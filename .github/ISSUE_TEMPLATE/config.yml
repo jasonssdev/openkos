@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & discussion
+    url: https://github.com/jasonssdev/openkos/discussions
+    about: Ask questions, share ideas, or discuss the project before opening an issue.
+  - name: 📖 Contributing guide
+    url: https://github.com/jasonssdev/openkos/blob/main/CONTRIBUTING.md
+    about: How to get involved, set up your environment, and open a pull request.
+  - name: 🔒 Report a security issue
+    url: https://github.com/jasonssdev/openkos/blob/main/SECURITY.md
+    about: Please do not file public issues for vulnerabilities — see the disclosure process.

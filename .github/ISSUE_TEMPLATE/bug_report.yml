@@ -1,0 +1,59 @@
+name: "🐞 Bug report"
+description: Report something that isn't working as expected
+title: "bug: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please search existing issues first to avoid duplicates.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what actually happened?
+      placeholder: |
+        I ran `openkos ingest ./sources` and ...
+        I expected ...
+        Instead ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps or files that reproduces the problem.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your OS, Python version, and how you installed OpenKOS.
+      placeholder: |
+        OS: macOS 15.4
+        Python: 3.13.2
+        Install: uv sync from source at commit abc1234
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: Paste any error messages or console output. This is automatically formatted as code.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I agree to follow this project's Code of Conduct.
+          required: true

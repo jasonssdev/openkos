@@ -1,0 +1,107 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  Tech stack: Python 3.13+ (requires-python >=3.13, .python-version 3.13), src/ layout, package `openkos` (ships py.typed), uv for env+deps (uv.lock present), no runtime deps yet — typer/pydantic/pyyaml sit in dev deps and move to runtime when the CLI imports them
+  Architecture: local-first knowledge engine on the Open Knowledge Format (OKF); canonical layer (model, bundle, state) never depends on derived layer (retrieval, graph, memory); engine.py stays thin; extension points are typing.Protocol (Producer, Consumer, VectorStore, GraphStore, LLMBackend); core stays synchronous
+  Testing: pytest configured via [tool.pytest.ini_options] (testpaths=["tests"], --import-mode=importlib); tests/unit exists, integration/e2e arrive when code justifies them. Ruff and MyPy (strict) configured in pyproject. CI runs quality (ruff+mypy) once plus pytest on 3.13 and 3.14. Do NOT add pythonpath=["src"] — uv installs editable via .pth, and pythonpath would make tests pass on a broken install.
+  Style: Ruff (lint+format) and MyPy (types) required by AGENTS.md policy; Conventional Commits with scopes okf, ingest, extract, graph, retrieval, memory, lint, cli, api, mcp, docs, ci
+  Contract: openspec/ is tracked in git and is the product contract. Spec = what (living, per-domain, merged on archive); ADR under docs/adr/ = why (immutable, project-wide, append-only). Required for changes touching the knowledge model, OKF conformance, ingestion, or public interfaces (CLI/API/MCP).
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Respect non-negotiable principles in AGENTS.md (local-first, adopt OKF, immutable raw/, reconstructible from canonical files, provenance/freshness, sensitivity levels, human curates/engine maintains)
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+    # --- ADR gate: spec = WHAT, ADR = WHY. See docs/adr/README.md for the process. ---
+    - >
+      ADR gate. Evaluate this design against BOTH conditions: (1) does it decide a
+      technology, a pattern, an interface, or a trade-off? AND (2) is that decision
+      hard-to-reverse? Create an ADR only when BOTH are true. Only significant
+      decisions get an ADR, not every change — "use pathlib over os.path" is not an
+      ADR; "adopt SQLite as the canonical store" is. When in doubt, do not create one.
+    - >
+      Creating an ADR. Copy docs/adr/template.md to docs/adr/NNNN-short-title.md,
+      where NNNN is the next free number (scan docs/adr/ for the highest NNNN and add
+      1; the first is 0001). Fill Context (the forces at play, not just the
+      conclusion), Decision (present tense — "We adopt...", "We use..."), Consequences
+      (what becomes easier AND what becomes harder), and Alternatives considered (the
+      options weighed and why they lost — take these from the alternatives compared
+      during explore/design, while they are still fresh). Set status Proposed and the
+      date. Then add a row to the index table in docs/adr/README.md.
+    - >
+      Set status Proposed here — never Accepted. The archive phase flips it to
+      Accepted when the change merges. An ADR is append-only once accepted: to change
+      a decision, write a new ADR that supersedes it, never edit the old one.
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+    - Create a package only when its code arrives — no empty scaffolding
+  apply:
+    guidelines:
+      - Follow existing code patterns
+      - Keep engine.py thin; behavior lives in subpackages
+      - Extension interfaces are typing.Protocol; keep the canonical layer free of derived-layer dependencies
+      - Core stays synchronous
+      - >
+        ADR gate for emergent decisions. If implementation forces a significant,
+        hard-to-reverse decision that design did not foresee, create its ADR here using
+        the same triggers, template, numbering, and Proposed status defined in
+        rules.design. Do not defer it to archive — the alternatives and forces are only
+        fresh now.
+    tdd: true            # Strict TDD is enabled via explicit agent marker (RED-GREEN-REFACTOR)
+    test_command: "uv run pytest"   # verified working
+  verify:
+    test_command: "uv run pytest"                                        # verified working
+    lint_command: "uv run ruff check . && uv run ruff format --check ."  # verified working
+    type_command: "uv run mypy ."                                        # verified working
+    build_command: ""      # no build step; uv_build produces the wheel on publish, not in the dev loop
+    coverage_threshold: 0  # no coverage tooling configured yet
+  archive:
+    - Warn before merging destructive deltas
+    - Keep raw/ immutable; never rewrite immutable sources during archive
+    # --- ADR acceptance: the only phase allowed to change an ADR's status. ---
+    - >
+      ADR acceptance. For every ADR this change created with status Proposed, flip it
+      to Accepted — in BOTH places: the frontmatter status field and the **Status:**
+      line in the body. Update that ADR's row in the docs/adr/README.md index to match.
+    - >
+      Change ONLY the status. ADRs are immutable once accepted: never rewrite Context,
+      Decision, Consequences, or Alternatives during archive. If the decision itself
+      turned out wrong, that is a new ADR superseding this one — mark the old one
+      "Superseded by ADR-XXXX", never edit it.
+    - >
+      Do not create ADRs here. If a significant decision was made and never recorded,
+      that is a gap in design/apply — report it rather than back-filling an ADR whose
+      forces and alternatives are no longer fresh.
+
+testing:
+  strict_tdd: true
+  test_runner:
+    command: ""
+    framework: pytest (declared as dev dependency, not yet configured or exercised)
+  layers:
+    unit: false
+    integration: false
+    e2e: false
+  coverage:
+    available: false
+    command: ""
+  quality_tools:
+    linter:
+      available: false
+      command: ""
+      tool: ruff (declared as dev dependency, no [tool.ruff] config yet)
+    type_checker:
+      available: false
+      command: ""
+      tool: mypy (declared as dev dependency, no [tool.mypy] config yet)
+    formatter:
+      available: false
+      command: ""
+      tool: ruff (declared as dev dependency, no [tool.ruff] config yet)

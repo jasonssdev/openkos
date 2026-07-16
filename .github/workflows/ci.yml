@@ -1,0 +1,89 @@
+name: CI
+
+# Pull requests into main are the merge gate (AGENTS.md: "nothing merges without
+# green CI + review"); the push trigger keeps main's own history green after a
+# merge or a direct push.
+#
+# There are deliberately no path filters. Docs-only changes touch nothing these
+# jobs validate, but a job skipped by a path filter reports no status at all, and
+# a required check that never reports blocks a pull request indefinitely. Running
+# every change through the full suite keeps the branch-protection story simple
+# and keeps the "green CI" claim honest. The jobs take seconds.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege. This is a public repository; no job here reads or writes
+# repository state beyond checking the code out.
+permissions:
+  contents: read
+
+# Supersede in-flight runs for the same pull request, but never cancel a run on
+# main: every commit on the default branch keeps a status of its own.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Actions are pinned by commit SHA rather than by moving tag: a tag can be
+# repointed at new code, a SHA cannot. The trailing comment records the release
+# each SHA corresponds to. Note that astral-sh/setup-uv publishes no moving major
+# tag for its v8 series, so an exact reference is required there regardless.
+jobs:
+  # Ruff reads its target version from `project.requires-python` and MyPy pins
+  # `python_version = "3.13"`, so both analyse for 3.13 whatever interpreter they
+  # run on. Running them across the matrix would repeat identical work; they run
+  # once, on the declared floor.
+  quality:
+    name: quality (ruff, mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      # `--locked` installs exactly what uv.lock pins and fails if the lock has
+      # drifted from pyproject.toml, so a dependency edit cannot merge unlocked.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      # `--check` reports formatting instead of rewriting it; CONTRIBUTING.md
+      # tells contributors to run `uv run ruff format .` locally to fix it.
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy .
+
+  # Only the test run genuinely varies by interpreter, so only it gets a matrix:
+  # 3.13 is the declared floor, 3.14 is the current release. Ubuntu only for now.
+  test:
+    name: test (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      # Report both interpreters even when one fails. The difference between
+      # "3.14 alone is red" and "both are red" is the whole reason the matrix
+      # exists, and cancelling the sibling job hides it.
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run pytest

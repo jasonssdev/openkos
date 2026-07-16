@@ -1,0 +1,75 @@
+[project]
+name = "openkos"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Jason Dev", email = "jasonssdev@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+openkos = "openkos:main"
+
+[build-system]
+requires = ["uv_build>=0.11.29,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.0",
+    "pre-commit>=4.6.0",
+    "pydantic>=2.13.4",
+    "pytest>=9.1.1",
+    "pyyaml>=6.0.3",
+    "ruff>=0.15.21",
+    "typer>=0.27.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]
+
+# Ruff infers `target-version` from `project.requires-python` (3.13) and
+# defaults `line-length` to 88; neither is restated here. The formatter runs on
+# defaults, so there is no [tool.ruff.format] section.
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes: undefined names, unused imports
+    "I",   # isort: deterministic import order, keeps the layering rule auditable
+    "UP",  # pyupgrade: the 3.13 floor means no back-compat idioms are needed
+    "B",   # bugbear: mutable defaults, `raise ... from`, unstrict `zip`
+    "SIM", # flake8-simplify
+    "S",   # bandit: untrusted user text, YAML frontmatter, git subprocess
+    "DTZ", # naive datetimes would corrupt OKF `as of` / freshness stamps
+    "PT",  # flake8-pytest-style: tests are a first-class quality gate
+    "PTH", # pathlib: the engine is filesystem-centric and must stay portable
+    "RUF", # Ruff-specific, incl. RUF100 (unused noqa) to keep suppressions honest
+]
+ignore = [
+    "E501", # line length is the formatter's job; E501 only fights it on long strings/URLs
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101", # `assert` is what a test is made of
+]
+
+[tool.mypy]
+# Pin the analysis target to the declared floor so a contributor on a newer
+# interpreter cannot merge code that is broken on 3.13.
+python_version = "3.13"
+files = ["src", "tests"]
+strict = true
+# Not implied by `strict`: dead code left by a wrong narrowing is a real bug,
+# and `py.typed` means our type errors become our consumers' type errors.
+warn_unreachable = true
+enable_error_code = [
+    "ignore-without-code", # a bare `# type: ignore` silences more than it claims
+    "redundant-expr",
+    "truthy-bool",       # catches `if obj:` on an always-truthy object
+    "possibly-undefined",
+]

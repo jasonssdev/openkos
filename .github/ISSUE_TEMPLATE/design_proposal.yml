@@ -1,0 +1,54 @@
+name: "🧭 Design proposal / RFC"
+description: Propose or discuss a change to the vision, knowledge model, or architecture
+title: "design: <short description>"
+labels: ["design", "discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        OpenKOS is designed in the open. Use this for anything that touches the knowledge model,
+        OKF conformance, the ingestion pipeline, or public interfaces (CLI, API, MCP).
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One paragraph describing what you're proposing.
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What problem does this solve? Who benefits, and how?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The design in detail. Include examples, file layouts, or frontmatter where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact on principles and OKF conformance
+      description: How does this affect local-first, reconstructibility, provenance, freshness, and OKF conformance? Note any breaking changes.
+    validations:
+      required: true
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: What is still undecided, or where would you most like feedback?
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I read docs/vision.md and docs/knowledge-object-model.md and this is consistent with (or explicitly revises) them.
+          required: true
+        - label: I agree to follow this project's Code of Conduct.
+          required: true

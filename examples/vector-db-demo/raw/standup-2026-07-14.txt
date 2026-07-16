@@ -1,0 +1,8 @@
+Standup 2026-07-14.
+
+Sarah ran the vector DB benchmark. pgvector: ~40ms p95 on 2M vectors under
+concurrency (the earlier 15ms figure was single-thread). Qdrant gives more tuning
+control but is a separate service to run. We're leaning toward pgvector to avoid
+extra infrastructure.
+
+Sarah also flagged the API-contract blocker on the auth refactor.
