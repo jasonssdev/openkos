@@ -95,7 +95,7 @@ testing:
   quality_tools:
     linter:
       available: true
-      command: "uv run ruff check"
+      command: "uv run ruff check ."
       tool: ruff ([tool.ruff.lint] configured in pyproject.toml)
     type_checker:
       available: true
@@ -103,5 +103,5 @@ testing:
       tool: mypy (strict mode via [tool.mypy] in pyproject.toml)
     formatter:
       available: true
-      command: "uv run ruff format --check"
+      command: "uv run ruff format --check ."
       tool: ruff format (default settings, enforced in CI)
