@@ -5,7 +5,7 @@ description = "Local-first engine that turns your scattered text into a living, 
 readme = "README.md"
 license = "Apache-2.0"
 authors = [
-    { name = "Jason Dev", email = "jasonssdev@gmail.com" }
+    { name = "Jason", email = "jasonssdev@gmail.com" }
 ]
 requires-python = ">=3.13"
 dependencies = []
