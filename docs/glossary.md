@@ -15,7 +15,7 @@ sensitivity: public
 
 Definitions of the terms that appear throughout OpenKOS. Terms are listed alphabetically.
 
-**Bundle (OKF bundle)** — A directory of markdown concept documents that together form a knowledge base. The bundle is the unit of storage and interchange; it is plain files, portable to any tool. See [Open Knowledge Format](#open-knowledge-format-okf).
+**Bundle (OKF bundle)** — A directory of markdown concept documents that together form a knowledge base. The bundle is the unit of storage and interchange; it is plain files, portable to any tool. In OpenKOS it lives at `bundle/` inside a [Workspace](#workspace) and contains concept documents and nothing else — no sources, no config — so it stays conformant and can be shared on its own. See [Open Knowledge Format](#open-knowledge-format-okf).
 
 **Canonical layer** — The durable part of an OpenKOS installation: the OKF bundle (markdown + frontmatter), the immutable raw sources, git history, and the SQLite operational store. It is the source of truth and is meant to outlive any tool. Contrast with the [Derived layer](#derived-layer).
 
@@ -23,13 +23,17 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Concept / concept document** — OKF's name for a single knowledge file: one markdown file with YAML frontmatter representing one thing. In OpenKOS a concept document is the physical form of a [Knowledge Object](#knowledge-object-ko).
 
+**Concept ID** — An object's identity, defined by OKF as its file path within the bundle with the `.md` suffix removed: `concepts/stoicism.md` has the concept ID `concepts/stoicism`. OpenKOS adopts this definition rather than adding an identifier of its own — there is no `id` field. Moving a file changes its ID; git records the rename, and OKF tolerates links to a moved target.
+
+**Conformance (OKF)** — The three rules of OKF §9: every non-reserved `.md` file has parseable YAML frontmatter; every frontmatter block has a non-empty `type`; and `index.md` / `log.md` follow their prescribed structure when present. Everything else is soft guidance — consumers must not reject a bundle over unknown types, extra keys, broken links, or a missing index. Distinct from the [Lint](#lint), which is OpenKOS's separate opinion about quality.
+
 **Config (`openkos.yaml`)** — A per-bundle configuration file holding the engine's settings for that bundle: the local model, review mode, default sensitivity, freshness window, and the type registry. Structured YAML, owned by the engine and edited by the user. Distinct from the [Operating manual](#operating-manual-agentsmd).
 
 **Consumer** — Any tool that reads and reasons over an OKF bundle (a viewer, a search index, an agent). OpenKOS is both a consumer and a [Producer](#producer).
 
 **Context assembly** — The retrieval step that gathers the most relevant concepts (and their citations) into the model's context — to answer a query, or to reconcile against what already exists during ingest.
 
-**Continuant / occurrent** — The foundational split behind the object types: continuants *persist* through time (Person, Concept, Entity), while occurrents *happen* in time (Event, Procedure). Borrowed from upper ontologies to ground the type vocabulary.
+**Continuant / occurrent** — The foundational split behind the object types: continuants *persist* through time (Person, Organization, Concept, Entity, Place), while occurrents *happen* in time (Event, Procedure). Borrowed from upper ontologies to ground the type vocabulary.
 
 **Derived layer** — The rebuildable part of an installation: vector indexes and graph projections. Because it can always be reconstructed from the [Canonical layer](#canonical-layer), the engines behind it are swappable and never a lock-in.
 
@@ -49,11 +53,11 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **index.md** — A catalog file that lists the bundle's concepts with short summaries, used for navigation and index-first retrieval. Defined by OKF as an optional, reserved filename.
 
-**Knowledge graph** — The network formed by concepts and the typed relationships (markdown links) between them. Richer than the folder hierarchy; traversed during retrieval.
+**Knowledge graph** — The network formed by concepts and the markdown links between them. Richer than the folder hierarchy; traversed during retrieval. The links themselves are untyped, as OKF defines them — the kind of relationship lives in the prose beside each link. See [Typed relationship](#typed-relationship) for the OpenKOS layer that adds meaning on top, from MVP 2.
 
 **Knowledge Object (KO)** — The fundamental unit of knowledge in OpenKOS: an OKF concept document plus a thin OpenKOS layer (provenance chain, freshness class, recommended type vocabulary). See [`knowledge-object-model.md`](knowledge-object-model.md).
 
-**Lint** — The operation that checks the health of the bundle. In MVP 1 it is mechanical: stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts not referenced by any markdown link from `index.md` or another concept, found by scanning links). Volatility classification and contradiction detection arrive in MVP 2. Enforces the freshness discipline automatically.
+**Lint** — The operation that checks the health of the bundle. In MVP 1 it is mechanical: stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts not referenced by any markdown link from `index.md` or another concept, found by scanning links). Volatility classification and contradiction detection arrive in MVP 2. Enforces the freshness discipline automatically. It is **not** a conformance checker: it reports OpenKOS's opinion about knowledge health, never OKF's verdict about validity. See [Conformance](#conformance-okf).
 
 **LLM Wiki pattern** — Andrej Karpathy's idea that a language model should *incrementally build and maintain* a persistent, interlinked knowledge base between you and your sources, rather than re-retrieving raw documents on every query. The pattern OpenKOS implements.
 
@@ -77,7 +81,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Query** — The operation of asking a question against the bundle and getting a cited answer, assembled from relevant concepts.
 
-**Raw source** — An original input file (article, notes, PDF). Raw sources are **immutable**: OpenKOS reads from them but never rewrites them.
+**Raw source** — An original input file (article, notes, PDF), stored in `raw/` under its own name and extension. Raw sources are **immutable**: OpenKOS reads from them but never rewrites them. They live outside the bundle, and each is represented inside it by a **Source concept** whose `resource` points back at the original — the one bridge from the bundle to the material it was compiled from.
 
 **Reconstructibility** — The guarantee that every index, embedding, and graph projection can be rebuilt from the canonical layer. It is why derived engines are swappable and why no single dependency is a lock-in.
 
@@ -101,4 +105,8 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Two-output rule** — The practice that a good answer to a query can be filed back into the bundle as a new concept, so that exploration compounds just like ingested sources do.
 
-**Typed relationship** — A link between Knowledge Objects with a declared meaning (for example `depends_on`, `derived_from`, `part_of`). Typed relationships are what the graph and retrieval layers traverse.
+**Workspace** — The directory a user opens and versions with git. It holds `raw/` (immutable sources, any extension), `bundle/` (the OKF [Bundle](#bundle-okf-bundle)), `openkos.yaml`, `AGENTS.md`, and the git-ignored `.openkos/`. Sources live *beside* the bundle rather than inside it because they are input material, not concepts — which keeps the bundle conformant by construction and lets sources keep their own filenames. One engine installation, many workspaces (as with `git init`).
+
+**Typed relationship** — A link between Knowledge Objects with a declared meaning (for example `depends_on`, `derived_from`, `part_of`). Typed relationships are what the OpenKOS graph and retrieval layers traverse, and they arrive with the MVP 2 graph. They are an **OpenKOS extension, not an OKF feature**: OKF links are untyped, and the kind of relationship is carried by the prose next to the link. The typing is layered on as an extra frontmatter key, so a plain OKF consumer still sees the untyped directed edges the spec promises it and loses nothing structural.
+
+**okf_version** — A frontmatter field declaring the OKF version a bundle targets (OpenKOS writes `"0.1"`). It lives in the bundle-root `index.md` — the one place OKF permits frontmatter in a reserved file — and exists so a future consumer knows exactly which revision of the spec the bundle was written against.

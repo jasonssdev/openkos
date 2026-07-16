@@ -33,14 +33,15 @@ This is the smallest slice that delivers real value: point OpenKOS at a folder o
 
 Deliverables:
 
-- Text and markdown ingestion, with raw sources kept immutable
-- Compilation of sources into OKF concept documents (`type`, `title`, `description`, `resource`, `tags`, `timestamp`)
+- Text and markdown ingestion, with raw sources kept immutable in a `raw/` directory that sits beside the OKF bundle rather than inside it — so sources keep their own names and extensions, and nothing dropped there can break bundle conformance
+- Compilation of sources into OKF concept documents (`type`, `title`, `description`, `resource`, `tags`, `timestamp`), with `# Citations` mirroring provenance into the body
 - Provenance chain linking every object back to its source
-- Automatic `index.md` (catalog) and `log.md` (chronological history)
+- Automatic `index.md` (catalog) and `log.md` (chronological history), following the OKF reserved-file structure, with `okf_version: "0.1"` declared at the bundle root
+- A conformance check for the three rules of OKF §9, run in CI against the reference bundle
 - Lexical retrieval (SQLite FTS5) with an index-first navigation strategy
 - Query answering with citations
 - Freshness lint v0 — mechanical checks only: flag any fact whose `as of` stamp is older than the configured freshness window (default 7d), and surface orphan pages by scanning markdown links; volatility classification is deferred to MVP 2
-- Basic lifecycle operations — undo the last ingest (via `git revert`), archive (`status: deprecated`), and simple object deletion (removing the concept and its index references, with undo through normal git history); tombstones, the reference-aware `forget` flow, and the privacy purge arrive in MVP 2
+- One lifecycle operation — a simple delete (`forget <concept-id>`: remove the concept, its index entry, and its state), with undo through plain git; archive, tombstones, the reference-aware `forget` flow, and the privacy purge all arrive in MVP 2
 - A command-line interface: `init`, `ingest`, `query`, `lint`, `status`, and a basic `forget` (see the [CLI reference](cli.md))
 - Output is plain files, browsable in Obsidian, VS Code, or GitHub
 
@@ -59,13 +60,13 @@ MVP 2 turns a flat set of documents into a connected, semantically searchable gr
 Deliverables:
 
 - Entity, concept, and relationship extraction (LLM-assisted, human-in-the-loop)
-- A typed knowledge graph over the bundle (markdown links plus a SQLite node-edge projection; NetworkX for analysis)
+- A typed knowledge graph over the bundle (markdown links plus a SQLite node-edge projection; NetworkX for analysis). The typing is an OpenKOS layer over OKF's untyped links: a bundle stays readable by any OKF consumer, which simply sees untyped edges.
 - Hybrid retrieval: lexical (FTS5) + local vectors (`sqlite-vec`) + graph traversal, with context assembly
 - Local embeddings (Sentence Transformers) and local model runtimes (Ollama)
 - The two-output rule: a good answer can be filed back as a new OKF concept
 - Incremental compilation and change tracking
 - Freshness lint v1 — volatility classification with volatility-aware windows (per-type, LLM-suggested), contradiction and staleness detection, and a guided reconcile workflow
-- The full `forget` surface — tombstones, the reference-aware scope/depth flow, and the privacy purge (git-history rewrite + index cleanup)
+- The full lifecycle and `forget` surface — archive (`status: deprecated`), tombstones, the reference-aware scope/depth flow, and the privacy purge (git-history rewrite + index cleanup)
 - Optional additional producers (PDF, web clip) as the extraction pipeline matures
 
 What a user can do after MVP 2: ask questions that require synthesizing many sources, navigate a real graph of their knowledge, and watch the base get richer and stay honest as they use it.

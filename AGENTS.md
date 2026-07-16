@@ -11,15 +11,16 @@ OpenKOS is an open-source, **local-first engine** that compiles a person's text 
 - `docs/knowledge-object-model.md` — the data model (the Knowledge Object).
 - `docs/roadmap.md` — MVP scoping; `docs/cli.md` — the command surface.
 - `docs/tech_stack.md` — technology choices and rationale.
-- `examples/vector-db-demo/` — a real bundle; the concrete **target output** of MVP 1's `ingest`.
+- `examples/good-life-demo/` — a real workspace; the concrete **target output** of MVP 1's `ingest`, and the fixture for the conformance tests.
 
 ## Non-negotiable principles
 
 Every change must respect these. A technically good change that violates one is wrong.
 
 - **Local-first & private.** Runs on the user's machine, offline; local models (Ollama). No mandatory cloud, no accounts, no API keys.
-- **Adopt OKF, don't invent a format.** Output is always a conformant OKF bundle. OpenKOS is the engine / reference implementation, never its own "standard."
+- **Adopt OKF, don't invent a format.** Output is always a conformant OKF bundle ([v0.1 spec](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)). OpenKOS is the engine / reference implementation, never its own "standard." This extends to definitions: where OKF has decided something, do not decide it again. Identity is the **Concept ID** — the file path minus `.md` (§2); there is no `id` field. Links are **bundle-relative** and **untyped** — the kind of relationship lives in the prose (§5.1, §5.3). Citations use the `# Citations` heading (§8). Conformance is exactly the three rules of §9 (parseable frontmatter on every non-reserved `.md`; non-empty `type`; reserved files follow §6/§7) — and **the lint is not a conformance checker**: it is our opinion about knowledge health, never OKF's verdict about validity, since OKF explicitly tolerates broken links and missing indexes. Anything we add is an extension carried in frontmatter (legal under §4.1) that degrades gracefully.
 - **Immutable sources, living objects.** `raw/` is read-only; concept documents are rewritten over time; history via git + `log.md`.
+- **`raw/` sits outside the bundle; `bundle/` is pure OKF.** A workspace is `raw/` (input material, any extension, untouched) + `bundle/` (the OKF bundle root) + the engine's files. Sources are not concepts, so they do not live in the concept tree — which is what makes §9 conformance hold *by construction*, even for files a user drops in by hand. Never put non-concept files inside `bundle/`.
 - **Reconstructible.** Every index / embedding / graph rebuilds from the canonical files (markdown + SQLite + git). Derived stores are caches, never the source of truth.
 - **Provenance & freshness are first-class.** Every derived object cites its sources; volatile facts carry an `as of` stamp (timeless / snapshot / pointer).
 - **Sensitivity across boundaries.** `public | private | confidential` (default `private`); confidential never leaves the device; high-water-mark propagation.
@@ -37,6 +38,7 @@ Every change must respect these. A technically good change that violates one is 
 - **`engine.py` stays thin** (wiring / composition only); behavior lives in subpackages.
 - **The core is synchronous.** Async only at the MVP 3 API/MCP edge (which calls the sync engine via a thread pool). Do not make the core async.
 - **Layering:** the canonical layer (`model`, `bundle`, `state`) never depends on the derived layer (`retrieval`, `graph`, `memory`).
+- **The OKF adapter is one seam.** All knowledge of the format's on-disk shape — frontmatter parsing/emission, reserved files, §9 conformance — lives in `model/okf.py` and nowhere else; the rest of the engine handles Knowledge Objects. OKF is a v0.1 **draft** whose §11 permits breaking major bumps, so this containment is what lets us adopt it safely. Do not spread format knowledge across the codebase.
 - **LLM calls** go behind `LLMBackend` and talk to Ollama's OpenAI-compatible endpoint; use Pydantic-validated structured output (e.g. `instructor`) with retry. The compiler is a **deterministic pipeline with LLM steps** — no agent framework in the core.
 
 ## Quality gates
@@ -59,7 +61,7 @@ Write it while the forces are still fresh — when the change's design settles t
 
 ## MVP 1 — start here
 
-Build the thinnest vertical slice first: `openkos ingest <path>` → copy the source into `raw/` → compile it with the local model into one or more OKF concept documents (with provenance + freshness) → update `index.md` and `log.md`. Lexical retrieval (FTS5) and a cited `query` come next. No graph, no vectors, no reconcile yet. Aim for the shape in `examples/vector-db-demo/`.
+Build the thinnest vertical slice first: `openkos ingest <path>` → copy the source into `raw/` → compile it with the local model into one or more OKF concept documents (with provenance + freshness) → update `index.md` and `log.md`. Lexical retrieval (FTS5) and a cited `query` come next. No graph, no vectors, no reconcile yet. Aim for the shape in `examples/good-life-demo/`.
 
 ## Do not
 

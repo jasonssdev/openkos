@@ -47,7 +47,7 @@ Every interface decision serves these:
 openkos init
 ```
 
-Creates the bundle structure (`raw/`, the concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual that tells any AI agent how to work with the bundle, and helps the user pick a local model (via Ollama; e.g. `qwen2.5`). After this, the user never thinks about setup again.
+Creates the workspace: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (the concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual that tells any AI agent how to work with it, and helps the user pick a local model (via Ollama; e.g. `qwen2.5`). After this, the user never thinks about setup again.
 
 `openkos.yaml` records the defaults that shape the journey, for example:
 
@@ -59,53 +59,55 @@ default_sensitivity: private
 
 ## The primary journey: capturing a new source
 
-The motivating case: *"I have a meeting transcript I want to capture."*
+The motivating case: *"I just had a conversation I don't want to lose."* The scenario below is the one in [`examples/good-life-demo/`](../examples/good-life-demo/): the user is reading philosophy to write an essay. Nine days ago they took notes on Epictetus's *Enchiridion* and compiled them; today a friend who studies the subject corrected one of their readings on a call.
 
 ### Step 1 — Ingest by path
 
 The user points OpenKOS at the file. The engine copies it into `raw/` (immutable) and begins.
 
 ```bash
-openkos ingest ./standup-2026-07-14.txt
+openkos ingest ./call-with-maria-2026-07-14.txt --sensitivity confidential
 ```
 
-- **By path.** `ingest <path>` copies the source into `raw/` for the user — they never have to organize folders by hand.
+- **By path.** `ingest <path>` copies the source into `raw/` for the user — they never have to organize folders by hand. Sources keep their own names and extensions, markdown included, and the compiled knowledge lands in `bundle/`.
 - **One at a time by default.** Ingesting a single source keeps the user involved and the results reviewable.
 - **Batch is optional.** A folder or glob ingests many at once for users who want throughput: `openkos ingest ./inbox/` or `openkos ingest ./inbox/*.txt`.
 - **Sensitivity at capture.** The source (and everything derived from it) can be labeled: `--sensitivity confidential`. Unlabeled defaults to `private`.
 
 ### Step 2 — Compile
 
-The engine reads the immutable source with the local model, drafts a summary concept, creates or updates related concept pages, records provenance back to the source, applies freshness stamps, and updates `index.md` and `log.md`. The user waits a moment; nothing has been saved yet.
+The engine reads the immutable source with the local model, drafts a summary concept, creates or updates related concept pages, records provenance back to the source, applies freshness stamps, and updates `index.md` and `log.md`. Here it finds that the call corrects something already in the base — the reading of *apatheia* recorded nine days ago — so rather than write a new page it proposes revising the existing one. The user waits a moment; nothing has been saved yet.
 
 ### Step 3 — Review and confirm (default) — or hand it off
 
 **Default (interactive):** the engine shows what it *proposes* to do and asks before saving.
 
 ```
-$ openkos ingest ./standup-2026-07-14.txt
-→ Copied to raw/standup-2026-07-14.txt (immutable)
+$ openkos ingest ./call-with-maria-2026-07-14.txt --sensitivity confidential
+→ Copied to raw/call-with-maria-2026-07-14.txt (immutable)
 → Reading with local model (qwen2.5)…
 
 Proposed changes:
-  +  sources/standup-2026-07-14.md   (new summary)
-  +  concepts/sarah-chen.md          (new)
-  ~  concepts/auth-refactor.md       (updated: + blocker on API contract)
-  ~  index.md, log.md
+  +  bundle/sources/call-with-maria-2026-07-14.md   (new summary)
+  +  bundle/people/maria-salazar.md                 (new)
+  ~  bundle/concepts/stoicism.md                    (v1→v2: apatheia corrected;
+                                                     sensitivity private → confidential)
+  +  bundle/decisions/frame-the-essay-on-the-dichotomy-of-control.md   (new)
+  ~  bundle/index.md, bundle/log.md
 
 Apply? [Y]es / [e]dit / [n]o:
 ```
 
-The user can accept, edit before saving, or reject. This keeps consequential changes under human control.
+The user can accept, edit before saving, or reject. This keeps consequential changes under human control — and this panel is exactly where that matters. It is not only proposing to rewrite a page the user wrote themselves; it is proposing to *reclassify* it, because a confidential source now feeds it (the high-water-mark rule). Both are consequential, so both are shown before anything is saved.
 
 **Optional (unattended):** a user who trusts the engine skips the review entirely — they just capture, and the engine does the rest.
 
 ```bash
-openkos ingest ./standup-2026-07-14.txt --auto
+openkos ingest ./call-with-maria-2026-07-14.txt --sensitivity confidential --auto
 ```
 
 ```
-✓ Ingested standup-2026-07-14.txt → 4 objects touched, committed.
+✓ Ingested call-with-maria-2026-07-14.txt → 4 objects touched, committed.
 ```
 
 `--auto` (per command) overrides the default; setting `review: false` in the config makes unattended the standing behavior. Either way, nothing is lost — every change is a git commit and can be inspected or reverted afterward. Review is a preference, not a requirement.
@@ -119,23 +121,29 @@ Accepted changes are committed to git. The knowledge is now part of the base, wi
 Later, the user asks a question and gets an answer with citations back to the source:
 
 ```bash
-openkos query "what is blocking the auth refactor?"
+openkos query "what does apatheia actually mean?"
 ```
 
 ```
-The auth refactor is blocked on the API contract, raised by Sarah Chen
-in the 2026-07-14 standup [1].
+Apatheia is freedom from the pathē — the destructive passions — not the
+absence of feeling: the Stoics kept the eupatheiai, the "good feelings" [1].
+It is commonly misread as "indifference to emotion" by analogy with the
+English cognate apathy [1].
 
 Sources:
-  [1] concepts/auth-refactor.md → raw/standup-2026-07-14.txt
+  [1] bundle/concepts/stoicism.md
+      → bundle/sources/call-with-maria-2026-07-14.md
+      → raw/call-with-maria-2026-07-14.txt
 ```
+
+Two things are worth noticing in that answer. It is the *corrected* understanding, not the one the user first wrote down — the base learned. And the citation chain runs all the way back to the immutable original, through the Source concept that represents it: the user can always ask *how do I know this?* and get a file path rather than a shrug.
 
 A good answer can be filed back as a new concept, so exploration compounds — feeding the loop again.
 
 ## Secondary journeys
 
 - **Ask:** `openkos query "…"` — cited answers assembled from the bundle.
-- **Keep it honest:** `openkos lint` — in MVP 1, flags stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts no markdown link reaches from `index.md` or another concept); volatility-aware and contradiction checks arrive in MVP 2.
+- **Keep it honest:** `openkos lint` — in MVP 1, flags stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts no markdown link reaches from `index.md` or another concept); volatility-aware and contradiction checks arrive in MVP 2. The lint is OpenKOS's opinion about knowledge health, not a verdict on OKF validity — a bundle it complains about is still a perfectly conformant bundle.
 - **Orient:** `openkos status` — what the base contains, recent activity, anything needing attention.
 - **Browse:** open the folder in any editor — the bundle is just markdown.
 
@@ -153,19 +161,23 @@ One exception: `raw/` sources are read-only by convention. Editing an original b
 
 OpenKOS accumulates knowledge, so removal is a last resort — and the experience is built to steer the user toward the gentlest option that fits. Most "I want to delete this" moments are really something else: undo a wrong ingest, archive a dead topic, retire a stale fact into a snapshot, or merge a duplicate. A true delete is reserved for genuine mistakes and, above all, **privacy** ("I need this gone").
 
-The user reaches for one verb, `forget`, which shows the consequences before acting and asks for scope and depth:
+The user reaches for one verb, `forget`, which shows the consequences before acting and asks for scope and depth. Continuing the running example: Maria mentioned a move she is not making public, and later asks that it not be kept anywhere. That is the privacy case, and it is the one the design exists for.
 
 ```
-$ openkos forget concepts/client-acme.md
-This object is referenced by 3 others and was derived from:
-  raw/meeting-acme-2026-05-10.txt   (sensitivity: confidential)
+$ openkos forget people/maria-salazar
+This object is referenced by 2 others and was derived from:
+  raw/call-with-maria-2026-07-14.txt   (sensitivity: confidential)
 
 Scope:   [1] just this object   [2] the source and everything derived from it
 Depth:   [a]rchive (keep history)   [d]elete (keep git history)   [p]urge (erase everything, irreversible)
 >
 ```
 
-It defaults to the least destructive choice, surfaces what links to the target so nothing is silently orphaned, requires explicit confirmation for a **purge** (the right-to-be-forgotten path that also rewrites git history and clears derived indexes), and stays human-in-the-loop even under `--auto`. Everything except a privacy purge is logged. In MVP 1, `forget` covers undo, archive, and simple delete; the reference-aware scope/depth panel and the privacy purge shown above arrive in MVP 2.
+The target is named by its concept ID — the path with `.md` removed, which is what OKF already defines identity to be.
+
+It defaults to the least destructive choice, surfaces what links to the target so nothing is silently orphaned, requires explicit confirmation for a **purge** (the right-to-be-forgotten path that also rewrites git history and clears derived indexes), and stays human-in-the-loop even under `--auto`. Everything except a privacy purge is logged.
+
+That is the mature shape. **In MVP 1, `forget` is only the simple delete** — remove the concept, its index entry, and its state; undo is plain git. The scope/depth panel above, archiving, tombstones, and the purge arrive in MVP 2 with the rest of the lifecycle. The thin version is enough to keep a first knowledge base tidy while the model is still producing rough drafts, which is the job MVP 1 actually has.
 
 ## Two ways to work
 

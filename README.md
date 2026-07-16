@@ -18,7 +18,7 @@ Retrieval (RAG) doesn't fix this: it re-reads your raw documents on every questi
 
 Instead of retrieving from raw sources every time, an LLM can *incrementally build and maintain* a persistent, interlinked knowledge base that sits between you and your sources — Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern. Knowledge is compiled once and then kept current. It compounds.
 
-In June 2026 Google Cloud turned that pattern into a real, vendor-neutral standard: the **Open Knowledge Format (OKF)** — a directory of markdown files with YAML frontmatter, portable across any tool. Google's framing was: *"What's missing is a format, not another service,"* and they invited the community to build producers and consumers.
+In June 2026 Google Cloud published a vendor-neutral specification for that pattern: the **Open Knowledge Format (OKF)** — a directory of markdown files with YAML frontmatter, portable across any tool. It is young (v0.1, still a draft) but open, minimal, and gaining adoption. Google's framing was: *"What's missing is a format, not another service,"* and they invited the community to build producers and consumers.
 
 **OpenKOS is that producer and consumer, built for individuals and running entirely on your machine.**
 
@@ -40,7 +40,7 @@ In June 2026 Google Cloud turned that pattern into a real, vendor-neutral standa
 openkos ingest ./sources
 
 # ask a question and get a cited answer from the compiled knowledge
-openkos query "what did I conclude about vector databases?"
+openkos query "what did I conclude about how to live well?"
 
 # check the base stays honest — stale `as of` stamps and orphan pages
 openkos lint
@@ -69,7 +69,7 @@ mkdir ~/knowledge && cd ~/knowledge
 openkos init
 ```
 
-`init` scaffolds the bundle (`raw/`, concept folders, `index.md`, `log.md`), writes `openkos.yaml` and `AGENTS.md`, helps you pick a local model, and initializes a git repository (with `.openkos/` git-ignored).
+`init` scaffolds the workspace — `raw/` for your immutable sources and `bundle/` for the compiled OKF bundle (concept folders, `index.md`, `log.md`) — writes `openkos.yaml` and `AGENTS.md`, helps you pick a local model, and initializes a git repository (with `.openkos/` git-ignored). Sources sit beside the bundle rather than inside it, so `bundle/` stays pure OKF: portable, conformant, and shareable on its own.
 
 **Then the loop:**
 
@@ -83,7 +83,7 @@ See [`docs/cli.md`](docs/cli.md) for the full command reference and [`docs/user-
 ## Philosophy
 
 - **Local-first and private by default.** Runs on your machine, works offline, built for local models. The cloud is optional, never required.
-- **Standard-aligned, not bespoke.** We adopt OKF rather than invent a format. An open, vendor-neutral standard is the most agnostic choice there is.
+- **Standard-aligned, not bespoke.** We adopt OKF rather than invent a format, and adopt its definitions rather than restate them. An open, vendor-neutral specification is the most agnostic choice there is.
 - **Living knowledge, honest over time.** Sources are immutable; concept documents evolve as you learn; fast-changing facts carry freshness stamps so nothing silently becomes a lie.
 - **The human curates; the engine maintains.** You source, explore, and ask. OpenKOS does the bookkeeping — extraction, linking, freshness, indexing.
 - **Reconstructible and explainable.** Every index, embedding, and graph rebuilds from the canonical bundle plus sources. Answers always cite.
@@ -103,7 +103,7 @@ The wedge, in one line: **the local-first, personal producer-consumer-runtime fo
 OpenKOS ships in three MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](docs/roadmap.md).
 
 - **MVP 1 — The Compiler.** The Karpathy loop, locally, over text: ingest → OKF concepts with provenance → cited query → freshness lint. Useful in an afternoon.
-- **MVP 2 — The Graph and Memory.** Entity/relationship extraction, a typed knowledge graph, hybrid retrieval (lexical + vector + graph), answers that file back into the base.
+- **MVP 2 — The Graph and Memory.** Entity/relationship extraction, a typed knowledge graph (an OpenKOS layer over OKF's untyped links — other tools still read the bundle fine), hybrid retrieval (lexical + vector + graph), answers that file back into the base.
 - **MVP 3 — The Runtime and Interoperability.** An MCP server and APIs so agents use OpenKOS as durable memory; full OKF import/export with the wider ecosystem.
 
 Beyond that: a desktop app, graph visualization, richer memory, and federation — explored only after the MVPs prove out with real users.

@@ -1,5 +1,0 @@
-name: vector-db-demo
-model: qwen2.5
-review: true
-default_sensitivity: private
-freshness_window: 7d

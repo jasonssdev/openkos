@@ -1,4 +1,0 @@
-Call with Maria — 2026-07-10.
-
-Maria's team benchmarked pgvector at ~15ms p95 on 2M vectors (single-thread).
-We also discussed deferring the Redis migration to Q2.

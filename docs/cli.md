@@ -45,11 +45,13 @@ You install the engine once and run `openkos init` in each knowledge base — li
 
 ### `openkos init`
 
-Creates a new bundle in the current directory: the folder structure (`raw/`, concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual. Helps you pick a local model (via Ollama). Run once per bundle.
+Creates a new workspace in the current directory: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual. Helps you pick a local model (via Ollama). Run once per workspace.
 
 ### `openkos ingest <path>`
 
 Copies the source at `<path>` into `raw/` (immutable) and compiles it into OKF concept documents, recording provenance and updating `index.md` and `log.md`.
+
+Sources are stored under their own names and extensions — `notes.md` lands as `raw/notes.md` — because `raw/` sits beside the OKF bundle rather than inside it. A markdown source therefore needs no special handling and still renders as markdown in any editor. Compiled output goes into `bundle/`, which stays a pure OKF bundle.
 
 | Flag | Meaning |
 | --- | --- |
@@ -72,26 +74,40 @@ Health-checks the bundle. In MVP 1 (freshness v0) the checks are deliberately me
 
 Reports errors and warnings; does not modify anything without confirmation.
 
+**Lint is not a conformance checker.** It reports OpenKOS's opinion about knowledge *health*, not OKF's verdict about *validity*. OKF explicitly tolerates broken links and missing index entries (§5.3, §9), so a bundle can fail every check here and still be perfectly conformant. Conformance is verified separately, against the three rules of §9.
+
 ### `openkos status`
 
 Shows what the bundle contains (counts of sources and concepts), recent activity, and anything needing attention (for example, lint findings).
 
-### `openkos forget <path-or-id>`
+### `openkos forget <concept-id>`
 
-Removes knowledge. In **MVP 1** this covers the least-destructive operations: undo the last ingest (via `git revert`), archive an object (`status: deprecated`), and simple object deletion — removing the concept and its references from `index.md`, with undo through normal git history. Tombstones, the reference-aware scope/depth flow, and the privacy **purge** (git-history rewrite + index cleanup) arrive in **MVP 2**.
+Removes knowledge. In **MVP 1** this is deliberately one thing: **a simple delete.** It removes the concept document, drops its entry from `index.md`, and updates the operational state. The target is named by its concept ID — the path with `.md` removed, which is what OKF already defines identity to be (`openkos forget people/maria-salazar`).
 
-## `openkos.yaml` (bundle config)
+Undo is **plain git** (`git revert`, `git checkout <file>`) — there is no wrapper command for it in MVP 1. Every change is already a commit, so the safety net exists without new surface.
 
-Structured settings for the bundle, read by the engine:
+MVP 1 does **not** check inbound references before deleting. Removing a concept others link to leaves dangling links, which `lint` reports as it would any orphan — OKF tolerates broken links by design (§5.3), so this is a quality signal, not corruption. Archiving (`status: deprecated`), tombstones in `log.md`, the reference-aware scope/depth flow, and the privacy **purge** (git-history rewrite + index cleanup) all arrive in **MVP 2**, alongside the rest of the lifecycle.
+
+You can also just delete the file by hand — the bundle is your files. `forget` is the ergonomic version that cleans up the index and state in one step.
+
+## `openkos.yaml` (workspace config)
+
+Structured settings for the workspace, read by the engine. It lives at the workspace root, beside `raw/` and `bundle/` — not inside the bundle, which holds concept documents and nothing else.
 
 ```yaml
+name: good-life-demo
 model: qwen2.5            # local model served via Ollama
-review: true             # show proposed changes and confirm before saving
+review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
-freshness_window: 7d     # age after which a stamp is flagged for re-observation
+freshness_window: 7d      # age after which a stamp is flagged for re-observation
+
+# Layout — where the engine keeps things, relative to this file.
+raw: raw/                 # immutable sources; any extension, never rewritten
+bundle: bundle/           # the OKF bundle root
+
 # type_registry is maintained by the engine (canonical + emergent types)
 ```
 
 ## Not in MVP 1
 
-For orientation, these land later and are **not** part of the MVP 1 CLI: semantic/graph query (MVP 2), volatility-aware freshness windows (MVP 2), tombstones and the reference-aware `forget` and purge (MVP 2), the MCP server and local REST API (MVP 3), and OKF import/export (MVP 3).
+For orientation, these land later and are **not** part of the MVP 1 CLI: semantic/graph query (MVP 2), volatility-aware freshness windows (MVP 2), archive, tombstones, the reference-aware `forget` and purge (MVP 2), the MCP server and local REST API (MVP 3), and OKF import/export (MVP 3).

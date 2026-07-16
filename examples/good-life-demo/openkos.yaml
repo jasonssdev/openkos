@@ -1,0 +1,12 @@
+name: good-life-demo
+model: qwen2.5
+review: true
+default_sensitivity: private
+freshness_window: 7d
+
+# Layout — where the engine keeps things, relative to this file.
+# raw/ sits outside the bundle on purpose: sources are input material, not
+# concepts, so bundle/ stays a pure OKF bundle — conformant by construction
+# and shareable on its own.
+raw: raw/
+bundle: bundle/
