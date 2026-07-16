@@ -1,5 +1,5 @@
 name: good-life-demo
-model: qwen2.5
+model: qwen3:8b
 review: true
 default_sensitivity: private
 freshness_window: 7d

@@ -17,6 +17,8 @@ sensitivity: public
 
 Every choice here honors four constraints: it runs **locally**, it is **open-source and free** (no paid services, no proprietary formats), it stays **lightweight**, and it must **hold a large knowledge base over many years**. All licenses noted below are permissive (MIT, Apache-2.0, BSD) or public domain.
 
+> **On the dates in this document.** Model licences, release names, and version numbers are **volatile facts** — the fastest-moving in the project. They carry `as of` stamps for exactly the reason the rest of OpenKOS does: a licence claim written from stale knowledge is a claim that quietly becomes false. We have already been caught by this once, on Gemma. Re-verify a stamped claim against the vendor's own terms page before relying on it; do not trust this document, or a model's reputation, over the licence text itself.
+
 ## The core principle: durable core, swappable indexes
 
 The single most important design decision for longevity is not which database we pick — it is that we split the system into two layers:
@@ -75,7 +77,7 @@ Introduced in MVP 2. Each engine has a simple default and a documented scale pat
 | Vector store (`VectorStore`) | sqlite-vec (same `.db` file) | LanceDB (on-disk IVF-PQ) | Apache-2.0 |
 | Graph store (`GraphStore`) | SQLite node-edge + recursive SQL | dedicated engine only if ever needed | — |
 | In-memory graph analysis | NetworkX (on subgraphs) | NetworkX | BSD |
-| Local LLM (extraction) | Ollama (Qwen2.5 / Mistral) | larger model | Apache-2.0 |
+| Local LLM (extraction) | Ollama (Qwen3 / Mistral Small / Gemma 4) | larger model | Apache-2.0 (as of 2026-07-16) |
 
 The runtime and interoperability layer (FastAPI local API, MCP server, OKF import/export) arrives with MVP 3.
 
@@ -95,20 +97,30 @@ Two kinds of model are used: a **generative model** (to compile, extract, and an
 
 **Runtime.** [Ollama](https://ollama.com) is the recommended local runtime (one-click install, cross-platform, manages model downloads); llama.cpp and LM Studio are alternatives. They all speak the same **OpenAI-compatible HTTP API** — this names the *request/response shape* that became a de-facto standard (like "S3-compatible" storage), **not** OpenAI the company or its cloud. No data leaves the machine; speaking one common dialect simply lets OpenKOS work with any conforming local runtime, which is the opposite of lock-in. Ollama and llama.cpp are both MIT-licensed.
 
-**Recommended generative models, by hardware:**
+**Recommended generative models, by hardware** *(as of 2026-07-16)*:
 
-- **~8 GB RAM** — 1.5B–3B (`qwen2.5:3b`, `llama3.2:3b`): summarization and light extraction with tight prompts.
-- **~16 GB / Apple Silicon** — 7–8B (**Qwen2.5 / Qwen3 7B**, **Mistral 7B**): the sweet spot for extraction quality and speed.
-- **32 GB+ / GPU** — 14B–24B (Qwen 14B, Mistral Small 24B): stronger reasoning and JSON / function-calling.
+- **~8 GB RAM** — 3–4B: summarization and light extraction with tight prompts. This is the honest floor, not a comfortable target.
+- **~16 GB / Apple Silicon** — 7–8B: the sweet spot for extraction quality and speed, and what a normal MacBook should aim at.
+- **32 GB+ / GPU** — 14B–24B: stronger reasoning and JSON / function-calling.
 
-Qwen and Mistral are the defaults because they are Apache-2.0 (truly open), strong at instruction-following and structured/JSON output, come in many sizes, and Qwen is strong multilingually. A smaller model means weaker extraction and more reliance on review and the lint.
+Three families are equally acceptable at each tier, all **Apache-2.0** *(as of 2026-07-16)*: **Qwen3**, **Mistral Small**, and **Gemma 4**. A smaller model means weaker extraction and more reliance on review and the lint.
+
+**Which one is the default is a question for a spike, not for this document.** What the compiler actually needs is schema-valid JSON out of a 7–8B model with few retries, and that is measured, not argued: the [`good-life-demo`](../examples/good-life-demo/) fixture is the target shape, so the same ingest run against each candidate settles it with data. Until that spike runs, the config ships a working default and swapping it is one line in `openkos.yaml`.
+
+That is the deeper point, and it is deliberate: **OpenKOS does not bless a model.** The model sits behind `LLMBackend` and is a config value, so the project has no model policy — it has a default, first-class alternatives, and a documented reason. If your organisation restricts models by origin, or you simply prefer another vendor, swap it; the engine does not care and nothing in the bundle changes.
 
 **Recommended embedding models:** `nomic-embed-text` (Apache-2.0, 768d) or `bge-small` (MIT, 384d) — small dimensions keep storage and search cheap at scale.
 
 **If no model is installed,** `openkos init` guides rather than failing silently: it offers to pull a default matched to the detected hardware, or points to the runtime's installer if none is present. For non-technical users later, the path is an embedded runtime (no separate install), hardware-aware auto-download with a progress UI, and an optional, explicit cloud fallback — never for `confidential` content — for machines that cannot run a capable local model. There is an honest hardware floor: a weak machine runs a weaker model and leans more on review and lint.
 
 - **Model Context Protocol (MCP)** for exposing the bundle to external agents (MVP 3).
-- **Model licensing note:** not every "open" model is OSI open source. For strictly open, free defaults prefer **Qwen** and **Mistral** (Apache-2.0). **Gemma** (Gemma Terms) and **Llama** (Llama Community License) are free to use but under custom, non-OSI licenses — use them only if that distinction does not matter to you. The recommended embedding models (`bge`, `e5`, `all-MiniLM`, `nomic-embed`) are MIT or Apache-2.0.
+- **Model licensing note** *(as of 2026-07-16 — verify against the vendor's terms before relying on it)*: not every "open" model is OSI open source, and the line moves. Today, **Qwen3**, **Mistral Small**, and **Gemma 4** are all **Apache-2.0** and all acceptable.
+
+  The distinction still matters for the rest. **Gemma 1–3 and the Gemma variants** — including `EmbeddingGemma` and `FunctionGemma`, which are otherwise tempting here — remain under the **Gemma Terms of Use**, and **Llama** under the **Llama Community License**. Both are non-OSI, carry a prohibited-use policy you must pass downstream to your own users, and reserve the vendor's right to terminate. The Gemma Terms go further and reserve the right to *"restrict (remotely or otherwise) usage"*.
+
+  That last clause is why this is a philosophy question and not just a legal one. OpenKOS promises a knowledge base that runs offline and that nobody can take away from you. A model whose licence reserves remote restriction contradicts that promise, however good the weights are. **Prefer Apache-2.0 models for the defaults**; anything else is the user's informed choice, never ours on their behalf. The recommended embedding models (`bge`, `e5`, `all-MiniLM`, `nomic-embed`) are MIT or Apache-2.0 — `EmbeddingGemma` is not, which is precisely why it is not the default.
+
+  Note how this entry got here: an earlier version of this document confidently listed Gemma as non-OSI. That was written from training data that predated the Gemma 4 relicensing, and it was **already false on the day it was written**. Model licences are volatile facts. Stamp them, and check the terms page.
 
 ## Freshness and quality gates
 

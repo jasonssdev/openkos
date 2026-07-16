@@ -54,7 +54,7 @@ openkos lint
 
 OpenKOS is a local-first command-line tool. You install the engine once, then create a knowledge bundle per knowledge base — much like installing git once and running `git init` in many repositories.
 
-**Prerequisites:** Python 3.13+, and a local model runtime — [Ollama](https://ollama.com) with a model pulled (for example `ollama pull qwen2.5`). No accounts, no API keys: nothing leaves your machine.
+**Prerequisites:** Python 3.13+, and a local model runtime — [Ollama](https://ollama.com) with a model pulled (for example `ollama pull qwen3`). No accounts, no API keys: nothing leaves your machine.
 
 **Install the engine** (once, after the first PyPI release):
 

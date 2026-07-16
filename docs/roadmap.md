@@ -38,6 +38,7 @@ Deliverables:
 - Provenance chain linking every object back to its source
 - Automatic `index.md` (catalog) and `log.md` (chronological history), following the OKF reserved-file structure, with `okf_version: "0.1"` declared at the bundle root
 - A conformance check for the three rules of OKF §9, run in CI against the reference bundle
+- A **model spike**: run the same ingest against the leading Apache-2.0 candidates at the 7–8B tier (Qwen3, Mistral Small, Gemma 4) and measure which returns schema-valid extraction with fewest retries, using [`examples/good-life-demo/`](../examples/good-life-demo/) as the target shape. The default is settled by that measurement, not by argument — and it stays a config value either way
 - Lexical retrieval (SQLite FTS5) with an index-first navigation strategy
 - Query answering with citations
 - Freshness lint v0 — mechanical checks only: flag any fact whose `as of` stamp is older than the configured freshness window (default 7d), and surface orphan pages by scanning markdown links; volatility classification is deferred to MVP 2

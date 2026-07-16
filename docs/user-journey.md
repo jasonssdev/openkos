@@ -47,12 +47,12 @@ Every interface decision serves these:
 openkos init
 ```
 
-Creates the workspace: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (the concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual that tells any AI agent how to work with it, and helps the user pick a local model (via Ollama; e.g. `qwen2.5`). After this, the user never thinks about setup again.
+Creates the workspace: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (the concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual that tells any AI agent how to work with it, and helps the user pick a local model (via Ollama; e.g. `qwen3`). After this, the user never thinks about setup again.
 
 `openkos.yaml` records the defaults that shape the journey, for example:
 
 ```
-model: qwen2.5
+model: qwen3:8b
 review: true            # show changes and confirm before saving (default)
 default_sensitivity: private
 ```
@@ -85,7 +85,7 @@ The engine reads the immutable source with the local model, drafts a summary con
 ```
 $ openkos ingest ./call-with-maria-2026-07-14.txt --sensitivity confidential
 → Copied to raw/call-with-maria-2026-07-14.txt (immutable)
-→ Reading with local model (qwen2.5)…
+→ Reading with local model (qwen3:8b)…
 
 Proposed changes:
   +  bundle/sources/call-with-maria-2026-07-14.md   (new summary)

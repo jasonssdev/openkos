@@ -20,11 +20,11 @@ This is the single source of truth for the OpenKOS command line as scoped for **
 
 - **Local-first.** Every command runs on your machine and works offline.
 - **Color is a layer, not a requirement.** Output uses color to encode meaning, but respects `NO_COLOR` and a `--no-color` flag, and auto-disables when output is not a TTY (e.g. piped to a file). The symbols (`+`, `~`, `✔`, `→`) carry the meaning without color.
-- **Config lives in `openkos.yaml`** at the bundle root; the agent operating manual lives in `AGENTS.md`.
+- **Config lives in `openkos.yaml`** at the workspace root, beside `raw/` and `bundle/`; the agent operating manual lives in `AGENTS.md`, next to it.
 
 ## Install and first run
 
-**Prerequisites:** Python 3.13+, and [Ollama](https://ollama.com) with a model pulled (for example `ollama pull qwen2.5`). No accounts or API keys.
+**Prerequisites:** Python 3.13+, and [Ollama](https://ollama.com) with a model pulled (for example `ollama pull qwen3`). No accounts or API keys.
 
 Install the engine once (after the first release):
 
@@ -96,7 +96,7 @@ Structured settings for the workspace, read by the engine. It lives at the works
 
 ```yaml
 name: good-life-demo
-model: qwen2.5            # local model served via Ollama
+model: qwen3:8b           # local model served via Ollama; see tech_stack.md
 review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
