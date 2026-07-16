@@ -10,7 +10,7 @@ A guide for **maintainers** — how contributions are reviewed and decided. It c
 
 ## The flow
 
-1. **Issue before PR.** For anything non-trivial, the idea is discussed in an issue (or a design-proposal issue) *before* code is written. This is the single most important rule — it prevents large PRs that don't fit and painful late rejections.
+1. **Issue before PR.** For anything non-trivial, the idea is discussed in an issue (or a design-proposal issue) *before* code is written. This is the single most important rule — it prevents large PRs that don't fit and painful late rejections. For significant changes, the agreed approach is then specified as an OpenSpec change under `openspec/changes/` before implementation (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 2. **Triage.** Respond promptly (even just "thanks, I'll look"), label it, and judge fit against the vision, roadmap, and principles. Mark suitable ones `good first issue`.
 3. **Agree the approach** in the issue for significant changes, so the PR arrives pre-aligned in direction.
 4. **Pull request + CI.** The contributor forks, branches, and opens a PR. CI runs automatically (tests, Ruff, MyPy) so review focuses on substance, not formatting.

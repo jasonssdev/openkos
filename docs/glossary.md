@@ -53,7 +53,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Knowledge Object (KO)** — The fundamental unit of knowledge in OpenKOS: an OKF concept document plus a thin OpenKOS layer (provenance chain, freshness class, recommended type vocabulary). See [`knowledge-object-model.md`](knowledge-object-model.md).
 
-**Lint** — The operation that checks the health of the bundle: unstamped volatile facts, stale claims, contradictions, orphan pages. Enforces the freshness discipline automatically.
+**Lint** — The operation that checks the health of the bundle. In MVP 1 it is mechanical: stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts not referenced by any markdown link from `index.md` or another concept, found by scanning links). Volatility classification and contradiction detection arrive in MVP 2. Enforces the freshness discipline automatically.
 
 **LLM Wiki pattern** — Andrej Karpathy's idea that a language model should *incrementally build and maintain* a persistent, interlinked knowledge base between you and your sources, rather than re-retrieving raw documents on every query. The pattern OpenKOS implements.
 
@@ -97,7 +97,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Timeless** — A freshness class for facts that do not decay and need no date. One of the three legal forms of a fact.
 
-**Tombstone** — A log entry left behind when an object is deleted, recording that it existed and was removed (except in a privacy purge), so deletion stays auditable.
+**Tombstone** — A log entry left behind when an object is deleted, recording that it existed and was removed (except in a privacy purge), so deletion stays auditable. Arrives with the MVP 2 lifecycle; in MVP 1, deletion relies on normal git history for recovery.
 
 **Two-output rule** — The practice that a good answer to a query can be filed back into the bundle as a new concept, so that exploration compounds just like ingested sources do.
 

@@ -203,7 +203,7 @@ The most common way a knowledge base rots is a present-tense claim about a fast-
 - **Snapshot** — a dated observation; it never goes stale because it claims what was true *on a date*.
 - **Pointer** — for facts whose current value matters, store where the truth lives (a `resource`), optionally with the last observed value and an `as of` stamp.
 
-A freshness lint enforces this: volatile claims must be stamped or expressed as pointers, and aged stamps are surfaced for re-observation rather than silently trusted. Freshness is a property of the system, not a habit the writer has to remember.
+A freshness lint enforces this: volatile claims must be stamped or expressed as pointers, and aged stamps are surfaced for re-observation rather than silently trusted. Freshness is a property of the system, not a habit the writer has to remember. The lint arrives in stages: in MVP 1 it is purely mechanical, flagging any `as of` stamp older than the configured freshness window; volatility classification and volatility-aware windows (per-type, LLM-suggested) arrive in MVP 2.
 
 These three forms were chosen over the main alternatives: a per-object TTL (guesswork, and a binary cutoff that cannot tell timeless from volatile); a decaying-confidence score (opaque and falsely precise, and at odds with explainability); full bi-temporal modeling (rigorous but heavy for personal markdown); re-verification on read (that is RAG's re-derive-everything model, which breaks local-first and offline use); and pure event-sourcing (clean, since everything becomes a snapshot, but it needs a reduction layer to answer "what is true now"). The three-forms lint is lightweight, explainable, and separates a fact's temporal nature from its content — and as a bonus it yields a lightweight bi-temporal record for free: a `snapshot` approximates valid-time, and git history provides transaction-time.
 
@@ -279,7 +279,7 @@ Because OpenKOS accumulates knowledge and preserves history, removal is delibera
 - **Archive** — set `status: deprecated`; the object fades from retrieval and the index but stays in history. Non-destructive.
 - **Merge** — fold a duplicate or mis-extracted object into another, preserving provenance.
 - **Retire a fact** — move a stale claim into a dated snapshot (the freshness path).
-- **Delete an object** — remove a concept document, leaving a tombstone in `log.md`; recoverable via git.
+- **Delete an object** — remove a concept document and its references from `index.md`; recoverable via normal git history. From MVP 2, deletion also leaves a tombstone in `log.md`.
 - **Purge a source** — the right to be forgotten: remove the raw source and everything derived from it, rewrite git history, and clear derived indexes. Destructive and irreversible.
 
 A `forget` flow presents scope and depth, shows inbound references and derived descendants before acting, defaults to the least destructive option, and requires explicit confirmation for a purge.

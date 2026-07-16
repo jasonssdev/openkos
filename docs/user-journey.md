@@ -135,7 +135,7 @@ A good answer can be filed back as a new concept, so exploration compounds — f
 ## Secondary journeys
 
 - **Ask:** `openkos query "…"` — cited answers assembled from the bundle.
-- **Keep it honest:** `openkos lint` — flags unstamped volatile facts, stale claims, and orphan pages.
+- **Keep it honest:** `openkos lint` — in MVP 1, flags stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts no markdown link reaches from `index.md` or another concept); volatility-aware and contradiction checks arrive in MVP 2.
 - **Orient:** `openkos status` — what the base contains, recent activity, anything needing attention.
 - **Browse:** open the folder in any editor — the bundle is just markdown.
 
@@ -143,7 +143,7 @@ A good answer can be filed back as a new concept, so exploration compounds — f
 
 The bundle is your files, so you can edit any concept document directly — in Obsidian, VS Code, or any editor — without asking the engine. This is not a workaround; it is the point. The canonical files are the source of truth, and the engine's indexes are derived from them.
 
-When you edit a concept by hand, the engine reconciles the next time you run a command: it notices the file changed (by content hash), re-indexes what's affected, and notes the external edit in `log.md`. Because every index is rebuildable from the files, your edit is never lost — the engine adapts to it. If the edit introduced a problem (invalid frontmatter, a broken link, an unstamped volatile fact), `openkos lint` surfaces it; the engine flags, it does not overrule you.
+When you edit a concept by hand, the engine reconciles the next time you run a command: it notices the file changed (by content hash), re-indexes what's affected, and notes the external edit in `log.md`. Because every index is rebuildable from the files, your edit is never lost — the engine adapts to it. If the edit introduced a problem (invalid frontmatter, a broken link, a stale `as of` stamp), `openkos lint` surfaces it; the engine flags, it does not overrule you.
 
 When you later ingest a source that touches a concept you edited, the engine reads the current file first and builds on your version, and review mode shows the merged change before saving — so the compiler adds to your edit rather than overwriting it. Git keeps every version, so any change stays diffable and reversible.
 

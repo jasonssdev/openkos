@@ -42,7 +42,7 @@ openkos ingest ./sources
 # ask a question and get a cited answer from the compiled knowledge
 openkos query "what did I conclude about vector databases?"
 
-# check the base stays honest — unstamped volatile facts, stale claims, orphans
+# check the base stays honest — stale `as of` stamps and orphan pages
 openkos lint
 ```
 

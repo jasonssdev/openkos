@@ -39,8 +39,8 @@ Deliverables:
 - Automatic `index.md` (catalog) and `log.md` (chronological history)
 - Lexical retrieval (SQLite FTS5) with an index-first navigation strategy
 - Query answering with citations
-- Freshness lint v0 — classify claims as timeless, snapshot, or pointer; flag unstamped volatile facts
-- Basic lifecycle operations — undo the last ingest (via `git revert`), archive (`status: deprecated`), and simple object deletion; the reference-aware `forget` flow and privacy purge arrive in MVP 2
+- Freshness lint v0 — mechanical checks only: flag any fact whose `as of` stamp is older than the configured freshness window (default 7d), and surface orphan pages by scanning markdown links; volatility classification is deferred to MVP 2
+- Basic lifecycle operations — undo the last ingest (via `git revert`), archive (`status: deprecated`), and simple object deletion (removing the concept and its index references, with undo through normal git history); tombstones, the reference-aware `forget` flow, and the privacy purge arrive in MVP 2
 - A command-line interface: `init`, `ingest`, `query`, `lint`, `status`, and a basic `forget` (see the [CLI reference](cli.md))
 - Output is plain files, browsable in Obsidian, VS Code, or GitHub
 
@@ -64,7 +64,8 @@ Deliverables:
 - Local embeddings (Sentence Transformers) and local model runtimes (Ollama)
 - The two-output rule: a good answer can be filed back as a new OKF concept
 - Incremental compilation and change tracking
-- Freshness lint v1 — aged-stamp warnings, contradiction and staleness detection, and a guided reconcile workflow
+- Freshness lint v1 — volatility classification with volatility-aware windows (per-type, LLM-suggested), contradiction and staleness detection, and a guided reconcile workflow
+- The full `forget` surface — tombstones, the reference-aware scope/depth flow, and the privacy purge (git-history rewrite + index cleanup)
 - Optional additional producers (PDF, web clip) as the extraction pipeline matures
 
 What a user can do after MVP 2: ask questions that require synthesizing many sources, navigate a real graph of their knowledge, and watch the base get richer and stay honest as they use it.

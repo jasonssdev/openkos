@@ -65,7 +65,12 @@ Answers a natural-language question from the compiled bundle, with citations bac
 
 ### `openkos lint`
 
-Health-checks the bundle. In MVP 1 (freshness v0) this flags unstamped volatile facts, and surfaces orphan pages. Reports errors and warnings; does not modify anything without confirmation.
+Health-checks the bundle. In MVP 1 (freshness v0) the checks are deliberately mechanical:
+
+- **Stale stamps** — flags any fact whose `as of` stamp is older than the configured `freshness_window` (default `7d`). MVP 1 performs no volatility classification; volatility-aware windows (per-type, LLM-suggested) arrive in **MVP 2**.
+- **Orphan pages** — flags any concept file not referenced by a markdown link from `index.md` or from another concept. This is computed by scanning markdown links; no graph is needed (graph-based analysis is **MVP 2**).
+
+Reports errors and warnings; does not modify anything without confirmation.
 
 ### `openkos status`
 
@@ -73,7 +78,7 @@ Shows what the bundle contains (counts of sources and concepts), recent activity
 
 ### `openkos forget <path-or-id>`
 
-Removes knowledge. In **MVP 1** this covers the least-destructive operations: undo the last ingest (via `git revert`), archive an object (`status: deprecated`), and simple object deletion (leaving a tombstone in `log.md`; recoverable via git). The reference-aware scope/depth flow and the privacy **purge** (git-history rewrite + index cleanup) arrive in **MVP 2**.
+Removes knowledge. In **MVP 1** this covers the least-destructive operations: undo the last ingest (via `git revert`), archive an object (`status: deprecated`), and simple object deletion — removing the concept and its references from `index.md`, with undo through normal git history. Tombstones, the reference-aware scope/depth flow, and the privacy **purge** (git-history rewrite + index cleanup) arrive in **MVP 2**.
 
 ## `openkos.yaml` (bundle config)
 
@@ -89,4 +94,4 @@ freshness_window: 7d     # age after which a stamp is flagged for re-observation
 
 ## Not in MVP 1
 
-For orientation, these land later and are **not** part of the MVP 1 CLI: semantic/graph query (MVP 2), the reference-aware `forget` and purge (MVP 2), the MCP server and local REST API (MVP 3), and OKF import/export (MVP 3).
+For orientation, these land later and are **not** part of the MVP 1 CLI: semantic/graph query (MVP 2), volatility-aware freshness windows (MVP 2), tombstones and the reference-aware `forget` and purge (MVP 2), the MCP server and local REST API (MVP 3), and OKF import/export (MVP 3).

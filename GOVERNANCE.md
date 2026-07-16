@@ -21,7 +21,7 @@ OpenKOS is **pre-alpha** and led by its founder and lead maintainer, **Jason ([@
 We aim for **consensus first**. Most changes are decided in the open, on the relevant issue or pull request, through discussion.
 
 - **Small changes** (bug fixes, docs, tightly scoped improvements): decided by normal review on the pull request.
-- **Significant changes** (anything touching the knowledge model, OKF conformance, the ingestion pipeline, public interfaces, or the project's principles): start with a **design proposal** issue (there is a template for it). These are discussed openly before implementation.
+- **Significant changes** (anything touching the knowledge model, OKF conformance, the ingestion pipeline, public interfaces, or the project's principles): start with a **design proposal** issue (there is a template for it). These are discussed openly before implementation, and the agreed approach is then written down as an OpenSpec change (delta specs under `openspec/changes/`) before code is built — see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Architecture Decision Records (ADRs):** consequential technical decisions are recorded as ADRs in `docs/adr/`, so the reasoning is preserved for contributors and future maintainers.
 - **When consensus is not reached:** the lead maintainer makes the final call, and records the reasoning (usually as an ADR).
 
