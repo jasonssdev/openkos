@@ -29,6 +29,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pydantic>=2.13.4",
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
     "pyyaml>=6.0.3",
     "ruff>=0.15.21",
     "typer>=0.27.0",
@@ -37,6 +38,19 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib"]
+
+# Coverage is opt-in: `--cov` is deliberately not in pytest's addopts, so plain
+# `uv run pytest` stays fast for the local loop. CI passes `--cov`, and because
+# the gate lives here, a local `uv run pytest --cov` gates identically to CI.
+[tool.coverage.run]
+source = ["openkos"]
+# Line coverage alone lets an `if` that never goes both ways read as covered;
+# branch coverage counts each direction.
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
 
 # Ruff infers `target-version` from `project.requires-python` (3.13) and
 # defaults `line-length` to 88; neither is restated here. The formatter runs on

@@ -60,8 +60,8 @@ rules:
     test_command: "uv run pytest"                                        # verified working
     lint_command: "uv run ruff check . && uv run ruff format --check ."  # verified working
     type_command: "uv run mypy ."                                        # verified working
-    build_command: ""      # no build step; uv_build produces the wheel on publish, not in the dev loop
-    coverage_threshold: 0  # no coverage tooling configured yet
+    build_command: "uv build"  # packaging validated in CI (build job: uv build + wheel smoke test)
+    coverage_threshold: 90     # pytest-cov branch coverage, gated via [tool.coverage.report] fail_under
   archive:
     - Warn before merging destructive deltas
     - Keep raw/ immutable; never rewrite immutable sources during archive
@@ -90,8 +90,9 @@ testing:
     integration: false
     e2e: false
   coverage:
-    available: false
-    command: ""
+    available: true
+    command: "uv run pytest --cov"
+    tool: pytest-cov (branch coverage, fail_under 90 via [tool.coverage.report] in pyproject.toml)
   quality_tools:
     linter:
       available: true

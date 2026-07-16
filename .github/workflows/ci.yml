@@ -85,5 +85,32 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      - name: Run tests
-        run: uv run pytest
+      # `--cov` enables the coverage gate configured in pyproject.toml
+      # ([tool.coverage.report] fail_under). The flag stays out of pytest's
+      # addopts so plain local runs stay fast, and a local `uv run pytest --cov`
+      # gates identically to this step.
+      - name: Run tests with coverage
+        run: uv run pytest --cov
+
+  # Packaging is validated before any release exists: `uv build` exercises the
+  # uv_build backend, and installing the wheel into an isolated environment
+  # proves the artifact itself is sound (the package imports, py.typed ships
+  # with it) — not just that the editable dev install happens to work.
+  build:
+    name: build (uv build + wheel smoke test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      # `--isolated --no-project` installs only the built wheel, so the import
+      # exercises the artifact rather than the checkout or the dev environment.
+      - name: Wheel smoke test
+        run: uv run --isolated --no-project --with dist/openkos-*.whl python -c "import openkos; openkos.main()"

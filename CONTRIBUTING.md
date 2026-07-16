@@ -63,6 +63,7 @@ uv run ruff check .      # lint
 uv run ruff format .     # format
 uv run mypy .            # static type checking
 uv run pytest            # tests
+uv run pytest --cov      # tests + coverage (CI gates at 90%)
 ```
 
 We use pre-commit hooks to run these automatically:
@@ -79,7 +80,7 @@ uv run pre-commit install
 2. **Keep the change focused.** One logical change per PR. Smaller PRs are reviewed faster.
 3. **Add or update tests** for any behavior change. New functionality needs tests; bug fixes need a regression test.
 4. **Update docs** when you change behavior, interfaces, or the knowledge model.
-5. **Pass the quality gates** — lint, format, type check, and tests must be green.
+5. **Pass the quality gates** — lint, format, type check, tests, and the 90% coverage gate must be green. CI also builds the wheel and smoke-tests it to validate packaging.
 6. **Reference the issue** your PR addresses — and the `openspec/` change folder, if it has one — and describe what changed and why.
 7. Be ready for review discussion. Maintainers may ask for changes to keep the project coherent.
 

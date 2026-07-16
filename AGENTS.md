@@ -42,7 +42,7 @@ Every change must respect these. A technically good change that violates one is 
 ## Quality gates
 
 - Tests with **pytest** (unit / integration / e2e). Test the deterministic parts thoroughly; spike-then-test the fuzzy extraction parts.
-- **Ruff** (lint + format) and **MyPy** (types) must pass. CI runs all three; nothing merges without green CI + review.
+- **Ruff** (lint + format) and **MyPy** (types) must pass. CI runs all three plus a 90% branch-coverage gate (`pytest --cov`) and a packaging build (wheel smoke test); nothing merges without green CI + review.
 - **Conventional Commits** with project scopes: `okf, ingest, extract, graph, retrieval, memory, lint, cli, api, mcp, docs, ci`.
 
 ## Architecture Decision Records (ADRs)
