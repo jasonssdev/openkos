@@ -2,7 +2,7 @@
 schema: spec-driven
 
 context: |
-  Tech stack: Python 3.13+ (requires-python >=3.13, .python-version 3.13), src/ layout, package `openkos` (ships py.typed), uv for env+deps (uv.lock present), no runtime deps yet — typer/pydantic/pyyaml sit in dev deps and move to runtime when the CLI imports them
+  Tech stack: Python 3.13+ (requires-python >=3.13, .python-version 3.13), src/ layout, package `openkos` (ships py.typed), uv for env+deps (uv.lock present), no runtime deps yet — typer/pydantic/python-frontmatter/ruamel.yaml sit in dev deps and move to runtime when the code imports them
   Architecture: local-first knowledge engine on the Open Knowledge Format (OKF); canonical layer (model, bundle, state) never depends on derived layer (retrieval, graph, memory); engine.py stays thin; extension points are typing.Protocol (Producer, Consumer, VectorStore, GraphStore, LLMBackend); core stays synchronous
   Testing: pytest configured via [tool.pytest.ini_options] (testpaths=["tests"], --import-mode=importlib); tests/unit exists, integration/e2e arrive when code justifies them. Ruff and MyPy (strict) configured in pyproject. CI runs quality (ruff+mypy) once plus pytest on 3.13 and 3.14. Do NOT add pythonpath=["src"] — uv installs editable via .pth, and pythonpath would make tests pass on a broken install.
   Style: Ruff (lint+format) and MyPy (types) required by AGENTS.md policy; Conventional Commits with scopes okf, ingest, extract, graph, retrieval, memory, lint, cli, api, mcp, docs, ci
