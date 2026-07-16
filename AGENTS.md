@@ -30,7 +30,7 @@ Every change must respect these. A technically good change that violates one is 
 
 - **Specs are the contract.** Behavior is agreed in `openspec/` before it is built: `openspec/specs/{domain}/spec.md` is the living per-domain contract; `openspec/changes/{change-name}/` carries a change in flight (proposal, delta specs, design, tasks) until archive merges its deltas into the main spec; `openspec/config.yaml` holds the per-phase rules. It is tracked and reviewed like any other file. Required for anything touching the knowledge model, the OKF conformance surface, the ingestion pipeline, or public interfaces (CLI, API, MCP); below that bar, see `CONTRIBUTING.md`.
 - **Python 3.13+**, `src/` layout, package `openkos`, `uv` for envs/deps.
-- **`pyproject.toml` is the single config source** — deps, the console entry point (`openkos = "openkos.cli.main:app"`), and Ruff / MyPy / Pytest settings.
+- **`pyproject.toml` is the single config source** — deps, the console entry point (currently `openkos = "openkos:main"`, a pre-MVP stub; it moves to `openkos.cli.main:app` when the `cli` package lands in MVP 1), and Ruff / MyPy / Pytest settings.
 - **Ship types:** keep `src/openkos/py.typed`.
 - **Start lean, grow by MVP.** Create a package when its code arrives — do not scaffold empty folders. MVP 1 needs: `model`, `bundle`, `state`, `llm`, `producers`, `compiler`, `retrieval` (lexical + context), `lint`, `lifecycle`, `config`, `cli`.
 - **Extension interfaces are `typing.Protocol`** (`Producer`, `Consumer`, `VectorStore`, `GraphStore`, `LLMBackend`); plugins via entry points.

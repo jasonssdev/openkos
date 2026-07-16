@@ -1,13 +1,20 @@
 [project]
 name = "openkos"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local-first engine that turns your scattered text into a living, portable knowledge base in the Open Knowledge Format (OKF)"
 readme = "README.md"
+license = "Apache-2.0"
 authors = [
     { name = "Jason Dev", email = "jasonssdev@gmail.com" }
 ]
 requires-python = ">=3.13"
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/jasonssdev/openkos"
+Repository = "https://github.com/jasonssdev/openkos"
+Issues = "https://github.com/jasonssdev/openkos/issues"
+Changelog = "https://github.com/jasonssdev/openkos/blob/main/CHANGELOG.md"
 
 [project.scripts]
 openkos = "openkos:main"

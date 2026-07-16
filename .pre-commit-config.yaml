@@ -1,0 +1,21 @@
+# Local hooks run through uv (`language: system`) so every tool executes at the
+# exact version pinned in uv.lock — no drift between pre-commit and CI.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src tests
+        language: system
+        pass_filenames: false
+        files: \.pyi?$

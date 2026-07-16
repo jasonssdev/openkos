@@ -83,10 +83,10 @@ rules:
 testing:
   strict_tdd: true
   test_runner:
-    command: ""
-    framework: pytest (declared as dev dependency, not yet configured or exercised)
+    command: "uv run pytest"
+    framework: pytest (configured via [tool.pytest.ini_options]; unit suite in tests/unit)
   layers:
-    unit: false
+    unit: true
     integration: false
     e2e: false
   coverage:
@@ -94,14 +94,14 @@ testing:
     command: ""
   quality_tools:
     linter:
-      available: false
-      command: ""
-      tool: ruff (declared as dev dependency, no [tool.ruff] config yet)
+      available: true
+      command: "uv run ruff check"
+      tool: ruff ([tool.ruff.lint] configured in pyproject.toml)
     type_checker:
-      available: false
-      command: ""
-      tool: mypy (declared as dev dependency, no [tool.mypy] config yet)
+      available: true
+      command: "uv run mypy ."
+      tool: mypy (strict mode via [tool.mypy] in pyproject.toml)
     formatter:
-      available: false
-      command: ""
-      tool: ruff (declared as dev dependency, no [tool.ruff] config yet)
+      available: true
+      command: "uv run ruff format --check"
+      tool: ruff format (default settings, enforced in CI)
