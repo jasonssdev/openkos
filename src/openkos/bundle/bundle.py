@@ -7,6 +7,7 @@ The only module in `bundle/` that touches the filesystem — `index.py` and
 from datetime import date
 from pathlib import Path
 
+from openkos import fsio
 from openkos.bundle.index import render_index
 from openkos.bundle.log import render_log
 
@@ -23,9 +24,5 @@ def create(bundle_dir: Path, today: date) -> None:
     partially written bundle is left as-is for manual recovery.
     """
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    with (bundle_dir / "index.md").open(
-        "x", encoding="utf-8", newline=""
-    ) as index_file:
-        index_file.write(render_index())
-    with (bundle_dir / "log.md").open("x", encoding="utf-8", newline="") as log_file:
-        log_file.write(render_log(today))
+    fsio.write_exclusive(bundle_dir / "index.md", render_index())
+    fsio.write_exclusive(bundle_dir / "log.md", render_log(today))

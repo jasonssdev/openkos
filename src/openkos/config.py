@@ -10,6 +10,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
+from typing import NamedTuple
+
+from openkos import fsio
 
 
 @dataclass(frozen=True)
@@ -39,31 +42,61 @@ class WorkspaceLayout:
         return self.root / "bundle"
 
 
-def _refusal_conditions(root: Path) -> Iterator[tuple[bool, str]]:
+class RefusalCondition(NamedTuple):
+    """One reason `init` might refuse to write, with its workspace classification."""
+
+    marks_workspace: bool
+    reason: str
+
+
+def _refusal_conditions(root: Path) -> Iterator[RefusalCondition]:
     """The ONE place that defines every reason `init` might refuse to write at `root`.
 
-    Yields `(marks_workspace, reason)` in priority order -- the first item
-    is the reason `refusal_reason` reports. `marks_workspace` is `True` for
-    the four conditions the spec names as "already a workspace" (existing
-    `openkos.yaml`, existing `AGENTS.md`, non-empty `raw/`, non-empty
-    `bundle/`) and `False` for the fifth: `raw` or `bundle` already exists
-    as a plain file. That fifth condition answers a different question --
-    a lone file named `raw` is not a workspace, yet init still cannot write
-    there, because `Path.mkdir` would raise an uncaught `FileExistsError`
-    on the collision. `is_workspace` and `refusal_reason` both read this
+    Yields `RefusalCondition(marks_workspace, reason)` in priority order --
+    the first item is the reason `refusal_reason` reports. `marks_workspace`
+    is `True` for the four conditions the spec names as "already a
+    workspace" (existing `openkos.yaml`, existing `AGENTS.md`, non-empty
+    `raw/`, non-empty `bundle/`) and `False` for the two that answer a
+    different question: `raw` or `bundle` already exists as a plain file, or
+    as a symlink. Neither is a workspace, yet init still cannot write there.
+    For the plain-file case, `Path.mkdir` would raise `FileExistsError` --
+    an `OSError` Phase B (`cli/main.py`) DOES catch, so nothing goes
+    uncaught, but without this pre-flight condition the failure would only
+    surface as the generic "failed while creating the workspace" message,
+    and only after any earlier Phase-B writes had already landed. For the
+    symlink case, `Path.mkdir`/`open("x")` would follow the link, letting
+    init write through it into whatever directory or file the symlink
+    targets -- potentially outside the workspace root entirely -- instead
+    of refusing outright. `is_workspace` and `refusal_reason` both read this
     generator, so extending what counts as either question changes both at
     once instead of the two silently drifting apart.
     """
     layout = WorkspaceLayout(root)
     if layout.config_path.exists():
-        yield True, f"'{layout.config_path.name}' already exists in this directory"
+        yield RefusalCondition(
+            True, f"'{layout.config_path.name}' already exists in this directory"
+        )
     if layout.agents_path.exists():
-        yield True, f"'{layout.agents_path.name}' already exists in this directory"
+        yield RefusalCondition(
+            True, f"'{layout.agents_path.name}' already exists in this directory"
+        )
     for path in (layout.raw_dir, layout.bundle_dir):
-        if path.exists() and not path.is_dir():
-            yield False, f"'{path.name}' exists and is not a directory"
+        if path.is_symlink():
+            yield RefusalCondition(False, f"'{path.name}' is a symlink")
+        elif path.exists() and not path.is_dir():
+            yield RefusalCondition(
+                False, f"'{path.name}' exists and is not a directory"
+            )
+        elif path == layout.bundle_dir and _non_empty_dir(path):
+            yield RefusalCondition(
+                True,
+                f"'{path.name}/' already exists and is not empty; a previous init "
+                "may have crashed mid-write -- inspect and remove it before retrying",
+            )
         elif _non_empty_dir(path):
-            yield True, f"'{path.name}/' already exists and is not empty"
+            yield RefusalCondition(
+                True, f"'{path.name}/' already exists and is not empty"
+            )
 
 
 def is_workspace(root: Path) -> bool:
@@ -105,8 +138,7 @@ def write_agents(root: Path) -> None:
     """
     content = _read_template("agents.md.template")
     layout = WorkspaceLayout(root)
-    with layout.agents_path.open("x", encoding="utf-8", newline="") as agents_file:
-        agents_file.write(content)
+    fsio.write_exclusive(layout.agents_path, content)
 
 
 def write_config(root: Path) -> None:
@@ -120,5 +152,4 @@ def write_config(root: Path) -> None:
     """
     content = _read_template("openkos.yaml.template")
     layout = WorkspaceLayout(root)
-    with layout.config_path.open("x", encoding="utf-8", newline="") as config_file:
-        config_file.write(content)
+    fsio.write_exclusive(layout.config_path, content)

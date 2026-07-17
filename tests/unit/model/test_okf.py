@@ -5,7 +5,11 @@ conformance rules of OKF §9 (docs/okf-alignment.md, AGENTS.md:41). Nothing
 else in the engine parses or emits frontmatter.
 """
 
+import os
+import stat
 from pathlib import Path
+
+import pytest
 
 from openkos.model import okf
 
@@ -83,3 +87,37 @@ def test_check_conformance_skips_reserved_filenames(tmp_path: Path) -> None:
 def test_check_conformance_passes_vacuously_on_empty_bundle(tmp_path: Path) -> None:
     """No non-reserved `.md` files means rules 1-2 hold vacuously (scenario 14)."""
     assert okf.check_conformance(tmp_path) == []
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="permission-based read failures require a POSIX non-root user",
+)
+def test_check_conformance_raises_oserror_on_unreadable_file(tmp_path: Path) -> None:
+    """An unreadable non-reserved `.md` raises `OSError`, not a conformance violation.
+
+    Root is exempted (`geteuid() == 0`) because root bypasses POSIX
+    permission bits, making this an untestable claim on that platform
+    rather than a false one, matching the pattern already used for
+    `raw/`'s permission tests in `test_init.py`.
+    """
+    target = tmp_path / "unreadable.md"
+    target.write_text("---\ntype: concept\n---\nBody.\n", encoding="utf-8")
+    original_mode = stat.S_IMODE(target.stat().st_mode)
+    target.chmod(0o000)
+    try:
+        with pytest.raises(PermissionError):
+            okf.check_conformance(tmp_path)
+    finally:
+        target.chmod(original_mode)
+
+
+def test_check_conformance_raises_unicode_decode_error_on_bad_encoding(
+    tmp_path: Path,
+) -> None:
+    """A non-reserved `.md` with bytes invalid as utf-8 raises `UnicodeDecodeError`."""
+    target = tmp_path / "bad-encoding.md"
+    target.write_bytes(b"---\ntype: concept\n---\n\xff\xfe invalid utf-8 body\n")
+
+    with pytest.raises(UnicodeDecodeError):
+        okf.check_conformance(tmp_path)

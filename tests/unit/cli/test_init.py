@@ -21,13 +21,30 @@ from openkos.model import okf
 runner = CliRunner()
 
 
-def _snapshot(root: Path) -> dict[Path, bytes]:
-    """Capture every file's exact bytes under `root`, keyed by relative path."""
-    return {
-        path.relative_to(root): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
+def _snapshot_entry(path: Path) -> bytes | None | tuple[str, str]:
+    """Classify one path for `_snapshot`, without ever following a symlink.
+
+    A symlink is checked first because `Path.is_dir()`/`is_file()` follow
+    it -- checking those first would either misread a symlink-to-dir as a
+    plain directory or crash `read_bytes()` on a broken symlink.
+    """
+    if path.is_symlink():
+        return ("symlink", str(path.readlink()))
+    if path.is_dir():
+        return None
+    return path.read_bytes()
+
+
+def _snapshot(root: Path) -> dict[Path, bytes | None | tuple[str, str]]:
+    """Capture every entry under `root`, keyed by relative path.
+
+    Files map to their exact bytes, directories map to `None`, and symlinks
+    map to their raw (unfollowed) target. Recording directory and symlink
+    entries too (not only `is_file()`) means a refusal test also catches a
+    stray directory or symlink created outside pre-flight -- a file-only
+    snapshot would miss both, since neither holds byte content of its own.
+    """
+    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def test_refuses_when_openkos_yaml_exists(
@@ -80,6 +97,76 @@ def test_refuses_when_dir_non_empty(
     assert dirname in result.stderr
     assert "not empty" in result.stderr
     assert _snapshot(tmp_path) == before
+
+
+def test_refuses_stray_bundle_names_crashed_init_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stray non-empty `bundle/` names the likely crashed-init cause + remediation.
+
+    Uses its own `tmp_path` fixture, distinct from
+    `test_refuses_when_dir_non_empty`'s parametrized `raw`/`bundle` fixture,
+    so this scenario-14 message assertion and that generic "not empty"
+    assertion cannot mask each other.
+    """
+    monkeypatch.chdir(tmp_path)
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "leftover.md").write_text("stray", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "bundle" in result.stderr
+    assert "crashed" in result.stderr or "interrupted" in result.stderr
+    assert "not empty" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="symlink creation without privilege requires POSIX"
+)
+@pytest.mark.parametrize("dirname", ["raw", "bundle"])
+@pytest.mark.parametrize(
+    "target_kind", ["dir", "file", "broken"], ids=["to_dir", "to_file", "broken"]
+)
+def test_refuses_when_dir_is_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dirname: str, target_kind: str
+) -> None:
+    """A pre-existing symlinked `raw`/`bundle` refuses in pre-flight, never followed.
+
+    Covers symlink-to-dir, symlink-to-file, and a broken symlink -- all
+    three are silently followed by `exists()`/`is_dir()`, which is exactly
+    what `is_symlink()` catches without following the link itself.
+    """
+    monkeypatch.chdir(tmp_path)
+    outside_root = tmp_path.parent / f"{tmp_path.name}-outside-{dirname}-{target_kind}"
+    link_path = tmp_path / dirname
+    if target_kind == "dir":
+        outside_root.mkdir()
+        link_path.symlink_to(outside_root, target_is_directory=True)
+    elif target_kind == "file":
+        outside_root.write_text("outside content", encoding="utf-8")
+        link_path.symlink_to(outside_root)
+    else:
+        link_path.symlink_to(outside_root)  # nonexistent target: broken symlink
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert dirname in result.stderr
+    assert "symlink" in result.stderr
+    assert _snapshot(tmp_path) == before
+    if target_kind == "dir":
+        assert list(outside_root.iterdir()) == []
+    elif target_kind == "file":
+        assert outside_root.read_text(encoding="utf-8") == "outside content"
+    else:
+        assert not outside_root.exists()
 
 
 @pytest.mark.parametrize("dirname", ["raw", "bundle"])
