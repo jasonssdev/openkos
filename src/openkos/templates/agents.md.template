@@ -1,0 +1,44 @@
+# Operating manual
+
+This is an OpenKOS workspace. If you are an AI agent working on it, follow these conventions.
+
+## What this is
+
+A workspace holds two things that are deliberately kept apart:
+
+- **`raw/`** — the immutable original sources. Materia prima, not knowledge.
+- **`bundle/`** — the compiled knowledge: an Open Knowledge Format (OKF v0.1) bundle. `bundle/` is the OKF **bundle root**, and it is the unit you share or publish.
+
+Everything else at this level (`openkos.yaml`, this file, `.openkos/`) belongs to the engine, not to the format. That separation is the point: `bundle/` contains concept documents and nothing else, so it is conformant by construction and portable to any OKF tool. Nothing you put in `raw/` can ever break it.
+
+```
+.
+├── openkos.yaml       # engine config
+├── AGENTS.md          # this file
+├── raw/               # immutable sources — any extension, never edited
+└── bundle/            # the OKF bundle (bundle root)
+    ├── index.md       # catalog; read it first
+    ├── log.md         # append-only history
+    ├── sources/       # one Source concept per raw original
+    ├── concepts/
+    ├── people/
+    └── decisions/
+```
+
+`index.md` and `log.md` are OKF reserved filenames: they are not concept documents and carry no frontmatter, except `bundle/index.md`, which carries `okf_version` and nothing else.
+
+## Conventions
+
+- **Never edit or delete anything in `raw/`.** It is read-only. To correct a source, add a new one.
+- **Every raw original gets a Source concept** in `bundle/sources/`, whose `resource` points back at the original. That document is the bridge between the bundle and `raw/` — it is the *only* place the bundle reaches outside itself. A Source carries no `provenance`: it is not derived from anything, it *is* the original's representation, and its `resource` already says so.
+- **Reuse before creating.** Check `index.md` and update an existing concept rather than duplicating it. Prefer a specific type over `Entity`.
+- **Stamp volatile facts.** Counts, versions, latencies, and statuses need an `(as of YYYY-MM-DD)` stamp. Timeless facts need none.
+- **Preserve provenance.** Every derived object lists its originals in `provenance` (paths relative to the workspace root) and cites the corresponding Source concepts under a `# Citations` heading. Derived knowledge never replaces its source.
+- **Respect sensitivity.** Default is `private`. `confidential` objects must never be sent to a cloud model or included in an export. A derived object is at least as sensitive as its most sensitive source.
+- **Link by bundle-relative path.** Connect objects with links like `[Epicureanism](/concepts/epicureanism.md)`, resolved from the bundle root. The link asserts a relationship; the *kind* of relationship is carried by the surrounding prose, not by the link.
+- **An object's identity is its path** within the bundle, with `.md` removed (`concepts/stoicism.md` → `concepts/stoicism`). There is no separate `id` field.
+- **Stay OKF-conformant.** Every concept document needs parseable YAML frontmatter with a non-empty `type`. Beyond that, frontmatter uses the OKF field set (`title`, `description`, `resource`, `tags`, `timestamp`) plus the OpenKOS layer (`status`, `version`, `freshness`, `sensitivity`, `provenance`).
+
+## After changes
+
+Update `bundle/index.md` and append to `bundle/log.md` (newest date first, `## YYYY-MM-DD` headings). Consequential changes are proposed for review, not applied silently.

@@ -47,11 +47,11 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: Workspace config + templates (PR 3, ~225)
 
-- [ ] 3.1 RED `tests/unit/test_config.py`: `is_workspace(root)` true/false over the 4 conditions (`openkos.yaml`, `AGENTS.md`, non-empty `raw/`, non-empty `bundle/`)
-- [ ] 3.2 GREEN: `src/openkos/config.py::WorkspaceLayout`, `is_workspace()`
-- [ ] 3.3 Add `src/openkos/templates/agents.md.template` (byte-identical target: `examples/good-life-demo/AGENTS.md`), `templates/openkos.yaml.template` (placeholder `{name}`, fixed `model: qwen3.5:9b`, D5); no `__init__.py`
-- [ ] 3.4 RED: `test_write_agents_byte_identical`, `test_write_config_generated_fields` — read via `importlib.resources.files("openkos")/"templates"`, write mode `"x"` (scenarios 4, 5)
-- [ ] 3.5 GREEN: `config.py::write_config()`, `write_agents()`
+- [x] 3.1 RED `tests/unit/test_config.py`: `is_workspace(root)` true/false over the 4 conditions (`openkos.yaml`, `AGENTS.md`, non-empty `raw/`, non-empty `bundle/`)
+- [x] 3.2 GREEN: `src/openkos/config.py::WorkspaceLayout`, `is_workspace()`
+- [x] 3.3 Add `src/openkos/templates/agents.md.template` (byte-identical target: `examples/good-life-demo/AGENTS.md`), `templates/openkos.yaml.template` (placeholder `{name}`, fixed `model: qwen3.5:9b`, D5); no `__init__.py`
+- [x] 3.4 RED: `test_write_agents_byte_identical`, `test_write_config_generated_fields` — read via `importlib.resources.files("openkos")/"templates"`, write mode `"x"` (scenarios 4, 5)
+- [x] 3.5 GREEN: `config.py::write_config()`, `write_agents()`
 
 ## Phase 4: `init` wiring, packaging proof, docs (PR 4, ~205)
 

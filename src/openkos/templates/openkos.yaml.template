@@ -1,0 +1,11 @@
+name: {name}
+model: qwen3.5:9b         # local model served via Ollama; see tech_stack.md
+review: true              # show proposed changes and confirm before saving
+default_sensitivity: private
+freshness_window: 7d      # age after which a stamp is flagged for re-observation
+
+# Layout — where the engine keeps things, relative to this file.
+raw: raw/                 # immutable sources; any extension, never rewritten
+bundle: bundle/           # the OKF bundle root
+
+# type_registry is maintained by the engine (canonical + emergent types)
