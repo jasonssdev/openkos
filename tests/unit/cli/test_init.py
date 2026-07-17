@@ -138,8 +138,8 @@ def test_fresh_empty_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert (tmp_path / "bundle" / "log.md").is_file()
     assert (tmp_path / "openkos.yaml").is_file()
     assert (tmp_path / "AGENTS.md").is_file()
-    assert result.stdout.strip() != ""
-    assert "openkos.yaml" in result.stdout
+    for named in ("raw/", "index.md", "log.md", "AGENTS.md", "openkos.yaml"):
+        assert named in result.stdout
 
 
 def test_raw_default_permissions(
