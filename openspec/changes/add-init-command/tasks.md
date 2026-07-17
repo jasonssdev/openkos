@@ -36,14 +36,14 @@ Chain strategy: stacked-to-main
 
 ## Phase 2: OKF format layer (PR 2, ~270)
 
-- [ ] 2.1 RED `tests/unit/model/test_okf.py`: `OKF_VERSION == "0.1"`, reserved filenames, frontmatter round-trip parses to `{"okf_version": "0.1"}`, §9 rules 1-2 pass/fail cases
-- [ ] 2.2 GREEN: `src/openkos/model/okf.py`; move `python-frontmatter` dev→runtime
-- [ ] 2.3 RED `tests/unit/bundle/test_index.py`: `render_index()` returns frontmatter + empty body (scenario 2)
-- [ ] 2.4 GREEN: `src/openkos/bundle/index.py::render_index() -> str`
-- [ ] 2.5 RED `tests/unit/bundle/test_log.py`: `render_log(today: date)` — heading, `## YYYY-MM-DD`, exact Initialization bullet, no frontmatter (scenario 3)
-- [ ] 2.6 GREEN: `src/openkos/bundle/log.py::render_log(today: date) -> str`
-- [ ] 2.7 RED `tests/unit/bundle/test_bundle.py`: `create(bundle_dir, today)` writes both files mode `"x"` under `tmp_path`; raises `FileExistsError` on collision (D2); bundle holds exactly two files (scenario 6)
-- [ ] 2.8 GREEN: `src/openkos/bundle/bundle.py::create()`
+- [x] 2.1 RED `tests/unit/model/test_okf.py`: `OKF_VERSION == "0.1"`, reserved filenames, frontmatter round-trip parses to `{"okf_version": "0.1"}`, §9 rules 1-2 pass/fail cases
+- [x] 2.2 GREEN: `src/openkos/model/okf.py`; move `python-frontmatter` dev→runtime
+- [x] 2.3 RED `tests/unit/bundle/test_index.py`: `render_index()` returns frontmatter + empty body (scenario 2)
+- [x] 2.4 GREEN: `src/openkos/bundle/index.py::render_index() -> str`
+- [x] 2.5 RED `tests/unit/bundle/test_log.py`: `render_log(today: date)` — heading, `## YYYY-MM-DD`, exact Initialization bullet, no frontmatter (scenario 3)
+- [x] 2.6 GREEN: `src/openkos/bundle/log.py::render_log(today: date) -> str`
+- [x] 2.7 RED `tests/unit/bundle/test_bundle.py`: `create(bundle_dir, today)` writes both files mode `"x"` under `tmp_path`; raises `FileExistsError` on collision (D2); bundle holds exactly two files (scenario 6)
+- [x] 2.8 GREEN: `src/openkos/bundle/bundle.py::create()`
 
 ## Phase 3: Workspace config + templates (PR 3, ~225)
 
