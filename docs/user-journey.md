@@ -47,7 +47,7 @@ Every interface decision serves these:
 openkos init
 ```
 
-Creates the workspace: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (the concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual that tells any AI agent how to work with it, and helps the user pick a local model (via Ollama; e.g. `qwen3`). After this, the user never thinks about setup again.
+Creates the workspace: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (the concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`) that ships with a working local-model default (via Ollama), and an `AGENTS.md` operating manual that tells any AI agent how to work with it. Picking a different model is a one-line edit to `openkos.yaml`; an interactive model picker during `init` is deferred — see `add-model-selection`. After this, the user never thinks about setup again.
 
 `openkos.yaml` records the defaults that shape the journey, for example:
 
