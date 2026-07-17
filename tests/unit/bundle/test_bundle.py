@@ -36,3 +36,23 @@ def test_create_raises_on_existing_log(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         create(bundle_dir, date(2026, 7, 16))
+
+
+def test_create_writes_no_cr_bytes(tmp_path: Path) -> None:
+    """`index.md` and `log.md` contain no `\\r`, so LF-only content is not
+    translated to CRLF on write.
+
+    This is a regression guard for non-LF platforms (Windows, where
+    `os.linesep` is `\\r\\n` and text-mode writes without `newline=""`
+    translate `\\n` to `\\r\\n`): it passes on Linux/macOS either way, since
+    POSIX never performs that translation, and CI here is ubuntu-only. The
+    assertion still documents the byte-identical contract `create`'s
+    docstring makes.
+    """
+    bundle_dir = tmp_path / "bundle"
+
+    create(bundle_dir, date(2026, 7, 16))
+
+    for filename in ("index.md", "log.md"):
+        raw_bytes = (bundle_dir / filename).read_bytes()
+        assert b"\r" not in raw_bytes

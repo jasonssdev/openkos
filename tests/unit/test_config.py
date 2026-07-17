@@ -112,12 +112,64 @@ def test_write_config_generated_fields(tmp_path: Path) -> None:
     }
 
 
+def test_write_agents_writes_no_cr_bytes(tmp_path: Path) -> None:
+    """`AGENTS.md` contains no `\\r`, so LF-only template bytes are not
+    translated to CRLF on write.
+
+    Regression guard for non-LF platforms (Windows, where text-mode writes
+    without `newline=""` translate `\\n` to `\\r\\n`): it passes on
+    Linux/macOS either way since POSIX never performs that translation, and
+    CI here is ubuntu-only. Still documents the byte-identical contract
+    `write_agents`'s docstring makes.
+    """
+    config.write_agents(tmp_path)
+
+    assert b"\r" not in (tmp_path / "AGENTS.md").read_bytes()
+
+
+def test_write_config_writes_no_cr_bytes(tmp_path: Path) -> None:
+    """`openkos.yaml` contains no `\\r` (see `test_write_agents_writes_no_cr_bytes`)."""
+    config.write_config(tmp_path)
+
+    assert b"\r" not in (tmp_path / "openkos.yaml").read_bytes()
+
+
 def test_write_config_raises_on_existing_file(tmp_path: Path) -> None:
     """Exclusive-create mode ("x") never overwrites an existing `openkos.yaml`."""
     (tmp_path / "openkos.yaml").write_text("pre-existing", encoding="utf-8")
 
     with pytest.raises(FileExistsError):
         config.write_config(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "dirname",
+    [
+        "weird: name",
+        "#leading-hash",
+        'has "quotes"',
+    ],
+)
+def test_write_config_escapes_yaml_significant_characters_in_name(
+    tmp_path: Path, dirname: str
+) -> None:
+    """A directory name with YAML-significant characters round-trips exactly.
+
+    `write_config` interpolates the directory basename into the template with
+    plain string substitution; a name containing `:`, a leading `#`, or
+    quotes must still produce a valid `openkos.yaml` whose `name` field
+    parses back to the *exact* original string, not a malformed or
+    semantically altered document (e.g. `#leading-hash` must not become a
+    YAML comment).
+    """
+    root = tmp_path / dirname
+    root.mkdir()
+
+    config.write_config(root)
+
+    yaml = YAML(typ="safe")
+    parsed = yaml.load((root / "openkos.yaml").read_text(encoding="utf-8"))
+    assert parsed["name"] == dirname
 
 
 def test_write_config_relative_root_uses_real_directory_name(
