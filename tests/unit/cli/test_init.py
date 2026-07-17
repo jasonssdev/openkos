@@ -252,6 +252,42 @@ def test_log_dated_section_uses_local_date_not_utc(
 
 @pytest.mark.skipif(
     os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="permission-based read failures require a POSIX non-root user",
+)
+def test_phase_a_read_failure_surfaces_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable pre-existing `raw/` exits cleanly instead of a raw traceback.
+
+    `config.refusal_reason` (Phase A) calls `_non_empty_dir`, which calls
+    `Path.iterdir()` -- an `OSError` (e.g. `PermissionError` on a mode-000
+    `raw/`) there happens before `cli/main.py`'s Phase B `try/except OSError`
+    even starts, so without its own guard this crashes with an uncaught
+    traceback instead of the clean exit every other filesystem failure gets.
+    Root is exempted (`geteuid() == 0`) for the same reason as
+    `test_write_failure_surfaces_cleanly`: root bypasses POSIX permission
+    bits, making this an untestable claim on that platform rather than a
+    false one.
+    """
+    monkeypatch.chdir(tmp_path)
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "source.txt").write_text("original", encoding="utf-8")
+    original_mode = stat.S_IMODE(raw_dir.stat().st_mode)
+    raw_dir.chmod(0o000)
+    try:
+        result = runner.invoke(app, ["init"])
+    finally:
+        raw_dir.chmod(original_mode)
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos init" in result.stderr
+    assert "checking" in result.stderr
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="permission-based write failures require a POSIX non-root user",
 )
 def test_write_failure_surfaces_cleanly(
