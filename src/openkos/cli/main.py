@@ -21,9 +21,10 @@ def init() -> None:
     """Create a fresh OKF workspace in the current directory.
 
     Refuses (exit 1) without writing anything if the current directory
-    cannot become a workspace, per `config.refusal_reason`'s five
-    conditions (existing `openkos.yaml`, existing `AGENTS.md`, `raw/` or
-    `bundle/` non-empty, or `raw/` or `bundle/` existing as a plain file).
+    cannot become a workspace, per the conditions `config.refusal_reason`
+    checks (existing `openkos.yaml`, existing `AGENTS.md`, `raw/` or
+    `bundle/` non-empty, or `raw/` or `bundle/` existing as a plain file or
+    a symlink).
     The refusal reason is printed to stderr so the user knows which
     condition triggered it. This is Phase A (D1): a pure read, evaluated in
     full before any write is attempted.

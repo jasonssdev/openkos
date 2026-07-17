@@ -40,13 +40,17 @@ def check_conformance(bundle_dir: Path) -> list[str]:
 
     An empty list means conformant; a fresh, empty bundle passes vacuously
     because there are no non-reserved `.md` files to violate either rule.
+    May raise `OSError` or `UnicodeDecodeError` when a candidate file cannot
+    be read or decoded -- those are inspection failures, never reported as
+    conformance violations.
     """
     violations: list[str] = []
     for path in sorted(bundle_dir.rglob("*.md")):
         if path.name in RESERVED_FILENAMES:
             continue
+        text = path.read_text(encoding="utf-8")
         try:
-            post = frontmatter.loads(path.read_text(encoding="utf-8"))
+            post = frontmatter.loads(text)
         except Exception as exc:  # broad: any parse failure is a rule-1 violation
             violations.append(f"{path}: no parseable frontmatter ({exc})")
             continue
