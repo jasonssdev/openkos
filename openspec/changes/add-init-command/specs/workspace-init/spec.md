@@ -163,11 +163,26 @@ permissions; no `chmod` MUST be applied.
 
 ### Requirement: OKF Conformance
 
-Init's output MUST pass the OKF §9 conformance check.
+Init's output MUST satisfy OKF §9 conformance for a fresh bundle. Rules 1
+(frontmatter present) and 2 (non-empty `type`) MUST pass vacuously, because
+a fresh bundle contains zero non-reserved `.md` files for the mechanical
+conformance check to inspect. Rule 3 (reserved-file structure) MUST hold by
+construction, through the `index.md` and `log.md` shapes required by the
+Bundle Index Shape and Bundle Log Shape requirements above. This slice MUST
+NOT claim a mechanical check of rule 3 — that check is deferred to `lint`.
 
-#### Scenario: Fresh bundle is conformant
+#### Scenario: Mechanical check reports no violations on a fresh bundle
 
 - GIVEN a successful init
-- WHEN the §9 conformance check runs against `bundle/`
-- THEN rules 1 and 2 pass vacuously (no non-reserved `.md` files exist) and
-  rule 3 passes actively via the index and log shapes above
+- WHEN the OKF conformance check (rules 1 and 2) runs against `bundle/`
+- THEN it reports no violations, because `bundle/` contains only the two
+  reserved files and no non-reserved `.md` file exists to check
+
+#### Scenario: Rule 3 holds by construction, not by mechanical check
+
+- GIVEN a successful init
+- WHEN `bundle/index.md` and `bundle/log.md` are inspected against the
+  shapes required by Bundle Index Shape and Bundle Log Shape
+- THEN both satisfy OKF §9 rule 3 by construction
+- AND no mechanical rule-3 check is performed by this slice; that check is
+  deferred to `lint`
