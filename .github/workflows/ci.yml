@@ -115,3 +115,20 @@ jobs:
       # rather than the checkout or the dev environment.
       - name: Wheel smoke test
         run: uv run --isolated --no-project --with dist/openkos-*.whl openkos --help
+
+      # The unit suite runs `init` against the editable install, where
+      # `src/openkos/templates/` is just a directory on disk -- it would
+      # stay green even if a packaging change silently dropped the
+      # templates from the wheel. This step is the only proof the
+      # templates actually ship: run `init` against the isolated wheel
+      # itself and assert all five artifacts land.
+      - name: Init smoke test (packaging proof for templates/)
+        run: |
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          uv run --isolated --no-project --with "${GITHUB_WORKSPACE}"/dist/openkos-*.whl openkos init
+          test -d raw
+          test -f bundle/index.md
+          test -f bundle/log.md
+          test -f openkos.yaml
+          test -f AGENTS.md
