@@ -21,7 +21,7 @@ Chain strategy: stacked-to-main
 ### Suggested Work Units
 
 | Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
-|------|------|-----------|----------------------|-----------------|-------------------|
+|------|------|-----------|----------------------|-----------------|---|
 | 1 | Console entry → `openkos.cli.main:app`, bare Typer app | PR 1 | `uv run pytest tests/unit/test_main.py` | `uv run --isolated --no-project --with dist/openkos-*.whl openkos --help` | `git revert` restores stub `main()` (D6) |
 | 2 | Format layer: `model/okf.py`, `bundle/{index,log,bundle}.py` | PR 2 | `uv run pytest tests/unit/model tests/unit/bundle` | N/A — no CLI caller yet, pure/fs-only modules | delete 4 files + tests, nothing imports them |
 | 3 | Workspace layer: `config.py` + `templates/` | PR 3 | `uv run pytest tests/unit/test_config.py` | N/A — no CLI caller yet | delete `config.py`, tests, `templates/` |
