@@ -103,6 +103,29 @@ def test_write_config_byte_identical(tmp_path: Path) -> None:
     assert (tmp_path / "openkos.yaml").read_bytes() == template_bytes
 
 
+def test_write_config_ignores_directory_name(tmp_path: Path) -> None:
+    """`openkos.yaml` is byte-identical to the template no matter what the
+    directory is called (scenario: no directory-derived field, regardless of
+    directory name).
+
+    The name here -- 40 chars, a double space, 40 more chars -- is the exact
+    shape that once corrupted `openkos.yaml`: when `name` was interpolated,
+    a run past ruamel's fold column folded and the double space collapsed on
+    round-trip. `write_config` no longer reads the directory name at all, so
+    this holds by construction; the test nails that shut against a future
+    reader of `root.name` sneaking back in.
+    """
+    workspace = tmp_path / ("a" * 40 + "  " + "b" * 40)
+    workspace.mkdir()
+    template_bytes = (
+        resources.files("openkos") / "templates" / "openkos.yaml.template"
+    ).read_bytes()
+
+    config.write_config(workspace)
+
+    assert (workspace / "openkos.yaml").read_bytes() == template_bytes
+
+
 def test_write_agents_writes_no_cr_bytes(tmp_path: Path) -> None:
     """`AGENTS.md` contains no `\\r`, so LF-only template bytes are not
     translated to CRLF on write.
