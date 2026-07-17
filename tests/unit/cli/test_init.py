@@ -13,12 +13,25 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos import config
 from openkos.cli.main import app
 from openkos.model import okf
 
 runner = CliRunner()
+
+
+def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `sys.stdin.isatty()` report `True` inside a `CliRunner.invoke` call.
+
+    `CliRunner.isolation()` replaces `sys.stdin` with a fresh
+    `_NamedTextIOWrapper` for the duration of `invoke()`, so patching the
+    *current* `sys.stdin` object before calling `invoke` has no effect --
+    the class method is patched instead, so it applies to whatever instance
+    `isolation()` creates next.
+    """
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
 
 
 def _snapshot_entry(path: Path) -> bytes | None | tuple[str, str]:
@@ -229,6 +242,110 @@ def test_fresh_empty_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         assert named in result.stdout
 
 
+def test_model_flag_writes_chosen_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--model` selects the model written to `openkos.yaml` (scenario: flag override)."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init", "--model", "gemma3"])
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: gemma3" in content
+
+
+def test_model_flag_with_colon_tag_writes_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--model mistral:7b` (non-TTY) survives the full CLI -> `write_config`
+    path and lands verbatim in `openkos.yaml` -- an end-to-end guard that a
+    colon-containing tag is not corrupted anywhere between argument parsing
+    and the written file, not just at the `validate_model` unit level."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init", "--model", "mistral:7b"])
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: mistral:7b" in content
+
+
+def test_model_flag_wins_over_tty_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--model` wins over a TTY prompt; no prompt is shown (scenario: flag wins even when stdin is a TTY)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["init", "--model", "mistral"])
+
+    assert result.exit_code == 0
+    assert "Model" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: mistral" in content
+
+
+def test_tty_prompt_accepts_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `--model` flag, stdin is a TTY, user accepts the offered default (scenario: TTY prompt, accept default)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert "qwen3:8b" in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: qwen3:8b" in content
+
+
+def test_tty_prompt_custom_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `--model` flag, stdin is a TTY, user enters a custom value (scenario: TTY prompt, custom value)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["init"], input="mistral\n")
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: mistral" in content
+
+
+def test_non_tty_no_flag_silent_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `--model` flag, stdin is not a TTY: no prompt, default model written (scenario: non-TTY, no flag, silent default)."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "Model" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: qwen3:8b" in content
+
+
+@pytest.mark.parametrize("bad_model", ["", " ", "a b", 'a"b', "a'b", "a#b"])
+def test_model_flag_rejects_blank_or_unsafe_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_model: str
+) -> None:
+    """A blank or unsafe `--model` value refuses with exit 1 and zero writes (scenarios: blank/unsafe token rejected)."""
+    monkeypatch.chdir(tmp_path)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["init", "--model", bad_model])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing" in result.stderr
+    assert _snapshot(tmp_path) == before
+    assert not (tmp_path / "openkos.yaml").exists()
+
+
 def test_raw_default_permissions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -371,6 +488,26 @@ def test_phase_a_read_failure_surfaces_cleanly(
     assert isinstance(result.exception, SystemExit)
     assert "openkos init" in result.stderr
     assert "checking" in result.stderr
+
+
+def test_corrupt_template_surfaces_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupt packaged template (missing/duplicated placeholder) raises
+    `ValueError` from `write_config`; Phase B routes it through the same
+    graceful stderr-message + exit-1 path as an `OSError`, not a raw
+    traceback, and leaves no half-written `openkos.yaml` behind.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config, "_read_template", lambda _: "no placeholder here\n")
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos init" in result.stderr
+    assert "failed" in result.stderr
+    assert not (tmp_path / "openkos.yaml").exists()
 
 
 @pytest.mark.skipif(

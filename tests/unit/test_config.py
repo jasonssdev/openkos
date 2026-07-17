@@ -73,6 +73,46 @@ def test_is_workspace_false_on_empty_bundle(tmp_path: Path) -> None:
     assert config.is_workspace(tmp_path) is False
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("qwen3:8b", "qwen3:8b"),
+        ("  qwen3:8b  ", "qwen3:8b"),
+        ("mistral:7b", "mistral:7b"),
+        ("gemma3", "gemma3"),
+        ("llama3.1:8b", "llama3.1:8b"),
+        ("library/llama3", "library/llama3"),
+        ("mistral", "mistral"),
+    ],
+)
+def test_validate_model_trims_and_allows_colon(raw: str, expected: str) -> None:
+    """`validate_model` trims whitespace and allows a mid-value colon (Ollama `name:tag` tags)."""
+    assert config.validate_model(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "   ", "a b", 'a"b', "a'b", "a#b", "a\nb"],
+)
+def test_validate_model_rejects_unsafe_values(raw: str) -> None:
+    """`validate_model` rejects blank, whitespace-containing, quote, `#`, and newline values."""
+    with pytest.raises(ValueError, match="model must not"):
+        config.validate_model(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["qwen3:", ":", "-foo", "&anchor", "!tag", "[a"],
+)
+def test_validate_model_rejects_unsafe_yaml_indicator_values(raw: str) -> None:
+    """`validate_model` rejects a trailing/leading colon, a leading `-`, and a
+    leading YAML indicator character (`&`, `!`, `[`) -- each would corrupt or
+    retype the assembled `model: <VALUE>  # comment` line if substituted
+    unvalidated."""
+    with pytest.raises(ValueError, match="model must not"):
+        config.validate_model(raw)
+
+
 def test_write_agents_byte_identical(tmp_path: Path) -> None:
     """`write_agents` copies the packaged template byte-for-byte (scenario 5)."""
     template_bytes = (
@@ -92,21 +132,26 @@ def test_write_agents_raises_on_existing_file(tmp_path: Path) -> None:
         config.write_agents(tmp_path)
 
 
-def test_write_config_byte_identical(tmp_path: Path) -> None:
-    """`write_config` copies the packaged template byte-for-byte (scenario: byte-identical)."""
-    template_bytes = (
+def _expected_config_bytes(model: str = config.DEFAULT_MODEL) -> bytes:
+    """The packaged `openkos.yaml.template` with its placeholder substituted."""
+    template_text = (
         resources.files("openkos") / "templates" / "openkos.yaml.template"
-    ).read_bytes()
+    ).read_text(encoding="utf-8")
+    return template_text.replace("__OPENKOS_MODEL__", model).encode("utf-8")
 
+
+def test_write_config_byte_identical(tmp_path: Path) -> None:
+    """`write_config` writes the template with the default model substituted,
+    byte-identical to today's static template otherwise (scenario: byte-identical)."""
     config.write_config(tmp_path)
 
-    assert (tmp_path / "openkos.yaml").read_bytes() == template_bytes
+    assert (tmp_path / "openkos.yaml").read_bytes() == _expected_config_bytes()
 
 
 def test_write_config_ignores_directory_name(tmp_path: Path) -> None:
-    """`openkos.yaml` is byte-identical to the template no matter what the
-    directory is called (scenario: no directory-derived field, regardless of
-    directory name).
+    """`openkos.yaml` is byte-identical to the token-substituted template no
+    matter what the directory is called (scenario: no directory-derived
+    field, regardless of directory name).
 
     The name here -- 40 chars, a double space, 40 more chars -- is the exact
     shape that once corrupted `openkos.yaml`: when `name` was interpolated,
@@ -117,13 +162,29 @@ def test_write_config_ignores_directory_name(tmp_path: Path) -> None:
     """
     workspace = tmp_path / ("a" * 40 + "  " + "b" * 40)
     workspace.mkdir()
-    template_bytes = (
-        resources.files("openkos") / "templates" / "openkos.yaml.template"
-    ).read_bytes()
 
     config.write_config(workspace)
 
-    assert (workspace / "openkos.yaml").read_bytes() == template_bytes
+    assert (workspace / "openkos.yaml").read_bytes() == _expected_config_bytes()
+
+
+def test_write_config_custom_model(tmp_path: Path) -> None:
+    """`write_config(root, model="gemma3")` writes `model: gemma3` and leaves
+    every other line byte-identical to the template (scenario: flag override selects the model)."""
+    config.write_config(tmp_path, model="gemma3")
+
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: gemma3" in content
+    assert (tmp_path / "openkos.yaml").read_bytes() == _expected_config_bytes("gemma3")
+
+
+@pytest.mark.parametrize("bad_model", ["", "   ", "a b", 'a"b', "a'b", "a#b"])
+def test_write_config_rejects_invalid_model(tmp_path: Path, bad_model: str) -> None:
+    """A blank or unsafe `model` is rejected before any file is written (scenario: blank/unsafe rejected)."""
+    with pytest.raises(ValueError, match="model must not"):
+        config.write_config(tmp_path, model=bad_model)
+
+    assert not (tmp_path / "openkos.yaml").exists()
 
 
 def test_write_agents_writes_no_cr_bytes(tmp_path: Path) -> None:
@@ -172,6 +233,21 @@ def test_write_agents_and_write_config_open_with_newline_empty(
 
     assert recorded["AGENTS.md"].get("newline") == ""
     assert recorded["openkos.yaml"].get("newline") == ""
+
+
+def test_write_config_raises_on_corrupt_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`write_config` raises if the packaged template does not contain exactly
+    one `__OPENKOS_MODEL__` placeholder -- a packaging invariant guard, not
+    reachable via user input, but still fails loudly instead of silently
+    writing an unsubstituted or double-substituted file."""
+    monkeypatch.setattr(config, "_read_template", lambda _: "no placeholder here\n")
+
+    with pytest.raises(ValueError, match="placeholder"):
+        config.write_config(tmp_path)
+
+    assert not (tmp_path / "openkos.yaml").exists()
 
 
 def test_write_config_raises_on_existing_file(tmp_path: Path) -> None:

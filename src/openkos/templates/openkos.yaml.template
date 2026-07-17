@@ -1,4 +1,4 @@
-model: qwen3:8b           # local model served via Ollama; see tech_stack.md
+model: __OPENKOS_MODEL__  # local model served via Ollama; see tech_stack.md
 review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
