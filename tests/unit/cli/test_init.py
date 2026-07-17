@@ -1,8 +1,8 @@
 """Unit tests for the `init` CLI command: pre-flight refusal and workspace creation.
 
-Pre-flight (D1 Phase A) is a pure read: all four refusal conditions are
-checked before any write happens, so a refusal leaves the directory exactly
-as it was found (D1, D2 belt-and-suspenders with `config.is_workspace`).
+Pre-flight (D1 Phase A) is a pure read: `config.refusal_reason`'s five
+conditions are checked before any write happens, so a refusal leaves the
+directory exactly as it was found.
 """
 
 import os
@@ -78,6 +78,7 @@ def test_refuses_when_dir_non_empty(
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert dirname in result.stderr
+    assert "not empty" in result.stderr
     assert _snapshot(tmp_path) == before
 
 
@@ -101,6 +102,7 @@ def test_refuses_when_dir_is_a_file(
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert dirname in result.stderr
+    assert "not a directory" in result.stderr
     assert _snapshot(tmp_path) == before
 
 
@@ -273,4 +275,5 @@ def test_write_failure_surfaces_cleanly(
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
-    assert result.stderr.strip() != ""
+    assert "openkos init" in result.stderr
+    assert "failed" in result.stderr
