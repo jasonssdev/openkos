@@ -44,6 +44,14 @@ Nothing runs yet: `src/openkos/__init__.py` is a stub printing `Hello from openk
 | Q7.8 | No `chmod`. `raw/` gets default permissions. | Every doc frames immutability as engine discipline, not a filesystem guarantee (`docs/architecture.md:164`). Restrictive modes would block `ingest`'s own writes and behave differently on Windows — a promise no doc makes. |
 | Q7.9 | `openkos.yaml` is **generated**: `name` = cwd directory name; `model` = **`qwen3.5:9b`**. `AGENTS.md` is a **static template copy**. | `examples/good-life-demo/openkos.yaml:1` `name: good-life-demo` matches its directory. `examples/good-life-demo/AGENTS.md` contains zero per-workspace variables — verified, it is literal. On the model tag, see below. |
 
+> **Q7.9 — superseded in design (see D5).** `name` is not generated: the
+> directory is the single source of truth, so `openkos.yaml` is a
+> byte-identical copy of the template like `AGENTS.md`, not a generated file.
+> `model` is pinned to `qwen3:8b`. The evidence cited here
+> (`examples/good-life-demo/openkos.yaml:1`) had not itself been examined — that
+> field was in the example by inertia, and a normative example silently made it
+> a requirement. The model subsection below is likewise superseded.
+
 ### The model default
 
 Shipping a default is required, not optional: `docs/tech_stack.md:108` mandates that "the config ships a working default" until the model spike runs. The spike decides which default is *best*; it never meant shipping none.
@@ -110,7 +118,7 @@ Per `openspec/config.yaml:21-27`, design decides whether either clears BOTH gate
 
 - [ ] `openkos init` in an empty directory produces `raw/`, `bundle/index.md`, `bundle/log.md`, `openkos.yaml`, `AGENTS.md`.
 - [ ] `bundle/index.md` carries exactly `okf_version: "0.1"`; `log.md` carries no frontmatter.
-- [ ] The generated `openkos.yaml` carries `model: qwen3.5:9b` and `name` matching the directory.
+- [ ] `openkos.yaml` is a byte-identical copy of the packaged template carrying `model: qwen3:8b`, with no `name` field (superseded Q7.9 — see D5).
 - [ ] The output passes `model/okf.py`'s §9 conformance check (vacuously — zero non-reserved `.md` files).
 - [ ] A second `openkos init` exits 1 and writes nothing.
 - [ ] `uv run pytest --cov` ≥ 90% branch; `ruff check`/`format --check`/`mypy .` green; `uv build` + wheel smoke test green.
