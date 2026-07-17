@@ -9,10 +9,7 @@ where the engine's own files live, not the OKF bundle root.
 from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib import resources
-from io import StringIO
 from pathlib import Path
-
-from ruamel.yaml import YAML
 
 
 @dataclass(frozen=True)
@@ -112,45 +109,16 @@ def write_agents(root: Path) -> None:
         agents_file.write(content)
 
 
-def _yaml_scalar(value: str) -> str:
-    """Render `value` as a properly escaped YAML scalar for a `key: value` line.
-
-    `write_config` interpolates a directory basename into the template with
-    plain string substitution (D5), not a full YAML dumper -- but the
-    basename is untrusted text that may contain YAML-significant characters
-    (`:`, quotes, a leading `#`, control characters). Hand-rolled quoting is
-    how those slip through and either break the document or, worse, are
-    silently absorbed (a leading `#` turning the whole line into a comment).
-    This delegates the actual escaping decision to `ruamel.yaml`'s own safe
-    dumper -- the same library already a project dependency -- and only
-    extracts the scalar it chose, so the surrounding template stays
-    hand-written.
-    """
-    yaml = YAML(typ="safe")
-    yaml.default_flow_style = False
-    stream = StringIO()
-    yaml.dump({"name": value}, stream)
-    line = stream.getvalue().rstrip("\n")
-    return line.removeprefix("name:").strip()
-
-
 def write_config(root: Path) -> None:
-    """Write `openkos.yaml` at `root`, generated from the packaged template.
+    """Write a byte-identical copy of the packaged `openkos.yaml` template at `root`.
 
-    Placeholder substitution, not a YAML dumper (D5): the template's
-    explanatory comments would not survive round-tripping through a dumper
-    that does not preserve them. `name` is `root`'s basename, escaped as a
-    YAML scalar via `_yaml_scalar` so the substitution alone cannot produce
-    a malformed or semantically altered document; the rest of the fields
-    are fixed. Exclusive-create mode ("x") never overwrites an existing
-    file (D2).
-
-    `root` is resolved before taking its basename: an unresolved relative
-    root such as `Path(".")` has an empty `.name`, which would silently
-    write a nameless workspace instead of failing loudly.
+    Same shape as `write_agents` (D5): no substitution, no dumper, no
+    per-workspace field. The directory itself is the single source of
+    truth for the workspace's identity, so nothing in `openkos.yaml` is
+    derived from `root`. Exclusive-create mode ("x") never overwrites an
+    existing file (D2).
     """
-    template = _read_template("openkos.yaml.template")
-    content = template.format(name=_yaml_scalar(root.resolve().name))
+    content = _read_template("openkos.yaml.template")
     layout = WorkspaceLayout(root)
     with layout.config_path.open("x", encoding="utf-8", newline="") as config_file:
         config_file.write(content)

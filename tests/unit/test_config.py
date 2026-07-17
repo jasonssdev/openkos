@@ -2,8 +2,8 @@
 
 A workspace is `openkos.yaml`, `AGENTS.md`, `raw/`, and `bundle/` at some
 root directory. `is_workspace` decides whether init must refuse;
-`write_config`/`write_agents` generate the two workspace-root files from
-the packaged templates.
+`write_config`/`write_agents` write byte-identical copies of the two
+packaged templates.
 """
 
 from importlib import resources
@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from ruamel.yaml import YAML
 
 from openkos import config
 
@@ -93,24 +92,15 @@ def test_write_agents_raises_on_existing_file(tmp_path: Path) -> None:
         config.write_agents(tmp_path)
 
 
-def test_write_config_generated_fields(tmp_path: Path) -> None:
-    """`write_config` generates `name` from the directory basename and fixes the rest (scenario 4)."""
-    root = tmp_path / "my-workspace"
-    root.mkdir()
+def test_write_config_byte_identical(tmp_path: Path) -> None:
+    """`write_config` copies the packaged template byte-for-byte (scenario: byte-identical)."""
+    template_bytes = (
+        resources.files("openkos") / "templates" / "openkos.yaml.template"
+    ).read_bytes()
 
-    config.write_config(root)
+    config.write_config(tmp_path)
 
-    yaml = YAML(typ="safe")
-    parsed = yaml.load((root / "openkos.yaml").read_text(encoding="utf-8"))
-    assert parsed == {
-        "name": "my-workspace",
-        "model": "qwen3.5:9b",
-        "review": True,
-        "default_sensitivity": "private",
-        "freshness_window": "7d",
-        "raw": "raw/",
-        "bundle": "bundle/",
-    }
+    assert (tmp_path / "openkos.yaml").read_bytes() == template_bytes
 
 
 def test_write_agents_writes_no_cr_bytes(tmp_path: Path) -> None:
@@ -167,71 +157,3 @@ def test_write_config_raises_on_existing_file(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         config.write_config(tmp_path)
-
-
-@pytest.mark.parametrize(
-    "dirname",
-    [
-        "weird: name",
-        "#leading-hash",
-        'has "quotes"',
-        "line\nbreak",
-        "tab\tchar",
-        "café-δοκιμή-🎉",
-        "x" * 100,
-    ],
-)
-def test_write_config_escapes_yaml_significant_characters_in_name(
-    tmp_path: Path, dirname: str
-) -> None:
-    """A directory name with YAML-significant characters round-trips exactly.
-
-    `write_config` interpolates the directory basename into the template with
-    plain string substitution; a name containing `:`, a leading `#`, quotes,
-    an embedded newline/tab, non-ASCII text, or >80 chars (ruamel's line
-    folding threshold) must still produce a valid `openkos.yaml` whose
-    `name` field parses back to the *exact* original string.
-    """
-    root = tmp_path / dirname
-    root.mkdir()
-
-    config.write_config(root)
-
-    yaml = YAML(typ="safe")
-    parsed = yaml.load((root / "openkos.yaml").read_text(encoding="utf-8"))
-    assert parsed["name"] == dirname
-
-
-@pytest.mark.parametrize("value", ["", "\x0c"])
-def test_yaml_scalar_handles_values_no_directory_can_hold(value: str) -> None:
-    """`_yaml_scalar` round-trips the empty string and a raw control character.
-
-    Neither can be a `tmp_path` directory name (empty collapses `tmp_path /
-    ""` back to `tmp_path`; NUL is rejected by the filesystem), so this
-    calls `_yaml_scalar` directly and round-trips its output via
-    `yaml.safe_load`.
-    """
-    scalar = config._yaml_scalar(value)
-
-    yaml = YAML(typ="safe")
-    parsed = yaml.load(f"name: {scalar}\n")
-    assert parsed["name"] == value
-
-
-def test_write_config_relative_root_uses_real_directory_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A relative root (e.g. `Path(".")`) must not collapse `name` to empty.
-
-    `Path(".").name` is `""` -- `write_config` must resolve the root before
-    taking its basename, matching what `openkos init` will naturally pass
-    when it operates on "the current directory" (docs/cli.md:46-48).
-    """
-    monkeypatch.chdir(tmp_path)
-
-    config.write_config(Path())
-
-    yaml = YAML(typ="safe")
-    parsed = yaml.load((tmp_path / "openkos.yaml").read_text(encoding="utf-8"))
-    assert parsed["name"] == tmp_path.name
-    assert parsed["name"] != ""

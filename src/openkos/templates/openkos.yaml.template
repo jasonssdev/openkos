@@ -1,5 +1,4 @@
-name: {name}
-model: qwen3.5:9b         # local model served via Ollama; see tech_stack.md
+model: qwen3:8b           # local model served via Ollama; see tech_stack.md
 review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
