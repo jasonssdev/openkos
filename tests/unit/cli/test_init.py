@@ -90,8 +90,13 @@ def test_refuses_when_dir_is_a_file(
 
     `_non_empty_dir` (and `is_workspace`) call `Path.is_dir()`, which is
     `False` for a plain file -- so without this fifth pre-flight condition,
-    a lone file named `raw` would slip past refusal into Phase B, where
-    `Path.mkdir` raises an uncaught `FileExistsError`.
+    a lone file named `raw` would slip past refusal into Phase B. There,
+    `Path.mkdir` would still raise `FileExistsError`, but `cli/main.py`
+    wraps all of Phase B in `try/except OSError`, so nothing would be
+    uncaught -- the failure would just surface as a generic mid-Phase-B
+    "failed while creating the workspace" error instead of this condition's
+    precise pre-flight refusal message, and only after any earlier Phase-B
+    writes (e.g. `raw/`) had already landed.
     """
     monkeypatch.chdir(tmp_path)
     (tmp_path / dirname).write_text("not a directory", encoding="utf-8")
