@@ -47,7 +47,11 @@ You install the engine once and run `openkos init` in each knowledge base — li
 
 Creates a new workspace in the current directory: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (`index.md` and `log.md`; concept folders are not pre-created, `ingest` adds them on first write), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual. Run once per workspace.
 
-`openkos.yaml` ships with a working default model (currently `qwen3:8b`, via Ollama) rather than an interactive picker — swapping it is one line in the config. Model selection during `init` is deferred; see `add-model-selection`.
+The model written into `openkos.yaml` resolves in this order: the `--model <tag>` flag, if given; otherwise, when stdin is a TTY, an interactive prompt offering the default `qwen3:8b`; otherwise the default `qwen3:8b` is used silently, no prompt shown. A blank value, or one containing whitespace, a quote (`'`/`"`), or `#`, refuses (exit 1) before anything is written; a colon is allowed, since Ollama `name:tag` tags (including the default) contain one.
+
+| Flag | Meaning |
+| --- | --- |
+| `--model <tag>` | Ollama model tag to write into `openkos.yaml`. Skips the prompt even on a TTY. Defaults to `qwen3:8b`. |
 
 ### `openkos ingest <path>`
 

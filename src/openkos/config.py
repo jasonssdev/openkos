@@ -6,6 +6,7 @@ on its own -- `raw/` sits outside it by design, so the workspace root is
 where the engine's own files live, not the OKF bundle root.
 """
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib import resources
@@ -13,6 +14,41 @@ from pathlib import Path
 from typing import NamedTuple
 
 from openkos import fsio
+
+DEFAULT_MODEL = "qwen3:8b"
+"""The packaged default Ollama model tag, offered when no `--model` is given."""
+
+_MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9._:/-]+")
+
+
+def validate_model(tag: str) -> str:
+    """Trim `tag` and reject any value unsafe to substitute into `openkos.yaml`.
+
+    The assembled line `model: <VALUE>  # comment` must remain a valid
+    single-line YAML plain scalar, so this validates via an ALLOWLIST rather
+    than blocking individually known-bad characters: every character of the
+    trimmed value must be a letter, digit, `.`, `_`, `:`, `/`, or `-`. Within
+    that allowlist, a trailing colon (`qwen3:`) would still corrupt the line
+    into `model: qwen3:  # ...`, whose `: ` is invalid YAML (a colon read as
+    a mapping separator), and a leading colon or leading `-` would likewise
+    be misread (an empty key, or a YAML block-sequence entry), so those three
+    positions are rejected on top of the character allowlist. A colon in the
+    middle stays allowed: Ollama's `name:tag` convention (`qwen3:8b`,
+    `mistral:7b`) and the default `qwen3:8b` both rely on it.
+    """
+    trimmed = tag.strip()
+    if not trimmed:
+        raise ValueError("model must not be blank")
+    if not _MODEL_TOKEN_RE.fullmatch(trimmed):
+        raise ValueError(
+            "model must not contain characters other than letters, digits, "
+            "'.', '_', ':', '/', or '-'"
+        )
+    if trimmed.startswith(":") or trimmed.endswith(":"):
+        raise ValueError("model must not start or end with ':'")
+    if trimmed.startswith("-"):
+        raise ValueError("model must not start with '-'")
+    return trimmed
 
 
 @dataclass(frozen=True)
@@ -141,15 +177,32 @@ def write_agents(root: Path) -> None:
     fsio.write_exclusive(layout.agents_path, content)
 
 
-def write_config(root: Path) -> None:
-    """Write a byte-identical copy of the packaged `openkos.yaml` template at `root`.
+_MODEL_PLACEHOLDER = "__OPENKOS_MODEL__"
 
-    Same shape as `write_agents` (D5): no substitution, no dumper, no
-    per-workspace field. The directory itself is the single source of
-    truth for the workspace's identity, so nothing in `openkos.yaml` is
-    derived from `root`. Exclusive-create mode ("x") never overwrites an
-    existing file (D2).
+
+def write_config(root: Path, model: str = DEFAULT_MODEL) -> None:
+    """Write the packaged `openkos.yaml` template at `root`, with `model`
+    substituted for the template's single `__OPENKOS_MODEL__` placeholder.
+
+    `model` is the ONLY user-selectable field (D5): every other line is
+    byte-identical to the packaged template regardless of the chosen model.
+    The directory itself remains the single source of truth for the
+    workspace's identity, so nothing in `openkos.yaml` is derived from
+    `root`. Substitution is a single constrained `str.replace` on a known
+    placeholder token -- never a YAML dumper or serializer -- so it cannot
+    reformat, reorder, or fold any other line the way a round-trip through a
+    YAML library could. `validate_model` runs first and raises `ValueError`
+    before any file is written if `model` is blank or contains whitespace, a
+    quote, or `#`. Exclusive-create mode ("x") never overwrites an existing
+    file (D2).
     """
-    content = _read_template("openkos.yaml.template")
+    validated_model = validate_model(model)
+    template = _read_template("openkos.yaml.template")
+    if template.count(_MODEL_PLACEHOLDER) != 1:
+        raise ValueError(
+            f"expected exactly one {_MODEL_PLACEHOLDER!r} placeholder in the "
+            "packaged template"
+        )
+    content = template.replace(_MODEL_PLACEHOLDER, validated_model)
     layout = WorkspaceLayout(root)
     fsio.write_exclusive(layout.config_path, content)
