@@ -1,6 +1,6 @@
 """Typer application object exposed as the `openkos` console script."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -39,6 +39,6 @@ def init() -> None:
 
     layout = config.WorkspaceLayout(root)
     layout.raw_dir.mkdir(parents=True, exist_ok=True)
-    bundle.create(layout.bundle_dir, datetime.now(UTC).date())
+    bundle.create(layout.bundle_dir, datetime.now().astimezone().date())
     config.write_agents(root)
     config.write_config(root)

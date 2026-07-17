@@ -38,9 +38,9 @@ sequence — either single- or double-quoted YAML scalars satisfy it.
 ### Requirement: Bundle Log Shape
 
 `bundle/log.md` MUST carry no frontmatter, and MUST contain
-`# Directory Update Log`, a `## YYYY-MM-DD` section for today's date
-(derived from a timezone-aware timestamp), and the bullet
-`* **Initialization**: Created the bundle structure and the root
+`# Directory Update Log`, a `## YYYY-MM-DD` section for the machine's
+current LOCAL calendar date (not UTC's, when the two differ), and the
+bullet `* **Initialization**: Created the bundle structure and the root
 [index](/index.md).`
 
 #### Scenario: Initialization entry
@@ -49,6 +49,15 @@ sequence — either single- or double-quoted YAML scalars satisfy it.
 - WHEN `bundle/log.md` is read
 - THEN it has no frontmatter and contains the heading, the dated section,
   and the exact Initialization bullet above
+
+#### Scenario: Dated section reflects local date, not UTC
+
+- GIVEN a successful init on a machine whose local timezone is offset from
+  UTC such that the local calendar date differs from the UTC calendar date
+  at the moment `init` runs
+- WHEN `bundle/log.md` is read
+- THEN the `## YYYY-MM-DD` section matches the machine's local date, not
+  UTC's
 
 ### Requirement: Generated Workspace Config
 

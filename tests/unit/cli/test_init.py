@@ -5,7 +5,11 @@ checked before any write happens, so a refusal leaves the directory exactly
 as it was found (D1, D2 belt-and-suspenders with `config.is_workspace`).
 """
 
+import os
+import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from typer.testing import CliRunner
@@ -145,3 +149,51 @@ def test_fresh_bundle_is_conformant(
 
     assert result.exit_code == 0
     assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+@pytest.mark.parametrize(
+    "tz_name",
+    ["Etc/GMT+12", "Pacific/Kiritimati"],
+    ids=["utc_minus_12", "utc_plus_14"],
+)
+def test_log_dated_section_uses_local_date_not_utc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tz_name: str
+) -> None:
+    """`log.md`'s dated section reflects the machine's local calendar date, not UTC's.
+
+    `ubuntu-latest` (CI) runs in UTC, where local == UTC -- a single fixed
+    timezone would pass in CI even if the implementation used UTC, the same
+    blind spot that hid the `Path(".")` bug (tmp_path is always absolute).
+    `Etc/GMT+12` (UTC-12) and `Pacific/Kiritimati` (UTC+14) are the two most
+    extreme real UTC offsets; together their "local date differs from UTC
+    date" windows cover all 24 hours of a UTC day, so at least one of the two
+    parametrized cases always disagrees with a UTC-based date at any instant
+    this test runs -- neither can silently pass alongside a UTC bug.
+
+    `time.tzset()` re-reads the `TZ` environment variable into the C
+    library's timezone state, which is what `datetime.now().astimezone()`
+    (no-arg) consults. The environment is restored and re-synced explicitly
+    in a `finally` block, rather than left to `monkeypatch`'s teardown alone,
+    because `monkeypatch` reverts the `TZ` env var but does not itself call
+    `tzset()` afterwards -- without the explicit re-sync here, the process's
+    C library timezone state would leak into later tests even though `TZ`
+    itself was reverted.
+    """
+    monkeypatch.chdir(tmp_path)
+    original_tz = os.environ.get("TZ")
+    os.environ["TZ"] = tz_name
+    time.tzset()
+    try:
+        expected_local_date = datetime.now(ZoneInfo(tz_name)).date()
+
+        result = runner.invoke(app, ["init"])
+    finally:
+        if original_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_tz
+        time.tzset()
+
+    assert result.exit_code == 0
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert f"## {expected_local_date.isoformat()}" in log_text
