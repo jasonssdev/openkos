@@ -8,6 +8,7 @@ the packaged templates.
 
 from importlib import resources
 from pathlib import Path
+from typing import Any
 
 import pytest
 from ruamel.yaml import YAML
@@ -134,6 +135,32 @@ def test_write_config_writes_no_cr_bytes(tmp_path: Path) -> None:
     assert b"\r" not in (tmp_path / "openkos.yaml").read_bytes()
 
 
+def test_write_agents_and_write_config_open_with_newline_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both writers open their output file with `newline=""`.
+
+    Unlike the `\\r`-byte checks below, which pass on POSIX regardless of
+    `newline=""` (no LF->CRLF translation there), this spies on `Path.open`
+    directly, so removing the argument fails here even on Linux CI.
+    """
+    original_open = Path.open
+    recorded: dict[str, dict[str, Any]] = {}
+
+    def spy_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self.name in ("AGENTS.md", "openkos.yaml"):
+            recorded[self.name] = kwargs
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy_open)
+
+    config.write_agents(tmp_path)
+    config.write_config(tmp_path)
+
+    assert recorded["AGENTS.md"].get("newline") == ""
+    assert recorded["openkos.yaml"].get("newline") == ""
+
+
 def test_write_config_raises_on_existing_file(tmp_path: Path) -> None:
     """Exclusive-create mode ("x") never overwrites an existing `openkos.yaml`."""
     (tmp_path / "openkos.yaml").write_text("pre-existing", encoding="utf-8")
@@ -148,6 +175,10 @@ def test_write_config_raises_on_existing_file(tmp_path: Path) -> None:
         "weird: name",
         "#leading-hash",
         'has "quotes"',
+        "line\nbreak",
+        "tab\tchar",
+        "café-δοκιμή-🎉",
+        "x" * 100,
     ],
 )
 def test_write_config_escapes_yaml_significant_characters_in_name(
@@ -156,11 +187,10 @@ def test_write_config_escapes_yaml_significant_characters_in_name(
     """A directory name with YAML-significant characters round-trips exactly.
 
     `write_config` interpolates the directory basename into the template with
-    plain string substitution; a name containing `:`, a leading `#`, or
-    quotes must still produce a valid `openkos.yaml` whose `name` field
-    parses back to the *exact* original string, not a malformed or
-    semantically altered document (e.g. `#leading-hash` must not become a
-    YAML comment).
+    plain string substitution; a name containing `:`, a leading `#`, quotes,
+    an embedded newline/tab, non-ASCII text, or >80 chars (ruamel's line
+    folding threshold) must still produce a valid `openkos.yaml` whose
+    `name` field parses back to the *exact* original string.
     """
     root = tmp_path / dirname
     root.mkdir()
@@ -170,6 +200,22 @@ def test_write_config_escapes_yaml_significant_characters_in_name(
     yaml = YAML(typ="safe")
     parsed = yaml.load((root / "openkos.yaml").read_text(encoding="utf-8"))
     assert parsed["name"] == dirname
+
+
+@pytest.mark.parametrize("value", ["", "\x0c"])
+def test_yaml_scalar_handles_values_no_directory_can_hold(value: str) -> None:
+    """`_yaml_scalar` round-trips the empty string and a raw control character.
+
+    Neither can be a `tmp_path` directory name (empty collapses `tmp_path /
+    ""` back to `tmp_path`; NUL is rejected by the filesystem), so this
+    calls `_yaml_scalar` directly and round-trips its output via
+    `yaml.safe_load`.
+    """
+    scalar = config._yaml_scalar(value)
+
+    yaml = YAML(typ="safe")
+    parsed = yaml.load(f"name: {scalar}\n")
+    assert parsed["name"] == value
 
 
 def test_write_config_relative_root_uses_real_directory_name(
