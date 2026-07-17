@@ -24,7 +24,7 @@ This is the single source of truth for the OpenKOS command line as scoped for **
 
 ## Install and first run
 
-**Prerequisites:** Python 3.13+, and [Ollama](https://ollama.com) with a model pulled (for example `ollama pull qwen3.5:9b`, `openkos init`'s generated default). No accounts or API keys.
+**Prerequisites:** Python 3.13+, and [Ollama](https://ollama.com) with a model pulled (for example `ollama pull qwen3:8b`, `openkos init`'s packaged default). No accounts or API keys.
 
 Install the engine once (after the first release):
 
@@ -47,7 +47,7 @@ You install the engine once and run `openkos init` in each knowledge base — li
 
 Creates a new workspace in the current directory: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (`index.md` and `log.md`; concept folders are not pre-created, `ingest` adds them on first write), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual. Run once per workspace.
 
-`openkos.yaml` ships with a working default model (currently `qwen3.5:9b`, via Ollama) rather than an interactive picker — swapping it is one line in the config. Model selection during `init` is deferred; see `add-model-selection`.
+`openkos.yaml` ships with a working default model (currently `qwen3:8b`, via Ollama) rather than an interactive picker — swapping it is one line in the config. Model selection during `init` is deferred; see `add-model-selection`.
 
 ### `openkos ingest <path>`
 
@@ -97,8 +97,7 @@ You can also just delete the file by hand — the bundle is your files. `forget`
 Structured settings for the workspace, read by the engine. It lives at the workspace root, beside `raw/` and `bundle/` — not inside the bundle, which holds concept documents and nothing else.
 
 ```yaml
-name: good-life-demo
-model: qwen3.5:9b         # local model served via Ollama; see tech_stack.md
+model: qwen3:8b           # local model served via Ollama; see tech_stack.md
 review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
