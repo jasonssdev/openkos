@@ -31,18 +31,24 @@
 
 ### Scenario-to-Test Traceability
 
-All 19 scenarios map to test coverage:
-- Workspace Creation (2 scenarios): test_fresh_empty_directory, test_success_message_stdout
-- Bundle Index Shape (1 scenario): test_create_writes_index_with_correct_frontmatter
-- Bundle Log Shape (2 scenarios): test_create_writes_log_with_date, test_log_dated_section_uses_local_date_not_utc
-- Generated Workspace Config (1 scenario): test_write_config_generates_name_from_directory
-- Static AGENTS.md Template (1 scenario): test_agents_template_byte_identical
-- No Concept-Type Folders (1 scenario): test_create_writes_exactly_index_and_log
-- Refusal Idempotency (6 scenarios): test_refuses_existing_openkos_yaml, test_refuses_existing_agents_md, test_refuses_non_empty_raw_or_bundle (parametrized), test_refuses_raw_or_bundle_as_file, test_second_run_refuses, test_no_partial_output
-- Write Failure Handling (1 scenario): test_write_failure_surfaces_clean_error
-- Adoption of Non-Workspace Directories (1 scenario): test_adopt_non_workspace_directory
-- Default raw/ Permissions (1 scenario): test_raw_default_permissions
-- OKF Conformance (2 scenarios): test_fresh_bundle_is_conformant, test_rule_3_holds_by_construction
+**Correction (post-archive review finding)**: the list below originally cited ~13
+test function names that do not exist in the shipped suite (invented, not
+verified against the real test files). Replaced here with the actual
+function names, cross-checked against `verify-report.md`'s traceability
+table (§"Scenario-to-Test Traceability (15/15 scenarios)") in this same
+change, which was independently correct:
+
+- Workspace Creation (1 scenario): `test_fresh_empty_directory`
+- Bundle Index Shape (1 scenario): `test_render_index_returns_version_frontmatter_and_empty_body`
+- Bundle Log Shape (2 scenarios): `test_render_log_has_heading_dated_section_and_initialization_bullet`, `test_render_log_has_no_frontmatter`; local-date-not-UTC covered separately by `test_log_dated_section_uses_local_date_not_utc` (parametrized)
+- Generated Workspace Config (1 scenario): `test_write_config_generated_fields`
+- Static AGENTS.md Template (1 scenario): `test_write_agents_byte_identical`
+- No Concept-Type Folders (1 scenario): `test_create_writes_exactly_index_and_log`
+- Refusal Idempotency (4 scenarios + no-partial-output check): `test_refuses_when_openkos_yaml_exists`, `test_refuses_when_agents_md_exists`, `test_refuses_when_dir_non_empty` (parametrized `raw`/`bundle`), `test_refuses_when_dir_is_a_file` (parametrized `raw`/`bundle`), `test_refuses_on_second_run`. There is no dedicated `test_no_partial_output` function — "no partial output kept on refusal" is asserted inline via byte-snapshot equality inside each of the tests above, not by a separate test.
+- Write Failure Handling (1 scenario): `test_write_failure_surfaces_cleanly`
+- Adoption of Non-Workspace Directories (1 scenario): `test_adopt_non_workspace_directory`
+- Default raw/ Permissions (1 scenario): `test_raw_default_permissions`
+- OKF Conformance (1 scenario): `test_fresh_bundle_is_conformant`. There is no `test_rule_3_holds_by_construction` — §9 rule 3 is not implemented (deferred to `lint`, per `design.md`'s gap log item 3 and `verify-report.md`'s WARNING-2); no test claims to verify it.
 
 ## What Shipped
 
