@@ -64,4 +64,4 @@ Chain strategy: stacked-to-main
 - [x] 4.7 Add CI build-job step: `mktemp -d`, run `openkos init` against isolated wheel, assert exit 0 + 5 artifacts (the only proof `templates/` ships)
 - [x] 4.8 If 4.7 fails: add `[tool.uv.build-backend]` include rule for `templates/` (fallback, not a redesign) — NOT NEEDED: 4.7 passed locally against the real isolated wheel (see apply-progress), templates/ ships without any include rule
 - [x] 4.9 Docs: `AGENTS.md:64` ingest→init; `docs/cli.md:48` mark model-pick/concept-folder claims as honest gap; `docs/cli.md:99` `qwen3:8b`→`qwen3.5:9b`
-- [ ] 4.10 Final verify: `uv run pytest --cov` (≥90% branch), ruff, mypy, `uv build`
+- [x] 4.10 Final verify: `uv run pytest --cov` (≥90% branch), ruff, mypy, `uv build`
