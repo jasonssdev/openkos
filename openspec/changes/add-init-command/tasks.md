@@ -65,3 +65,97 @@ Chain strategy: stacked-to-main
 - [x] 4.8 If 4.7 fails: add `[tool.uv.build-backend]` include rule for `templates/` (fallback, not a redesign) — NOT NEEDED: 4.7 passed locally against the real isolated wheel (see apply-progress), templates/ ships without any include rule
 - [x] 4.9 Docs: `AGENTS.md:64` ingest→init; `docs/cli.md:48` mark model-pick/concept-folder claims as honest gap; `docs/cli.md:99` `qwen3:8b`→`qwen3.5:9b`
 - [x] 4.10 Final verify: `uv run pytest --cov` (≥90% branch), ruff, mypy, `uv build`
+
+---
+
+## REOPENING: D5 revert — byte-identical `openkos.yaml`, drop generated `name`, `qwen3:8b` unification
+
+Phases 1-4 above are the historical record of the first implementation and are
+unchanged. This reopening supersedes only `write_config`'s shape (D5 reverted
+to its original byte-copy design) and unifies the model tag. Single PR, no
+new files, no CLI-visible behavior change beyond `openkos.yaml`'s content.
+
+### Reopening Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | ~150 (config.py ~53, test_config.py ~88, template ~3, pyproject.toml ~4, docs/cli.md ~2) |
+| 400-line budget risk | Low |
+| Chained PRs recommended | No |
+| Suggested split | Single PR |
+| Delivery strategy | single-pr |
+| Chain strategy | pending (not needed — under budget) |
+
+Decision needed before apply: No
+Chained PRs recommended: No
+Chain strategy: pending
+400-line budget risk: Low
+
+Net-deletion change: `_yaml_scalar` (~20 lines), its 4 parametrized/unit
+tests (~80 lines), the `ruamel.yaml`/`StringIO` runtime imports, and the
+`name:` template line all go away; additions are the collapsed
+`write_config` body (~8 lines) and one new byte-identity test (~8 lines).
+`uv.lock` regeneration is generated, not authored, and excluded from the
+authored count.
+
+### Phase 5: Template and config collapse (RED → GREEN → REFACTOR)
+
+- [x] 5.1 RED `tests/unit/test_config.py`: add `test_write_config_byte_identical`
+  (mirrors `test_write_agents_byte_identical` — asserts `openkos.yaml`'s
+  written bytes equal `templates/openkos.yaml.template`'s packaged bytes).
+  Delete `test_write_config_generated_fields`,
+  `test_write_config_escapes_yaml_significant_characters_in_name` (full
+  parametrization), `test_yaml_scalar_handles_values_no_directory_can_hold`,
+  and `test_write_config_relative_root_uses_real_directory_name` (all assert
+  `name` generation, now removed). Delete the now-unused
+  `from ruamel.yaml import YAML` import at the top of the file. Keep
+  `test_write_config_raises_on_existing_file`,
+  `test_write_config_writes_no_cr_bytes`, and
+  `test_write_agents_and_write_config_open_with_newline_empty`. Confirm the
+  new test fails against the current `write_config` (name-based output
+  diverges from the template).
+- [x] 5.2 GREEN `src/openkos/templates/openkos.yaml.template`: delete line 1
+  (`name: {name}`); set the model line to `model: qwen3:8b`. This file
+  becomes the literal bytes every new workspace receives.
+- [x] 5.3 GREEN `src/openkos/config.py`: delete `_yaml_scalar` entirely;
+  delete `from ruamel.yaml import YAML` and `from io import StringIO`;
+  rewrite `write_config(root)` to read the template via
+  `_read_template("openkos.yaml.template")` and write it byte-for-byte under
+  `"x"` with `newline=""`, exactly matching `write_agents`'s shape — no
+  `.format()`, no substitution, no parameter beyond `root`.
+- [x] 5.4 REFACTOR: run `uv run pytest tests/unit/test_config.py` green;
+  align `write_config`'s docstring with the byte-copy contract (mirror
+  `write_agents`'s docstring); confirm `uv run ruff check .` reports no
+  unused imports (F401).
+
+### Phase 6: Dependency revert
+
+- [x] 6.1 `pyproject.toml`: move `ruamel-yaml>=0.19.1` from
+  `[project].dependencies` to `[dependency-groups].dev` (insert
+  alphabetically, before `ruff`).
+- [x] 6.2 Regenerate `uv.lock` via `uv lock` (do not hand-edit); confirm the
+  diff reflects only the `ruamel-yaml` group move.
+
+### Phase 7: `qwen3:8b` unification
+
+- [x] 7.1 `docs/cli.md:101` (config block) — change `model: qwen3.5:9b` to
+  `model: qwen3:8b`. Also fixed two more `qwen3.5:9b` occurrences found in
+  the same file during the sweep (line 27 Prerequisites, line 50 current-
+  default sentence), and deleted the stale `name: good-life-demo` line from
+  the example block (line 100) since `openkos.yaml` no longer has a `name`
+  field.
+- [x] 7.2 `examples/good-life-demo/openkos.yaml:2` — already `model:
+  qwen3:8b`, unchanged. Deleted line 1 (`name: good-life-demo`, widened
+  scope item C.8): the spec now forbids `name` in `openkos.yaml`, and this
+  example is normative (mirrors what `init` produces), so it must match.
+- [x] 7.3 `docs/user-journey.md:55` (openkos.yaml block) and line 88 —
+  already `model: qwen3:8b`, unchanged. Reworded line 50's false "helps
+  the user pick a local model" claim (widened scope item C.7) — `init`
+  ships a fixed default and defers model selection to
+  `add-model-selection`.
+
+### Phase 8: Verification gate
+
+- [x] 8.1 `uv run pytest --cov` (≥90% branch), `uv run ruff check .`,
+  `uv run ruff format --check .`, `uv run mypy .`, `uv build` + both wheel
+  smoke tests (console-entry `--help` and `openkos init` in a `mktemp -d`).

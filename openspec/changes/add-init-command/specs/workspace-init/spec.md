@@ -69,19 +69,31 @@ bullet `* **Initialization**: Created the bundle structure and the root
 - THEN the `## YYYY-MM-DD` section matches the machine's local date, not
   UTC's
 
-### Requirement: Generated Workspace Config
+### Requirement: Static openkos.yaml Template
 
-`openkos.yaml` MUST be generated (not copied) with `name` set to the
-current directory's base name, `model: qwen3.5:9b`, `review: true`,
-`default_sensitivity: private`, `freshness_window: 7d`, `raw: raw/`, and
-`bundle: bundle/`.
+`openkos.yaml` MUST be a byte-identical copy of the packaged template, with
+no per-workspace substitution. It MUST NOT contain a `name` field or any
+other field derived from the current directory; the directory itself
+remains the single source of truth for the workspace's identity, and
+nothing in `openkos.yaml` duplicates it. The packaged template pins
+`model: qwen3:8b`, `review: true`, `default_sensitivity: private`,
+`freshness_window: 7d`, `raw: raw/`, and `bundle: bundle/`.
 
-#### Scenario: Generated fields match directory
+#### Scenario: Byte-identical template
 
-- GIVEN a directory named `my-workspace`
-- WHEN init succeeds and `openkos.yaml` is parsed
-- THEN the parsed values equal `name: my-workspace` plus the fixed values
-  above (byte-level formatting, such as quoting, is not asserted)
+- GIVEN a successful init
+- WHEN the generated `openkos.yaml` is compared to the packaged template
+- THEN the content is byte-identical
+
+#### Scenario: No directory-derived field, regardless of directory name
+
+- GIVEN a directory with any name, including one long enough or containing
+  consecutive spaces such that it would previously have risked corruption
+  if written into a YAML scalar
+- WHEN init succeeds and `openkos.yaml` is written
+- THEN the file contains no field derived from the directory name, and its
+  content matches the packaged template exactly, independent of the
+  directory's name
 
 ### Requirement: Static AGENTS.md Template
 
