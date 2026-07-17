@@ -123,11 +123,18 @@ The system MUST evaluate all refusal conditions in a pre-flight check
 before writing any file. It MUST exit 1 and write nothing if any of the
 following applies: `openkos.yaml` already exists; `AGENTS.md` already
 exists; `raw/` exists and is non-empty; `bundle/` exists and is non-empty;
-or `raw` or `bundle` exists and is not a directory. It MUST NEVER overwrite
-an existing file, and MUST leave no partial artifacts behind on refusal —
+`raw` or `bundle` exists and is not a directory; or `raw` or `bundle`
+exists as a pre-existing symlink (to a directory, to a file, or to a
+nonexistent target). It MUST NEVER overwrite an existing file, follow a
+symlinked workspace path when creating or writing, or write outside the
+workspace root. It MUST leave no partial artifacts behind on refusal —
 writing MUST NOT begin until every condition has been checked and none
 apply. On refusal, it MUST write to stderr a message identifying which
-condition triggered the refusal.
+condition triggered the refusal; when the trigger is a non-empty
+`bundle/`, that message MUST additionally identify the leftover as a
+likely remnant of an interrupted (crashed or killed) prior `init` and
+point to manual remediation, instead of the bare "already exists and is
+not empty".
 
 #### Scenario: Existing openkos.yaml
 
@@ -171,6 +178,25 @@ condition triggered the refusal.
 - WHEN init exits 1
 - THEN none of the five artifacts exist unless they pre-existed, and any
   pre-existing one is unchanged
+
+#### Scenario: Symlinked raw or bundle target is refused
+
+- GIVEN no `openkos.yaml`, and `raw` or `bundle` in the current directory
+  is a pre-existing symlink, whether it targets a directory, a file, or a
+  nonexistent path
+- WHEN init runs
+- THEN it exits 1 in pre-flight, writes nothing anywhere (including
+  through the symlink or at its target), never follows the symlink, and
+  stderr identifies that path as a symlink
+
+#### Scenario: Stray bundle/ retry names the likely crashed-init cause
+
+- GIVEN a prior `init` run left a non-empty `bundle/` behind (for example
+  after a mid-write crash) and no `openkos.yaml` exists
+- WHEN init runs again
+- THEN it exits 1, writes nothing, and stderr's message identifies the
+  leftover `bundle/` as a likely remnant of an interrupted init and points
+  to remediation — not the bare "already exists and is not empty"
 
 ### Requirement: Write Failure Handling
 
@@ -223,6 +249,10 @@ conformance check to inspect. Rule 3 (reserved-file structure) MUST hold by
 construction, through the `index.md` and `log.md` shapes required by the
 Bundle Index Shape and Bundle Log Shape requirements above. This slice MUST
 NOT claim a mechanical check of rule 3 — that check is deferred to `lint`.
+When the mechanical conformance check encounters a file it cannot read or
+decode (for example a permission error or invalid encoding), it MUST
+report that failure distinctly as an I/O/read error and MUST NOT report it
+as a conformance violation.
 
 #### Scenario: Mechanical check reports no violations on a fresh bundle
 
@@ -239,3 +269,13 @@ NOT claim a mechanical check of rule 3 — that check is deferred to `lint`.
 - THEN both satisfy OKF §9 rule 3 by construction
 - AND no mechanical rule-3 check is performed by this slice; that check is
   deferred to `lint`
+
+#### Scenario: Unreadable file is reported as an I/O error, not a conformance violation
+
+- GIVEN a non-reserved `.md` file under `bundle/` that exists but cannot
+  be read as text — for example permission denied, or content that cannot
+  be decoded with the expected encoding
+- WHEN the OKF conformance check runs against `bundle/`
+- THEN the failure is reported as an I/O/read error distinct from a
+  conformance violation, and is not phrased as "no parseable frontmatter"
+  or any other conformance-violation wording
