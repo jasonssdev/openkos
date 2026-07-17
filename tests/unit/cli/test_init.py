@@ -6,6 +6,7 @@ as it was found (D1, D2 belt-and-suspenders with `config.is_workspace`).
 """
 
 import os
+import stat
 import time
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,8 @@ def test_refuses_when_openkos_yaml_exists(
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos.yaml" in result.stderr
     assert _snapshot(tmp_path) == before
 
 
@@ -54,6 +57,8 @@ def test_refuses_when_agents_md_exists(
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "AGENTS.md" in result.stderr
     assert _snapshot(tmp_path) == before
 
 
@@ -71,6 +76,31 @@ def test_refuses_when_dir_non_empty(
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert dirname in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("dirname", ["raw", "bundle"])
+def test_refuses_when_dir_is_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dirname: str
+) -> None:
+    """A `raw` or `bundle` that exists as a plain file refuses cleanly (requirement 3).
+
+    `_non_empty_dir` (and `is_workspace`) call `Path.is_dir()`, which is
+    `False` for a plain file -- so without this fifth pre-flight condition,
+    a lone file named `raw` would slip past refusal into Phase B, where
+    `Path.mkdir` raises an uncaught `FileExistsError`.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / dirname).write_text("not a directory", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert dirname in result.stderr
     assert _snapshot(tmp_path) == before
 
 
@@ -84,6 +114,8 @@ def test_refuses_on_second_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     second = runner.invoke(app, ["init"])
 
     assert second.exit_code == 1
+    assert isinstance(second.exception, SystemExit)
+    assert "openkos.yaml" in second.stderr
     assert _snapshot(tmp_path) == before
 
 
@@ -99,6 +131,8 @@ def test_fresh_empty_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert (tmp_path / "bundle" / "log.md").is_file()
     assert (tmp_path / "openkos.yaml").is_file()
     assert (tmp_path / "AGENTS.md").is_file()
+    assert result.stdout.strip() != ""
+    assert "openkos.yaml" in result.stdout
 
 
 def test_raw_default_permissions(
@@ -207,3 +241,36 @@ def test_log_dated_section_uses_local_date_not_utc(
     assert result.exit_code == 0
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     assert f"## {expected_local_date.isoformat()}" in log_text
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="permission-based write failures require a POSIX non-root user",
+)
+def test_write_failure_surfaces_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Phase-B write failure exits non-zero with a clear message, no traceback (requirement 4).
+
+    Pre-flight (Phase A) only reads, so it passes on an empty, writable
+    directory. Stripping write permission from `tmp_path` itself, after
+    pre-flight would pass but before Phase B runs, forces the very first
+    write (`raw/`'s `mkdir`) to raise `PermissionError` -- a write failure
+    that a `chmod`-based collision on `openkos.yaml` cannot reach, since
+    pre-flight would refuse before any write is attempted. Root is exempted
+    (`geteuid() == 0`) because root bypasses POSIX permission bits
+    entirely, which would make this test silently pass without exercising
+    the failure path -- an untestable claim on that platform, not a false
+    one.
+    """
+    monkeypatch.chdir(tmp_path)
+    original_mode = stat.S_IMODE(tmp_path.stat().st_mode)
+    tmp_path.chmod(0o500)
+    try:
+        result = runner.invoke(app, ["init"])
+    finally:
+        tmp_path.chmod(original_mode)
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.strip() != ""
