@@ -142,7 +142,17 @@ def test_adopt_non_workspace_directory(
 def test_fresh_bundle_is_conformant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A freshly initialized bundle passes the OKF §9 conformance check (scenario 14)."""
+    """§9 rules 1-2 hold vacuously on a fresh bundle (scenario 14).
+
+    `index.md` and `log.md` are both reserved, so `check_conformance` has no
+    non-reserved `.md` file to check and returns `[]` regardless of what
+    `init` wrote -- this cannot fail today. Its real value is as a
+    regression guard: it starts failing the moment `init` ever writes a
+    non-reserved `.md` that violates rules 1-2. Rule 3 (reserved-file
+    structure) is deferred to `lint` and not checked here; it holds by
+    construction via the index/log shapes, genuinely enforced by
+    `tests/unit/bundle/test_index.py` and `test_log.py`.
+    """
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["init"])
