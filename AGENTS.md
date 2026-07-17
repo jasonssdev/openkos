@@ -61,7 +61,7 @@ Write it while the forces are still fresh — when the change's design settles t
 
 ## MVP 1 — start here
 
-Build the thinnest vertical slice first: `openkos ingest <path>` → copy the source into `raw/` → compile it with the local model into one or more OKF concept documents (with provenance + freshness) → update `index.md` and `log.md`. Lexical retrieval (FTS5) and a cited `query` come next. No graph, no vectors, no reconcile yet. Aim for the shape in `examples/good-life-demo/`.
+Build the thinnest vertical slice first: `openkos init` → create the workspace (`raw/`, `bundle/`, `openkos.yaml`, `AGENTS.md`) → `openkos ingest <path>` → copy the source into `raw/` → compile it with the local model into one or more OKF concept documents (with provenance + freshness) → update `index.md` and `log.md`. Lexical retrieval (FTS5) and a cited `query` come next. No graph, no vectors, no reconcile yet. Aim for the shape in `examples/good-life-demo/`.
 
 ## Do not
 
