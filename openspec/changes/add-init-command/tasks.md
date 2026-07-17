@@ -61,7 +61,7 @@ Chain strategy: stacked-to-main
 - [x] 4.4 GREEN: `init` sequencing (Phase B, D1): `bundle.create()` → `write_agents()` → `write_config()` last (D3, marker last)
 - [x] 4.5 RED: `test_raw_default_permissions` — `raw/` mode matches a fresh dir default (scenario 13)
 - [x] 4.6 RED: `test_fresh_bundle_is_conformant` — run `init`, call `okf` §9 check against produced `bundle/` (scenario 14)
-- [ ] 4.7 Add CI build-job step: `mktemp -d`, run `openkos init` against isolated wheel, assert exit 0 + 5 artifacts (the only proof `templates/` ships)
-- [ ] 4.8 If 4.7 fails: add `[tool.uv.build-backend]` include rule for `templates/` (fallback, not a redesign)
+- [x] 4.7 Add CI build-job step: `mktemp -d`, run `openkos init` against isolated wheel, assert exit 0 + 5 artifacts (the only proof `templates/` ships)
+- [x] 4.8 If 4.7 fails: add `[tool.uv.build-backend]` include rule for `templates/` (fallback, not a redesign) — NOT NEEDED: 4.7 passed locally against the real isolated wheel (see apply-progress), templates/ ships without any include rule
 - [ ] 4.9 Docs: `AGENTS.md:64` ingest→init; `docs/cli.md:48` mark model-pick/concept-folder claims as honest gap; `docs/cli.md:99` `qwen3:8b`→`qwen3.5:9b`
 - [ ] 4.10 Final verify: `uv run pytest --cov` (≥90% branch), ruff, mypy, `uv build`
