@@ -90,9 +90,13 @@ def write_config(root: Path) -> None:
     that does not preserve them. `name` is `root`'s basename; the rest of
     the fields are fixed. Exclusive-create mode ("x") never overwrites an
     existing file (D2).
+
+    `root` is resolved before taking its basename: an unresolved relative
+    root such as `Path(".")` has an empty `.name`, which would silently
+    write a nameless workspace instead of failing loudly.
     """
     template = _read_template("openkos.yaml.template")
-    content = template.format(name=root.name)
+    content = template.format(name=root.resolve().name)
     layout = WorkspaceLayout(root)
     with layout.config_path.open("x", encoding="utf-8") as config_file:
         config_file.write(content)

@@ -118,3 +118,22 @@ def test_write_config_raises_on_existing_file(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         config.write_config(tmp_path)
+
+
+def test_write_config_relative_root_uses_real_directory_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative root (e.g. `Path(".")`) must not collapse `name` to empty.
+
+    `Path(".").name` is `""` -- `write_config` must resolve the root before
+    taking its basename, matching what `openkos init` will naturally pass
+    when it operates on "the current directory" (docs/cli.md:46-48).
+    """
+    monkeypatch.chdir(tmp_path)
+
+    config.write_config(Path())
+
+    yaml = YAML(typ="safe")
+    parsed = yaml.load((tmp_path / "openkos.yaml").read_text(encoding="utf-8"))
+    assert parsed["name"] == tmp_path.name
+    assert parsed["name"] != ""
