@@ -22,7 +22,9 @@ def create(bundle_dir: Path, today: date) -> None:
     bundle is left as-is for manual recovery.
     """
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    with (bundle_dir / "index.md").open("x", encoding="utf-8") as index_file:
+    with (bundle_dir / "index.md").open(
+        "x", encoding="utf-8", newline=""
+    ) as index_file:
         index_file.write(render_index())
-    with (bundle_dir / "log.md").open("x", encoding="utf-8") as log_file:
+    with (bundle_dir / "log.md").open("x", encoding="utf-8", newline="") as log_file:
         log_file.write(render_log(today))
