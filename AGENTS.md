@@ -46,6 +46,7 @@ Every change must respect these. A technically good change that violates one is 
 - Tests with **pytest** (unit / integration / e2e). Test the deterministic parts thoroughly; spike-then-test the fuzzy extraction parts.
 - **Ruff** (lint + format) and **MyPy** (types) must pass. CI runs all three plus a 90% branch-coverage gate (`pytest --cov`) and a packaging build (wheel smoke test); nothing merges without green CI + review.
 - **Conventional Commits** with project scopes: `okf, ingest, extract, graph, retrieval, memory, lint, cli, api, mcp, docs, ci`.
+- **The PR and issue flow is exactly what `CONTRIBUTING.md` and `.github/` define — nothing stricter.** Branch `feat/…` or `fix/…` off `main`; a PR references its issue and any `openspec/` change in prose (`Closes #N` / `Refs #N`); issue-first applies only above the small-obvious-fix bar. This repo has **no `status:*` or `type:*` label gates and no issue-linkage CI check** — the only things that block a merge are green CI and review. A general PR workflow that assumes stricter label or issue machinery does not apply here; this repo's convention wins.
 
 ## Architecture Decision Records (ADRs)
 
