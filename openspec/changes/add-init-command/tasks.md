@@ -55,12 +55,12 @@ Chain strategy: stacked-to-main
 
 ## Phase 4: `init` wiring, packaging proof, docs (PR 4, ~205)
 
-- [ ] 4.1 RED `tests/unit/cli/test_init.py`: 4 refusal tests (existing `openkos.yaml`, existing `AGENTS.md`, non-empty `raw/`/`bundle/`, second run) — `CliRunner` + `monkeypatch.chdir`, exit 1, zero writes (scenarios 7-11)
-- [ ] 4.2 GREEN: pre-flight (Phase A, D1) evaluating all 4 conditions before any write
-- [ ] 4.3 RED: `test_fresh_empty_directory`, `test_adopt_non_workspace_directory` — exit 0, 5 artifacts exist (scenarios 1, 12)
-- [ ] 4.4 GREEN: `init` sequencing (Phase B, D1): `bundle.create()` → `write_agents()` → `write_config()` last (D3, marker last)
-- [ ] 4.5 RED: `test_raw_default_permissions` — `raw/` mode matches a fresh dir default (scenario 13)
-- [ ] 4.6 RED: `test_fresh_bundle_is_conformant` — run `init`, call `okf` §9 check against produced `bundle/` (scenario 14)
+- [x] 4.1 RED `tests/unit/cli/test_init.py`: 4 refusal tests (existing `openkos.yaml`, existing `AGENTS.md`, non-empty `raw/`/`bundle/`, second run) — `CliRunner` + `monkeypatch.chdir`, exit 1, zero writes (scenarios 7-11)
+- [x] 4.2 GREEN: pre-flight (Phase A, D1) evaluating all 4 conditions before any write
+- [x] 4.3 RED: `test_fresh_empty_directory`, `test_adopt_non_workspace_directory` — exit 0, 5 artifacts exist (scenarios 1, 12)
+- [x] 4.4 GREEN: `init` sequencing (Phase B, D1): `bundle.create()` → `write_agents()` → `write_config()` last (D3, marker last)
+- [x] 4.5 RED: `test_raw_default_permissions` — `raw/` mode matches a fresh dir default (scenario 13)
+- [x] 4.6 RED: `test_fresh_bundle_is_conformant` — run `init`, call `okf` §9 check against produced `bundle/` (scenario 14)
 - [ ] 4.7 Add CI build-job step: `mktemp -d`, run `openkos init` against isolated wheel, assert exit 0 + 5 artifacts (the only proof `templates/` ships)
 - [ ] 4.8 If 4.7 fails: add `[tool.uv.build-backend]` include rule for `templates/` (fallback, not a redesign)
 - [ ] 4.9 Docs: `AGENTS.md:64` ingest→init; `docs/cli.md:48` mark model-pick/concept-folder claims as honest gap; `docs/cli.md:99` `qwen3:8b`→`qwen3.5:9b`
