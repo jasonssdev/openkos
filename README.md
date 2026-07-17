@@ -69,7 +69,7 @@ mkdir ~/knowledge && cd ~/knowledge
 openkos init
 ```
 
-`init` scaffolds the workspace — `raw/` for your immutable sources and `bundle/` for the compiled OKF bundle (concept folders, `index.md`, `log.md`) — writes `openkos.yaml` and `AGENTS.md`, helps you pick a local model, and initializes a git repository (with `.openkos/` git-ignored). Sources sit beside the bundle rather than inside it, so `bundle/` stays pure OKF: portable, conformant, and shareable on its own.
+`init` scaffolds the workspace — `raw/` for your immutable sources and `bundle/` for the compiled OKF bundle (starting with just `index.md` and `log.md`; concept-type folders are never pre-created, only added as you ingest) — then writes `AGENTS.md` and, last, the `openkos.yaml` marker. It refuses without writing anything if the directory already looks like a workspace. Sources sit beside the bundle rather than inside it, so `bundle/` stays pure OKF: portable, conformant, and shareable on its own.
 
 **Then the loop:**
 
