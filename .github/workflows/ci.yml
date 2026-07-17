@@ -94,8 +94,8 @@ jobs:
 
   # Packaging is validated before any release exists: `uv build` exercises the
   # uv_build backend, and installing the wheel into an isolated environment
-  # proves the artifact itself is sound (the package imports, py.typed ships
-  # with it) — not just that the editable dev install happens to work.
+  # proves the artifact itself is sound (the console script resolves and runs)
+  # — not just that the editable dev install happens to work.
   build:
     name: build (uv build + wheel smoke test)
     runs-on: ubuntu-latest
@@ -110,7 +110,8 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
-      # `--isolated --no-project` installs only the built wheel, so the import
-      # exercises the artifact rather than the checkout or the dev environment.
+      # `--isolated --no-project` installs only the built wheel, so invoking
+      # the console script exercises the artifact's own entry-point metadata
+      # rather than the checkout or the dev environment.
       - name: Wheel smoke test
-        run: uv run --isolated --no-project --with dist/openkos-*.whl python -c "import openkos; openkos.main()"
+        run: uv run --isolated --no-project --with dist/openkos-*.whl openkos --help
