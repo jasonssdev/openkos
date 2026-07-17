@@ -14,12 +14,22 @@ The system MUST create `raw/`, `bundle/index.md`, `bundle/log.md`,
 `openkos.yaml`, and `AGENTS.md` in the current directory and exit 0, when no
 refusal condition (see Refusal Idempotency) applies. It MUST accept no
 positional argument and no flags, operating on the current directory only.
+On success, it MUST write a confirmation message to stdout that names what
+was created.
 
 #### Scenario: Fresh empty directory
 
 - GIVEN an empty current directory
 - WHEN `openkos init` runs
 - THEN all five artifacts exist and the process exits 0
+
+#### Scenario: Success message names what was created
+
+- GIVEN an empty current directory
+- WHEN `openkos init` runs successfully
+- THEN stdout contains a message naming the created workspace/bundle
+  artifacts
+- AND the process exits 0
 
 ### Requirement: Bundle Index Shape
 
@@ -98,29 +108,43 @@ The system MUST NOT pre-create concept-type folders (`concepts/`,
 ### Requirement: Refusal Idempotency
 
 The system MUST evaluate all refusal conditions in a pre-flight check
-before writing any file. It MUST exit 1 and write nothing if `openkos.yaml`
-already exists, if `AGENTS.md` already exists, or if `raw/` or `bundle/`
-exist and are non-empty. It MUST NEVER overwrite an existing file, and MUST
-leave no partial artifacts behind on refusal — writing MUST NOT begin until
-every condition has been checked and none apply.
+before writing any file. It MUST exit 1 and write nothing if any of the
+following applies: `openkos.yaml` already exists; `AGENTS.md` already
+exists; `raw/` exists and is non-empty; `bundle/` exists and is non-empty;
+or `raw` or `bundle` exists and is not a directory. It MUST NEVER overwrite
+an existing file, and MUST leave no partial artifacts behind on refusal —
+writing MUST NOT begin until every condition has been checked and none
+apply. On refusal, it MUST write to stderr a message identifying which
+condition triggered the refusal.
 
 #### Scenario: Existing openkos.yaml
 
 - GIVEN a directory containing `openkos.yaml`
 - WHEN init runs
-- THEN it exits 1 and no file is created or modified
+- THEN it exits 1, no file is created or modified, and stderr identifies
+  the existing `openkos.yaml` as the cause
 
 #### Scenario: Existing AGENTS.md
 
 - GIVEN a directory containing `AGENTS.md` and no `openkos.yaml`
 - WHEN init runs
-- THEN it exits 1, `AGENTS.md` is unchanged, and no other file is created
+- THEN it exits 1, `AGENTS.md` is unchanged, no other file is created, and
+  stderr identifies the existing `AGENTS.md` as the cause
 
 #### Scenario: Non-empty raw/ or bundle/
 
 - GIVEN no `openkos.yaml` but a non-empty `raw/` or `bundle/`
 - WHEN init runs
-- THEN it exits 1 and writes nothing
+- THEN it exits 1, writes nothing, and stderr identifies the non-empty
+  directory as the cause
+
+#### Scenario: raw or bundle exists as a non-directory
+
+- GIVEN no `openkos.yaml`, and either `raw` or `bundle` exists in the
+  current directory as a regular file, not a directory
+- WHEN init runs
+- THEN it exits 1 in pre-flight, writes nothing, raises no uncaught
+  exception, and stderr identifies that path as not a directory
 
 #### Scenario: Second run on an initialized workspace
 
@@ -135,6 +159,23 @@ every condition has been checked and none apply.
 - WHEN init exits 1
 - THEN none of the five artifacts exist unless they pre-existed, and any
   pre-existing one is unchanged
+
+### Requirement: Write Failure Handling
+
+If a Phase-B write fails after pre-flight has passed — for example due to
+insufficient permissions, insufficient disk space, or a path that another
+process created between pre-flight and the write — the system MUST write a
+clear error message to stderr and exit with a non-zero code. It MUST NOT
+let an uncaught exception traceback reach the user.
+
+#### Scenario: Write failure surfaces a clean error
+
+- GIVEN pre-flight has passed and a Phase-B write then fails, for example
+  because the target lost write permission or was occupied by another
+  process after pre-flight completed
+- WHEN init attempts that write
+- THEN it exits with a non-zero code, writes a clear error message to
+  stderr, and no uncaught exception traceback reaches the user
 
 ### Requirement: Adoption of Non-Workspace Directories
 
