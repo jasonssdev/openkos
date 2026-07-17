@@ -28,6 +28,11 @@ def init() -> None:
     condition triggered it. This is Phase A (D1): a pure read, evaluated in
     full before any write is attempted.
 
+    Phase A itself can fail to even read the directory (e.g. a pre-existing
+    `raw/` or `bundle/` with no read permission) -- that is neither a
+    refusal (no workspace was found; the check itself errored) nor a
+    write failure (Phase B never started), so it gets its own message.
+
     Phase B (D1) then writes, in order: `raw/`, the bundle (`index.md` then
     `log.md`), `AGENTS.md`, and `openkos.yaml` LAST (D3) -- the marker is
     written only once every other artifact already exists, so a crash
@@ -38,7 +43,13 @@ def init() -> None:
     caught and reported on stderr rather than surfacing a raw traceback.
     """
     root = Path.cwd()
-    reason = config.refusal_reason(root)
+    try:
+        reason = config.refusal_reason(root)
+    except OSError as exc:
+        typer.echo(
+            f"openkos init: failed while checking the workspace -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
     if reason is not None:
         typer.echo(f"openkos init: refusing to initialize -- {reason}.", err=True)
         raise typer.Exit(code=1)
