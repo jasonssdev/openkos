@@ -29,10 +29,10 @@ Chain strategy: stacked-to-main
 
 ## Phase 1: Console-entry migration (PR 1, ~130)
 
-- [ ] 1.1 RED `tests/unit/test_main.py`: drop greeting test; entry-point test asserts `is openkos.cli.main.app`; add `test_app_help_exits_zero` (CliRunner)
-- [ ] 1.2 GREEN: create `src/openkos/cli/main.py` (bare `app = typer.Typer()`, `__init__.py`); delete `main()` from `src/openkos/__init__.py` (D6); `pyproject.toml:20` → `openkos.cli.main:app`; move `typer` dev→`dependencies`; `uv lock`
-- [ ] 1.3 GREEN: `.github/workflows/ci.yml:116` → `openkos --help` against isolated wheel; fix stale py.typed comment (ci.yml:97-98)
-- [ ] 1.4 Verify: `uv run pytest`, ruff, mypy green
+- [x] 1.1 RED `tests/unit/test_main.py`: drop greeting test; entry-point test asserts `is openkos.cli.main.app`; add `test_app_help_exits_zero` (CliRunner)
+- [x] 1.2 GREEN: create `src/openkos/cli/main.py` (bare `app = typer.Typer()`, `__init__.py`); delete `main()` from `src/openkos/__init__.py` (D6); `pyproject.toml:20` → `openkos.cli.main:app`; move `typer` dev→`dependencies`; `uv lock`
+- [x] 1.3 GREEN: `.github/workflows/ci.yml:116` → `openkos --help` against isolated wheel; fix stale py.typed comment (ci.yml:97-98)
+- [x] 1.4 Verify: `uv run pytest`, ruff, mypy green
 
 ## Phase 2: OKF format layer (PR 2, ~270)
 
