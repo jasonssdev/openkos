@@ -12,7 +12,7 @@
 | `bundle/index.py` | The **bytes of `index.md`**: `render_index() -> str` — frontmatter from `okf.py` + empty body. Pure. | The filesystem. |
 | `bundle/log.py` | The **bytes of `log.md`**: `render_log(today: date) -> str` — no frontmatter (reserved, `docs/okf-alignment.md:38`). Pure. | The filesystem, the clock. |
 | `bundle/bundle.py` | The **bundle root**: `create(bundle_dir: Path, today: date)` — mkdir + write both reserved files. The only module that writes inside the OKF tree. | The workspace root above it. |
-| `config.py` | The **workspace root**: `WorkspaceLayout`, `is_workspace(root)`, `write_config(root, name, model)`, `write_agents(root)`. | Frontmatter, OKF. |
+| `config.py` | The **workspace root**: `WorkspaceLayout`, `is_workspace(root)`, `refusal_reason(root)`, `write_config(root, name, model)`, `write_agents(root)`. `is_workspace` and `refusal_reason` both read one private generator (`_refusal_conditions`) so the "already a workspace" conditions have exactly one definition. | Frontmatter, OKF. |
 | `cli/main.py` | Typer `app` + the `init` command: pre-flight, sequence, exit codes, stdout. | Format and layout details. |
 | `src/openkos/templates/` | Package **data** (not a package — no `__init__.py`): `AGENTS.md`, `openkos.yaml`. | — |
 
@@ -49,10 +49,11 @@ openkos init                     cli/main    config     bundle    okf     FS
     ├── invoke ────────────────────>│           │          │       │       │
     │                               │
     │  PHASE A — pre-flight (reads only, in cost order)
-    │                               ├── is_workspace(cwd)? ────────────────>│  openkos.yaml exists?
-    │                               ├── raw/ exists and non-empty? ────────>│
-    │                               ├── bundle/ exists and non-empty? ─────>│
-    │                               ├── AGENTS.md exists? ─────────────────>│  (gap — see below)
+    │                               ├── refusal_reason(cwd)? ──────────────>│  openkos.yaml exists?
+    │                               │                                      │  AGENTS.md exists?
+    │                               │                                      │  raw/ exists and non-empty?
+    │                               │                                      │  bundle/ exists and non-empty?
+    │                               │                                      │  raw or bundle exists and is not a directory?
     │                               │
     │        ┌──────────────────────┴── any reason? ──────────────────────┐
     │        │ YES                                            NO          │
