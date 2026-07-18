@@ -3,7 +3,7 @@
 ## Technical Approach
 
 `lint` is the second **read** command and Phase-A only, following `status`'s
-precedent: a pure read/validate, no Phase B, no confirm, no `--auto`, exit `0`
+precedent: a pure read/validate, no Phase B, no confirm, exit `0`
 on any successful run, exit `1` **only** when the workspace is absent/unreadable
 (via `config.require_workspace`). It adds a new `src/openkos/lint.py` module with
 its **own** `LintReport`/`LintFinding`/`LintDoc` vocabulary, fully separate from
