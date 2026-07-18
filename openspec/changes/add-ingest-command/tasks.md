@@ -54,17 +54,17 @@ Chain strategy: pending
 
 ## Phase 7: CLI `ingest` command (PR 2)
 
-- [ ] 7.1 RED — `tests/unit/cli/test_ingest.py`: Phase A preview shown, nothing written, when TTY and no `--auto`; confirm → Phase B all-or-nothing (raw copy + concept + `index.md` + `log.md` all present, catalog written last); `--auto` skips the prompt; config `review: false` skips the prompt like `--auto`; non-TTY + `review: true` + no `--auto` refuses (exit 1, "re-run with `--auto`", nothing written); missing/unreadable `<path>` refuses, nothing written; collision (`raw/<name>` or `bundle/sources/<slug>.md` exists) refuses in Phase A, nothing overwritten; traversal path `../../evil.txt` lands as `raw/evil.txt` only, nothing written outside `raw/`/`bundle/sources/`; missing workspace (`bundle/index.md`/`log.md` absent) refuses; generated concept `sensitivity` equals config `default_sensitivity`.
-- [ ] 7.2 GREEN — `cli/main.py`: add `ingest` command. Phase A: validate `<path>` is a readable file; workspace check; `read_config`; derive slug/dest from `Path(src).name` only (never raw path segments); collision refusal; `build_source_concept`; `insert_source_entry`/`insert_log_entry` against current on-disk bytes; preview. Confirm gate: `--auto` → no prompt; else `review=false` → no prompt; else TTY → `typer.confirm`; else refuse (exit 1). Phase B: `mkdir bundle/sources`; `copy_exclusive` raw; `write_exclusive` concept; `write_atomic` `index.md`; `write_atomic` `log.md` (catalog last). Reuse `init`'s `except (OSError, ValueError)` → `echo(err=True)` + `Exit(1)`, prefix `openkos ingest:`.
-- [ ] 7.3 REFACTOR — `cli/main.py`: document `ingest`'s Phase A/B flow, confirm-gate resolution order, and refusal cases in its docstring.
+- [x] 7.1 RED — `tests/unit/cli/test_ingest.py`: Phase A preview shown, nothing written, when TTY and no `--auto`; confirm → Phase B all-or-nothing (raw copy + concept + `index.md` + `log.md` all present, catalog written last); `--auto` skips the prompt; config `review: false` skips the prompt like `--auto`; non-TTY + `review: true` + no `--auto` refuses (exit 1, "re-run with `--auto`", nothing written); missing/unreadable `<path>` refuses, nothing written; collision (`raw/<name>` or `bundle/sources/<slug>.md` exists) refuses in Phase A, nothing overwritten; traversal path `../../evil.txt` lands as `raw/evil.txt` only, nothing written outside `raw/`/`bundle/sources/`; missing workspace (`bundle/index.md`/`log.md` absent) refuses; generated concept `sensitivity` equals config `default_sensitivity`.
+- [x] 7.2 GREEN — `cli/main.py`: add `ingest` command. Phase A: validate `<path>` is a readable file; workspace check; `read_config`; derive slug/dest from `Path(src).name` only (never raw path segments); collision refusal; `build_source_concept`; `insert_source_entry`/`insert_log_entry` against current on-disk bytes; preview. Confirm gate: `--auto` → no prompt; else `review=false` → no prompt; else TTY → `typer.confirm`; else refuse (exit 1). Phase B: `mkdir bundle/sources`; `copy_exclusive` raw; `write_exclusive` concept; `write_atomic` `index.md`; `write_atomic` `log.md` (catalog last). Reuse `init`'s `except (OSError, ValueError)` → `echo(err=True)` + `Exit(1)`, prefix `openkos ingest:`.
+- [x] 7.3 REFACTOR — `cli/main.py`: document `ingest`'s Phase A/B flow, confirm-gate resolution order, and refusal cases in its docstring.
 
 ## Phase 8: Documentation (PR 2)
 
-- [ ] 8.1 `docs/cli.md` — record `ingest`'s null-compiler behavior (raw copy + one Source concept, no extraction); mark `--sensitivity`/`--batch` explicitly as "not in this slice".
+- [x] 8.1 `docs/cli.md` — record `ingest`'s null-compiler behavior (raw copy + one Source concept, no extraction); mark `--sensitivity`/`--batch` explicitly as "not in this slice".
 
 ## Phase 9: Verification Gate
 
-- [ ] 9.1 `uv run pytest --cov` — full suite green, branch coverage ≥90%.
-- [ ] 9.2 `uv run ruff check .` and `uv run ruff format --check .` — clean.
-- [ ] 9.3 `uv run mypy .` — clean (strict mode).
-- [ ] 9.4 `uv build` + wheel smoke test.
+- [x] 9.1 `uv run pytest --cov` — full suite green, branch coverage ≥90%.
+- [x] 9.2 `uv run ruff check .` and `uv run ruff format --check .` — clean.
+- [x] 9.3 `uv run mypy .` — clean (strict mode).
+- [x] 9.4 `uv build` + wheel smoke test.

@@ -83,6 +83,16 @@ ignore = [
     "S101", # `assert` is what a test is made of
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# `typer.Argument(...)`/`typer.Option(...)` in a parameter default is the
+# idiomatic Typer CLI pattern (B008 normally flags a mutable default called
+# at definition time), and both are effectively immutable declarative
+# markers, not runtime state. `bool`/`str | None`-annotated parameters are
+# already exempt by B008's own immutable-type check; `Path`-annotated ones
+# (e.g. `ingest`'s `src` argument) are not, so both callables are listed
+# explicitly here for consistency across every future Typer command.
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
 [tool.mypy]
 # Pin the analysis target to the declared floor so a contributor on a newer
 # interpreter cannot merge code that is broken on 3.13.

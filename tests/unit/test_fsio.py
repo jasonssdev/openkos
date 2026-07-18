@@ -26,6 +26,46 @@ def test_write_exclusive_raises_on_existing_file(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "original"
 
 
+def test_write_exclusive_unlinks_partial_file_on_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write failure after `path.open("x")` has already created the file
+    must not leave a partial file behind -- `write_exclusive` is
+    create-only, so a leftover partial would make every retry raise
+    `FileExistsError` and block recovery (mirrors `copy_exclusive`'s
+    cleanup-on-failure)."""
+    target = tmp_path / "concept.md"
+    original_open = Path.open
+
+    class _RaisingFile:
+        """Wraps the real (already-created) file handle; `write` fails."""
+
+        def __init__(self, real: Any) -> None:
+            self._real = real
+
+        def __enter__(self) -> "_RaisingFile":
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            self._real.__exit__(*exc_info)
+
+        def write(self, _data: str) -> int:
+            raise OSError("simulated failure mid-write")
+
+    def patched_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        real = original_open(self, *args, **kwargs)
+        if self == target:
+            return _RaisingFile(real)
+        return real
+
+    monkeypatch.setattr(Path, "open", patched_open)
+
+    with pytest.raises(OSError, match="simulated failure mid-write"):
+        fsio.write_exclusive(target, "new content")
+
+    assert not target.exists()
+
+
 def test_write_atomic_overwrites_existing_file(tmp_path: Path) -> None:
     """`write_atomic` replaces an existing file's content."""
     target = tmp_path / "index.md"

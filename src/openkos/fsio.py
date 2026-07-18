@@ -15,10 +15,18 @@ def write_exclusive(path: Path, content: str) -> None:
 
     Exclusive-create mode ("x"): a colliding file raises `FileExistsError`
     instead of being overwritten (D2). `newline=""` and `encoding="utf-8"`
-    are preserved so callers keep byte-identical output.
+    are preserved so callers keep byte-identical output. Mirrors
+    `copy_exclusive`'s cleanup: if the write fails after `path` was already
+    created, `path` is unlinked before re-raising -- `path` is create-only,
+    so a leftover partial file would make every retry raise
+    `FileExistsError` and block recovery.
     """
     with path.open("x", encoding="utf-8", newline="") as f:
-        f.write(content)
+        try:
+            f.write(content)
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
 
 
 def write_atomic(path: Path, content: str) -> None:

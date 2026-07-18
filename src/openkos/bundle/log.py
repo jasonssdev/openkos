@@ -26,6 +26,19 @@ _SECTION_SPLIT_RE = re.compile(r"\n(?=## )")
 _SECTION_HEADER_RE = re.compile(r"\A## (.+)\n\n")
 
 
+def _reject_newline(field: str, value: str) -> None:
+    """Raise `ValueError` if `value` contains a newline (RISK-2).
+
+    `entry` is interpolated verbatim into the rendered bullet with no
+    escaping. A value containing a newline followed by `## ` could forge a
+    new dated section the next time the file is re-parsed. A single log
+    entry is inherently single-line, so rejecting is simpler and safer than
+    escaping.
+    """
+    if "\n" in value or "\r" in value:
+        raise ValueError(f"log.md: {field!r} must not contain a newline")
+
+
 def insert_log_entry(log_text: str, today: date, entry: str) -> str:
     """Prepend `entry` as a new bullet under today's `## YYYY-MM-DD` section (D2).
 
@@ -36,8 +49,10 @@ def insert_log_entry(log_text: str, today: date, entry: str) -> str:
     existing entries; prior entries are otherwise untouched. If today's
     section is absent, it is created at the very top of the log (right after
     the `# Directory Update Log` header), since a fresh `today` is always
-    the newest section by construction.
+    the newest section by construction. `entry` is rejected (`ValueError`)
+    if it contains a newline (RISK-2) -- see `_reject_newline`.
     """
+    _reject_newline("entry", entry)
     today_header = today.isoformat()
     bullet = f"* {entry}\n"
 

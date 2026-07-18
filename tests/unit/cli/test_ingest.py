@@ -1,0 +1,445 @@
+"""Unit tests for the `ingest` CLI command: Phase A preview, confirm gate,
+and Phase B create-only writes.
+
+Phase A (D5 Phase A) is a pure read + in-memory build: every refusal
+condition -- missing path, missing workspace, collision -- is checked
+before any file is written, so a refusal leaves the workspace exactly as
+it was found. Phase B writes create-only immutables (raw copy, concept)
+first and the catalog (`index.md`, `log.md`) last, but is NOT
+transactional -- there is no rollback across the sequence (D5 retreat);
+recovery from a partial write is via git, not an in-process undo.
+"""
+
+import os
+import stat
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner, _NamedTextIOWrapper
+
+from openkos import fsio
+from openkos.cli.main import app
+from openkos.model import okf
+
+runner = CliRunner()
+
+
+def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `sys.stdin.isatty()` report `True` inside a `CliRunner.invoke` call.
+
+    See `tests/unit/cli/test_init.py::_simulate_tty` for why the CLASS
+    method must be patched rather than the current `sys.stdin` instance.
+    """
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+
+
+def _snapshot_entry(path: Path) -> bytes | None:
+    if path.is_dir():
+        return None
+    return path.read_bytes()
+
+
+def _snapshot(root: Path) -> dict[Path, bytes | None]:
+    """Capture every entry under `root`, keyed by relative path."""
+    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
+
+
+def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+
+
+def _set_config_field(tmp_path: Path, old: str, new: str) -> None:
+    config_path = tmp_path / "openkos.yaml"
+    content = config_path.read_text(encoding="utf-8")
+    assert old in content
+    config_path.write_text(content.replace(old, new), encoding="utf-8")
+
+
+def test_successful_ingest_of_valid_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid `ingest --auto` copies the raw source, writes one conformant
+    Source concept with provenance + `# Citations`, and updates
+    `index.md`/`log.md` (scenario: successful ingest of a valid path)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    raw_copy = tmp_path / "raw" / "notes.txt"
+    assert raw_copy.read_text(encoding="utf-8") == "Some raw notes."
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert concept_path.is_file()
+    concept_text = concept_path.read_text(encoding="utf-8")
+    metadata, body = okf.load_frontmatter(concept_text)
+    assert metadata["type"] == "Source"
+    assert metadata["provenance"] == ["raw/notes.txt"]
+    assert "# Citations" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "sources/notes.md" in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    today = datetime.now().astimezone().date()
+    assert f"## {today.isoformat()}" in log_text
+    assert "notes.md" in log_text
+
+
+def test_description_is_honest_no_extraction_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The generated concept's `description` states the source was imported
+    and not yet compiled/extracted -- it must not claim extraction
+    occurred (null-compiler scope)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(concept_text)
+    description = str(metadata["description"])
+    assert "not yet" in description
+    assert "compiled" in description or "extract" in description
+
+
+def test_path_does_not_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing `<path>` refuses with exit 1 and writes nothing (scenario:
+    path does not exist)."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "missing.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "missing.txt" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_refuses_when_not_a_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory with no `bundle/index.md`/`log.md` refuses (scenario:
+    missing workspace)."""
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "workspace" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("collision", ["raw", "concept"])
+def test_collision_refuses_in_phase_a(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, collision: str
+) -> None:
+    """An existing `raw/<name>` OR `bundle/sources/<slug>.md` refuses in
+    Phase A -- nothing is overwritten (scenario: already-ingested source is
+    refused, not overwritten)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("new content", encoding="utf-8")
+    if collision == "raw":
+        (tmp_path / "raw" / "notes.txt").write_text("original", encoding="utf-8")
+    else:
+        sources_dir = tmp_path / "bundle" / "sources"
+        sources_dir.mkdir()
+        (sources_dir / "notes.md").write_text("original concept", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "already exists" in result.stderr
+    expected = "raw/notes.txt" if collision == "raw" else "bundle/sources/notes.md"
+    assert expected in result.stderr
+    assert "retrying" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_traversal_basename_lands_inside_raw_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A traversal path like `../../evil.txt` lands as `raw/evil.txt` only
+    -- never outside `raw/`/`bundle/sources/` (path-containment)."""
+    base = tmp_path
+    workspace = base / "a" / "b"
+    workspace.mkdir(parents=True)
+    outside_source = base / "evil.txt"
+    outside_source.write_text("malicious", encoding="utf-8")
+    _init_workspace(workspace, monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "../../evil.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (workspace / "raw" / "evil.txt").is_file()
+    assert (workspace / "raw" / "evil.txt").read_text(encoding="utf-8") == "malicious"
+    # nothing written outside raw/ or bundle/sources/
+    assert not (base / "raw").exists()
+    assert (base / "evil.txt").read_text(encoding="utf-8") == "malicious"
+
+
+def test_phase_a_preview_shown_then_phase_b_writes_on_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A preview of the proposed changes is shown before any write; on
+    confirmation, the raw copy, concept document, and index/log updates all
+    land together on the happy path (scenarios: preview before write, Phase
+    B writes proceed on confirm)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "raw/notes.txt" in result.stdout
+    assert "sources/notes.md" in result.stdout
+    assert (tmp_path / "raw" / "notes.txt").is_file()
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_auto_skips_the_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--auto` skips the confirmation prompt and writes directly (scenario:
+    --auto skips the prompt)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "Proceed" not in result.output
+    assert (tmp_path / "raw" / "notes.txt").is_file()
+
+
+def test_review_false_skips_the_prompt_like_auto(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config `review: false` skips the prompt the same as `--auto`
+    (scenario: review: false skips the prompt like --auto)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "review: true", "review: false")
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"])
+
+    assert result.exit_code == 0
+    assert "Proceed" not in result.output
+    assert (tmp_path / "raw" / "notes.txt").is_file()
+
+
+def test_non_tty_review_true_no_auto_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`review: true`, non-TTY stdin, no `--auto` refuses (exit 1), tells the
+    user to re-run with `--auto`, and writes nothing (scenario: non-TTY
+    without --auto refuses to write)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--auto" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_phase_a_preparation_failure_surfaces_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An invalid `openkos.yaml` (malformed YAML) makes `read_config` raise
+    `ValueError`; Phase A's preparation step routes it through the same
+    graceful stderr-message + exit-1 path as an `OSError`, not a raw
+    traceback, and writes nothing (mirrors `test_init.py`'s
+    `test_corrupt_template_surfaces_cleanly`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text("not: valid: yaml: [", encoding="utf-8")
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos ingest" in result.stderr
+    assert "failed" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="permission-based write failures require a POSIX non-root user",
+)
+def test_phase_b_write_failure_surfaces_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Phase-B write failure exits non-zero with a clear message, no
+    traceback (mirrors `test_init.py`'s `test_write_failure_surfaces_cleanly`).
+
+    Stripping write permission from `raw/` (created by `init`, so Phase A's
+    checks all pass) forces the very first Phase-B write --
+    `copy_exclusive(src, raw/<name>)` -- to raise `PermissionError`.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    raw_dir = tmp_path / "raw"
+    original_mode = stat.S_IMODE(raw_dir.stat().st_mode)
+    raw_dir.chmod(0o500)
+    try:
+        result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    finally:
+        raw_dir.chmod(original_mode)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos ingest" in result.stderr
+    assert "failed" in result.stderr
+    assert not (tmp_path / "bundle" / "sources" / "notes.md").exists()
+
+
+def test_empty_slug_after_sanitization_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filename stem made only of non-alphanumeric characters would
+    slugify to an empty string (`bundle/sources/.md`); Phase A refuses
+    instead of writing there (scenario: empty-slug guard)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "+++.txt"
+    source.write_text("content", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "+++.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos ingest" in result.stderr
+    assert "cannot derive a concept name" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_phase_a_permission_error_surfaces_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `PermissionError` raised by a Phase A stat call (`is_file`) is
+    caught and reported cleanly, not left to surface as a raw traceback
+    (scenario: guard Phase A reads)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    original_is_file = Path.is_file
+
+    def failing_is_file(self: Path) -> bool:
+        if self.name == "notes.txt":
+            raise PermissionError("simulated permission failure")
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", failing_is_file)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos ingest" in result.stderr
+    assert "failed" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("fail_step", ["concept", "index", "log"])
+def test_phase_b_failure_surfaces_cleanly_and_leaves_detectable_orphan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_step: str
+) -> None:
+    """A failure at any Phase-B write step (concept, `index.md`, or
+    `log.md`) exits cleanly (exit 1, `openkos ingest:` message, no
+    traceback) -- but does NOT roll back the steps that already succeeded
+    (scenario: Phase B retreat to create-only, non-transactional writes,
+    D5). Every write before the failing step is create-only or atomic, so
+    none is left half-written; the writes that already landed remain as a
+    detectable orphan (e.g. an uncatalogued concept) rather than being
+    undone. Recovery is via git (`git status`/`git checkout`/`git clean`),
+    not an in-process rollback."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    original_write_exclusive = fsio.write_exclusive
+    original_write_atomic = fsio.write_atomic
+
+    def failing_write_exclusive(path: Path, content: str) -> None:
+        if fail_step == "concept" and path.suffix == ".md":
+            raise OSError("simulated concept write failure")
+        original_write_exclusive(path, content)
+
+    def failing_write_atomic(path: Path, content: str) -> None:
+        if fail_step == "index" and path.name == "index.md":
+            raise OSError("simulated index write failure")
+        if fail_step == "log" and path.name == "log.md":
+            raise OSError("simulated log write failure")
+        original_write_atomic(path, content)
+
+    monkeypatch.setattr(fsio, "write_exclusive", failing_write_exclusive)
+    monkeypatch.setattr(fsio, "write_atomic", failing_write_atomic)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos ingest" in result.stderr
+    assert "failed" in result.stderr
+    assert "Traceback" not in result.stderr
+    # the raw copy always lands before every parametrized failing step
+    assert (tmp_path / "raw" / "notes.txt").is_file()
+    if fail_step in ("index", "log"):
+        # the concept document was already written when index/log failed --
+        # a detectable, uncatalogued orphan, left in place (not rolled back)
+        assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+    else:
+        assert not (tmp_path / "bundle" / "sources" / "notes.md").exists()
+
+
+def test_sensitivity_matches_config_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The generated Source concept's `sensitivity` equals config's
+    `default_sensitivity` (scenario: sensitivity matches config default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(concept_text)
+    assert metadata["sensitivity"] == "confidential"

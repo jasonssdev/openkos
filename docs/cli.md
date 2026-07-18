@@ -55,17 +55,21 @@ The model written into `openkos.yaml` resolves in this order: the `--model <tag>
 
 ### `openkos ingest <path>`
 
-Copies the source at `<path>` into `raw/` (immutable) and compiles it into OKF concept documents, recording provenance and updating `index.md` and `log.md`.
+**MVP 1 null compiler.** Copies the source at `<path>` into `raw/` (immutable, as `raw/<name>` — only the basename is used, so directory components in `<path>`, including traversal segments, are always stripped) and generates exactly **one** OKF Source concept in `bundle/sources/<slug>.md`. There is no LLM extraction in this slice: no concept splitting, no multi-concept output — just the raw copy plus one honest Source stub whose `description` states the source was imported and not yet compiled or extracted. Provenance is recorded OKF-natively as the concept's `provenance:` frontmatter field, with no separate provenance store. `index.md` and `log.md` are updated to reflect the new entry.
 
-Sources are stored under their own names and extensions — `notes.md` lands as `raw/notes.md` — because `raw/` sits beside the OKF bundle rather than inside it. A markdown source therefore needs no special handling and still renders as markdown in any editor. Compiled output goes into `bundle/`, which stays a pure OKF bundle.
+Sources are stored under their own names and extensions — `notes.md` lands as `raw/notes.md` — because `raw/` sits beside the OKF bundle rather than inside it. A markdown source therefore needs no special handling and still renders as markdown in any editor.
+
+`ingest` computes the raw copy, the Source concept, and the `index.md`/`log.md` changes in memory first, shows a preview of the proposed changes, and only writes after confirmation. An already-ingested source (`raw/<name>` or `bundle/sources/<slug>.md` already exists) is refused rather than overwritten.
+
+Writes are **not transactional**: each individual write is create-only or atomic (never half-written), and content is always written before the catalog (raw copy and concept document land before `index.md`/`log.md`), so the catalog never references a file that does not exist — but there is no rollback across the sequence. A failure partway through a write can leave the workspace holding a partial result, for example a raw file or concept document not yet reflected in `index.md`/`log.md`. Because the OKF bundle is version-controlled, recovery is `git status` to see the partial result and `git checkout`/`git clean` to restore it — not a manual unlink. This mirrors `init`'s own no-cleanup-path position.
 
 | Flag | Meaning |
 | --- | --- |
-| `--auto` | Skip the review step; compile, apply, and commit directly (unattended). Overrides `review` in config. |
-| `--sensitivity <level>` | Label the source and everything derived from it: `public`, `private`, or `confidential`. Defaults to the config's `default_sensitivity` (itself `private`). |
-| `--batch` | Ingest many sources at once when `<path>` is a folder or glob (default is one at a time). |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
 
-By default, ingest shows the proposed changes and asks to confirm before saving.
+`review: true` in config plus a non-TTY stdin (and no `--auto`) refuses to write rather than defaulting silently — re-run with `--auto` for unattended use.
+
+**Not in this slice / planned:** `--sensitivity <level>` (the generated concept's `sensitivity` always equals config's `default_sensitivity`, currently no per-invocation override) and `--batch` (folder/glob ingestion — one source per invocation only, for now). Both are documented here for forward reference but are not implemented yet.
 
 ### `openkos query "<question>"`
 
