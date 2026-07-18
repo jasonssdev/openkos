@@ -2,7 +2,7 @@
 
 import pytest
 
-from openkos.bundle.index import insert_source_entry, render_index
+from openkos.bundle.index import insert_source_entry, remove_index_entry, render_index
 from openkos.model import okf
 
 
@@ -163,3 +163,196 @@ def test_insert_source_entry_rejects_newline_in_interpolated_field(
 
     with pytest.raises(ValueError, match="newline"):
         insert_source_entry(render_index(), **kwargs)
+
+
+_POPULATED_INDEX = (
+    "---\n"
+    'okf_version: "0.1"\n'
+    "---\n"
+    "\n"
+    "# Concepts\n"
+    "\n"
+    "* [Stoicism](/concepts/stoicism.md) - A school of thought.\n"
+    "\n"
+    "# Decisions\n"
+    "\n"
+    "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+    "\n"
+    "# People\n"
+    "\n"
+    "* [Maria Salazar](/people/maria-salazar.md) - A friend.\n"
+    "\n"
+    "# Sources\n"
+    "\n"
+    "* [Reading notes](/sources/reading-notes.md) - First pass through the text.\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("concept_id", "surviving_fragment"),
+    [
+        ("sources/reading-notes", "[Stoicism]"),
+        ("concepts/stoicism", "[Reading notes]"),
+        ("people/maria-salazar", "[Frame the essay]"),
+        ("decisions/frame-the-essay", "[Maria Salazar]"),
+    ],
+)
+def test_remove_index_entry_drops_matching_bullet_from_any_section(
+    concept_id: str, surviving_fragment: str
+) -> None:
+    """`remove_index_entry` drops the matching bullet regardless of which of
+    the four sections (Sources, Concepts, People, Decisions) it lives in --
+    matching is by resolved link identity, not by section (#922)."""
+    result, removed = remove_index_entry(_POPULATED_INDEX, concept_id)
+
+    assert removed == 1
+    assert concept_id.split("/")[-1] not in result or surviving_fragment in result
+    assert surviving_fragment in result
+
+
+def test_remove_index_entry_removes_exactly_the_matching_bullet_line() -> None:
+    """Only the matched bullet line (plus its trailing newline) is removed;
+    every other byte -- blank lines, other bullets -- is preserved verbatim."""
+    result, removed = remove_index_entry(_POPULATED_INDEX, "sources/reading-notes")
+
+    assert removed == 1
+    expected = _POPULATED_INDEX.replace(
+        "* [Reading notes](/sources/reading-notes.md) - First pass through the text.\n",
+        "",
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "link_target",
+    [
+        "/sources/reading-notes.md",
+        "sources/reading-notes.md",
+        "sources/reading-notes",
+    ],
+)
+def test_remove_index_entry_matches_every_link_form(link_target: str) -> None:
+    """Leading-slash, no-leading-slash, and extension-less link forms all
+    normalize to the same identity and match `concept_id`."""
+    index_text = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Sources\n"
+        "\n"
+        f"* [Reading notes]({link_target}) - First pass through the text.\n"
+    )
+
+    result, removed = remove_index_entry(index_text, "sources/reading-notes")
+
+    assert removed == 1
+    assert "[Reading notes]" not in result
+
+
+def test_remove_index_entry_matches_link_with_trailing_fragment_and_title() -> None:
+    """A trailing `#fragment` or quoted-title suffix is stripped before
+    matching, mirroring `lint.normalize_link`'s narrower bundle-local twin."""
+    index_text = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Sources\n"
+        "\n"
+        '* [Reading notes](/sources/reading-notes.md#intro "Reading notes") - '
+        "First pass through the text.\n"
+    )
+
+    result, removed = remove_index_entry(index_text, "sources/reading-notes")
+
+    assert removed == 1
+    assert "[Reading notes]" not in result
+
+
+def test_remove_index_entry_zero_matches_returns_unchanged() -> None:
+    """A `concept_id` with no matching bullet returns `(index_text, 0)`
+    UNCHANGED -- no unrelated bullet is dropped, and this is not an error
+    (a file with no catalog entry is drift; deletion is still safe)."""
+    result, removed = remove_index_entry(_POPULATED_INDEX, "sources/nonexistent")
+
+    assert removed == 0
+    assert result == _POPULATED_INDEX
+
+
+def test_remove_index_entry_drops_all_duplicate_matches() -> None:
+    """More than one bullet resolving to the same `concept_id` (a duplicate
+    catalog entry) drops ALL of them and reports the total count."""
+    index_text = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Sources\n"
+        "\n"
+        "* [Reading notes](/sources/reading-notes.md) - First pass.\n"
+        "* [Reading notes again](/sources/reading-notes.md) - Duplicate entry.\n"
+    )
+
+    result, removed = remove_index_entry(index_text, "sources/reading-notes")
+
+    assert removed == 2
+    assert "[Reading notes]" not in result
+    assert "[Reading notes again]" not in result
+
+
+def test_remove_index_entry_preserves_frontmatter_verbatim() -> None:
+    """The frontmatter block is preserved byte-for-byte across a removal."""
+    result, removed = remove_index_entry(_POPULATED_INDEX, "sources/reading-notes")
+
+    assert removed == 1
+    frontmatter_block = _POPULATED_INDEX.split("---\n", 2)
+    expected_frontmatter = "---\n" + frontmatter_block[1] + "---\n"
+    assert result.startswith(expected_frontmatter)
+
+
+def test_remove_index_entry_raises_valueerror_on_malformed_frontmatter() -> None:
+    """A text that does not start with a `---`-delimited frontmatter block
+    raises `ValueError`, reusing `_split_frontmatter_verbatim`'s contract."""
+    with pytest.raises(ValueError, match="frontmatter"):
+        remove_index_entry("# Concepts\n\n* [X](/concepts/x.md) - Y.\n", "concepts/x")
+
+
+def test_remove_index_entry_accepts_hyphen_bullet_marker() -> None:
+    """A hand-authored bullet using `- ` (not the engine's `* `) still
+    matches -- both list markers are accepted (D2)."""
+    index_text = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "- [Stoicism](/concepts/stoicism.md) - A school of thought.\n"
+    )
+
+    result, removed = remove_index_entry(index_text, "concepts/stoicism")
+
+    assert removed == 1
+    assert "[Stoicism]" not in result
+
+
+def test_remove_index_entry_does_not_match_non_first_link_on_the_line() -> None:
+    """Only the FIRST markdown link on a bullet line is the match candidate --
+    a bullet whose description happens to mention another concept must not
+    be dropped when that OTHER concept is forgotten."""
+    index_text = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - See also "
+        "[Epictetus](/people/epictetus.md).\n"
+    )
+
+    result, removed = remove_index_entry(index_text, "people/epictetus")
+
+    assert removed == 0
+    assert result == index_text

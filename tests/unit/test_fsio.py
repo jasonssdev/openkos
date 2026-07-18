@@ -166,6 +166,27 @@ def test_copy_exclusive_raises_on_existing_destination(tmp_path: Path) -> None:
     assert dst.read_bytes() == b"original"
 
 
+def test_remove_file_deletes_an_existing_file(tmp_path: Path) -> None:
+    """`remove_file` deletes an existing file (symmetry with the `write_*`
+    primitives: `forget`'s only filesystem op routed through `fsio`)."""
+    target = tmp_path / "concept.md"
+    target.write_text("content", encoding="utf-8")
+
+    fsio.remove_file(target)
+
+    assert not target.exists()
+
+
+def test_remove_file_raises_on_missing_path(tmp_path: Path) -> None:
+    """`remove_file` on a missing path raises `FileNotFoundError` -- default
+    `missing_ok=False`, no silent no-op (a Phase-A-checked file vanishing
+    before Phase B is a genuine race worth surfacing)."""
+    target = tmp_path / "does-not-exist.md"
+
+    with pytest.raises(FileNotFoundError):
+        fsio.remove_file(target)
+
+
 def test_copy_exclusive_unlinks_partial_dst_on_write_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
