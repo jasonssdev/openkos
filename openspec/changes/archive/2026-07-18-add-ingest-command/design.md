@@ -105,8 +105,8 @@ openkos ingest <path>        cli/main   config   okf   bundle   fsio   FS
     ├── sources.mkdir ───────────────────────────────────────────────>│
     ├── copy_exclusive(src, raw/<name>) ──────────────────────>│ "xb"  │
     ├── write_exclusive(sources/<slug>.md) ───────────────────>│ "x"   │
-    ├── write_atomic(index.md) ───────────────────────────────>│ replace
-    └── write_atomic(log.md)  ────────────────────────────────>│ replace
+    ├── write_atomic(index.md) ───────────────────────>│ replace
+    └── write_atomic(log.md)  ────────────────────────>│ replace
 ```
 
 ## File Changes
