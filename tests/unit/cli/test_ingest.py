@@ -143,6 +143,26 @@ def test_refuses_when_not_a_workspace(
     assert _snapshot(tmp_path) == before
 
 
+def test_refuses_when_not_a_workspace_byte_identical_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression (Phase 5.1): `ingest`'s missing-workspace refusal message
+    stays BYTE-IDENTICAL after switching from its inline `index.md`/`log.md`
+    check to the shared `config.require_workspace` (D1) -- this test MUST
+    pass unmodified both before AND after that refactor."""
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "openkos ingest: refusing to ingest -- no OpenKOS workspace found in "
+        "this directory (run 'openkos init' first).\n"
+    )
+
+
 @pytest.mark.parametrize("collision", ["raw", "concept"])
 def test_collision_refuses_in_phase_a(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, collision: str

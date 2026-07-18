@@ -1,6 +1,7 @@
 """Renders the bytes of a fresh bundle's `log.md`, and appends to it."""
 
 import re
+from dataclasses import dataclass
 from datetime import date
 
 
@@ -70,3 +71,45 @@ def insert_log_entry(log_text: str, today: date, entry: str) -> str:
         section_chunks.insert(0, f"## {today_header}\n\n{bullet}")
 
     return preamble + "".join(f"\n{chunk}" for chunk in section_chunks)
+
+
+@dataclass(frozen=True)
+class LogEntry:
+    """One flattened `log.md` bullet, tagged with its section date (D4)."""
+
+    date: str
+    """`YYYY-MM-DD`, the `## ` section header this bullet came from."""
+
+    text: str
+    """The bullet's text, with its `"* "` prefix stripped."""
+
+
+def read_recent_entries(log_text: str, limit: int) -> list[LogEntry]:
+    """Flatten the most-recent `limit` bullets from `log_text`, newest-first (D4).
+
+    `log.md` is newest-first BY CONSTRUCTION (`insert_log_entry` always
+    prepends), so this walks `## YYYY-MM-DD` sections top-down, then each
+    section's bullets top-down, stopping once `limit` entries are collected
+    -- NO sort is performed or needed. Pure text-in/list-out, reusing
+    `insert_log_entry`'s section-splitting regexes; `log.py` stays
+    policy-free (the display limit itself is `cli/main.py`'s concern, D4).
+    Raises `ValueError` on a malformed section chunk (no blank line after a
+    `## ` header), matching `insert_log_entry`'s contract (D5). A log with
+    no dated sections yet (fresh/empty) returns `[]`.
+    """
+    entries: list[LogEntry] = []
+    chunks = _SECTION_SPLIT_RE.split(log_text)
+    for chunk in chunks[1:]:
+        if len(entries) >= limit:
+            break
+        match = _SECTION_HEADER_RE.match(chunk)
+        if match is None:
+            raise ValueError(f"log.md: malformed section chunk {chunk!r}")
+        section_date = match.group(1)
+        body = chunk[match.end() :]
+        for line in body.splitlines():
+            if len(entries) >= limit:
+                break
+            if line.startswith("* "):
+                entries.append(LogEntry(section_date, line[2:]))
+    return entries

@@ -88,7 +88,11 @@ Reports errors and warnings; does not modify anything without confirmation.
 
 ### `openkos status`
 
-Shows what the bundle contains (counts of sources and concepts), recent activity, and anything needing attention (for example, lint findings).
+**Read-only.** Reports what the bundle currently contains, in three sections: **Bundle contents** (source/concept counts from a fresh scan of `bundle/**/*.md`, never from `index.md` alone, so it stays accurate even after an interrupted `ingest`), **Recent activity** (the most recent 5 entries from `log.md`, newest-first), and **Needs attention** (OKF §9 conformance findings — unparseable frontmatter, missing/empty `type` — reused from the same check `ingest`'s generated concepts must pass). It never writes, modifies, or deletes any bundle file.
+
+Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `ingest` uses. A malformed or unreadable `log.md` degrades "Recent activity" to a notice rather than failing the whole command; counts and findings still come from the disk scan. Findings are informational only — their presence never causes a non-zero exit.
+
+**Not in this slice:** `--json` or any other structured output mode; lint checks (stale-stamp, orphan-page detection — a future `lint` command); a non-zero exit for findings or CI-gate behavior.
 
 ### `openkos forget <concept-id>`
 

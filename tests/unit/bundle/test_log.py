@@ -4,7 +4,12 @@ from datetime import date
 
 import pytest
 
-from openkos.bundle.log import insert_log_entry, render_log
+from openkos.bundle.log import (
+    LogEntry,
+    insert_log_entry,
+    read_recent_entries,
+    render_log,
+)
 
 
 def test_render_log_has_no_frontmatter() -> None:
@@ -113,6 +118,120 @@ def test_insert_log_entry_raises_valueerror_on_malformed_section_chunk() -> None
 
     with pytest.raises(ValueError, match="malformed section chunk"):
         insert_log_entry(malformed, date(2026, 7, 14), "**Creation**: New.")
+
+
+def test_read_recent_entries_flattens_newest_first_across_sections() -> None:
+    """`read_recent_entries` flattens bullets across `## YYYY-MM-DD` sections
+    newest-first, with NO sort -- the log is already newest-first by
+    construction (`insert_log_entry` prepends), so this walks top-down (D4)."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* Bullet A\n"
+        "\n"
+        "## 2026-07-14\n"
+        "\n"
+        "* Bullet C\n"
+    )
+
+    entries = read_recent_entries(log_text, limit=5)
+
+    assert entries == [
+        LogEntry("2026-07-16", "Bullet A"),
+        LogEntry("2026-07-14", "Bullet C"),
+    ]
+
+
+def test_read_recent_entries_stops_at_limit() -> None:
+    """`read_recent_entries` stops flattening once `limit` entries are
+    collected, even when more remain in the log."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* Bullet A\n"
+        "* Bullet B\n"
+        "\n"
+        "## 2026-07-14\n"
+        "\n"
+        "* Bullet C\n"
+    )
+
+    entries = read_recent_entries(log_text, limit=2)
+
+    assert entries == [
+        LogEntry("2026-07-16", "Bullet A"),
+        LogEntry("2026-07-16", "Bullet B"),
+    ]
+
+
+def test_read_recent_entries_stops_at_limit_mid_section() -> None:
+    """`read_recent_entries` stops mid-section (not only at a section
+    boundary) once `limit` is reached, leaving a later bullet in the SAME
+    section unread."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* Bullet A\n"
+        "* Bullet B\n"
+        "* Bullet C\n"
+    )
+
+    entries = read_recent_entries(log_text, limit=2)
+
+    assert entries == [
+        LogEntry("2026-07-16", "Bullet A"),
+        LogEntry("2026-07-16", "Bullet B"),
+    ]
+
+
+def test_read_recent_entries_preserves_multi_bullet_same_day_order() -> None:
+    """Multiple bullets within the SAME day's section keep their on-disk
+    order (top-to-bottom, no sort)."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* Bullet A\n"
+        "* Bullet B\n"
+        "* Bullet C\n"
+    )
+
+    entries = read_recent_entries(log_text, limit=5)
+
+    assert [entry.text for entry in entries] == ["Bullet A", "Bullet B", "Bullet C"]
+    assert all(entry.date == "2026-07-16" for entry in entries)
+
+
+def test_read_recent_entries_skips_non_bullet_lines_within_section() -> None:
+    """A non-`"* "`-prefixed line inside a section's body (e.g. a stray blank
+    line) is skipped rather than treated as an entry."""
+    log_text = "# Directory Update Log\n\n## 2026-07-16\n\n\n* Bullet A\n"
+
+    entries = read_recent_entries(log_text, limit=5)
+
+    assert entries == [LogEntry("2026-07-16", "Bullet A")]
+
+
+def test_read_recent_entries_malformed_section_chunk_raises_valueerror() -> None:
+    """A `## `-headed chunk with no blank line after the header raises
+    `ValueError`, matching `insert_log_entry`'s malformed-chunk contract."""
+    malformed = "# Directory Update Log\n\n## 2026-07-05\n* no blank line above\n"
+
+    with pytest.raises(ValueError, match="malformed section chunk"):
+        read_recent_entries(malformed, limit=5)
+
+
+def test_read_recent_entries_empty_log_body_returns_empty_list() -> None:
+    """A log with a header but no dated sections yet returns `[]` (scenario:
+    empty log)."""
+    assert read_recent_entries("# Directory Update Log\n", limit=5) == []
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r"])
