@@ -340,6 +340,27 @@ def test_read_config_reads_required_fields(tmp_path: Path) -> None:
     assert result.default_sensitivity == "confidential"
 
 
+def test_read_config_reads_present_freshness_window(tmp_path: Path) -> None:
+    """A `freshness_window` present in `openkos.yaml` passes through verbatim."""
+    (tmp_path / "openkos.yaml").write_text("freshness_window: 14d\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.freshness_window == "14d"
+
+
+def test_read_config_falls_back_to_default_freshness_window_when_absent(
+    tmp_path: Path,
+) -> None:
+    """A `freshness_window` absent from `openkos.yaml` falls back to
+    `DEFAULT_FRESHNESS_WINDOW`."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.freshness_window == config.DEFAULT_FRESHNESS_WINDOW
+
+
 def test_read_config_falls_back_to_packaged_defaults_on_missing_keys(
     tmp_path: Path,
 ) -> None:
@@ -386,6 +407,8 @@ def test_read_config_raises_valueerror_on_non_mapping_root(tmp_path: Path) -> No
             "default_sensitivity",
             "DEFAULT_SENSITIVITY",
         ),
+        ("freshness_window: null\n", "freshness_window", "DEFAULT_FRESHNESS_WINDOW"),
+        ("freshness_window:\n", "freshness_window", "DEFAULT_FRESHNESS_WINDOW"),
     ],
 )
 def test_read_config_falls_back_to_packaged_defaults_on_explicit_null(

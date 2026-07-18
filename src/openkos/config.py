@@ -26,6 +26,12 @@ DEFAULT_REVIEW = True
 DEFAULT_SENSITIVITY = "private"
 """Packaged default for `default_sensitivity`, matching `openkos.yaml.template`."""
 
+DEFAULT_FRESHNESS_WINDOW = "7d"
+"""Packaged default for `freshness_window`, matching `openkos.yaml.template`.
+
+Raw passthrough only -- the `"7d"`/`"2w"` duration grammar is parsed by
+`lint.parse_window`, not here (policy stays out of `config`)."""
+
 _MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9._:/-]+")
 
 
@@ -264,12 +270,13 @@ class Config:
 
     Fields absent from the file fall back to the same packaged defaults
     `openkos.yaml.template` ships (D3): `DEFAULT_MODEL`, `DEFAULT_REVIEW`,
-    `DEFAULT_SENSITIVITY`.
+    `DEFAULT_SENSITIVITY`, `DEFAULT_FRESHNESS_WINDOW`.
     """
 
     model: str
     review: bool
     default_sensitivity: str
+    freshness_window: str
 
 
 def read_config(root: Path) -> Config:
@@ -302,6 +309,7 @@ def read_config(root: Path) -> Config:
     model = raw.get("model")
     review = raw.get("review")
     default_sensitivity = raw.get("default_sensitivity")
+    freshness_window = raw.get("freshness_window")
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,
@@ -309,5 +317,10 @@ def read_config(root: Path) -> Config:
             default_sensitivity
             if default_sensitivity is not None
             else DEFAULT_SENSITIVITY
+        ),
+        freshness_window=(
+            freshness_window
+            if freshness_window is not None
+            else DEFAULT_FRESHNESS_WINDOW
         ),
     )

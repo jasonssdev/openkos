@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from openkos import config, fsio
+from openkos import lint as lint_check
 from openkos.bundle import bundle
 from openkos.bundle import index as bundle_index
 from openkos.bundle import log as bundle_log
@@ -389,3 +390,81 @@ def status() -> None:
     else:
         for finding in survey.findings:
             typer.echo(f"  {finding}")
+
+
+@app.command()
+def lint() -> None:
+    """Health-check the bundle for stale stamps and orphan pages: read-only, Phase-A only.
+
+    The SECOND read command, mirroring `status`'s shape exactly: no Phase B,
+    no confirm gate, no `--auto`. Refuses (exit 1) via the shared
+    `config.require_workspace` gate (D1) if the current directory is not an
+    initialized workspace -- the SAME check `ingest`/`status` use -- printing
+    the reason to stderr with no raw traceback. A permission-denied
+    `bundle/index.md` that passes `require_workspace`'s `is_file()` check but
+    fails to `read_text()` is the only OTHER non-zero path: caught here and
+    reported the same way, never left to raise a raw traceback.
+
+    On a workspace, the flow is: `read_config(root).freshness_window` is
+    resolved via `lint.resolve_window` (Q4) -- an invalid/zero/negative
+    value never raises, it falls back to the packaged default and prints a
+    fallback-notice line instead. `today` is computed ONCE via
+    `datetime.now(UTC).date()` and injected into `lint.check_stale_stamps`
+    (the clock is never read inside `lint.py` itself, keeping every scan
+    deterministic and testable). `lint.collect_docs` reuses `okf._iter_docs`
+    for the single walk, returning `(docs, skip_notices)` so a skipped
+    file never silently shrinks the scan; `lint.check_stale_stamps` scans
+    inline `(as of YYYY-MM-DD)` body stamps (never the `freshness` field);
+    `lint.check_orphans` scans markdown links from `index.md` and every
+    doc body (never `log.md` -- see its docstring for why).
+
+    The window and skip notices feed one `lint.LintReport`, rendered
+    under two sections, `Stale stamps:` and `Orphan pages:`, each with its
+    own empty-state line when there is nothing to report. Every
+    successful read exits 0, whether the bundle is clean or
+    has findings (spec: Non-Gating Exit Contract) -- `lint` is NOT a CI
+    gate in MVP-1. No file under the workspace is ever created, modified,
+    or deleted, and no `--json` or other structured output mode is offered
+    (spec: Read-Only and Human-Readable Only).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos lint: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+        index_text = (layout.bundle_dir / "index.md").read_text(encoding="utf-8")
+        docs, skip_notices = lint_check.collect_docs(layout.bundle_dir)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos lint: failed while reading the workspace -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    window, window_notice = lint_check.resolve_window(cfg.freshness_window)
+    today = datetime.now(UTC).date()
+    stale = lint_check.check_stale_stamps(docs, today=today, window=window)
+    orphans = lint_check.check_orphans(docs, index_text=index_text)
+    notices = ([window_notice] if window_notice is not None else []) + skip_notices
+    report = lint_check.LintReport(stale=stale, orphans=orphans, notices=notices)
+
+    typer.echo(f"openkos lint: workspace at {root}")
+    for notice_line in report.notices:
+        typer.echo(notice_line)
+    typer.echo()
+    typer.echo("Stale stamps:")
+    if not report.stale:
+        typer.echo("  No stale stamps.")
+    else:
+        for finding in report.stale:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("Orphan pages:")
+    if not report.orphans:
+        typer.echo("  No orphan pages.")
+    else:
+        for finding in report.orphans:
+            typer.echo(f"  {finding.path}: {finding.detail}")
