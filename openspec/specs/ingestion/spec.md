@@ -49,6 +49,14 @@ entries and sections.
 - THEN the entry appears in the correct section and prior entries are
   unchanged
 
+#### Scenario: Newline in title, slug, or description is rejected
+
+- GIVEN a `title`, `slug`, or `description` value containing a newline
+  (`\n` or `\r`)
+- WHEN the catalog-append primitive is called with that value
+- THEN it raises `ValueError` and `index.md` is left unchanged, preventing
+  a source-derived value from forging a new Markdown section header
+
 ### Requirement: Bundle Log Append
 
 The system MUST provide a primitive inserting a dated line into
@@ -60,6 +68,13 @@ The system MUST provide a primitive inserting a dated line into
 - WHEN the primitive adds a line for the current local date
 - THEN the line appears under the correct `## YYYY-MM-DD` section (created
   if absent) and prior entries are unchanged
+
+#### Scenario: Newline in entry is rejected
+
+- GIVEN an `entry` value containing a newline (`\n` or `\r`)
+- WHEN the log-append primitive is called with that value
+- THEN it raises `ValueError` and `log.md` is left unchanged, preventing a
+  source-derived value from forging a new dated section header
 
 ### Requirement: Non-Exclusive Atomic Write
 
@@ -79,6 +94,15 @@ updating files that already exist, separate from `write_exclusive`.
 - GIVEN a file that already exists
 - WHEN `write_exclusive` targets that path
 - THEN it refuses, unchanged from before this change
+
+#### Scenario: write_exclusive cleans up its own partial file on write failure
+
+- GIVEN `write_exclusive` has already created `path` in create-only ("x")
+  mode and the subsequent write to that handle fails
+- WHEN the failure occurs
+- THEN `write_exclusive` unlinks the partially-written `path` before
+  re-raising, so `path` does not exist afterward and a retry does not raise
+  `FileExistsError` against its own leftover partial
 
 ### Requirement: Ingest Raw Copy and Source Concept Generation
 
@@ -131,6 +155,14 @@ MUST NOT influence where the copy or concept document is written.
 - THEN the copied file lands inside the bundle's `raw/` directory (as
   `raw/evil.txt`), and no file is written outside `raw/` or
   `bundle/sources/`
+
+#### Scenario: Empty slug after sanitization is refused
+
+- GIVEN a source filename whose stem sanitizes to an empty slug (e.g. a
+  stem made only of non-alphanumeric characters, such as `+++.txt`)
+- WHEN `openkos ingest <path>` runs
+- THEN it refuses in Phase A with a clear error, exits non-zero, and writes
+  nothing (no raw copy, concept document, or catalog change)
 
 ### Requirement: OKF-Native Provenance
 
@@ -217,4 +249,3 @@ slice.
 - GIVEN a workspace config with `default_sensitivity: private`
 - WHEN `openkos ingest <path>` completes
 - THEN the generated Source concept's `sensitivity` field is `private`
-</content>
