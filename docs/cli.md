@@ -77,12 +77,12 @@ Answers a natural-language question from the compiled bundle, with citations bac
 
 ### `openkos lint`
 
-Health-checks the bundle. In MVP 1 (freshness v0) the checks are deliberately mechanical:
+**Read-only.** Health-checks the bundle for two freshness signals, mirroring `status`'s Phase-A-only shape: no writes, no confirmation, no `--auto`. In MVP 1 (freshness v0) the checks are deliberately mechanical:
 
-- **Stale stamps** — flags any fact whose `as of` stamp is older than the configured `freshness_window` (default `7d`). MVP 1 performs no volatility classification; volatility-aware windows (per-type, LLM-suggested) arrive in **MVP 2**.
-- **Orphan pages** — flags any concept file not referenced by a markdown link from `index.md` or from another concept. This is computed by scanning markdown links; no graph is needed (graph-based analysis is **MVP 2**).
+- **Stale stamps** — flags any inline `(as of YYYY-MM-DD)` stamp in a concept body older than the configured `freshness_window` (default `7d`). The scan reads only inline body text, never the `freshness` field, so a `freshness: snapshot` Source produced by `ingest` (no `as of` stamp by design) never produces a stale-stamp finding. MVP 1 performs no volatility classification; volatility-aware windows (per-type, LLM-suggested) arrive in **MVP 2**.
+- **Orphan pages** — flags any concept or Source file not referenced by a markdown link from `index.md` or from another concept's body. This is a flat link scan, no dependency graph (graph-based analysis is **MVP 2**), and treats every doc type uniformly — a Source is orphan-able exactly like a concept.
 
-Reports errors and warnings; does not modify anything without confirmation.
+Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `ingest`/`status` use, and also on the rare case where `bundle/index.md` exists but cannot be read. Both are the ONLY non-zero exit paths: `lint` is **not a CI gate** in MVP 1 — a bundle with findings, or a clean bundle, both exit `0`. An invalid or out-of-range `freshness_window` in `openkos.yaml` never crashes `lint`; it degrades to the packaged default (`7d`) and prints a one-line fallback notice instead. Findings are flat warning-level (no error/warning tiers) and rendered as plain text; no `--json` or other structured output mode is offered, and no file under the workspace is ever created, modified, or deleted.
 
 **Lint is not a conformance checker.** It reports OpenKOS's opinion about knowledge *health*, not OKF's verdict about *validity*. OKF explicitly tolerates broken links and missing index entries (§5.3, §9), so a bundle can fail every check here and still be perfectly conformant. Conformance is verified separately, against the three rules of §9.
 
@@ -92,7 +92,7 @@ Reports errors and warnings; does not modify anything without confirmation.
 
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `ingest` uses. A malformed or unreadable `log.md` degrades "Recent activity" to a notice rather than failing the whole command; counts and findings still come from the disk scan. Findings are informational only — their presence never causes a non-zero exit.
 
-**Not in this slice:** `--json` or any other structured output mode; lint checks (stale-stamp, orphan-page detection — a future `lint` command); a non-zero exit for findings or CI-gate behavior.
+**Not in this slice:** `--json` or any other structured output mode; a non-zero exit for findings or CI-gate behavior. Freshness and orphan-link checks are `lint`'s job, not `status`'s.
 
 ### `openkos forget <concept-id>`
 
