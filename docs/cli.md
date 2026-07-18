@@ -96,7 +96,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 ### `openkos forget <concept-id>`
 
-Removes knowledge. In **MVP 1** this is deliberately one thing: **a simple delete.** It removes the concept document, drops its entry from `index.md`, and updates the operational state. The target is named by its concept ID — the path with `.md` removed, which is what OKF already defines identity to be (`openkos forget people/maria-salazar`).
+Removes knowledge. In **MVP 1** this is deliberately one thing: **a simple delete.** It removes the concept document, drops its entry from `index.md`, and records the removal as a dated line in `log.md`. The target is named by its concept ID — the path with `.md` removed, which is what OKF already defines identity to be (`openkos forget people/maria-salazar`).
 
 `forget` is the mirror-image of `ingest`, sharing the same Phase A (validate + preview) / confirm gate / Phase B (write) shape. Index removal is **generic across every section** — Sources, Concepts, People, Decisions — not just Sources: whichever section's bullet links to the concept ID is the one dropped. A concept ID with no matching `index.md` entry is not an error; the file is still deleted. `forget` computes the proposed changes in memory and shows a preview (`~ index.md`, `~ log.md`, `- bundle/<concept-id>.md`) before writing, using the same confirm-gate precedence as `ingest` (`--auto` > config `review: false` > TTY prompt > non-TTY refusal).
 
@@ -104,9 +104,9 @@ Writes are, like `ingest`'s, **not transactional** — but ordered in reverse: `
 
 Undo is **plain git** (`git revert`, `git checkout <file>`) — there is no wrapper command for it in MVP 1. Every change is already a commit, so the safety net exists without new surface.
 
-MVP 1 does **not** check inbound references before deleting. Removing a concept others link to leaves dangling links, which `lint` reports as it would any orphan — OKF tolerates broken links by design (§5.3), so this is a quality signal, not corruption. Archiving (`status: deprecated`), tombstones in `log.md`, the reference-aware scope/depth flow, and the privacy **purge** (git-history rewrite + index cleanup) all arrive in **MVP 2**, alongside the rest of the lifecycle.
+MVP 1 does **not** check inbound references before deleting. Removing a concept others link to leaves those inbound links dangling. MVP 1 `lint` does **not** detect this — its orphan check flags concepts that nothing links *to*, not links whose *target* is missing — so a dangling inbound link is neither reported nor rewritten in this slice. OKF tolerates broken links by design (§5.3), so this is a quality signal, not corruption. Broken-link detection, archiving (`status: deprecated`), tombstones in `log.md`, the reference-aware scope/depth flow, and the privacy **purge** (git-history rewrite + index cleanup) all arrive in **MVP 2**, alongside the rest of the lifecycle.
 
-You can also just delete the file by hand — the bundle is your files. `forget` is the ergonomic version that cleans up the index and state in one step.
+You can also just delete the file by hand — the bundle is your files. `forget` is the ergonomic version that cleans up the index and log in one step.
 
 ## `openkos.yaml` (workspace config)
 
