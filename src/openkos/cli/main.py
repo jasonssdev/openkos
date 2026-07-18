@@ -214,10 +214,10 @@ def ingest(
             )
             raise typer.Exit(code=1)
 
-        if not index_path.is_file() or not log_path.is_file():
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
             typer.echo(
-                "openkos ingest: refusing to ingest -- no OpenKOS workspace "
-                "found in this directory (run 'openkos init' first).",
+                f"openkos ingest: refusing to ingest -- {workspace_reason}.",
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -317,3 +317,75 @@ def ingest(
         f"openkos ingest: imported '{src}' -> raw/{name}, "
         f"bundle/sources/{slug}.md ({index_path.name}, {log_path.name} updated)."
     )
+
+
+RECENT_ACTIVITY_LIMIT = 5
+"""How many `log.md` bullets `status` shows under "Recent activity" (D4).
+
+Display policy, not parsing policy -- `bundle/log.py::read_recent_entries`
+stays free of this constant and takes it as a parameter instead."""
+
+
+@app.command()
+def status() -> None:
+    """Report what the bundle currently contains: read-only, Phase-A only.
+
+    Refuses (exit 1) via the shared `config.require_workspace` gate (D1) if
+    the current directory is not an initialized workspace -- the SAME check
+    `ingest` uses -- printing the reason to stderr with no raw traceback.
+    This is the ONLY non-zero exit path.
+
+    On a workspace, sequences three reads and renders their result as plain
+    text via `typer.echo`, always exiting 0: `okf.survey_bundle` scans
+    `bundle/**/*.md` ONCE for source/concept counts and §9 findings (D2) --
+    counts always reflect the disk scan, never `index.md` alone, so catalog
+    drift after an interrupted `ingest` is still visible; `log.md` is read
+    and passed through `bundle_log.read_recent_entries` for the most recent
+    `RECENT_ACTIVITY_LIMIT` entries, newest-first -- an unreadable or
+    malformed `log.md` degrades to a notice (`except (OSError, ValueError)`)
+    rather than failing the whole command (D5), because recent activity is
+    the one nice-to-have `status` exists to show, not the counts or the
+    conformance findings. `survey_bundle`'s findings (missing/unparseable
+    frontmatter, unreadable files) are informational: their presence never
+    changes the exit code (spec: Needs-Attention via §9 Conformance).
+
+    No file under the workspace is ever created, modified, or deleted, and
+    no `--json` or other structured output mode is offered (spec: Read-Only
+    and Human-Readable Only).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos status: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    survey = okf.survey_bundle(layout.bundle_dir)
+
+    try:
+        log_text = (layout.bundle_dir / "log.md").read_text(encoding="utf-8")
+        recent_entries = bundle_log.read_recent_entries(log_text, RECENT_ACTIVITY_LIMIT)
+    except (OSError, ValueError):
+        recent_entries = None
+
+    typer.echo(f"openkos status: workspace at {root}")
+    typer.echo()
+    typer.echo("Bundle contents:")
+    typer.echo(f"  Sources:  {survey.sources}")
+    typer.echo(f"  Concepts: {survey.concepts}")
+    typer.echo()
+    typer.echo("Recent activity:")
+    if recent_entries is None:
+        typer.echo("  Recent activity unavailable — log.md could not be read/parsed.")
+    elif not recent_entries:
+        typer.echo("  No activity recorded yet.")
+    else:
+        for entry in recent_entries:
+            typer.echo(f"  {entry.date}  {entry.text}")
+    typer.echo()
+    typer.echo("Needs attention:")
+    if not survey.findings:
+        typer.echo("  Nothing needs attention.")
+    else:
+        for finding in survey.findings:
+            typer.echo(f"  {finding}")

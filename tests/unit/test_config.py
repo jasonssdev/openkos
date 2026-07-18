@@ -258,6 +258,73 @@ def test_write_config_raises_on_existing_file(tmp_path: Path) -> None:
         config.write_config(tmp_path)
 
 
+def test_require_workspace_none_when_both_files_present(tmp_path: Path) -> None:
+    """`require_workspace` returns `None` when both `bundle/index.md` and
+    `bundle/log.md` are files -- the workspace may proceed (D1)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "index.md").write_text("stub", encoding="utf-8")
+    (bundle_dir / "log.md").write_text("stub", encoding="utf-8")
+
+    assert config.require_workspace(tmp_path) is None
+
+
+@pytest.mark.parametrize("missing", ["index.md", "log.md", "both"])
+def test_require_workspace_reason_when_either_file_missing(
+    tmp_path: Path, missing: str
+) -> None:
+    """`require_workspace` returns the exact refusal reason string when
+    `bundle/index.md`, `bundle/log.md`, or both are absent (D1)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    if missing != "index.md":
+        (bundle_dir / "log.md").write_text("stub", encoding="utf-8")
+    if missing != "log.md" and missing != "both":
+        (bundle_dir / "index.md").write_text("stub", encoding="utf-8")
+
+    assert config.require_workspace(tmp_path) == (
+        "no OpenKOS workspace found in this directory (run 'openkos init' first)"
+    )
+
+
+def test_require_workspace_distinct_reason_on_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permission-denied `bundle/index.md` (or `log.md`) makes `is_file()`
+    RAISE `PermissionError` rather than swallow it to `False` (stdlib
+    `is_file()` only swallows `ENOENT`/`ENOTDIR`/`EBADF`/`ELOOP`, not
+    `EACCES`). `require_workspace` must catch that `OSError` and return a
+    distinct reason naming the unreadable bundle -- never let it propagate,
+    and never conflate it with the missing-workspace reason, since the
+    workspace DOES exist here, it just could not be read.
+
+    `Path.is_file` is monkeypatched (not `chmod`) for determinism: `chmod
+    0o000` is silently ignored when tests run as root (see the `geteuid`
+    skip pattern elsewhere in this suite)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "index.md").write_text("stub", encoding="utf-8")
+    (bundle_dir / "log.md").write_text("stub", encoding="utf-8")
+
+    original_is_file = Path.is_file
+
+    def fake_is_file(self: Path) -> bool:
+        if self.name == "index.md":
+            raise PermissionError(13, "Permission denied", str(self))
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+
+    reason = config.require_workspace(tmp_path)
+
+    assert reason is not None
+    assert reason != (
+        "no OpenKOS workspace found in this directory (run 'openkos init' first)"
+    )
+    assert str(bundle_dir) in reason
+    assert "Permission denied" in reason
+
+
 def test_read_config_reads_required_fields(tmp_path: Path) -> None:
     """`read_config` returns `model`, `review`, and `default_sensitivity`
     matching a valid `openkos.yaml`'s values (scenario: reads required fields)."""

@@ -159,6 +159,48 @@ def refusal_reason(root: Path) -> str | None:
     return next((reason for _, reason in _refusal_conditions(root)), None)
 
 
+_NO_WORKSPACE_REASON = (
+    "no OpenKOS workspace found in this directory (run 'openkos init' first)"
+)
+
+
+_UNREADABLE_WORKSPACE_REASON_PREFIX = "OpenKOS workspace files at"
+"""Prefix for the distinct permission-denied reason `require_workspace`
+returns -- kept as a separate constant from `_NO_WORKSPACE_REASON` because
+the two cases are NOT the same: this one means the workspace exists but
+could not be inspected, not that it is missing."""
+
+
+def require_workspace(root: Path) -> str | None:
+    """Return `None` if `root` already holds an initialized workspace, else
+    the exact refusal reason string every read-only command shares (D1).
+
+    `None` means both `bundle/index.md` and `bundle/log.md` are `is_file()`
+    at `root` -- the same check `ingest` performed inline before this
+    extraction. `is_file()` only swallows `ENOENT`/`ENOTDIR`/`EBADF`/`ELOOP`
+    into `False`; it RE-RAISES any other `OSError`, notably
+    `PermissionError` on a bundle directory or file this process cannot
+    stat. That case is caught here and reported as a DISTINCT reason (never
+    `_NO_WORKSPACE_REASON`, since the workspace demonstrably exists -- it
+    just could not be read) so callers never see a raw traceback. Callers
+    (`ingest`, `status`) format their own command-specific prefix around
+    this reason; `config` stays free of `typer` (layering).
+    """
+    layout = WorkspaceLayout(root)
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    try:
+        both_files_present = index_path.is_file() and log_path.is_file()
+    except OSError as exc:
+        return (
+            f"{_UNREADABLE_WORKSPACE_REASON_PREFIX} '{layout.bundle_dir}' "
+            f"could not be read ({exc})"
+        )
+    if not both_files_present:
+        return _NO_WORKSPACE_REASON
+    return None
+
+
 def _non_empty_dir(path: Path) -> bool:
     return path.is_dir() and any(path.iterdir())
 

@@ -10,6 +10,9 @@ concept-doc structure the model layer does not have, and is deferred to
 `lint` (docs/okf-alignment.md).
 """
 
+import os
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -73,6 +76,130 @@ def build_source_concept(
     return dump_frontmatter(metadata, body)
 
 
+@dataclass(frozen=True)
+class DocScan:
+    """One `_iter_docs` result: a non-reserved `.md` file, scanned once.
+
+    Exactly one of `metadata`, `read_error`, or `parse_error` is set (the
+    other two are `None`) -- a successfully read AND parsed file has
+    `metadata` populated (possibly `{}`) and both errors `None`; a file that
+    could not be opened/decoded has `read_error` set and `metadata`/
+    `parse_error` `None`; a file that was read but whose frontmatter did not
+    parse has `parse_error` set and `metadata`/`read_error` `None`.
+    """
+
+    path: Path
+    metadata: dict[str, object] | None
+    read_error: OSError | UnicodeDecodeError | None
+    parse_error: str | None
+
+
+def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:
+    """Walk every non-reserved `.md` file under `bundle_dir` exactly once (D2).
+
+    `sorted(rglob("*.md"))` is the SAME walk `check_conformance` used before
+    this refactor, so both `check_conformance` and `survey_bundle` (Phase 2)
+    observe files in identical order. A file that cannot be opened or
+    decoded yields a `DocScan` with `read_error` set instead of raising --
+    `check_conformance` re-raises it (preserving its documented raise
+    contract); `survey_bundle` degrades it to a finding (D3). A file whose
+    frontmatter does not parse, or that has no parseable frontmatter block,
+    yields `parse_error` set to the SAME message text `check_conformance`
+    has always produced for that case.
+    """
+    for path in sorted(bundle_dir.rglob("*.md")):
+        if path.name in RESERVED_FILENAMES:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            yield DocScan(path, None, exc, None)
+            continue
+        try:
+            post = frontmatter.loads(text)
+        except Exception as exc:  # broad: any parse failure is a rule-1 violation
+            yield DocScan(path, None, None, f"no parseable frontmatter ({exc})")
+            continue
+        if post.handler is None:
+            yield DocScan(path, None, None, "no parseable frontmatter")
+        else:
+            yield DocScan(path, post.metadata, None, None)
+
+
+@dataclass(frozen=True)
+class BundleSurvey:
+    """Counts and §9 findings for one `_iter_docs` pass over a bundle (Phase 2/D2).
+
+    `findings` is a SUPERSET of `check_conformance`'s violations: it adds a
+    per-file "unreadable" line for a `read_error` (D3), which
+    `check_conformance` instead raises, PLUS one "unreadable directory" line
+    per subdirectory `_iter_docs`'s `rglob` walk could not descend into (its
+    `OSError` is silently swallowed by `scandir()`, per stdlib `glob`
+    behavior). A file contributing a finding is counted as NEITHER a source
+    nor a concept; an unreadable subdirectory's contents are unknown, so it
+    affects no count at all -- only `findings`.
+    """
+
+    sources: int
+    concepts: int
+    findings: list[str]
+
+
+def _walk_errors(bundle_dir: Path) -> list[OSError]:
+    """Collect directory-scan `OSError`s that `_iter_docs`'s `rglob` walk
+    would silently swallow, without yielding any file paths.
+
+    `Path.rglob` never surfaces `scandir()` failures on a subdirectory it
+    cannot descend into -- the subtree just vanishes from the walk with no
+    signal. This walks the SAME tree with `os.walk`'s `onerror` hook solely
+    to capture those errors as data (each has `.filename` set to the
+    unreadable directory); `_iter_docs` and `check_conformance` are
+    untouched and stay byte-identical.
+    """
+    errors: list[OSError] = []
+    for _ in os.walk(bundle_dir, onerror=errors.append):
+        pass
+    return errors
+
+
+def survey_bundle(bundle_dir: Path) -> BundleSurvey:
+    """Survey `bundle_dir` for source/concept counts and §9-shaped findings (D2/D3).
+
+    Consumes the SAME `_iter_docs` walk `check_conformance` uses, in one
+    pass: `type == "Source"` counts as a source, any other non-empty `type`
+    counts as a concept, and every read error, parse error, or missing/empty
+    `type` becomes a finding instead of a count -- including a per-file read
+    error, which `survey_bundle` degrades to a finding rather than raising
+    (D3, Q3), unlike `check_conformance`. Directory-scan errors that
+    `_iter_docs`'s walk silently drops (see `_walk_errors`) are appended as
+    one finding per unreadable directory, sorted by path for determinism, so
+    an unscanned subtree is never invisible to a caller reading `findings`
+    alone -- it never affects `sources`/`concepts`, since that subtree's
+    contents are unknown.
+    """
+    sources = 0
+    concepts = 0
+    findings: list[str] = []
+    for scan in _iter_docs(bundle_dir):
+        if scan.read_error is not None:
+            findings.append(f"{scan.path}: unreadable ({scan.read_error})")
+        elif scan.parse_error is not None:
+            findings.append(f"{scan.path}: {scan.parse_error}")
+        else:
+            doc_type = (scan.metadata or {}).get("type")
+            if not doc_type:
+                findings.append(f"{scan.path}: missing non-empty 'type'")
+            elif doc_type == "Source":
+                sources += 1
+            else:
+                concepts += 1
+    for walk_error in sorted(
+        _walk_errors(bundle_dir), key=lambda exc: str(exc.filename)
+    ):
+        findings.append(f"{walk_error.filename}: unreadable directory ({walk_error})")
+    return BundleSurvey(sources, concepts, findings)
+
+
 def check_conformance(bundle_dir: Path) -> list[str]:
     """Check §9 rules 1-2 against every non-reserved `.md` file under `bundle_dir`.
 
@@ -80,20 +207,17 @@ def check_conformance(bundle_dir: Path) -> list[str]:
     because there are no non-reserved `.md` files to violate either rule.
     May raise `OSError` or `UnicodeDecodeError` when a candidate file cannot
     be read or decoded -- those are inspection failures, never reported as
-    conformance violations.
+    conformance violations. Consumes the shared `_iter_docs` walk (D2) and
+    re-raises `read_error` to preserve this exact contract; output is
+    byte-identical to the pre-refactor implementation (regression-guarded by
+    `tests/unit/model/test_okf.py::test_check_conformance_round_trip_regression`).
     """
     violations: list[str] = []
-    for path in sorted(bundle_dir.rglob("*.md")):
-        if path.name in RESERVED_FILENAMES:
-            continue
-        text = path.read_text(encoding="utf-8")
-        try:
-            post = frontmatter.loads(text)
-        except Exception as exc:  # broad: any parse failure is a rule-1 violation
-            violations.append(f"{path}: no parseable frontmatter ({exc})")
-            continue
-        if post.handler is None:
-            violations.append(f"{path}: no parseable frontmatter")
-        elif not post.metadata.get("type"):
-            violations.append(f"{path}: missing non-empty 'type'")
+    for scan in _iter_docs(bundle_dir):
+        if scan.read_error is not None:
+            raise scan.read_error
+        if scan.parse_error is not None:
+            violations.append(f"{scan.path}: {scan.parse_error}")
+        elif not (scan.metadata or {}).get("type"):
+            violations.append(f"{scan.path}: missing non-empty 'type'")
     return violations
