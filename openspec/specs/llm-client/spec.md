@@ -3,7 +3,7 @@
 ## Purpose
 
 `llm/` is a pure library seam for chat completion against a locally running
-Ollama server: a `ChatClient` Protocol plus a concrete `OllamaClient` that
+Ollama server: a `LLMBackend` Protocol plus a concrete `OllamaClient` that
 POSTs `/api/chat` via stdlib `urllib`, mapping every failure mode to a typed
 exception. It has no CLI command and no workspace effect; its only consumer
 is the future `query` command.
@@ -19,7 +19,7 @@ non-Ollama provider; any CLI command; changes to `ingest`, `forget`, or
 
 ### Requirement: Successful Chat Call Returns Assistant Text
 
-`ChatClient.chat(messages)` MUST POST the configured model and `messages` to
+`LLMBackend.chat(messages)` MUST POST the configured model and `messages` to
 `POST {base_url}/api/chat` with `stream: false` and `think: false`, and MUST
 return `message.content` from the response as a plain string.
 
