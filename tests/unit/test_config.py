@@ -256,3 +256,92 @@ def test_write_config_raises_on_existing_file(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         config.write_config(tmp_path)
+
+
+def test_read_config_reads_required_fields(tmp_path: Path) -> None:
+    """`read_config` returns `model`, `review`, and `default_sensitivity`
+    matching a valid `openkos.yaml`'s values (scenario: reads required fields)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: gemma3\nreview: false\ndefault_sensitivity: confidential\n",
+        encoding="utf-8",
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.model == "gemma3"
+    assert result.review is False
+    assert result.default_sensitivity == "confidential"
+
+
+def test_read_config_falls_back_to_packaged_defaults_on_missing_keys(
+    tmp_path: Path,
+) -> None:
+    """Keys absent from `openkos.yaml` fall back to the packaged defaults."""
+    (tmp_path / "openkos.yaml").write_text("freshness_window: 7d\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.model == config.DEFAULT_MODEL
+    assert result.review is True
+    assert result.default_sensitivity == "private"
+
+
+def test_read_config_raises_valueerror_on_malformed_yaml(tmp_path: Path) -> None:
+    """A `yaml.YAMLError` while parsing `openkos.yaml` is wrapped as `ValueError`."""
+    (tmp_path / "openkos.yaml").write_text("model: [unclosed\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"openkos\.yaml"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_raises_valueerror_on_non_mapping_root(tmp_path: Path) -> None:
+    """A YAML root that parses but is not a mapping (e.g. a list) raises `ValueError`."""
+    (tmp_path / "openkos.yaml").write_text("- a\n- b\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"openkos\.yaml"):
+        config.read_config(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("yaml_body", "attr", "expected"),
+    [
+        ("model: null\n", "model", "DEFAULT_MODEL"),
+        ("model:\n", "model", "DEFAULT_MODEL"),
+        ("review: null\n", "review", "DEFAULT_REVIEW"),
+        ("review:\n", "review", "DEFAULT_REVIEW"),
+        (
+            "default_sensitivity: null\n",
+            "default_sensitivity",
+            "DEFAULT_SENSITIVITY",
+        ),
+        (
+            "default_sensitivity:\n",
+            "default_sensitivity",
+            "DEFAULT_SENSITIVITY",
+        ),
+    ],
+)
+def test_read_config_falls_back_to_packaged_defaults_on_explicit_null(
+    tmp_path: Path, yaml_body: str, attr: str, expected: str
+) -> None:
+    """A key PRESENT with an explicit YAML null (`key: null` or bare `key:`)
+    also falls back to the packaged default -- `raw.get(key, DEFAULT)` alone
+    only covers an ABSENT key; a present-but-null value would otherwise slip
+    a bare `None` past `Config`'s typed fields (`model: str`, `review: bool`,
+    `default_sensitivity: str`)."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert getattr(result, attr) == getattr(config, expected)
+
+
+def test_read_config_preserves_explicit_review_false(tmp_path: Path) -> None:
+    """An explicit `review: false` is a real value, not an absence -- the
+    None-fallback fix must not coerce it to the packaged default (`True`).
+    Regression guard: `False is not None`, so it must survive untouched."""
+    (tmp_path / "openkos.yaml").write_text("review: false\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.review is False

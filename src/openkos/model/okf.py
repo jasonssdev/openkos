@@ -35,6 +35,44 @@ def load_frontmatter(text: str) -> tuple[dict[str, object], str]:
     return post.metadata, post.content
 
 
+def build_source_concept(
+    *,
+    title: str,
+    description: str,
+    resource: str,
+    tags: list[str],
+    timestamp: str,
+    sensitivity: str,
+    provenance: list[str],
+) -> str:
+    """Build a conformant OKF Source concept document (D4).
+
+    Plain dict -> `dump_frontmatter`, no pydantic: every field is
+    engine-derived from trusted local inputs (workspace config, the source's
+    filename, an injected clock, the raw path) rather than untrusted
+    structured LLM output, so `check_conformance` (§9 rules 1-2: parseable
+    frontmatter, non-empty `type`) is the only gate this slice needs.
+    `description` is passed through verbatim -- callers MUST phrase it as an
+    honest null-compiler description (imported, not yet compiled/extracted),
+    never claiming extraction occurred, matching this slice's scope.
+    """
+    metadata: dict[str, object] = {
+        "type": "Source",
+        "title": title,
+        "description": description,
+        "resource": resource,
+        "tags": tags,
+        "timestamp": timestamp,
+        "status": "active",
+        "version": 1,
+        "freshness": "snapshot",
+        "sensitivity": sensitivity,
+        "provenance": provenance,
+    }
+    body = f"# {title}\n\n{description}\n\n# Citations\n"
+    return dump_frontmatter(metadata, body)
+
+
 def check_conformance(bundle_dir: Path) -> list[str]:
     """Check §9 rules 1-2 against every non-reserved `.md` file under `bundle_dir`.
 
