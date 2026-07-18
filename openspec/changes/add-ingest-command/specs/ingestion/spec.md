@@ -148,8 +148,15 @@ provenance store.
 
 `ingest` MUST compute the Source concept, raw copy, and index/log changes
 in memory during Phase A without writing, present a preview, and perform
-all writes atomically (all-or-nothing) in Phase B only after confirmation.
-`--auto` MUST skip the confirmation prompt and proceed directly to Phase B.
+Phase B writes only after confirmation. Each Phase B write MUST be
+individually create-only (`copy_exclusive`, `write_exclusive`) or atomic
+(`write_atomic`), and content MUST be written before the catalog (raw copy
+and concept document before `index.md`/`log.md`), so the catalog never
+references a file that does not exist. Phase B is NOT required to be
+transactional as a whole: there is no rollback across the sequence, and a
+failure partway through MAY leave a partial, detectable result recoverable
+via git. `--auto` MUST skip the confirmation prompt and proceed directly
+to Phase B.
 Config `review: false` MUST likewise skip the prompt, the same as
 `--auto`. When `review: true` and stdin is not a TTY and `--auto` is not
 passed, the system MUST refuse to write rather than default silently —
@@ -163,12 +170,21 @@ because `ingest` honors "review before save".
 - THEN a preview of the raw copy, Source concept, and index/log changes is
   shown before any file is written
 
-#### Scenario: All-or-nothing write on confirm
+#### Scenario: Phase B writes proceed on confirm
 
 - GIVEN a shown preview
 - WHEN the user confirms
-- THEN the raw copy, concept document, and index/log updates all succeed
-  together, or none are applied if any step fails
+- THEN the raw copy, concept document, and index/log updates are written
+  in order (content before catalog); on success all four land together
+
+#### Scenario: Phase B failure leaves a detectable, recoverable partial result
+
+- GIVEN a shown preview and confirmation
+- WHEN a Phase B write past the first one fails
+- THEN the command exits non-zero with a clear error and no raw traceback;
+  writes already completed are NOT rolled back (no in-process undo); any
+  resulting partial (e.g. an uncatalogued concept) is visible via
+  `git status` and recoverable via `git checkout`/`git clean`
 
 #### Scenario: --auto skips the prompt
 

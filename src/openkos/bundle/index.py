@@ -37,6 +37,19 @@ def _section_header(chunk: str) -> str:
     return match.group(1)
 
 
+def _reject_newline(field: str, value: str) -> None:
+    """Raise `ValueError` if `value` contains a newline (RISK-1).
+
+    `title`/`slug`/`description` are interpolated verbatim into the
+    rendered bullet with no escaping. A value containing a newline followed
+    by `# ` or `## ` could forge a section header the next time the file is
+    re-parsed. Every one of these fields is inherently single-line for a
+    single Source concept, so rejecting is simpler and safer than escaping.
+    """
+    if "\n" in value or "\r" in value:
+        raise ValueError(f"index.md: {field!r} must not contain a newline")
+
+
 def insert_source_entry(
     index_text: str, *, title: str, slug: str, description: str
 ) -> str:
@@ -50,8 +63,12 @@ def insert_source_entry(
     Sources]`, and `Sources` is last in that order, so appending a new
     `# Sources` chunk after every existing section is always the correct
     position, regardless of which of the other three sections currently
-    exist.
+    exist. `title`/`slug`/`description` are each rejected (`ValueError`) if
+    they contain a newline (RISK-1) -- see `_reject_newline`.
     """
+    _reject_newline("title", title)
+    _reject_newline("slug", slug)
+    _reject_newline("description", description)
     frontmatter_block, body = _split_frontmatter_verbatim(index_text)
     chunks = _SECTION_SPLIT_RE.split(body)
     preamble, section_chunks = chunks[0], chunks[1:]

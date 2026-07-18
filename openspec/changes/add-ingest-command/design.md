@@ -42,13 +42,42 @@ extraction to house — it would be empty scaffolding) and no `engine.py`/
 | D2 | **Append = parse-then-render, frontmatter bytes verbatim.** `index.md`: split off the frontmatter block (kept **byte-for-byte**, preserving `okf_version: "0.1"`), parse the body into `# `-headed sections, create/locate `# Sources` in canonical order `[Concepts, Decisions, People, Sources]`, append the bullet at the section end, re-render body. `log.md`: keep the `# Directory Update Log` header, parse `## YYYY-MM-DD` sections newest-first, **prepend** the bullet to today's section (creating today's section at the top if absent). | Targeted string insert at a byte offset (brittle — the `# Sources` section does **not** exist on a fresh empty-body index, `index.py:6-8`); full YAML/markdown AST round-trip (reformats, quote-drift — init gap #4). | Body-only parsing sidesteps the frontmatter quote-style divergence entirely. Untouched sections/entries round-trip byte-for-byte; only the edited section changes. `write_atomic` (D1) makes the replace atomic, so a failed append leaves the original intact. |
 | D3 | **`read_config` via PyYAML `safe_load`, returns a frozen `Config`** (`model`, `review`, `default_sensitivity`). Missing keys → packaged defaults (`DEFAULT_MODEL`, `review=True`, `default_sensitivity="private"`); non-mapping root or `yaml.YAMLError` → wrapped `ValueError`. | `dict` return (untyped, no validation chokepoint); hand-rolled parser (fragile); `ruamel.yaml` (heavier, and we only **read**). | PyYAML is already importable (transitive via `python-frontmatter`); the reader has no byte-identity constraint, unlike `write_config`. A frozen dataclass matches `WorkspaceLayout`'s house style and gives one typed access point. Wrapping `YAMLError` as `ValueError` keeps the CLI's existing `except (OSError, ValueError)`. **Manifest note (affects tasks):** we now `import yaml` directly, so `pyyaml` should be declared an explicit runtime dependency — **no new install**, just an honest manifest (a transitive-only reliance breaks silently if `python-frontmatter` swaps parsers). |
 | D4 | **`Source` concept = plain `dict` + `dump_frontmatter` + `check_conformance`. NO pydantic.** **CONFIRMS the proposal.** | Promoting `pydantic` dev→main. | Every field is engine-derived from **trusted local** inputs (config, filename, injected clock, the raw path) — there is no untrusted structured input to validate. pydantic's value is guarding LLM JSON, which does not exist in this slice; adding a runtime dep with nothing to validate is premature. `check_conformance` (§9 rules 1-2: parseable frontmatter + non-empty `type`, `okf.py:38-61`) is the only conformance gate and it suffices. `pydantic` stays dev-only. |
-| D5 | **Phase A/B mirrors `init`.** Phase A (pure, no writes): `<path>` is an existing file; workspace present (`bundle/index.md` + `log.md` exist) else refuse; `read_config`; derive slug/dest; refuse if `raw/<name>` **or** `bundle/sources/<slug>.md` exists; build the concept; compute new `index.md`/`log.md` from current on-disk bytes; show preview. **Confirm gate:** `--auto` → no prompt; else `review=false` → no prompt; else TTY → `typer.confirm`; else (non-TTY, `review=true`, no `--auto`) → **refuse** (exit 1, "re-run with `--auto`"). Phase B (after confirm): `mkdir bundle/sources`; `copy_exclusive` raw; `write_exclusive` concept; `write_atomic` `index.md`; `write_atomic` `log.md`. | Write-then-rollback; silent non-TTY write like `init`. | Create-only immutables (raw, concept) first, **catalog last** — the catalog never points at a file that does not yet exist (parallels `init`'s marker-last, D3). `init` writes silently on non-TTY because it is the command's whole point; `ingest` honours `review` and refuses to write unattended without `--auto`, matching "review before save". Error convention verbatim from `init`: `except (OSError, ValueError)` → `echo(err=True)` + `Exit(1)`, prefix `openkos ingest:`. |
+| D5 | **Phase A/B mirrors `init`.** Phase A (pure, no writes): `<path>` is an existing file; workspace present (`bundle/index.md` + `log.md` exist) else refuse; `read_config`; derive slug/dest; refuse if `raw/<name>` **or** `bundle/sources/<slug>.md` exists; build the concept; compute new `index.md`/`log.md` from current on-disk bytes; show preview. **Confirm gate:** `--auto` → no prompt; else `review=false` → no prompt; else TTY → `typer.confirm`; else (non-TTY, `review=true`, no `--auto`) → **refuse** (exit 1, "re-run with `--auto`"). Phase B (after confirm, create-only, non-transactional): `mkdir bundle/sources`; `copy_exclusive` raw; `write_exclusive` concept; `write_atomic` `index.md`; `write_atomic` `log.md`. | Write-then-rollback (attempted in a PR 2 review-correction pass, then RETREATED — see below); silent non-TTY write like `init`. | Create-only immutables (raw, concept) first, **catalog last** — the catalog never points at a file that does not yet exist (parallels `init`'s marker-last, D3). `init` writes silently on non-TTY because it is the command's whole point; `ingest` honours `review` and refuses to write unattended without `--auto`, matching "review before save". Error convention verbatim from `init`: `except (OSError, ValueError)` → `echo(err=True)` + `Exit(1)`, prefix `openkos ingest:`. |
 
-**Known limit (accepted).** Phase B is **not** transactional: `write_atomic`
-makes each file update atomic (never half-written), but `index.md` and `log.md`
-are two writes — a failure between them leaves a **recoverable, visible** partial
-(same class as `init`'s D3 no-cleanup). Ordering the two catalog writes last and
-adjacent minimizes the window.
+**Known limit (accepted) — final decision: create-only, non-transactional,
+git recovery.** An earlier PR 2 review-correction pass attempted real
+multi-step rollback across Phase B (undo flags + reverse-order unlink/restore
+on any failure). A fresh bounded review found two CRITICALs proving that
+rollback cannot be made truly atomic across independent filesystem writes
+(a crash or failure *during the rollback itself* has no further fallback).
+The maintainer retreated to the design's originally-ratified non-transactional
+position (this D5, and `init`'s own D3 "no cleanup path"): Phase B performs
+**no in-process rollback**. Each individual write stays create-only
+(`copy_exclusive`, `write_exclusive`) or atomic (`write_atomic`), so no
+single write is ever left half-written, and content is always written
+**before** the catalog (raw copy and concept document precede `index.md`/
+`log.md`), so the catalog never references a file that does not exist. A
+failure partway through Phase B therefore leaves, at worst, a **detectable
+orphan** — e.g. a raw file or concept document written but not yet
+reflected in `index.md`/`log.md` — never a catalog entry pointing at a
+missing file, and never silent corruption.
+
+Detectability: the OKF bundle is version-controlled, so the orphan is
+**always visible via `git status`**; recovery is `git checkout`/`git clean`,
+not a manual unlink. This is the primary, solid detectability claim.
+Separately, `docs/cli.md`'s planned `lint` "orphan pages" check (concept
+files not linked from `index.md`) is **not implemented yet** — `lint`
+itself does not exist in this codebase (`model/okf.py::check_conformance`
+only implements §9 rules 1-2, parseable frontmatter + non-empty `type`;
+rule 3 and any freshness/catalog lint are deferred) — so no existing
+automated check currently flags an uncatalogued concept; only `git status`
+does, today.
+
+As a consequence, `fsio.write_exclusive` was hardened independently of this
+retreat: it now unlinks its own partial file on a mid-write failure
+(mirroring `copy_exclusive`'s existing cleanup), so a crash mid-write never
+leaves a partial file that blocks every retry with `FileExistsError`. This
+is a real primitive-symmetry fix, not part of the rollback decision.
 
 **Derivations.** Slug = source filename **stem** lowercased, non-`[a-z0-9]`→`-`,
 collapsed/trimmed; when already safe it equals the stem so `raw/notes.md` ↔
@@ -72,7 +101,7 @@ openkos ingest <path>        cli/main   config   okf   bundle   fsio   FS
     ├── insert_source_entry(index bytes) ─────────────>│
     ├── insert_log_entry(log bytes, today) ───────────>│
     └── preview → confirm gate (--auto / review / TTY)
-  PHASE B (after confirm, all-or-nothing; catalog LAST)
+  PHASE B (after confirm, create-only/non-transactional; catalog LAST)
     ├── sources.mkdir ───────────────────────────────────────────────>│
     ├── copy_exclusive(src, raw/<name>) ──────────────────────>│ "xb"  │
     ├── write_exclusive(sources/<slug>.md) ───────────────────>│ "x"   │
@@ -120,7 +149,7 @@ def build_source_concept(*, title, description, resource, tags, timestamp, sensi
 | Unit (fs) | `write_atomic` overwrites; interrupted write leaves original intact; `copy_exclusive` refuses collision | `tmp_path`; monkeypatch `os.replace`/open to raise mid-write |
 | Unit (fs) | `read_config` fields + defaults; `YAMLError`→`ValueError`; non-mapping root | `tmp_path` fixtures |
 | Unit (fs) | generated `Source` concept passes `check_conformance`; `sensitivity == default_sensitivity` | build + write + check |
-| Unit (cli) | Phase A preview vs Phase B all-or-nothing; `--auto`; non-TTY-refuse; missing-path/collision/not-a-workspace refusals; exit codes | `CliRunner` + `monkeypatch.chdir` |
+| Unit (cli) | Phase A preview vs Phase B create-only writes (non-transactional, no rollback); `--auto`; non-TTY-refuse; missing-path/collision/not-a-workspace refusals; exit codes | `CliRunner` + `monkeypatch.chdir` |
 
 ## Threat / path-containment note
 

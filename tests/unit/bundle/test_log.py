@@ -113,3 +113,17 @@ def test_insert_log_entry_raises_valueerror_on_malformed_section_chunk() -> None
 
     with pytest.raises(ValueError, match="malformed section chunk"):
         insert_log_entry(malformed, date(2026, 7, 14), "**Creation**: New.")
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r"])
+def test_insert_log_entry_rejects_newline_in_entry(newline: str) -> None:
+    """A newline in `entry` is REJECTED, not interpolated (RISK-2):
+    unescaped, a value like `"evil\\n## 2099-01-01"` could forge a new
+    dated section the next time `log.md` is parsed. A single log entry is
+    always single-line, so rejecting is simpler and safer than escaping."""
+    with pytest.raises(ValueError, match="newline"):
+        insert_log_entry(
+            render_log(date(2026, 7, 16)),
+            date(2026, 7, 16),
+            f"evil{newline}## 2099-01-01",
+        )

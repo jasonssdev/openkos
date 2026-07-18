@@ -146,3 +146,20 @@ def test_insert_source_entry_raises_valueerror_on_malformed_section_chunk() -> N
 
     with pytest.raises(ValueError, match="malformed section chunk"):
         insert_source_entry(malformed, title="A", slug="a", description="B")
+
+
+@pytest.mark.parametrize("field", ["title", "slug", "description"])
+@pytest.mark.parametrize("newline", ["\n", "\r"])
+def test_insert_source_entry_rejects_newline_in_interpolated_field(
+    field: str, newline: str
+) -> None:
+    """A newline in `title`/`slug`/`description` is REJECTED, not
+    interpolated (RISK-1): unescaped, a value like
+    `"evil\\n# Forged Section"` could forge a section header the next time
+    `index.md` is parsed. A single Source concept's title/slug/description
+    is always single-line, so rejecting is simpler and safer than escaping."""
+    kwargs = {"title": "A", "slug": "a", "description": "B"}
+    kwargs[field] = f"evil{newline}# Forged Section"
+
+    with pytest.raises(ValueError, match="newline"):
+        insert_source_entry(render_index(), **kwargs)
