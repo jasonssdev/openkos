@@ -681,3 +681,60 @@ commit made.
 clean, build + wheel smoke passed). No commit made. Ready for the
 orchestrator to re-validate/re-run the review receipt for PR 2 (the prior
 receipt is invalidated by this code change), then `sdd-verify`.
+
+## Verify CRITICAL + WARNING Closed — 2026-07-17
+
+Branch: `feat/ingest-command`. Mode: Strict TDD. Closes the two findings
+raised by `sdd-verify` against PR 2: 1 CRITICAL (missing spec-scenario
+test), 1 WARNING (stale "all-or-nothing" doc drift after the D5 retreat).
+No commit made.
+
+- FIX 1 (CRITICAL) — added the missing test for the `ingestion` spec's
+  Config Reader "No workspace config" scenario. Two characterization tests,
+  both GREEN immediately (no production code change needed — the existing
+  `read_config`/`ingest` error handling already satisfies the scenario):
+  `tests/unit/test_config.py::test_read_config_raises_clear_error_when_config_missing`
+  (`read_config` on a directory with no `openkos.yaml` raises `OSError`
+  naming the missing file, writes nothing) and
+  `tests/unit/cli/test_ingest.py::test_missing_config_refuses_via_ingest`
+  (a workspace whose `openkos.yaml` was removed post-init, reached via
+  `ingest --auto`, exits 1 with a clear `openkos ingest:` stderr message
+  naming `openkos.yaml`, no traceback, snapshot-unchanged). One ruff fix
+  needed: `match="openkos.yaml"` → `match=r"openkos\.yaml"` (RUF043, `.` is
+  a regex metacharacter) — matches the existing convention already used
+  elsewhere in `test_config.py`.
+- FIX 2 (WARNING) — reconciled stale "all-or-nothing" phrasing in
+  `proposal.md` (4 spots: Review/confirm-flow bullet, `ingest` command
+  approach paragraph, Testing Expectations paragraph, Success Criteria
+  checklist) and `tasks.md` (task 7.1) with the ratified D5 retreat
+  (non-transactional, create-only/atomic per-file writes, git recovery for
+  a partial result). Each spot reworded in place with a
+  "superseded — see design D5" note; no other content changed.
+  `apply-progress.md`'s own historical language left untouched per
+  instruction (it is a correct chronological log of what was decided and
+  retreated from, not a live contract).
+
+### Files Changed (Verify Closure)
+
+- `tests/unit/test_config.py` Mod — +21/-0 lines (1 new test).
+- `tests/unit/cli/test_ingest.py` Mod — +31/-0 lines (1 new test).
+- `openspec/changes/add-ingest-command/proposal.md` Mod — +23/-9 lines (4
+  stale "all-or-nothing" spots reworded).
+- `openspec/changes/add-ingest-command/tasks.md` Mod — +1/-1 line (task 7.1
+  reworded).
+
+### Verification Gate (Verify Closure)
+
+- `uv run pytest --cov -q` → **166 passed**, coverage **100.00%** (line +
+  branch; gate ≥90%)
+- `uv run ruff check .` → **All checks passed**
+- `uv run ruff format --check .` → **20 files already formatted**
+- `uv run mypy .` → **Success: no issues found in 20 source files**
+
+### Status (Verify Closure)
+
+2/2 verify findings closed (1 CRITICAL, 1 WARNING). Gate fully green (166
+passed, 100% coverage, ruff/mypy clean). No commit made. The two tracked
+code SUGGESTIONs (decompose `ingest` body, dedup `_reject_newline`) were
+intentionally left untouched, per scope. Ready for the orchestrator to
+re-run/validate the review receipt, then archive.

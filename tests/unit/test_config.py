@@ -336,6 +336,27 @@ def test_read_config_falls_back_to_packaged_defaults_on_explicit_null(
     assert getattr(result, attr) == getattr(config, expected)
 
 
+def test_read_config_raises_clear_error_when_config_missing(tmp_path: Path) -> None:
+    """No `openkos.yaml` at `root`: `read_config` raises a clear, catchable
+    error and performs no write (scenario: no workspace config).
+
+    This is a spec-scenario characterization test, not a behavior change:
+    `read_config` reads `openkos.yaml` via `Path.read_text`, so a missing
+    file already raises `FileNotFoundError` (an `OSError` subclass) whose
+    message names the missing file -- exactly the "clear error" the
+    scenario requires, and already covered by the CLI's `except (OSError,
+    ValueError)` convention (see
+    `test_ingest.py::test_missing_config_refuses_via_ingest` for the
+    `ingest`-path counterpart). No production code change was needed; this
+    test locks the behavior in."""
+    before = set(tmp_path.iterdir())
+
+    with pytest.raises(OSError, match=r"openkos\.yaml"):
+        config.read_config(tmp_path)
+
+    assert set(tmp_path.iterdir()) == before
+
+
 def test_read_config_preserves_explicit_review_false(tmp_path: Path) -> None:
     """An explicit `review: false` is a real value, not an absence -- the
     None-fallback fix must not coerce it to the packaged default (`True`).

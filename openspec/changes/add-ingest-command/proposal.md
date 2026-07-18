@@ -30,7 +30,9 @@ single-concept-per-source is the ratified scope.
   body with `# Citations`); record provenance in-frontmatter; update
   `index.md` + `log.md`.
 - **Review/confirm flow** reusing `init`'s Phase A (compute in memory, no writes)
-  / Phase B (all-or-nothing write after confirm) pattern; `--auto` skips the prompt.
+  / Phase B (writes proceed in order after confirm — non-transactional, superseded,
+  see design D5: create-only/atomic per-file writes + git recovery) pattern;
+  `--auto` skips the prompt.
 - Source-concept `sensitivity` = config `default_sensitivity` (no flag).
 
 ### Out of Scope (deferred, named)
@@ -68,9 +70,11 @@ single-concept-per-source is the ratified scope.
   the D2 create-only invariant of `write_exclusive` stays intact (never weakened).
 - **`ingest` command** (`cli/main.py`): Phase A builds the Source concept as a
   plain `dict` + body in memory, computes the index/log diffs, and shows a preview;
-  Phase B writes raw copy, concept doc, then index/log all-or-nothing after confirm
-  (or immediately under `--auto`). Follow the existing
-  `try/except (OSError, ValueError)` → `echo(err=True)` + `Exit(1)` convention.
+  Phase B writes raw copy, concept doc, then index/log in order after confirm
+  (or immediately under `--auto`) — non-transactional, superseded, see design D5:
+  create-only/atomic per-file writes, no cross-write rollback, recovery via git.
+  Follow the existing `try/except (OSError, ValueError)` → `echo(err=True)` +
+  `Exit(1)` convention.
 - **Provenance**: `provenance:` frontmatter list (raw paths) + `# Citations` body.
   No separate provenance store.
 
@@ -119,8 +123,9 @@ no repo migration or published artifact to unwind.
 Strict TDD (`strict_tdd: true`): RED-GREEN-REFACTOR, `uv run pytest`, branch
 coverage ≥ 90%. Deterministic, no network — no LLM in this slice. New paths land
 test-first: `read_config` fields, index/log append round-trips, atomic
-temp+rename, Phase A preview vs. Phase B all-or-nothing write, `--auto`,
-`check_conformance` passing on the generated Source concept.
+temp+rename, Phase A preview vs. Phase B create-only writes (non-transactional
+— superseded, see design D5), `--auto`, `check_conformance` passing on the
+generated Source concept.
 
 ## Success Criteria
 
@@ -130,8 +135,10 @@ temp+rename, Phase A preview vs. Phase B all-or-nothing write, `--auto`,
       the atomic write; the original files survive an interrupted write.
 - [ ] `read_config` returns `model`, `review`, `default_sensitivity`; the Source
       concept's `sensitivity` equals `default_sensitivity`.
-- [ ] Review preview shows proposed changes; confirm writes all-or-nothing;
-      `--auto` skips the prompt. `write_exclusive` stays create-only.
+- [ ] Review preview shows proposed changes; confirm writes proceed in order
+      (non-transactional — superseded, see design D5: git recovery for a
+      partial result); `--auto` skips the prompt. `write_exclusive` stays
+      create-only.
 - [ ] `ingestion` spec added; no new runtime dependency; `pydantic` stays dev-only
       unless design records otherwise.
 - [ ] `uv run pytest --cov` ≥ 90% branch; ruff/mypy green.

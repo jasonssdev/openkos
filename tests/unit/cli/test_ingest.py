@@ -290,6 +290,37 @@ def test_phase_a_preparation_failure_surfaces_cleanly(
     assert _snapshot(tmp_path) == before
 
 
+def test_missing_config_refuses_via_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace whose `openkos.yaml` was removed (`bundle/index.md` and
+    `log.md` still present, so Phase A's workspace check passes) makes
+    `read_config` raise while preparing the ingest; `ingest` routes it
+    through the same graceful stderr-message + exit-1 path as any other
+    `OSError`, not a raw traceback, and writes nothing (spec: Config Reader
+    -- no workspace config, reached via `ingest`).
+
+    Characterization test: the existing `except (OSError, ValueError)`
+    handler around `read_config` already surfaces a clear, caught message
+    naming `openkos.yaml`; no production code change was needed (see
+    `test_config.py::test_read_config_raises_clear_error_when_config_missing`
+    for the `read_config`-direct counterpart)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").unlink()
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos ingest" in result.stderr
+    assert "openkos.yaml" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
 @pytest.mark.skipif(
     os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
     reason="permission-based write failures require a POSIX non-root user",
