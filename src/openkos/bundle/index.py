@@ -1,6 +1,7 @@
 """Renders the bytes of a fresh bundle's root `index.md`, and appends to it."""
 
 import re
+from pathlib import PurePosixPath
 
 from openkos.model import okf
 
@@ -85,3 +86,83 @@ def insert_source_entry(
     return (
         frontmatter_block + preamble + "".join(f"\n{chunk}" for chunk in section_chunks)
     )
+
+
+_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+_BULLET_MARKERS = ("* ", "- ")
+_SCHEME_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def _link_identity(target: str) -> str | None:
+    """Normalize a raw markdown link target to its bundle-relative identity.
+
+    A deliberately narrower, bundle-local twin of `lint.normalize_link`
+    (NOT imported from `lint`, per #922 -- `lint` imports `config` and
+    `okf` and is the higher "health" layer; importing it here would invert
+    layering). `index.md` always lives at the bundle root, so there is no
+    `source_rel_dir` parameter to thread through: a leading `/` and a bare
+    relative link both resolve identically. A trailing `#fragment` or a
+    quoted ` "title"` suffix is stripped first; an external `scheme:` URL
+    (`http:`, `mailto:`, ...), an empty target, or one that escapes the
+    bundle root via `..` all normalize to `None` (never a match).
+    """
+    target = target.split("#", 1)[0].strip()
+    if target.endswith('"') and ' "' in target:
+        target = target.rsplit(' "', 1)[0].strip()
+    if not target:
+        return None
+    if _SCHEME_RE.match(target):
+        return None
+    candidate = PurePosixPath(target.removeprefix("/"))
+    parts: list[str] = []
+    for part in candidate.parts:
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    return "/".join(parts).removesuffix(".md")
+
+
+def remove_index_entry(index_text: str, concept_id: str) -> tuple[str, int]:
+    """Drop every bullet whose FIRST markdown link resolves to `concept_id`.
+
+    Generic across all four sections (Sources, Concepts, People, Decisions,
+    #922): matching is by resolved LINK IDENTITY, never by section, so no
+    section-splitting or `# `-header parsing is needed here (unlike
+    `insert_source_entry`). Frontmatter is split off byte-for-byte via
+    `_split_frontmatter_verbatim` (raises `ValueError` on malformed
+    frontmatter, matching `insert_source_entry`'s contract) and the body is
+    walked line by line: a candidate line is one whose stripped text starts
+    with a list marker (`* ` or `- ` -- the engine always writes `*`, a
+    hand-authored bullet may use `-`); only its FIRST markdown link is
+    inspected, so a bullet that merely MENTIONS another concept later in its
+    description text is never mistakenly dropped.
+
+    Count semantics: zero matches returns `(index_text, 0)` completely
+    UNCHANGED -- not an error, since a file with no catalog entry is drift,
+    not a reason to refuse a deletion that is otherwise safe. One match
+    drops that line. More than one match (a duplicate catalog entry) drops
+    ALL of them, reporting the total count -- leaving any would create a
+    dangling reference to the now-deleted file. Only the matched line plus
+    its trailing newline is ever removed; every other byte -- blank lines,
+    other bullets, empty sections -- round-trips verbatim (no section
+    pruning, avoiding any reflow risk).
+    """
+    frontmatter_block, body = _split_frontmatter_verbatim(index_text)
+    lines = body.splitlines(keepends=True)
+    kept_lines: list[str] = []
+    removed = 0
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(_BULLET_MARKERS):
+            match = _LINK_RE.search(stripped)
+            if match is not None and _link_identity(match.group(1)) == concept_id:
+                removed += 1
+                continue
+        kept_lines.append(line)
+
+    if removed == 0:
+        return index_text, 0
+    return frontmatter_block + "".join(kept_lines), removed

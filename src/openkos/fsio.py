@@ -62,6 +62,20 @@ def write_atomic(path: Path, content: str) -> None:
         raise
 
 
+def remove_file(path: Path) -> None:
+    """Delete `path`, refusing to silently no-op on a missing file.
+
+    `path.unlink()` with the default `missing_ok=False` -- symmetry with
+    `write_exclusive`/`write_atomic`/`copy_exclusive`: every filesystem
+    mutation this module offers goes through an explicit primitive rather
+    than an inline `Path` call. A missing `path` raises `FileNotFoundError`
+    rather than a silent no-op, since a caller (`forget`) that already
+    verified the file exists during Phase A treats its disappearance before
+    Phase B as a genuine race worth surfacing, not something to swallow.
+    """
+    path.unlink()
+
+
 def copy_exclusive(src: Path, dst: Path) -> None:
     """Copy `src`'s bytes to `dst`, refusing to overwrite an existing file.
 

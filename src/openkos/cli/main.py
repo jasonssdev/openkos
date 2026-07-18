@@ -3,7 +3,7 @@
 import re
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import typer
 
@@ -317,6 +317,174 @@ def ingest(
     typer.echo(
         f"openkos ingest: imported '{src}' -> raw/{name}, "
         f"bundle/sources/{slug}.md ({index_path.name}, {log_path.name} updated)."
+    )
+
+
+def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]:
+    """Resolve `concept_id` to `(concept_file, canonical_id)` under
+    `bundle_dir`, or raise `ValueError` (`forget`'s Phase A path-safety gate,
+    mirroring `ingest`'s basename-derived containment).
+
+    The `concept_id` is canonicalized ONCE -- a redundant `.md` suffix is
+    stripped and `PurePosixPath` collapses `.` and repeated-slash segments --
+    and that single `canonical_id` is used for BOTH the filesystem path and
+    the caller's `index.md` match, so a leading `./` (or a `.md` suffix) can
+    never delete a concept file while leaving its catalog bullet dangling.
+
+    Rejects an absolute `concept_id` (a leading `/`), any `..` path segment,
+    and a reserved basename (`index`/`log`, `okf.RESERVED_FILENAMES`, matched
+    CASE-INSENSITIVELY so a case-insensitive filesystem -- macOS/Windows
+    default -- cannot be tricked into deleting the real `index.md`/`log.md`).
+    Every one of these is a security-relevant path-traversal check and MUST
+    run before any filesystem read tied to `concept_id` (threat matrix:
+    path-traversal deletion). Finally refuses (also `ValueError`) if the
+    resolved `<canonical_id>.md` file does not exist -- a nonexistent
+    concept-id is a clear error, never a silent no-op (spec: Nonexistent
+    Concept Refusal).
+    """
+    if concept_id.startswith("/"):
+        raise ValueError(f"'{concept_id}' must be a relative concept-id, not absolute")
+    posix_id = PurePosixPath(concept_id.removesuffix(".md"))
+    if ".." in posix_id.parts:
+        raise ValueError(f"'{concept_id}' must not contain '..' segments")
+    canonical_id = "/".join(posix_id.parts)
+    if not canonical_id:
+        raise ValueError(f"'{concept_id}' is not a valid concept-id")
+    reserved = {name.lower() for name in okf.RESERVED_FILENAMES}
+    if f"{posix_id.name}.md".lower() in reserved:
+        raise ValueError(f"'{concept_id}' is a reserved filename")
+    concept_path = bundle_dir / f"{canonical_id}.md"
+    if not concept_path.is_file():
+        raise ValueError(f"concept '{concept_id}' does not exist")
+    return concept_path, canonical_id
+
+
+@app.command()
+def forget(
+    concept_id: str = typer.Argument(
+        ..., help="Bundle-relative concept id (path minus '.md') to remove."
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Delete a concept file and remove its `index.md` catalog entry: the
+    mirror-image of `ingest` (MVP-1 simplified delete, decision #717).
+
+    Phase A (pure, no writes) validates and builds the entire result in
+    memory, in order: the current directory must already be a workspace
+    (the same `config.require_workspace` gate `ingest`/`status`/`lint`
+    share), or this refuses; `concept_id` is resolved via
+    `_resolve_concept_path`, which rejects an absolute id, any `..`
+    segment, a reserved basename (`index`/`log`), or a nonexistent concept
+    file -- all as `ValueError`, all refusing before any write. `index.md`
+    is then searched, via `bundle_index.remove_index_entry`, for a bullet
+    in ANY section (Sources, Concepts, People, Decisions) whose first
+    markdown link resolves to `concept_id` -- matching is generic across
+    sections, never Sources-only (#922). A `log.md` entry is built in
+    memory via `bundle_log.insert_log_entry` (a plain `**Forget**` line,
+    never a tombstone marker). A preview of the proposed changes is then
+    printed: `~ index.md (remove entry)` only appears when at least one
+    bullet matched (zero matches is drift, not an error -- the deletion
+    still proceeds); `~ log.md (new dated entry)` and `- bundle/<concept_id>.md`
+    always appear.
+
+    Confirm gate, identical precedence and mechanism to `ingest`: `--auto`
+    skips the prompt outright; otherwise config `review: false` skips it
+    the same way; otherwise, on a TTY, `typer.confirm` asks and aborts
+    (exit 1) on decline; otherwise (non-TTY, no `--auto`) this refuses to
+    write (exit 1), telling the user to re-run with `--auto`.
+
+    Phase B (after confirm) writes `index.md` then `log.md`
+    (`write_atomic`, catalog FIRST) and deletes the concept file
+    (`fsio.remove_file`) LAST -- the inverse of `ingest`'s content-then-
+    catalog ordering, preserving the same invariant either way: `index.md`
+    never references a file that does not exist. This is NOT transactional
+    as a whole: a failure partway through (e.g. the unlink itself) leaves a
+    benign, git-recoverable partial result -- the catalog already updated,
+    the concept file possibly still present as an orphan -- never silent
+    corruption. Any failure, Phase A or Phase B, is caught and reported on
+    stderr (exit 1), not a raw traceback; `except (OSError, ValueError)`,
+    matching `ingest`'s convention.
+
+    Known limitation (deferred to MVP-2, per the proposal's non-goals):
+    other concepts that still link to the forgotten one are left with a
+    dangling inbound reference -- this is neither detected nor rewritten
+    here.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos forget: refusing to forget -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        concept_path, canonical_id = _resolve_concept_path(
+            layout.bundle_dir, concept_id
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos forget: refusing to forget -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    now = datetime.now(UTC)
+
+    try:
+        cfg = config.read_config(root)
+        index_text = index_path.read_text(encoding="utf-8")
+        log_text = log_path.read_text(encoding="utf-8")
+        new_index_text, removed = bundle_index.remove_index_entry(
+            index_text, canonical_id
+        )
+        new_log_text = bundle_log.insert_log_entry(
+            log_text,
+            now.astimezone().date(),
+            f"**Forget**: Removed [{canonical_id}](/{canonical_id}.md).",
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos forget: failed while preparing the forget -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos forget: proposed changes:")
+    if removed >= 1:
+        typer.echo(f"  ~ {index_path.name} (remove entry)")
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+    typer.echo(f"  - bundle/{canonical_id}.md")
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos forget: refusing to write without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        fsio.write_atomic(index_path, new_index_text)
+        fsio.write_atomic(log_path, new_log_text)
+        fsio.remove_file(concept_path)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos forget: failed while writing the forget -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos forget: removed 'bundle/{canonical_id}.md' "
+        f"({index_path.name}, {log_path.name} updated)."
     )
 
 
