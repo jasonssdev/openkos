@@ -121,3 +121,79 @@ def test_check_conformance_raises_unicode_decode_error_on_bad_encoding(
 
     with pytest.raises(UnicodeDecodeError):
         okf.check_conformance(tmp_path)
+
+
+def _build_call_source(**overrides: object) -> str:
+    """Build a Source concept with realistic defaults, letting tests override
+    individual keyword arguments."""
+    kwargs: dict[str, object] = {
+        "title": "Call with Maria Salazar",
+        "description": (
+            "Raw source imported from raw/call-with-maria.txt; not yet "
+            "compiled or extracted into concepts."
+        ),
+        "resource": "raw/call-with-maria.txt",
+        "tags": ["call", "philosophy"],
+        "timestamp": "2026-07-14T18:30:00Z",
+        "sensitivity": "private",
+        "provenance": ["raw/call-with-maria.txt"],
+    }
+    kwargs.update(overrides)
+    return okf.build_source_concept(**kwargs)  # type: ignore[arg-type]
+
+
+def test_build_source_concept_emits_required_frontmatter_fields() -> None:
+    """`build_source_concept` emits every field the spec requires, plus a
+    `# Citations` body (scenario: successful ingest, all required fields)."""
+    text = _build_call_source()
+
+    metadata, body = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Source"
+    assert metadata["title"] == "Call with Maria Salazar"
+    assert metadata["description"] == (
+        "Raw source imported from raw/call-with-maria.txt; not yet "
+        "compiled or extracted into concepts."
+    )
+    assert metadata["resource"] == "raw/call-with-maria.txt"
+    assert metadata["tags"] == ["call", "philosophy"]
+    assert metadata["timestamp"] == "2026-07-14T18:30:00Z"
+    assert metadata["status"] == "active"
+    assert metadata["version"] == 1
+    assert metadata["freshness"] == "snapshot"
+    assert metadata["sensitivity"] == "private"
+    assert metadata["provenance"] == ["raw/call-with-maria.txt"]
+    assert "# Citations" in body
+
+
+def test_build_source_concept_passes_check_conformance(tmp_path: Path) -> None:
+    """The generated concept passes `check_conformance` (§9 rules 1-2)."""
+    text = _build_call_source()
+    (tmp_path / "call-with-maria.md").write_text(text, encoding="utf-8")
+
+    assert okf.check_conformance(tmp_path) == []
+
+
+def test_build_source_concept_description_makes_no_extraction_claim() -> None:
+    """The `description` states the source was imported and not yet
+    compiled/extracted -- it must not claim extraction occurred (null-compiler
+    scope, this slice)."""
+    text = _build_call_source(
+        description="Raw source imported; not yet compiled or extracted."
+    )
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    description = str(metadata["description"])
+    assert "not yet" in description
+    assert "compiled" in description or "extracted" in description
+
+
+def test_build_source_concept_sensitivity_equals_passed_value() -> None:
+    """`sensitivity` on the generated concept equals the passed value
+    (scenario: sensitivity matches config default)."""
+    text = _build_call_source(sensitivity="confidential")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["sensitivity"] == "confidential"

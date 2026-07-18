@@ -13,10 +13,18 @@ from importlib import resources
 from pathlib import Path
 from typing import NamedTuple
 
+import yaml
+
 from openkos import fsio
 
 DEFAULT_MODEL = "qwen3:8b"
 """The packaged default Ollama model tag, offered when no `--model` is given."""
+
+DEFAULT_REVIEW = True
+"""Packaged default for `review`: show a preview and confirm before saving."""
+
+DEFAULT_SENSITIVITY = "private"
+"""Packaged default for `default_sensitivity`, matching `openkos.yaml.template`."""
 
 _MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9._:/-]+")
 
@@ -206,3 +214,58 @@ def write_config(root: Path, model: str = DEFAULT_MODEL) -> None:
     content = template.replace(_MODEL_PLACEHOLDER, validated_model)
     layout = WorkspaceLayout(root)
     fsio.write_exclusive(layout.config_path, content)
+
+
+@dataclass(frozen=True)
+class Config:
+    """The subset of `openkos.yaml` the engine reads back at runtime.
+
+    Fields absent from the file fall back to the same packaged defaults
+    `openkos.yaml.template` ships (D3): `DEFAULT_MODEL`, `DEFAULT_REVIEW`,
+    `DEFAULT_SENSITIVITY`.
+    """
+
+    model: str
+    review: bool
+    default_sensitivity: str
+
+
+def read_config(root: Path) -> Config:
+    """Parse `openkos.yaml` at `root` and return its `model`/`review`/
+    `default_sensitivity` fields, falling back to packaged defaults for any
+    field the file omits OR sets to an explicit YAML null (D3).
+
+    Uses `yaml.safe_load` -- never a loader that can construct arbitrary
+    Python objects from untrusted YAML. A `yaml.YAMLError` (malformed YAML)
+    or a root that parses but is not a mapping both raise `ValueError`, so
+    callers can catch alongside `OSError` (a missing or unreadable file)
+    with a single `except (OSError, ValueError)`, matching `init`'s
+    convention. `raw.get(key, DEFAULT)` alone only falls back when `key` is
+    ABSENT -- a key present with an explicit `key: null` (or bare `key:`)
+    parses to `None`, which would otherwise violate `Config`'s typed fields.
+    Each field is therefore checked `is not None` before falling back, not
+    truthiness: `review: false` is a real value (`False is not None`), so it
+    must survive untouched and never get coerced to `DEFAULT_REVIEW`.
+    """
+    layout = WorkspaceLayout(root)
+    text = layout.config_path.read_text(encoding="utf-8")
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{layout.config_path.name}: invalid YAML -- {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{layout.config_path.name}: expected a mapping at the document root"
+        )
+    model = raw.get("model")
+    review = raw.get("review")
+    default_sensitivity = raw.get("default_sensitivity")
+    return Config(
+        model=model if model is not None else DEFAULT_MODEL,
+        review=review if review is not None else DEFAULT_REVIEW,
+        default_sensitivity=(
+            default_sensitivity
+            if default_sensitivity is not None
+            else DEFAULT_SENSITIVITY
+        ),
+    )
