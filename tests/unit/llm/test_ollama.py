@@ -25,6 +25,7 @@ from openkos.llm.ollama import (
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
+    model_tag_matches,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -463,6 +464,134 @@ def test_bare_host_port_is_normalized_with_http_scheme(
     client.chat([{"role": "user", "content": "hi"}])
 
     assert captured[0].full_url == "http://example.internal:11434/api/chat"
+
+
+def _tags_body(entries: list[dict[str, Any]]) -> bytes:
+    """Build a well-formed `/api/tags` success body containing `entries`."""
+    return json.dumps({"models": entries}).encode("utf-8")
+
+
+# --- Phase 9: list_models() ---------------------------------------------------
+
+
+def test_list_models_returns_installed_tags_from_model_field() -> None:
+    """A reachable server's `model` entries are returned as a list of tags
+    (Scenario: Reachable server returns installed tags)."""
+    body = _tags_body([{"model": "qwen3:8b"}, {"model": "llama3.2:1b"}])
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
+
+    result = client.list_models()
+
+    assert result == ["qwen3:8b", "llama3.2:1b"]
+
+
+def test_list_models_falls_back_to_name_field() -> None:
+    """An entry with `name` but no `model` key still yields its tag (D2 field
+    variance: Installed entry exposes its tag only under name)."""
+    body = _tags_body([{"name": "mistral:7b"}])
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
+
+    result = client.list_models()
+
+    assert result == ["mistral:7b"]
+
+
+def test_list_models_skips_malformed_entries() -> None:
+    """A non-dict entry, or a dict entry with neither `model` nor `name`, is
+    skipped rather than raised or included."""
+    entries: list[Any] = [{"model": "qwen3:8b"}, {"other": "junk"}, "not-a-dict"]
+    body = json.dumps({"models": entries}).encode("utf-8")
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
+
+    result = client.list_models()
+
+    assert result == ["qwen3:8b"]
+
+
+def test_list_models_unreachable_raises_ollama_unavailable() -> None:
+    """A `URLError`/`TimeoutError` from `urlopen` maps to `OllamaUnavailable`,
+    no raw transport exception leaks (Scenario: Unreachable server raises
+    OllamaUnavailable)."""
+    client = OllamaClient(
+        "qwen3", urlopen=_raising_urlopen(urllib.error.URLError("Connection refused"))
+    )
+
+    with pytest.raises(OllamaUnavailable):
+        client.list_models()
+
+
+def test_list_models_body_read_failure_raises_ollama_unavailable() -> None:
+    """A transport failure while reading the response body (not while
+    connecting) still maps to `OllamaUnavailable`, symmetric with `chat()`'s
+    body-read guard."""
+    client = OllamaClient(
+        "qwen3",
+        urlopen=_fake_urlopen_returning(
+            _RaisingReadResponse(TimeoutError("timed out mid-read"))
+        ),
+    )
+
+    with pytest.raises(OllamaUnavailable):
+        client.list_models()
+
+
+def test_list_models_non_200_raises_ollama_error() -> None:
+    """An `HTTPError` maps to `OllamaError`, reusing `_map_http_error`
+    (Scenario: Non-200 or malformed response raises OllamaError)."""
+    body = json.dumps({"error": "internal server error"}).encode("utf-8")
+    client = OllamaClient("qwen3", urlopen=_raising_urlopen(_http_error(500, body)))
+
+    with pytest.raises(OllamaError):
+        client.list_models()
+
+
+def test_list_models_malformed_json_raises_ollama_error() -> None:
+    """A 200 body that is not valid JSON raises `OllamaError`."""
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(b"not json at all {{{", []))
+
+    with pytest.raises(OllamaError):
+        client.list_models()
+
+
+@pytest.mark.parametrize("models_value", ["null", "42"])
+def test_list_models_non_list_models_value_raises_ollama_error(
+    models_value: str,
+) -> None:
+    """A valid-JSON body whose `models` is null or a non-iterable scalar maps to
+    the `OllamaError` family -- never leaks a bare `TypeError` from the entry
+    iteration (symmetric with `chat()`'s all-parsing-in-one-try guard)."""
+    body = f'{{"models": {models_value}}}'.encode()
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
+
+    with pytest.raises(OllamaError):
+        client.list_models()
+
+
+# --- Phase 10: model_tag_matches() ---------------------------------------------
+
+
+def test_model_tag_matches_exact_match() -> None:
+    """A configured tag equal to an installed entry's tag matches (Scenario:
+    Exact tag match)."""
+    assert model_tag_matches("qwen3:8b", ["qwen3:8b"]) is True
+
+
+def test_model_tag_matches_bare_configured_matches_latest_installed() -> None:
+    """A bare configured tag (`qwen3`) matches an installed `qwen3:latest`
+    entry (D4 symmetric normalization; Scenario: Bare configured tag matches
+    a :latest installed entry)."""
+    assert model_tag_matches("qwen3", ["qwen3:latest"]) is True
+
+
+def test_model_tag_matches_no_match_returns_false() -> None:
+    """No installed tag matches under either normalization returns `False`
+    (Scenario: No matching entry returns False)."""
+    assert model_tag_matches("qwen3:8b", ["llama3.2:1b", "mistral:7b"]) is False
+
+
+def test_model_tag_matches_case_sensitive_mismatch() -> None:
+    """Differing case never matches (D4 honest exact match, no lowercasing)."""
+    assert model_tag_matches("Qwen3:8b", ["qwen3:8b"]) is False
 
 
 # --- Phase 8: layering guard --------------------------------------------------
