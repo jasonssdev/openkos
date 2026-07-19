@@ -126,6 +126,7 @@ def init(
         f"{layout.bundle_dir.name}/log.md, {layout.agents_path.name}, "
         f"{layout.config_path.name})."
     )
+    typer.echo("Next: run `openkos ingest <path>` to import your first source.")
 
 
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
@@ -176,11 +177,17 @@ def ingest(
     basename (`Path(src).name`/`.stem` -- directory components, including
     traversal segments like `../../evil.txt`, are always stripped, so the
     raw copy and concept document can never land outside `raw/` or
-    `bundle/sources/`); if `raw/<name>` or `bundle/sources/<slug>.md`
-    already exists, this refuses rather than overwriting either; otherwise
-    `read_config` resolves `default_sensitivity`, the Source concept and
-    the new `index.md`/`log.md` bytes are computed in memory, and a preview
-    of the proposed changes is printed.
+    `bundle/sources/`). When `raw/<name>` already exists, `src`'s bytes are
+    compared against it (full-byte, before any write): identical bytes make
+    this an idempotent re-ingest -- `raw/<name>` is reused untouched and only
+    the Source concept plus `index.md`/`log.md` are regenerated, regardless
+    of whether the concept already exists (closes the `forget`-then-`ingest`
+    trap) -- while differing bytes refuse (raw sources are immutable). When
+    `raw/<name>` is absent but `bundle/sources/<slug>.md` exists, this
+    refuses as an inconsistent workspace (no raw bytes to compare against).
+    Otherwise `read_config` resolves `default_sensitivity`, the Source
+    concept and the new `index.md`/`log.md` bytes are computed in memory,
+    and a preview of the proposed changes is printed.
 
     Confirm gate, checked in order: `--auto` skips the prompt outright;
     otherwise config `review: false` skips the prompt the same way;
@@ -192,12 +199,15 @@ def ingest(
     before save".
 
     Phase B (after confirm) writes, in order: `bundle/sources/` (created if
-    absent), the raw copy (`copy_exclusive`, create-only), the concept
-    document (`write_exclusive`, create-only), then `index.md` and `log.md`
-    (`write_atomic`, catalog LAST -- so the catalog never points at a file
-    that does not yet exist, mirroring `init`'s marker-last ordering, D3).
-    Every one of these writes is itself create-only or atomic, so none is
-    ever left half-written -- but Phase B as a whole is NOT transactional:
+    absent), the raw copy (`copy_exclusive`, create-only) and the concept
+    document (`write_exclusive`, create-only) on a fresh ingest -- or, on a
+    byte-identical re-ingest (D2), the raw copy step is SKIPPED entirely and
+    the concept is written via non-exclusive `write_atomic` instead, since it
+    may already exist -- then `index.md` and `log.md` (`write_atomic`,
+    catalog LAST -- so the catalog never points at a file that does not yet
+    exist, mirroring `init`'s marker-last ordering, D3). Every one of these
+    writes is itself create-only or atomic, so none is ever left
+    half-written -- but Phase B as a whole is NOT transactional:
     there is no rollback across the sequence (`init`'s D3 "no cleanup
     path" position, retreated to here after an attempt at real rollback
     proved it could not be made truly atomic across independent filesystem
@@ -242,18 +252,29 @@ def ingest(
         sources_dir = layout.bundle_dir / "sources"
         concept_path = sources_dir / f"{slug}.md"
 
-        if raw_dest.exists() or concept_path.exists():
-            existing = (
-                f"raw/{name}" if raw_dest.exists() else f"bundle/sources/{slug}.md"
-            )
+        regenerate = False
+        if raw_dest.exists():
+            if src.read_bytes() != raw_dest.read_bytes():
+                # differing source under an immutable raw copy -> refuse (D4)
+                typer.echo(
+                    f"openkos ingest: refusing to ingest -- '{src}' differs from "
+                    f"the existing 'raw/{name}' copy; raw sources are "
+                    "immutable. Ingest under a different name, or inspect the "
+                    "existing copy.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            regenerate = True  # identical bytes -> idempotent re-ingest (D1)
+        elif concept_path.exists():
+            # raw absent + concept present -> inconsistent workspace (D5)
             typer.echo(
-                f"openkos ingest: refusing to ingest -- '{existing}' already "
-                "exists -- this source may already be ingested, or a "
-                "previous run crashed mid-write; inspect and remove it "
-                "before retrying.",
+                f"openkos ingest: refusing to ingest -- 'bundle/sources/{slug}.md' "
+                f"exists but its raw source 'raw/{name}' is missing; the "
+                "workspace is inconsistent, inspect it before retrying.",
                 err=True,
             )
             raise typer.Exit(code=1)
+        # else: raw absent + concept absent -> fresh (regenerate stays False)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos ingest: failed while checking the source or workspace -- {exc}.",
@@ -298,13 +319,26 @@ def ingest(
         )
         index_text = index_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
+        if regenerate:
+            # D3: dedup before insert -- a no-forget re-ingest already has
+            # the bullet, so a bare insert would duplicate it; a post-forget
+            # re-ingest has zero matches, leaving index_text unchanged.
+            index_text, _ = bundle_index.remove_index_entry(
+                index_text, f"sources/{slug}"
+            )
+            log_line = (
+                f"**Re-ingest**: Regenerated [{title}](/sources/{slug}.md) from "
+                f"existing `{resource}` (identical source, raw copy reused)."
+            )
+        else:
+            log_line = (
+                f"**Ingest**: Imported [{title}](/sources/{slug}.md) from `{resource}`."
+            )
         new_index_text = bundle_index.insert_source_entry(
             index_text, title=title, slug=slug, description=description
         )
         new_log_text = bundle_log.insert_log_entry(
-            log_text,
-            now.astimezone().date(),
-            f"**Ingest**: Imported [{title}](/sources/{slug}.md) from `{resource}`.",
+            log_text, now.astimezone().date(), log_line
         )
     except (OSError, ValueError) as exc:
         typer.echo(
@@ -312,11 +346,21 @@ def ingest(
         )
         raise typer.Exit(code=1) from exc
 
-    typer.echo("openkos ingest: proposed changes:")
-    typer.echo(f"  + raw/{name}")
-    typer.echo(f"  + bundle/sources/{slug}.md")
-    typer.echo(f"  ~ {index_path.name} (new Source entry)")
-    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+    if regenerate:
+        typer.echo(
+            "openkos ingest: proposed changes (re-ingest -- identical source "
+            "already present):"
+        )
+        typer.echo(f"  ~ raw/{name} (existing copy reused -- not rewritten)")
+        typer.echo(f"  ~ bundle/sources/{slug}.md (regenerated)")
+        typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")
+        typer.echo(f"  ~ {log_path.name} (new dated entry)")
+    else:
+        typer.echo("openkos ingest: proposed changes:")
+        typer.echo(f"  + raw/{name}")
+        typer.echo(f"  + bundle/sources/{slug}.md")
+        typer.echo(f"  ~ {index_path.name} (new Source entry)")
+        typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
     if not auto and cfg.review:
         if sys.stdin.isatty():
@@ -331,8 +375,14 @@ def ingest(
 
     try:
         sources_dir.mkdir(parents=True, exist_ok=True)
-        fsio.copy_exclusive(src, raw_dest)
-        fsio.write_exclusive(concept_path, concept_content)
+        if regenerate:
+            # D2: raw copy SKIPPED -- raw/<name> is reused, never rewritten;
+            # write_atomic (not write_exclusive) since the concept may
+            # already exist (no-forget case) or be absent (post-forget case).
+            fsio.write_atomic(concept_path, concept_content)
+        else:
+            fsio.copy_exclusive(src, raw_dest)
+            fsio.write_exclusive(concept_path, concept_content)
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
     except (OSError, ValueError) as exc:
