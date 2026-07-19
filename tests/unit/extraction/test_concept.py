@@ -72,6 +72,21 @@ _PROCEDURE_JSON = (
     '"body": "Write three things you are grateful for, then one obstacle."}'
 )
 
+_DECISION_JSON = (
+    '{"extract": true, "type": "Decision", "title": "Frame the Essay Around Control", '
+    '"description": "A choice to structure the essay around the dichotomy of '
+    'control, made after weighing two alternative framings.", '
+    '"body": "Chosen over a chronological-biography framing because it better '
+    'serves a practical audience; status: adopted."}'
+)
+
+_PROJECT_JSON = (
+    '{"extract": true, "type": "Project", "title": "Stoicism Essay Series", '
+    '"description": "An ongoing series of essays on Stoic practice, running '
+    'over several months toward a publishable collection.", '
+    '"body": "Six essays planned across Q1-Q2, each drafted then revised."}'
+)
+
 
 # --- Scaffold ---------------------------------------------------------------
 
@@ -204,6 +219,41 @@ def test_valid_procedure_json_returns_extraction_result() -> None:
     assert result.description == "A repeatable daily reflection practice."
 
 
+def test_valid_decision_json_returns_extraction_result() -> None:
+    """A well-formed `type: Decision` reply parses with `type == "Decision"`
+    (spec: "Single-source self-narrating decision classifies as Decision")."""
+    llm = _FakeLLM(reply=_DECISION_JSON)
+
+    result = concept_mod.extract_concept(
+        "We decided to frame the essay around the dichotomy of control.",
+        source_title="Notes",
+        llm=llm,
+    )
+
+    assert result is not None
+    assert result.type == "Decision"
+    assert result.title == "Frame the Essay Around Control"
+    assert "dichotomy of control" in result.description
+
+
+def test_valid_project_json_returns_extraction_result() -> None:
+    """A well-formed `type: Project` reply parses with `type == "Project"`
+    (spec: "Ongoing effort with a goal and timespan classifies as
+    Project")."""
+    llm = _FakeLLM(reply=_PROJECT_JSON)
+
+    result = concept_mod.extract_concept(
+        "A multi-month series of essays on Stoic practice.",
+        source_title="Notes",
+        llm=llm,
+    )
+
+    assert result is not None
+    assert result.type == "Project"
+    assert result.title == "Stoicism Essay Series"
+    assert "series" in result.description.lower()
+
+
 # --- Parsing: fenced / prose-wrapped JSON -----------------------------------
 
 
@@ -252,9 +302,9 @@ def test_extract_false_returns_none() -> None:
 
 def test_invalid_type_returns_none() -> None:
     """A `type` outside the closed `{Concept, Entity, Place, Event, Procedure,
-    Person, Organization}` set fails closed to `None`. `"Animal"` is a
-    genuinely invalid sentinel, outside the vocabulary in any batch (spec:
-    "Classifier degrades on unknown type")."""
+    Decision, Project, Person, Organization}` set fails closed to `None`.
+    `"Animal"` is a genuinely invalid sentinel, outside the vocabulary in any
+    batch (spec: "Classifier degrades on unknown type")."""
     llm = _FakeLLM(
         reply='{"extract": true, "type": "Animal", "title": "T", "description": "D"}'
     )
@@ -407,10 +457,10 @@ def test_ollama_error_propagates_unswallowed() -> None:
 
 def test_prompt_contains_vocabulary_and_heuristic() -> None:
     """The system prompt pins the classification contract: the closed
-    `{Concept, Entity, Place, Event, Procedure, Person, Organization}`
-    vocabulary, the aboutness heuristic (a borrowed name is a label, not the
-    subject), the Person/Organization/Place/Concept-outrank-Entity
-    tie-break, and the JSON-only instruction."""
+    `{Concept, Entity, Place, Event, Procedure, Decision, Project, Person,
+    Organization}` vocabulary, the aboutness heuristic (a borrowed name is a
+    label, not the subject), the Person/Organization/Place/Concept-outrank-
+    Entity tie-break, and the JSON-only instruction."""
     llm = _FakeLLM(reply=_CONCEPT_JSON)
 
     concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
@@ -424,11 +474,59 @@ def test_prompt_contains_vocabulary_and_heuristic() -> None:
     assert '"Place"' in system_content
     assert '"Event"' in system_content
     assert '"Procedure"' in system_content
+    assert '"Decision"' in system_content
+    assert '"Project"' in system_content
+    assert "nine" in system_content
     assert "fundamentally about" in system_content
     assert "borrowed" in system_content
     assert "fallback" in system_content
     assert "outrank" in system_content
     assert "JSON object" in system_content
+
+
+def test_prompt_no_longer_forbids_decision() -> None:
+    """The former guard forbidding `Decision` ("is NOT in this vocabulary
+    and MUST NOT be emitted... never invent Decision") is retracted: the
+    prompt no longer instructs the model to withhold `Decision` (spec:
+    "Prompt no longer forbids Decision")."""
+    llm = _FakeLLM(reply=_DECISION_JSON)
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "MUST NOT be emitted" not in system_content
+    assert "never invent" not in system_content
+
+
+def test_prompt_pins_decision_vs_concept_and_event_disambiguation() -> None:
+    """The system prompt gives positive Decision-vs-Concept-vs-Event
+    disambiguation: a choice made with rationale/alternatives/status is a
+    Decision, distinct from a general idea (Concept) or a dated happening
+    (Event) (spec: "Decision disambiguates from Concept and Event")."""
+    llm = _FakeLLM(reply=_DECISION_JSON)
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert '"Decision"' in system_content
+    assert "rationale" in system_content
+    assert "alternatives" in system_content
+    assert "status" in system_content
+
+
+def test_prompt_pins_project_vs_event_disambiguation() -> None:
+    """The system prompt gives positive Project-vs-Event disambiguation: an
+    ongoing effort defined by a goal and a timespan is a Project, distinct
+    from a single bounded happening (Event) (spec: "Project disambiguates
+    from Event")."""
+    llm = _FakeLLM(reply=_PROJECT_JSON)
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert '"Project"' in system_content
+    assert "goal" in system_content
+    assert "timespan" in system_content
 
 
 def test_prompt_pins_landmark_named_after_person_tie_break() -> None:

@@ -61,14 +61,16 @@ Sources are stored under their own names and extensions — `notes.md` lands as 
 
 #### Extraction: one derived object, or a graceful degrade
 
-Using the model configured in `openkos.yaml`, `ingest` classifies the source's decoded text as one of the classifiable types — `Concept`, `Entity`, `Place`, `Event`, `Procedure`, `Person`, or `Organization` — or declines to extract anything. `Entity` is used only as a fallback when no more specific type fits; every other classifiable type is preferred over `Entity` whenever the source content clearly matches that type's definition.
+Using the model configured in `openkos.yaml`, `ingest` classifies the source's decoded text as one of the classifiable types — `Concept`, `Entity`, `Place`, `Event`, `Procedure`, `Decision`, `Project`, `Person`, or `Organization` — or declines to extract anything. `Entity` is used only as a fallback when no more specific type fits; every other classifiable type is preferred over `Entity` whenever the source content clearly matches that type's definition. `Source` remains the only in-registry type that is never a classification target.
+
+`Decision` classification is scoped to a single-source, self-narrating decision — a source that itself narrates a choice made, with rationale, alternatives considered, and current status. There is no cross-document synthesis step in this slice, so a decision whose evidence is inferred from patterns spread across several sources (the KOM's canonical multi-source case) is not reproduced here; that synthesis is deliberate future work, not an oversight.
 
 A successful, validated extraction writes a SECOND document alongside the Source, under the type's own bundle subdirectory (e.g. `bundle/concepts/<slug>.md` for a `Concept`, `bundle/events/<slug>.md` for an `Event`, `bundle/procedures/<slug>.md` for a `Procedure`). That document's `provenance` points back at the Source, and its `sensitivity` is inherited verbatim from the Source's own `sensitivity`. Extraction always runs, even under `--auto` or `review: false` — those flags only skip the confirmation PROMPT, never the extraction attempt itself.
 
 Extraction degrades to Source-only — the exact MVP-1 result, nothing more — in every one of these cases, none of which fail the command (`ingest` still exits `0` and writes the Source concept normally):
 
 - the source has no decodable text to extract from (binary or empty);
-- the model declines to extract anything, or its reply fails validation (not parseable structured output, a `type` outside `{Concept, Entity, Place, Event, Procedure, Person, Organization}`, or a missing/empty `title`/`description`);
+- the model declines to extract anything, or its reply fails validation (not parseable structured output, a `type` outside `{Concept, Entity, Place, Event, Procedure, Decision, Project, Person, Organization}`, or a missing/empty `title`/`description`);
 - the local Ollama server is unreachable, times out, or errors.
 
 Each degrade prints a short, distinguishing note to stderr — e.g. `source has no extractable text; keeping the Source only` for a binary/empty source, `no concept extracted from this source; keeping the Source only` for a decline/invalid reply, or `concept extraction skipped -- <reason>; keeping the Source only` for an LLM-availability failure — so the miss is always visible without interrupting the run.
@@ -87,7 +89,7 @@ Writes are **not transactional**: each individual write is create-only or atomic
 
 `review: true` in config plus a non-TTY stdin (and no `--auto`) refuses to write rather than defaulting silently — re-run with `--auto` for unattended use.
 
-**Not in this slice / planned:** multiple derived objects per ingest (still at most one `Concept`/`Entity`), the other 9 canonical OKF types, entity resolution/merge/reclassification on re-ingest, a typed relationship graph, `--sensitivity <level>` (the generated Source's `sensitivity` always equals config's `default_sensitivity`, currently no per-invocation override), and `--batch` (folder/glob ingestion — one source per invocation only, for now). Both flags are documented here for forward reference but are not implemented yet.
+**Not in this slice / planned:** multiple derived objects per ingest (still at most one `Concept`/`Entity`), entity resolution/merge/reclassification on re-ingest, a typed relationship graph, `--sensitivity <level>` (the generated Source's `sensitivity` always equals config's `default_sensitivity`, currently no per-invocation override), and `--batch` (folder/glob ingestion — one source per invocation only, for now). Both flags are documented here for forward reference but are not implemented yet.
 
 ### `openkos query "<question>"`
 

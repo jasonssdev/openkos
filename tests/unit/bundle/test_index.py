@@ -569,14 +569,63 @@ def test_insert_index_entry_places_places_leaves_other_sections_byte_identical()
     assert "* [Second Places](/places/second-places.md) - Second entry.\n" in result
 
 
+def test_insert_index_entry_places_project_between_decisions_and_people() -> None:
+    """A fresh `# Projects` section is inserted at its canonical rank --
+    after `# Decisions`, before `# People` -- when both neighbors already
+    exist (canonical order `[..., Decisions, Projects, People, ...]`, spec:
+    "Decision and Project Route to Dedicated Catalog Sections")."""
+    populated = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+        "\n"
+        "# People\n"
+        "\n"
+        "* [Maria Salazar](/people/maria-salazar.md) - A friend.\n"
+    )
+
+    result = insert_index_entry(
+        populated,
+        section="Projects",
+        link_dir="projects",
+        title="Stoicism Essay Series",
+        slug="stoicism-essay-series",
+        description="An ongoing series of essays on Stoic practice.",
+    )
+
+    assert result == (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+        "\n"
+        "# Projects\n"
+        "\n"
+        "* [Stoicism Essay Series](/projects/stoicism-essay-series.md) - "
+        "An ongoing series of essays on Stoic practice.\n"
+        "\n"
+        "# People\n"
+        "\n"
+        "* [Maria Salazar](/people/maria-salazar.md) - A friend.\n"
+    )
+
+
 def test_insert_index_entry_places_events_and_procedures_between_places_and_decisions() -> (
     None
 ):
     """Fresh `# Events` and `# Procedures` sections are inserted at their
     canonical rank -- after `# Places`, before `# Decisions` -- when both
     neighbors already exist (canonical order `[Concepts, Entities, Places,
-    Events, Procedures, Decisions, People, Organizations, Sources]`, spec:
-    "Event and Procedure Route to Dedicated Catalog Sections")."""
+    Events, Procedures, Decisions, Projects, People, Organizations,
+    Sources]`, spec: "Event and Procedure Route to Dedicated Catalog
+    Sections")."""
     populated = (
         "---\n"
         'okf_version: "0.1"\n'

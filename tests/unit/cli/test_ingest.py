@@ -176,6 +176,38 @@ def _procedure_reply(title: str = "Morning Journaling Routine") -> str:
     )
 
 
+def _decision_reply(title: str = "Frame the Essay Around Control") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Decision`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Decision",
+            "title": title,
+            "description": (
+                "A choice to structure the essay around the dichotomy of "
+                "control, made after weighing two alternative framings."
+            ),
+            "body": "Chosen over a chronological framing; status: adopted.",
+        }
+    )
+
+
+def _project_reply(title: str = "Stoicism Essay Series") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Project`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Project",
+            "title": title,
+            "description": (
+                "An ongoing series of essays on Stoic practice, running "
+                "over several months toward a publishable collection."
+            ),
+            "body": "Six essays planned across Q1-Q2, each drafted then revised.",
+        }
+    )
+
+
 def _snapshot_entry(path: Path) -> bytes | None:
     if path.is_dir():
         return None
@@ -1024,6 +1056,71 @@ def test_successful_procedure_extraction_writes_procedures_dir(
     assert "# Procedures" in index_text
 
 
+def test_successful_decision_extraction_writes_decisions_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Decision` reply writes the Source AND a
+    `bundle/decisions/<slug>.md` document, whose `provenance` references
+    the Source, cataloged under `# Decisions` and passing conformance --
+    reversing the prior rejection of `Decision` (spec: "Decision is now
+    accepted, reversing prior rejection"; "Decision and Project Route to
+    Dedicated Catalog Sections")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _decision_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "We decided to frame the essay around the dichotomy of control.",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    decision_path = (
+        tmp_path / "bundle" / "decisions" / "frame-the-essay-around-control.md"
+    )
+    assert decision_path.is_file()
+    metadata, body = okf.load_frontmatter(decision_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Decision"
+    assert metadata["freshness"] == "snapshot"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "decisions/frame-the-essay-around-control.md" in index_text
+    assert "# Decisions" in index_text
+
+
+def test_successful_project_extraction_writes_projects_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Project` reply writes the Source AND a
+    `bundle/projects/<slug>.md` document, whose `provenance` references the
+    Source, cataloged under `# Projects` and passing conformance (spec:
+    "Decision and Project Route to Dedicated Catalog Sections")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _project_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "A multi-month series of essays on Stoic practice.", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    project_path = tmp_path / "bundle" / "projects" / "stoicism-essay-series.md"
+    assert project_path.is_file()
+    metadata, body = okf.load_frontmatter(project_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Project"
+    assert metadata["freshness"] == "snapshot"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "projects/stoicism-essay-series.md" in index_text
+    assert "# Projects" in index_text
+
+
 def test_malformed_json_reply_degrades_to_source_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1049,10 +1146,10 @@ def test_invalid_type_degrades_to_source_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A well-formed reply whose `type` is outside the closed `{Concept,
-    Entity, Place, Event, Procedure, Person, Organization}` set degrades to
-    Source-only, with a stderr note and exit 0 (scenario: type outside the
-    vocabulary degrades to Source-only). `"Animal"` is a genuinely invalid
-    sentinel."""
+    Entity, Place, Event, Procedure, Decision, Project, Person,
+    Organization}` set degrades to Source-only, with a stderr note and exit
+    0 (scenario: type outside the vocabulary degrades to Source-only).
+    `"Animal"` is a genuinely invalid sentinel."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(
         monkeypatch,
@@ -1077,6 +1174,8 @@ def test_invalid_type_degrades_to_source_only(
     assert not (tmp_path / "bundle" / "places").exists()
     assert not (tmp_path / "bundle" / "events").exists()
     assert not (tmp_path / "bundle" / "procedures").exists()
+    assert not (tmp_path / "bundle" / "decisions").exists()
+    assert not (tmp_path / "bundle" / "projects").exists()
     assert not (tmp_path / "bundle" / "people").exists()
     assert not (tmp_path / "bundle" / "organizations").exists()
     assert "no concept extracted" in result.stderr
@@ -1389,6 +1488,72 @@ def test_idempotent_reingest_leaves_existing_procedure_untouched(
     assert index_text.count("procedures/morning-journaling-routine.md") == 1
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     assert log_text.count("morning-journaling-routine.md") == 1
+
+
+def test_idempotent_reingest_leaves_existing_decision_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose Decision derived object already exists
+    leaves that file byte-unchanged and does not duplicate the catalog
+    entry -- the idempotency scan must cover `decisions/`, the SAME guard
+    `_source_has_derived_object` applies to the other classifiable types
+    (spec: "Decision and Project Route to Dedicated Catalog Sections")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _decision_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "We decided to frame the essay around the dichotomy of control.",
+        encoding="utf-8",
+    )
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    decision_path = (
+        tmp_path / "bundle" / "decisions" / "frame-the-essay-around-control.md"
+    )
+    assert decision_path.is_file()
+    hand_edited = decision_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    decision_path.write_text(hand_edited, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert decision_path.read_text(encoding="utf-8") == hand_edited
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("decisions/frame-the-essay-around-control.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("frame-the-essay-around-control.md") == 1
+
+
+def test_idempotent_reingest_leaves_existing_project_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose Project derived object already exists
+    leaves that file byte-unchanged and does not duplicate the catalog
+    entry -- the idempotency scan must cover `projects/` (spec: "Decision
+    and Project Route to Dedicated Catalog Sections")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _project_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "A multi-month series of essays on Stoic practice.", encoding="utf-8"
+    )
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    project_path = tmp_path / "bundle" / "projects" / "stoicism-essay-series.md"
+    assert project_path.is_file()
+    hand_edited = project_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    project_path.write_text(hand_edited, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert project_path.read_text(encoding="utf-8") == hand_edited
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("projects/stoicism-essay-series.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("stoicism-essay-series.md") == 1
 
 
 def test_reingest_with_nondeterministic_llm_title_skips_second_extraction(

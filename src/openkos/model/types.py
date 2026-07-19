@@ -18,8 +18,9 @@ class ObjectType:
     name: str
     """The `type` value as it appears in frontmatter and LLM output."""
     link_dir: str | None
-    """Bundle subdirectory a derived object of this type is written under,
-    or `None` when this type has no dedicated builder/dir (`Decision`)."""
+    """Bundle subdirectory a derived object of this type is written under.
+    `None` is reserved for a future type with no dedicated builder/dir;
+    every currently registered type has one, including `Source`."""
     section: str
     """Catalog section heading (`index.md`) this type's entries rank under."""
     llm_classifiable: bool
@@ -32,7 +33,8 @@ REGISTRY: tuple[ObjectType, ...] = (
     ObjectType("Place", "places", "Places", True),
     ObjectType("Event", "events", "Events", True),
     ObjectType("Procedure", "procedures", "Procedures", True),
-    ObjectType("Decision", None, "Decisions", False),
+    ObjectType("Decision", "decisions", "Decisions", True),
+    ObjectType("Project", "projects", "Projects", True),
     ObjectType("Person", "people", "People", True),
     ObjectType("Organization", "organizations", "Organizations", True),
     ObjectType("Source", "sources", "Sources", False),
@@ -64,4 +66,4 @@ CLASSIFIABLE_LINK_DIRS: tuple[str, ...] = tuple(
 
 CANONICAL_SECTION_ORDER: tuple[str, ...] = tuple(ot.section for ot in REGISTRY)
 """Ordered catalog section headings, including non-classifiable types
-(`Decision`, `Source`) -- their rank is reserved even without a builder."""
+(`Source`) -- their rank is reserved even without a builder."""
