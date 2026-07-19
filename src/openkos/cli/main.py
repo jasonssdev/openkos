@@ -266,6 +266,10 @@ def ingest(
         try:
             raw_content: str | None = src.read_text(encoding="utf-8")
         except UnicodeDecodeError:
+            # `UnicodeDecodeError` subclasses `ValueError`, so it MUST be
+            # caught here first: the outer `except (OSError, ValueError)`
+            # would otherwise swallow a binary/non-text source and fail the
+            # whole ingest, instead of degrading to the binary-fallback body.
             raw_content = None
         if raw_content is None:
             description = (
@@ -718,6 +722,10 @@ def query(
             err=True,
         )
         raise typer.Exit(code=1) from exc
+    # The two specific handlers above MUST precede this generic tuple:
+    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
+    # `OllamaError`, so reordering would silently funnel them into this
+    # fallback and lose their actionable remediation messages.
     except (FtsUnavailable, OllamaError) as exc:
         typer.echo(f"openkos query: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc

@@ -140,6 +140,7 @@ def test_undecodable_source_degrades_without_crashing(
     description = str(metadata["description"])
     assert "binary" in description or "non-text" in description
     assert "could not be embedded" in description
+    assert "not yet extracted" in description
 
 
 def test_empty_source_renders_distinct_body(
