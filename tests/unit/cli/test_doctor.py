@@ -28,15 +28,23 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _fake_ollama_client(
-    *, installed: list[str] | None = None, error: Exception | None = None
+    *,
+    installed: list[str] | None = None,
+    error: Exception | None = None,
+    record: list[dict[str, Any]] | None = None,
 ) -> Callable[..., Any]:
     """Build a fake `OllamaClient` factory: returns `installed` from
-    `list_models()`, or raises `error` if given. Records nothing else --
-    `doctor` only calls the constructor and `list_models()`."""
+    `list_models()`, or raises `error` if given. When `record` is provided,
+    each constructor call appends its `{"model": ..., **kwargs}` to it, so a
+    test can assert how `doctor` built the client (e.g. the preflight
+    `timeout`); `doctor` otherwise only calls the constructor and
+    `list_models()`."""
 
     class _FakeOllamaClient:
         def __init__(self, model: str, **kwargs: object) -> None:
             self.model = model
+            if record is not None:
+                record.append({"model": model, **kwargs})
 
         def list_models(self) -> list[str]:
             if error is not None:
@@ -269,3 +277,49 @@ def test_doctor_run_leaves_workspace_unchanged(
 
     assert result.exit_code == 1
     assert _snapshot(tmp_path) == before
+
+
+def test_doctor_builds_reachability_client_with_short_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Ollama-reachable check constructs its `OllamaClient` with the short
+    preflight `timeout=5.0` (not the 120s `DEFAULT_TIMEOUT`), so a
+    hung/firewalled host fails fast instead of blocking the interactive
+    diagnostic (S1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL], record=calls),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["timeout"] == 5.0
+
+
+def test_doctor_model_installed_honors_latest_normalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare configured tag (`qwen3`) counts as installed when Ollama reports
+    only the `:latest`-suffixed form (`qwen3:latest`): the `<name>:latest`
+    normalization flows end-to-end through the doctor model-installed check,
+    not just the `model_tag_matches` helper. Every critical check passes, so
+    the command exits 0 (S2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "qwen3"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {configured_model}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[f"{configured_model}:latest"]),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert f"[PASS] Model '{configured_model}' installed" in result.stdout
+    assert "[FAIL]" not in result.stdout
