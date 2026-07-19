@@ -145,6 +145,8 @@ Citations:
   → sources/call-with-maria-2026-07-14 (call with maria 2026 07 14)
 ```
 
+On every run, a `retrieval: <n> FTS hit(s) → LLM invoked|skipped → <m> source(s) cited` summary also prints to stderr — separate from the stdout answer above, so scripts piping stdout never see it.
+
 **In MVP 1**, `query` cites the `Source` concept it drew on directly (`bundle/sources/<slug>.md`), which itself embeds the raw text and points back to `raw/<name>`. The citation chain still lets the user ask *how do I know this?* and get a file path, even though there is no separate extracted topic page yet. **Later MVPs**, once `compile` produces topic pages (like a `concepts/stoicism.md`), the citation chain will run from the answer through that topic page, back through the Source concept, to the immutable original — and the answer above will reflect the *corrected* understanding the base learned from later sources, not just the first one it saw.
 
 A good answer can be filed back as a new concept, so exploration compounds — feeding the loop again.

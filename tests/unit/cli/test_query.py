@@ -72,6 +72,10 @@ def test_query_matching_answer_renders_citations_in_hit_rank_order(
     fake_result = AnswerResult(
         answer="Stoicism teaches the dichotomy of control.",
         citations=[citation_one, citation_two],
+        fts_hit_count=3,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -85,23 +89,149 @@ def test_query_matching_answer_renders_citations_in_hit_rank_order(
         "  → concepts/stoicism (Stoicism)\n"
         "  → concepts/epictetus (Epictetus)\n"
     )
+    assert result.stderr == "retrieval: 3 FTS hits → LLM invoked → 2 sources cited\n"
 
 
-def test_query_no_match_renders_answer_line_alone(
+def test_query_zero_hits_renders_zero_hits_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A no-match `AnswerResult` (empty `citations`) renders only the
-    no-match answer line, with no `Citations:` section, and exits 0 -- not
-    an error (spec: Zero matching concepts)."""
+    """A `no_match_cause="zero_hits"` `AnswerResult` renders the zero-hits
+    stdout message, no `Citations:` section, and exits 0 -- not an error
+    (spec: Zero matching concepts). Stderr reports the retrieval summary."""
     _init_workspace(tmp_path, monkeypatch)
-    fake_result = AnswerResult(answer=NO_MATCH, citations=[])
+    fake_result = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=0,
+        llm_invoked=False,
+        no_match_cause="zero_hits",
+        skip_notices=[],
+    )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
     result = runner.invoke(app, ["query", "what is nothing?"])
 
     assert result.exit_code == 0
-    assert result.stdout == f"{NO_MATCH}\n"
+    assert result.stdout == (
+        "No matching concepts were found in the compiled bundle for this "
+        "question. Try different wording, or run `openkos status` to see "
+        "what the bundle contains.\n"
+    )
     assert "Citations:" not in result.stdout
+    assert result.stderr == "retrieval: 0 FTS hits → LLM skipped → 0 sources cited\n"
+
+
+def test_query_all_unreadable_renders_corruption_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `no_match_cause="all_unreadable"` `AnswerResult` renders the
+    unreadable-hits stdout message pointing at `openkos lint`, no
+    `Citations:` section, and exits 0."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=2,
+        llm_invoked=False,
+        no_match_cause="all_unreadable",
+        skip_notices=[],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is nothing?"])
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "Found 2 matching concepts, but none could be read from the "
+        "compiled bundle — it may be corrupted. Run `openkos lint` to "
+        "check bundle health.\n"
+    )
+    assert "Citations:" not in result.stdout
+    assert result.stderr == "retrieval: 2 FTS hits → LLM skipped → 0 sources cited\n"
+
+
+def test_query_empty_question_renders_prompt_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `no_match_cause="empty_query"` `AnswerResult` renders a prompt to
+    provide a question, no `Citations:` section, and exits 0."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer=NO_MATCH,
+        citations=[],
+        fts_hit_count=0,
+        llm_invoked=False,
+        no_match_cause="empty_query",
+        skip_notices=[],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "   "])
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "No question was provided. Pass a question to answer, e.g. "
+        'openkos query "what is stoicism?".\n'
+    )
+    assert "Citations:" not in result.stdout
+    assert result.stderr == "retrieval: 0 FTS hits → LLM skipped → 0 sources cited\n"
+
+
+def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-empty `skip_notices` on a successful run print to stderr, worded
+    as a whole-bundle build diagnostic, after the retrieval summary; stdout
+    is unaffected (spec: Skip notices present alongside a successful
+    answer)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=["concepts/corrupt.md: skipped (unreadable)"],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "Stoicism teaches the dichotomy of control.\n"
+        "\n"
+        "Citations:\n"
+        "  → concepts/stoicism (Stoicism)\n"
+    )
+    assert result.stderr == (
+        "retrieval: 1 FTS hit → LLM invoked → 1 source cited\n"
+        "index: 1 doc skipped while building the search index (whole-bundle, "
+        "not this query's hits):\n"
+        "  concepts/corrupt.md: skipped (unreadable)\n"
+    )
+
+
+def test_query_no_skip_notices_omits_skip_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty `skip_notices` prints only the retrieval summary line to
+    stderr, no skip-notice text (spec: No skip notices)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert result.stderr == "retrieval: 1 FTS hit → LLM invoked → 1 source cited\n"
 
 
 def test_query_limit_flag_is_forwarded_unchanged(
@@ -115,7 +245,14 @@ def test_query_limit_flag_is_forwarded_unchanged(
     def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
         captured["question"] = question
         captured["kwargs"] = kwargs
-        return AnswerResult(answer=NO_MATCH, citations=[])
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
 
     monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
 
@@ -139,7 +276,14 @@ def test_query_omitted_limit_defaults_to_five(
 
     def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
         captured["kwargs"] = kwargs
-        return AnswerResult(answer=NO_MATCH, citations=[])
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
 
     monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
 
@@ -167,7 +311,14 @@ def test_query_builds_ollama_client_from_configured_model(
 
     def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
         captured["kwargs"] = kwargs
-        return AnswerResult(answer=NO_MATCH, citations=[])
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
 
     monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
 

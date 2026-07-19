@@ -53,9 +53,12 @@ class _FakeLLM:
 class _RecordingIndex:
     """A fake `FtsIndex` context manager: records `search()` args, returns fixed hits."""
 
-    def __init__(self, hits: list[fts.FtsHit]) -> None:
+    def __init__(
+        self, hits: list[fts.FtsHit], skipped: list[str] | None = None
+    ) -> None:
         self._hits = hits
         self.calls: list[tuple[str, int]] = []
+        self.skipped = skipped if skipped is not None else []
 
     def search(self, query: str, limit: int = 10) -> list[fts.FtsHit]:
         self.calls.append((query, limit))
@@ -82,12 +85,25 @@ def test_citation_is_a_frozen_dataclass() -> None:
 
 
 def test_answer_result_is_a_frozen_dataclass() -> None:
-    """`AnswerResult` carries `answer` text and a `citations` list, and is immutable."""
+    """`AnswerResult` carries `answer` text, a `citations` list, and retrieval
+    metadata (`fts_hit_count`, `llm_invoked`, `no_match_cause`,
+    `skip_notices`), and is immutable."""
     citation = answer_mod.Citation(concept_id="concepts/stoicism", title="Stoicism")
-    result = answer_mod.AnswerResult(answer="the reply", citations=[citation])
+    result = answer_mod.AnswerResult(
+        answer="the reply",
+        citations=[citation],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+    )
 
     assert result.answer == "the reply"
     assert result.citations == [citation]
+    assert result.fts_hit_count == 1
+    assert result.llm_invoked is True
+    assert result.no_match_cause == "none"
+    assert result.skip_notices == []
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.answer = "other"  # type: ignore[misc]
 
@@ -112,6 +128,9 @@ def test_matching_concepts_produce_a_cited_answer(tmp_path: Path) -> None:
     assert result.citations == [
         answer_mod.Citation(concept_id="concepts/stoicism", title="Stoicism")
     ]
+    assert result.fts_hit_count == 1
+    assert result.llm_invoked is True
+    assert result.no_match_cause == "none"
 
 
 def test_caller_omits_limit_search_called_with_five(
@@ -171,6 +190,9 @@ def test_no_matching_concepts_returns_canned_no_match(tmp_path: Path) -> None:
     assert llm.calls == []
     assert result.citations == []
     assert result.answer == answer_mod.NO_MATCH
+    assert result.fts_hit_count == 0
+    assert result.llm_invoked is False
+    assert result.no_match_cause == "zero_hits"
 
 
 def test_all_hits_unreadable_degrades_to_no_match(
@@ -190,6 +212,9 @@ def test_all_hits_unreadable_degrades_to_no_match(
     assert llm.calls == []
     assert result.citations == []
     assert result.answer == answer_mod.NO_MATCH
+    assert result.fts_hit_count == 1
+    assert result.llm_invoked is False
+    assert result.no_match_cause == "all_unreadable"
 
 
 def test_unparseable_frontmatter_hit_is_skipped(
@@ -298,6 +323,78 @@ def test_one_hit_vanished_skips_it_and_still_answers_with_the_rest(
     assert result.citations == [
         answer_mod.Citation(concept_id="concepts/stoicism", title="Stoicism")
     ]
+
+
+def test_empty_question_never_invokes_llm_and_sets_empty_query_cause(
+    tmp_path: Path,
+) -> None:
+    """A whitespace-only question never reaches `chat` and returns
+    `no_match_cause="empty_query"`, distinct from `"zero_hits"`."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    llm = _FakeLLM()
+
+    result = answer_mod.answer("   ", bundle_dir=bundle_dir, llm=llm)
+
+    assert llm.calls == []
+    assert result.fts_hit_count == 0
+    assert result.llm_invoked is False
+    assert result.no_match_cause == "empty_query"
+    assert result.answer == answer_mod.NO_MATCH
+
+
+def test_classify_no_match_empty_query_wins_over_present_hits() -> None:
+    """`_classify_no_match` gives `"empty_query"` priority: a blank question
+    classifies as `"empty_query"` even when hits are present, so it never
+    collapses into `"zero_hits"` or `"all_unreadable"`."""
+    hits = [fts.FtsHit(concept_id="concepts/stoicism", score=1.0)]
+
+    assert answer_mod._classify_no_match("   ", hits) == "empty_query"
+    assert answer_mod._classify_no_match("", hits) == "empty_query"
+    assert answer_mod._classify_no_match("real question", []) == "zero_hits"
+    assert answer_mod._classify_no_match("real question", hits) == "all_unreadable"
+
+
+def test_skip_notices_carried_on_matched_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Non-empty `FtsIndex.skipped` is carried onto `AnswerResult.skip_notices`
+    even when the query matches and the LLM is invoked."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    skip_notices = ["concepts/corrupt.md: skipped (unreadable)"]
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/stoicism", score=0.0)],
+        skipped=skip_notices,
+    )
+    monkeypatch.setattr(fts, "build_index", lambda _bundle_dir: recording_index)
+    llm = _FakeLLM(reply="the reply")
+
+    result = answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm)
+
+    assert result.skip_notices == skip_notices
+    assert result.llm_invoked is True
+
+
+def test_skip_notices_carried_on_no_match_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Non-empty `FtsIndex.skipped` is carried onto `AnswerResult.skip_notices`
+    even on a no-match (zero-hit) path."""
+    bundle_dir = tmp_path / "bundle"
+    skip_notices = ["concepts/corrupt.md: skipped (unreadable)"]
+    recording_index = _RecordingIndex(hits=[], skipped=skip_notices)
+    monkeypatch.setattr(fts, "build_index", lambda _bundle_dir: recording_index)
+    llm = _FakeLLM()
+
+    result = answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm)
+
+    assert result.skip_notices == skip_notices
+    assert result.no_match_cause == "zero_hits"
 
 
 # --- Phase 6/7: title fallback -------------------------------------------
