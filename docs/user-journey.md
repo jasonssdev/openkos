@@ -31,7 +31,7 @@ A user does not "finish" with OpenKOS. Each source they add makes the base more 
 
 The **value moment** — the reason the whole thing exists — is the *query* step: getting a trustworthy, cited answer from knowledge the user never had to organize by hand.
 
-**In MVP 1:** `compile` is a null compiler — the source is embedded verbatim into exactly one `Source` concept, with no LLM synthesis. **Later MVPs** grow `compile` into the richer step this loop depicts: an LLM drafting a summary, updating related concept pages, and reconciling corrections across the base.
+**In MVP 1:** `compile` embeds the source verbatim into exactly one `Source` concept, then attempts ONE LLM-driven extraction step — at most one derived `Concept` or `Entity`, or a graceful degrade back to the Source alone. **Later MVPs** grow `compile` into the richer step this loop depicts: an LLM drafting a full summary, updating related concept pages, and reconciling corrections across the base.
 
 ## UX principles
 
@@ -77,9 +77,9 @@ openkos ingest ./call-with-maria-2026-07-14.txt
 
 ### Step 2 — Compile
 
-**In MVP 1**, `compile` is the "null compiler": the engine copies the source into `raw/`, embeds its full text verbatim into exactly one `Source` concept (or a binary-fallback note if the content is not text), and updates `index.md` and `log.md`. There is no LLM extraction, no drafted summary, and no separate person/decision/topic pages — one source in, one honest `Source` concept out.
+**In MVP 1**, the engine copies the source into `raw/`, embeds its full text verbatim into exactly one `Source` concept (or a binary-fallback note if the content is not text), and updates `index.md` and `log.md`. It then attempts ONE LLM-driven extraction step: using the model configured in `openkos.yaml`, it classifies the source's text as at most one derived `Concept` (an idea, topic, or framework) or `Entity` (a fallback for a concrete artifact) — or declines to extract anything. A successful extraction writes that derived document alongside the Source, with `provenance` pointing back to it and `sensitivity` inherited from it; a decline, a validation failure, or an unreachable local model all degrade gracefully to the Source alone, with a short note and no failed command. One source in, one `Source` concept plus **at most one** derived concept out — there is still no drafted multi-paragraph summary, no person/decision pages, and no relationships between concepts.
 
-**Later MVPs** grow this into real compilation: the engine reads the source with the local model, drafts a summary concept, creates or updates related concept pages, records provenance back to the source, applies freshness stamps, and reconciles corrections against what is already in the base — for example, recognizing that today's call corrects the reading of *apatheia* recorded nine days ago and revising that page instead of writing a new one.
+**Later MVPs** grow this into fuller compilation: multiple derived concepts per source, a drafted summary, person/decision pages, a typed relationship graph, applied freshness stamps, and reconciliation against what is already in the base — for example, recognizing that today's call corrects the reading of *apatheia* recorded nine days ago and revising that page instead of writing a new one.
 
 ### Step 3 — Review and confirm (default) — or hand it off
 
@@ -94,6 +94,8 @@ openkos ingest: proposed changes:
   ~ log.md (new dated entry)
 Proceed with these changes? [y/N]:
 ```
+
+The example above shows the case where extraction declined (Source-only, MVP-1's baseline result). When extraction succeeds, the preview adds one more line — `+ bundle/concepts/<slug>.md` (or `bundle/entities/<slug>.md`) — and the confirm covers both proposed documents together, still one prompt.
 
 The user accepts or declines; there is no `[e]dit` option to change the content in place. Declining aborts and nothing is written. This confirm step only appears when stdin is a TTY and review is not disabled; otherwise `--auto` (or `review: false` in `openkos.yaml`) is required to write unattended.
 
@@ -125,7 +127,7 @@ Apply? [Y]es / [e]dit / [n]o:
 
 ### Step 4 — Commit
 
-**In MVP 1**, accepted changes are written to disk (`raw/`, the new `Source` concept, `index.md`, `log.md`); committing them to git is a manual, optional step the user takes themselves. **Later MVPs** may make that commit automatic as part of `ingest`. Either way the workspace is a normal git repository, so `git log`/`git diff` always show what changed.
+**In MVP 1**, accepted changes are written to disk (`raw/`, the new `Source` concept, any derived `Concept`/`Entity` extraction produced, `index.md`, `log.md`); committing them to git is a manual, optional step the user takes themselves. **Later MVPs** may make that commit automatic as part of `ingest`. Either way the workspace is a normal git repository, so `git log`/`git diff` always show what changed.
 
 ### Step 5 — Use (the value moment)
 
@@ -147,7 +149,7 @@ Citations:
 
 On every run, a `retrieval: <n> FTS hit(s) → LLM invoked|skipped → <m> source(s) cited` summary also prints to stderr — separate from the stdout answer above, so scripts piping stdout never see it.
 
-**In MVP 1**, `query` cites the `Source` concept it drew on directly (`bundle/sources/<slug>.md`), which itself embeds the raw text and points back to `raw/<name>`. The citation chain still lets the user ask *how do I know this?* and get a file path, even though there is no separate extracted topic page yet. **Later MVPs**, once `compile` produces topic pages (like a `concepts/stoicism.md`), the citation chain will run from the answer through that topic page, back through the Source concept, to the immutable original — and the answer above will reflect the *corrected* understanding the base learned from later sources, not just the first one it saw.
+**In MVP 1**, `query` cites the `Source` concept it drew on directly (`bundle/sources/<slug>.md`), which itself embeds the raw text and points back to `raw/<name>`. The citation chain lets the user ask *how do I know this?* and get a file path. When `ingest` also extracted a derived topic page (like `concepts/apatheia.md`) from that source, it links back to the Source via `provenance`, but MVP 1's retrieval still cites whichever document its lexical search matched — the Source, the derived page, or both — rather than always preferring one over the other. **Later MVPs** make that citation chain graph-aware: running from the answer through a topic page, back through every Source it draws on, to the immutable originals — and the answer above will reflect the *corrected* understanding the base learned from later sources, not just the first one it saw.
 
 A good answer can be filed back as a new concept, so exploration compounds — feeding the loop again.
 
@@ -164,7 +166,7 @@ The bundle is your files, so you can edit any concept document directly — in O
 
 **In MVP 1**, a hand edit simply stays as you left it — the engine does not scan for or automatically reconcile out-of-band edits. `openkos status`/`openkos lint` read the bundle fresh each time, so they always reflect your latest edit; if the edit introduced a problem (invalid frontmatter, a broken link, a stale `as of` stamp), `lint` surfaces it. **Later MVPs** may add automatic reconciliation: detecting a changed file by content hash, re-indexing what's affected, and logging the external edit in `log.md`.
 
-**Later MVPs**: when you later ingest a source that touches a concept you edited, the engine would read the current file first and build on your version, with review mode showing the merged change before saving — so the compiler adds to your edit rather than overwriting it. **In MVP 1**, `ingest` produces one `Source` concept per source and does not merge into concepts you have hand-edited. Git keeps every version either way, so any change stays diffable and reversible if you use it.
+**Later MVPs**: when you later ingest a source that touches a concept you edited, the engine would read the current file first and build on your version, with review mode showing the merged change before saving — so the compiler adds to your edit rather than overwriting it. **In MVP 1**, `ingest` produces one `Source` concept plus at most one derived `Concept`/`Entity` per source, and does not merge into concepts you have hand-edited — a re-ingest whose derived document already exists leaves it exactly as you left it, the same create-only guarantee `raw/` gets. Git keeps every version either way, so any change stays diffable and reversible if you use it.
 
 One exception: `raw/` sources are read-only by convention. Editing an original by hand breaks its provenance hash; to correct a source, add a new one rather than rewriting the original.
 
