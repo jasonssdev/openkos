@@ -74,12 +74,12 @@ def insert_index_entry(
     byte-for-byte except for the inserted bullet. `# {section}` is located
     if present, and the bullet is appended to it. If absent, a fresh
     `# {section}` chunk is created and inserted at its CANONICAL rank --
-    `_CANONICAL_SECTION_ORDER = (Concepts, Entities, Decisions, People,
-    Organizations, Sources)` -- i.e. immediately before the first EXISTING
-    section whose rank is greater, or at the end of the body if no such
-    section exists. `Sources` is always last in that order, so a fresh
+    `_CANONICAL_SECTION_ORDER = (Concepts, Entities, Places, Decisions,
+    People, Organizations, Sources)` -- i.e. immediately before the first
+    EXISTING section whose rank is greater, or at the end of the body if no
+    such section exists. `Sources` is always last in that order, so a fresh
     `# Sources` section is always appended after every other existing
-    section, regardless of which of the other five currently exist --
+    section, regardless of which of the other six currently exist --
     preserving the historical Sources-last behavior byte-identically.
     `title`/`slug`/`description` are each rejected (`ValueError`) if they
     contain a newline (RISK-1) -- see `_reject_newline`. This guard applies
