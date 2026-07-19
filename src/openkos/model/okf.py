@@ -47,8 +47,9 @@ def build_source_concept(
     timestamp: str,
     sensitivity: str,
     provenance: list[str],
+    raw_content: str | None = None,
 ) -> str:
-    """Build a conformant OKF Source concept document (D4).
+    """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
 
     Plain dict -> `dump_frontmatter`, no pydantic: every field is
     engine-derived from trusted local inputs (workspace config, the source's
@@ -56,8 +57,16 @@ def build_source_concept(
     structured LLM output, so `check_conformance` (§9 rules 1-2: parseable
     frontmatter, non-empty `type`) is the only gate this slice needs.
     `description` is passed through verbatim -- callers MUST phrase it as an
-    honest null-compiler description (imported, not yet compiled/extracted),
-    never claiming extraction occurred, matching this slice's scope.
+    honest description of the source's embedding state (embedded verbatim,
+    or could not be embedded), never claiming extraction/compilation
+    occurred, matching this slice's scope.
+
+    `raw_content` (ingest-source-body D1/D3) renders one of three body
+    shapes, each honest about what happened: `raw_content` holding
+    non-blank text embeds it verbatim under a `## Source content` heading;
+    `None` (a decode failure) renders a short note that the content could
+    not be embedded as text; blank/whitespace-only text renders a distinct
+    "source is empty" note. All three end with `# Citations`.
     """
     metadata: dict[str, object] = {
         "type": "Source",
@@ -72,7 +81,16 @@ def build_source_concept(
         "sensitivity": sensitivity,
         "provenance": provenance,
     }
-    body = f"# {title}\n\n{description}\n\n# Citations\n"
+    if raw_content is None:
+        section = (
+            "_Source content could not be embedded as text "
+            "(binary or non-UTF-8); see the linked resource._\n\n"
+        )
+    elif not raw_content.strip():
+        section = "_The source file is empty._\n\n"
+    else:
+        section = f"## Source content\n\n{raw_content}\n\n"
+    body = f"# {title}\n\n{description}\n\n{section}# Citations\n"
     return dump_frontmatter(metadata, body)
 
 

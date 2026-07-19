@@ -216,7 +216,7 @@ def test_resolve_window_falls_back_on_non_string_input(raw: object) -> None:
     assert "not a valid duration" in notice
 
 
-def _doc(identity: str, body: str) -> lint.LintDoc:
+def _doc(identity: str, body: str, *, freshness: str = "current") -> lint.LintDoc:
     rel_dir = str(PurePosixPath(identity).parent)
     if rel_dir == ".":
         rel_dir = ""
@@ -225,6 +225,7 @@ def _doc(identity: str, body: str) -> lint.LintDoc:
         identity=identity,
         rel_dir=rel_dir,
         body=body,
+        freshness=freshness,
     )
 
 
@@ -309,6 +310,48 @@ def test_check_stale_stamps_pure_ingest_bundle_has_zero_findings() -> None:
     )
 
     assert findings == []
+
+
+def test_check_stale_stamps_skips_snapshot_docs_with_stamp_shaped_text() -> None:
+    """A `freshness: snapshot` doc whose embedded verbatim content
+    coincidentally contains an `(as of YYYY-MM-DD)`-shaped string produces
+    ZERO stale-stamp findings -- that text is embedded source content, not
+    a maintained freshness stamp (D4, scenario: snapshot concept with an
+    embedded stamp-shaped string is not flagged)."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Meeting notes mention (as of 2000-01-01) as a historical quote.",
+            freshness="snapshot",
+        )
+    ]
+
+    findings = lint.check_stale_stamps(
+        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+    )
+
+    assert findings == []
+
+
+def test_check_stale_stamps_still_flags_non_snapshot_docs() -> None:
+    """The SAME stale stamp shape, on a doc whose `freshness` is NOT
+    `snapshot`, is still flagged -- pinning the new snapshot-skip to
+    exactly `freshness == "snapshot"` (D4, scenario: stale stamp is
+    flagged)."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Meeting notes mention (as of 2000-01-01) as a historical quote.",
+            freshness="current",
+        )
+    ]
+
+    findings = lint.check_stale_stamps(
+        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+    )
+
+    assert len(findings) == 1
+    assert findings[0].kind == "stale"
 
 
 def test_normalize_link_rooted_slash() -> None:

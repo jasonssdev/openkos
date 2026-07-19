@@ -256,12 +256,23 @@ def ingest(
     now = datetime.now(UTC)
     title = _titleize(src.stem)
     resource = f"raw/{name}"
-    description = (
-        f"Raw source imported from '{src}' as {resource}; not yet compiled "
-        "or extracted into concepts."
-    )
 
     try:
+        try:
+            raw_content: str | None = src.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raw_content = None
+        if raw_content is None:
+            description = (
+                f"Raw source imported from '{src}' as {resource}; "
+                "binary/non-text content could not be embedded, not yet "
+                "extracted into concepts."
+            )
+        else:
+            description = (
+                f"Raw source imported from '{src}' as {resource}; full text "
+                "embedded verbatim below, not yet extracted into concepts."
+            )
         cfg = config.read_config(root)
         concept_content = okf.build_source_concept(
             title=title,
@@ -271,6 +282,7 @@ def ingest(
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             sensitivity=cfg.default_sensitivity,
             provenance=[resource],
+            raw_content=raw_content,
         )
         index_text = index_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
