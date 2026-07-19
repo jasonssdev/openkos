@@ -29,6 +29,7 @@ class ObjectType:
 REGISTRY: tuple[ObjectType, ...] = (
     ObjectType("Concept", "concepts", "Concepts", True),
     ObjectType("Entity", "entities", "Entities", True),
+    ObjectType("Place", "places", "Places", True),
     ObjectType("Decision", None, "Decisions", False),
     ObjectType("Person", "people", "People", True),
     ObjectType("Organization", "organizations", "Organizations", True),
