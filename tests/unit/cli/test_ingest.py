@@ -2084,9 +2084,7 @@ def test_batch_of_five_all_staged_no_second_cap_in_main(
     assert (tmp_path / "bundle" / "entities" / "enchiridion.md").is_file()
     assert (tmp_path / "bundle" / "people" / "epictetus.md").is_file()
     assert (tmp_path / "bundle" / "organizations" / "praxis-foundation.md").is_file()
-    assert (
-        tmp_path / "bundle" / "places" / "yellowstone-national-park.md"
-    ).is_file()
+    assert (tmp_path / "bundle" / "places" / "yellowstone-national-park.md").is_file()
     assert okf.check_conformance(tmp_path / "bundle") == []
 
 
