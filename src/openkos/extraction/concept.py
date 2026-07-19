@@ -1,6 +1,7 @@
-"""Concept/Entity classification: prompt an injected `LLMBackend` to propose
-at most one derived object from a source's text, then parse and validate its
-reply fail-closed.
+"""Derived-object classification: prompt an injected `LLMBackend` to propose
+at most one derived object -- of any type in the current classifiable
+vocabulary (`openkos.model.types.CLASSIFIABLE_TYPES`) -- from a source's
+text, then parse and validate its reply fail-closed.
 
 Config-free leaf (mirrors `retrieval/answer.py`): this module never imports
 `openkos.config`; the caller supplies an `LLMBackend`. Any `OllamaError`-
@@ -50,10 +51,11 @@ _SYSTEM_PROMPT = (
     '(1) Name vs. denoted concept -- e.g. "Toyota" the company is '
     'Organization, but "Toyota Production System" is Concept; a person is '
     "Person, but a theory named after them is Concept; a landmark IS its "
-    'named place, but "Stockholm Syndrome" is Concept, not Place -- prefer '
-    "Person, Organization, or Place ONLY when the source centers on the "
-    "individual, institution, or location itself, otherwise choose "
-    "Concept.\n"
+    'named place, but "Stockholm Syndrome" is Concept, not Place; a '
+    'general geographic idea (e.g. "urbanism") is Concept, not one '
+    "specific named site -- prefer Person, Organization, or Place ONLY "
+    "when the source centers on the individual, institution, or location "
+    "itself, otherwise choose Concept.\n"
     "(2) Among specific named continuants (Person, Organization, Place) -- "
     "pick whichever the source centers on:\n"
     "    - A landmark or site named after a person or organization (e.g. a "
@@ -64,14 +66,15 @@ _SYSTEM_PROMPT = (
     'campus) is "Organization" when the source centers on the group\'s '
     'identity or activity; choose "Place" only when the source centers on '
     "the site itself as a location.\n"
-    "    - An event that happens at a place is OUT OF this closed "
-    "vocabulary unless the source is genuinely about the location itself "
-    "-- never map an event to Place.\n"
+    '    - An event that happens at a place is never "Place" itself -- '
+    "there is no Event type in this vocabulary, so classify it by what it "
+    "is fundamentally about instead: the person, organization, or concept "
+    'behind it, or Entity as a last resort; choose "Place" only when the '
+    "source is genuinely about the location itself, not the event.\n"
     "    - When Person and Organization are truly balanced, prefer "
     '"Organization" (the continuant that outlives individuals).\n'
     '(3) Person, Organization, Place, and Concept all outrank "Entity" -- '
-    "Entity is the last resort; a general geographic idea (e.g. "
-    '"urbanism") is Concept, while a specific named site is Place.\n\n'
+    "Entity is the last resort, used only when nothing else fits.\n\n"
     'If nothing in the source is worth extracting, set "extract" to false.\n\n'
     "Return ONLY one JSON object, with NO prose, NO markdown, and NO code "
     "fences around it, matching exactly this shape:\n"

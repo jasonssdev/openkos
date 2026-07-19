@@ -402,6 +402,43 @@ def test_prompt_pins_landmark_named_after_person_tie_break() -> None:
     assert "physical site" in system_content
 
 
+def test_prompt_pins_event_at_a_place_tie_break() -> None:
+    """The system prompt's tie-break prose states a positive outcome for an
+    event that happens at a place: since there is no `Event` type, such a
+    source falls to the best fit among the existing types (Person,
+    Organization, Concept, or Entity as a last resort), and is `Place` only
+    when the source is genuinely about the location itself -- not merely
+    "out of the closed vocabulary" with no stated resolution."""
+    llm = _FakeLLM(reply=_CONCEPT_JSON)
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "event" in system_content.lower()
+    assert 'never "Place" itself' in system_content
+    assert "genuinely about the location itself" in system_content
+
+
+def test_prompt_pins_urbanism_example_under_name_vs_concept_tie_break() -> None:
+    """The "urbanism" general-geographic-idea example concerns the Concept-
+    vs-Place distinction, so it lives under tie-break (1) ("Name vs. denoted
+    concept"), not under the Entity-outranking tie-break (3)."""
+    llm = _FakeLLM(reply=_CONCEPT_JSON)
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    rule_1_start = system_content.index("(1) Name vs. denoted concept")
+    rule_2_start = system_content.index("(2) Among specific named continuants")
+    rule_3_start = system_content.index("(3) Person, Organization, Place, and Concept")
+
+    urbanism_index = system_content.index("urbanism")
+    assert rule_1_start < urbanism_index < rule_2_start
+
+    rule_3_text = system_content[rule_3_start:]
+    assert "urbanism" not in rule_3_text
+
+
 def test_prompt_carries_source_text_and_title() -> None:
     """The user message carries the raw source text and its title."""
     llm = _FakeLLM(reply=_CONCEPT_JSON)
