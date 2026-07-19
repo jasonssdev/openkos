@@ -247,33 +247,128 @@ def test_refuses_when_not_a_workspace_byte_identical_message(
     )
 
 
-@pytest.mark.parametrize("collision", ["raw", "concept"])
-def test_collision_refuses_in_phase_a(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, collision: str
+def test_differing_source_reingest_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An existing `raw/<name>` OR `bundle/sources/<slug>.md` refuses in
-    Phase A -- nothing is overwritten (scenario: already-ingested source is
-    refused, not overwritten)."""
+    """An existing `raw/<name>` whose bytes DIFFER from the incoming source
+    refuses in Phase A -- raw is not overwritten, and the message
+    distinguishes "differs" from the byte-identical case (scenario:
+    differing re-ingest still refused)."""
     _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "raw" / "notes.txt").write_text("original", encoding="utf-8")
     source = tmp_path / "notes.txt"
     source.write_text("new content", encoding="utf-8")
-    if collision == "raw":
-        (tmp_path / "raw" / "notes.txt").write_text("original", encoding="utf-8")
-    else:
-        sources_dir = tmp_path / "bundle" / "sources"
-        sources_dir.mkdir()
-        (sources_dir / "notes.md").write_text("original concept", encoding="utf-8")
     before = _snapshot(tmp_path)
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "already exists" in result.stderr
-    expected = "raw/notes.txt" if collision == "raw" else "bundle/sources/notes.md"
-    assert expected in result.stderr
-    assert "retrying" in result.stderr
+    assert "differs" in result.stderr
+    assert "immutable" in result.stderr
+    assert "raw/notes.txt" in result.stderr
     assert _snapshot(tmp_path) == before
+
+
+def test_raw_absent_concept_present_refuses_inconsistent_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`raw/<name>` absent but `bundle/sources/<slug>.md` present refuses as
+    an inconsistent workspace (D5) -- nothing is written (scenario: raw
+    absent but concept present)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text("original concept", encoding="utf-8")
+    source = tmp_path / "notes.txt"
+    source.write_text("new content", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "inconsistent" in result.stderr
+    assert "bundle/sources/notes.md" in result.stderr
+    assert "raw/notes.txt" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_reingest_after_forget_regenerates_concept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`init` -> `ingest --auto` -> `forget --auto` -> `ingest --auto` (same
+    file) regenerates the concept, exits 0, leaves `raw/<name>` bytes
+    byte-identical to the pre-forget snapshot, produces exactly ONE
+    `sources/<slug>.md` bullet in `index.md`, and a new `**Re-ingest**` log
+    entry (scenario: byte-identical re-ingest, post-forget sub-case)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    raw_snapshot = (tmp_path / "raw" / "notes.txt").read_bytes()
+
+    forgotten = runner.invoke(app, ["forget", "sources/notes", "--auto"])
+    assert forgotten.exit_code == 0
+    assert not (tmp_path / "bundle" / "sources" / "notes.md").exists()
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "notes.txt").read_bytes() == raw_snapshot
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert concept_path.is_file()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("sources/notes.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert "**Re-ingest**" in log_text
+
+
+def test_reingest_without_forget_regenerates_without_duplicate_index_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`init` -> `ingest --auto` -> `ingest --auto` (same file, no forget)
+    regenerates the concept, exits 0, and `index.md` contains exactly ONE
+    occurrence of `sources/<slug>.md` -- proving D3 dedup -- with raw bytes
+    unchanged (scenario: byte-identical re-ingest, no-forget sub-case)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    raw_snapshot = (tmp_path / "raw" / "notes.txt").read_bytes()
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "notes.txt").read_bytes() == raw_snapshot
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("sources/notes.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert "**Re-ingest**" in log_text
+
+
+def test_reingest_preview_shows_regenerate_not_new_raw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A TTY-confirm re-ingest of an identical source shows `~ raw/<name>`
+    (existing copy reused) in the preview and NO `+ raw/<name>` line
+    (scenario: byte-identical re-ingest, preview wording)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "~ raw/notes.txt" in result.stdout
+    assert "+ raw/notes.txt" not in result.stdout
 
 
 def test_traversal_basename_lands_inside_raw_only(

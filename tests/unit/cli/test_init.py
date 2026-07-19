@@ -240,6 +240,7 @@ def test_fresh_empty_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert (tmp_path / "AGENTS.md").is_file()
     for named in ("raw/", "index.md", "log.md", "AGENTS.md", "openkos.yaml"):
         assert named in result.stdout
+    assert "openkos ingest" in result.stdout
 
 
 def test_model_flag_writes_chosen_model(
