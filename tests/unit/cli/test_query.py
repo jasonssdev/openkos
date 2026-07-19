@@ -3,8 +3,10 @@
 `query` is the read-only counterpart to `status`/`lint` (D1: bare
 `require_workspace` gate, no Phase B, no confirm gate, no `--auto`), followed
 by a Phase-A `read_config` guard (`except (OSError, ValueError)`, lint
-parity) and a Phase-B `answer()` call guarded by `except (FtsUnavailable,
-OllamaError)`. Every test patches `openkos.cli.main.answer` (D4) -- zero
+parity) and a Phase-B `answer()` call guarded by three ORDERED handlers --
+`OllamaUnavailable`, then `OllamaModelNotFound`, then the generic
+`(FtsUnavailable, OllamaError)` fallback -- each with its own actionable
+message. Every test patches `openkos.cli.main.answer` (D4) -- zero
 network, zero real Ollama process, zero real FTS5 index.
 """
 
@@ -14,7 +16,12 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
-from openkos.llm.ollama import OllamaClient, OllamaUnavailable
+from openkos.llm.ollama import (
+    OllamaClient,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state.fts import FtsUnavailable
 
@@ -178,8 +185,9 @@ def test_query_ollama_unavailable_maps_to_exit_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`answer()` raising `OllamaUnavailable` (an `OllamaError` subclass) is
-    caught, printed as a friendly stderr message, and exits 1 with no raw
-    traceback (spec: Ollama backend unreachable)."""
+    caught, printed as a friendly stderr message with `ollama serve`
+    remediation, and exits 1 with no raw traceback (spec: Ollama backend
+    unreachable)."""
     _init_workspace(tmp_path, monkeypatch)
 
     def _raise_unavailable(*args: object, **kwargs: object) -> AnswerResult:
@@ -193,7 +201,92 @@ def test_query_ollama_unavailable_maps_to_exit_one(
     assert isinstance(result.exception, SystemExit)
     assert result.stderr.startswith("openkos query: failed -- ")
     assert "Ollama not reachable" in result.stderr
+    assert "ollama serve" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_query_model_not_found_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`answer()` raising `OllamaModelNotFound` is caught, printed as a
+    friendly stderr message naming the CONFIGURED model tag and the
+    `ollama pull <model>` remediation, and exits 1 with no raw traceback
+    (spec: Configured model not installed)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "llama3.2:1b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {configured_model}\n", encoding="utf-8"
+    )
+
+    def _raise_model_not_found(*args: object, **kwargs: object) -> AnswerResult:
+        raise OllamaModelNotFound("Model not found (404): {}")
+
+    monkeypatch.setattr("openkos.cli.main.answer", _raise_model_not_found)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos query: failed -- ")
+    assert "is not installed" in result.stderr
+    assert f"ollama pull {configured_model}" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_query_generic_ollama_error_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`answer()` raising a plain `OllamaError` (neither `OllamaUnavailable`
+    nor `OllamaModelNotFound`) is caught, printed as the unchanged generic
+    friendly message with no cause-specific remediation, and exits 1 with no
+    raw traceback (spec: Other Ollama error)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_generic(*args: object, **kwargs: object) -> AnswerResult:
+        raise OllamaError("boom")
+
+    monkeypatch.setattr("openkos.cli.main.answer", _raise_generic)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr == "openkos query: failed -- boom.\n"
+    assert "ollama serve" not in result.stderr
+    assert "ollama pull" not in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_query_specific_ollama_subclasses_do_not_fall_through_to_generic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both `OllamaUnavailable` and `OllamaModelNotFound` must reach their
+    OWN handler, not the generic `(FtsUnavailable, OllamaError)` fallback --
+    the direct RED test for D1's specific-before-general handler ordering."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    unavailable_message = "Ollama not reachable at http://localhost:11434"
+
+    def _raise_unavailable(*args: object, **kwargs: object) -> AnswerResult:
+        raise OllamaUnavailable(unavailable_message)
+
+    monkeypatch.setattr("openkos.cli.main.answer", _raise_unavailable)
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+    # The generic tuple fallback would print exactly this bare shape with no
+    # remediation -- proves `OllamaUnavailable` reached its OWN handler.
+    assert result.stderr != f"openkos query: failed -- {unavailable_message}.\n"
+    assert "ollama serve" in result.stderr
+
+    def _raise_model_not_found(*args: object, **kwargs: object) -> AnswerResult:
+        raise OllamaModelNotFound("Model not found (404): {}")
+
+    monkeypatch.setattr("openkos.cli.main.answer", _raise_model_not_found)
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+    # The generic tuple fallback would echo the raw exception text
+    # ("Model not found (404): ...") -- proves `OllamaModelNotFound` reached
+    # its OWN handler instead.
+    assert "Model not found (404)" not in result.stderr
+    assert "ollama pull" in result.stderr
 
 
 def test_query_fts_unavailable_maps_to_exit_one(
