@@ -12,7 +12,12 @@ from openkos import lint as lint_check
 from openkos.bundle import bundle
 from openkos.bundle import index as bundle_index
 from openkos.bundle import log as bundle_log
-from openkos.llm.ollama import OllamaClient, OllamaError
+from openkos.llm.ollama import (
+    OllamaClient,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.model import okf
 from openkos.retrieval.answer import answer
 from openkos.state.fts import FtsUnavailable
@@ -699,6 +704,20 @@ def query(
     llm = OllamaClient(model=cfg.model)
     try:
         result = answer(question, bundle_dir=layout.bundle_dir, llm=llm, limit=limit)
+    except OllamaUnavailable as exc:
+        typer.echo(
+            f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
+            "then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    except OllamaModelNotFound as exc:
+        typer.echo(
+            f"openkos query: failed -- model '{cfg.model}' is not installed. "
+            f"Pull it with `ollama pull {cfg.model}`, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     except (FtsUnavailable, OllamaError) as exc:
         typer.echo(f"openkos query: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc

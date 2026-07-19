@@ -81,7 +81,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | --- | --- |
 | `--limit <n>` | Max concepts to retrieve as context. Defaults to `5`. |
 
-Output is answer-first and banner-free: the answer text, then (only when at least one citation exists) a blank line, `Citations:`, and one `  → <concept_id> (<title>)` line per citation, in the same order the answer cited them. When nothing in the bundle matches the question, `query` prints a single no-match line and still exits `0` — a valid "no answer found" response is not an error. A malformed or unreadable `openkos.yaml` (caught the same way `lint` handles an unreadable workspace), a failure to reach Ollama, or a missing/unusable FTS5 index is caught and reported on stderr (exit 1), never a raw traceback.
+Output is answer-first and banner-free: the answer text, then (only when at least one citation exists) a blank line, `Citations:`, and one `  → <concept_id> (<title>)` line per citation, in the same order the answer cited them. When nothing in the bundle matches the question, `query` prints a single no-match line and still exits `0` — a valid "no answer found" response is not an error. A malformed or unreadable `openkos.yaml` (caught the same way `lint` handles an unreadable workspace), a failure to reach Ollama, or a missing/unusable FTS5 index is caught and reported on stderr (exit 1), never a raw traceback — an unreachable Ollama and a not-installed configured model print actionable guidance (`ollama serve` / `ollama pull <model>`).
 
 A good answer can be filed back as a new concept (the two-output rule) — that re-filing step is not automated in this slice.
 
