@@ -2,18 +2,19 @@
 
 ## Purpose
 
-`openkos ingest <path>` is the MVP 1 "null compiler": it copies a raw source
-into the bundle, generates one conformant OKF Source concept with no LLM
-extraction, records provenance OKF-natively, and updates the bundle catalog
-(`index.md`) and log (`log.md`).
+`openkos ingest <path>` copies a raw source into the bundle, generates one
+conformant OKF Source concept, and attempts LLM-driven extraction of at most
+one derived Concept or Entity (MVP-2 vertical slice). Records provenance
+OKF-natively, updates the bundle catalog (`index.md`) and log (`log.md`),
+and degrades to Source-only behavior with zero crashes on any LLM failure.
 
 ## Non-Goals
 
-This spec does not define: LLM backend or extraction of concept content
-beyond a single Source stub; JSON schema validation or bounded retry;
-`--sensitivity` or `--batch` flags; model-quality evaluation; multi-concept
-reconciliation (sensitivity high-water-mark, cross-concept links), deferred
-to MVP 2 per `knowledge-object-model.md`.
+This spec does not define: multiple derived objects per ingest; extraction
+of the other 9 canonical OKF types; entity resolution, merge, or
+reclassification on re-ingest; typed relationship graph; sensitivity
+high-water-mark across multiple sources; or MVP-2 hybrid retrieval,
+all deferred to future MVPs per `knowledge-object-model.md`.
 
 ## Requirements
 
@@ -107,30 +108,28 @@ updating files that already exist, separate from `write_exclusive`.
 ### Requirement: Ingest Raw Copy and Source Concept Generation
 
 `openkos ingest <path>` MUST copy the raw source into the bundle's raw
-storage as an exclusive (create-only) binary write when `raw/<name>` does
-not already exist for this source — this copy MUST remain byte-identical
-and untouched afterward — and generate exactly one OKF Source concept with
-frontmatter `type`, `title`, `description`, `resource`, `tags`,
-`timestamp`, plus OpenKOS-layer `status`, `version`, `freshness`,
-`sensitivity`, and `provenance`. WHEN `raw/<name>` already exists and the
-incoming source's bytes are byte-identical to it, `ingest` MUST NOT
-re-copy, rewrite, or delete the raw file, and MUST instead regenerate the
-Source concept and the `index.md`/`log.md` catalog entries from the
-existing raw bytes, exiting 0 — this holds regardless of whether
-`bundle/sources/<slug>.md` already exists, and the catalog update MUST
-NOT produce a duplicate entry when the concept was already catalogued.
-WHEN `raw/<name>` does not exist but `bundle/sources/<slug>.md` does,
-`ingest` MUST refuse, treating this as an inconsistent-workspace state.
-WHEN the source decodes as UTF-8 text, the concept's BODY MUST embed that
+storage as an exclusive (create-only) binary write and generate exactly one
+OKF Source concept with frontmatter `type`, `title`, `description`,
+`resource`, `tags`, `timestamp`, plus OpenKOS-layer `status`, `version`,
+`freshness`, `sensitivity`, and `provenance`. In addition, `ingest` MUST
+attempt LLM-driven extraction of **at most one** derived object of type
+`Concept` or `Entity` from the source. WHEN extraction succeeds and the
+derived object passes validation, `ingest` MUST write that derived object
+IN ADDITION to the Source concept, with `provenance` pointing to the Source
+and `sensitivity` inherited from the Source. WHEN extraction fails, is
+unavailable, times out, errors, or produces invalid output, `ingest` MUST
+degrade to Source-only behavior — write only the Source concept, emit an
+explanatory note to stderr, and exit 0 (no crash). Extraction always runs
+regardless of `--auto`; `--auto` only skips the confirmation prompt. WHEN
+the source decodes as UTF-8 text, the Source concept's BODY MUST embed that
 text verbatim under a labeled section, followed by `# Citations`. WHEN the
 source is not valid UTF-8 text, the body MUST instead contain a short,
 honest note that the content could not be embedded as text (no crash),
-followed by `# Citations`. An empty source MUST render a body distinct
-from both the verbatim and undecodable cases. The generated concept MUST
+followed by `# Citations`. An empty source MUST render a body distinct from
+both the verbatim and undecodable cases. The generated Source concept MUST
 pass `check_conformance`. The `description` MUST remain a single line (no
 newlines) and MUST state that the raw source's content was embedded
-verbatim and NOT extracted, compiled, or split into concepts — it MUST NOT
-claim any extraction occurred.
+verbatim, and MUST NOT claim extraction or splitting into derived concepts.
 
 #### Scenario: Successful ingest embeds verbatim text
 
@@ -139,8 +138,7 @@ claim any extraction occurred.
 - WHEN `openkos ingest <path>` completes (confirmed or `--auto`)
 - THEN the raw source is copied, one Source concept exists whose body
   contains that source's text verbatim under a labeled section followed by
-  `# Citations`, `description` is a single-line honest statement (embedded,
-  not extracted), `check_conformance` reports no violations, and
+  `# Citations`, `check_conformance` reports no violations, and
   `index.md`/`log.md` reflect the new entry
 
 #### Scenario: Path does not exist
@@ -150,38 +148,32 @@ claim any extraction occurred.
 - THEN it exits non-zero, writes a clear error to stderr, and no file is
   created or modified
 
-#### Scenario: Raw absent but concept present is refused as an inconsistent workspace
+#### Scenario: Already-ingested source is refused, not overwritten
 
-- GIVEN `raw/<name>` does not exist but `bundle/sources/<slug>.md` already
-  exists for this source
+- GIVEN `raw/<name>` or `bundle/sources/<slug>.md` already exists for this
+  source
 - WHEN `openkos ingest <path>` runs
-- THEN it refuses in Phase A, exits non-zero with an error identifying the
-  workspace as inconsistent (concept present, raw source missing), and
+- THEN it refuses in Phase A, exits non-zero with a clear error, and
   writes nothing
 
-#### Scenario: Byte-identical re-ingest regenerates the concept and catalog
+#### Scenario: Successful extraction yields a Concept
 
-- GIVEN `raw/<name>` already exists and the incoming source at `<path>` is
-  byte-identical to it — whether or not `bundle/sources/<slug>.md` already
-  exists (covering both the post-`forget` case, where the concept is
-  absent, and the no-`forget` re-run case, where the concept is still
-  present)
-- WHEN `openkos ingest <path>` completes (confirmed or `--auto`)
-- THEN `ingest` does not re-copy, rewrite, or delete `raw/<name>` (its
-  bytes are unchanged), regenerates the Source concept and updates
-  `index.md`/`log.md` with exactly one entry for this source (no
-  duplicate), the preview shown beforehand names it a regenerate/update
-  (not a new-raw copy), and the process exits 0
+- GIVEN a source whose content clearly describes an idea, topic, or
+  framework, and a fake LLM backend returning a well-formed structured
+  reply of `type: Concept`
+- WHEN `openkos ingest <path>` completes
+- THEN both the Source concept AND a Concept document are written, the
+  Concept's `provenance` references the Source, and `check_conformance`
+  reports no violations for either document
 
-#### Scenario: Differing re-ingest under the same name is still refused
+#### Scenario: Successful extraction yields an Entity
 
-- GIVEN `raw/<name>` already exists and the incoming source at `<path>`
-  differs in bytes from the existing `raw/<name>`
-- WHEN `openkos ingest <path>` runs
-- THEN it refuses in Phase A, exits non-zero with an error that
-  distinguishes "content differs from the immutable raw copy" from the
-  byte-identical case, and writes nothing (the raw file is not
-  overwritten)
+- GIVEN a source whose content clearly describes a concrete tool, product,
+  or artifact that is not a person or organization, and a fake LLM backend
+  returning a well-formed structured reply of `type: Entity`
+- WHEN `openkos ingest <path>` completes
+- THEN both the Source concept AND an Entity document are written, and the
+  Entity's `provenance` references the Source
 
 #### Scenario: Undecodable source falls back without crashing
 
@@ -198,6 +190,139 @@ claim any extraction occurred.
 - THEN the Source concept's body distinctly indicates the source was
   empty, distinguishable from both the verbatim-embed and
   undecodable-fallback cases
+
+### Requirement: Type Classification Prefers Specific Types Over the Entity Fallback
+
+Extraction MUST classify the derived object's type using a closed vocabulary
+of `{Concept, Entity}`. `Entity` MUST be used only as a fallback when no
+more specific type fits; `Concept` MUST be preferred whenever the source
+content describes an idea, topic, theory, term, or framework.
+
+#### Scenario: Entity chosen only when Concept does not fit
+
+- GIVEN a fake LLM backend that would only plausibly classify the source's
+  content as a concrete artifact rather than an idea or framework
+- WHEN extraction runs
+- THEN the derived object's `type` is `Entity`, not `Concept`
+
+#### Scenario: Concept preferred when content fits
+
+- GIVEN a fake LLM backend returning a reply describing an idea or
+  framework
+- WHEN extraction runs
+- THEN the derived object's `type` is `Concept`
+
+### Requirement: Fail-Closed Validation of Extracted Output
+
+Extraction output MUST be validated before any derived object is written.
+Validation MUST reject: output that is not parseable as the documented
+structured shape; a `type` outside `{Concept, Entity}`; and missing or
+empty required fields (at minimum `title` and `description`). WHEN
+validation rejects the output, `ingest` MUST NOT write a derived object,
+MUST still write the Source concept, MUST emit a note to stderr explaining
+the degrade, and MUST exit 0.
+
+#### Scenario: Malformed JSON degrades to Source-only
+
+- GIVEN a fake LLM backend returning a reply that is not valid structured
+  output
+- WHEN `openkos ingest <path>` runs
+- THEN only the Source concept is written, a note appears on stderr, and
+  the exit code is 0
+
+#### Scenario: Invalid type degrades to Source-only
+
+- GIVEN a fake LLM backend returning well-formed output whose `type` is
+  outside `{Concept, Entity}`
+- WHEN `openkos ingest <path>` runs
+- THEN only the Source concept is written, a note appears on stderr, and
+  the exit code is 0
+
+#### Scenario: Missing title degrades to Source-only
+
+- GIVEN a fake LLM backend returning output with an empty or missing
+  `title`
+- WHEN `openkos ingest <path>` runs
+- THEN only the Source concept is written, a note appears on stderr, and
+  the exit code is 0
+
+### Requirement: Extraction Degrades Gracefully on LLM Unavailability
+
+WHEN the LLM backend raises an error (unavailable, timeout, or any backend
+error) during extraction, `ingest` MUST catch it locally, degrade to
+Source-only behavior, emit a note to stderr, and exit 0. Extraction failure
+MUST NOT crash or abort the ingest command.
+
+#### Scenario: LLM backend unavailable
+
+- GIVEN a fake LLM backend whose `chat` call raises a backend error
+- WHEN `openkos ingest <path>` runs
+- THEN only the Source concept is written, a note describing the degrade
+  appears on stderr, and the command exits 0
+
+### Requirement: Derived Object Provenance and Sensitivity Inheritance
+
+A successfully validated derived object MUST record `provenance`
+referencing its originating Source concept, and MUST inherit the Source's
+`sensitivity` value verbatim.
+
+#### Scenario: Provenance and sensitivity inherited
+
+- GIVEN a source ingested with a configured `sensitivity` value and
+  successful extraction
+- WHEN `openkos ingest <path>` completes
+- THEN the derived object's frontmatter `provenance` includes a reference
+  to the Source concept and its `sensitivity` equals the Source's
+  `sensitivity`
+
+### Requirement: Review Gate Shows Both Objects Before Write
+
+The confirmation preview MUST show BOTH the proposed Source concept and
+the proposed derived object (when extraction succeeded) before any write
+occurs. WHEN `--auto` is passed, both objects MUST be written without
+prompting; the confirmation prompt is skipped, but extraction still runs
+beforehand.
+
+#### Scenario: Interactive confirm shows both objects
+
+- GIVEN successful extraction and an interactive TTY without `--auto`
+- WHEN `openkos ingest <path>` reaches the confirm gate
+- THEN the preview lists both the Source concept and the derived object,
+  and declining aborts with no files written
+
+#### Scenario: `--auto` writes both without prompting
+
+- GIVEN successful extraction and `--auto`
+- WHEN `openkos ingest <path>` runs
+- THEN no confirmation prompt appears and both the Source concept and the
+  derived object are written
+
+### Requirement: Idempotent Re-Ingest Leaves an Existing Derived Object Untouched
+
+WHEN a source is re-ingested and a derived object already exists (from a
+prior successful extraction) for that source, `ingest` MUST leave the
+existing derived object file untouched — no overwrite, no re-extraction of
+that object's content.
+
+#### Scenario: Re-ingest does not overwrite existing derived object
+
+- GIVEN a source already ingested with a resulting Concept (or Entity)
+  document, possibly hand-edited afterward
+- WHEN `openkos ingest <path>` is run again for the same source
+- THEN the existing derived object file's content is unchanged
+
+### Requirement: Derived Object Cataloging and Logging
+
+A successfully written derived object MUST be cataloged in `index.md` under
+the `# Concepts` section, and the write MUST be recorded as a new entry in
+`log.md`, alongside the Source concept's own catalog and log entries.
+
+#### Scenario: Catalog and log reflect both objects
+
+- GIVEN successful extraction and a completed ingest
+- WHEN `index.md` and `log.md` are inspected
+- THEN `index.md` lists the Source under `# Sources` and the derived
+  object under `# Concepts`, and `log.md` records both writes
 
 ### Requirement: Embedded Content Is Queryable End-to-End
 
