@@ -83,9 +83,9 @@ def insert_index_entry(
     preserving the historical Sources-last behavior byte-identically.
     `title`/`slug`/`description` are each rejected (`ValueError`) if they
     contain a newline (RISK-1) -- see `_reject_newline`. This guard applies
-    to every section, including untrusted LLM-derived derived-object
-    fields. `section` MUST be one of the canonical sections, else
-    `ValueError` -- there is no defined rank for an unknown section.
+    to every section, including untrusted, LLM-derived object fields.
+    `section` MUST be one of the canonical sections, else `ValueError` --
+    there is no defined rank for an unknown section.
     """
     if section not in _CANONICAL_SECTION_ORDER:
         raise ValueError(

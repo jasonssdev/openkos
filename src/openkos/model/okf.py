@@ -106,13 +106,14 @@ def build_concept(
     sensitivity: str,
     timestamp: str,
 ) -> str:
-    """Build a conformant OKF Concept/Entity document from LLM-extracted,
+    """Build a conformant OKF derived-object document from LLM-extracted,
     UNTRUSTED fields (design: "Builder validation").
 
     Unlike `build_source_concept` (whose inputs are engine-derived and
     trusted, so it skips validation -- see its docstring), this builder is
     the fail-closed gate for `extraction.ExtractionResult` data: `type` MUST
-    be one of `{"Concept", "Entity", "Person", "Organization"}`;
+    be a member of the closed classifiable vocabulary (see
+    `openkos.model.types.CLASSIFIABLE_TYPES`, the single source of truth);
     `title`/`description` MUST be non-empty
     after stripping whitespace AND single-line (no embedded newlines, since
     each is a single Markdown/heading line); and `provenance` MUST be
