@@ -598,6 +598,34 @@ def test_build_concept_accepts_procedure_type() -> None:
     assert metadata["freshness"] == "snapshot"
 
 
+def test_build_concept_accepts_decision_type() -> None:
+    """`type: Decision` is a member of the widened classifiable vocabulary
+    (the KOM "why" tier) and builds a conformant document just like the
+    other classifiable types; `freshness` stays uniform `"snapshot"` even
+    though a real Decision's status is mutable (design: Non-Goals, no
+    freshness change)."""
+    text = _build_call_concept(type="Decision", title="Frame the Essay Around Control")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Decision"
+    assert metadata["title"] == "Frame the Essay Around Control"
+    assert metadata["freshness"] == "snapshot"
+
+
+def test_build_concept_accepts_project_type() -> None:
+    """`type: Project` is a member of the widened classifiable vocabulary
+    (the KOM "why" tier) and builds a conformant document just like the
+    other classifiable types."""
+    text = _build_call_concept(type="Project", title="Stoicism Essay Series")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Project"
+    assert metadata["title"] == "Stoicism Essay Series"
+    assert metadata["freshness"] == "snapshot"
+
+
 def test_build_concept_sensitivity_inherited_verbatim() -> None:
     """`sensitivity` is passed straight through, unmodified -- the caller
     (main.py, a later slice) is responsible for reading it off the Source

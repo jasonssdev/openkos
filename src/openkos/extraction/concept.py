@@ -28,10 +28,10 @@ _SYSTEM_PROMPT = (
     "You are a classification step in a local-first knowledge engine. Read "
     "the SOURCE text below and decide whether it is worth extracting as ONE "
     "derived knowledge object.\n\n"
-    'Vocabulary: the derived object\'s "type" MUST be one of exactly seven '
+    'Vocabulary: the derived object\'s "type" MUST be one of exactly nine '
     'values: "Person", "Organization", "Place", "Event", "Procedure", '
-    '"Concept", or "Entity". Classify by what the source is fundamentally '
-    "about:\n"
+    '"Decision", "Project", "Concept", or "Entity". Classify by what the '
+    "source is fundamentally about:\n"
     '- "Person": the source is fundamentally about ONE specific, named '
     "individual human -- their identity, role, work, or biography.\n"
     '- "Organization": the source is fundamentally about ONE specific, '
@@ -45,6 +45,14 @@ _SYSTEM_PROMPT = (
     '- "Procedure": the source is fundamentally about ONE repeatable '
     "how-to -- a method, protocol, recipe, or step-by-step process meant "
     "to be performed again.\n"
+    '- "Decision": the source is fundamentally about ONE choice that was '
+    "made -- carrying its rationale, the alternatives considered, and its "
+    "current status -- a self-contained decision record, not a general "
+    "idea or a dated happening.\n"
+    '- "Project": the source is fundamentally about ONE ongoing effort '
+    "defined by a goal and a timespan -- a multi-step undertaking spanning "
+    "time toward that goal, not a single bounded happening or a repeatable "
+    "how-to.\n"
     '- "Concept": the source describes an idea, topic, theory, term, or '
     "framework -- INCLUDING one named after a person, organization, or "
     "place (a named method, system, principle, or law). A name borrowed "
@@ -64,8 +72,8 @@ _SYSTEM_PROMPT = (
     "when the source centers on the individual, institution, or location "
     "itself, otherwise choose Concept.\n"
     "(2) Among specific named continuants and occurrents (Person, "
-    "Organization, Place, Event, Procedure) -- pick whichever the source "
-    "centers on:\n"
+    "Organization, Place, Event, Procedure, Decision, Project) -- pick "
+    "whichever the source centers on:\n"
     "    - A landmark or site named after a person or organization (e.g. a "
     'memorial) is "Place" ONLY if the source is about the physical site '
     "itself; if the source is about the honoree, choose Person or "
@@ -79,33 +87,40 @@ _SYSTEM_PROMPT = (
     "only when the source is genuinely about the location itself as a "
     "site, not about what happened there.\n"
     '    - Among occurrents, "Event" is a single time-bound happening '
-    'while "Procedure" is a repeatable how-to. A choice made with '
-    "rationale is a Decision, which is NOT in this vocabulary and MUST "
-    "NOT be emitted; fall back to the best-fitting classifiable type "
-    '(often Concept or Entity), never invent "Decision".\n'
+    'while "Procedure" is a repeatable how-to.\n'
+    "    - A choice made with rationale, alternatives considered, and a "
+    'current status is "Decision" -- distinct from "Concept" (a general '
+    "idea, topic, theory, or framework, with no decision-record shape) "
+    'and from "Event" (a dated happening with no rationale or '
+    "alternatives weighed).\n"
+    "    - An ongoing effort defined by a goal and a timespan is "
+    '"Project" -- distinct from "Event" (a single bounded happening) and '
+    'from "Procedure" (a repeatable how-to meant to be performed again, '
+    "not a one-time effort toward a goal).\n"
     "    - When Person and Organization are truly balanced, prefer "
     '"Organization" (the continuant that outlives individuals).\n'
     '(3) Person, Organization, Place, and Concept all outrank "Entity" -- '
-    'so do "Event" and "Procedure" -- Entity is the last resort, used '
-    "only when nothing else fits.\n\n"
+    'so do "Event", "Procedure", "Decision", and "Project" -- Entity is '
+    "the last resort, used only when nothing else fits.\n\n"
     'If nothing in the source is worth extracting, set "extract" to false.\n\n'
     "Return ONLY one JSON object, with NO prose, NO markdown, and NO code "
     "fences around it, matching exactly this shape:\n"
     '{"extract": true|false, "type": "Person"|"Organization"|"Place"'
-    '|"Event"|"Procedure"|"Concept"|"Entity", "title": "...", '
-    '"description": "...", "body": "..."}\n'
+    '|"Event"|"Procedure"|"Decision"|"Project"|"Concept"|"Entity", '
+    '"title": "...", "description": "...", "body": "..."}\n'
     '"type", "title", "description", and "body" are only meaningful when '
     '"extract" is true.'
 )
-"""Stable system half of the 2-message prompt: the closed 7-value
+"""Stable system half of the 2-message prompt: the closed 9-value
 vocabulary, the aboutness heuristic (classify by subject, not by a
-borrowed name), the Person/Organization/Place/Event/Procedure/
-Concept-outrank-Entity tie-break chain -- including the bespoke KOM-silent
-sub-rules for a landmark named after a person/org, an organization sited
-at a location, an event at a place, and the occurrent Event-vs-Procedure
-distinction with the non-classifiable Decision guard -- and the JSON-only
-instruction baked into system text; the `user` message carries the raw
-source text."""
+borrowed name), the Person/Organization/Place/Event/Procedure/Decision/
+Project/Concept-outrank-Entity tie-break chain -- including the bespoke
+KOM-silent sub-rules for a landmark named after a person/org, an
+organization sited at a location, an event at a place, the occurrent
+Event-vs-Procedure distinction, positive Decision-vs-Concept-vs-Event
+disambiguation, and Project-vs-Event/Procedure disambiguation -- and the
+JSON-only instruction baked into system text; the `user` message carries
+the raw source text."""
 
 
 @dataclass(frozen=True)
@@ -114,7 +129,7 @@ class ExtractionResult:
 
     type: str
     """`"Person"`, `"Organization"`, `"Place"`, `"Event"`, `"Procedure"`,
-    `"Concept"`, or `"Entity"`."""
+    `"Decision"`, `"Project"`, `"Concept"`, or `"Entity"`."""
     title: str
     """Non-empty, stripped title for the derived object."""
     description: str
