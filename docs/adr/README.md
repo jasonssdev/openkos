@@ -34,4 +34,6 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 
 ## Index
 
-_No ADRs yet — the log begins with the first decision made while building MVP 1._
+| ADR | Title | Status | Date |
+| --- | --- | --- | --- |
+| [0001](0001-default-extraction-model.md) | Default extraction model settled by measurement | Accepted | 2026-07-19 |
