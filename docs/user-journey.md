@@ -31,6 +31,8 @@ A user does not "finish" with OpenKOS. Each source they add makes the base more 
 
 The **value moment** — the reason the whole thing exists — is the *query* step: getting a trustworthy, cited answer from knowledge the user never had to organize by hand.
 
+**In MVP 1:** `compile` is a null compiler — the source is embedded verbatim into exactly one `Source` concept, with no LLM synthesis. **Later MVPs** grow `compile` into the richer step this loop depicts: an LLM drafting a summary, updating related concept pages, and reconciling corrections across the base.
+
 ## UX principles
 
 Every interface decision serves these:
@@ -66,27 +68,50 @@ The motivating case: *"I just had a conversation I don't want to lose."* The sce
 The user points OpenKOS at the file. The engine copies it into `raw/` (immutable) and begins.
 
 ```bash
-openkos ingest ./call-with-maria-2026-07-14.txt --sensitivity confidential
+openkos ingest ./call-with-maria-2026-07-14.txt
 ```
 
 - **By path.** `ingest <path>` copies the source into `raw/` for the user — they never have to organize folders by hand. Sources keep their own names and extensions, markdown included, and the compiled knowledge lands in `bundle/`.
-- **One at a time by default.** Ingesting a single source keeps the user involved and the results reviewable.
-- **Batch is optional.** A folder or glob ingests many at once for users who want throughput: `openkos ingest ./inbox/` or `openkos ingest ./inbox/*.txt`.
-- **Sensitivity at capture.** The source (and everything derived from it) can be labeled: `--sensitivity confidential`. Unlabeled defaults to `private`.
+- **One at a time.** **In MVP 1**, `ingest` takes a single `<path>` argument; each source is captured and reviewed on its own. **Later MVPs** add batch/glob ingest (`openkos ingest ./inbox/` or `openkos ingest ./inbox/*.txt`) for users who want throughput.
+- **Sensitivity at capture.** **In MVP 1**, sensitivity is not a per-command flag — it comes from `default_sensitivity` in `openkos.yaml` and applies to everything ingested. **Later MVPs** may add a per-source `--sensitivity` flag for one-off overrides.
 
 ### Step 2 — Compile
 
-The engine reads the immutable source with the local model, drafts a summary concept, creates or updates related concept pages, records provenance back to the source, applies freshness stamps, and updates `index.md` and `log.md`. Here it finds that the call corrects something already in the base — the reading of *apatheia* recorded nine days ago — so rather than write a new page it proposes revising the existing one. The user waits a moment; nothing has been saved yet.
+**In MVP 1**, `compile` is the "null compiler": the engine copies the source into `raw/`, embeds its full text verbatim into exactly one `Source` concept (or a binary-fallback note if the content is not text), and updates `index.md` and `log.md`. There is no LLM extraction, no drafted summary, and no separate person/decision/topic pages — one source in, one honest `Source` concept out.
+
+**Later MVPs** grow this into real compilation: the engine reads the source with the local model, drafts a summary concept, creates or updates related concept pages, records provenance back to the source, applies freshness stamps, and reconciles corrections against what is already in the base — for example, recognizing that today's call corrects the reading of *apatheia* recorded nine days ago and revising that page instead of writing a new one.
 
 ### Step 3 — Review and confirm (default) — or hand it off
 
-**Default (interactive):** the engine shows what it *proposes* to do and asks before saving.
+**In MVP 1**, "review" is a preview of the exact files touched, followed by a plain yes/no confirm — not an editable panel.
 
 ```
-$ openkos ingest ./call-with-maria-2026-07-14.txt --sensitivity confidential
-→ Copied to raw/call-with-maria-2026-07-14.txt (immutable)
-→ Reading with local model (qwen3:8b)…
+$ openkos ingest ./call-with-maria-2026-07-14.txt
+openkos ingest: proposed changes:
+  + raw/call-with-maria-2026-07-14.txt
+  + bundle/sources/call-with-maria-2026-07-14.md
+  ~ index.md (new Source entry)
+  ~ log.md (new dated entry)
+Proceed with these changes? [y/N]:
+```
 
+The user accepts or declines; there is no `[e]dit` option to change the content in place. Declining aborts and nothing is written. This confirm step only appears when stdin is a TTY and review is not disabled; otherwise `--auto` (or `review: false` in `openkos.yaml`) is required to write unattended.
+
+**Optional (unattended):** a user who trusts the engine skips the review entirely — they just capture, and the engine does the rest.
+
+```bash
+openkos ingest ./call-with-maria-2026-07-14.txt --auto
+```
+
+```
+openkos ingest: imported 'call-with-maria-2026-07-14.txt' -> raw/call-with-maria-2026-07-14.txt, bundle/sources/call-with-maria-2026-07-14.md (index.md, log.md updated).
+```
+
+`--auto` (per command) overrides the default; setting `review: false` in the config makes unattended the standing behavior. Either way the proposed-changes preview and this same success line are printed — review is a preference, not a requirement.
+
+**Later MVPs** grow this into a richer review panel: multiple proposed concepts (summary, person, decision pages) shown together, an `[e]dit` option to revise content before saving, and a *reclassification* notice when a more sensitive source raises the sensitivity of a concept it feeds (the high-water-mark rule) — for example:
+
+```
 Proposed changes:
   +  bundle/sources/call-with-maria-2026-07-14.md   (new summary)
   +  bundle/people/maria-salazar.md                 (new)
@@ -98,23 +123,9 @@ Proposed changes:
 Apply? [Y]es / [e]dit / [n]o:
 ```
 
-The user can accept, edit before saving, or reject. This keeps consequential changes under human control — and this panel is exactly where that matters. It is not only proposing to rewrite a page the user wrote themselves; it is proposing to *reclassify* it, because a confidential source now feeds it (the high-water-mark rule). Both are consequential, so both are shown before anything is saved.
-
-**Optional (unattended):** a user who trusts the engine skips the review entirely — they just capture, and the engine does the rest.
-
-```bash
-openkos ingest ./call-with-maria-2026-07-14.txt --sensitivity confidential --auto
-```
-
-```
-✓ Ingested call-with-maria-2026-07-14.txt → 4 objects touched, committed.
-```
-
-`--auto` (per command) overrides the default; setting `review: false` in the config makes unattended the standing behavior. Either way, nothing is lost — every change is a git commit and can be inspected or reverted afterward. Review is a preference, not a requirement.
-
 ### Step 4 — Commit
 
-Accepted changes are committed to git. The knowledge is now part of the base, with full history preserved. One capture cycle is complete.
+**In MVP 1**, accepted changes are written to disk (`raw/`, the new `Source` concept, `index.md`, `log.md`); committing them to git is a manual, optional step the user takes themselves. **Later MVPs** may make that commit automatic as part of `ingest`. Either way the workspace is a normal git repository, so `git log`/`git diff` always show what changed.
 
 ### Step 5 — Use (the value moment)
 
@@ -126,17 +137,15 @@ openkos query "what does apatheia actually mean?"
 
 ```
 Apatheia is freedom from the pathē — the destructive passions — not the
-absence of feeling: the Stoics kept the eupatheiai, the "good feelings" [1].
-It is commonly misread as "indifference to emotion" by analogy with the
-English cognate apathy [1].
+absence of feeling: the Stoics kept the eupatheiai, the "good feelings"
+(sources/call-with-maria-2026-07-14). It is commonly misread as
+"indifference to emotion" by analogy with the English cognate apathy.
 
-Sources:
-  [1] bundle/concepts/stoicism.md
-      → bundle/sources/call-with-maria-2026-07-14.md
-      → raw/call-with-maria-2026-07-14.txt
+Citations:
+  → sources/call-with-maria-2026-07-14 (call with maria 2026 07 14)
 ```
 
-Two things are worth noticing in that answer. It is the *corrected* understanding, not the one the user first wrote down — the base learned. And the citation chain runs all the way back to the immutable original, through the Source concept that represents it: the user can always ask *how do I know this?* and get a file path rather than a shrug.
+**In MVP 1**, `query` cites the `Source` concept it drew on directly (`bundle/sources/<slug>.md`), which itself embeds the raw text and points back to `raw/<name>`. The citation chain still lets the user ask *how do I know this?* and get a file path, even though there is no separate extracted topic page yet. **Later MVPs**, once `compile` produces topic pages (like a `concepts/stoicism.md`), the citation chain will run from the answer through that topic page, back through the Source concept, to the immutable original — and the answer above will reflect the *corrected* understanding the base learned from later sources, not just the first one it saw.
 
 A good answer can be filed back as a new concept, so exploration compounds — feeding the loop again.
 
@@ -151,9 +160,9 @@ A good answer can be filed back as a new concept, so exploration compounds — f
 
 The bundle is your files, so you can edit any concept document directly — in Obsidian, VS Code, or any editor — without asking the engine. This is not a workaround; it is the point. The canonical files are the source of truth, and the engine's indexes are derived from them.
 
-When you edit a concept by hand, the engine reconciles the next time you run a command: it notices the file changed (by content hash), re-indexes what's affected, and notes the external edit in `log.md`. Because every index is rebuildable from the files, your edit is never lost — the engine adapts to it. If the edit introduced a problem (invalid frontmatter, a broken link, a stale `as of` stamp), `openkos lint` surfaces it; the engine flags, it does not overrule you.
+**In MVP 1**, a hand edit simply stays as you left it — the engine does not scan for or automatically reconcile out-of-band edits. `openkos status`/`openkos lint` read the bundle fresh each time, so they always reflect your latest edit; if the edit introduced a problem (invalid frontmatter, a broken link, a stale `as of` stamp), `lint` surfaces it. **Later MVPs** may add automatic reconciliation: detecting a changed file by content hash, re-indexing what's affected, and logging the external edit in `log.md`.
 
-When you later ingest a source that touches a concept you edited, the engine reads the current file first and builds on your version, and review mode shows the merged change before saving — so the compiler adds to your edit rather than overwriting it. Git keeps every version, so any change stays diffable and reversible.
+**Later MVPs**: when you later ingest a source that touches a concept you edited, the engine would read the current file first and build on your version, with review mode showing the merged change before saving — so the compiler adds to your edit rather than overwriting it. **In MVP 1**, `ingest` produces one `Source` concept per source and does not merge into concepts you have hand-edited. Git keeps every version either way, so any change stays diffable and reversible if you use it.
 
 One exception: `raw/` sources are read-only by convention. Editing an original by hand breaks its provenance hash; to correct a source, add a new one rather than rewriting the original.
 
@@ -184,13 +193,13 @@ That is the mature shape. **In MVP 1, `forget` is only the simple delete** — r
 | | Interactive (default) | Unattended |
 | --- | --- | --- |
 | Command | `openkos ingest <path>` | `openkos ingest <path> --auto` (or `review: false`) |
-| Before saving | Shows proposed changes, asks to confirm | Saves and commits directly |
+| Before saving | Shows proposed changes, asks to confirm | Saves directly to disk (git commit stays manual/optional, same as interactive) |
 | Best for | Staying involved, important sources | Bulk capture, trusted flows |
 | Safety net | Review, plus git history | git history (inspect / revert anytime) |
 
 ## MVP 1 scope
 
-For MVP 1 the journey is **text only**: `ingest` accepts plain-text sources (`.txt`, `.md`). A transcript that is already text fits perfectly. Other formats (PDF, web, audio, images) arrive as producers in later MVPs and extend this same journey without changing its shape.
+MVP 1's intended use case is **text**: `ingest` is built and tested for plain-text sources (`.txt`, `.md`), and a transcript that is already text fits perfectly. `ingest` does not enforce a file-extension allowlist — any readable file is accepted and copied into `raw/`; text content is embedded verbatim into the `Source` concept, and non-text content gets a binary-fallback note in the concept body instead. Dedicated format producers for PDF, web, audio, and images arrive in later MVPs and extend this same journey without changing its shape.
 
 ## Deferred / open questions
 
