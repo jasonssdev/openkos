@@ -159,16 +159,26 @@ def _titleize(stem: str) -> str:
     return _TITLE_SEPARATOR_RE.sub(" ", stem).strip()
 
 
-_TYPE_TO_LINK_DIR: dict[str, str] = {"Concept": "concepts", "Entity": "entities"}
-_TYPE_TO_SECTION: dict[str, str] = {"Concept": "Concepts", "Entity": "Entities"}
+_TYPE_TO_LINK_DIR: dict[str, str] = {
+    "Concept": "concepts",
+    "Entity": "entities",
+    "Person": "people",
+    "Organization": "organizations",
+}
+_TYPE_TO_SECTION: dict[str, str] = {
+    "Concept": "Concepts",
+    "Entity": "Entities",
+    "Person": "People",
+    "Organization": "Organizations",
+}
 """`extraction.ExtractionResult.type` -> catalog section / bundle subdirectory
-(design: Path/Catalog); the closed `{Concept, Entity}` vocabulary is the only
-key space these two maps need."""
+(design: Path/Catalog); the closed `{Concept, Entity, Person, Organization}`
+vocabulary is the only key space these two maps need."""
 
 
 @dataclass(frozen=True)
 class _DerivedPlan:
-    """A validated derived Concept/Entity staged for Phase B, or `None`
+    """A validated derived object staged for Phase B, or `None`
     (`_stage_derived_object`'s return) when extraction is skipped, declined,
     fails validation, or the LLM is unavailable -- every one of those cases
     degrades to Source-only, never a crash (design: Degrade seam)."""
@@ -184,9 +194,10 @@ class _DerivedPlan:
 
 
 def _source_has_derived_object(bundle_dir: Path, source_slug: str) -> bool:
-    """True if any existing Concept/Entity already cites this source in its
-    provenance -- so a re-ingest never extracts (or writes) a second derived
-    object for the same source, independent of nondeterministic LLM titles.
+    """True if any existing derived object of any of the four types already
+    cites this source in its provenance -- so a re-ingest never extracts (or
+    writes) a second derived object for the same source, independent of
+    nondeterministic LLM titles.
 
     Idempotency in `_stage_derived_object` cannot be keyed off the derived
     document's own slug (`_slugify(extraction.title)`), because that title
@@ -199,7 +210,7 @@ def _source_has_derived_object(bundle_dir: Path, source_slug: str) -> bool:
     key.
     """
     source_ref = f"sources/{source_slug}"
-    for link_dir in ("concepts", "entities"):
+    for link_dir in ("concepts", "entities", "people", "organizations"):
         section_dir = bundle_dir / link_dir
         if not section_dir.is_dir():
             continue
@@ -228,7 +239,7 @@ def _stage_derived_object(
     bundle_dir: Path,
     llm: LLMBackend,
 ) -> _DerivedPlan | None:
-    """Attempt LLM extraction of at most one derived Concept/Entity from the
+    """Attempt LLM extraction of at most one derived object from the
     source's decoded text, and stage it for Phase B (`ingest` owns
     slug/path derivation and degrade-note wording; the extraction leaf stays
     config-free, per design's Technical Approach).
@@ -349,20 +360,21 @@ def ingest(
     ),
 ) -> None:
     """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
-    LLM extraction of at most one derived Concept/Entity (MVP-2 vertical
-    slice; D5).
+    LLM extraction of at most one derived object (MVP-2 vertical slice; D5).
 
     Beyond the MVP-1 "null compiler" (exactly one `Source` concept per
     invocation, with an honest description stating the source was imported),
     this now also attempts ONE LLM-driven extraction step: an injected
     `OllamaClient` classifies the source's decoded text as `{Concept,
-    Entity}` or declines. Any failure of that step -- declined extraction,
-    fail-closed validation, or the LLM being unavailable -- degrades to the
-    exact same Source-only result MVP-1 always produced, with a short note
-    on stderr and exit 0; a successful extraction ADDS a second, create-only
-    derived document (`bundle/concepts/<slug>.md` or
-    `bundle/entities/<slug>.md`) alongside the Source, never replacing it.
-    See `_stage_derived_object` for the full degrade matrix.
+    Entity, Person, Organization}` or declines. Any failure of that step --
+    declined extraction, fail-closed validation, or the LLM being
+    unavailable -- degrades to the exact same Source-only result MVP-1
+    always produced, with a short note on stderr and exit 0; a successful
+    extraction ADDS a second, create-only derived document
+    (`bundle/concepts/<slug>.md`, `bundle/entities/<slug>.md`,
+    `bundle/people/<slug>.md`, or `bundle/organizations/<slug>.md`)
+    alongside the Source, never replacing it. See `_stage_derived_object`
+    for the full degrade matrix.
 
     Phase A (pure, no writes) validates and builds the entire result in
     memory, in order: `src` must be an existing, readable file, or this
@@ -402,9 +414,10 @@ def ingest(
     document (`write_exclusive`, create-only) on a fresh ingest -- or, on a
     byte-identical re-ingest (D2), the raw copy step is SKIPPED entirely and
     the concept is written via non-exclusive `write_atomic` instead, since it
-    may already exist -- then, if a derived Concept/Entity was staged, its
-    own directory (`bundle/concepts/` or `bundle/entities/`, created if
-    absent) and its document (`write_exclusive`, create-only -- always,
+    may already exist -- then, if a derived object was staged, its own
+    directory (`bundle/concepts/`, `bundle/entities/`, `bundle/people/`, or
+    `bundle/organizations/`, created if absent) and its document
+    (`write_exclusive`, create-only -- always,
     regardless of whether the Source itself was fresh or regenerated) --
     then `index.md` and `log.md` (`write_atomic`, catalog LAST -- so the
     catalog never points at a file that does not yet exist, mirroring

@@ -525,7 +525,7 @@ def test_build_concept_emits_required_frontmatter_fields() -> None:
 
 
 def test_build_concept_accepts_entity_type() -> None:
-    """`type: Entity` is the other member of the closed vocabulary and
+    """`type: Entity` is another member of the closed vocabulary and
     builds a conformant document just like `Concept` (Phase 3.1)."""
     text = _build_call_concept(type="Entity", title="Zettelkasten")
 
@@ -533,6 +533,28 @@ def test_build_concept_accepts_entity_type() -> None:
 
     assert metadata["type"] == "Entity"
     assert metadata["title"] == "Zettelkasten"
+
+
+def test_build_concept_accepts_person_type() -> None:
+    """`type: Person` is a member of the widened closed vocabulary and
+    builds a conformant document just like `Concept`/`Entity`."""
+    text = _build_call_concept(type="Person", title="Epictetus")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Person"
+    assert metadata["title"] == "Epictetus"
+
+
+def test_build_concept_accepts_organization_type() -> None:
+    """`type: Organization` is a member of the widened closed vocabulary and
+    builds a conformant document just like `Concept`/`Entity`."""
+    text = _build_call_concept(type="Organization", title="Praxis Foundation")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Organization"
+    assert metadata["title"] == "Praxis Foundation"
 
 
 def test_build_concept_sensitivity_inherited_verbatim() -> None:
@@ -611,10 +633,11 @@ def test_build_concept_passes_check_conformance(tmp_path: Path) -> None:
 
 
 def test_build_concept_raises_on_invalid_type() -> None:
-    """`type` outside `{Concept, Entity}` fails closed with `ValueError`
-    (Phase 3.2)."""
+    """`type` outside `{Concept, Entity, Person, Organization}` fails
+    closed with `ValueError`. `"Place"` is a real future KOM continuant,
+    still out of scope for this vocabulary batch (Phase 3.2)."""
     with pytest.raises(ValueError, match="type"):
-        _build_call_concept(type="Person")
+        _build_call_concept(type="Place")
 
 
 def test_build_concept_raises_on_blank_title() -> None:

@@ -94,7 +94,9 @@ def build_source_concept(
     return dump_frontmatter(metadata, body)
 
 
-_CONCEPT_TYPES: Final[frozenset[str]] = frozenset({"Concept", "Entity"})
+_CONCEPT_TYPES: Final[frozenset[str]] = frozenset(
+    {"Concept", "Entity", "Person", "Organization"}
+)
 """Closed vocabulary `build_concept` accepts, per the design's Architecture
 Decisions ("Vocabulary"); anything else fails closed with `ValueError`."""
 
@@ -115,7 +117,8 @@ def build_concept(
     Unlike `build_source_concept` (whose inputs are engine-derived and
     trusted, so it skips validation -- see its docstring), this builder is
     the fail-closed gate for `extraction.ExtractionResult` data: `type` MUST
-    be one of `{"Concept", "Entity"}`; `title`/`description` MUST be non-empty
+    be one of `{"Concept", "Entity", "Person", "Organization"}`;
+    `title`/`description` MUST be non-empty
     after stripping whitespace AND single-line (no embedded newlines, since
     each is a single Markdown/heading line); and `provenance` MUST be
     non-empty (a derived object always cites the Source it came from). Any

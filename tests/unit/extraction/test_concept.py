@@ -43,6 +43,17 @@ _ENTITY_JSON = (
     '"description": "A note-taking tool.", "body": ""}'
 )
 
+_PERSON_JSON = (
+    '{"extract": true, "type": "Person", "title": "Epictetus", '
+    '"description": "A Stoic philosopher and former slave.", '
+    '"body": "Taught that we control only our own judgments."}'
+)
+
+_ORGANIZATION_JSON = (
+    '{"extract": true, "type": "Organization", "title": "Praxis Foundation", '
+    '"description": "A nonprofit researching Stoic philosophy.", "body": ""}'
+)
+
 
 # --- Scaffold ---------------------------------------------------------------
 
@@ -94,6 +105,37 @@ def test_valid_entity_json_returns_extraction_result() -> None:
     assert result.description == "A note-taking tool."
 
 
+def test_valid_person_json_returns_extraction_result() -> None:
+    """A well-formed `type: Person` reply parses with `type == "Person"`
+    (spec: Person preferred over Entity for a named individual)."""
+    llm = _FakeLLM(reply=_PERSON_JSON)
+
+    result = concept_mod.extract_concept(
+        "Epictetus was a Stoic philosopher.", source_title="Notes", llm=llm
+    )
+
+    assert result is not None
+    assert result.type == "Person"
+    assert result.title == "Epictetus"
+    assert result.description == "A Stoic philosopher and former slave."
+
+
+def test_valid_organization_json_returns_extraction_result() -> None:
+    """A well-formed `type: Organization` reply parses with `type ==
+    "Organization"` (spec: Organization preferred over Entity for a named
+    company/institution)."""
+    llm = _FakeLLM(reply=_ORGANIZATION_JSON)
+
+    result = concept_mod.extract_concept(
+        "The Praxis Foundation researches Stoicism.", source_title="Notes", llm=llm
+    )
+
+    assert result is not None
+    assert result.type == "Organization"
+    assert result.title == "Praxis Foundation"
+    assert result.description == "A nonprofit researching Stoic philosophy."
+
+
 # --- Parsing: fenced / prose-wrapped JSON -----------------------------------
 
 
@@ -141,9 +183,11 @@ def test_extract_false_returns_none() -> None:
 
 
 def test_invalid_type_returns_none() -> None:
-    """A `type` outside `{Concept, Entity}` fails closed to `None`."""
+    """A `type` outside `{Concept, Entity, Person, Organization}` fails
+    closed to `None`. `"Place"` is a real future KOM continuant, still out
+    of scope for this vocabulary batch -- a genuinely invalid sentinel."""
     llm = _FakeLLM(
-        reply='{"extract": true, "type": "Person", "title": "T", "description": "D"}'
+        reply='{"extract": true, "type": "Place", "title": "T", "description": "D"}'
     )
 
     result = concept_mod.extract_concept("text", source_title="t", llm=llm)
@@ -294,8 +338,10 @@ def test_ollama_error_propagates_unswallowed() -> None:
 
 def test_prompt_contains_vocabulary_and_heuristic() -> None:
     """The system prompt pins the classification contract: the closed
-    `{Concept, Entity}` vocabulary, the three-test heuristic, the
-    prefer-specific-over-Entity rule, and the JSON-only instruction."""
+    `{Concept, Entity, Person, Organization}` vocabulary, the aboutness
+    heuristic (a borrowed name is a label, not the subject), the
+    Person/Organization/Concept-outrank-Entity tie-break, and the JSON-only
+    instruction."""
     llm = _FakeLLM(reply=_CONCEPT_JSON)
 
     concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
@@ -304,10 +350,12 @@ def test_prompt_contains_vocabulary_and_heuristic() -> None:
     system_content = llm.calls[0][0]["content"]
     assert '"Concept"' in system_content
     assert '"Entity"' in system_content
-    assert "distinct structure" in system_content
-    assert "relationships" in system_content
-    assert "recurrence" in system_content
+    assert '"Person"' in system_content
+    assert '"Organization"' in system_content
+    assert "fundamentally about" in system_content
+    assert "borrowed" in system_content
     assert "fallback" in system_content
+    assert "outrank" in system_content
     assert "JSON object" in system_content
 
 

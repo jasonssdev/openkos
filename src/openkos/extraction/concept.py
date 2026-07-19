@@ -18,36 +18,50 @@ from typing import Any
 
 from openkos.llm.base import LLMBackend, Message
 
-_VALID_TYPES = frozenset({"Concept", "Entity"})
+_VALID_TYPES = frozenset({"Concept", "Entity", "Person", "Organization"})
 """Closed classification vocabulary; anything else fails validation."""
 
 _SYSTEM_PROMPT = (
     "You are a classification step in a local-first knowledge engine. Read "
     "the SOURCE text below and decide whether it is worth extracting as ONE "
     "derived knowledge object.\n\n"
-    'Vocabulary: the derived object\'s "type" MUST be one of exactly two '
-    'values: "Concept" or "Entity". Apply this three-test heuristic to '
-    "decide: (1) distinct structure -- does the idea have its own coherent "
-    "shape, not just a passing mention; (2) relationships -- does it connect "
-    "to or explain other ideas; (3) recurrence -- would this idea plausibly "
-    "reappear across multiple sources, rather than being a one-off detail. "
-    'Prefer "Concept" whenever the source describes an idea, topic, theory, '
-    'term, or framework that passes these tests. Use "Entity" ONLY as a '
-    "fallback, when the content is a concrete tool, product, or artifact "
-    "that is not itself an idea or framework -- Entity is never the first "
-    "choice, only what remains when Concept does not fit.\n\n"
+    'Vocabulary: the derived object\'s "type" MUST be one of exactly four '
+    'values: "Person", "Organization", "Concept", or "Entity". Classify by '
+    "what the source is fundamentally about:\n"
+    '- "Person": the source is fundamentally about ONE specific, named '
+    "individual human -- their identity, role, work, or biography.\n"
+    '- "Organization": the source is fundamentally about ONE specific, '
+    "named group, company, institution, team, or agency.\n"
+    '- "Concept": the source describes an idea, topic, theory, term, or '
+    "framework -- INCLUDING one named after a person or organization (a "
+    "named method, system, principle, or law). A name borrowed from a "
+    "person or organization is a label, not the subject: classify by what "
+    "the source is actually about, not by whose name it carries.\n"
+    '- "Entity": a fallback for a concrete tool, product, or artifact that '
+    "is neither a who nor an idea -- Entity is never the first choice, only "
+    "what remains when nothing else fits.\n\n"
+    "Tie-breaks, applied in this order: (1) name vs. denoted concept -- "
+    'e.g. "Toyota" the company is Organization, but "Toyota Production '
+    'System" is Concept; a person is Person, but a theory named after them '
+    "is Concept -- prefer Person or Organization ONLY when the source "
+    "centers on the individual or institution itself, otherwise choose "
+    'Concept; (2) Person vs. Organization -- pick whichever the source '
+    'centers on; when truly balanced, prefer "Organization" (the '
+    'continuant that outlives individuals); (3) Person, Organization, and '
+    'Concept all outrank "Entity" -- Entity is the last resort.\n\n'
     'If nothing in the source is worth extracting, set "extract" to false.\n\n'
     "Return ONLY one JSON object, with NO prose, NO markdown, and NO code "
     "fences around it, matching exactly this shape:\n"
-    '{"extract": true|false, "type": "Concept"|"Entity", "title": "...", '
-    '"description": "...", "body": "..."}\n'
+    '{"extract": true|false, "type": "Person"|"Organization"|"Concept"'
+    '|"Entity", "title": "...", "description": "...", "body": "..."}\n'
     '"type", "title", "description", and "body" are only meaningful when '
     '"extract" is true.'
 )
-"""Stable system half of the 2-message prompt: closed vocabulary, the
-three-test heuristic, prefer-Concept-over-Entity, and the JSON-only
-instruction baked into system text; the `user` message carries the raw
-source text."""
+"""Stable system half of the 2-message prompt: the closed 4-value
+vocabulary, the aboutness heuristic (classify by subject, not by a
+borrowed name), the Person/Organization/Concept-outrank-Entity tie-break
+chain, and the JSON-only instruction baked into system text; the `user`
+message carries the raw source text."""
 
 
 @dataclass(frozen=True)
@@ -55,7 +69,7 @@ class ExtractionResult:
     """One validated derived object proposed for a source's text."""
 
     type: str
-    """`"Concept"` or `"Entity"`."""
+    """`"Person"`, `"Organization"`, `"Concept"`, or `"Entity"`."""
     title: str
     """Non-empty, stripped title for the derived object."""
     description: str
