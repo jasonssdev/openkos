@@ -73,7 +73,17 @@ Writes are **not transactional**: each individual write is create-only or atomic
 
 ### `openkos query "<question>"`
 
-Answers a natural-language question from the compiled bundle, with citations back to the concepts and their sources. A good answer can be filed back as a new concept (the two-output rule).
+**Read-only.** Answers a natural-language question from the compiled bundle, with citations back to the concepts and their sources. It shares the same shape as `status`/`lint`: no writes, no confirmation, no `--auto`. Requires a local Ollama server running the model configured in `openkos.yaml` (see `openkos init`'s `--model`) — `query` never calls Ollama outside a workspace.
+
+Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `ingest`/`status`/`lint` use, before any LLM or index work happens. Retrieval is lexical only (FTS5, inherited from the `retrieval.answer` seam) — there is no semantic/vector search in MVP 1 (that lands later; see "Not in MVP 1").
+
+| Flag | Meaning |
+| --- | --- |
+| `--limit <n>` | Max concepts to retrieve as context. Defaults to `5`. |
+
+Output is answer-first and banner-free: the answer text, then (only when at least one citation exists) a blank line, `Citations:`, and one `  → <concept_id> (<title>)` line per citation, in the same order the answer cited them. When nothing in the bundle matches the question, `query` prints a single no-match line and still exits `0` — a valid "no answer found" response is not an error. A failure to reach Ollama, or a missing/unusable FTS5 index, is caught and reported on stderr (exit 1), never a raw traceback.
+
+A good answer can be filed back as a new concept (the two-output rule) — that re-filing step is not automated in this slice.
 
 ### `openkos lint`
 

@@ -28,6 +28,10 @@ _SYSTEM_PROMPT = (
     'rather than guessing; an honest "the compiled bundle does not cover '
     'this" is the correct answer when the context is insufficient.'
 )
+"""Stable system half of the 2-message prompt (D5): local-first grounding
+rules (answer only from CONTEXT, cite by concept id, admit gaps honestly)
+baked into system text; the `user` message carries the context blocks +
+question."""
 
 
 @dataclass(frozen=True)

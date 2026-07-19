@@ -560,18 +560,28 @@ def test_build_index_and_search_never_write_to_disk(tmp_path: Path) -> None:
     assert not (bundle_dir / ".gitignore").exists()
 
 
-def test_cli_module_does_not_import_state_fts() -> None:
-    """`state/fts.py` is imported by no CLI module (No CLI Surface scenario)."""
+def test_ingest_and_forget_do_not_reference_state_fts() -> None:
+    """`state/fts.py` remains a dormant library dependency for `ingest`/
+    `forget` (No CLI Surface, No Lifecycle Change scenario): its own spec
+    text anticipates staying dormant only "until a future command calls
+    it" -- that future command is `query` (`add-query-command`), which
+    legitimately imports `FtsUnavailable` to map it to exit 1 (D2). This
+    test narrows to the two commands the requirement actually protects:
+    neither `ingest` nor `forget`'s source mentions `fts` or `state`, so
+    their behavior is provably unaffected by `state/fts.py` existing."""
     cli_main = _REPO_ROOT / "src" / "openkos" / "cli" / "main.py"
     tree = ast.parse(cli_main.read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module)
+    functions = {
+        node.name: ast.get_source_segment(cli_main.read_text(encoding="utf-8"), node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name in ("ingest", "forget")
+    }
 
-    assert not any("state" in name for name in imported)
+    assert set(functions) == {"ingest", "forget"}
+    for name, source in functions.items():
+        assert source is not None
+        assert "fts" not in source, f"{name} unexpectedly references fts"
+        assert "state" not in source, f"{name} unexpectedly references state"
 
 
 # --- Phase 8: integration fixture -------------------------------------------
