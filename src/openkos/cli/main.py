@@ -2,8 +2,10 @@
 
 import re
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 import typer
 
@@ -17,6 +19,7 @@ from openkos.llm.ollama import (
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
+    model_tag_matches,
 )
 from openkos.model import okf
 from openkos.retrieval.answer import answer
@@ -736,3 +739,178 @@ def query(
         typer.echo("Citations:")
         for citation in result.citations:
             typer.echo(f"  → {citation.concept_id} ({citation.title})")
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    """One `doctor` check's outcome (D5): accumulated, never raised, so a
+    failure never short-circuits the checks that follow it."""
+
+    label: str
+    status: Literal["pass", "fail", "skip"]
+    critical: bool
+    remediation: str | None = None
+    detail: str | None = None
+
+
+def _render_check(r: CheckResult) -> None:
+    """Print one `CheckResult` as `[PASS]`/`[FAIL]`/`[SKIP] <label>`, with an
+    optional ` — <detail>` suffix and, only under a `[FAIL]`, an indented
+    `  -> <remediation>` line naming the user's own next command."""
+    tag = {"pass": "[PASS]", "fail": "[FAIL]", "skip": "[SKIP]"}[r.status]
+    line = f"{tag} {r.label}"
+    if r.detail:
+        line += f" — {r.detail}"
+    typer.echo(line)
+    if r.status == "fail" and r.remediation:
+        typer.echo(f"  -> {r.remediation}")
+
+
+@app.command()
+def doctor() -> None:
+    """Read-only environment health scan: fixed checks against the local
+    workspace and local Ollama, printed as `[PASS]`/`[FAIL]`/`[SKIP]` lines
+    with actionable remediation, usable even before `openkos init`.
+
+    Deliberately NEW control-flow shape versus `status`/`lint`/`query`:
+    instead of exiting on the first failure, this runs ALL five checks,
+    appends each to a `list[CheckResult]`, renders every line
+    unconditionally, then exits ONCE (`code=1`) if any CRITICAL check
+    failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
+    TEXT lives only here; `llm/` stays config-free (D1).
+
+    Checks, in order: (1) workspace-initialized -- informational, via the
+    shared `config.require_workspace` gate; (2) config-valid -- critical,
+    workspace-only, `[SKIP]` outside a workspace; (3) Ollama-reachable --
+    critical, always, via `OllamaClient.list_models()`; (4) model-installed
+    -- critical, always, via `model_tag_matches`; `[SKIP]` (never `[FAIL]`)
+    when Ollama is unreachable, since the two share one root cause (D6);
+    (5) bundle-readable -- informational, workspace-only, `[SKIP]` outside a
+    workspace. Outside a workspace, checks (3)/(4) still run against
+    `config.DEFAULT_MODEL` and still determine the exit code (spec: Doctor
+    Works Outside An Initialized Workspace).
+
+    Never creates, modifies, or deletes any file, and never runs a
+    remediation command itself (spec: Doctor Is Read-Only).
+    """
+    root = Path.cwd()
+    results: list[CheckResult] = []
+
+    # 1. workspace-initialized (informational)
+    workspace_reason = config.require_workspace(root)
+    in_workspace = workspace_reason is None
+    results.append(
+        CheckResult(
+            "Workspace initialized",
+            "pass" if in_workspace else "fail",
+            critical=False,
+            remediation=None if in_workspace else "openkos init",
+            detail=None if in_workspace else workspace_reason,
+        )
+    )
+
+    # 2. config-valid (critical, workspace-only; SKIP outside)
+    cfg: config.Config | None = None
+    if in_workspace:
+        try:
+            cfg = config.read_config(root)
+            results.append(
+                CheckResult(
+                    "Config valid", "pass", critical=True, detail=f"model {cfg.model}"
+                )
+            )
+        except (OSError, ValueError) as exc:
+            results.append(
+                CheckResult(
+                    "Config valid",
+                    "fail",
+                    critical=True,
+                    remediation="fix openkos.yaml",
+                    detail=str(exc),
+                )
+            )
+    else:
+        results.append(CheckResult("Config valid", "skip", critical=True))
+
+    model = cfg.model if cfg is not None else config.DEFAULT_MODEL
+
+    # 3. Ollama-reachable (critical, always)
+    reachable = False
+    installed: list[str] = []
+    # doctor is a fast interactive diagnostic: use a short preflight timeout so a
+    # hung/firewalled host fails quickly instead of blocking on DEFAULT_TIMEOUT.
+    client = OllamaClient(model=model, timeout=5.0)
+    try:
+        installed = client.list_models()
+        reachable = True
+        results.append(
+            CheckResult(
+                "Ollama reachable",
+                "pass",
+                critical=True,
+                detail=f"{len(installed)} models",
+            )
+        )
+    except OllamaUnavailable as exc:
+        results.append(
+            CheckResult(
+                "Ollama reachable",
+                "fail",
+                critical=True,
+                remediation="ollama serve",
+                detail=str(exc),
+            )
+        )
+    except OllamaError as exc:  # non-transport server error
+        results.append(
+            CheckResult("Ollama reachable", "fail", critical=True, detail=str(exc))
+        )
+
+    # 4. model-installed (critical, always; SKIP-blocked if unreachable, D6)
+    label = f"Model '{model}' installed"
+    if not reachable:
+        results.append(
+            CheckResult(
+                label, "skip", critical=True, detail="blocked: Ollama unreachable"
+            )
+        )
+    elif model_tag_matches(model, installed):
+        results.append(CheckResult(label, "pass", critical=True))
+    else:
+        results.append(
+            CheckResult(
+                label, "fail", critical=True, remediation=f"ollama pull {model}"
+            )
+        )
+
+    # 5. bundle-readable (informational, workspace-only; SKIP outside)
+    if in_workspace:
+        survey = okf.survey_bundle(config.WorkspaceLayout(root).bundle_dir)
+        if not survey.findings:
+            results.append(
+                CheckResult(
+                    "Bundle readable",
+                    "pass",
+                    critical=False,
+                    detail=f"{survey.sources} sources, {survey.concepts} concepts",
+                )
+            )
+        else:
+            results.append(
+                CheckResult(
+                    "Bundle readable",
+                    "fail",
+                    critical=False,
+                    detail=f"{len(survey.findings)} issue(s)",
+                )
+            )
+    else:
+        results.append(CheckResult("Bundle readable", "skip", critical=False))
+
+    typer.echo(f"openkos doctor: checking environment at {root}")
+    typer.echo()
+    for r in results:
+        _render_check(r)
+
+    if any(r.status == "fail" and r.critical for r in results):
+        raise typer.Exit(code=1)

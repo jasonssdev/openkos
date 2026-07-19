@@ -43,7 +43,7 @@ Deliverables:
 - Query answering with citations
 - Freshness lint v0 — mechanical checks only: flag any fact whose `as of` stamp is older than the configured freshness window (default 7d), and surface orphan pages by scanning markdown links; volatility classification is deferred to MVP 2
 - One lifecycle operation — a simple delete (`forget <concept-id>`: remove the concept, its index entry, and its state), with undo through plain git; archive, tombstones, the reference-aware `forget` flow, and the privacy purge all arrive in MVP 2
-- A command-line interface: `init`, `ingest`, `query`, `lint`, `status`, and a basic `forget` (see the [CLI reference](cli.md))
+- A command-line interface: `init`, `ingest`, `query`, `lint`, `status`, a basic `forget`, and `doctor` (see the [CLI reference](cli.md))
 - Output is plain files, browsable in Obsidian, VS Code, or GitHub
 
 What a user can do after MVP 1: drop notes and articles into a folder, compile them into a living knowledge base, and get cited answers — entirely offline.

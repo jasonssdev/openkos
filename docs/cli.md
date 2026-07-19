@@ -118,6 +118,24 @@ MVP 1 does **not** check inbound references before deleting. Removing a concept 
 
 You can also just delete the file by hand — the bundle is your files. `forget` is the ergonomic version that cleans up the index and log in one step.
 
+### `openkos doctor`
+
+**Read-only.** A fixed environment health scan: five checks against the local workspace and the local Ollama server, each printed as one `[PASS]`, `[FAIL]`, or `[SKIP]` line. Every `[FAIL]` line is immediately followed by an indented `  -> <fix command>` line naming the user's own next command (`ollama serve`, `ollama pull <model>`, `openkos init`) — `doctor` never runs these commands itself.
+
+Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it runs and prints **all** applicable checks, then exits once. The checks, in order:
+
+1. **Workspace initialized** — informational.
+2. **Config valid** — critical, workspace-only (`[SKIP]` outside a workspace).
+3. **Ollama reachable** — critical, always runs.
+4. **Model `<tag>` installed** — critical, always runs; `[SKIP]` (not `[FAIL]`) when Ollama is unreachable, since the two share one root cause. A configured tag counts as installed if it matches an installed tag exactly, or matches that tag's `<name>:latest` form.
+5. **Bundle readable** — informational, workspace-only (`[SKIP]` outside a workspace).
+
+Exit code reflects **critical** failures only: `doctor` exits `1` if config-valid, Ollama-reachable, or model-installed failed, and `0` otherwise — the two informational checks (workspace-initialized, bundle-readable) never affect the exit code on their own.
+
+`doctor` also works **outside an initialized workspace**, as a pure Ollama preflight: the workspace-initialized check reports an informational `[FAIL]` with `openkos init` remediation, config-valid and bundle-readable are skipped as not applicable, and Ollama-reachable/model-installed still run — checked against the packaged default model — and still determine the exit code.
+
+`doctor` never creates, modifies, or deletes any file.
+
 ## `openkos.yaml` (workspace config)
 
 Structured settings for the workspace, read by the engine. It lives at the workspace root, beside `raw/` and `bundle/` — not inside the bundle, which holds concept documents and nothing else.

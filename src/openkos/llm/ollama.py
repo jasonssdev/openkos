@@ -117,10 +117,67 @@ class OllamaClient:
             )
         return content
 
+    def list_models(self) -> list[str]:
+        """GET `{host}/api/tags`; return installed model tags (D1). Config-free."""
+        url = f"{self._host}/api/tags"
+        # Same trusted-host rationale as `chat()`'s S310 note (D2: host is
+        # user/env config, normalized to a scheme, never derived from
+        # document content).
+        request = urllib.request.Request(url, method="GET")  # noqa: S310
+        try:
+            response = self._urlopen(request, timeout=self._timeout)
+        except urllib.error.HTTPError as exc:
+            raise _map_http_error(exc) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise self._unavailable(exc) from exc
+
+        try:
+            body = response.read()
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            http.client.IncompleteRead,
+        ) as exc:
+            raise self._unavailable(exc) from exc
+
+        # Mirror `chat()`'s guard: wrap ALL body parsing -- json.loads, the
+        # `models` extraction AND the entry iteration -- in one try/except, so a
+        # valid-JSON body whose `models` is null or a non-iterable scalar (e.g.
+        # `{"models": null}`, `{"models": 42}`) maps to the OllamaError family
+        # instead of leaking a bare TypeError from the `for` loop.
+        try:
+            entries = json.loads(body)["models"]
+            tags: list[str] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                tag = entry.get("model") or entry.get("name")  # D2 field variance
+                if isinstance(tag, str) and tag:
+                    tags.append(tag)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise OllamaError(f"Malformed response from Ollama: {exc}") from exc
+        return tags
+
     def _unavailable(self, exc: BaseException) -> OllamaUnavailable:
         """Build the `OllamaUnavailable` for a transport failure, shared by
         both the connect-phase and read-phase except branches (D4)."""
         return OllamaUnavailable(f"Ollama not reachable at {self._host}: {exc}")
+
+
+def model_tag_matches(configured: str, installed: list[str]) -> bool:
+    """True if `configured` matches any installed tag (D3, D4).
+
+    A bare name (no `:`) normalizes to `<name>:latest` per Ollama
+    convention, applied symmetrically to both `configured` and each
+    installed tag; comparison after normalization is case-sensitive.
+    """
+    wanted = configured if ":" in configured else f"{configured}:latest"
+    for tag in installed:
+        normalized = tag if ":" in tag else f"{tag}:latest"
+        if normalized == wanted:
+            return True
+    return False
 
 
 def _map_http_error(exc: urllib.error.HTTPError) -> OllamaError:
