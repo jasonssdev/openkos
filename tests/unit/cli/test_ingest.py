@@ -10,8 +10,10 @@ transactional -- there is no rollback across the sequence (D5 retreat);
 recovery from a partial write is via git, not an in-process undo.
 """
 
+import json
 import os
 import stat
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +22,8 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
 from openkos.cli.main import app
+from openkos.llm.base import Message
+from openkos.llm.ollama import OllamaUnavailable
 from openkos.model import okf
 
 runner = CliRunner()
@@ -32,6 +36,79 @@ def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     method must be patched rather than the current `sys.stdin` instance.
     """
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+
+
+class _FakeLLM:
+    """A structural `LLMBackend`, mirroring `test_answer.py::_FakeLLM`
+    (test_answer.py:41-50): records every `chat()` call and returns a fixed
+    reply, or raises a fixed exception instead -- zero network, zero real
+    Ollama process."""
+
+    def __init__(self, reply: str = "", *, raises: Exception | None = None) -> None:
+        self.reply = reply
+        self.raises = raises
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        if self.raises is not None:
+            raise self.raises
+        return self.reply
+
+
+def _patch_llm(
+    monkeypatch: pytest.MonkeyPatch,
+    reply: str = '{"extract": false}',
+    *,
+    raises: Exception | None = None,
+) -> _FakeLLM:
+    """Replace `openkos.cli.main.OllamaClient` with a factory returning a
+    configured `_FakeLLM` -- mirrors `test_query.py`'s pattern of patching
+    the CLI's LLM seam directly (module docstring: "zero network, zero real
+    Ollama process") rather than mocking `extract_concept`, so `ingest`
+    exercises the REAL `extraction.extract_concept` parse/validation path
+    end to end. Default reply declines extraction (`extract: false`)."""
+    fake = _FakeLLM(reply, raises=raises)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *args, **kwargs: fake)
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def _default_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Protect every test in this module from a real Ollama network call by
+    default: `openkos.cli.main.OllamaClient` is replaced with a fake backend
+    that always declines extraction, so `ingest`'s pre-existing Source-only
+    scenarios stay deterministic and offline. Tests that need a specific
+    extraction outcome call `_patch_llm` again to override this default."""
+    _patch_llm(monkeypatch)
+
+
+def _concept_reply(title: str = "Stoic Dichotomy Of Control") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Concept`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Concept",
+            "title": title,
+            "description": (
+                "A framework distinguishing what is and is not within our control."
+            ),
+            "body": "Elaboration on applying the framework day to day.",
+        }
+    )
+
+
+def _entity_reply(title: str = "Enchiridion") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Entity`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Entity",
+            "title": title,
+            "description": "A short handbook of Stoic ethical advice.",
+            "body": "",
+        }
+    )
 
 
 def _snapshot_entry(path: Path) -> bytes | None:
@@ -673,3 +750,448 @@ def test_sensitivity_matches_config_default(
     )
     metadata, _ = okf.load_frontmatter(concept_text)
     assert metadata["sensitivity"] == "confidential"
+
+
+# --- Extraction (WU4, Phase 5-6): LLM Concept/Entity extraction ------------
+
+
+def test_successful_concept_extraction_writes_both_documents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Concept` reply writes the Source AND a
+    `bundle/concepts/<slug>.md` document, the derived doc's `provenance`
+    references the Source, and both pass `check_conformance` (scenario:
+    successful extraction yields a Concept)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Concept"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "sources/notes.md" in index_text
+    assert "concepts/stoic-dichotomy-of-control.md" in index_text
+    assert "# Concepts" in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert "Extracted" in log_text
+    assert "stoic-dichotomy-of-control.md" in log_text
+
+
+def test_successful_entity_extraction_writes_entities_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Entity` reply writes the Source AND a
+    `bundle/entities/<slug>.md` document, whose `provenance` references the
+    Source (scenario: successful extraction yields an Entity)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _entity_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("A field manual for Stoic practice.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    entity_path = tmp_path / "bundle" / "entities" / "enchiridion.md"
+    assert entity_path.is_file()
+    metadata, body = okf.load_frontmatter(entity_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Entity"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "entities/enchiridion.md" in index_text
+    assert "# Entities" in index_text
+
+
+def test_malformed_json_reply_degrades_to_source_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reply that is not parseable structured output degrades to
+    Source-only: no `bundle/concepts/`/`bundle/entities/` directory is
+    created, a note appears on stderr, and the exit code is 0 (scenario:
+    malformed JSON degrades to Source-only)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, "this is not JSON at all")
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert not (tmp_path / "bundle" / "entities").exists()
+    assert "no concept extracted" in result.stderr
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_invalid_type_degrades_to_source_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed reply whose `type` is outside `{Concept, Entity}`
+    degrades to Source-only, with a stderr note and exit 0 (scenario:
+    invalid type degrades to Source-only)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        json.dumps(
+            {
+                "extract": True,
+                "type": "Person",
+                "title": "Epictetus",
+                "description": "A Stoic philosopher.",
+                "body": "",
+            }
+        ),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert not (tmp_path / "bundle" / "entities").exists()
+    assert "no concept extracted" in result.stderr
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_missing_title_degrades_to_source_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed reply with an empty `title` degrades to Source-only,
+    with a stderr note and exit 0 (scenario: missing title degrades to
+    Source-only)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        json.dumps(
+            {
+                "extract": True,
+                "type": "Concept",
+                "title": "",
+                "description": "A framework.",
+                "body": "",
+            }
+        ),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert "no concept extracted" in result.stderr
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_llm_backend_error_degrades_to_source_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaError`-family exception raised by `chat()` is caught locally
+    (never crashes `ingest`), degrades to Source-only, prints a
+    distinguishing stderr note, and exits 0 (scenario: LLM backend
+    unavailable)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        raises=OllamaUnavailable("Ollama not reachable at http://localhost:11434"),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "concept extraction skipped" in result.stderr
+    assert "Ollama not reachable" in result.stderr
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_auto_runs_extraction_and_writes_both_without_prompting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--auto` still runs extraction (only the confirmation PROMPT is
+    skipped): both the Source and the derived object are written with no
+    `Proceed` prompt in the output (scenario: --auto writes both without
+    prompting)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "Proceed" not in result.output
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+    assert (
+        tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    ).is_file()
+
+
+def test_interactive_preview_lists_both_objects_before_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confirmation preview lists BOTH the proposed Source concept and
+    the proposed derived object before the confirm gate (scenario:
+    interactive confirm shows both objects)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "sources/notes.md" in result.stdout
+    assert "concepts/stoic-dichotomy-of-control.md" in result.stdout
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+    assert (
+        tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    ).is_file()
+
+
+def test_declining_confirm_writes_neither_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining the confirm prompt aborts with NEITHER the Source nor the
+    derived object written (scenario: interactive confirm shows both
+    objects, declining aborts with no files written)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    _simulate_tty(monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="n\n")
+
+    assert result.exit_code == 1
+    assert not (tmp_path / "bundle" / "sources" / "notes.md").exists()
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert _snapshot(tmp_path) == before
+
+
+def test_idempotent_reingest_leaves_existing_derived_object_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose derived object already exists (possibly
+    hand-edited) leaves that file byte-unchanged -- no overwrite, no
+    re-extraction of its content (scenario: re-ingest does not overwrite
+    existing derived object)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+    hand_edited = concept_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    concept_path.write_text(hand_edited, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert concept_path.read_text(encoding="utf-8") == hand_edited
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("concepts/stoic-dichotomy-of-control.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("stoic-dichotomy-of-control.md") == 1
+
+
+def test_reingest_with_nondeterministic_llm_title_skips_second_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose derived object already exists must NOT
+    create a second derived document even when the LLM (nondeterministic)
+    returns a DIFFERENT title on the second attempt -- idempotency is keyed
+    off provenance (deterministic), not the LLM's slugified title. The LLM
+    must not even be called on the re-ingest (quiet idempotent skip)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Dichotomy Of Control"))
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    first_concept_path = (
+        tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    )
+    assert first_concept_path.is_file()
+
+    fake = _patch_llm(monkeypatch, _concept_reply(title="A Completely Different Title"))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    assert [p.name for p in concepts_dir.glob("*.md")] == [
+        "stoic-dichotomy-of-control.md"
+    ]
+    assert not (tmp_path / "bundle" / "entities").exists()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("concepts/stoic-dichotomy-of-control.md") == 1
+    assert "a-completely-different-title" not in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("stoic-dichotomy-of-control.md") == 1
+    assert "a-completely-different-title" not in log_text
+
+
+def test_source_has_derived_object_ignores_unrelated_and_malformed_concepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_source_has_derived_object` must skip over derived documents that
+    belong to OTHER sources (provenance mismatch -- keeps scanning) and over
+    a derived document with unparseable frontmatter (caught, keeps scanning)
+    before concluding no match exists -- ingesting a second, unrelated
+    source still gets its own extraction."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Dichotomy Of Control"))
+    source_a = tmp_path / "notes-a.txt"
+    source_a.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
+    assert first.exit_code == 0
+    assert (
+        tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    ).is_file()
+
+    malformed_path = tmp_path / "bundle" / "concepts" / "malformed.md"
+    malformed_path.write_text("---\nfoo: [unclosed\n---\nbody", encoding="utf-8")
+
+    _patch_llm(monkeypatch, _concept_reply(title="Enchiridion"))
+    source_b = tmp_path / "notes-b.txt"
+    source_b.write_text("Different raw notes entirely.", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "enchiridion.md").is_file()
+
+
+def test_reingest_of_identical_source_can_still_stage_a_new_derived_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A byte-identical re-ingest (Source `regenerate` path) that now gets a
+    successful extraction (e.g. the LLM declined on the first attempt)
+    still stages and writes the derived object -- Source `regenerate` and
+    derived-object staging are independent (preview shows `+
+    bundle/concepts/<slug>.md` even under the re-ingest preview banner)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+
+    _patch_llm(monkeypatch, _concept_reply())
+    _simulate_tty(monkeypatch)
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "re-ingest" in result.stdout
+    assert "+ bundle/concepts/stoic-dichotomy-of-control.md" in result.stdout
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "concepts/stoic-dichotomy-of-control.md" in index_text
+
+
+def test_derived_object_inherits_source_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The derived object's `sensitivity` equals the Source's configured
+    `default_sensitivity` (scenario: provenance and sensitivity
+    inherited)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+
+
+def test_symbol_only_title_slugifies_empty_degrades_to_source_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed reply whose `title` is made only of characters
+    `_slugify` strips (so it would collide with an empty concept name)
+    degrades to Source-only rather than writing to `bundle/concepts/.md`
+    (fail-closed slug guard, mirroring the Source's own empty-slug refusal
+    -- but degrading, not refusing the whole ingest)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="!!!"))
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert "could not be turned into a slug" in result.stderr
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_builder_validation_failure_degrades_to_source_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An extracted `title` containing an embedded newline passes
+    `extract_concept`'s own non-empty check but fails `okf.build_concept`'s
+    stricter single-line gate; that `ValueError` is caught locally and
+    degrades to Source-only, never crashing the whole ingest (fail-closed
+    validation of untrusted LLM output that slipped past the extraction
+    leaf's own validation)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Framework\nExtra Line"))
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert "extracted content failed validation" in result.stderr
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_undecodable_source_skips_extraction_without_network_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A binary/undecodable source has no text to extract from: extraction
+    is never attempted (the fake LLM records zero `chat()` calls), a note is
+    reported to stderr (every degrade case is reported per the docstring),
+    and the Source-only result is unaffected."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.bin"
+    source.write_bytes(b"\xff\xfe not valid utf-8 \x00\x01")
+
+    result = runner.invoke(app, ["ingest", "notes.bin", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+    assert "no extractable text" in result.stderr
