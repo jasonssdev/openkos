@@ -12,7 +12,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from openkos.cli.main import app
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.retrieval import answer as answer_mod
@@ -354,6 +356,41 @@ def test_llm_chat_error_propagates_unswallowed(tmp_path: Path) -> None:
 
 
 # --- Phase 9: layering guard ----------------------------------------------
+
+
+# --- ingest-source-body: zero-change confirmation ------------------------
+
+
+def test_query_retrieves_and_cites_ingested_content(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`openkos ingest` embeds a source's verbatim text into its Source
+    concept body, and `answer()` retrieves and cites that concept with NO
+    changes to `state/fts.py` or `retrieval/answer.py` -- embedding alone
+    makes the content reachable via the existing generic body-indexing and
+    body-feeding behavior (design's zero-change confirmation, scenario:
+    query retrieves and cites ingested content)."""
+    runner = CliRunner()
+    monkeypatch.chdir(tmp_path)
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+
+    distinctive_phrase = "the flurbnorxal protocol requires triple validation"
+    source = tmp_path / "protocol-notes.txt"
+    source.write_text(distinctive_phrase, encoding="utf-8")
+    ingest_result = runner.invoke(app, ["ingest", "protocol-notes.txt", "--auto"])
+    assert ingest_result.exit_code == 0
+
+    llm = _FakeLLM(reply="The flurbnorxal protocol requires triple validation.")
+    result = answer_mod.answer("flurbnorxal", bundle_dir=tmp_path / "bundle", llm=llm)
+
+    assert result.answer != answer_mod.NO_MATCH
+    assert any(
+        citation.concept_id == "sources/protocol-notes" for citation in result.citations
+    )
+    assert len(llm.calls) == 1
+    user_content = llm.calls[0][1]["content"]
+    assert distinctive_phrase in user_content
 
 
 def test_answer_module_does_not_import_config() -> None:

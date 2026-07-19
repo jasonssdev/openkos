@@ -35,6 +35,12 @@ class LintDoc:
     resolve a plain-relative link found in this doc's body."""
     body: str
     """The doc's text after its frontmatter block (`okf.load_frontmatter`)."""
+    freshness: str
+    """The doc's frontmatter `freshness` field, or `""` if absent
+    (ingest-source-body D4). `check_stale_stamps` skips any doc whose
+    `freshness` is `"snapshot"` -- such docs (as produced by `openkos
+    ingest`) embed verbatim source text that MAY coincidentally contain an
+    `(as of ...)`-shaped string that is not a maintained freshness stamp."""
 
 
 @dataclass(frozen=True)
@@ -87,12 +93,18 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
             skip_notices.append(f"{identity}.md: skipped (unreadable)")
             continue
         try:
-            _, body = okf.load_frontmatter(text)
+            metadata, body = okf.load_frontmatter(text)
         except Exception:  # broad: a concurrent edit can corrupt frontmatter mid-scan
             skip_notices.append(f"{identity}.md: skipped (unparseable frontmatter)")
             continue
         docs.append(
-            LintDoc(path=scan.path, identity=identity, rel_dir=rel_dir, body=body)
+            LintDoc(
+                path=scan.path,
+                identity=identity,
+                rel_dir=rel_dir,
+                body=body,
+                freshness=str(metadata.get("freshness", "")),
+            )
         )
     return docs, skip_notices
 
@@ -153,20 +165,24 @@ def check_stale_stamps(
 ) -> list[LintFinding]:
     """Flag any inline `(as of YYYY-MM-DD)` stamp older than `window` (Q5).
 
-    Reads only inline body text, never the `freshness` field (a
-    `freshness: snapshot` concept carries no `(as of ...)` stamp by design,
-    so a pure-ingest bundle produces zero findings here). `_STAMP_RE`
-    shape-matches, then `date(y, m, d)` is attempted in a `try`/`except
-    ValueError` -- a non-date like `2026-13-45` is silently skipped, never
-    flagged, never crashes (MVP-1 lenient). A stamp is stale iff `today -
-    stamp > window` (an exact-boundary stamp is NOT stale). One finding is
-    produced per unique `(identity, stamp text)` pair, so a stamp repeated
-    verbatim within one body never double-counts. `today` and `window` are
-    always injected -- this function never calls `datetime.now()`.
+    Reads only inline body text, EXCEPT that any doc whose `freshness` is
+    `"snapshot"` is skipped entirely (ingest-source-body D4): such docs (as
+    produced by `openkos ingest`) embed verbatim source text that MAY
+    coincidentally contain an `(as of ...)`-shaped string, and that text is
+    not a maintained freshness stamp. `_STAMP_RE` shape-matches, then
+    `date(y, m, d)` is attempted in a `try`/`except ValueError` -- a
+    non-date like `2026-13-45` is silently skipped, never flagged, never
+    crashes (MVP-1 lenient). A stamp is stale iff `today - stamp > window`
+    (an exact-boundary stamp is NOT stale). One finding is produced per
+    unique `(identity, stamp text)` pair, so a stamp repeated verbatim
+    within one body never double-counts. `today` and `window` are always
+    injected -- this function never calls `datetime.now()`.
     """
     findings: list[LintFinding] = []
     seen: set[tuple[str, str]] = set()
     for doc in docs:
+        if doc.freshness == "snapshot":
+            continue
         for stamp_text in _STAMP_RE.findall(doc.body):
             key = (doc.identity, stamp_text)
             if key in seen:

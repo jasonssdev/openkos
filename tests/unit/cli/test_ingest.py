@@ -79,6 +79,9 @@ def test_successful_ingest_of_valid_path(
     metadata, body = okf.load_frontmatter(concept_text)
     assert metadata["type"] == "Source"
     assert metadata["provenance"] == ["raw/notes.txt"]
+    assert "## Source content" in body
+    assert "Some raw notes." in body
+    assert body.index("## Source content") < body.index("# Citations")
     assert "# Citations" in body
     assert okf.check_conformance(tmp_path / "bundle") == []
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
@@ -92,9 +95,9 @@ def test_successful_ingest_of_valid_path(
 def test_description_is_honest_no_extraction_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The generated concept's `description` states the source was imported
-    and not yet compiled/extracted -- it must not claim extraction
-    occurred (null-compiler scope)."""
+    """The generated concept's `description` states the source's content was
+    embedded verbatim -- it must not claim extraction/compilation occurred
+    (D-honesty, null-compiler scope)."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
     source.write_text("content", encoding="utf-8")
@@ -107,8 +110,88 @@ def test_description_is_honest_no_extraction_claim(
     )
     metadata, _ = okf.load_frontmatter(concept_text)
     description = str(metadata["description"])
-    assert "not yet" in description
-    assert "compiled" in description or "extract" in description
+    assert "embedded" in description
+    assert "not yet extracted" in description
+
+
+def test_undecodable_source_degrades_without_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source that is not valid UTF-8 text does not crash `ingest`: the
+    raw copy still lands byte-identical, and the concept body honestly
+    states the content could not be embedded (D2, scenario: undecodable
+    source falls back)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.bin"
+    raw_bytes = b"\xff\xfe not valid utf-8 \x00\x01"
+    source.write_bytes(raw_bytes)
+
+    result = runner.invoke(app, ["ingest", "notes.bin", "--auto"])
+
+    assert result.exit_code == 0
+    raw_copy = tmp_path / "raw" / "notes.bin"
+    assert raw_copy.read_bytes() == raw_bytes
+    concept_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, body = okf.load_frontmatter(concept_text)
+    assert "could not be embedded as text" in body
+    assert "## Source content" not in body
+    description = str(metadata["description"])
+    assert "binary" in description or "non-text" in description
+    assert "could not be embedded" in description
+
+
+def test_empty_source_renders_distinct_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zero-length source renders a distinct empty-body note -- neither
+    the verbatim-embed nor the undecodable-fallback wording (scenario:
+    empty source renders a distinct body)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "empty.txt"
+    source.write_text("", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "empty.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_text = (tmp_path / "bundle" / "sources" / "empty.md").read_text(
+        encoding="utf-8"
+    )
+    _, body = okf.load_frontmatter(concept_text)
+    assert "file is empty" in body
+    assert "## Source content" not in body
+    assert "could not be embedded as text" not in body
+
+
+def test_decode_guard_precedes_generic_value_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain `ValueError` (NOT `UnicodeDecodeError`) raised while reading
+    the source text still fails `ingest` via the outer `except (OSError,
+    ValueError)` handler -- proving the specific `UnicodeDecodeError` guard
+    does not swallow an unrelated `ValueError` (D2 ordering)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    original_read_text = Path.read_text
+
+    def failing_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self.name == "notes.txt":
+            raise ValueError("simulated non-decode value error")
+        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", failing_read_text)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos ingest" in result.stderr
+    assert "failed" in result.stderr
+    assert _snapshot(tmp_path) == before
 
 
 def test_path_does_not_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

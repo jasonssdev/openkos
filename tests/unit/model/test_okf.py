@@ -440,3 +440,42 @@ def test_build_source_concept_sensitivity_equals_passed_value() -> None:
     metadata, _ = okf.load_frontmatter(text)
 
     assert metadata["sensitivity"] == "confidential"
+
+
+def test_build_source_concept_embeds_text_content() -> None:
+    """`raw_content` text is embedded verbatim under `## Source content`,
+    positioned before `# Citations` (D1/D3, scenario: successful ingest
+    embeds verbatim text)."""
+    text = _build_call_source(raw_content="hello")
+
+    _, body = okf.load_frontmatter(text)
+
+    assert "## Source content" in body
+    assert "hello" in body
+    assert body.index("## Source content") < body.index("# Citations")
+    assert body.index("hello") < body.index("# Citations")
+
+
+def test_build_source_concept_binary_fallback_note() -> None:
+    """`raw_content=None` (decode failure) renders the honest "could not be
+    embedded as text" note, with no `## Source content` heading (D3,
+    scenario: undecodable source falls back)."""
+    text = _build_call_source(raw_content=None)
+
+    _, body = okf.load_frontmatter(text)
+
+    assert "could not be embedded as text" in body
+    assert "## Source content" not in body
+
+
+def test_build_source_concept_empty_source_note() -> None:
+    """`raw_content=""`/whitespace renders a distinct "source is empty" note
+    -- different from both the embedded-text and binary-fallback cases (D3,
+    scenario: empty source renders a distinct body)."""
+    text = _build_call_source(raw_content="   \n  ")
+
+    _, body = okf.load_frontmatter(text)
+
+    assert "file is empty" in body
+    assert "## Source content" not in body
+    assert "could not be embedded as text" not in body
