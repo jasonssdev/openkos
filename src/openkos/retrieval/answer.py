@@ -6,7 +6,7 @@ an injected `llm.LLMBackend` (answer). Core is synchronous; the `llm`
 instance is caller-supplied, so this module never imports `openkos.config`
 (mirrors `llm/ollama.py`'s leaf discipline). Typed exceptions
 (`FtsUnavailable`, the `OllamaError` family) propagate unswallowed to the
-future `query` command (#4).
+caller, such as the `query` command.
 """
 
 from dataclasses import dataclass
