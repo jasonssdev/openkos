@@ -1,15 +1,18 @@
 """Derived-object classification: prompt an injected `LLMBackend` to propose
-at most one derived object -- of any type in the current classifiable
-vocabulary (`openkos.model.types.CLASSIFIABLE_TYPES`) -- from a source's
-text, then parse and validate its reply fail-closed.
+zero or more distinct derived objects -- up to `_MAX_OBJECTS_PER_SOURCE`, of
+any type in the current classifiable vocabulary
+(`openkos.model.types.CLASSIFIABLE_TYPES`) -- from a source's text, then
+parse and validate its reply fail-closed, per item.
 
 Config-free leaf (mirrors `retrieval/answer.py`): this module never imports
 `openkos.config`; the caller supplies an `LLMBackend`. Any `OllamaError`-
 family exception raised by `llm.chat` propagates unswallowed to the caller
 (mirrors `answer()`'s `chat` boundary, `retrieval/answer.py:151`) -- only
-PARSING and VALIDATION failures degrade to `None` here. The caller (`main.py`
-ingest, a later slice) owns slug/path derivation, degrade-note wording, and
-catching `OllamaError` to keep the CLI's Source-only fallback UX.
+PARSING and VALIDATION failures degrade a candidate item, never the whole
+call: `extract_concept` returns `[]` when nothing survives. The caller
+(`main.py` ingest) owns slug/path derivation, per-object degrade-note
+wording, and catching `OllamaError` to keep the CLI's Source-only fallback
+UX, looping `openkos.model.okf.build_concept` once per validated object.
 """
 
 import json
@@ -26,8 +29,9 @@ from openkos.model.types import CLASSIFIABLE_TYPES as _VALID_TYPES
 
 _SYSTEM_PROMPT = (
     "You are a classification step in a local-first knowledge engine. Read "
-    "the SOURCE text below and decide whether it is worth extracting as ONE "
-    "derived knowledge object.\n\n"
+    "the SOURCE text below and decide which distinct derived knowledge "
+    "objects, if any, it is worth extracting. Apply the type rubric and "
+    "tie-breaks below to EACH object independently.\n\n"
     'Vocabulary: the derived object\'s "type" MUST be one of exactly nine '
     'values: "Person", "Organization", "Place", "Event", "Procedure", '
     '"Decision", "Project", "Concept", or "Entity". Classify by what the '
@@ -102,14 +106,24 @@ _SYSTEM_PROMPT = (
     '(3) Person, Organization, Place, and Concept all outrank "Entity" -- '
     'so do "Event", "Procedure", "Decision", and "Project" -- Entity is '
     "the last resort, used only when nothing else fits.\n\n"
-    'If nothing in the source is worth extracting, set "extract" to false.\n\n'
-    "Return ONLY one JSON object, with NO prose, NO markdown, and NO code "
-    "fences around it, matching exactly this shape:\n"
-    '{"extract": true|false, "type": "Person"|"Organization"|"Place"'
-    '|"Event"|"Procedure"|"Decision"|"Project"|"Concept"|"Entity", '
-    '"title": "...", "description": "...", "body": "..."}\n'
-    '"type", "title", "description", and "body" are only meaningful when '
-    '"extract" is true.'
+    "A source may be about more than one thing: extract each DISTINCT "
+    "object the source is genuinely about. Prefer FEWER, RICHER objects "
+    "over many shallow ones. Do NOT enumerate every named entity -- a "
+    "person, place, or organization merely mentioned or named in passing "
+    "is NOT a standalone object; extract it only when the source is "
+    "genuinely about it. Example: a meeting transcript is fundamentally "
+    "about the meeting itself (an Event) and any Decisions reached -- NOT "
+    "about each of the five participants named around the table; extract "
+    "the Event and the Decisions, not five Person stubs. When in doubt, "
+    "leave it out.\n\n"
+    "If nothing is worth extracting, return an empty array [].\n\n"
+    "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
+    "fences around it. Each element matches exactly this shape:\n"
+    '[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"'
+    '|"Decision"|"Project"|"Concept"|"Entity", "title": "...", '
+    '"description": "...", "body": "..."}, ...]\n'
+    "Return [] if nothing is worth extracting. Do NOT wrap the array in "
+    "an outer object."
 )
 """Stable system half of the 2-message prompt: the closed 9-value
 vocabulary, the aboutness heuristic (classify by subject, not by a
@@ -155,39 +169,68 @@ def _strip_code_fence(raw: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def _first_bracket_block(raw: str) -> str | None:
+    """Parse step 3: return the first `[...]` block found anywhere in `raw`,
+    if any (recovers a JSON array embedded in surrounding prose)."""
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    return match.group(0) if match else None
+
+
 def _first_brace_block(raw: str) -> str | None:
-    """Parse step 3: return the first `{...}` block found anywhere in `raw`,
-    if any (recovers JSON embedded in surrounding prose)."""
+    """Parse step 4: return the first `{...}` block found anywhere in `raw`,
+    if any (D2 recovery path: a lone top-level object embedded in prose).
+    Multiple bare objects back-to-back without array wrapping are NOT
+    recovered by this greedy first-brace-to-last-brace span and degrade to
+    an empty list by design -- D2 recovers only a lone object."""
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     return match.group(0) if match else None
 
 
-def _extract_json_object(raw: object) -> dict[str, Any] | None:
-    """3-step fail-closed JSON extraction: raw `json.loads`, then a fenced
-    code block stripped, then the first `{...}` block found by regex. Any
-    candidate that fails to parse as a JSON object is skipped; `None` if none
-    of the three steps yields one, or if `raw` is not a string (fail-closed:
-    a backend that violates the `-> str` contract must not crash the parser)."""
+def _extract_json_items(raw: object) -> list[dict[str, Any]]:
+    """4-step fail-closed JSON extraction, generalized to a list of candidate
+    objects (design D2): raw `json.loads`, then a fenced code block stripped,
+    then the first `[...]` block, then the first `{...}` block. The first
+    candidate that parses is used: a JSON array keeps only its dict elements
+    (non-dict elements, e.g. stray numbers, are dropped without failing the
+    whole reply); a lone top-level JSON object (wrong shape -- not
+    array-wrapped) is RECOVERED as a one-item list rather than failing
+    closed, since a local LLM routinely emits a lone object for a
+    single-object source and that is valid content on a shape technicality,
+    not invalid data. `[]` if none of the four steps yields a list or
+    object, or if `raw` is not a string (fail-closed: a backend that
+    violates the `-> str` contract must not crash the parser)."""
     if not isinstance(raw, str):
-        return None
-    for candidate in (raw, _strip_code_fence(raw), _first_brace_block(raw)):
+        return []
+    for candidate in (
+        raw,
+        _strip_code_fence(raw),
+        _first_bracket_block(raw),
+        _first_brace_block(raw),
+    ):
         if candidate is None:
             continue
         try:
             parsed = json.loads(candidate)
         except (json.JSONDecodeError, TypeError):
             continue
+        if isinstance(parsed, list):
+            return [item for item in parsed if isinstance(item, dict)]
         if isinstance(parsed, dict):
-            return parsed
-    return None
+            return [parsed]
+    return []
 
 
 def _validate(data: dict[str, Any]) -> ExtractionResult | None:
-    """Fail-closed validation of a parsed JSON object: `extract is True`;
-    `type` in the closed vocabulary; `title`/`description` non-empty after
-    strip; `body` is a string (blank is valid -- the builder handles the
-    fallback). Any violation returns `None`."""
-    if data.get("extract") is not True:
+    """Fail-closed validation of one parsed candidate item: `type` in the
+    closed vocabulary; `title`/`description` non-empty after strip; `body`
+    is a string (blank is valid -- the builder handles the fallback). Array
+    membership is the positive extraction signal (design D3): a candidate is
+    rejected only on an EXPLICIT `extract: false` (kept for a model that
+    still emits the retired flag) -- an absent `extract` key no longer fails
+    validation, since requiring `extract: true` per item would silently
+    null every object when a local LLM omits the flag. Any other violation
+    returns `None`."""
+    if data.get("extract") is False:
         return None
 
     doc_type = data.get("type")
@@ -214,18 +257,33 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     )
 
 
+_MAX_OBJECTS_PER_SOURCE = 5
+"""Hard ceiling on validated objects returned per source (design D4): a
+safety ceiling applied AFTER per-item validation, not a target -- the
+prompt's anti-enumeration instruction (D1) is the real lever against
+greedy over-extraction; this cap only guards against a pathological reply."""
+
+
 def extract_concept(
     source_text: str, *, source_title: str, llm: LLMBackend
-) -> ExtractionResult | None:
-    """Prompt `llm` to classify at most one derived object from `source_text`.
+) -> list[ExtractionResult]:
+    """Prompt `llm` to classify zero or more distinct derived objects from
+    `source_text`.
 
-    Returns a validated `ExtractionResult`, or `None` on `extract: false` or
-    any parse/validation failure (fail-closed). Any `OllamaError`-family
-    exception raised by `llm.chat` propagates unswallowed to the caller (see
-    module docstring).
+    Returns a list of validated `ExtractionResult`s, in reply order,
+    truncated to `_MAX_OBJECTS_PER_SOURCE` (keeping the first N). `[]` means
+    nothing was worth extracting -- the model returned an empty array, or
+    every candidate failed validation; this layer does not distinguish the
+    two (fail-closed). Any `OllamaError`-family exception raised by
+    `llm.chat` propagates unswallowed to the caller (see module docstring).
+    The caller loops `openkos.model.okf.build_concept` once per returned
+    object.
     """
     reply = llm.chat(_build_messages(source_text, source_title))
-    data = _extract_json_object(reply)
-    if data is None:
-        return None
-    return _validate(data)
+    items = _extract_json_items(reply)
+    results: list[ExtractionResult] = []
+    for item in items:
+        result = _validate(item)
+        if result is not None:
+            results.append(result)
+    return results[:_MAX_OBJECTS_PER_SOURCE]

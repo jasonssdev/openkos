@@ -275,7 +275,13 @@ def _stage_derived_object(
         return None
 
     try:
-        extraction = extract_concept(raw_content, source_title=source_title, llm=llm)
+        extractions = extract_concept(raw_content, source_title=source_title, llm=llm)
+        # Temporary single-item adapter (multi-object-extraction PR 1): the
+        # array-returning contract lands here first; PR 2 replaces this
+        # cardinality-one call site with `_stage_derived_objects`'s 2-phase
+        # loop over the full list. Preserves today's cardinality-one
+        # behavior byte-for-byte in the meantime.
+        extraction = extractions[0] if extractions else None
     except OllamaError as exc:
         typer.echo(
             f"openkos ingest: concept extraction skipped -- {exc}; "
