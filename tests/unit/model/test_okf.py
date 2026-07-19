@@ -544,6 +544,7 @@ def test_build_concept_accepts_person_type() -> None:
 
     assert metadata["type"] == "Person"
     assert metadata["title"] == "Epictetus"
+    assert metadata["freshness"] == "snapshot"
 
 
 def test_build_concept_accepts_organization_type() -> None:
@@ -555,6 +556,7 @@ def test_build_concept_accepts_organization_type() -> None:
 
     assert metadata["type"] == "Organization"
     assert metadata["title"] == "Praxis Foundation"
+    assert metadata["freshness"] == "snapshot"
 
 
 def test_build_concept_accepts_place_type() -> None:
@@ -567,6 +569,7 @@ def test_build_concept_accepts_place_type() -> None:
 
     assert metadata["type"] == "Place"
     assert metadata["title"] == "Yellowstone National Park"
+    assert metadata["freshness"] == "snapshot"
 
 
 def test_build_concept_sensitivity_inherited_verbatim() -> None:
