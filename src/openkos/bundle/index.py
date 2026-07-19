@@ -4,6 +4,7 @@ import re
 from pathlib import PurePosixPath
 
 from openkos.model import okf
+from openkos.model.types import CANONICAL_SECTION_ORDER as _CANONICAL_SECTION_ORDER
 
 
 def render_index() -> str:
@@ -51,14 +52,9 @@ def _reject_newline(field: str, value: str) -> None:
         raise ValueError(f"index.md: {field!r} must not contain a newline")
 
 
-_CANONICAL_SECTION_ORDER = (
-    "Concepts",
-    "Entities",
-    "Decisions",
-    "People",
-    "Organizations",
-    "Sources",
-)
+# `_CANONICAL_SECTION_ORDER` is now derived from
+# `openkos.model.types.REGISTRY` -- see that module for the single source of
+# truth.
 
 
 def insert_index_entry(

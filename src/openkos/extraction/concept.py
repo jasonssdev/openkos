@@ -17,9 +17,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from openkos.llm.base import LLMBackend, Message
+from openkos.model.types import CLASSIFIABLE_TYPES as _VALID_TYPES
 
-_VALID_TYPES = frozenset({"Concept", "Entity", "Person", "Organization"})
-"""Closed classification vocabulary; anything else fails validation."""
+# `_VALID_TYPES` is now derived from `openkos.model.types.REGISTRY` -- see
+# that module for the single source of truth. Closed classification
+# vocabulary; anything else fails validation.
 
 _SYSTEM_PROMPT = (
     "You are a classification step in a local-first knowledge engine. Read "
