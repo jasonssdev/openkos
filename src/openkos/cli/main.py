@@ -24,7 +24,6 @@ from openkos.llm.ollama import (
     model_tag_matches,
 )
 from openkos.model import okf
-from openkos.model.types import CLASSIFIABLE_LINK_DIRS
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
@@ -170,10 +169,12 @@ def _titleize(stem: str) -> str:
 
 @dataclass(frozen=True)
 class _DerivedPlan:
-    """A validated derived object staged for Phase B, or `None`
-    (`_stage_derived_object`'s return) when extraction is skipped, declined,
-    fails validation, or the LLM is unavailable -- every one of those cases
-    degrades to Source-only, never a crash (design: Degrade seam)."""
+    """One validated derived object staged for Phase B write -- one entry
+    per item in the list `_stage_derived_objects` returns. The list itself,
+    not this dataclass, carries the zero-to-N cardinality (design: bounded
+    multi-object contract, D4); `[]` means every candidate was declined,
+    dropped, or skipped, and `ingest` degrades to Source-only for this
+    batch."""
 
     doc_type: str
     section: str
@@ -185,43 +186,7 @@ class _DerivedPlan:
     content: str
 
 
-def _source_has_derived_object(bundle_dir: Path, source_slug: str) -> bool:
-    """True if any existing derived object of any classifiable derived-object
-    type already cites this source in its provenance -- so a re-ingest never
-    extracts (or writes) a second derived object for the same source,
-    independent of nondeterministic LLM titles.
-
-    Idempotency in `_stage_derived_object` cannot be keyed off the derived
-    document's own slug (`_slugify(extraction.title)`), because that title
-    comes from the LLM and is not guaranteed deterministic across calls: a
-    re-ingest that gets a slightly different title would slugify to a
-    different path, `derived_path.exists()` would be `False`, and a SECOND
-    derived document (plus its own catalog bullet and log entry) would be
-    created for the same source. Provenance (`sources/<slug>`), by contrast,
-    is engine-derived and deterministic, so it is the correct idempotency
-    key.
-    """
-    source_ref = f"sources/{source_slug}"
-    for link_dir in CLASSIFIABLE_LINK_DIRS:
-        section_dir = bundle_dir / link_dir
-        if not section_dir.is_dir():
-            continue
-        for path in sorted(section_dir.glob("*.md")):
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            try:
-                metadata, _ = okf.load_frontmatter(text)
-            except Exception:  # noqa: S112 -- broad: a concurrent edit can corrupt frontmatter
-                continue
-            provenance = metadata.get("provenance")
-            if isinstance(provenance, list) and source_ref in provenance:
-                return True
-    return False
-
-
-def _stage_derived_object(
+def _stage_derived_objects(
     *,
     raw_content: str | None,
     source_title: str,
@@ -230,120 +195,149 @@ def _stage_derived_object(
     timestamp: str,
     bundle_dir: Path,
     llm: LLMBackend,
-) -> _DerivedPlan | None:
-    """Attempt LLM extraction of at most one derived object from the
-    source's decoded text, and stage it for Phase B (`ingest` owns
-    slug/path derivation and degrade-note wording; the extraction leaf stays
-    config-free, per design's Technical Approach).
+) -> list[_DerivedPlan]:
+    """Attempt LLM extraction of zero or more distinct derived objects from
+    the source's decoded text, and stage each validated candidate for Phase
+    B (`ingest` owns slug/path derivation and per-candidate drop wording;
+    the extraction leaf stays config-free, per design's Technical Approach).
 
-    Returns `None` -- always a Source-only degrade, never a raised error --
-    when: `raw_content` is `None` or blank (a binary/undecodable or empty
-    source has no text to extract from, so the LLM is never called); a
-    derived object already cites this source's provenance (idempotent
-    re-ingest, see `_source_has_derived_object` -- checked BEFORE calling the
-    LLM, so a re-ingest never spends a network call it cannot use);
-    `llm.chat` raises any `OllamaError`-family exception (caught HERE, per
-    design's "Degrade seam" -- `extraction/concept.py` lets it propagate
-    unswallowed); `extract_concept` itself returns `None` (declined, or
-    failed its own fail-closed validation); the extracted title slugifies to
-    an empty string (an LLM title made only of non-alphanumeric characters);
-    or `okf.build_concept` raises `ValueError` (untrusted LLM fields that
-    slipped past `extract_concept`'s own validation -- e.g. an embedded
-    newline -- fail `build_concept`'s stricter single-line gate). Every one
-    of these is reported to stderr with wording that distinguishes the
-    `None`/declined case from the `OllamaError` case (design: Degrade
-    wording), and `ingest` keeps exiting 0.
+    This function IS Phase A in full: every check below runs strictly
+    BEFORE any write, and the returned list is the COMPLETE, already-deduped
+    write set -- Phase B (in `ingest`) does nothing but `mkdir` +
+    `write_exclusive` per plan, with no existence check, slug work, or
+    dedup left there (design D5 pinned ordering), so a failure partway
+    through Phase B never leaves a partially-reconciled state.
 
-    A `None` return also covers the create-only idempotency case: when the
-    derived object's target path already exists (a prior successful
-    extraction for this same source), it is left untouched -- no re-write,
-    no duplicate catalog/log entry -- exactly like a hand-edited file. This
-    same-slug guard is a SECONDARY safety net only, guarding against two
-    DIFFERENT sources colliding on the same slug; the PRIMARY idempotency
-    guard is `_source_has_derived_object`, above, which is provenance-keyed
-    and therefore immune to a nondeterministic LLM title changing the slug
-    on a re-ingest of the SAME source.
+    Returns `[]` -- always a Source-only degrade for this batch, never a
+    raised error -- when: `raw_content` is `None` or blank (a
+    binary/undecodable or empty source has no text to extract from, so the
+    LLM is never called); `llm.chat` raises any `OllamaError`-family
+    exception (caught HERE, per design's "Degrade seam" --
+    `extraction/concept.py` lets it propagate unswallowed); or
+    `extract_concept` itself returns `[]` (`[]`, never `None`, is
+    `extract_concept`'s contract -- design D4 -- meaning either nothing was
+    worth extracting, or every candidate failed ITS OWN fail-closed
+    validation; this layer does not distinguish the two).
+
+    Each item in a non-empty `extract_concept` result is then staged
+    independently, in reply order, per design's pinned Phase A sequence:
+    (1) derive a slug from the title -- an empty slug (a title made only of
+    characters `_slugify` strips) skips just that candidate; (2) an
+    in-batch collision guard -- a slug already claimed by an EARLIER
+    candidate in this SAME reply keeps the first and drops the later one
+    (spec: In-Batch Slug-Collision Guard); (3) `derived_path.exists()` -- a
+    slug already on disk for ANY source (this source's own prior
+    extraction, a hand-authored file, or a genuine cross-source slug
+    collision) skips this candidate, leaving the existing file untouched.
+    This REPLACES the old provenance-keyed `_source_has_derived_object`
+    all-or-nothing gate with PER-SLUG reconciliation (design D5): a
+    re-ingest now calls the LLM again and can insert a genuinely NEW object
+    even when an older one for the same source already exists, at the
+    accepted cost that a nondeterministic LLM title can slugify differently
+    across re-ingests and produce a duplicate object. (4) `okf.build_concept`
+    -- untrusted LLM fields that slipped past `extract_concept`'s own
+    validation (e.g. an embedded newline) can still fail `build_concept`'s
+    stricter single-line gate (`ValueError`), which skips just that
+    candidate.
+
+    Every one of these four main.py-visible drops (empty slug, collision,
+    exists, build failure) is reported to stderr, per candidate (design D4
+    drop transparency); a candidate dropped inside `extract_concept`'s own
+    validation stays silent there, unchanged from today.
     """
     if raw_content is None or not raw_content.strip():
         typer.echo(
             "openkos ingest: source has no extractable text; keeping the Source only.",
             err=True,
         )
-        return None
-
-    if _source_has_derived_object(bundle_dir, source_slug):
-        return None
+        return []
 
     try:
         extractions = extract_concept(raw_content, source_title=source_title, llm=llm)
-        # Temporary single-item adapter (multi-object-extraction PR 1): the
-        # array-returning contract lands here first; PR 2 replaces this
-        # cardinality-one call site with `_stage_derived_objects`'s 2-phase
-        # loop over the full list. Preserves today's cardinality-one
-        # behavior byte-for-byte in the meantime.
-        extraction = extractions[0] if extractions else None
     except OllamaError as exc:
         typer.echo(
             f"openkos ingest: concept extraction skipped -- {exc}; "
             "keeping the Source only.",
             err=True,
         )
-        return None
+        return []
 
-    if extraction is None:
+    if not extractions:
         typer.echo(
             "openkos ingest: no concept extracted from this source; "
             "keeping the Source only.",
             err=True,
         )
-        return None
+        return []
 
-    derived_slug = _slugify(extraction.title)
-    if not derived_slug:
-        typer.echo(
-            "openkos ingest: extracted title could not be turned into a "
-            "slug; keeping the Source only.",
-            err=True,
+    plans: list[_DerivedPlan] = []
+    seen_slugs: set[str] = set()
+    for extraction in extractions:
+        derived_slug = _slugify(extraction.title)
+        if not derived_slug:
+            typer.echo(
+                "openkos ingest: extracted title could not be turned into a "
+                "slug; skipping this candidate.",
+                err=True,
+            )
+            continue
+
+        if derived_slug in seen_slugs:
+            typer.echo(
+                f"openkos ingest: duplicate slug '{derived_slug}' within "
+                "this extraction batch; keeping the first, skipping this "
+                "candidate.",
+                err=True,
+            )
+            continue
+
+        link_dir = _TYPE_TO_LINK_DIR[extraction.type]
+        section = _TYPE_TO_SECTION[extraction.type]
+        derived_path = bundle_dir / link_dir / f"{derived_slug}.md"
+        if derived_path.exists():
+            # Create-only reconciliation (design D5): leave the existing
+            # derived object -- and its original catalog/log entries --
+            # untouched rather than overwriting a possibly hand-edited file.
+            typer.echo(
+                f"openkos ingest: '{derived_slug}' already exists; skipping "
+                "this candidate (create-only).",
+                err=True,
+            )
+            continue
+
+        try:
+            content = okf.build_concept(
+                type=extraction.type,
+                title=extraction.title,
+                description=extraction.description,
+                body=extraction.body,
+                provenance=[f"sources/{source_slug}"],
+                sensitivity=sensitivity,
+                timestamp=timestamp,
+            )
+        except ValueError as exc:
+            typer.echo(
+                f"openkos ingest: extracted content failed validation -- {exc}; "
+                "skipping this candidate.",
+                err=True,
+            )
+            continue
+
+        seen_slugs.add(derived_slug)
+        plans.append(
+            _DerivedPlan(
+                doc_type=extraction.type,
+                section=section,
+                link_dir=link_dir,
+                slug=derived_slug,
+                title=extraction.title,
+                description=extraction.description,
+                path=derived_path,
+                content=content,
+            )
         )
-        return None
 
-    link_dir = _TYPE_TO_LINK_DIR[extraction.type]
-    section = _TYPE_TO_SECTION[extraction.type]
-    derived_path = bundle_dir / link_dir / f"{derived_slug}.md"
-    if derived_path.exists():
-        # Create-only idempotency (design: Idempotency/collision): leave the
-        # existing derived object -- and its original catalog/log entries --
-        # untouched rather than overwriting a possibly hand-edited file.
-        return None
-
-    try:
-        content = okf.build_concept(
-            type=extraction.type,
-            title=extraction.title,
-            description=extraction.description,
-            body=extraction.body,
-            provenance=[f"sources/{source_slug}"],
-            sensitivity=sensitivity,
-            timestamp=timestamp,
-        )
-    except ValueError as exc:
-        typer.echo(
-            f"openkos ingest: extracted content failed validation -- {exc}; "
-            "keeping the Source only.",
-            err=True,
-        )
-        return None
-
-    return _DerivedPlan(
-        doc_type=extraction.type,
-        section=section,
-        link_dir=link_dir,
-        slug=derived_slug,
-        title=extraction.title,
-        description=extraction.description,
-        path=derived_path,
-        content=content,
-    )
+    return plans
 
 
 @app.command()
@@ -358,21 +352,29 @@ def ingest(
     ),
 ) -> None:
     """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
-    LLM extraction of at most one derived object (MVP-2 vertical slice; D5).
+    LLM extraction of zero or more distinct derived objects, up to
+    `extraction.concept._MAX_OBJECTS_PER_SOURCE` (multi-object-extraction,
+    PR 2; D5).
 
     Beyond the MVP-1 "null compiler" (exactly one `Source` concept per
     invocation, with an honest description stating the source was imported),
-    this now also attempts ONE LLM-driven extraction step: an injected
-    `OllamaClient` classifies the source's decoded text as `{Concept,
-    Entity, Person, Organization}` or declines. Any failure of that step --
-    declined extraction, fail-closed validation, or the LLM being
-    unavailable -- degrades to the exact same Source-only result MVP-1
-    always produced, with a short note on stderr and exit 0; a successful
-    extraction ADDS a second, create-only derived document
-    (`bundle/concepts/<slug>.md`, `bundle/entities/<slug>.md`,
-    `bundle/people/<slug>.md`, or `bundle/organizations/<slug>.md`)
-    alongside the Source, never replacing it. See `_stage_derived_object`
-    for the full degrade matrix.
+    this now also attempts ONE LLM-driven extraction step -- one call to
+    `extract_concept` per ingest, which itself returns a bounded LIST: an
+    injected `OllamaClient` classifies the source's decoded text against the
+    full classifiable vocabulary (`openkos.model.types.CLASSIFIABLE_TYPES`)
+    and proposes zero, one, or several distinct objects. Any candidate that
+    fails validation, collides with an earlier candidate's slug in the same
+    batch, or already exists on disk is dropped individually, never the
+    whole batch; if the LLM call itself fails or nothing survives at all,
+    this degrades to the exact same Source-only result MVP-1 always
+    produced, with a short note on stderr and exit 0. A successful
+    extraction ADDS zero or more additional, create-only derived documents
+    -- one file per validated, staged candidate, under `bundle/concepts/`,
+    `bundle/entities/`, `bundle/people/`, `bundle/organizations/`,
+    `bundle/places/`, `bundle/events/`, `bundle/procedures/`,
+    `bundle/decisions/`, or `bundle/projects/` -- alongside the Source,
+    never replacing it. See `_stage_derived_objects` for the full staging,
+    degrade, and reconciliation matrix.
 
     Phase A (pure, no writes) validates and builds the entire result in
     memory, in order: `src` must be an existing, readable file, or this
@@ -393,10 +395,11 @@ def ingest(
     Otherwise `read_config` resolves `default_sensitivity`, the Source
     concept is computed in memory, extraction is attempted (always, even
     under `--auto` -- only the confirmation PROMPT is skipped), the derived
-    object (if any) is staged, the new `index.md`/`log.md` bytes are
-    computed to cover BOTH objects, and a preview of the proposed changes --
-    listing both the Source and the derived object, when one was staged --
-    is printed.
+    objects (zero or more -- `_stage_derived_objects`' already-reconciled,
+    deduped result) are staged, the new `index.md`/`log.md` bytes are
+    computed to cover the Source and every staged derived object, and a
+    preview of the proposed changes -- listing the Source and every staged
+    derived object -- is printed.
 
     Confirm gate, checked in order: `--auto` skips the prompt outright;
     otherwise config `review: false` skips the prompt the same way;
@@ -412,15 +415,20 @@ def ingest(
     document (`write_exclusive`, create-only) on a fresh ingest -- or, on a
     byte-identical re-ingest (D2), the raw copy step is SKIPPED entirely and
     the concept is written via non-exclusive `write_atomic` instead, since it
-    may already exist -- then, if a derived object was staged, its own
-    directory (`bundle/concepts/`, `bundle/entities/`, `bundle/people/`, or
-    `bundle/organizations/`, created if absent) and its document
-    (`write_exclusive`, create-only -- always,
-    regardless of whether the Source itself was fresh or regenerated) --
-    then `index.md` and `log.md` (`write_atomic`, catalog LAST -- so the
-    catalog never points at a file that does not yet exist, mirroring
-    `init`'s marker-last ordering, D3), extended to cover the derived
-    object's own bullet/log entry when one was staged. Every one of these
+    may already exist -- then, for EACH staged derived object in staging
+    order (zero or more; `_stage_derived_objects` already computed and
+    deduped the full write set in Phase A, so this loop does nothing but
+    `mkdir` + `write_exclusive`, with no existence check or dedup left
+    here, design D5), its own directory (`bundle/concepts/`,
+    `bundle/entities/`, `bundle/people/`, `bundle/organizations/`,
+    `bundle/places/`, `bundle/events/`, `bundle/procedures/`,
+    `bundle/decisions/`, or `bundle/projects/`, created if absent) and its
+    document (`write_exclusive`, create-only -- always, regardless of
+    whether the Source itself was fresh or regenerated) -- then `index.md`
+    and `log.md` (`write_atomic`, catalog LAST -- so the catalog never
+    points at a file that does not yet exist, mirroring `init`'s
+    marker-last ordering, D3), extended to cover each staged derived
+    object's own bullet/log entry, in staging order. Every one of these
     writes is itself create-only or atomic, so none is ever left
     half-written -- but Phase B as a whole is NOT transactional:
     there is no rollback across the sequence (`init`'s D3 "no cleanup
@@ -535,7 +543,10 @@ def ingest(
         # Extraction runs AFTER the Source concept is built, BEFORE the
         # preview (design: Technical Approach) -- always attempted, even
         # under `--auto`; only the confirm PROMPT is skipped by `--auto`.
-        derived = _stage_derived_object(
+        # `derived_plans` is the FULL, already-reconciled Phase A write set
+        # (design D5 pinned ordering) -- zero or more entries, in reply
+        # order.
+        derived_plans = _stage_derived_objects(
             raw_content=raw_content,
             source_title=title,
             source_slug=slug,
@@ -567,22 +578,24 @@ def ingest(
         new_log_text = bundle_log.insert_log_entry(
             log_text, now.astimezone().date(), log_line
         )
-        if derived is not None:
-            # Extends the SAME index/log diff (design: one confirm gate, one
-            # preview) rather than a second read-modify-write round trip.
+        # Extends the SAME index/log diff (design: one confirm gate, one
+        # preview) rather than a second read-modify-write round trip per
+        # derived object; loops `derived_plans` in staging order (design:
+        # ingest() call-site loop reshape).
+        for plan in derived_plans:
             new_index_text = bundle_index.insert_index_entry(
                 new_index_text,
-                section=derived.section,
-                link_dir=derived.link_dir,
-                title=derived.title,
-                slug=derived.slug,
-                description=derived.description,
+                section=plan.section,
+                link_dir=plan.link_dir,
+                title=plan.title,
+                slug=plan.slug,
+                description=plan.description,
             )
             new_log_text = bundle_log.insert_log_entry(
                 new_log_text,
                 now.astimezone().date(),
-                f"**Ingest**: Extracted [{derived.title}]"
-                f"(/{derived.link_dir}/{derived.slug}.md) ({derived.doc_type}) "
+                f"**Ingest**: Extracted [{plan.title}]"
+                f"(/{plan.link_dir}/{plan.slug}.md) ({plan.doc_type}) "
                 f"from [{title}](/sources/{slug}.md).",
             )
     except (OSError, ValueError) as exc:
@@ -598,16 +611,16 @@ def ingest(
         )
         typer.echo(f"  ~ raw/{name} (existing copy reused -- not rewritten)")
         typer.echo(f"  ~ bundle/sources/{slug}.md (regenerated)")
-        if derived is not None:
-            typer.echo(f"  + bundle/{derived.link_dir}/{derived.slug}.md")
+        for plan in derived_plans:
+            typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
         typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")
         typer.echo(f"  ~ {log_path.name} (new dated entry)")
     else:
         typer.echo("openkos ingest: proposed changes:")
         typer.echo(f"  + raw/{name}")
         typer.echo(f"  + bundle/sources/{slug}.md")
-        if derived is not None:
-            typer.echo(f"  + bundle/{derived.link_dir}/{derived.slug}.md")
+        for plan in derived_plans:
+            typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
         typer.echo(f"  ~ {index_path.name} (new Source entry)")
         typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
@@ -632,12 +645,13 @@ def ingest(
         else:
             fsio.copy_exclusive(src, raw_dest)
             fsio.write_exclusive(concept_path, concept_content)
-        if derived is not None:
-            # Create-only, like the Source's own fresh write -- ALWAYS
-            # (even on a Source `regenerate`), since a staged `derived` here
-            # already proved its target path does not exist yet.
-            derived.path.parent.mkdir(parents=True, exist_ok=True)
-            fsio.write_exclusive(derived.path, derived.content)
+        # Phase B write loop (design D5): `derived_plans` is the COMPLETE,
+        # already-deduped write set computed by `_stage_derived_objects` in
+        # Phase A -- no existence check, slug work, or dedup happens here,
+        # only `mkdir` + create-only write, per plan, in staging order.
+        for plan in derived_plans:
+            plan.path.parent.mkdir(parents=True, exist_ok=True)
+            fsio.write_exclusive(plan.path, plan.content)
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
     except (OSError, ValueError) as exc:
@@ -646,17 +660,14 @@ def ingest(
         )
         raise typer.Exit(code=1) from exc
 
-    if derived is not None:
-        typer.echo(
-            f"openkos ingest: imported '{src}' -> raw/{name}, "
-            f"bundle/sources/{slug}.md, bundle/{derived.link_dir}/{derived.slug}.md "
-            f"({index_path.name}, {log_path.name} updated)."
-        )
-    else:
-        typer.echo(
-            f"openkos ingest: imported '{src}' -> raw/{name}, "
-            f"bundle/sources/{slug}.md ({index_path.name}, {log_path.name} updated)."
-        )
+    imported_paths = [f"raw/{name}", f"bundle/sources/{slug}.md"]
+    imported_paths.extend(
+        f"bundle/{plan.link_dir}/{plan.slug}.md" for plan in derived_plans
+    )
+    typer.echo(
+        f"openkos ingest: imported '{src}' -> {', '.join(imported_paths)} "
+        f"({index_path.name}, {log_path.name} updated)."
+    )
 
 
 def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]:

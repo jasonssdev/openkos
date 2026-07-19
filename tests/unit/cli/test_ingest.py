@@ -208,6 +208,13 @@ def _project_reply(title: str = "Stoicism Essay Series") -> str:
     )
 
 
+def _multi_object_reply(*replies: str) -> str:
+    """Combine N single-object JSON replies (each from a `_..._reply()`
+    helper above) into one JSON-array reply, mirroring a real multi-object
+    `extract_concept` batch (design D1: array-shaped reply)."""
+    return json.dumps([json.loads(reply) for reply in replies])
+
+
 def _snapshot_entry(path: Path) -> bytes | None:
     if path.is_dir():
         return None
@@ -827,6 +834,54 @@ def test_phase_b_failure_surfaces_cleanly_and_leaves_detectable_orphan(
         assert not (tmp_path / "bundle" / "sources" / "notes.md").exists()
 
 
+def test_phase_b_write_failure_on_second_derived_object_leaves_first_as_orphan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `write_exclusive` failure on the SECOND of three staged derived
+    objects leaves the FIRST derived object written as a detectable
+    orphan, never reaches the THIRD, and never extends `index.md`/`log.md`
+    for either un-written object -- documents the accepted
+    non-transactional Phase B behavior for multi-object batches (D5
+    retreat), mirroring
+    `test_phase_b_failure_surfaces_cleanly_and_leaves_detectable_orphan`'s
+    failure-injection pattern."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(_concept_reply(), _person_reply(), _organization_reply()),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    original_write_exclusive = fsio.write_exclusive
+
+    def failing_write_exclusive(path: Path, content: str) -> None:
+        if path.parent.name == "people":
+            raise OSError("simulated second-derived-object write failure")
+        original_write_exclusive(path, content)
+
+    monkeypatch.setattr(fsio, "write_exclusive", failing_write_exclusive)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos ingest" in result.stderr
+    assert "failed" in result.stderr
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    organization_path = tmp_path / "bundle" / "organizations" / "praxis-foundation.md"
+    assert concept_path.is_file()
+    assert not person_path.exists()
+    assert not organization_path.exists()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert "epictetus.md" not in index_text
+    assert "praxis-foundation.md" not in index_text
+    assert "epictetus.md" not in log_text
+    assert "praxis-foundation.md" not in log_text
+
+
 def test_sensitivity_matches_config_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1337,9 +1392,10 @@ def test_idempotent_reingest_leaves_existing_person_untouched(
 ) -> None:
     """Re-ingesting a source whose Person derived object already exists
     leaves that file byte-unchanged and does not duplicate the catalog
-    entry -- the idempotency scan must cover `people/`, the SAME guard
-    `_source_has_derived_object` applies to `concepts/`/`entities/` (spec:
-    Re-ingesting a Person source does not duplicate)."""
+    entry -- the same per-slug `derived_path.exists()` reconciliation (design
+    D5) `_stage_derived_objects` applies to `concepts/`/`entities/` covers
+    `people/` too (spec: Re-ingesting a Person source does not
+    duplicate)."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _person_reply())
     source = tmp_path / "notes.txt"
@@ -1367,10 +1423,10 @@ def test_idempotent_reingest_leaves_existing_organization_untouched(
 ) -> None:
     """Re-ingesting a source whose Organization derived object already
     exists leaves that file byte-unchanged and does not duplicate the
-    catalog entry -- the idempotency scan must cover `organizations/`, the
-    SAME guard `_source_has_derived_object` applies to
-    `concepts/`/`entities/`/`people/` (spec: Re-ingesting an Organization
-    source does not duplicate)."""
+    catalog entry -- the same per-slug `derived_path.exists()`
+    reconciliation (design D5) `_stage_derived_objects` applies to
+    `concepts/`/`entities/`/`people/` covers `organizations/` too (spec:
+    Re-ingesting an Organization source does not duplicate)."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _organization_reply())
     source = tmp_path / "notes.txt"
@@ -1398,10 +1454,10 @@ def test_idempotent_reingest_leaves_existing_place_untouched(
 ) -> None:
     """Re-ingesting a source whose Place derived object already exists
     leaves that file byte-unchanged and does not duplicate the catalog
-    entry -- the idempotency scan must cover `places/`, the SAME guard
-    `_source_has_derived_object` applies to `concepts/`/`entities/`/
-    `people/`/`organizations/` (spec: "Re-ingesting a Place source does not
-    duplicate")."""
+    entry -- the same per-slug `derived_path.exists()` reconciliation
+    (design D5) `_stage_derived_objects` applies to
+    `concepts/`/`entities/`/`people/`/`organizations/` covers `places/` too
+    (spec: "Re-ingesting a Place source does not duplicate")."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _place_reply())
     source = tmp_path / "notes.txt"
@@ -1431,9 +1487,10 @@ def test_idempotent_reingest_leaves_existing_event_untouched(
 ) -> None:
     """Re-ingesting a source whose Event derived object already exists
     leaves that file byte-unchanged and does not duplicate the catalog
-    entry -- the idempotency scan must cover `events/`, the SAME guard
-    `_source_has_derived_object` applies to the other classifiable types
-    (spec: "Re-ingesting an Event source does not duplicate")."""
+    entry -- the same per-slug `derived_path.exists()` reconciliation
+    (design D5) `_stage_derived_objects` applies to the other classifiable
+    types covers `events/` too (spec: "Re-ingesting an Event source does
+    not duplicate")."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _event_reply())
     source = tmp_path / "notes.txt"
@@ -1495,9 +1552,10 @@ def test_idempotent_reingest_leaves_existing_decision_untouched(
 ) -> None:
     """Re-ingesting a source whose Decision derived object already exists
     leaves that file byte-unchanged and does not duplicate the catalog
-    entry -- the idempotency scan must cover `decisions/`, the SAME guard
-    `_source_has_derived_object` applies to the other classifiable types
-    (spec: "Decision and Project Route to Dedicated Catalog Sections")."""
+    entry -- the same per-slug `derived_path.exists()` reconciliation
+    (design D5) `_stage_derived_objects` applies to the other classifiable
+    types covers `decisions/` too (spec: "Decision and Project Route to
+    Dedicated Catalog Sections")."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _decision_reply())
     source = tmp_path / "notes.txt"
@@ -1556,14 +1614,18 @@ def test_idempotent_reingest_leaves_existing_project_untouched(
     assert log_text.count("stoicism-essay-series.md") == 1
 
 
-def test_reingest_with_nondeterministic_llm_title_skips_second_extraction(
+def test_reingest_with_nondeterministic_llm_title_inserts_a_new_distinct_object(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Re-ingesting a source whose derived object already exists must NOT
-    create a second derived document even when the LLM (nondeterministic)
-    returns a DIFFERENT title on the second attempt -- idempotency is keyed
-    off provenance (deterministic), not the LLM's slugified title. The LLM
-    must not even be called on the re-ingest (quiet idempotent skip)."""
+    """Reversal of the old all-or-nothing `_source_has_derived_object` gate
+    (Phase 7, design D5): re-ingest reconciliation is now SLUG-LEVEL, not
+    provenance-level. A re-ingest whose (nondeterministic) LLM reply
+    proposes a DIFFERENT title calls the LLM again -- unlike the retired
+    provenance-keyed skip, which never called it -- and, since the new
+    title slugifies to a slug that does not yet exist for this source,
+    INSERTS a second, distinct derived object; the pre-existing one is left
+    byte-unchanged. This is the accepted cost of the D5 tradeoff, not a
+    bug."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _concept_reply(title="Stoic Dichotomy Of Control"))
     source = tmp_path / "notes.txt"
@@ -1575,53 +1637,24 @@ def test_reingest_with_nondeterministic_llm_title_skips_second_extraction(
         tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     )
     assert first_concept_path.is_file()
+    first_content = first_concept_path.read_text(encoding="utf-8")
 
     fake = _patch_llm(monkeypatch, _concept_reply(title="A Completely Different Title"))
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert fake.calls == []
-    concepts_dir = tmp_path / "bundle" / "concepts"
-    assert [p.name for p in concepts_dir.glob("*.md")] == [
-        "stoic-dichotomy-of-control.md"
-    ]
-    assert not (tmp_path / "bundle" / "entities").exists()
+    assert len(fake.calls) == 1
+    assert first_concept_path.read_text(encoding="utf-8") == first_content
+    second_concept_path = (
+        tmp_path / "bundle" / "concepts" / "a-completely-different-title.md"
+    )
+    assert second_concept_path.is_file()
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert index_text.count("concepts/stoic-dichotomy-of-control.md") == 1
-    assert "a-completely-different-title" not in index_text
+    assert "concepts/a-completely-different-title.md" in index_text
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
-    assert log_text.count("stoic-dichotomy-of-control.md") == 1
-    assert "a-completely-different-title" not in log_text
-
-
-def test_source_has_derived_object_ignores_unrelated_and_malformed_concepts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`_source_has_derived_object` must skip over derived documents that
-    belong to OTHER sources (provenance mismatch -- keeps scanning) and over
-    a derived document with unparseable frontmatter (caught, keeps scanning)
-    before concluding no match exists -- ingesting a second, unrelated
-    source still gets its own extraction."""
-    _init_workspace(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch, _concept_reply(title="Stoic Dichotomy Of Control"))
-    source_a = tmp_path / "notes-a.txt"
-    source_a.write_text("Some raw notes about self-control.", encoding="utf-8")
-    first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
-    assert first.exit_code == 0
-    assert (
-        tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
-    ).is_file()
-
-    malformed_path = tmp_path / "bundle" / "concepts" / "malformed.md"
-    malformed_path.write_text("---\nfoo: [unclosed\n---\nbody", encoding="utf-8")
-
-    _patch_llm(monkeypatch, _concept_reply(title="Enchiridion"))
-    source_b = tmp_path / "notes-b.txt"
-    source_b.write_text("Different raw notes entirely.", encoding="utf-8")
-    result = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
-
-    assert result.exit_code == 0
-    assert (tmp_path / "bundle" / "concepts" / "enchiridion.md").is_file()
+    assert "a-completely-different-title.md" in log_text
+    assert okf.check_conformance(tmp_path / "bundle") == []
 
 
 def test_reingest_of_identical_source_can_still_stage_a_new_derived_object(
@@ -1737,3 +1770,417 @@ def test_undecodable_source_skips_extraction_without_network_call(
     assert not (tmp_path / "bundle" / "concepts").exists()
     assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
     assert "no extractable text" in result.stderr
+
+
+# --- Multi-object extraction (PR 2, Phases 7-14) ----------------------------
+
+
+def test_multi_object_extraction_writes_all_valid_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single ingest whose extraction reply contains 3 distinct, valid
+    objects writes the Source AND all 3 derived documents, each cataloged
+    and logged, all passing conformance (Phase 8: core N-object end-to-end
+    scenario; spec: "Multiple distinct objects extracted, under cap")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(_concept_reply(), _person_reply(), _organization_reply()),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "Epictetus, at the Praxis Foundation, taught the dichotomy of control.",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    org_path = tmp_path / "bundle" / "organizations" / "praxis-foundation.md"
+    assert concept_path.is_file()
+    assert person_path.is_file()
+    assert org_path.is_file()
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "concepts/stoic-dichotomy-of-control.md" in index_text
+    assert "people/epictetus.md" in index_text
+    assert "organizations/praxis-foundation.md" in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("Extracted") == 3
+    assert "bundle/concepts/stoic-dichotomy-of-control.md" in result.stdout
+    assert "bundle/people/epictetus.md" in result.stdout
+    assert "bundle/organizations/praxis-foundation.md" in result.stdout
+
+
+def test_empty_extraction_array_degrades_to_source_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An extraction reply that is a well-formed but EMPTY JSON array
+    degrades to Source-only, same as a decline/malformed reply (Phase 8:
+    `[]` is a valid, distinct "nothing worth extracting" contract)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, "[]")
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    assert "no concept extracted" in result.stderr
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_in_batch_slug_collision_keeps_first_drops_second(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two candidates in the SAME extraction reply that slugify to the same
+    slug: only the first (in reply order) is staged and written; the
+    second is dropped with a stderr note, never written (Phase 9; spec:
+    In-Batch Slug-Collision Guard)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(
+            _concept_reply(title="Stoic Practice"),
+            _entity_reply(title="Stoic Practice"),
+        ),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Notes about Stoic practice.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-practice.md"
+    assert concept_path.is_file()
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Concept"
+    assert not (tmp_path / "bundle" / "entities").exists()
+    assert "duplicate slug" in result.stderr
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_in_batch_collision_guard_does_not_reserve_slug_before_candidate_lands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The in-batch collision guard must reserve a slug only once the
+    candidate that owns it actually becomes a plan: a FIRST candidate that
+    shares a slug with a SECOND, valid candidate, but itself fails
+    `okf.build_concept` (never staged, never written), must NOT block the
+    second, valid candidate from being written -- regression for a bug
+    where `seen_slugs.add()` ran before the exists/build checks, so an
+    earlier candidate that never wrote anything could still falsely shadow
+    a later, valid same-slug candidate."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(
+            _concept_reply(title="Test Object\nExtra"),
+            _entity_reply(title="Test Object Extra"),
+        ),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    entity_path = tmp_path / "bundle" / "entities" / "test-object-extra.md"
+    assert entity_path.is_file()
+    assert "extracted content failed validation" in result.stderr
+    assert "duplicate slug" not in result.stderr
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_empty_slug_item_skipped_other_items_still_staged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate whose title slugifies to an empty string is skipped with
+    a stderr note; other valid candidates in the same batch are still
+    staged and written -- a per-item fail-closed drop, not a whole-batch
+    degrade (Phase 9.2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(_concept_reply(title="!!!"), _person_reply()),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    assert person_path.is_file()
+    assert "could not be turned into a slug" in result.stderr
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_reingest_reconciles_per_slug_skips_existing_inserts_new(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingest whose extraction yields the pre-existing derived object's
+    slug PLUS one new distinct slug inserts only the new one; the existing
+    slug's file is left byte-unchanged (Phase 10.1; spec: "Re-ingest with
+    one new and one existing object")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    hand_edited = concept_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    concept_path.write_text(hand_edited, encoding="utf-8")
+
+    _patch_llm(monkeypatch, _multi_object_reply(_concept_reply(), _person_reply()))
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert concept_path.read_text(encoding="utf-8") == hand_edited
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    assert person_path.is_file()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("concepts/stoic-dichotomy-of-control.md") == 1
+    assert "people/epictetus.md" in index_text
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_reingest_all_slugs_already_exist_is_a_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingest whose extraction yields ONLY slugs that already exist for
+    this source writes no derived object and raises no error (Phase 10.2;
+    spec: "Re-ingest with all objects already present")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _multi_object_reply(_concept_reply(), _person_reply()))
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    assert concept_path.is_file()
+    assert person_path.is_file()
+    concept_before = concept_path.read_text(encoding="utf-8")
+    person_before = person_path.read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert concept_path.read_text(encoding="utf-8") == concept_before
+    assert person_path.read_text(encoding="utf-8") == person_before
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("concepts/stoic-dichotomy-of-control.md") == 1
+    assert index_text.count("people/epictetus.md") == 1
+
+
+def test_phase_a_existence_checks_precede_phase_b_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ALL Phase A `derived_path.exists()` checks complete before the FIRST
+    Phase B `write_exclusive` call -- the write set is fully computed and
+    deduped before the first byte lands (Phase 10.3; spec: Slug-Level
+    Re-Ingest Reconciliation, ordering guarantee; design D5 pinned
+    ordering)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(_concept_reply(), _person_reply(), _organization_reply()),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    calls: list[str] = []
+    derived_dirs = ("concepts", "people", "organizations")
+    original_exists = Path.exists
+    original_write_exclusive = fsio.write_exclusive
+
+    def recording_exists(self: Path) -> bool:
+        outcome = original_exists(self)
+        if self.suffix == ".md" and self.parent.name in derived_dirs:
+            calls.append(f"exists:{self.name}")
+        return outcome
+
+    def recording_write_exclusive(path: Path, content: str) -> None:
+        if path.suffix == ".md" and path.parent.name in derived_dirs:
+            calls.append(f"write:{path.name}")
+        original_write_exclusive(path, content)
+
+    monkeypatch.setattr(Path, "exists", recording_exists)
+    monkeypatch.setattr(fsio, "write_exclusive", recording_write_exclusive)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    exists_calls = [c for c in calls if c.startswith("exists:")]
+    write_calls = [c for c in calls if c.startswith("write:")]
+    assert len(exists_calls) == 3
+    assert len(write_calls) == 3
+    first_write_index = calls.index(write_calls[0])
+    assert all(calls.index(c) < first_write_index for c in exists_calls)
+
+
+def test_build_concept_failure_skips_only_that_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One candidate whose title contains an embedded newline (passes
+    `extract_concept`'s own validation but fails `okf.build_concept`'s
+    stricter single-line gate) is skipped without discarding the OTHER
+    valid candidates in the same batch (Phase 10.4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(
+            _concept_reply(title="Stoic Framework\nExtra Line"), _person_reply()
+        ),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts").exists()
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    assert person_path.is_file()
+    assert "extracted content failed validation" in result.stderr
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_batch_of_five_all_staged_no_second_cap_in_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch of exactly 5 valid, non-colliding, non-existing candidates
+    are ALL staged and written -- `main.py` never re-caps; `concept.py`'s
+    `_MAX_OBJECTS_PER_SOURCE = 5` is the only ceiling (Phase 11; spec:
+    "LLM proposes more than CAP objects" / "Multiple distinct objects
+    extracted, under cap")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(
+            _concept_reply(),
+            _entity_reply(),
+            _person_reply(),
+            _organization_reply(),
+            _place_reply(),
+        ),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    ).is_file()
+    assert (tmp_path / "bundle" / "entities" / "enchiridion.md").is_file()
+    assert (tmp_path / "bundle" / "people" / "epictetus.md").is_file()
+    assert (tmp_path / "bundle" / "organizations" / "praxis-foundation.md").is_file()
+    assert (tmp_path / "bundle" / "places" / "yellowstone-national-park.md").is_file()
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_two_same_type_candidates_in_one_batch_are_both_indexed_and_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two distinct, non-colliding candidates of the SAME derived type in
+    one extraction batch are BOTH written and BOTH get their own
+    `index.md`/`log.md` entries under the SAME catalog section -- the
+    in-batch collision guard and per-slug reconciliation only drop a
+    candidate on a genuine slug match, never merely for sharing a type."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(
+            _concept_reply(title="Stoic Dichotomy Of Control"),
+            _concept_reply(title="Amor Fati"),
+        ),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    first_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    second_path = tmp_path / "bundle" / "concepts" / "amor-fati.md"
+    assert first_path.is_file()
+    assert second_path.is_file()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert index_text.count("# Concepts") == 1
+    assert "concepts/stoic-dichotomy-of-control.md" in index_text
+    assert "concepts/amor-fati.md" in index_text
+    assert "Stoic Dichotomy Of Control" in log_text
+    assert "Amor Fati" in log_text
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_interactive_preview_lists_all_staged_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confirmation preview lists the Source AND every staged derived
+    object, one `+ bundle/<link_dir>/<slug>.md` line each, before the
+    confirm gate (Phase 12.1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _multi_object_reply(_concept_reply(), _person_reply()))
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "+ bundle/concepts/stoic-dichotomy-of-control.md" in result.stdout
+    assert "+ bundle/people/epictetus.md" in result.stdout
+
+
+def test_final_echo_lists_all_derived_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The final confirmation echo lists the Source path plus every staged
+    derived object's path (0..N), alongside the always-present Source path
+    (Phase 12.4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _multi_object_reply(_concept_reply(), _person_reply()))
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "raw/notes.txt, bundle/sources/notes.md, "
+        "bundle/concepts/stoic-dichotomy-of-control.md, "
+        "bundle/people/epictetus.md" in result.stdout
+    )
+
+
+def test_exists_skip_reports_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose derived object's slug already exists
+    prints a per-candidate stderr note naming the skipped slug (Phase 13;
+    design D4 drop transparency) -- distinct from the whole-batch
+    "no concept extracted" wording used when extraction itself yields
+    nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "stoic-dichotomy-of-control" in result.stderr
+    assert "already exists" in result.stderr
