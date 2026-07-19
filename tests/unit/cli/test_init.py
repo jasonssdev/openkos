@@ -302,6 +302,28 @@ def test_tty_prompt_accepts_default(
     assert "model: qwen3:8b" in content
 
 
+def test_tty_init_prints_exact_next_step_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Coverage guard for pre-existing behavior: `cli/main.py:129` always
+    echoes this next-step hint after a successful `init`, verbatim, even
+    when stdin is a TTY. Existing coverage only substring-asserts
+    `"openkos ingest"` on a non-TTY run (`test_fresh_empty_directory`); this
+    locks the FULL line under a TTY runner so future wording drift is caught
+    immediately. This test targets already-existing behavior, so it is
+    expected to pass on write (no RED phase, `main.py` is untouched)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert (
+        "Next: run `openkos ingest <path>` to import your first source."
+        in result.output
+    )
+
+
 def test_tty_prompt_custom_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
