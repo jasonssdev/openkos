@@ -3,18 +3,27 @@
 ## Purpose
 
 `openkos ingest <path>` copies a raw source into the bundle, generates one
-conformant OKF Source concept, and attempts LLM-driven extraction of at most
-one derived Concept or Entity (MVP-2 vertical slice). Records provenance
-OKF-natively, updates the bundle catalog (`index.md`) and log (`log.md`),
-and degrades to Source-only behavior with zero crashes on any LLM failure.
+conformant OKF Source concept, and attempts LLM-driven extraction of a
+bounded list of derived objects — zero up to a hard cap of 5 — each
+classified across the 9-type derived-object vocabulary (`Concept`, `Entity`,
+`Place`, `Event`, `Procedure`, `Decision`, `Project`, `Person`,
+`Organization`). Records provenance OKF-natively, updates the bundle catalog
+(`index.md`) and log (`log.md`), and degrades to Source-only behavior with
+zero crashes on any LLM failure.
 
 ## Non-Goals
 
-This spec does not define: multiple derived objects per ingest; extraction
-of the other 9 canonical OKF types; entity resolution, merge, or
-reclassification on re-ingest; typed relationship graph; sensitivity
-high-water-mark across multiple sources; or MVP-2 hybrid retrieval,
-all deferred to future MVPs per `knowledge-object-model.md`.
+Extraction of a bounded list of derived objects across the 9-type
+classifiable vocabulary HAS shipped and is specified below. This spec does
+NOT define: entity resolution, merge, or cross-source dedup of derived
+objects (MVP-2); reclassification, re-typing, or merge of an existing
+derived object on re-ingest — re-ingest reconciles per slug (create-only
+insert of slug-missing objects, existing files left byte-untouched), but
+never re-types or merges what already exists; a typed relationship graph or
+inter-object relations (MVP-2); sensitivity high-water-mark across multiple
+sources (MVP-2/3); a configurable (per-workspace) cap or cross-document
+synthesis; or MVP-2 hybrid retrieval — all deferred to future MVPs per
+`knowledge-object-model.md`.
 
 ## Requirements
 
@@ -112,14 +121,17 @@ storage as an exclusive (create-only) binary write and generate exactly one
 OKF Source concept with frontmatter `type`, `title`, `description`,
 `resource`, `tags`, `timestamp`, plus OpenKOS-layer `status`, `version`,
 `freshness`, `sensitivity`, and `provenance`. In addition, `ingest` MUST
-attempt LLM-driven extraction of **at most one** derived object of type
-`Concept` or `Entity` from the source. WHEN extraction succeeds and the
-derived object passes validation, `ingest` MUST write that derived object
-IN ADDITION to the Source concept, with `provenance` pointing to the Source
-and `sensitivity` inherited from the Source. WHEN extraction fails, is
-unavailable, times out, errors, or produces invalid output, `ingest` MUST
-degrade to Source-only behavior — write only the Source concept, emit an
-explanatory note to stderr, and exit 0 (no crash). Extraction always runs
+attempt LLM-driven extraction of a **bounded list** of derived objects —
+zero up to a hard cap of 5 — each of a type in the 9-type classifiable
+vocabulary (`{Concept, Entity, Place, Event, Procedure, Decision, Project,
+Person, Organization}`) from the source. WHEN extraction succeeds, for EACH
+derived object that passes per-item validation and survives staging, `ingest`
+MUST write that derived object IN ADDITION to the Source concept, with
+`provenance` pointing to the Source and `sensitivity` inherited from the
+Source. WHEN extraction fails, is unavailable, times out, errors, or leaves
+no valid surviving object, `ingest` MUST degrade to Source-only behavior —
+write only the Source concept, emit an explanatory note to stderr, and exit 0
+(no crash). Extraction always runs
 regardless of `--auto`; `--auto` only skips the confirmation prompt. WHEN
 the source decodes as UTF-8 text, the Source concept's BODY MUST embed that
 text verbatim under a labeled section, followed by `# Citations`. WHEN the
@@ -175,6 +187,16 @@ verbatim, and MUST NOT claim extraction or splitting into derived concepts.
 - THEN both the Source concept AND an Entity document are written, and the
   Entity's `provenance` references the Source
 
+#### Scenario: Multiple distinct objects are all written
+
+- GIVEN a source genuinely about several distinct objects, and a fake LLM
+  backend returning a well-formed array of multiple validly-typed objects
+  (at or under the cap)
+- WHEN `openkos ingest <path>` completes
+- THEN the Source concept AND one derived document per surviving object are
+  written, each with `provenance` referencing the Source, and
+  `check_conformance` reports no violations for any document
+
 #### Scenario: Undecodable source falls back without crashing
 
 - GIVEN a source at `<path>` that is not valid UTF-8 text (e.g. binary)
@@ -193,18 +215,28 @@ verbatim, and MUST NOT claim extraction or splitting into derived concepts.
 
 ### Requirement: Type Classification Prefers Specific Types Over the Entity Fallback
 
-Extraction MUST classify the derived object's type using a closed vocabulary
-of `{Concept, Entity, Place, Event, Procedure, Person, Organization}`.
-`Entity` MUST be used only as a fallback when no more specific type fits;
-`Concept` MUST be preferred whenever the source content describes an idea,
-topic, theory, term, or framework.
+Extraction MUST classify each derived object's type using a closed
+vocabulary of `{Concept, Entity, Place, Event, Procedure, Decision, Project,
+Person, Organization}`. `Entity` MUST be used only as a fallback when no more
+specific type fits; every other type MUST be preferred over `Entity` whenever
+the source content clearly matches that type's definition, and `Concept` MUST
+be preferred whenever the source content describes an idea, topic, theory,
+term, or framework — including one named after a person, organization, or
+place. Extraction MUST classify each object by what the source is
+fundamentally ABOUT, and MUST NOT enumerate every named entity as a
+standalone object: a person, place, or organization merely mentioned or named
+in passing is a participant or attribute of a richer object, not an
+independent extraction target. Extraction MUST prefer FEWER, RICHER objects
+over many shallow ones, so the derived set reflects what the source is
+genuinely about rather than every name it contains.
 
-#### Scenario: Entity chosen only when Concept does not fit
+#### Scenario: Entity chosen only when no specific type fits
 
 - GIVEN a fake LLM backend that would only plausibly classify the source's
-  content as a concrete artifact rather than an idea or framework
+  content as a concrete artifact rather than an idea, person, place, event,
+  procedure, decision, or project
 - WHEN extraction runs
-- THEN the derived object's `type` is `Entity`, not `Concept`
+- THEN the derived object's `type` is `Entity`, not any more specific type
 
 #### Scenario: Concept preferred when content fits
 
@@ -213,16 +245,46 @@ topic, theory, term, or framework.
 - WHEN extraction runs
 - THEN the derived object's `type` is `Concept`
 
+#### Scenario: Self-narrating decision classifies as Decision
+
+- GIVEN a source that narrates a choice made, carrying its rationale, the
+  alternatives considered, and its current status
+- WHEN extraction runs
+- THEN the derived object's `type` is `Decision`, not `Concept` or `Event`
+
+#### Scenario: Ongoing goal-directed effort classifies as Project
+
+- GIVEN a source fundamentally about an ongoing effort defined by a goal and
+  a timespan rather than a single bounded happening
+- WHEN extraction runs
+- THEN the derived object's `type` is `Project`, not `Event`
+
+#### Scenario: Named entities in passing are not enumerated
+
+- GIVEN a source fundamentally about one bounded happening that names several
+  people only in passing (e.g. a meeting transcript listing attendees)
+- WHEN extraction runs
+- THEN the result contains the richer objects the source is about (e.g. the
+  Event and any Decisions reached) and does NOT contain a shallow Person
+  object per named attendee
+
 ### Requirement: Fail-Closed Validation of Extracted Output
 
 Extraction output MUST be validated before any derived object is written.
-Validation MUST reject: output that is not parseable as the documented
-structured shape; a `type` outside `{Concept, Entity, Place, Event,
-Procedure, Person, Organization}`; and missing or empty required fields
-(at minimum `title` and `description`). WHEN
-validation rejects the output, `ingest` MUST NOT write a derived object,
-MUST still write the Source concept, MUST emit a note to stderr explaining
-the degrade, and MUST exit 0.
+Each candidate object in the parsed reply MUST be validated INDEPENDENTLY:
+validation MUST reject a candidate whose parsed shape is not the documented
+structured shape; whose `type` is outside the 9-value classifiable set
+`{Concept, Entity, Place, Event, Procedure, Decision, Project, Person,
+Organization}` (`Source` remains the only in-registry type rejected as
+non-classifiable); or whose required fields are missing or empty (at minimum
+`title` and `description`). A malformed candidate MUST be dropped WITHOUT
+discarding the valid candidates in the same reply — validation is per-item,
+not all-or-nothing. Extraction MUST yield a bounded list of the surviving
+valid objects, or an empty list when none survive; an empty list and "the LLM
+proposed nothing" MUST NOT be distinguished at this layer. WHEN no valid
+derived object survives, `ingest` MUST NOT write any derived object, MUST
+still write the Source concept, MUST emit a note to stderr explaining the
+degrade, and MUST exit 0.
 
 #### Scenario: Malformed JSON degrades to Source-only
 
@@ -235,7 +297,9 @@ the degrade, and MUST exit 0.
 #### Scenario: Invalid type degrades to Source-only
 
 - GIVEN a fake LLM backend returning well-formed output whose `type` is
-  outside `{Concept, Entity, Place, Event, Procedure, Person, Organization}`
+  outside the 9-value classifiable set `{Concept, Entity, Place, Event,
+  Procedure, Decision, Project, Person, Organization}` (including `Source`
+  itself)
 - WHEN `openkos ingest <path>` runs
 - THEN only the Source concept is written, a note appears on stderr, and
   the exit code is 0
@@ -247,6 +311,60 @@ the degrade, and MUST exit 0.
 - WHEN `openkos ingest <path>` runs
 - THEN only the Source concept is written, a note appears on stderr, and
   the exit code is 0
+
+#### Scenario: Malformed candidate is dropped, valid candidates kept
+
+- GIVEN a fake LLM backend returning an array of several candidates, one of
+  which is missing a required field
+- WHEN `openkos ingest <path>` runs
+- THEN the valid candidates are written as derived objects and the malformed
+  one is dropped, without discarding the valid ones
+
+#### Scenario: All candidates invalid degrades to Source-only
+
+- GIVEN a fake LLM backend whose every candidate fails validation
+- WHEN `openkos ingest <path>` runs
+- THEN only the Source concept is written, a note appears on stderr, and the
+  exit code is 0
+
+### Requirement: Bounded, Deduplicated Derived-Object Staging
+
+`ingest` MUST compute the complete set of derived objects to write with zero
+writes (Phase A) before Phase B writes any of them. The number of derived
+objects written for a single source MUST NOT exceed a hard cap of 5 (a safety
+ceiling applied after per-item validation, not a target). During staging, the
+system MUST, per candidate in reply order: derive a slug from the candidate's
+title and drop a candidate whose title yields an empty slug; apply an
+in-batch slug-collision guard that keeps the first and drops later
+candidate(s) from the SAME reply that slugify to an already-seen slug; drop,
+create-only, a candidate whose slug already exists on disk; and drop a
+candidate whose fields fail the stricter single-line concept-build gate. A
+slug MUST be reserved only once its candidate survives every check, so a
+dropped candidate never reserves a slug for a later one. Each per-candidate
+drop MUST be reported to stderr and MUST drop only that candidate, never the
+whole batch.
+
+#### Scenario: More than the cap of validated objects is bounded
+
+- GIVEN a source whose extraction would yield more than 5 valid objects
+- WHEN `openkos ingest <path>` completes
+- THEN no more than 5 derived objects are written, keeping the first 5 in
+  reply order
+
+#### Scenario: Two objects in one reply collide on slug
+
+- GIVEN a validated batch of two objects whose titles slugify to the same
+  slug
+- WHEN staging derived objects for write
+- THEN only the first object in reply order is staged; the second is dropped
+  with a note on stderr and not written
+
+#### Scenario: A candidate whose slug already exists is skipped create-only
+
+- GIVEN a validated candidate whose slug already exists on disk
+- WHEN staging derived objects for write
+- THEN that candidate is skipped (create-only), the existing file is left
+  untouched, and a note is emitted to stderr
 
 ### Requirement: Extraction Degrades Gracefully on LLM Unavailability
 
@@ -277,54 +395,73 @@ referencing its originating Source concept, and MUST inherit the Source's
   to the Source concept and its `sensitivity` equals the Source's
   `sensitivity`
 
-### Requirement: Review Gate Shows Both Objects Before Write
+### Requirement: Review Gate Shows the Source and Every Derived Object Before Write
 
-The confirmation preview MUST show BOTH the proposed Source concept and
-the proposed derived object (when extraction succeeded) before any write
-occurs. WHEN `--auto` is passed, both objects MUST be written without
-prompting; the confirmation prompt is skipped, but extraction still runs
-beforehand.
+The confirmation preview MUST show the proposed Source concept AND every
+staged derived object (zero or more) before any write occurs. WHEN `--auto`
+is passed, the Source concept and all staged derived objects MUST be written
+without prompting; the confirmation prompt is skipped, but extraction still
+runs beforehand.
 
-#### Scenario: Interactive confirm shows both objects
+#### Scenario: Interactive confirm shows the Source and each derived object
 
-- GIVEN successful extraction and an interactive TTY without `--auto`
+- GIVEN successful extraction of one or more derived objects and an
+  interactive TTY without `--auto`
 - WHEN `openkos ingest <path>` reaches the confirm gate
-- THEN the preview lists both the Source concept and the derived object,
+- THEN the preview lists the Source concept and every staged derived object,
   and declining aborts with no files written
 
-#### Scenario: `--auto` writes both without prompting
+#### Scenario: `--auto` writes the Source and every derived object without prompting
 
 - GIVEN successful extraction and `--auto`
 - WHEN `openkos ingest <path>` runs
-- THEN no confirmation prompt appears and both the Source concept and the
-  derived object are written
+- THEN no confirmation prompt appears and the Source concept together with
+  every staged derived object is written
 
-### Requirement: Idempotent Re-Ingest Leaves an Existing Derived Object Untouched
+### Requirement: Idempotent Re-Ingest Reconciles Derived Objects Per Slug
 
-WHEN a source is re-ingested and a derived object already exists (from a
-prior successful extraction) for that source, `ingest` MUST leave the
-existing derived object file untouched — no overwrite, no re-extraction of
-that object's content.
+WHEN a source is re-ingested, `ingest` MUST reconcile derived objects per
+slug rather than all-or-nothing: for each validated candidate, the system
+MUST check whether an object with that slug already exists, MUST insert it
+only when no such slug exists yet (create-only), and MUST leave any existing
+derived object file byte-untouched — no overwrite, no re-typing, no merge.
+The slug-existence check for a candidate MUST complete BEFORE any write for
+that candidate, so a failed write never leaves a partially-reconciled state.
+Re-ingest re-runs extraction, so a genuinely new object CAN be inserted even
+when older objects for the same source already exist.
 
-#### Scenario: Re-ingest does not overwrite existing derived object
+#### Scenario: Re-ingest leaves an existing derived object untouched
 
-- GIVEN a source already ingested with a resulting Concept (or Entity)
-  document, possibly hand-edited afterward
+- GIVEN a source already ingested with a resulting derived object, possibly
+  hand-edited afterward
 - WHEN `openkos ingest <path>` is run again for the same source
-- THEN the existing derived object file's content is unchanged
+- THEN the existing derived object file whose slug already exists is left
+  byte-unchanged
+
+#### Scenario: Re-ingest inserts a slug-missing object and skips existing ones
+
+- GIVEN a source that already has one derived object on disk, and a re-ingest
+  whose extraction yields that same object plus one whose slug is not yet on
+  disk
+- WHEN `openkos ingest <path>` runs again
+- THEN only the object whose slug does not yet exist is written; the existing
+  slug is skipped and not rewritten
 
 ### Requirement: Derived Object Cataloging and Logging
 
-A successfully written derived object MUST be cataloged in `index.md` under
-the `# Concepts` section, and the write MUST be recorded as a new entry in
+Each successfully written derived object MUST be cataloged in `index.md`
+under the section matching its type (`# Concepts`, `# Entities`, `# Places`,
+`# Events`, `# Procedures`, `# Decisions`, `# Projects`, `# People`, or
+`# Organizations`), and each write MUST be recorded as a new entry in
 `log.md`, alongside the Source concept's own catalog and log entries.
 
-#### Scenario: Catalog and log reflect both objects
+#### Scenario: Catalog and log reflect the Source and each derived object
 
-- GIVEN successful extraction and a completed ingest
+- GIVEN successful extraction of one or more derived objects and a completed
+  ingest
 - WHEN `index.md` and `log.md` are inspected
-- THEN `index.md` lists the Source under `# Sources` and the derived
-  object under `# Concepts`, and `log.md` records both writes
+- THEN `index.md` lists the Source under `# Sources` and each derived object
+  under the section matching its type, and `log.md` records every write
 
 ### Requirement: Embedded Content Is Queryable End-to-End
 
@@ -383,13 +520,14 @@ provenance store.
 
 ### Requirement: Review/Confirm Flow
 
-`ingest` MUST compute the Source concept, raw copy, and index/log changes
-in memory during Phase A without writing, present a preview, and perform
-Phase B writes only after confirmation. Each Phase B write MUST be
-individually create-only (`copy_exclusive`, `write_exclusive`) or atomic
-(`write_atomic`), and content MUST be written before the catalog (raw copy
-and concept document before `index.md`/`log.md`), so the catalog never
-references a file that does not exist. Phase B is NOT required to be
+`ingest` MUST compute the Source concept, raw copy, any staged derived
+objects, and index/log changes in memory during Phase A without writing,
+present a preview, and perform Phase B writes only after confirmation. Each
+Phase B write MUST be individually create-only (`copy_exclusive`,
+`write_exclusive`) or atomic (`write_atomic`), and content MUST be written
+before the catalog (raw copy, concept document, and each derived object
+before `index.md`/`log.md`), so the catalog never references a file that does
+not exist. Phase B is NOT required to be
 transactional as a whole: there is no rollback across the sequence, and a
 failure partway through MAY leave a partial, detectable result recoverable
 via git. `--auto` MUST skip the confirmation prompt and proceed directly
