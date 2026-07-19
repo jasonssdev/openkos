@@ -4,9 +4,10 @@
 vocabulary: every derived projection consumed by `extraction/concept.py`,
 `model/okf.py`, `cli/main.py`, and `bundle/index.py` MUST equal today's
 literal values -- this is the behavior-preservation proof for the PR1
-extraction (design: "Behavior-preservation proof"). PR2 adds one `Place`
-entry, inserted after `Entity` -- every other pairwise order is unchanged
-(spec: "Canonical order is insert-only")."""
+extraction (design: "Behavior-preservation proof"). This slice adds two
+occurrent entries, `Event` and `Procedure`, inserted after `Place`, before
+`Decision` -- every other pairwise order is unchanged (spec: "Canonical
+order is insert-only")."""
 
 from dataclasses import FrozenInstanceError
 
@@ -15,14 +16,17 @@ import pytest
 from openkos.model import types
 
 
-def test_registry_has_seven_entries_with_place() -> None:
-    """PR2 REGISTRY has the 6 pre-existing types plus `Place`, inserted
-    immediately after `Entity` (design: Decision 1, PR2 result)."""
+def test_registry_has_nine_entries_with_event_and_procedure() -> None:
+    """REGISTRY has the 7 pre-existing types plus `Event` and `Procedure`,
+    inserted immediately after `Place`, before `Decision` (design: Decision
+    1)."""
     names = tuple(ot.name for ot in types.REGISTRY)
     assert names == (
         "Concept",
         "Entity",
         "Place",
+        "Event",
+        "Procedure",
         "Decision",
         "Person",
         "Organization",
@@ -46,60 +50,83 @@ def test_decision_and_source_are_not_llm_classifiable() -> None:
 
 
 def test_classifiable_types_matches_widened_set() -> None:
-    """`CLASSIFIABLE_TYPES` is the closed 5-value set: the PR1 4 pre-existing
-    types plus `Place` (spec: "Classifiable set matches legacy literal",
-    widened by "Place is a classifiable type")."""
-    assert frozenset({"Concept", "Entity", "Place", "Person", "Organization"}) == (
-        types.CLASSIFIABLE_TYPES
+    """`CLASSIFIABLE_TYPES` is the closed 7-value set: the 5 pre-existing
+    classifiable types plus `Event` and `Procedure` (spec: "Type
+    Classification Prefers Specific Types Over the Entity Fallback")."""
+    assert (
+        frozenset(
+            {
+                "Concept",
+                "Entity",
+                "Place",
+                "Event",
+                "Procedure",
+                "Person",
+                "Organization",
+            }
+        )
+        == types.CLASSIFIABLE_TYPES
     )
 
 
-def test_type_to_link_dir_includes_place() -> None:
-    """`TYPE_TO_LINK_DIR` gains a `Place -> places` key; the 4 pre-existing
-    entries are unchanged (spec: "Dir/section maps unchanged for
-    pre-existing types")."""
+def test_type_to_link_dir_includes_event_and_procedure() -> None:
+    """`TYPE_TO_LINK_DIR` gains `Event -> events` and `Procedure ->
+    procedures` keys; the 5 pre-existing entries are unchanged (spec: "Dir/
+    section maps unchanged for pre-existing types")."""
     assert types.TYPE_TO_LINK_DIR == {
         "Concept": "concepts",
         "Entity": "entities",
         "Place": "places",
+        "Event": "events",
+        "Procedure": "procedures",
         "Person": "people",
         "Organization": "organizations",
     }
 
 
-def test_type_to_section_includes_place() -> None:
-    """`TYPE_TO_SECTION` gains a `Place -> Places` key; the 4 pre-existing
-    entries are unchanged."""
+def test_type_to_section_includes_event_and_procedure() -> None:
+    """`TYPE_TO_SECTION` gains `Event -> Events` and `Procedure ->
+    Procedures` keys; the 5 pre-existing entries are unchanged."""
     assert types.TYPE_TO_SECTION == {
         "Concept": "Concepts",
         "Entity": "Entities",
         "Place": "Places",
+        "Event": "Events",
+        "Procedure": "Procedures",
         "Person": "People",
         "Organization": "Organizations",
     }
 
 
-def test_classifiable_link_dirs_includes_places_in_registry_order() -> None:
-    """`CLASSIFIABLE_LINK_DIRS` gains `"places"`, positioned after
-    `"entities"` (registry order), so the ingest idempotency scan covers
-    `places/` too (spec: "Idempotency scan dirs derive from the registry")."""
+def test_classifiable_link_dirs_includes_events_and_procedures_in_registry_order() -> (
+    None
+):
+    """`CLASSIFIABLE_LINK_DIRS` gains `"events"` and `"procedures"`,
+    positioned after `"places"` (registry order), so the ingest idempotency
+    scan covers `events/`/`procedures/` too (spec: "Idempotency scan dirs
+    derive from the registry")."""
     assert types.CLASSIFIABLE_LINK_DIRS == (
         "concepts",
         "entities",
         "places",
+        "events",
+        "procedures",
         "people",
         "organizations",
     )
 
 
-def test_canonical_section_order_inserts_places_after_entities() -> None:
-    """`CANONICAL_SECTION_ORDER` inserts `Places` immediately after
-    `Entities`, before `Decisions` -- every other pair keeps its pre-existing
-    relative order (spec: "Canonical order is insert-only")."""
+def test_canonical_section_order_inserts_events_and_procedures_after_places() -> None:
+    """`CANONICAL_SECTION_ORDER` inserts `Events` then `Procedures`
+    immediately after `Places`, before `Decisions` -- every other pair keeps
+    its pre-existing relative order (spec: "Canonical order is
+    insert-only")."""
     assert types.CANONICAL_SECTION_ORDER == (
         "Concepts",
         "Entities",
         "Places",
+        "Events",
+        "Procedures",
         "Decisions",
         "People",
         "Organizations",

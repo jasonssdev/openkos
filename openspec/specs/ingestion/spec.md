@@ -194,9 +194,10 @@ verbatim, and MUST NOT claim extraction or splitting into derived concepts.
 ### Requirement: Type Classification Prefers Specific Types Over the Entity Fallback
 
 Extraction MUST classify the derived object's type using a closed vocabulary
-of `{Concept, Entity}`. `Entity` MUST be used only as a fallback when no
-more specific type fits; `Concept` MUST be preferred whenever the source
-content describes an idea, topic, theory, term, or framework.
+of `{Concept, Entity, Place, Event, Procedure, Person, Organization}`.
+`Entity` MUST be used only as a fallback when no more specific type fits;
+`Concept` MUST be preferred whenever the source content describes an idea,
+topic, theory, term, or framework.
 
 #### Scenario: Entity chosen only when Concept does not fit
 
@@ -216,8 +217,9 @@ content describes an idea, topic, theory, term, or framework.
 
 Extraction output MUST be validated before any derived object is written.
 Validation MUST reject: output that is not parseable as the documented
-structured shape; a `type` outside `{Concept, Entity}`; and missing or
-empty required fields (at minimum `title` and `description`). WHEN
+structured shape; a `type` outside `{Concept, Entity, Place, Event,
+Procedure, Person, Organization}`; and missing or empty required fields
+(at minimum `title` and `description`). WHEN
 validation rejects the output, `ingest` MUST NOT write a derived object,
 MUST still write the Source concept, MUST emit a note to stderr explaining
 the degrade, and MUST exit 0.
@@ -233,7 +235,7 @@ the degrade, and MUST exit 0.
 #### Scenario: Invalid type degrades to Source-only
 
 - GIVEN a fake LLM backend returning well-formed output whose `type` is
-  outside `{Concept, Entity}`
+  outside `{Concept, Entity, Place, Event, Procedure, Person, Organization}`
 - WHEN `openkos ingest <path>` runs
 - THEN only the Source concept is written, a note appears on stderr, and
   the exit code is 0

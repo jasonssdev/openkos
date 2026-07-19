@@ -60,6 +60,18 @@ _PLACE_JSON = (
     '"body": "Known for its geysers and geothermal features."}'
 )
 
+_EVENT_JSON = (
+    '{"extract": true, "type": "Event", "title": "Stoicon 2026", '
+    '"description": "An annual conference on Stoic philosophy.", '
+    '"body": "Held over a single weekend with talks and workshops."}'
+)
+
+_PROCEDURE_JSON = (
+    '{"extract": true, "type": "Procedure", "title": "Morning Journaling Routine", '
+    '"description": "A repeatable daily reflection practice.", '
+    '"body": "Write three things you are grateful for, then one obstacle."}'
+)
+
 
 # --- Scaffold ---------------------------------------------------------------
 
@@ -157,6 +169,39 @@ def test_valid_place_json_returns_extraction_result() -> None:
     assert result.type == "Place"
     assert result.title == "Yellowstone National Park"
     assert result.description == "A national park in the western United States."
+
+
+def test_valid_event_json_returns_extraction_result() -> None:
+    """A well-formed `type: Event` reply parses with `type == "Event"`
+    (spec: "Source about a bounded happening classifies as Event")."""
+    llm = _FakeLLM(reply=_EVENT_JSON)
+
+    result = concept_mod.extract_concept(
+        "Stoicon 2026 is an annual conference on Stoic philosophy.",
+        source_title="Notes",
+        llm=llm,
+    )
+
+    assert result is not None
+    assert result.type == "Event"
+    assert result.title == "Stoicon 2026"
+    assert result.description == "An annual conference on Stoic philosophy."
+
+
+def test_valid_procedure_json_returns_extraction_result() -> None:
+    """A well-formed `type: Procedure` reply parses with `type ==
+    "Procedure"` (spec: "Source about a repeatable how-to classifies as
+    Procedure")."""
+    llm = _FakeLLM(reply=_PROCEDURE_JSON)
+
+    result = concept_mod.extract_concept(
+        "A daily morning journaling routine.", source_title="Notes", llm=llm
+    )
+
+    assert result is not None
+    assert result.type == "Procedure"
+    assert result.title == "Morning Journaling Routine"
+    assert result.description == "A repeatable daily reflection practice."
 
 
 # --- Parsing: fenced / prose-wrapped JSON -----------------------------------
@@ -362,10 +407,10 @@ def test_ollama_error_propagates_unswallowed() -> None:
 
 def test_prompt_contains_vocabulary_and_heuristic() -> None:
     """The system prompt pins the classification contract: the closed
-    `{Concept, Entity, Place, Person, Organization}` vocabulary, the
-    aboutness heuristic (a borrowed name is a label, not the subject), the
-    Person/Organization/Place/Concept-outrank-Entity tie-break, and the
-    JSON-only instruction."""
+    `{Concept, Entity, Place, Event, Procedure, Person, Organization}`
+    vocabulary, the aboutness heuristic (a borrowed name is a label, not the
+    subject), the Person/Organization/Place/Concept-outrank-Entity
+    tie-break, and the JSON-only instruction."""
     llm = _FakeLLM(reply=_CONCEPT_JSON)
 
     concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
@@ -377,6 +422,8 @@ def test_prompt_contains_vocabulary_and_heuristic() -> None:
     assert '"Person"' in system_content
     assert '"Organization"' in system_content
     assert '"Place"' in system_content
+    assert '"Event"' in system_content
+    assert '"Procedure"' in system_content
     assert "fundamentally about" in system_content
     assert "borrowed" in system_content
     assert "fallback" in system_content
@@ -404,19 +451,19 @@ def test_prompt_pins_landmark_named_after_person_tie_break() -> None:
 
 def test_prompt_pins_event_at_a_place_tie_break() -> None:
     """The system prompt's tie-break prose states a positive outcome for an
-    event that happens at a place: since there is no `Event` type, such a
-    source falls to the best fit among the existing types (Person,
-    Organization, Concept, or Entity as a last resort), and is `Place` only
-    when the source is genuinely about the location itself -- not merely
-    "out of the closed vocabulary" with no stated resolution."""
-    llm = _FakeLLM(reply=_CONCEPT_JSON)
+    event that happens at a place: a source about a bounded, dated happening
+    is `Event`, not `Place` -- `Place` is chosen only when the source is
+    genuinely about the location itself as a site (spec: "Event-at-a-place
+    disambiguates to Event, not Place"; design: Decision 2, retraction of
+    the former "no Event type" claim)."""
+    llm = _FakeLLM(reply=_EVENT_JSON)
 
     concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
 
     system_content = llm.calls[0][0]["content"]
-    assert "event" in system_content.lower()
-    assert 'never "Place" itself' in system_content
+    assert '"Event"' in system_content
     assert "genuinely about the location itself" in system_content
+    assert "bounded, dated happening" in system_content
 
 
 def test_prompt_pins_urbanism_example_under_name_vs_concept_tie_break() -> None:

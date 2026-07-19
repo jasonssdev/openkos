@@ -28,9 +28,10 @@ _SYSTEM_PROMPT = (
     "You are a classification step in a local-first knowledge engine. Read "
     "the SOURCE text below and decide whether it is worth extracting as ONE "
     "derived knowledge object.\n\n"
-    'Vocabulary: the derived object\'s "type" MUST be one of exactly five '
-    'values: "Person", "Organization", "Place", "Concept", or "Entity". '
-    "Classify by what the source is fundamentally about:\n"
+    'Vocabulary: the derived object\'s "type" MUST be one of exactly seven '
+    'values: "Person", "Organization", "Place", "Event", "Procedure", '
+    '"Concept", or "Entity". Classify by what the source is fundamentally '
+    "about:\n"
     '- "Person": the source is fundamentally about ONE specific, named '
     "individual human -- their identity, role, work, or biography.\n"
     '- "Organization": the source is fundamentally about ONE specific, '
@@ -38,6 +39,12 @@ _SYSTEM_PROMPT = (
     '- "Place": the source is fundamentally about ONE specific, named '
     "geographic location or physical site -- a city, region, building, "
     "landmark, or venue -- treated AS a location.\n"
+    '- "Event": the source is fundamentally about ONE bounded, dated '
+    "happening -- an occurrence tied to a specific time or span (a "
+    "meeting, launch, battle, incident, or conference).\n"
+    '- "Procedure": the source is fundamentally about ONE repeatable '
+    "how-to -- a method, protocol, recipe, or step-by-step process meant "
+    "to be performed again.\n"
     '- "Concept": the source describes an idea, topic, theory, term, or '
     "framework -- INCLUDING one named after a person, organization, or "
     "place (a named method, system, principle, or law). A name borrowed "
@@ -66,30 +73,38 @@ _SYSTEM_PROMPT = (
     'campus) is "Organization" when the source centers on the group\'s '
     'identity or activity; choose "Place" only when the source centers on '
     "the site itself as a location.\n"
-    '    - An event that happens at a place is never "Place" itself -- '
-    "there is no Event type in this vocabulary, so classify it by what it "
-    "is fundamentally about instead: the person, organization, or concept "
-    'behind it, or Entity as a last resort; choose "Place" only when the '
-    "source is genuinely about the location itself, not the event.\n"
+    '    - A source about a bounded, dated happening is "Event", not '
+    '"Place" -- the place is merely where it occurred; choose "Place" '
+    "only when the source is genuinely about the location itself as a "
+    "site, not about what happened there.\n"
+    '    - Among occurrents, "Event" is a single time-bound happening '
+    'while "Procedure" is a repeatable how-to. A choice made with '
+    "rationale is a Decision, which is NOT in this vocabulary and MUST "
+    "NOT be emitted; fall back to the best-fitting classifiable type "
+    '(often Concept or Entity), never invent "Decision".\n'
     "    - When Person and Organization are truly balanced, prefer "
     '"Organization" (the continuant that outlives individuals).\n'
     '(3) Person, Organization, Place, and Concept all outrank "Entity" -- '
-    "Entity is the last resort, used only when nothing else fits.\n\n"
+    'so do "Event" and "Procedure" -- Entity is the last resort, used '
+    "only when nothing else fits.\n\n"
     'If nothing in the source is worth extracting, set "extract" to false.\n\n'
     "Return ONLY one JSON object, with NO prose, NO markdown, and NO code "
     "fences around it, matching exactly this shape:\n"
     '{"extract": true|false, "type": "Person"|"Organization"|"Place"'
-    '|"Concept"|"Entity", "title": "...", "description": "...", "body": "..."}\n'
+    '|"Event"|"Procedure"|"Concept"|"Entity", "title": "...", '
+    '"description": "...", "body": "..."}\n'
     '"type", "title", "description", and "body" are only meaningful when '
     '"extract" is true.'
 )
-"""Stable system half of the 2-message prompt: the closed 5-value
+"""Stable system half of the 2-message prompt: the closed 7-value
 vocabulary, the aboutness heuristic (classify by subject, not by a
-borrowed name), the Person/Organization/Place/Concept-outrank-Entity
-tie-break chain -- including the bespoke KOM-silent sub-rules for a
-landmark named after a person/org, an organization sited at a location,
-and an event at a place -- and the JSON-only instruction baked into
-system text; the `user` message carries the raw source text."""
+borrowed name), the Person/Organization/Place/Event/Procedure/
+Concept-outrank-Entity tie-break chain -- including the bespoke KOM-silent
+sub-rules for a landmark named after a person/org, an organization sited
+at a location, an event at a place, and the occurrent Event-vs-Procedure
+distinction with the non-classifiable Decision guard -- and the JSON-only
+instruction baked into system text; the `user` message carries the raw
+source text."""
 
 
 @dataclass(frozen=True)
@@ -97,7 +112,8 @@ class ExtractionResult:
     """One validated derived object proposed for a source's text."""
 
     type: str
-    """`"Person"`, `"Organization"`, `"Place"`, `"Concept"`, or `"Entity"`."""
+    """`"Person"`, `"Organization"`, `"Place"`, `"Event"`, `"Procedure"`,
+    `"Concept"`, or `"Entity"`."""
     title: str
     """Non-empty, stripped title for the derived object."""
     description: str

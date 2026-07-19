@@ -572,6 +572,32 @@ def test_build_concept_accepts_place_type() -> None:
     assert metadata["freshness"] == "snapshot"
 
 
+def test_build_concept_accepts_event_type() -> None:
+    """`type: Event` is a member of the widened classifiable vocabulary and
+    builds a conformant document just like the other classifiable types
+    (spec: "Event and Procedure Route to Dedicated Catalog Sections")."""
+    text = _build_call_concept(type="Event", title="Stoicon 2026")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Event"
+    assert metadata["title"] == "Stoicon 2026"
+    assert metadata["freshness"] == "snapshot"
+
+
+def test_build_concept_accepts_procedure_type() -> None:
+    """`type: Procedure` is a member of the widened classifiable vocabulary
+    and builds a conformant document just like the other classifiable types
+    (spec: "Event and Procedure Route to Dedicated Catalog Sections")."""
+    text = _build_call_concept(type="Procedure", title="Morning Journaling Routine")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Procedure"
+    assert metadata["title"] == "Morning Journaling Routine"
+    assert metadata["freshness"] == "snapshot"
+
+
 def test_build_concept_sensitivity_inherited_verbatim() -> None:
     """`sensitivity` is passed straight through, unmodified -- the caller
     (main.py, a later slice) is responsible for reading it off the Source

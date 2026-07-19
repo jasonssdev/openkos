@@ -569,6 +569,160 @@ def test_insert_index_entry_places_places_leaves_other_sections_byte_identical()
     assert "* [Second Places](/places/second-places.md) - Second entry.\n" in result
 
 
+def test_insert_index_entry_places_events_and_procedures_between_places_and_decisions() -> (
+    None
+):
+    """Fresh `# Events` and `# Procedures` sections are inserted at their
+    canonical rank -- after `# Places`, before `# Decisions` -- when both
+    neighbors already exist (canonical order `[Concepts, Entities, Places,
+    Events, Procedures, Decisions, People, Organizations, Sources]`, spec:
+    "Event and Procedure Route to Dedicated Catalog Sections")."""
+    populated = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Places\n"
+        "\n"
+        "* [Yellowstone](/places/yellowstone.md) - A national park.\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+    )
+
+    with_event = insert_index_entry(
+        populated,
+        section="Events",
+        link_dir="events",
+        title="Stoicon 2026",
+        slug="stoicon-2026",
+        description="An annual Stoicism conference.",
+    )
+
+    assert with_event == (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Places\n"
+        "\n"
+        "* [Yellowstone](/places/yellowstone.md) - A national park.\n"
+        "\n"
+        "# Events\n"
+        "\n"
+        "* [Stoicon 2026](/events/stoicon-2026.md) - "
+        "An annual Stoicism conference.\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+    )
+
+    with_procedure = insert_index_entry(
+        with_event,
+        section="Procedures",
+        link_dir="procedures",
+        title="Morning Journaling Routine",
+        slug="morning-journaling-routine",
+        description="A repeatable daily reflection practice.",
+    )
+
+    headers_in_order = [
+        line[2:] for line in with_procedure.splitlines() if line.startswith("# ")
+    ]
+    assert headers_in_order == ["Places", "Events", "Procedures", "Decisions"]
+    assert (
+        "* [Morning Journaling Routine](/procedures/morning-journaling-routine.md) - "
+        "A repeatable daily reflection practice.\n" in with_procedure
+    )
+
+
+def test_insert_index_entry_places_events_and_procedures_leaves_other_sections_byte_identical() -> (
+    None
+):
+    """With all 9 canonical sections already present, inserting a second
+    bullet into `# Events`/`# Procedures` round-trips every OTHER section's
+    bullet byte-for-byte, and relative section order is unchanged (spec:
+    "Existing sections keep byte-identical order")."""
+    text = render_index()
+    for section, link_dir in (
+        ("Concepts", "concepts"),
+        ("Entities", "entities"),
+        ("Places", "places"),
+        ("Events", "events"),
+        ("Procedures", "procedures"),
+        ("Decisions", "decisions"),
+        ("People", "people"),
+        ("Organizations", "organizations"),
+        ("Sources", "sources"),
+    ):
+        text = insert_index_entry(
+            text,
+            section=section,
+            link_dir=link_dir,
+            title=f"First {section}",
+            slug=f"first-{section.lower()}",
+            description="First entry.",
+        )
+    other_section_bullets = [
+        "* [First Concepts](/concepts/first-concepts.md) - First entry.\n",
+        "* [First Entities](/entities/first-entities.md) - First entry.\n",
+        "* [First Places](/places/first-places.md) - First entry.\n",
+        "* [First Decisions](/decisions/first-decisions.md) - First entry.\n",
+        "* [First People](/people/first-people.md) - First entry.\n",
+        "* [First Organizations](/organizations/first-organizations.md) - "
+        "First entry.\n",
+        "* [First Sources](/sources/first-sources.md) - First entry.\n",
+    ]
+    for bullet in other_section_bullets:
+        assert bullet in text
+
+    result = insert_index_entry(
+        text,
+        section="Events",
+        link_dir="events",
+        title="Second Events",
+        slug="second-events",
+        description="Second entry.",
+    )
+    result = insert_index_entry(
+        result,
+        section="Procedures",
+        link_dir="procedures",
+        title="Second Procedures",
+        slug="second-procedures",
+        description="Second entry.",
+    )
+
+    headers_in_order = [
+        line[2:] for line in result.splitlines() if line.startswith("# ")
+    ]
+    assert headers_in_order == [
+        "Concepts",
+        "Entities",
+        "Places",
+        "Events",
+        "Procedures",
+        "Decisions",
+        "People",
+        "Organizations",
+        "Sources",
+    ]
+    for bullet in other_section_bullets:
+        assert bullet in result
+    assert "* [First Events](/events/first-events.md) - First entry.\n" in result
+    assert "* [Second Events](/events/second-events.md) - Second entry.\n" in result
+    assert (
+        "* [First Procedures](/procedures/first-procedures.md) - First entry.\n"
+        in result
+    )
+    assert (
+        "* [Second Procedures](/procedures/second-procedures.md) - Second entry.\n"
+        in result
+    )
+
+
 @pytest.mark.parametrize("field", ["title", "slug", "description"])
 @pytest.mark.parametrize("newline", ["\n", "\r"])
 def test_insert_index_entry_rejects_newline_in_interpolated_field(
