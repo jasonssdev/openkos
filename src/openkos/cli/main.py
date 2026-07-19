@@ -12,7 +12,10 @@ from openkos import lint as lint_check
 from openkos.bundle import bundle
 from openkos.bundle import index as bundle_index
 from openkos.bundle import log as bundle_log
+from openkos.llm.ollama import OllamaClient, OllamaError
 from openkos.model import okf
+from openkos.retrieval.answer import answer
+from openkos.state.fts import FtsUnavailable
 
 app = typer.Typer()
 
@@ -636,3 +639,69 @@ def lint() -> None:
     else:
         for finding in report.orphans:
             typer.echo(f"  {finding.path}: {finding.detail}")
+
+
+@app.command()
+def query(
+    question: str = typer.Argument(
+        ..., help="Natural-language question to answer from the bundle."
+    ),
+    limit: int = typer.Option(
+        5, "--limit", help="Max concepts to retrieve as context."
+    ),
+) -> None:
+    """Answer `question` from the compiled bundle, with citations (MVP-1 query chain).
+
+    The THIRD read command, gated the same way as `status`/`lint` (D1): bare
+    `config.require_workspace` check, no Phase B, no confirm gate, no
+    `--auto`. Refuses (exit 1) via the shared gate if the current directory
+    is not an initialized workspace, printing the reason to stderr with no
+    raw traceback, and `answer()` is never called (spec: Workspace Gate).
+
+    On a workspace, Phase A resolves `read_config(root).model` and builds an
+    `OllamaClient` from it; a malformed or unreadable `openkos.yaml` is
+    caught (`except (OSError, ValueError)`, `lint` parity) and reported the
+    same way rather than raising a raw traceback. Phase B calls the archived
+    `retrieval.answer.answer(question, bundle_dir=layout.bundle_dir,
+    llm=client, limit=limit)` (D4: the `answer` symbol is imported directly
+    so tests can patch `openkos.cli.main.answer`); an `OllamaError`-family
+    exception or `FtsUnavailable` raised from that call is caught the same
+    way (spec: LLM And Index Errors Map To Exit 1).
+
+    Rendering is answer-first and banner-free (D3): the answer text is
+    echoed, then a `Citations:` section with one `  → {concept_id} ({title})`
+    line per citation, in the exact order `AnswerResult.citations` returns
+    them -- but ONLY when `citations` is non-empty. A no-match result (the
+    stable `NO_MATCH` text, empty `citations`) renders as the answer line
+    alone, with no `Citations:` section, and the process still exits 0 --
+    a valid "no answer found" response is not an error (spec: No-Match Is
+    Not An Error).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos query: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos query: failed while reading the workspace -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    llm = OllamaClient(model=cfg.model)
+    try:
+        result = answer(question, bundle_dir=layout.bundle_dir, llm=llm, limit=limit)
+    except (FtsUnavailable, OllamaError) as exc:
+        typer.echo(f"openkos query: failed -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(result.answer)
+    if result.citations:
+        typer.echo()
+        typer.echo("Citations:")
+        for citation in result.citations:
+            typer.echo(f"  → {citation.concept_id} ({citation.title})")

@@ -223,6 +223,53 @@ def test_unparseable_frontmatter_hit_is_skipped(
     ]
 
 
+def test_multiple_surviving_hits_cite_in_rank_order_and_join_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two readable concepts both survive `_assemble_context`: citations come
+    back in hit-rank order (not just present), and the user message's
+    context carries BOTH blocks joined by `\\n\\n`, in that same rank order
+    (design's "Multi-survivor test follow-up")."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="the dichotomy of control",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "epictetus.md",
+        title="Epictetus",
+        body="a Stoic philosopher",
+    )
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/stoicism", score=1.0),
+            fts.FtsHit(concept_id="concepts/epictetus", score=0.5),
+        ]
+    )
+    monkeypatch.setattr(fts, "build_index", lambda _bundle_dir: recording_index)
+    llm = _FakeLLM(reply="Stoicism was practiced by Epictetus.")
+
+    result = answer_mod.answer("stoicism", bundle_dir=bundle_dir, llm=llm)
+
+    assert result.citations == [
+        answer_mod.Citation(concept_id="concepts/stoicism", title="Stoicism"),
+        answer_mod.Citation(concept_id="concepts/epictetus", title="Epictetus"),
+    ]
+    assert len(llm.calls) == 1
+    user_content = llm.calls[0][1]["content"]
+    stoicism_block = (
+        "[concept_id: concepts/stoicism — Stoicism]\nthe dichotomy of control"
+    )
+    epictetus_block = (
+        "[concept_id: concepts/epictetus — Epictetus]\na Stoic philosopher"
+    )
+    assert stoicism_block in user_content
+    assert epictetus_block in user_content
+    assert f"{stoicism_block}\n\n{epictetus_block}" in user_content
+    assert user_content.index(stoicism_block) < user_content.index(epictetus_block)
+
+
 def test_one_hit_vanished_skips_it_and_still_answers_with_the_rest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
