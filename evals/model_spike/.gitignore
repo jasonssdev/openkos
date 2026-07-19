@@ -1,0 +1,3 @@
+# Timestamped per-run report copies are ephemeral; the canonical latest run
+# is committed as report.md. Re-run `run_spike.py` to regenerate.
+results/
