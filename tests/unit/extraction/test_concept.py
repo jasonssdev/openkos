@@ -251,10 +251,10 @@ def test_extract_false_returns_none() -> None:
 
 
 def test_invalid_type_returns_none() -> None:
-    """A `type` outside the closed `{Concept, Entity, Place, Person,
-    Organization}` set fails closed to `None`. `"Animal"` is a genuinely
-    invalid sentinel, outside the vocabulary in any batch (spec: "Classifier
-    degrades on unknown type")."""
+    """A `type` outside the closed `{Concept, Entity, Place, Event, Procedure,
+    Person, Organization}` set fails closed to `None`. `"Animal"` is a
+    genuinely invalid sentinel, outside the vocabulary in any batch (spec:
+    "Classifier degrades on unknown type")."""
     llm = _FakeLLM(
         reply='{"extract": true, "type": "Animal", "title": "T", "description": "D"}'
     )

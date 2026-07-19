@@ -63,8 +63,9 @@ _SYSTEM_PROMPT = (
     "specific named site -- prefer Person, Organization, or Place ONLY "
     "when the source centers on the individual, institution, or location "
     "itself, otherwise choose Concept.\n"
-    "(2) Among specific named continuants (Person, Organization, Place) -- "
-    "pick whichever the source centers on:\n"
+    "(2) Among specific named continuants and occurrents (Person, "
+    "Organization, Place, Event, Procedure) -- pick whichever the source "
+    "centers on:\n"
     "    - A landmark or site named after a person or organization (e.g. a "
     'memorial) is "Place" ONLY if the source is about the physical site '
     "itself; if the source is about the honoree, choose Person or "
