@@ -557,6 +557,18 @@ def test_build_concept_accepts_organization_type() -> None:
     assert metadata["title"] == "Praxis Foundation"
 
 
+def test_build_concept_accepts_place_type() -> None:
+    """`type: Place` is a member of the closed 5-value vocabulary and builds
+    a conformant document just like the other classifiable types (spec:
+    "Place routes end-to-end through ingest")."""
+    text = _build_call_concept(type="Place", title="Yellowstone National Park")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Place"
+    assert metadata["title"] == "Yellowstone National Park"
+
+
 def test_build_concept_sensitivity_inherited_verbatim() -> None:
     """`sensitivity` is passed straight through, unmodified -- the caller
     (main.py, a later slice) is responsible for reading it off the Source
@@ -633,11 +645,11 @@ def test_build_concept_passes_check_conformance(tmp_path: Path) -> None:
 
 
 def test_build_concept_raises_on_invalid_type() -> None:
-    """`type` outside `{Concept, Entity, Person, Organization}` fails
-    closed with `ValueError`. `"Place"` is a real future KOM continuant,
-    still out of scope for this vocabulary batch (Phase 3.2)."""
+    """`type` outside the closed `{Concept, Entity, Place, Person,
+    Organization}` set fails closed with `ValueError`. `"Animal"` is a
+    genuinely invalid sentinel (spec: "Builder raises on unknown type")."""
     with pytest.raises(ValueError, match="type"):
-        _build_call_concept(type="Place")
+        _build_call_concept(type="Animal")
 
 
 def test_build_concept_raises_on_blank_title() -> None:

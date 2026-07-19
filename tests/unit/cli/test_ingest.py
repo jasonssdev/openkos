@@ -137,6 +137,19 @@ def _organization_reply(title: str = "Praxis Foundation") -> str:
     )
 
 
+def _place_reply(title: str = "Yellowstone National Park") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Place`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Place",
+            "title": title,
+            "description": "A national park in the western United States.",
+            "body": "Known for its geysers and geothermal features.",
+        }
+    )
+
+
 def _snapshot_entry(path: Path) -> bytes | None:
     if path.is_dir():
         return None
@@ -894,6 +907,36 @@ def test_successful_organization_extraction_writes_organizations_dir(
     assert "# Organizations" in index_text
 
 
+def test_successful_place_extraction_writes_places_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Place` reply writes the Source AND a
+    `bundle/places/<slug>.md` document, whose `provenance` references the
+    Source, cataloged under `# Places` and passing conformance (spec: "Place
+    derived object is written and cataloged")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _place_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "Yellowstone is a national park known for its geysers.", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    place_path = tmp_path / "bundle" / "places" / "yellowstone-national-park.md"
+    assert place_path.is_file()
+    metadata, body = okf.load_frontmatter(place_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Place"
+    assert metadata["freshness"] == "snapshot"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "places/yellowstone-national-park.md" in index_text
+    assert "# Places" in index_text
+
+
 def test_malformed_json_reply_degrades_to_source_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -918,18 +961,17 @@ def test_malformed_json_reply_degrades_to_source_only(
 def test_invalid_type_degrades_to_source_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A well-formed reply whose `type` is outside `{Concept, Entity,
-    Person, Organization}` degrades to Source-only, with a stderr note and
-    exit 0 (scenario: type outside the 4-value set degrades to
-    Source-only). `"Place"` is a real future KOM continuant, still out of
-    scope for this vocabulary batch -- a genuinely invalid sentinel."""
+    """A well-formed reply whose `type` is outside the closed `{Concept,
+    Entity, Place, Person, Organization}` set degrades to Source-only, with
+    a stderr note and exit 0 (scenario: type outside the vocabulary degrades
+    to Source-only). `"Animal"` is a genuinely invalid sentinel."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(
         monkeypatch,
         json.dumps(
             {
                 "extract": True,
-                "type": "Place",
+                "type": "Animal",
                 "title": "Athens",
                 "description": "An ancient city.",
                 "body": "",
@@ -944,6 +986,7 @@ def test_invalid_type_degrades_to_source_only(
     assert result.exit_code == 0
     assert not (tmp_path / "bundle" / "concepts").exists()
     assert not (tmp_path / "bundle" / "entities").exists()
+    assert not (tmp_path / "bundle" / "places").exists()
     assert not (tmp_path / "bundle" / "people").exists()
     assert not (tmp_path / "bundle" / "organizations").exists()
     assert "no concept extracted" in result.stderr
@@ -1159,6 +1202,39 @@ def test_idempotent_reingest_leaves_existing_organization_untouched(
     assert index_text.count("organizations/praxis-foundation.md") == 1
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     assert log_text.count("praxis-foundation.md") == 1
+
+
+def test_idempotent_reingest_leaves_existing_place_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose Place derived object already exists
+    leaves that file byte-unchanged and does not duplicate the catalog
+    entry -- the idempotency scan must cover `places/`, the SAME guard
+    `_source_has_derived_object` applies to `concepts/`/`entities/`/
+    `people/`/`organizations/` (spec: "Re-ingesting a Place source does not
+    duplicate")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _place_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "Yellowstone is a national park known for its geysers.", encoding="utf-8"
+    )
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    place_path = tmp_path / "bundle" / "places" / "yellowstone-national-park.md"
+    assert place_path.is_file()
+    hand_edited = place_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    place_path.write_text(hand_edited, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert place_path.read_text(encoding="utf-8") == hand_edited
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("places/yellowstone-national-park.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("yellowstone-national-park.md") == 1
 
 
 def test_reingest_with_nondeterministic_llm_title_skips_second_extraction(
