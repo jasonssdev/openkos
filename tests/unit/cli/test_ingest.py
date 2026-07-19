@@ -111,6 +111,32 @@ def _entity_reply(title: str = "Enchiridion") -> str:
     )
 
 
+def _person_reply(title: str = "Epictetus") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Person`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Person",
+            "title": title,
+            "description": "A Stoic philosopher and former slave.",
+            "body": "Taught that we control only our own judgments.",
+        }
+    )
+
+
+def _organization_reply(title: str = "Praxis Foundation") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Organization`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Organization",
+            "title": title,
+            "description": "A nonprofit researching Stoic philosophy.",
+            "body": "",
+        }
+    )
+
+
 def _snapshot_entry(path: Path) -> bytes | None:
     if path.is_dir():
         return None
@@ -812,6 +838,62 @@ def test_successful_entity_extraction_writes_entities_dir(
     assert "# Entities" in index_text
 
 
+def test_successful_person_extraction_writes_people_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Person` reply writes the Source AND a
+    `bundle/people/<slug>.md` document, whose `provenance` references the
+    Source (scenario: Extraction yields a Person)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _person_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    assert person_path.is_file()
+    metadata, body = okf.load_frontmatter(person_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Person"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "sources/notes.md" in index_text
+    assert "people/epictetus.md" in index_text
+    assert "# People" in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert "Extracted" in log_text
+    assert "epictetus.md" in log_text
+
+
+def test_successful_organization_extraction_writes_organizations_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Organization` reply writes the Source AND a
+    `bundle/organizations/<slug>.md` document, whose `provenance` references
+    the Source (scenario: Extraction yields an Organization)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _organization_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("The Praxis Foundation researches Stoicism.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    org_path = tmp_path / "bundle" / "organizations" / "praxis-foundation.md"
+    assert org_path.is_file()
+    metadata, body = okf.load_frontmatter(org_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Organization"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "organizations/praxis-foundation.md" in index_text
+    assert "# Organizations" in index_text
+
+
 def test_malformed_json_reply_degrades_to_source_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -836,18 +918,20 @@ def test_malformed_json_reply_degrades_to_source_only(
 def test_invalid_type_degrades_to_source_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A well-formed reply whose `type` is outside `{Concept, Entity}`
-    degrades to Source-only, with a stderr note and exit 0 (scenario:
-    invalid type degrades to Source-only)."""
+    """A well-formed reply whose `type` is outside `{Concept, Entity,
+    Person, Organization}` degrades to Source-only, with a stderr note and
+    exit 0 (scenario: type outside the 4-value set degrades to
+    Source-only). `"Place"` is a real future KOM continuant, still out of
+    scope for this vocabulary batch -- a genuinely invalid sentinel."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(
         monkeypatch,
         json.dumps(
             {
                 "extract": True,
-                "type": "Person",
-                "title": "Epictetus",
-                "description": "A Stoic philosopher.",
+                "type": "Place",
+                "title": "Athens",
+                "description": "An ancient city.",
                 "body": "",
             }
         ),
@@ -860,6 +944,8 @@ def test_invalid_type_degrades_to_source_only(
     assert result.exit_code == 0
     assert not (tmp_path / "bundle" / "concepts").exists()
     assert not (tmp_path / "bundle" / "entities").exists()
+    assert not (tmp_path / "bundle" / "people").exists()
+    assert not (tmp_path / "bundle" / "organizations").exists()
     assert "no concept extracted" in result.stderr
     assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
 
@@ -1012,6 +1098,67 @@ def test_idempotent_reingest_leaves_existing_derived_object_untouched(
     assert index_text.count("concepts/stoic-dichotomy-of-control.md") == 1
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     assert log_text.count("stoic-dichotomy-of-control.md") == 1
+
+
+def test_idempotent_reingest_leaves_existing_person_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose Person derived object already exists
+    leaves that file byte-unchanged and does not duplicate the catalog
+    entry -- the idempotency scan must cover `people/`, the SAME guard
+    `_source_has_derived_object` applies to `concepts/`/`entities/` (spec:
+    Re-ingesting a Person source does not duplicate)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _person_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    assert person_path.is_file()
+    hand_edited = person_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    person_path.write_text(hand_edited, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert person_path.read_text(encoding="utf-8") == hand_edited
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("people/epictetus.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("epictetus.md") == 1
+
+
+def test_idempotent_reingest_leaves_existing_organization_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose Organization derived object already
+    exists leaves that file byte-unchanged and does not duplicate the
+    catalog entry -- the idempotency scan must cover `organizations/`, the
+    SAME guard `_source_has_derived_object` applies to
+    `concepts/`/`entities/`/`people/` (spec: Re-ingesting an Organization
+    source does not duplicate)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _organization_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("The Praxis Foundation researches Stoicism.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    org_path = tmp_path / "bundle" / "organizations" / "praxis-foundation.md"
+    assert org_path.is_file()
+    hand_edited = org_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    org_path.write_text(hand_edited, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert org_path.read_text(encoding="utf-8") == hand_edited
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("organizations/praxis-foundation.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("praxis-foundation.md") == 1
 
 
 def test_reingest_with_nondeterministic_llm_title_skips_second_extraction(

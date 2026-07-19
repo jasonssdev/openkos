@@ -66,7 +66,7 @@ def test_insert_source_entry_appends_second_entry_to_existing_sources_section() 
 def test_insert_source_entry_round_trips_existing_sections_byte_for_byte() -> None:
     """An index with `Concepts`/`Decisions`/`People` sections already populated
     keeps them byte-for-byte identical when a new `Sources` entry is added
-    (canonical order `[Concepts, Decisions, People, Sources]`)."""
+    (canonical order `[Concepts, Decisions, People, Organizations, Sources]`)."""
     populated = (
         "---\n"
         'okf_version: "0.1"\n'
@@ -173,7 +173,8 @@ def test_insert_source_entry_rejects_newline_in_interpolated_field(
 def test_insert_source_entry_stays_last_when_entities_section_present() -> None:
     """`insert_source_entry` still appends `# Sources` after EVERY other
     canonical section, including a populated `# Entities` section (canonical
-    order `[Concepts, Entities, Decisions, People, Sources]`)."""
+    order `[Concepts, Entities, Decisions, People, Organizations,
+    Sources]`)."""
     populated = (
         "---\n"
         'okf_version: "0.1"\n'
@@ -259,7 +260,7 @@ def test_insert_index_entry_places_entities_between_concepts_and_decisions() -> 
     """A fresh `# Entities` section is inserted at its canonical rank --
     after `# Concepts`, before `# Decisions` -- when both neighbors already
     exist (canonical order `[Concepts, Entities, Decisions, People,
-    Sources]`)."""
+    Organizations, Sources]`)."""
     populated = (
         "---\n"
         'okf_version: "0.1"\n'
@@ -380,9 +381,9 @@ def test_insert_index_entry_places_entities_before_people_when_concepts_absent()
 
 def test_insert_index_entry_full_canonical_order_from_scratch() -> None:
     """Inserting one entry per section in a DELIBERATELY SHUFFLED call order
-    (Sources, People, Concepts, Decisions, Entities) still yields the
-    canonical `[Concepts, Entities, Decisions, People, Sources]` section
-    order in the final rendered index."""
+    (Sources, People, Concepts, Decisions, Entities, Organizations) still
+    yields the canonical `[Concepts, Entities, Decisions, People,
+    Organizations, Sources]` section order in the final rendered index."""
     text = render_index()
     text = insert_index_entry(
         text,
@@ -419,6 +420,14 @@ def test_insert_index_entry_full_canonical_order_from_scratch() -> None:
         slug="e",
         description="e",
     )
+    text = insert_index_entry(
+        text,
+        section="Organizations",
+        link_dir="organizations",
+        title="O",
+        slug="o",
+        description="o",
+    )
 
     headers_in_order = [line[2:] for line in text.splitlines() if line.startswith("# ")]
     assert headers_in_order == [
@@ -426,6 +435,7 @@ def test_insert_index_entry_full_canonical_order_from_scratch() -> None:
         "Entities",
         "Decisions",
         "People",
+        "Organizations",
         "Sources",
     ]
 
