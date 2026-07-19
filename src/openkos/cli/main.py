@@ -650,32 +650,24 @@ def query(
         5, "--limit", help="Max concepts to retrieve as context."
     ),
 ) -> None:
-    """Answer `question` from the compiled bundle, with citations (MVP-1 query chain).
+    """Answer a natural-language question from the compiled bundle, with citations.
 
-    The THIRD read command, gated the same way as `status`/`lint` (D1): bare
-    `config.require_workspace` check, no Phase B, no confirm gate, no
-    `--auto`. Refuses (exit 1) via the shared gate if the current directory
-    is not an initialized workspace, printing the reason to stderr with no
-    raw traceback, and `answer()` is never called (spec: Workspace Gate).
+    Read-only, like `status` and `lint`: no writes, no confirmation prompt,
+    no `--auto`. Must be run inside an initialized workspace; outside one it
+    refuses (exit 1) with a short reason on stderr.
 
-    On a workspace, Phase A resolves `read_config(root).model` and builds an
-    `OllamaClient` from it; a malformed or unreadable `openkos.yaml` is
-    caught (`except (OSError, ValueError)`, `lint` parity) and reported the
-    same way rather than raising a raw traceback. Phase B calls the archived
-    `retrieval.answer.answer(question, bundle_dir=layout.bundle_dir,
-    llm=client, limit=limit)` (D4: the `answer` symbol is imported directly
-    so tests can patch `openkos.cli.main.answer`); an `OllamaError`-family
-    exception or `FtsUnavailable` raised from that call is caught the same
-    way (spec: LLM And Index Errors Map To Exit 1).
+    The answer is grounded in the concepts retrieved from the bundle and is
+    printed first; when at least one concept was cited, a `Citations:`
+    section follows, one `  → {concept_id} ({title})` line per citation, in
+    the order they were used. When nothing in the bundle matches, a single
+    no-match line is printed and the command still exits 0 -- "no answer
+    found" is a valid result, not an error.
 
-    Rendering is answer-first and banner-free (D3): the answer text is
-    echoed, then a `Citations:` section with one `  → {concept_id} ({title})`
-    line per citation, in the exact order `AnswerResult.citations` returns
-    them -- but ONLY when `citations` is non-empty. A no-match result (the
-    stable `NO_MATCH` text, empty `citations`) renders as the answer line
-    alone, with no `Citations:` section, and the process still exits 0 --
-    a valid "no answer found" response is not an error (spec: No-Match Is
-    Not An Error).
+    Use `--limit` to cap how many concepts are retrieved as context
+    (default 5). Answering needs a local Ollama server running the model
+    configured in `openkos.yaml`. A workspace/config problem, an unreachable
+    Ollama, or an unusable search index is reported on stderr with no
+    traceback and exits 1.
     """
     root = Path.cwd()
     reason = config.require_workspace(root)

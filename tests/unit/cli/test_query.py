@@ -14,7 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.ollama import OllamaClient, OllamaUnavailable
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state.fts import FtsUnavailable
 
@@ -142,6 +142,36 @@ def test_query_omitted_limit_defaults_to_five(
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["limit"] == 5
+
+
+def test_query_builds_ollama_client_from_configured_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`query` builds the `OllamaClient` from the model configured in
+    `openkos.yaml`, not a hardcoded or wrong-field value: a distinctive
+    non-default model tag written to config is the model tag on the `llm`
+    passed to `answer()` (spec: Model comes from workspace config)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "llama3.2:1b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {configured_model}\n", encoding="utf-8"
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return AnswerResult(answer=NO_MATCH, citations=[])
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    llm = kwargs["llm"]
+    assert isinstance(llm, OllamaClient)
+    assert llm._model == configured_model
 
 
 def test_query_ollama_unavailable_maps_to_exit_one(
