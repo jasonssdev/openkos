@@ -89,7 +89,7 @@ Writes are **not transactional**: each individual write is create-only or atomic
 
 `review: true` in config plus a non-TTY stdin (and no `--auto`) refuses to write rather than defaulting silently — re-run with `--auto` for unattended use.
 
-**Not in this slice / planned:** multiple derived objects per ingest (still at most one `Concept`/`Entity`), the other 9 canonical OKF types, entity resolution/merge/reclassification on re-ingest, a typed relationship graph, `--sensitivity <level>` (the generated Source's `sensitivity` always equals config's `default_sensitivity`, currently no per-invocation override), and `--batch` (folder/glob ingestion — one source per invocation only, for now). Both flags are documented here for forward reference but are not implemented yet.
+**Not in this slice / planned:** multiple derived objects per ingest (still at most one `Concept`/`Entity`), entity resolution/merge/reclassification on re-ingest, a typed relationship graph, `--sensitivity <level>` (the generated Source's `sensitivity` always equals config's `default_sensitivity`, currently no per-invocation override), and `--batch` (folder/glob ingestion — one source per invocation only, for now). Both flags are documented here for forward reference but are not implemented yet.
 
 ### `openkos query "<question>"`
 
