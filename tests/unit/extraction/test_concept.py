@@ -783,8 +783,7 @@ def test_prompt_contains_anti_enumeration_paragraph_verbatim() -> None:
     )
     assert (
         "NOT about each of the five participants named around the table; "
-        "extract the Event and the Decisions, not five Person stubs"
-        in system_content
+        "extract the Event and the Decisions, not five Person stubs" in system_content
     )
     assert "When in doubt, leave it out." in system_content
 
