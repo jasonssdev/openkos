@@ -150,6 +150,32 @@ def _place_reply(title: str = "Yellowstone National Park") -> str:
     )
 
 
+def _event_reply(title: str = "Stoicon 2026") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Event`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Event",
+            "title": title,
+            "description": "An annual conference on Stoic philosophy.",
+            "body": "Held over a single weekend with talks and workshops.",
+        }
+    )
+
+
+def _procedure_reply(title: str = "Morning Journaling Routine") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Procedure`."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Procedure",
+            "title": title,
+            "description": "A repeatable daily reflection practice.",
+            "body": "Write three things you are grateful for, then one obstacle.",
+        }
+    )
+
+
 def _snapshot_entry(path: Path) -> bytes | None:
     if path.is_dir():
         return None
@@ -937,6 +963,67 @@ def test_successful_place_extraction_writes_places_dir(
     assert "# Places" in index_text
 
 
+def test_successful_event_extraction_writes_events_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Event` reply writes the Source AND a
+    `bundle/events/<slug>.md` document, whose `provenance` references the
+    Source, cataloged under `# Events` and passing conformance (spec:
+    "Event and Procedure are written and cataloged")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _event_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "Stoicon 2026 is an annual conference on Stoic philosophy.",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    event_path = tmp_path / "bundle" / "events" / "stoicon-2026.md"
+    assert event_path.is_file()
+    metadata, body = okf.load_frontmatter(event_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Event"
+    assert metadata["freshness"] == "snapshot"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "events/stoicon-2026.md" in index_text
+    assert "# Events" in index_text
+
+
+def test_successful_procedure_extraction_writes_procedures_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed `Procedure` reply writes the Source AND a
+    `bundle/procedures/<slug>.md` document, whose `provenance` references
+    the Source, cataloged under `# Procedures` and passing conformance
+    (spec: "Event and Procedure are written and cataloged")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _procedure_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("A daily morning journaling routine.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    procedure_path = (
+        tmp_path / "bundle" / "procedures" / "morning-journaling-routine.md"
+    )
+    assert procedure_path.is_file()
+    metadata, body = okf.load_frontmatter(procedure_path.read_text(encoding="utf-8"))
+    assert metadata["type"] == "Procedure"
+    assert metadata["freshness"] == "snapshot"
+    assert metadata["provenance"] == ["sources/notes"]
+    assert "sources/notes.md" in body
+    assert okf.check_conformance(tmp_path / "bundle") == []
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "procedures/morning-journaling-routine.md" in index_text
+    assert "# Procedures" in index_text
+
+
 def test_malformed_json_reply_degrades_to_source_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -962,9 +1049,10 @@ def test_invalid_type_degrades_to_source_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A well-formed reply whose `type` is outside the closed `{Concept,
-    Entity, Place, Person, Organization}` set degrades to Source-only, with
-    a stderr note and exit 0 (scenario: type outside the vocabulary degrades
-    to Source-only). `"Animal"` is a genuinely invalid sentinel."""
+    Entity, Place, Event, Procedure, Person, Organization}` set degrades to
+    Source-only, with a stderr note and exit 0 (scenario: type outside the
+    vocabulary degrades to Source-only). `"Animal"` is a genuinely invalid
+    sentinel."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(
         monkeypatch,
@@ -987,6 +1075,8 @@ def test_invalid_type_degrades_to_source_only(
     assert not (tmp_path / "bundle" / "concepts").exists()
     assert not (tmp_path / "bundle" / "entities").exists()
     assert not (tmp_path / "bundle" / "places").exists()
+    assert not (tmp_path / "bundle" / "events").exists()
+    assert not (tmp_path / "bundle" / "procedures").exists()
     assert not (tmp_path / "bundle" / "people").exists()
     assert not (tmp_path / "bundle" / "organizations").exists()
     assert "no concept extracted" in result.stderr
@@ -1235,6 +1325,70 @@ def test_idempotent_reingest_leaves_existing_place_untouched(
     assert index_text.count("places/yellowstone-national-park.md") == 1
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     assert log_text.count("yellowstone-national-park.md") == 1
+
+
+def test_idempotent_reingest_leaves_existing_event_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose Event derived object already exists
+    leaves that file byte-unchanged and does not duplicate the catalog
+    entry -- the idempotency scan must cover `events/`, the SAME guard
+    `_source_has_derived_object` applies to the other classifiable types
+    (spec: "Re-ingesting an Event source does not duplicate")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _event_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "Stoicon 2026 is an annual conference on Stoic philosophy.",
+        encoding="utf-8",
+    )
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    event_path = tmp_path / "bundle" / "events" / "stoicon-2026.md"
+    assert event_path.is_file()
+    hand_edited = event_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    event_path.write_text(hand_edited, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert event_path.read_text(encoding="utf-8") == hand_edited
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("events/stoicon-2026.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("stoicon-2026.md") == 1
+
+
+def test_idempotent_reingest_leaves_existing_procedure_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting a source whose Procedure derived object already exists
+    leaves that file byte-unchanged and does not duplicate the catalog
+    entry -- the idempotency scan must cover `procedures/` (spec:
+    "Re-ingesting a Procedure source does not duplicate")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _procedure_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("A daily morning journaling routine.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    procedure_path = (
+        tmp_path / "bundle" / "procedures" / "morning-journaling-routine.md"
+    )
+    assert procedure_path.is_file()
+    hand_edited = procedure_path.read_text(encoding="utf-8") + "\n<!-- hand edit -->\n"
+    procedure_path.write_text(hand_edited, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert procedure_path.read_text(encoding="utf-8") == hand_edited
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert index_text.count("procedures/morning-journaling-routine.md") == 1
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("morning-journaling-routine.md") == 1
 
 
 def test_reingest_with_nondeterministic_llm_title_skips_second_extraction(

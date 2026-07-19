@@ -186,10 +186,10 @@ class _DerivedPlan:
 
 
 def _source_has_derived_object(bundle_dir: Path, source_slug: str) -> bool:
-    """True if any existing derived object of any of the four types already
-    cites this source in its provenance -- so a re-ingest never extracts (or
-    writes) a second derived object for the same source, independent of
-    nondeterministic LLM titles.
+    """True if any existing derived object of any classifiable derived-object
+    type already cites this source in its provenance -- so a re-ingest never
+    extracts (or writes) a second derived object for the same source,
+    independent of nondeterministic LLM titles.
 
     Idempotency in `_stage_derived_object` cannot be keyed off the derived
     document's own slug (`_slugify(extraction.title)`), because that title
