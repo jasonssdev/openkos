@@ -51,22 +51,43 @@ def _reject_newline(field: str, value: str) -> None:
         raise ValueError(f"index.md: {field!r} must not contain a newline")
 
 
-def insert_source_entry(
-    index_text: str, *, title: str, slug: str, description: str
-) -> str:
-    """Insert a new Source bullet into `index_text`'s `# Sources` section (D2).
+_CANONICAL_SECTION_ORDER = ("Concepts", "Entities", "Decisions", "People", "Sources")
 
-    Pure body-only edit: the frontmatter block is split off and kept
-    byte-for-byte verbatim, and every existing section round-trips
-    byte-for-byte except for the appended bullet. `# Sources` is located if
-    present; if absent, a fresh `# Sources` section is created at the end of
-    the body. Canonical section order is `[Concepts, Decisions, People,
-    Sources]`, and `Sources` is last in that order, so appending a new
-    `# Sources` chunk after every existing section is always the correct
-    position, regardless of which of the other three sections currently
-    exist. `title`/`slug`/`description` are each rejected (`ValueError`) if
-    they contain a newline (RISK-1) -- see `_reject_newline`.
+
+def insert_index_entry(
+    index_text: str,
+    *,
+    section: str,
+    link_dir: str,
+    title: str,
+    slug: str,
+    description: str,
+) -> str:
+    """Insert a new bullet into `index_text`'s `# {section}` section (D2, #4).
+
+    Generalizes `insert_source_entry` to any of the canonical catalog
+    sections. Pure body-only edit: the frontmatter block is split off and
+    kept byte-for-byte verbatim, and every existing section round-trips
+    byte-for-byte except for the inserted bullet. `# {section}` is located
+    if present, and the bullet is appended to it. If absent, a fresh
+    `# {section}` chunk is created and inserted at its CANONICAL rank --
+    `_CANONICAL_SECTION_ORDER = (Concepts, Entities, Decisions, People,
+    Sources)` -- i.e. immediately before the first EXISTING section whose
+    rank is greater, or at the end of the body if no such section exists.
+    `Sources` is always last in that order, so a fresh `# Sources` section
+    is always appended after every other existing section, regardless of
+    which of the other four currently exist -- preserving the historical
+    Sources-last behavior byte-identically. `title`/`slug`/`description` are
+    each rejected (`ValueError`) if they contain a newline (RISK-1) -- see
+    `_reject_newline`. This guard applies to every section, including
+    untrusted LLM-derived Concept/Entity fields. `section` MUST be one of the
+    canonical sections, else `ValueError` -- there is no defined rank for an
+    unknown section.
     """
+    if section not in _CANONICAL_SECTION_ORDER:
+        raise ValueError(
+            f"section must be one of {list(_CANONICAL_SECTION_ORDER)}, got {section!r}"
+        )
     _reject_newline("title", title)
     _reject_newline("slug", slug)
     _reject_newline("description", description)
@@ -74,17 +95,46 @@ def insert_source_entry(
     chunks = _SECTION_SPLIT_RE.split(body)
     preamble, section_chunks = chunks[0], chunks[1:]
 
-    bullet = f"* [{title}](/sources/{slug}.md) - {description}\n"
+    bullet = f"* [{title}](/{link_dir}/{slug}.md) - {description}\n"
     headers = [_section_header(chunk) for chunk in section_chunks]
 
-    if "Sources" in headers:
-        sources_index = headers.index("Sources")
-        section_chunks[sources_index] = section_chunks[sources_index] + bullet
+    if section in headers:
+        section_index = headers.index(section)
+        section_chunks[section_index] = section_chunks[section_index] + bullet
     else:
-        section_chunks.append(f"# Sources\n\n{bullet}")
+        target_rank = _CANONICAL_SECTION_ORDER.index(section)
+        insert_at = len(section_chunks)
+        for i, header in enumerate(headers):
+            if (
+                header in _CANONICAL_SECTION_ORDER
+                and _CANONICAL_SECTION_ORDER.index(header) > target_rank
+            ):
+                insert_at = i
+                break
+        section_chunks.insert(insert_at, f"# {section}\n\n{bullet}")
 
     return (
         frontmatter_block + preamble + "".join(f"\n{chunk}" for chunk in section_chunks)
+    )
+
+
+def insert_source_entry(
+    index_text: str, *, title: str, slug: str, description: str
+) -> str:
+    """Insert a new Source bullet into `index_text`'s `# Sources` section (D2).
+
+    Thin wrapper around `insert_index_entry(section="Sources",
+    link_dir="sources", ...)`, kept as a distinct public function so
+    `cli/main.py`'s existing call site (`bundle_index.insert_source_entry`)
+    keeps working unmodified.
+    """
+    return insert_index_entry(
+        index_text,
+        section="Sources",
+        link_dir="sources",
+        title=title,
+        slug=slug,
+        description=description,
     )
 
 
