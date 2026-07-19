@@ -24,6 +24,9 @@ from openkos.llm.ollama import (
     model_tag_matches,
 )
 from openkos.model import okf
+from openkos.model.types import CLASSIFIABLE_LINK_DIRS
+from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
+from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state.fts import FtsUnavailable
 
@@ -159,21 +162,10 @@ def _titleize(stem: str) -> str:
     return _TITLE_SEPARATOR_RE.sub(" ", stem).strip()
 
 
-_TYPE_TO_LINK_DIR: dict[str, str] = {
-    "Concept": "concepts",
-    "Entity": "entities",
-    "Person": "people",
-    "Organization": "organizations",
-}
-_TYPE_TO_SECTION: dict[str, str] = {
-    "Concept": "Concepts",
-    "Entity": "Entities",
-    "Person": "People",
-    "Organization": "Organizations",
-}
-"""`extraction.ExtractionResult.type` -> catalog section / bundle subdirectory
-(design: Path/Catalog); the closed `{Concept, Entity, Person, Organization}`
-vocabulary is the only key space these two maps need."""
+# `_TYPE_TO_LINK_DIR`/`_TYPE_TO_SECTION` are now derived from
+# `openkos.model.types.REGISTRY` -- see that module for the single source of
+# truth. `extraction.ExtractionResult.type` -> catalog section / bundle
+# subdirectory (design: Path/Catalog).
 
 
 @dataclass(frozen=True)
@@ -210,7 +202,7 @@ def _source_has_derived_object(bundle_dir: Path, source_slug: str) -> bool:
     key.
     """
     source_ref = f"sources/{source_slug}"
-    for link_dir in ("concepts", "entities", "people", "organizations"):
+    for link_dir in CLASSIFIABLE_LINK_DIRS:
         section_dir = bundle_dir / link_dir
         if not section_dir.is_dir():
             continue

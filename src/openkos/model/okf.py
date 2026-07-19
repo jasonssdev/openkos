@@ -18,6 +18,8 @@ from typing import Final
 
 import frontmatter
 
+from openkos.model.types import CLASSIFIABLE_TYPES as _CONCEPT_TYPES
+
 OKF_VERSION: Final = "0.1"
 """The OKF version this engine targets and declares, per §11."""
 
@@ -92,13 +94,6 @@ def build_source_concept(
         section = f"## Source content\n\n{raw_content}\n\n"
     body = f"# {title}\n\n{description}\n\n{section}# Citations\n"
     return dump_frontmatter(metadata, body)
-
-
-_CONCEPT_TYPES: Final[frozenset[str]] = frozenset(
-    {"Concept", "Entity", "Person", "Organization"}
-)
-"""Closed vocabulary `build_concept` accepts, per the design's Architecture
-Decisions ("Vocabulary"); anything else fails closed with `ValueError`."""
 
 
 def build_concept(
