@@ -84,6 +84,8 @@ uv run pre-commit install
 6. **Reference the issue** your PR addresses — and the `openspec/` change folder, if it has one — and describe what changed and why.
 7. Be ready for review discussion. Maintainers may ask for changes to keep the project coherent.
 
+**Stacking PRs.** When a change is large enough to split into a chain — one PR based on another so each stays reviewable — merge the stack **bottom-up**, and do **not** delete a base branch while PRs are still stacked on it. GitHub *closes* a pull request when its base branch is deleted rather than retargeting it, so merging the base with "delete branch" strands its dependents (they then have to be rebased onto `main` and reopened as new PRs). The safe order: merge the base **without** deleting its branch, let GitHub retarget the dependents to `main`, merge those, and only then delete the branches.
+
 ### Commit messages
 
 Please use [Conventional Commits](https://www.conventionalcommits.org/):
