@@ -54,6 +54,12 @@ _ORGANIZATION_JSON = (
     '"description": "A nonprofit researching Stoic philosophy.", "body": ""}'
 )
 
+_PLACE_JSON = (
+    '{"extract": true, "type": "Place", "title": "Yellowstone National Park", '
+    '"description": "A national park in the western United States.", '
+    '"body": "Known for its geysers and geothermal features."}'
+)
+
 
 # --- Scaffold ---------------------------------------------------------------
 
@@ -136,6 +142,23 @@ def test_valid_organization_json_returns_extraction_result() -> None:
     assert result.description == "A nonprofit researching Stoic philosophy."
 
 
+def test_valid_place_json_returns_extraction_result() -> None:
+    """A well-formed `type: Place` reply parses with `type == "Place"`
+    (spec: "Source about a location classifies as Place")."""
+    llm = _FakeLLM(reply=_PLACE_JSON)
+
+    result = concept_mod.extract_concept(
+        "Yellowstone is a national park known for its geysers.",
+        source_title="Notes",
+        llm=llm,
+    )
+
+    assert result is not None
+    assert result.type == "Place"
+    assert result.title == "Yellowstone National Park"
+    assert result.description == "A national park in the western United States."
+
+
 # --- Parsing: fenced / prose-wrapped JSON -----------------------------------
 
 
@@ -183,11 +206,12 @@ def test_extract_false_returns_none() -> None:
 
 
 def test_invalid_type_returns_none() -> None:
-    """A `type` outside `{Concept, Entity, Person, Organization}` fails
-    closed to `None`. `"Place"` is a real future KOM continuant, still out
-    of scope for this vocabulary batch -- a genuinely invalid sentinel."""
+    """A `type` outside the closed `{Concept, Entity, Place, Person,
+    Organization}` set fails closed to `None`. `"Animal"` is a genuinely
+    invalid sentinel, outside the vocabulary in any batch (spec: "Classifier
+    degrades on unknown type")."""
     llm = _FakeLLM(
-        reply='{"extract": true, "type": "Place", "title": "T", "description": "D"}'
+        reply='{"extract": true, "type": "Animal", "title": "T", "description": "D"}'
     )
 
     result = concept_mod.extract_concept("text", source_title="t", llm=llm)
@@ -240,7 +264,7 @@ def test_non_string_type_returns_none() -> None:
     for bad_type in ('["Concept"]', '{"k": "v"}'):
         llm = _FakeLLM(
             reply=(
-                '{"extract": true, "type": ' + bad_type + ', '
+                '{"extract": true, "type": ' + bad_type + ", "
                 '"title": "T", "description": "D", "body": ""}'
             )
         )
@@ -338,10 +362,10 @@ def test_ollama_error_propagates_unswallowed() -> None:
 
 def test_prompt_contains_vocabulary_and_heuristic() -> None:
     """The system prompt pins the classification contract: the closed
-    `{Concept, Entity, Person, Organization}` vocabulary, the aboutness
-    heuristic (a borrowed name is a label, not the subject), the
-    Person/Organization/Concept-outrank-Entity tie-break, and the JSON-only
-    instruction."""
+    `{Concept, Entity, Place, Person, Organization}` vocabulary, the
+    aboutness heuristic (a borrowed name is a label, not the subject), the
+    Person/Organization/Place/Concept-outrank-Entity tie-break, and the
+    JSON-only instruction."""
     llm = _FakeLLM(reply=_CONCEPT_JSON)
 
     concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
@@ -352,11 +376,30 @@ def test_prompt_contains_vocabulary_and_heuristic() -> None:
     assert '"Entity"' in system_content
     assert '"Person"' in system_content
     assert '"Organization"' in system_content
+    assert '"Place"' in system_content
     assert "fundamentally about" in system_content
     assert "borrowed" in system_content
     assert "fallback" in system_content
     assert "outrank" in system_content
     assert "JSON object" in system_content
+
+
+def test_prompt_pins_landmark_named_after_person_tie_break() -> None:
+    """The system prompt's tie-break prose resolves the KOM-silent
+    landmark-named-after-a-person case explicitly: a site honoring a person
+    or organization is `Place` ONLY when the source is about the physical
+    site itself; when the source is about the honoree, it is Person or
+    Organization instead (design: Decision 2, "Landmark named after a
+    person/org"). This pins the PROMPT's encoded preference, not an actual
+    LLM's output -- classification itself is not deterministic Python code."""
+    llm = _FakeLLM(reply=_PERSON_JSON)
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"].lower()
+    assert "landmark" in system_content
+    assert "honoree" in system_content
+    assert "physical site" in system_content
 
 
 def test_prompt_carries_source_text_and_title() -> None:

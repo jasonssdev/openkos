@@ -440,6 +440,135 @@ def test_insert_index_entry_full_canonical_order_from_scratch() -> None:
     ]
 
 
+def test_insert_index_entry_places_places_between_entities_and_decisions() -> None:
+    """A fresh `# Places` section is inserted at its canonical rank -- after
+    `# Entities`, before `# Decisions` -- when both neighbors already exist
+    (canonical order `[Concepts, Entities, Places, Decisions, People,
+    Organizations, Sources]`, spec: "Fresh Places section inserted at
+    canonical rank")."""
+    populated = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - A school of thought.\n"
+        "\n"
+        "# Entities\n"
+        "\n"
+        "* [Zettelkasten](/entities/zettelkasten.md) - A note-taking tool.\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+        "\n"
+        "# People\n"
+        "\n"
+        "* [Maria Salazar](/people/maria-salazar.md) - A friend.\n"
+    )
+
+    result = insert_index_entry(
+        populated,
+        section="Places",
+        link_dir="places",
+        title="Yellowstone National Park",
+        slug="yellowstone-national-park",
+        description="A national park in the western United States.",
+    )
+
+    assert result == (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - A school of thought.\n"
+        "\n"
+        "# Entities\n"
+        "\n"
+        "* [Zettelkasten](/entities/zettelkasten.md) - A note-taking tool.\n"
+        "\n"
+        "# Places\n"
+        "\n"
+        "* [Yellowstone National Park](/places/yellowstone-national-park.md) - "
+        "A national park in the western United States.\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+        "\n"
+        "# People\n"
+        "\n"
+        "* [Maria Salazar](/people/maria-salazar.md) - A friend.\n"
+    )
+
+
+def test_insert_index_entry_places_places_leaves_other_sections_byte_identical() -> (
+    None
+):
+    """With all 7 canonical sections already present, inserting a second
+    bullet into `# Places` round-trips every OTHER section's bullet
+    byte-for-byte, and relative section order is unchanged (spec: "Existing
+    sections keep byte-identical order")."""
+    text = render_index()
+    for section, link_dir in (
+        ("Concepts", "concepts"),
+        ("Entities", "entities"),
+        ("Places", "places"),
+        ("Decisions", "decisions"),
+        ("People", "people"),
+        ("Organizations", "organizations"),
+        ("Sources", "sources"),
+    ):
+        text = insert_index_entry(
+            text,
+            section=section,
+            link_dir=link_dir,
+            title=f"First {section}",
+            slug=f"first-{section.lower()}",
+            description="First entry.",
+        )
+    other_section_bullets = [
+        "* [First Concepts](/concepts/first-concepts.md) - First entry.\n",
+        "* [First Entities](/entities/first-entities.md) - First entry.\n",
+        "* [First Decisions](/decisions/first-decisions.md) - First entry.\n",
+        "* [First People](/people/first-people.md) - First entry.\n",
+        "* [First Organizations](/organizations/first-organizations.md) - "
+        "First entry.\n",
+        "* [First Sources](/sources/first-sources.md) - First entry.\n",
+    ]
+    for bullet in other_section_bullets:
+        assert bullet in text
+
+    result = insert_index_entry(
+        text,
+        section="Places",
+        link_dir="places",
+        title="Second Places",
+        slug="second-places",
+        description="Second entry.",
+    )
+
+    headers_in_order = [
+        line[2:] for line in result.splitlines() if line.startswith("# ")
+    ]
+    assert headers_in_order == [
+        "Concepts",
+        "Entities",
+        "Places",
+        "Decisions",
+        "People",
+        "Organizations",
+        "Sources",
+    ]
+    for bullet in other_section_bullets:
+        assert bullet in result
+    assert "* [First Places](/places/first-places.md) - First entry.\n" in result
+    assert "* [Second Places](/places/second-places.md) - Second entry.\n" in result
+
+
 @pytest.mark.parametrize("field", ["title", "slug", "description"])
 @pytest.mark.parametrize("newline", ["\n", "\r"])
 def test_insert_index_entry_rejects_newline_in_interpolated_field(

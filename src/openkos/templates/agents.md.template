@@ -21,7 +21,10 @@ Everything else at this level (`openkos.yaml`, this file, `.openkos/`) belongs t
     ├── log.md         # append-only history
     ├── sources/       # one Source concept per raw original
     ├── concepts/
+    ├── entities/
+    ├── places/
     ├── people/
+    ├── organizations/
     └── decisions/
 ```
 
