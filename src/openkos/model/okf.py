@@ -94,6 +94,76 @@ def build_source_concept(
     return dump_frontmatter(metadata, body)
 
 
+_CONCEPT_TYPES: Final[frozenset[str]] = frozenset({"Concept", "Entity"})
+"""Closed vocabulary `build_concept` accepts, per the design's Architecture
+Decisions ("Vocabulary"); anything else fails closed with `ValueError`."""
+
+
+def build_concept(
+    *,
+    type: str,
+    title: str,
+    description: str,
+    body: str,
+    provenance: list[str],
+    sensitivity: str,
+    timestamp: str,
+) -> str:
+    """Build a conformant OKF Concept/Entity document from LLM-extracted,
+    UNTRUSTED fields (design: "Builder validation").
+
+    Unlike `build_source_concept` (whose inputs are engine-derived and
+    trusted, so it skips validation -- see its docstring), this builder is
+    the fail-closed gate for `extraction.ExtractionResult` data: `type` MUST
+    be one of `{"Concept", "Entity"}`; `title`/`description` MUST be non-empty
+    after stripping whitespace AND single-line (no embedded newlines, since
+    each is a single Markdown/heading line); and `provenance` MUST be
+    non-empty (a derived object always cites the Source it came from). Any
+    violation raises `ValueError` rather than emitting a non-conformant or
+    misleading document.
+
+    `description` is a one-line lede; `body` follows it only when non-blank,
+    so a blank body does not duplicate the description paragraph. A `## Related`
+    section then backlinks every `provenance` entry -- each a Source concept-id
+    path such as `sources/<slug>` -- as the source this object was extracted
+    from, bundle-relative per docs/knowledge-object-model.md's link shape.
+    `tags` is always `[]`: this slice has no tagging step.
+    """
+    if type not in _CONCEPT_TYPES:
+        raise ValueError(f"type must be one of {sorted(_CONCEPT_TYPES)}, got {type!r}")
+    if not title.strip():
+        raise ValueError("title must be non-empty")
+    if not description.strip():
+        raise ValueError("description must be non-empty")
+    if "\n" in title or "\r" in title:
+        raise ValueError("title must not contain newlines")
+    if "\n" in description or "\r" in description:
+        raise ValueError("description must not contain newlines")
+    if not provenance:
+        raise ValueError("provenance must be non-empty for a derived object")
+
+    metadata: dict[str, object] = {
+        "type": type,
+        "title": title,
+        "description": description,
+        "tags": [],
+        "timestamp": timestamp,
+        "status": "active",
+        "version": 1,
+        "freshness": "snapshot",
+        "sensitivity": sensitivity,
+        "provenance": provenance,
+    }
+    related = "\n".join(
+        f"- [{ref}](/{ref}.md) — source this was extracted from" for ref in provenance
+    )
+    # `description` is a one-line lede; append `body` only when it adds content,
+    # so a blank-body fallback does not render the description paragraph twice.
+    lede = description if not body.strip() else f"{description}\n\n{body}"
+    doc_body = f"# {title}\n\n{lede}\n\n## Related\n\n{related}\n"
+    return dump_frontmatter(metadata, doc_body)
+
+
 @dataclass(frozen=True)
 class DocScan:
     """One `_iter_docs` result: a non-reserved `.md` file, scanned once.

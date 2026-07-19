@@ -479,3 +479,189 @@ def test_build_source_concept_empty_source_note() -> None:
     assert "file is empty" in body
     assert "## Source content" not in body
     assert "could not be embedded as text" not in body
+
+
+def _build_call_concept(**overrides: object) -> str:
+    """Build a derived Concept/Entity document with realistic defaults,
+    letting tests override individual keyword arguments -- mirrors
+    `_build_call_source`."""
+    kwargs: dict[str, object] = {
+        "type": "Concept",
+        "title": "Stoicism",
+        "description": (
+            "Hellenistic school holding that virtue is the only good, and "
+            "that freedom comes from knowing what is up to us."
+        ),
+        "body": "The dichotomy of control separates what is up to us from what is not.",
+        "provenance": ["sources/call-with-maria-salazar"],
+        "sensitivity": "confidential",
+        "timestamp": "2026-07-14T18:30:00Z",
+    }
+    kwargs.update(overrides)
+    return okf.build_concept(**kwargs)  # type: ignore[arg-type]
+
+
+def test_build_concept_emits_required_frontmatter_fields() -> None:
+    """`build_concept` emits every OKF + OpenKOS-layer field
+    `build_source_concept` emits, plus an empty `tags` list (design: no
+    tagging step in this slice) (Phase 3.1)."""
+    text = _build_call_concept()
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Concept"
+    assert metadata["title"] == "Stoicism"
+    assert metadata["description"] == (
+        "Hellenistic school holding that virtue is the only good, and "
+        "that freedom comes from knowing what is up to us."
+    )
+    assert metadata["tags"] == []
+    assert metadata["timestamp"] == "2026-07-14T18:30:00Z"
+    assert metadata["status"] == "active"
+    assert metadata["version"] == 1
+    assert metadata["freshness"] == "snapshot"
+    assert metadata["sensitivity"] == "confidential"
+    assert metadata["provenance"] == ["sources/call-with-maria-salazar"]
+
+
+def test_build_concept_accepts_entity_type() -> None:
+    """`type: Entity` is the other member of the closed vocabulary and
+    builds a conformant document just like `Concept` (Phase 3.1)."""
+    text = _build_call_concept(type="Entity", title="Zettelkasten")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Entity"
+    assert metadata["title"] == "Zettelkasten"
+
+
+def test_build_concept_sensitivity_inherited_verbatim() -> None:
+    """`sensitivity` is passed straight through, unmodified -- the caller
+    (main.py, a later slice) is responsible for reading it off the Source
+    (Phase 3.1, scenario: provenance and sensitivity inherited)."""
+    text = _build_call_concept(sensitivity="public")
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["sensitivity"] == "public"
+
+
+def test_build_concept_body_included_when_non_blank() -> None:
+    """A non-blank `body` is embedded in the document body, alongside the
+    title and description (Phase 3.1)."""
+    text = _build_call_concept(body="The dichotomy of control is central.")
+
+    _, body = okf.load_frontmatter(text)
+
+    assert "# Stoicism" in body
+    assert "The dichotomy of control is central." in body
+
+
+def test_build_concept_blank_body_falls_back_to_description() -> None:
+    """A blank/whitespace-only `body` falls back to `description`, per the
+    `ExtractionResult` contract (`extraction/concept.py`) that leaves
+    "the builder falls back to description when this is blank" (Phase 3.1,
+    Testing Strategy: body-fallback)."""
+    text = _build_call_concept(body="   ")
+
+    _, body = okf.load_frontmatter(text)
+
+    description = (
+        "Hellenistic school holding that virtue is the only good, and "
+        "that freedom comes from knowing what is up to us."
+    )
+    assert description in body
+    # A blank body must not render the description paragraph twice.
+    assert body.count(description) == 1
+
+
+def test_build_concept_related_section_backlinks_to_source() -> None:
+    """The body carries a `## Related` section citing every `provenance`
+    entry as the source this object was extracted from, bundle-relative per
+    docs/knowledge-object-model.md's link shape (Phase 3.1)."""
+    text = _build_call_concept(provenance=["sources/call-with-maria-salazar"])
+
+    _, body = okf.load_frontmatter(text)
+
+    assert "## Related" in body
+    assert (
+        "[sources/call-with-maria-salazar](/sources/call-with-maria-salazar.md)" in body
+    )
+    assert "source this was extracted from" in body
+
+
+def test_build_concept_frontmatter_round_trips() -> None:
+    """`build_concept`'s output round-trips through `load_frontmatter` with
+    no data loss (Phase 3.1)."""
+    text = _build_call_concept()
+
+    metadata, body = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Concept"
+    assert body.strip() != ""
+
+
+def test_build_concept_passes_check_conformance(tmp_path: Path) -> None:
+    """A `build_concept` document passes §9 rules 1-2, same as
+    `build_source_concept` (Phase 3.1)."""
+    text = _build_call_concept()
+    (tmp_path / "stoicism.md").write_text(text, encoding="utf-8")
+
+    assert okf.check_conformance(tmp_path) == []
+
+
+def test_build_concept_raises_on_invalid_type() -> None:
+    """`type` outside `{Concept, Entity}` fails closed with `ValueError`
+    (Phase 3.2)."""
+    with pytest.raises(ValueError, match="type"):
+        _build_call_concept(type="Person")
+
+
+def test_build_concept_raises_on_blank_title() -> None:
+    """An empty or whitespace-only `title` fails closed with `ValueError`
+    (Phase 3.2)."""
+    with pytest.raises(ValueError, match="title"):
+        _build_call_concept(title="   ")
+
+
+def test_build_concept_raises_on_blank_description() -> None:
+    """An empty or whitespace-only `description` fails closed with
+    `ValueError` (Phase 3.2)."""
+    with pytest.raises(ValueError, match="description"):
+        _build_call_concept(description="")
+
+
+def test_build_concept_raises_on_newline_in_title() -> None:
+    """A `title` with an embedded newline (plausible from untrusted LLM
+    output) would corrupt the Markdown heading, so it fails closed."""
+    with pytest.raises(ValueError, match="title"):
+        _build_call_concept(title="Stoicism\n# Injected heading")
+
+
+def test_build_concept_raises_on_newline_in_description() -> None:
+    """A `description` is a single-line lede; an embedded newline fails
+    closed rather than emitting a stray paragraph."""
+    with pytest.raises(ValueError, match="description"):
+        _build_call_concept(description="A school.\nInjected line.")
+
+
+def test_build_concept_raises_on_empty_provenance() -> None:
+    """A derived object always cites the Source it came from, so an empty
+    `provenance` list fails closed rather than emitting a dangling
+    `## Related` section."""
+    with pytest.raises(ValueError, match="provenance"):
+        _build_call_concept(provenance=[])
+
+
+def test_build_concept_backlinks_every_provenance_entry() -> None:
+    """The `## Related` section renders one backlink per `provenance` entry,
+    in input order."""
+    text = _build_call_concept(
+        provenance=["sources/first-source", "sources/second-source"]
+    )
+
+    _, body = okf.load_frontmatter(text)
+
+    first = body.index("[sources/first-source](/sources/first-source.md)")
+    second = body.index("[sources/second-source](/sources/second-source.md)")
+    assert first < second
