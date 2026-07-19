@@ -2,7 +2,12 @@
 
 import pytest
 
-from openkos.bundle.index import insert_source_entry, remove_index_entry, render_index
+from openkos.bundle.index import (
+    insert_index_entry,
+    insert_source_entry,
+    remove_index_entry,
+    render_index,
+)
 from openkos.model import okf
 
 
@@ -163,6 +168,317 @@ def test_insert_source_entry_rejects_newline_in_interpolated_field(
 
     with pytest.raises(ValueError, match="newline"):
         insert_source_entry(render_index(), **kwargs)
+
+
+def test_insert_source_entry_stays_last_when_entities_section_present() -> None:
+    """`insert_source_entry` still appends `# Sources` after EVERY other
+    canonical section, including a populated `# Entities` section (canonical
+    order `[Concepts, Entities, Decisions, People, Sources]`)."""
+    populated = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - A school of thought.\n"
+        "\n"
+        "# Entities\n"
+        "\n"
+        "* [Zettelkasten](/entities/zettelkasten.md) - A note-taking tool.\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+        "\n"
+        "# People\n"
+        "\n"
+        "* [Maria Salazar](/people/maria-salazar.md) - A friend.\n"
+    )
+
+    result = insert_source_entry(
+        populated,
+        title="Reading notes",
+        slug="reading-notes",
+        description="First pass through the text.",
+    )
+
+    assert result == (
+        populated + "\n# Sources\n\n"
+        "* [Reading notes](/sources/reading-notes.md) - "
+        "First pass through the text.\n"
+    )
+
+
+def test_insert_index_entry_creates_concepts_section_on_fresh_index() -> None:
+    """`insert_index_entry(section="Concepts", link_dir="concepts")` creates a
+    fresh `# Concepts` section on an empty-body index."""
+    result = insert_index_entry(
+        render_index(),
+        section="Concepts",
+        link_dir="concepts",
+        title="Stoicism",
+        slug="stoicism",
+        description="A school of Hellenistic philosophy.",
+    )
+
+    assert "# Concepts" in result
+    assert (
+        "* [Stoicism](/concepts/stoicism.md) - "
+        "A school of Hellenistic philosophy.\n" in result
+    )
+
+
+def test_insert_index_entry_appends_to_existing_concepts_section() -> None:
+    """A second `insert_index_entry` call for `Concepts` appends a new
+    bullet under the same section, keeping the first entry."""
+    once = insert_index_entry(
+        render_index(),
+        section="Concepts",
+        link_dir="concepts",
+        title="Stoicism",
+        slug="stoicism",
+        description="First concept.",
+    )
+
+    twice = insert_index_entry(
+        once,
+        section="Concepts",
+        link_dir="concepts",
+        title="Apatheia",
+        slug="apatheia",
+        description="Second concept.",
+    )
+
+    assert twice.count("# Concepts") == 1
+    assert "* [Stoicism](/concepts/stoicism.md) - First concept.\n" in twice
+    assert "* [Apatheia](/concepts/apatheia.md) - Second concept.\n" in twice
+
+
+def test_insert_index_entry_places_entities_between_concepts_and_decisions() -> None:
+    """A fresh `# Entities` section is inserted at its canonical rank --
+    after `# Concepts`, before `# Decisions` -- when both neighbors already
+    exist (canonical order `[Concepts, Entities, Decisions, People,
+    Sources]`)."""
+    populated = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - A school of thought.\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+    )
+
+    result = insert_index_entry(
+        populated,
+        section="Entities",
+        link_dir="entities",
+        title="Zettelkasten",
+        slug="zettelkasten",
+        description="A note-taking tool.",
+    )
+
+    assert result == (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - A school of thought.\n"
+        "\n"
+        "# Entities\n"
+        "\n"
+        "* [Zettelkasten](/entities/zettelkasten.md) - A note-taking tool.\n"
+        "\n"
+        "# Decisions\n"
+        "\n"
+        "* [Frame the essay](/decisions/frame-the-essay.md) - A choice.\n"
+    )
+
+
+def test_insert_index_entry_places_entities_after_concepts_when_last_section() -> None:
+    """`# Entities` is appended right after `# Concepts` when `Concepts` is
+    currently the last (and only) existing section."""
+    populated = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - A school of thought.\n"
+    )
+
+    result = insert_index_entry(
+        populated,
+        section="Entities",
+        link_dir="entities",
+        title="Zettelkasten",
+        slug="zettelkasten",
+        description="A note-taking tool.",
+    )
+
+    assert result == (
+        populated + "\n# Entities\n\n"
+        "* [Zettelkasten](/entities/zettelkasten.md) - A note-taking tool.\n"
+    )
+
+
+def test_insert_index_entry_places_entities_before_people_when_concepts_absent() -> (
+    None
+):
+    """`# Entities` is inserted before `# People` even when `# Concepts` and
+    `# Decisions` are both absent (canonical ordering holds regardless of
+    which OTHER sections currently exist)."""
+    populated = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# People\n"
+        "\n"
+        "* [Maria Salazar](/people/maria-salazar.md) - A friend.\n"
+        "\n"
+        "# Sources\n"
+        "\n"
+        "* [Reading notes](/sources/reading-notes.md) - First pass.\n"
+    )
+
+    result = insert_index_entry(
+        populated,
+        section="Entities",
+        link_dir="entities",
+        title="Zettelkasten",
+        slug="zettelkasten",
+        description="A note-taking tool.",
+    )
+
+    assert result == (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Entities\n"
+        "\n"
+        "* [Zettelkasten](/entities/zettelkasten.md) - A note-taking tool.\n"
+        "\n"
+        "# People\n"
+        "\n"
+        "* [Maria Salazar](/people/maria-salazar.md) - A friend.\n"
+        "\n"
+        "# Sources\n"
+        "\n"
+        "* [Reading notes](/sources/reading-notes.md) - First pass.\n"
+    )
+
+
+def test_insert_index_entry_full_canonical_order_from_scratch() -> None:
+    """Inserting one entry per section in a DELIBERATELY SHUFFLED call order
+    (Sources, People, Concepts, Decisions, Entities) still yields the
+    canonical `[Concepts, Entities, Decisions, People, Sources]` section
+    order in the final rendered index."""
+    text = render_index()
+    text = insert_index_entry(
+        text,
+        section="Sources",
+        link_dir="sources",
+        title="S",
+        slug="s",
+        description="s",
+    )
+    text = insert_index_entry(
+        text, section="People", link_dir="people", title="P", slug="p", description="p"
+    )
+    text = insert_index_entry(
+        text,
+        section="Concepts",
+        link_dir="concepts",
+        title="C",
+        slug="c",
+        description="c",
+    )
+    text = insert_index_entry(
+        text,
+        section="Decisions",
+        link_dir="decisions",
+        title="D",
+        slug="d",
+        description="d",
+    )
+    text = insert_index_entry(
+        text,
+        section="Entities",
+        link_dir="entities",
+        title="E",
+        slug="e",
+        description="e",
+    )
+
+    headers_in_order = [line[2:] for line in text.splitlines() if line.startswith("# ")]
+    assert headers_in_order == [
+        "Concepts",
+        "Entities",
+        "Decisions",
+        "People",
+        "Sources",
+    ]
+
+
+@pytest.mark.parametrize("field", ["title", "slug", "description"])
+@pytest.mark.parametrize("newline", ["\n", "\r"])
+def test_insert_index_entry_rejects_newline_in_interpolated_field(
+    field: str, newline: str
+) -> None:
+    """The generalized inserter still guards `title`/`slug`/`description`
+    against newline-forgery (RISK-1) for a non-Sources section, so untrusted
+    LLM-derived text cannot forge a section header."""
+    kwargs = {"title": "A", "slug": "a", "description": "B"}
+    kwargs[field] = f"evil{newline}# Forged Section"
+
+    with pytest.raises(ValueError, match="newline"):
+        insert_index_entry(
+            render_index(), section="Concepts", link_dir="concepts", **kwargs
+        )
+
+
+def test_insert_index_entry_rejects_unknown_section() -> None:
+    """A `section` outside the canonical order has no defined rank, so the
+    inserter fails closed with a clear `ValueError` rather than a cryptic
+    tuple.index lookup error."""
+    with pytest.raises(ValueError, match="section must be one of"):
+        insert_index_entry(
+            render_index(),
+            section="Notes",
+            link_dir="notes",
+            title="A",
+            slug="a",
+            description="B",
+        )
+
+
+def test_insert_source_entry_delegates_to_insert_index_entry() -> None:
+    """`insert_source_entry` is a thin `section="Sources", link_dir="sources"`
+    wrapper around `insert_index_entry` -- both produce byte-identical
+    output, and `main.py`'s call site keeps working unmodified."""
+    via_wrapper = insert_source_entry(
+        render_index(), title="A", slug="a", description="B"
+    )
+    via_generalized = insert_index_entry(
+        render_index(),
+        section="Sources",
+        link_dir="sources",
+        title="A",
+        slug="a",
+        description="B",
+    )
+
+    assert via_wrapper == via_generalized
 
 
 _POPULATED_INDEX = (
