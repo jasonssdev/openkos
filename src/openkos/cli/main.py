@@ -22,7 +22,7 @@ from openkos.llm.ollama import (
     model_tag_matches,
 )
 from openkos.model import okf
-from openkos.retrieval.answer import answer
+from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state.fts import FtsUnavailable
 
 app = typer.Typer()
@@ -127,6 +127,12 @@ def init(
         f"{layout.config_path.name})."
     )
     typer.echo("Next: run `openkos ingest <path>` to import your first source.")
+
+
+def _plural(n: int) -> str:
+    """Return `""` for `n == 1`, else `"s"` -- English plural suffix helper
+    shared by the `query` command's stderr rendering."""
+    return "" if n == 1 else "s"
 
 
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
@@ -715,6 +721,34 @@ def lint() -> None:
             typer.echo(f"  {finding.path}: {finding.detail}")
 
 
+def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
+    """Map `AnswerResult.no_match_cause` to an actionable STDOUT message,
+    distinguishing the three causes `query` must not conflate: nothing
+    matched, matches existed but were unreadable, or no question was asked.
+
+    Only the three real no-match causes are expected here; the caller guards
+    against `"none"`. An unhandled cause raises rather than silently falling
+    through to a misleading message, so a future `NoMatchCause` value fails
+    loudly instead of rendering the wrong text."""
+    if cause == "zero_hits":
+        return (
+            f"{NO_MATCH} Try different wording, or run `openkos status` "
+            "to see what the bundle contains."
+        )
+    if cause == "all_unreadable":
+        return (
+            f"Found {fts_hit_count} matching concept{_plural(fts_hit_count)}, "
+            "but none could be read from the compiled bundle — it may be "
+            "corrupted. Run `openkos lint` to check bundle health."
+        )
+    if cause == "empty_query":
+        return (
+            "No question was provided. Pass a question to answer, e.g. "
+            'openkos query "what is stoicism?".'
+        )
+    raise ValueError(f"unexpected no_match_cause: {cause!r}")
+
+
 @app.command()
 def query(
     question: str = typer.Argument(
@@ -730,12 +764,23 @@ def query(
     no `--auto`. Must be run inside an initialized workspace; outside one it
     refuses (exit 1) with a short reason on stderr.
 
-    The answer is grounded in the concepts retrieved from the bundle and is
-    printed first; when at least one concept was cited, a `Citations:`
-    section follows, one `  → {concept_id} ({title})` line per citation, in
-    the order they were used. When nothing in the bundle matches, a single
-    no-match line is printed and the command still exits 0 -- "no answer
-    found" is a valid result, not an error.
+    Every completed run (successful answer or no-match) prints a one-line
+    `retrieval:` summary to STDERR reporting the raw FTS hit count, whether
+    the LLM was invoked, and how many sources were cited -- so a silent
+    short-circuit (e.g. zero hits, so the LLM never ran) is always visible,
+    even though STDOUT stays pipe-clean. When the build skipped any
+    unreadable/unparseable files, an `index:` skip-notice block follows the
+    summary on stderr, worded as a whole-bundle build diagnostic -- it never
+    implies the skipped files were candidates for THIS query's match.
+
+    On a successful answer, STDOUT carries exactly the answer text, then
+    (only when at least one concept was cited) a blank line, `Citations:`,
+    and one `  → {concept_id} ({title})` line per citation, in the order
+    they were used -- unchanged from prior behavior. When nothing in the
+    bundle matches, STDOUT instead carries a cause-specific message (zero
+    hits, hits found but all unreadable, or an empty/whitespace question)
+    and the command still exits 0 -- "no answer found" is a valid result,
+    not an error.
 
     Use `--limit` to cap how many concepts are retrieved as context
     (default 5). Answering needs a local Ollama server running the model
@@ -782,6 +827,27 @@ def query(
     except (FtsUnavailable, OllamaError) as exc:
         typer.echo(f"openkos query: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
+
+    cited_count = len(result.citations)
+    llm_status = "invoked" if result.llm_invoked else "skipped"
+    typer.echo(
+        f"retrieval: {result.fts_hit_count} FTS hit{_plural(result.fts_hit_count)} "
+        f"→ LLM {llm_status} → {cited_count} source{_plural(cited_count)} cited",
+        err=True,
+    )
+    if result.skip_notices:
+        typer.echo(
+            f"index: {len(result.skip_notices)} "
+            f"doc{_plural(len(result.skip_notices))} skipped while building "
+            "the search index (whole-bundle, not this query's hits):",
+            err=True,
+        )
+        for notice in result.skip_notices:
+            typer.echo(f"  {notice}", err=True)
+
+    if result.no_match_cause != "none":
+        typer.echo(_no_match_message(result.no_match_cause, result.fts_hit_count))
+        return
 
     typer.echo(result.answer)
     if result.citations:

@@ -11,6 +11,7 @@ caller, such as the `query` command.
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import okf
@@ -19,6 +20,12 @@ from openkos.state import fts
 NO_MATCH = "No matching concepts were found in the compiled bundle for this question."
 """Stable no-match text (D3): zero or all-skipped hits short-circuit to this,
 without calling `llm.chat`."""
+
+NoMatchCause = Literal["none", "empty_query", "zero_hits", "all_unreadable"]
+"""Why an `AnswerResult` short-circuited to `NO_MATCH` -- `"none"` on a
+successful answer, otherwise which guard tripped (D-shortcircuit): an
+empty/whitespace-only question, zero raw FTS hits, or hits that were all
+unreadable/unparseable at re-read time."""
 
 _SYSTEM_PROMPT = (
     "You are OpenKOS, a local-first knowledge assistant. Answer the question "
@@ -46,12 +53,28 @@ class Citation:
 
 @dataclass(frozen=True)
 class AnswerResult:
-    """The LLM's answer text plus the concepts cited to produce it."""
+    """The LLM's answer text, the concepts cited to produce it, and the
+    retrieval metadata that explains how the answer was reached (surfaced by
+    `query` on stderr and used to render a cause-specific no-match message)."""
 
     answer: str
     """The LLM's reply text, or the stable `NO_MATCH` string (D3)."""
     citations: list[Citation]
     """One `Citation` per concept placed in context, in hit-rank order."""
+    fts_hit_count: int
+    """Raw `FtsIndex.search` hit count, BEFORE guarded re-read filtering --
+    always `len(hits)`, so it stays `> 0` even when every hit is later
+    skipped as unreadable."""
+    llm_invoked: bool
+    """Whether `llm.chat` was called for this answer."""
+    no_match_cause: NoMatchCause
+    """`"none"` on a successful answer; otherwise which no-match guard
+    tripped. Never derived from `citations` alone -- distinguishes a
+    zero-hit search from hits that were found but all unreadable."""
+    skip_notices: list[str]
+    """Copied from `FtsIndex.skipped` for this build: files skipped while
+    building the search index. A whole-bundle build-time signal, unrelated
+    to whether this query's hits matched."""
 
 
 def _assemble_context(
@@ -91,6 +114,18 @@ def _build_messages(context_blocks: list[str], question: str) -> list[Message]:
     ]
 
 
+def _classify_no_match(question: str, hits: list[fts.FtsHit]) -> NoMatchCause:
+    """Classify why a no-match happened: an empty/whitespace-only `question`
+    always wins (checked before hits, so it never collapses into
+    `"zero_hits"`), then a genuine zero-hit search, else every hit was
+    unreadable/unparseable at re-read time."""
+    if not question.split():
+        return "empty_query"
+    if not hits:
+        return "zero_hits"
+    return "all_unreadable"
+
+
 def answer(
     question: str, *, bundle_dir: Path, llm: LLMBackend, limit: int = 5
 ) -> AnswerResult:
@@ -101,9 +136,24 @@ def answer(
     with fts.build_index(bundle_dir) as index:
         hits = index.search(question, limit)
         context_blocks, citations = _assemble_context(bundle_dir, hits)
+        skip_notices = list(index.skipped)
 
     if not context_blocks:
-        return AnswerResult(answer=NO_MATCH, citations=[])
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=len(hits),
+            llm_invoked=False,
+            no_match_cause=_classify_no_match(question, hits),
+            skip_notices=skip_notices,
+        )
 
     reply = llm.chat(_build_messages(context_blocks, question))
-    return AnswerResult(answer=reply, citations=citations)
+    return AnswerResult(
+        answer=reply,
+        citations=citations,
+        fts_hit_count=len(hits),
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=skip_notices,
+    )
