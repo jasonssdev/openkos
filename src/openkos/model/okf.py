@@ -421,13 +421,29 @@ def _validate_relation_field(field_name: str, value: str) -> str:
     return stripped
 
 
+def _validate_relation_target(value: str) -> str:
+    """Shared target-normalization guard: fail-closed field validation, then
+    strip a `.md` suffix (design: SHAPE), then re-check non-empty (a target
+    that is non-empty only by virtue of its `.md` suffix, e.g. exactly
+    ".md", must still be rejected).
+
+    Shared by `encode_relation` and `decode_relation` so `.md`-suffix
+    handling is symmetric on both sides of the codec: a stored
+    `.md`-suffixed target (e.g. hand-edited) always decodes to the same
+    stripped form it would have been encoded to, keeping the codec
+    round-trip stable and `relate`'s idempotency dedup correct regardless
+    of how the `relations:` entry was produced."""
+    target = _validate_relation_field("target", value).removesuffix(".md")
+    if not target:
+        raise ValueError("relation target must be non-empty")
+    return target
+
+
 def encode_relation(relation: Relation) -> dict[str, object]:
     """Turn one `Relation` into a plain-dict shape safe for
     `dump_frontmatter`, with `target`'s `.md` suffix stripped (design:
     SHAPE)."""
-    target = _validate_relation_field("target", relation.target).removesuffix(".md")
-    if not target:
-        raise ValueError("relation target must be non-empty")
+    target = _validate_relation_target(relation.target)
     rel_type = _validate_relation_field("type", relation.type)
     return {"target": target, "type": rel_type}
 
@@ -454,7 +470,7 @@ def decode_relation(raw: object) -> Relation:
         rel_type = str(raw["type"])
     except KeyError as exc:
         raise ValueError(f"relations entry missing field {exc}") from exc
-    target = _validate_relation_field("target", target)
+    target = _validate_relation_target(target)
     rel_type = _validate_relation_field("type", rel_type)
     return Relation(target=target, type=rel_type)
 

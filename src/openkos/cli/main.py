@@ -26,6 +26,7 @@ from openkos.llm.ollama import (
     model_tag_matches,
 )
 from openkos.model import okf
+from openkos.model.relations import validate_relation_type
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates
@@ -856,6 +857,192 @@ def forget(
     typer.echo(
         f"openkos forget: removed 'bundle/{canonical_id}.md' "
         f"({index_path.name}, {log_path.name} updated)."
+    )
+
+
+@app.command()
+def relate(
+    source_id: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') to add the relation to.",
+    ),
+    rel: str = typer.Argument(
+        ..., help="Relation type, e.g. 'references', 'depends_on'."
+    ),
+    target_id: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') the relation points to.",
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Write one deterministic typed edge -- `{target: target_id, type: rel}`
+    -- into `source_id`'s `relations:` frontmatter (no LLM this slice, spec:
+    "`relate` CLI Verb Writes A Typed Relation").
+
+    Phase A (pure, no writes) mirrors `forget`'s gate shape: the current
+    directory must already be a workspace (the same `config.require_workspace`
+    gate every other write verb shares), or this refuses; `source_id` and
+    `target_id` are EACH resolved via the same `_resolve_concept_path`
+    `forget`/`merge` use -- rejecting an absolute id, any `..` segment, a
+    reserved basename, or a nonexistent concept file, all as `ValueError`,
+    all before any read (fail-closed existence on BOTH ends, spec: "Target
+    Containment Consistent With Existing Verbs"). The two ids MUST resolve
+    to DISTINCT concept files, else this refuses too, mirroring `merge`'s
+    same-id guard. `rel` is validated via
+    `model.relations.validate_relation_type`: rejected (no write) if empty
+    or whitespace-only; accepted -- with an advisory note on stderr -- if it
+    is not one of the seeded defaults (spec: "Seeded-But-Extensible Relation
+    Vocabulary").
+
+    The rest of Phase A builds the entire result in memory: `source_id`'s
+    frontmatter is parsed (`okf.load_frontmatter`), its existing
+    `relations:` decoded (`okf.decode_relations`), and the new
+    `{target: target_id, type: rel}` edge appended UNLESS an identical
+    `(target, type)` pair is already present -- in which case the existing
+    list is kept as-is, so a repeated `relate` call is idempotent (spec:
+    duplicate edge is not written twice). The full list is then
+    re-encoded (`okf.encode_relations`, sorted, deterministic) and the
+    source document re-rendered via `okf.dump_frontmatter`. A `log.md`
+    entry is built in memory via `bundle_log.insert_log_entry` (a plain
+    `**Relate**` line; no `index.md` entry -- a relation is an edit to an
+    EXISTING catalog entry, not a new one, design decision 3).
+
+    The preview printed before the confirm gate shows the source file, the
+    relation being added, and the `relations:` entry count before/after.
+
+    Confirm gate, identical precedence and mechanism to `forget`/`ingest`/
+    `merge`: `--auto` skips the prompt outright; otherwise config
+    `review: false` skips it the same way; otherwise, on a TTY,
+    `typer.confirm` asks and aborts (exit 1) on decline; otherwise
+    (non-TTY, no `--auto`) this refuses to write (exit 1), telling the user
+    to re-run with `--auto`. Declining or refusing leaves the bundle
+    completely untouched -- Phase A never writes anything.
+
+    Phase B (after confirm) writes the source concept file
+    (`fsio.write_atomic`, since it already exists) then `log.md`
+    (`fsio.write_atomic`) -- content before the audit trail, mirroring
+    `ingest`'s content-then-catalog ordering. Not transactional as a whole,
+    matching every other write verb's documented limitation: a failure
+    partway through is a benign, git-recoverable partial result, never
+    silent corruption. Any failure, Phase A or Phase B, is caught and
+    reported on stderr (exit 1), not a raw traceback.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos relate: refusing to relate -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        source_path, source_canonical = _resolve_concept_path(
+            layout.bundle_dir, source_id
+        )
+        _, target_canonical = _resolve_concept_path(layout.bundle_dir, target_id)
+        if source_canonical == target_canonical:
+            raise ValueError(
+                "source and target concept-ids must be distinct, both "
+                f"resolved to {source_canonical!r}"
+            )
+        rel_type = validate_relation_type(rel)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos relate: refusing to relate -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    now = datetime.now(UTC)
+
+    try:
+        cfg = config.read_config(root)
+        source_text = source_path.read_text(encoding="utf-8")
+        log_text = log_path.read_text(encoding="utf-8")
+
+        metadata, body = okf.load_frontmatter(source_text)
+        existing_relations = okf.decode_relations(metadata)
+        new_relation = okf.Relation(target=target_canonical, type=rel_type)
+        already_present = any(
+            relation.target == new_relation.target
+            and relation.type == new_relation.type
+            for relation in existing_relations
+        )
+        updated_relations = (
+            existing_relations
+            if already_present
+            else [*existing_relations, new_relation]
+        )
+        metadata[okf.RELATIONS_KEY] = okf.encode_relations(updated_relations)
+        new_source_text = okf.dump_frontmatter(metadata, body)
+
+        if already_present:
+            log_line = (
+                f"**Relate**: [{source_canonical}](/{source_canonical}.md) already "
+                f"has a {rel_type!r} relation to "
+                f"[{target_canonical}](/{target_canonical}.md); no change."
+            )
+        else:
+            log_line = (
+                f"**Relate**: Added a {rel_type!r} relation from "
+                f"[{source_canonical}](/{source_canonical}.md) to "
+                f"[{target_canonical}](/{target_canonical}.md)."
+            )
+        new_log_text = bundle_log.insert_log_entry(
+            log_text, now.astimezone().date(), log_line
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos relate: failed while preparing the relate -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos relate: proposed changes:")
+    if already_present:
+        preview_line = (
+            f"  ~ bundle/{source_canonical}.md (relations: "
+            f"{len(existing_relations)} -> {len(updated_relations)} entries; "
+            f"unchanged: {{target: {target_canonical}, type: {rel_type}}} "
+            "already present)"
+        )
+    else:
+        preview_line = (
+            f"  ~ bundle/{source_canonical}.md (relations: "
+            f"{len(existing_relations)} -> {len(updated_relations)} entries; "
+            f"+{{target: {target_canonical}, type: {rel_type}}})"
+        )
+    typer.echo(preview_line)
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos relate: refusing to write without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        fsio.write_atomic(source_path, new_source_text)
+        fsio.write_atomic(log_path, new_log_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos relate: failed while writing the relate -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos relate: added a {rel_type!r} relation from "
+        f"'bundle/{source_canonical}.md' to 'bundle/{target_canonical}.md' "
+        f"({log_path.name} updated)."
     )
 
 
