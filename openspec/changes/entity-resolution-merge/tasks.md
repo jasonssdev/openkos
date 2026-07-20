@@ -27,9 +27,9 @@ Chain strategy: feature-branch-chain
 | U5 | `unmerge` + round-trip parity | PR5 (base PR4) | `pytest tests/unit/cli/test_merge_roundtrip.py` | merge then unmerge on scratch bundle, diff bytes | remove `unmerge`; human checkpoint before merge-to-main |
 
 ## Phase 1: U1 — Sensitivity HWM (`model/okf.py`)
-- [ ] 1.1 RED `test_okf.py`: parametrized `combine_sensitivity` (all pairs, missing→private, malformed/non-str→confidential)
-- [ ] 1.2 GREEN: add `SENSITIVITY_ORDER`, `combine_sensitivity(a,b)` to `okf.py`
-- [ ] 1.3 REFACTOR: extract `rank()`; mypy strict
+- [x] 1.1 RED `test_okf.py`: parametrized `combine_sensitivity` (all pairs, missing→private, malformed/non-str→confidential)
+- [x] 1.2 GREEN: add `SENSITIVITY_ORDER`, `combine_sensitivity(a,b)` to `okf.py`
+- [x] 1.3 REFACTOR: extract `rank()`; mypy strict
 
 ## Phase 2: U2 — Merge Core (ledger + combine, library only)
 - [ ] 2.1 RED: `build_merged_document` scalar-survivor-wins/list-union/freshness-most-recent
