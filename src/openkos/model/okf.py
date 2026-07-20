@@ -5,12 +5,13 @@ reserved filenames, and the conformance rules of §9. Nothing outside this
 module parses or emits frontmatter, or reasons about reserved files
 (AGENTS.md:41, docs/architecture.md:113).
 
-Rule 3 of §9 (reserved-file structure) is not implemented here; it needs
-concept-doc structure the model layer does not have, and is deferred to
-`lint` (docs/okf-alignment.md).
+All three §9 rules are implemented here: rules 1-2 walk every non-reserved
+`.md` file (`_iter_docs`), and rule 3 walks the reserved files themselves
+(`index.md`/`log.md`) to check their fixed structure per §6/§7/§11.
 """
 
 import os
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,14 @@ OKF_VERSION: Final = "0.1"
 
 RESERVED_FILENAMES: Final[frozenset[str]] = frozenset({"index.md", "log.md"})
 """§6/§7 give these a fixed structure; §9 rule 1 exempts them from frontmatter."""
+
+_LOG_HEADING_RE: Final = re.compile(r"^## (.+)$", re.MULTILINE)
+"""Every level-2 heading in a `log.md`, per §7. `### ` cannot false-match:
+`^## ` requires a space in the 3rd position."""
+
+_ISO_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+"""§7's date-heading format, checked for shape only -- not calendar-validated
+(e.g. `2026-13-45` matches)."""
 
 
 def dump_frontmatter(metadata: dict[str, object], body: str = "") -> str:
@@ -287,16 +296,81 @@ def survey_bundle(bundle_dir: Path) -> BundleSurvey:
     return BundleSurvey(sources, concepts, findings)
 
 
+def _has_frontmatter_fence(text: str) -> bool:
+    """Detect a frontmatter block by FENCE PRESENCE, not parseability: `text`
+    opens (after optional leading whitespace) with a `---` delimiter line and
+    has a later closing `---` line.
+
+    Deliberately does NOT reuse `_iter_docs`'s `frontmatter.loads` check
+    (rule 1's "parseable frontmatter" mechanism): §6 forbids a nested
+    `index.md` from carrying frontmatter AT ALL, so a malformed `---` block
+    that fails to parse as YAML is still a frontmatter block for this rule,
+    and must still be flagged.
+    """
+    lines = text.lstrip().splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    return any(line.strip() == "---" for line in lines[1:])
+
+
+def _iter_reserved(bundle_dir: Path) -> Iterator[Path]:
+    """Walk every reserved `.md` file (`index.md`/`log.md`) under
+    `bundle_dir` exactly once, in the SAME `sorted(rglob("*.md"))` order
+    `_iter_docs` uses -- but filtering IN `RESERVED_FILENAMES` instead of
+    excluding them."""
+    for path in sorted(bundle_dir.rglob("*.md")):
+        if path.name in RESERVED_FILENAMES:
+            yield path
+
+
+def _check_reserved_structure(bundle_dir: Path) -> list[str]:
+    """§9 rule 3: check the fixed structure of every reserved file.
+
+    `index.md` (§6 + §11 root exception): any `index.md` other than the
+    bundle-root one (`path.parent == bundle_dir`) MUST NOT carry a
+    frontmatter block, detected by `_has_frontmatter_fence`.
+
+    `log.md` (§7): every `## ` heading MUST match `_ISO_DATE_RE`
+    (`YYYY-MM-DD`, format only -- not calendar-validated).
+
+    Reads via `path.read_text(encoding="utf-8")`, so an unreadable or
+    undecodable reserved file raises `OSError`/`UnicodeDecodeError`, matching
+    `check_conformance`'s documented raise contract for candidate files.
+    """
+    violations: list[str] = []
+    for path in _iter_reserved(bundle_dir):
+        text = path.read_text(encoding="utf-8")
+        if path.name == "index.md":
+            if path.parent != bundle_dir and _has_frontmatter_fence(text):
+                violations.append(f"{path}: index.md must not contain frontmatter")
+        else:  # log.md -- `_iter_reserved` only yields the two reserved names
+            for heading in _LOG_HEADING_RE.findall(text):
+                if not _ISO_DATE_RE.match(heading):
+                    violations.append(
+                        f"{path}: log.md heading must be an ISO-8601 date "
+                        f"(YYYY-MM-DD), got '## {heading}'"
+                    )
+    return violations
+
+
 def check_conformance(bundle_dir: Path) -> list[str]:
-    """Check §9 rules 1-2 against every non-reserved `.md` file under `bundle_dir`.
+    """Check §9 rules 1-3 against `bundle_dir`.
+
+    Rules 1-2 walk every non-reserved `.md` file (`_iter_docs`), checking for
+    parseable frontmatter with a non-empty `type`. Rule 3 additively walks
+    the reserved files themselves (`_check_reserved_structure`), checking
+    `index.md`'s frontmatter ban (with the §11 bundle-root exception) and
+    `log.md`'s ISO-8601 date headings; its violations are appended after
+    rules 1-2's.
 
     An empty list means conformant; a fresh, empty bundle passes vacuously
-    because there are no non-reserved `.md` files to violate either rule.
+    because there are no `.md` files to violate any rule.
     May raise `OSError` or `UnicodeDecodeError` when a candidate file cannot
     be read or decoded -- those are inspection failures, never reported as
     conformance violations. Consumes the shared `_iter_docs` walk (D2) and
-    re-raises `read_error` to preserve this exact contract; output is
-    byte-identical to the pre-refactor implementation (regression-guarded by
+    re-raises `read_error` to preserve this exact contract; the rule 1-2
+    portion of the output is byte-identical to the pre-refactor
+    implementation (regression-guarded by
     `tests/unit/model/test_okf.py::test_check_conformance_round_trip_regression`).
     """
     violations: list[str] = []
@@ -307,4 +381,5 @@ def check_conformance(bundle_dir: Path) -> list[str]:
             violations.append(f"{scan.path}: {scan.parse_error}")
         elif not (scan.metadata or {}).get("type"):
             violations.append(f"{scan.path}: missing non-empty 'type'")
+    violations += _check_reserved_structure(bundle_dir)
     return violations
