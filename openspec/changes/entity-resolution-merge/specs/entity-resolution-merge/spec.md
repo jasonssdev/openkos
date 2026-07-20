@@ -146,7 +146,12 @@ remove that `merged_from` entry, and restore `index.md`/`log.md` from
 `index_before`/`log_before` then append an unmerge audit line to `log.md`.
 Given this full snapshot set, `merge` then `unmerge` of the same pair
 leaves every bundle file byte-identical to before; the append-only `log.md`
-audit trail net-grows by the merge+unmerge record.
+audit trail net-grows by the merge+unmerge record. Limitation: `unmerge`
+restores `index.md`/`log.md` to their exact pre-merge snapshot, not a merge
+of that snapshot with the current on-disk state; if `index.md`/`log.md`
+changed since the merge (another `ingest`/`forget`/unrelated `merge` ran in
+between), `unmerge`'s preview warns of the discard before the confirm
+gate but does not refuse -- round-trip parity assumes a prompt unmerge.
 
 #### Scenario: Merge then unmerge restores the pre-merge bundle
 - GIVEN a merge including a rewritten inbound link
