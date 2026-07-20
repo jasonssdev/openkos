@@ -18,6 +18,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.bundle import index as bundle_index
 from openkos.cli.main import app
+from openkos.model import okf
 
 runner = CliRunner()
 
@@ -75,6 +76,41 @@ def _write_concept(
     lines.append(body)
     lines.append("")
     concept_path.write_text("\n".join(lines), encoding="utf-8")
+
+    link_dir, slug = concept_id.rsplit("/", 1)
+    index_path = tmp_path / "bundle" / "index.md"
+    index_text = index_path.read_text(encoding="utf-8")
+    new_index_text = bundle_index.insert_index_entry(
+        index_text,
+        section=section,
+        link_dir=link_dir,
+        title=title,
+        slug=slug,
+        description=f"{title}.",
+    )
+    index_path.write_text(new_index_text, encoding="utf-8")
+
+
+def _write_concept_with_relations(
+    tmp_path: Path,
+    concept_id: str,
+    *,
+    title: str,
+    section: str = "Concepts",
+    relations: list[dict[str, str]] | None = None,
+    body: str = "Body.",
+) -> None:
+    """Same shape as `_write_concept`, but carries a `relations:` frontmatter
+    list -- registered in `index.md` like every other concept here, so
+    byte-parity comparisons cover it the same way."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {"type": "Concept", "title": title}
+    if relations is not None:
+        metadata["relations"] = relations
+    concept_path.write_text(
+        okf.dump_frontmatter(metadata, f"# {title}\n\n{body}\n"), encoding="utf-8"
+    )
 
     link_dir, slug = concept_id.rsplit("/", 1)
     index_path = tmp_path / "bundle" / "index.md"
@@ -253,6 +289,103 @@ def test_unmerge_non_tail_absorbed_id_refuses_clean_error_no_write(
     assert isinstance(result.exception, SystemExit)
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
+
+
+def test_merge_then_unmerge_rematerializes_dropped_self_loop_and_deduped_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A survivor whose outbound `relations:` merge with the absorbed's
+    produces BOTH a dropped self-loop (survivor -> absorbed retargets to a
+    survivor -> survivor self-loop, dropped) and a deduped collision (both
+    sides carry an identical `(target, type)` edge to a genuine third
+    party) -- `unmerge` restores the survivor via its verbatim
+    `survivor_before` snapshot, re-materializing both the dropped self-loop
+    and the deduped collision exactly, with the whole bundle byte-identical
+    to the pre-merge snapshot except `log.md` (spec: "Resulting self-loop is
+    dropped, non-silently", "Duplicate edge is deduped, non-silently";
+    Unmerge Achieves Round-Trip Parity)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        relations=[
+            {"target": "concepts/absorbed", "type": "references"},
+            {"target": "concepts/other", "type": "depends_on"},
+        ],
+    )
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        relations=[{"target": "concepts/other", "type": "depends_on"}],
+    )
+    _write_concept(tmp_path, "concepts/other", title="Other")
+
+    pre_snapshot = _bundle_bytes_snapshot(tmp_path)
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+
+    _assert_byte_parity_except_log(tmp_path, pre_snapshot)
+
+
+def test_overlapping_third_party_relation_lifo_restores_each_intermediate_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`merge(S, B)` then `merge(S, C)`, both retargeting the SAME
+    third-party file's `relations:` (one entry targeting B, one targeting
+    C) -- `unmerge(S, C)` then `unmerge(S, B)` restores that file to each
+    exact INTERMEDIATE byte state in LIFO order (design D4's overlapping-
+    LIFO proof, applied to whole-file relation snapshots rather than
+    offset-based link rewrites): after unmerging C the file must match its
+    state right after the FIRST merge (B already retargeted, C not yet);
+    after also unmerging B it must match its ORIGINAL pre-any-merge
+    state."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/b", title="B")
+    _write_concept(tmp_path, "concepts/c", title="C")
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/linker",
+        title="Linker",
+        relations=[
+            {"target": "concepts/b", "type": "references"},
+            {"target": "concepts/c", "type": "depends_on"},
+        ],
+    )
+    linker_path = tmp_path / "bundle" / "concepts" / "linker.md"
+
+    f0 = linker_path.read_bytes()
+
+    merge_b = runner.invoke(app, ["merge", "concepts/survivor", "concepts/b", "--auto"])
+    assert merge_b.exit_code == 0, merge_b.stderr
+
+    f1 = linker_path.read_bytes()
+    assert f1 != f0  # B's relation must have been retargeted to the survivor
+
+    merge_c = runner.invoke(app, ["merge", "concepts/survivor", "concepts/c", "--auto"])
+    assert merge_c.exit_code == 0, merge_c.stderr
+
+    unmerge_c = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/c", "--auto"]
+    )
+    assert unmerge_c.exit_code == 0, unmerge_c.stderr
+    assert linker_path.read_bytes() == f1  # exact intermediate state restored
+
+    unmerge_b = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/b", "--auto"]
+    )
+    assert unmerge_b.exit_code == 0, unmerge_b.stderr
+    assert linker_path.read_bytes() == f0  # exact original state restored
 
 
 def test_unmerge_decline_at_prompt_writes_nothing_bytes_and_mtimes(

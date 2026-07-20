@@ -16,6 +16,7 @@ from openkos.bundle import index as bundle_index
 from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
+from openkos.bundle import relations as bundle_relations
 from openkos.extraction.concept import extract_concept
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
@@ -1161,7 +1162,7 @@ def merge(
     whichever side is strictly more recent, and `sensitivity` RECOMPUTED via
     `combine_sensitivity` (never copied, high-water-mark) -- plus the full
     `merged_from` ledger entry (ADR-0002) capturing the pre-merge snapshot
-    set `unmerge` (a later unit) needs for round-trip parity.
+    set `unmerge` needs for round-trip parity.
     `bundle.links.find_inbound_link_rewrites` (U3) then scans every OTHER
     bundle concept file (never the survivor or absorbed file themselves,
     and never `index.md`/`log.md`) for a markdown link resolving to
@@ -1175,16 +1176,21 @@ def merge(
     `bundle.merge.plan_merge` moves any outbound `relations:` the absorbed
     object bears onto the survivor -- retargeted, self-loops dropped,
     collisions deduped (spec: Reversible Typed-Relation Rewiring; ADR-0005)
-    -- `merge` never refuses or blocks on typed relations. Inbound
-    third-party retargeting is a later unit (PR2/PR3): a bundle file OTHER
-    than the survivor/absorbed pair that targets the absorbed object keeps
-    pointing at the now-vanished id until that unit ships.
+    -- `merge` never refuses or blocks on typed relations.
+    `bundle.relations.find_inbound_relation_rewrites` (D3) scans the SAME
+    `other_files` whole-bundle snapshot `find_inbound_link_rewrites` already
+    captured -- taken BEFORE any write, so both scans see identical
+    pre-merge bytes -- for a bundle file OTHER than the survivor/absorbed
+    pair whose OWN `relations:` targets `absorbed_id`, recording the
+    whole-file snapshot `unmerge` needs to reverse it later (design D1/D3).
 
     The preview printed before the confirm gate surfaces exactly what a
     reviewer needs to approve a DESTRUCTIVE, hard-to-undo-by-hand write:
-    the recomputed sensitivity outcome (`before -> after`), every OTHER
-    file whose inbound link will be rewritten, the catalog/log updates, the
-    merged survivor file, and the absorbed file that will be removed.
+    the recomputed sensitivity outcome (`before -> after`), any dropped
+    self-loop or deduped collision from the OUTBOUND merge (design D2/
+    "Preview"), every OTHER file whose inbound link OR inbound relation
+    will be rewritten, the catalog/log updates, the merged survivor file,
+    and the absorbed file that will be removed.
 
     Confirm gate, identical precedence and mechanism to `forget`/`ingest`:
     `--auto` skips the prompt outright; otherwise config `review: false`
@@ -1196,14 +1202,17 @@ def merge(
 
     Phase B (after confirm) writes, in order: `index.md` then `log.md`
     (`write_atomic`, catalog FIRST, mirroring `forget`'s ordering
-    invariant), then applies EVERY OTHER file's inbound-link rewrite,
-    then the merged survivor file (carrying the `merged_from` ledger),
-    and finally removes the absorbed file LAST. The survivor/ledger is
-    deliberately committed only AFTER every rewrite has succeeded: if a
-    rewrite fails partway through, the survivor has NO ledger entry yet,
-    so a clean re-run of this same command is never refused by
-    `plan_merge`'s "already merged" guard, and the absorbed file --
-    untouched until the very last step -- is still there to retry
+    invariant), then applies EVERY OTHER file's inbound-link rewrite AND/OR
+    inbound-relation retarget -- a file present in BOTH touches disjoint
+    regions (body link vs. frontmatter `relations:`), so applying both to
+    the same in-memory text is safe (design D5) -- then the merged
+    survivor file (carrying the `merged_from` ledger, now including
+    `relation_rewrites`), and finally removes the absorbed file LAST. The
+    survivor/ledger is deliberately committed only AFTER every rewrite has
+    succeeded: if a rewrite fails partway through, the survivor has NO
+    ledger entry yet, so a clean re-run of this same command is never
+    refused by `plan_merge`'s "already merged" guard, and the absorbed file
+    -- untouched until the very last step -- is still there to retry
     against. Rewriting a file that some earlier, partial attempt already
     migrated to `survivor_id` is a no-op skip, not a failure, so a re-run
     after a partial rewrite failure completes cleanly. Not transactional
@@ -1218,11 +1227,8 @@ def merge(
     survivor/ledger write (including a failed absorbed-file removal) has
     already committed the `merged_from` entry, so a re-run is refused by
     `_reject_already_merged`; that narrow window is recoverable only via
-    `git` (or a future `unmerge`), same as `forget`'s own non-transactional
+    `git` or `unmerge`, same as `forget`'s own non-transactional
     limitation.
-
-    `unmerge` (the reversal `merged_from` makes possible) is a later unit
-    and is NOT implemented here.
     """
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
@@ -1276,6 +1282,14 @@ def merge(
             absorbed_id=absorbed_canonical,
             survivor_id=survivor_canonical,
         )
+        # Same `other_files` whole-bundle snapshot, captured ONCE above
+        # BEFORE any write -- both scans see identical pre-merge bytes
+        # (design D3).
+        relation_rewrites = bundle_relations.find_inbound_relation_rewrites(
+            other_files,
+            absorbed_id=absorbed_canonical,
+            survivor_id=survivor_canonical,
+        )
 
         plan = bundle_merge.plan_merge(
             survivor_id=survivor_canonical,
@@ -1286,6 +1300,23 @@ def merge(
             log_text=log_text,
             merged_at=now.isoformat(),
             link_rewrites=link_rewrites,
+            relation_rewrites=relation_rewrites,
+        )
+
+        # The OUTBOUND merge_relations report (dropped self-loops, deduped
+        # collisions) for the preview below: recomputed here from the SAME
+        # survivor/absorbed metadata `plan_merge` -> `build_merged_document`
+        # already used internally, since neither is exposed on `MergePlan`
+        # (design: "preview report comes from merge_relations return").
+        # Pure and deterministic -- calling it a second time is cheap and
+        # never diverges from what `plan.merged_survivor` actually carries.
+        survivor_metadata, _ = okf.load_frontmatter(survivor_text)
+        absorbed_metadata, _ = okf.load_frontmatter(absorbed_text)
+        _, dropped_self_loops, deduped_collisions = okf.merge_relations(
+            okf.decode_relations(survivor_metadata),
+            okf.decode_relations(absorbed_metadata),
+            survivor_id=survivor_canonical,
+            absorbed_id=absorbed_canonical,
         )
 
         new_index_text, removed = bundle_index.remove_index_entry(
@@ -1304,13 +1335,21 @@ def merge(
         raise typer.Exit(code=1) from exc
 
     rewritten_files = sorted({rewrite.file for rewrite in link_rewrites})
+    relation_rewritten_files = sorted({rewrite.file for rewrite in relation_rewrites})
+    touched_files = sorted(set(rewritten_files) | set(relation_rewritten_files))
     sensitivity_before = plan.ledger_entry.sensitivity_before or "(none)"
     sensitivity_after = plan.ledger_entry.sensitivity_after
 
     typer.echo("openkos merge: proposed changes:")
     typer.echo(f"  ~ sensitivity: {sensitivity_before} -> {sensitivity_after}")
+    for relation in dropped_self_loops:
+        typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
+    for relation in deduped_collisions:
+        typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
     for rel in rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
+    for rel in relation_rewritten_files:
+        typer.echo(f"  ~ bundle/{rel} (retarget relation to survivor)")
     if removed >= 1:
         typer.echo(f"  ~ {index_path.name} (remove entry)")
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
@@ -1332,19 +1371,29 @@ def merge(
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
 
-        # All inbound-link rewrites are computed BEFORE any of them (or the
-        # survivor/ledger) is written: a compute-time failure on any one
-        # file thus leaves every other file untouched, so a re-run's fresh
-        # Phase-A rescan sees every still-absorbed-linked file exactly as
-        # it was and rewrites it from scratch -- no file is left silently
-        # half-migrated by this step.
+        # All inbound-link rewrites AND inbound-relation retargets are
+        # computed BEFORE any of them (or the survivor/ledger) is written: a
+        # compute-time failure on any one file thus leaves every other file
+        # untouched, so a re-run's fresh Phase-A rescan sees every still-
+        # absorbed-linked/related file exactly as it was and rewrites it
+        # from scratch -- no file is left silently half-migrated by this
+        # step. A file present in BOTH `rewritten_files` and
+        # `relation_rewritten_files` gets both transforms applied to the
+        # SAME in-memory text -- safe, since they touch disjoint regions
+        # (body link vs. frontmatter `relations:`, design D5).
         rewritten_texts = {
-            rel: _apply_link_rewrite_idempotently(
-                other_files[rel], file=rel, rewrites=link_rewrites
+            rel: bundle_relations.apply_relation_rewrites(
+                _apply_link_rewrite_idempotently(
+                    other_files[rel], file=rel, rewrites=link_rewrites
+                ),
+                file=rel,
+                survivor_id=survivor_canonical,
+                absorbed_id=absorbed_canonical,
+                rewrites=relation_rewrites,
             )
-            for rel in rewritten_files
+            for rel in touched_files
         }
-        for rel in rewritten_files:
+        for rel in touched_files:
             fsio.write_atomic(layout.bundle_dir / rel, rewritten_texts[rel])
 
         # The merged survivor (with its `merged_from` ledger) is committed
@@ -1418,10 +1467,28 @@ def unmerge(
     blind replace-all -- which fails closed (`ValueError`) if a target file
     drifted since the merge (threat matrix: Link-file drift before unmerge).
 
+    Every recorded `relation_rewrites` entry (design D1/D3; `[]` for a
+    pre-slice-2a v1 ledger entry) is read from disk and reversed via
+    `bundle.relations.reverse_relation_rewrites` -- an ABSOLUTE whole-file
+    overwrite of the recorded pre-merge snapshot, never offset math (design
+    D4's overlapping-LIFO proof relies on this exact property) -- but
+    DRIFT-AWARE and FAIL-CLOSED, symmetric with the link path: the file's
+    CURRENT on-disk text is compared against what THIS merge deterministically
+    wrote there (recomputed by re-applying the retarget to the recorded
+    pre-merge snapshot), and a mismatch (a legitimate edit landed on that
+    file after the merge and before this `unmerge`) raises `ValueError`
+    rather than silently clobbering that edit with the stale snapshot
+    (CRITICAL fix, review correction batch). A file present in BOTH
+    `link_rewrites` and `relation_rewrites` (design D5) has its inbound-link
+    reversal SKIPPED entirely: the relation snapshot already restores that
+    file's full bytes -- link included -- so also attempting
+    `reverse_link_rewrites` on it would either corrupt the already-restored
+    text or fail closed on a now-nonexistent `new_link` occurrence.
+
     The preview printed before the confirm gate surfaces every file this
     DESTRUCTIVE-in-reverse write will touch: each reversed inbound link,
-    the catalog/log restoration, the restored survivor, and the recreated
-    absorbed file.
+    each restored relation snapshot, the catalog/log restoration, the
+    restored survivor, and the recreated absorbed file.
 
     Confirm gate, identical precedence and mechanism to `merge`/`forget`:
     `--auto` skips the prompt outright; otherwise config `review: false`
@@ -1510,7 +1577,17 @@ def unmerge(
             or current_log_text != expected_log_text
         )
 
-        rewritten_files = sorted({rewrite.file for rewrite in plan.link_rewrites})
+        # D5: a file present in BOTH `link_rewrites` and `relation_rewrites`
+        # is reversed EXCLUSIVELY via its `relation_rewrites` whole-file
+        # snapshot below -- excluded here so `reverse_link_rewrites` is
+        # never attempted on it (see this command's docstring).
+        relation_rewrite_files = sorted(
+            {rewrite.file for rewrite in plan.relation_rewrites}
+        )
+        rewritten_files = sorted(
+            {rewrite.file for rewrite in plan.link_rewrites}
+            - set(relation_rewrite_files)
+        )
         other_texts = {
             rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
             for rel in rewritten_files
@@ -1520,6 +1597,30 @@ def unmerge(
                 other_texts[rel], file=rel, rewrites=plan.link_rewrites
             )
             for rel in rewritten_files
+        }
+        # Whole-file absolute restore, never offset math (design D1/D3/D4) --
+        # but DRIFT-AWARE and FAIL-CLOSED (CRITICAL fix, review correction
+        # batch), symmetric with the link path above: each file's CURRENT
+        # on-disk text is read and compared against what this merge
+        # deterministically wrote there. A mismatch (a legitimate edit
+        # landed on that file after the merge) raises `ValueError` here,
+        # caught by this same try/except -- refusing the whole unmerge
+        # before any write, rather than clobbering the edit with the stale
+        # snapshot.
+        relation_texts = {
+            rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
+            for rel in relation_rewrite_files
+        }
+        relation_reversed_texts = {
+            rel: bundle_relations.reverse_relation_rewrites(
+                relation_texts[rel],
+                file=rel,
+                survivor_id=survivor_canonical,
+                absorbed_id=absorbed_canonical,
+                rewrites=plan.relation_rewrites,
+                link_rewrites=plan.link_rewrites,
+            )
+            for rel in relation_rewrite_files
         }
 
         new_log_text = bundle_log.insert_log_entry(
@@ -1537,6 +1638,8 @@ def unmerge(
     typer.echo("openkos unmerge: proposed changes:")
     for rel in rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
+    for rel in relation_rewrite_files:
+        typer.echo(f"  ~ bundle/{rel} (restore pre-merge relations snapshot)")
     typer.echo(f"  ~ {index_path.name} (restore pre-merge contents)")
     typer.echo(
         f"  ~ {log_path.name} (restore pre-merge contents, append unmerge entry)"
@@ -1570,6 +1673,8 @@ def unmerge(
 
         for rel in rewritten_files:
             fsio.write_atomic(layout.bundle_dir / rel, reversed_texts[rel])
+        for rel in relation_rewrite_files:
+            fsio.write_atomic(layout.bundle_dir / rel, relation_reversed_texts[rel])
 
         # The absorbed file is recreated BEFORE the survivor is restored:
         # the survivor's `merged_from` ledger entry (the only record of

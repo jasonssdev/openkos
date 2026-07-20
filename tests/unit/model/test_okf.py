@@ -1595,9 +1595,7 @@ def test_merge_relations_union_retarget_self_loop_drop_and_dedupe() -> None:
     ]
 
 
-def test_merge_relations_absorbed_pre_existing_self_loop_retargets_then_drops() -> (
-    None
-):
+def test_merge_relations_absorbed_pre_existing_self_loop_retargets_then_drops() -> None:
     """The delicate absorbed-self-loop branch: an absorbed relation already
     targeting the absorbed id itself retargets to the survivor id and is then
     dropped as a RESULTING survivor self-loop -- never carried onto the
@@ -1673,17 +1671,13 @@ def test_build_merged_document_relations_never_emit_absorbed_target_or_self_loop
         "concepts/survivor",
     )
 
-    relation_targets = {
-        relation.target for relation in okf.decode_relations(merged)
-    }
+    relation_targets = {relation.target for relation in okf.decode_relations(merged)}
     assert "concepts/absorbed" not in relation_targets
     assert "concepts/survivor" not in relation_targets
     assert relation_targets == {"concepts/other"}
 
 
-def test_build_merged_document_no_relations_key_when_neither_side_carries_one() -> (
-    None
-):
+def test_build_merged_document_no_relations_key_when_neither_side_carries_one() -> None:
     """A merge of two documents with no `relations:` key on either side does
     not introduce one (spec: "Absent relations key is valid" preserved
     through a merge)."""

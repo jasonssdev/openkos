@@ -40,3 +40,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0002](0002-reversible-merge-ledger.md) | Reversible merge ledger with embedded verbatim snapshots | Accepted | 2026-07-20 |
 | [0003](0003-sensitivity-high-water-mark.md) | Sensitivity high-water-mark ordering and fail-closed combine | Accepted | 2026-07-20 |
 | [0004](0004-typed-relationships-frontmatter.md) | Typed relationships in frontmatter; guard-then-rewire staging | Accepted | 2026-07-20 |
+| [0005](0005-merge-edge-rewiring.md) | Merge edge rewiring -- refuse-then-rewire reversal, v2 ledger contract | Accepted | 2026-07-20 |

@@ -695,6 +695,106 @@ def test_merge_succeeds_and_moves_absorbed_outbound_relations_onto_survivor(
     ]
 
 
+def test_preview_surfaces_relation_drop_dedupe_and_retarget_bullets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Phase A preview (printed before the confirm gate) surfaces the
+    outbound `merge_relations` report -- dropped self-loop, deduped
+    collision -- AND every third-party file whose inbound relation will be
+    retargeted, all non-silently before any write (spec: "Resulting
+    self-loop is dropped, non-silently", "Duplicate edge is deduped,
+    non-silently"; design D3/"Preview")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        relations=[
+            {"target": "concepts/absorbed", "type": "references"},
+            {"target": "concepts/other", "type": "depends_on"},
+        ],
+    )
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        relations=[{"target": "concepts/other", "type": "depends_on"}],
+    )
+    _write_concept(tmp_path, "concepts/other", title="Other")
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/linker",
+        title="Linker",
+        relations=[{"target": "concepts/absorbed", "type": "mentions"}],
+    )
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "drop self-loop: concepts/survivor (references)" in result.output
+    assert "dedupe collision: concepts/other (depends_on)" in result.output
+    assert "bundle/concepts/linker.md (retarget relation to survivor)" in result.output
+
+
+def test_preview_bullets_match_committed_survivor_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SUGGESTION coverage (review correction batch, regression insurance):
+    couples the merge PREVIEW's drop-self-loop/dedupe-collision bullets to
+    the ACTUAL post-write survivor document. `cli/main.py::merge` recomputes
+    these bullets via a SECOND, separate `okf.merge_relations` call (since
+    `MergePlan` doesn't expose them -- see apply-progress's documented
+    deviation); this test guards that recompute against ever diverging from
+    what is actually committed to `plan.merged_survivor`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        relations=[
+            {"target": "concepts/absorbed", "type": "references"},
+            {"target": "concepts/other", "type": "depends_on"},
+        ],
+    )
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        relations=[{"target": "concepts/other", "type": "depends_on"}],
+    )
+    _write_concept(tmp_path, "concepts/other", title="Other")
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "drop self-loop: concepts/survivor (references)" in result.output
+    assert "dedupe collision: concepts/other (depends_on)" in result.output
+
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(survivor_text)
+    committed_relations = okf.decode_relations(metadata)
+
+    # The "drop self-loop" bullet must correspond to NO surviving
+    # `target=concepts/survivor` entry in the committed document.
+    assert not any(r.target == "concepts/survivor" for r in committed_relations)
+    # The "dedupe collision" bullet must correspond to EXACTLY ONE surviving
+    # `(concepts/other, depends_on)` entry, never two.
+    assert (
+        sum(
+            1
+            for r in committed_relations
+            if r.target == "concepts/other" and r.type == "depends_on"
+        )
+        == 1
+    )
+
+
 def test_merge_succeeds_despite_unrelated_file_with_malformed_frontmatter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

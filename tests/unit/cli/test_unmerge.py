@@ -18,6 +18,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos import fsio
 from openkos.bundle import index as bundle_index
 from openkos.cli.main import app
+from openkos.model import okf
 
 runner = CliRunner()
 
@@ -224,6 +225,66 @@ def test_unmerge_link_drift_fails_closed_no_write(
     drifted_text = other_path.read_text(encoding="utf-8").replace(
         "/concepts/survivor.md", "/concepts/elsewhere.md"
     )
+    other_path.write_text(drifted_text, encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_relation_drift_fails_closed_no_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CRITICAL (review correction batch): if a third-party file's typed
+    relation was retargeted by `merge` (recorded in `relation_rewrites`) and
+    the user then makes a LEGITIMATE edit to that same file before running
+    `unmerge` (e.g. `openkos relate`, or a manual edit), `unmerge` MUST
+    degrade cleanly (exit 1) instead of silently overwriting the file with
+    the stale pre-merge snapshot -- symmetric with the link path's identical
+    fail-closed drift contract (`test_unmerge_link_drift_fails_closed_no_write`).
+
+    Before the fix, `reverse_relation_rewrites` ignored its `text` argument
+    entirely and always returned the recorded snapshot verbatim, so
+    `unmerge` clobbered the user's edit with exit 0 and no warning."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    other_path = tmp_path / "bundle" / "concepts" / "other.md"
+    other_path.parent.mkdir(parents=True, exist_ok=True)
+    other_metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": "Other",
+        "relations": [{"target": "concepts/absorbed", "type": "depends_on"}],
+    }
+    other_path.write_text(
+        okf.dump_frontmatter(other_metadata, "# Other\n\nBody.\n"), encoding="utf-8"
+    )
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    post_merge_other = other_path.read_text(encoding="utf-8")
+    assert "concepts/survivor" in post_merge_other
+
+    # A legitimate edit to the retargeted third-party file, made AFTER the
+    # merge and BEFORE unmerge -- e.g. `openkos relate concepts/other
+    # concepts/elsewhere related_to`, or a manual edit. Must NOT be lost.
+    drifted_metadata, drifted_body = okf.load_frontmatter(post_merge_other)
+    drifted_relations = [
+        *okf.decode_relations(drifted_metadata),
+        okf.Relation(target="concepts/elsewhere", type="related_to"),
+    ]
+    drifted_metadata[okf.RELATIONS_KEY] = okf.encode_relations(drifted_relations)
+    drifted_text = okf.dump_frontmatter(drifted_metadata, drifted_body)
     other_path.write_text(drifted_text, encoding="utf-8")
     before = _snapshot(tmp_path)
 
@@ -549,6 +610,126 @@ def test_retry_after_mid_reverse_failure_completes_the_unmerge(
     assert "/concepts/survivor.md" not in linker1_text
     assert "/concepts/absorbed.md" in linker2_text
     assert "/concepts/survivor.md" not in linker2_text
+
+
+def test_unmerge_skips_link_reverse_for_file_also_present_in_relation_rewrites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A third-party file carrying BOTH an inbound body-link AND an inbound
+    typed relation to the absorbed concept has BOTH surfaces retargeted by
+    `merge` -- and `unmerge` MUST restore it via its `relation_rewrites`
+    whole-file snapshot ONLY, skipping `reverse_link_rewrites` for that same
+    file (design D5): the relation snapshot already restores the entire
+    file (link included), so also attempting an offset-based link reversal
+    on top would either corrupt the already-restored bytes or raise a
+    spurious offset-mismatch error (spec: "Link/relation overlap on same
+    third-party file").
+
+    `survivor_id` (`concepts/keep`, 13 chars) and `absorbed_id`
+    (`concepts/absorbed`, 18 chars) are DELIBERATELY different lengths: the
+    relation retarget shrinks the frontmatter's rendered length, which
+    shifts the body's absolute byte position relative to
+    `find_inbound_link_rewrites`'s recorded `LinkRewrite.offset` (computed
+    in isolation, unaware of the concurrent relation retarget on the SAME
+    file). Without the D5 skip, `unmerge` would attempt an offset-based
+    link reversal at that now-STALE offset, on top of bytes already fully
+    restored by the whole-file relation snapshot -- exactly the failure
+    mode this test guards against."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/keep", title="Keep")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    other_path = tmp_path / "bundle" / "concepts" / "other.md"
+    other_path.parent.mkdir(parents=True, exist_ok=True)
+    other_metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": "Other",
+        "relations": [{"target": "concepts/absorbed", "type": "references"}],
+    }
+    other_body = "# Other\n\nSee [Absorbed](/concepts/absorbed.md) for details.\n"
+    other_path.write_text(
+        okf.dump_frontmatter(other_metadata, other_body), encoding="utf-8"
+    )
+    pre_other = other_path.read_bytes()
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/keep", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    post_merge_other = other_path.read_text(encoding="utf-8")
+    assert "concepts/keep" in post_merge_other
+    assert "concepts/absorbed" not in post_merge_other
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/keep", "concepts/absorbed", "--auto"]
+    )
+
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+    assert "Traceback" not in unmerge_result.stderr
+    assert other_path.read_bytes() == pre_other
+
+
+def test_unmerge_v1_ledger_entry_without_relation_rewrites_key_still_unmerges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-slice-2a `merged_from` entry -- schema
+    `openkos.merge_ledger/v1`, carrying NO `relation_rewrites` key at all --
+    must still decode and unmerge exactly: `decode_merge_ledger_entry`
+    defaults a V1 entry's `relation_rewrites` to `[]` regardless of what the
+    raw dict carries (spec: "Pre-slice-2a v1 ledger entry still unmerges
+    exactly")."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    pre_index = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    pre_log = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+
+    absorbed_snapshot = okf.dump_frontmatter(
+        {"type": "Concept", "title": "Absorbed"}, "# Absorbed\n\nBody.\n"
+    )
+    survivor_before = okf.dump_frontmatter(
+        {"type": "Concept", "title": "Survivor"}, "# Survivor\n\nBody.\n"
+    )
+
+    v1_entry: dict[str, object] = {
+        "schema": "openkos.merge_ledger/v1",
+        "merged_at": "2026-01-01T00:00:00+00:00",
+        "absorbed_id": "concepts/absorbed",
+        "absorbed_snapshot": absorbed_snapshot,
+        "survivor_before": survivor_before,
+        "index_before": pre_index,
+        "log_before": pre_log,
+        "link_rewrites": [],
+        "sensitivity_before": "",
+        "sensitivity_after": "public",
+        # deliberately NO "relation_rewrites" key -- genuine pre-slice-2a shape
+    }
+    survivor_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    survivor_path.parent.mkdir(parents=True, exist_ok=True)
+    survivor_path.write_text(
+        okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                "title": "Survivor",
+                "sensitivity": "public",
+                "merged_from": [v1_entry],
+            },
+            "# Survivor\n\nBody.\n",
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    ) == survivor_before
+    assert (tmp_path / "bundle" / "concepts" / "absorbed.md").read_text(
+        encoding="utf-8"
+    ) == absorbed_snapshot
 
 
 def test_unmerge_warns_on_interleaved_index_log_drift(

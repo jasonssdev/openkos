@@ -19,6 +19,7 @@ unlike the link-rewrite trio.
 
 import pytest
 
+from openkos.bundle import links as bundle_links
 from openkos.bundle import relations
 from openkos.model import okf
 
@@ -123,9 +124,7 @@ def test_find_inbound_relation_rewrites_skips_malformed_frontmatter() -> None:
     assert [rw.file for rw in rewrites] == ["concepts/clean.md"]
 
 
-def test_find_inbound_relation_rewrites_excludes_survivor_and_absorbed_files() -> (
-    None
-):
+def test_find_inbound_relation_rewrites_excludes_survivor_and_absorbed_files() -> None:
     """Correction batch, finding 1 (CRITICAL): the scan is for GENUINE third
     parties only -- the survivor's own relations are handled by
     `build_merged_document`/`merge_relations`, and the absorbed file is
@@ -163,9 +162,7 @@ def test_find_inbound_relation_rewrites_skips_malformed_relations_shape() -> Non
     is malformed (fails `decode_relations`) is likewise skipped -- same
     broad-except rationale as the previous test (task 2.6)."""
     files = {
-        "concepts/malformed-relations.md": _doc(
-            {"relations": "not-a-list"}, "Body."
-        )
+        "concepts/malformed-relations.md": _doc({"relations": "not-a-list"}, "Body.")
     }
 
     rewrites = relations.find_inbound_relation_rewrites(
@@ -202,9 +199,7 @@ def test_apply_relation_rewrites_retargets_absorbed_to_survivor() -> None:
     ]
 
 
-def test_apply_relation_rewrites_preserves_preexisting_third_party_self_loop() -> (
-    None
-):
+def test_apply_relation_rewrites_preserves_preexisting_third_party_self_loop() -> None:
     """Correction batch, finding 1 (CRITICAL): a genuine third-party file
     `F != survivor_id, F != absorbed_id` cannot ever have its retarget
     create a self-loop -- `F -> absorbed` always becomes `F -> survivor`,
@@ -336,7 +331,12 @@ def test_reverse_relation_rewrites_restores_recorded_snapshot_exactly() -> None:
     assert rewritten != original  # sanity: the rewrite actually changed the text
 
     restored = relations.reverse_relation_rewrites(
-        rewritten, file="concepts/other.md", rewrites=[rewrite]
+        rewritten,
+        file="concepts/other.md",
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        rewrites=[rewrite],
+        link_rewrites=[],
     )
 
     assert restored == original
@@ -344,12 +344,18 @@ def test_reverse_relation_rewrites_restores_recorded_snapshot_exactly() -> None:
 
 def test_reverse_relation_rewrites_no_op_when_file_not_in_rewrites() -> None:
     """A file with no matching recorded rewrite is returned unchanged
-    (mirrors `reverse_link_rewrites`' ignore-other-files behavior)."""
+    (mirrors `reverse_link_rewrites`' ignore-other-files behavior); no drift
+    check applies since there is nothing recorded to compare against."""
     text = "some arbitrary text\n"
     rewrite = okf.RelationRewrite(file="concepts/unrelated.md", snapshot="snapshot\n")
 
     result = relations.reverse_relation_rewrites(
-        text, file="concepts/other.md", rewrites=[rewrite]
+        text,
+        file="concepts/other.md",
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        rewrites=[rewrite],
+        link_rewrites=[],
     )
 
     assert result == text
@@ -368,5 +374,88 @@ def test_reverse_relation_rewrites_rejects_more_than_one_snapshot_for_same_file(
 
     with pytest.raises(ValueError, match="more than one"):
         relations.reverse_relation_rewrites(
-            "text\n", file="concepts/other.md", rewrites=rewrites
+            "text\n",
+            file="concepts/other.md",
+            survivor_id="concepts/survivor",
+            absorbed_id="concepts/absorbed",
+            rewrites=rewrites,
+            link_rewrites=[],
+        )
+
+
+def test_reverse_relation_rewrites_no_false_drift_when_file_also_link_rewritten() -> (
+    None
+):
+    """Design D5 regression: a file present in BOTH `link_rewrites` and
+    `rewrites` (relation_rewrites) -- e.g. a body link AND a typed relation
+    to the absorbed id -- must NOT trigger a false drift positive. The
+    expected-content recomputation applies the recorded link rewrite FORWARD
+    on the snapshot before the relation retarget, exactly mirroring what
+    `merge`'s Phase B write loop produced for this file."""
+    original = _doc(
+        {"relations": [{"target": "concepts/absorbed", "type": "depends_on"}]},
+        "See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+    relation_rewrite = okf.RelationRewrite(file="concepts/other.md", snapshot=original)
+    link_rewrite = okf.LinkRewrite(
+        file="concepts/other.md",
+        old_link="/concepts/absorbed.md",
+        new_link="/concepts/survivor.md",
+        offset=original.index("/concepts/absorbed.md") - 1,
+    )
+
+    # What `merge`'s Phase B actually wrote to this file: link rewrite
+    # applied first, then the relation retarget on top (same in-memory text).
+    current_on_disk = relations.apply_relation_rewrites(
+        bundle_links.apply_link_rewrites(
+            original, file="concepts/other.md", rewrites=[link_rewrite]
+        ),
+        file="concepts/other.md",
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        rewrites=[relation_rewrite],
+    )
+
+    restored = relations.reverse_relation_rewrites(
+        current_on_disk,
+        file="concepts/other.md",
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        rewrites=[relation_rewrite],
+        link_rewrites=[link_rewrite],
+    )
+
+    assert restored == original
+
+
+def test_reverse_relation_rewrites_fails_closed_on_drifted_current_text() -> None:
+    """CRITICAL fix (review correction batch): if `text` (the file's
+    CURRENT on-disk content) does not match what this merge deterministically
+    wrote to it -- a legitimate edit landed on the file after the merge --
+    this raises `ValueError` instead of silently returning the stale
+    pre-merge snapshot, symmetric with `reverse_link_rewrites`'s identical
+    current-bytes drift check."""
+    original = _doc(
+        {"relations": [{"target": "concepts/absorbed", "type": "depends_on"}]},
+        "Other body.",
+    )
+    rewrite = okf.RelationRewrite(file="concepts/other.md", snapshot=original)
+    drifted_current_text = _doc(
+        {
+            "relations": [
+                {"target": "concepts/survivor", "type": "depends_on"},
+                {"target": "concepts/elsewhere", "type": "related_to"},
+            ]
+        },
+        "Other body.",
+    )
+
+    with pytest.raises(ValueError, match="drifted"):
+        relations.reverse_relation_rewrites(
+            drifted_current_text,
+            file="concepts/other.md",
+            survivor_id="concepts/survivor",
+            absorbed_id="concepts/absorbed",
+            rewrites=[rewrite],
+            link_rewrites=[],
         )

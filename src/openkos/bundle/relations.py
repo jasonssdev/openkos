@@ -38,13 +38,25 @@ survivor-side self-loop (correction batch, finding 1). A file with no
 recorded rewrite is returned unchanged (no-op).
 
 `reverse_relation_rewrites` is the exact inverse `unmerge` needs: it
-returns the recorded snapshot verbatim, ignoring the passed-in `text`
-entirely -- no offset math, no partial patch, matching this module's
-byte-exact whole-file restore contract.
+returns the recorded snapshot verbatim -- no offset math, no partial patch,
+matching this module's byte-exact whole-file restore contract -- but ONLY
+after confirming the passed-in `text` (the file's CURRENT on-disk bytes)
+still matches what THIS merge actually wrote there. It recomputes that
+expected post-merge content by re-applying `apply_relation_rewrites` to the
+recorded pre-merge `snapshot` (the exact retarget this merge performed is
+fully deterministic, so this reproduces it byte-for-byte) and compares.
+A mismatch means the file drifted -- a legitimate edit made after the merge
+and before `unmerge` -- and raises `ValueError` (fail closed) rather than
+silently clobbering that edit with the stale snapshot. This is symmetric
+with `bundle/links.py::reverse_link_rewrites`'s identical current-bytes
+drift check, just anchored on the whole file instead of one offset
+(CRITICAL fix, review correction batch: PR3 originally ignored `text`
+entirely and always returned the snapshot unconditionally).
 """
 
 from collections.abc import Mapping
 
+from openkos.bundle import links as bundle_links
 from openkos.model import okf
 
 
@@ -145,15 +157,42 @@ def apply_relation_rewrites(
 
 
 def reverse_relation_rewrites(
-    text: str, *, file: str, rewrites: list[okf.RelationRewrite]
+    text: str,
+    *,
+    file: str,
+    survivor_id: str,
+    absorbed_id: str,
+    rewrites: list[okf.RelationRewrite],
+    link_rewrites: list[okf.LinkRewrite],
 ) -> str:
     """Pure inverse of `apply_relation_rewrites`: restore `file`'s recorded
     whole-file snapshot verbatim -- an ABSOLUTE overwrite, never offset
-    math (design D1/D3), unlike `bundle/links.py::reverse_link_rewrites`.
-    The passed-in `text` is otherwise ignored; only the matching recorded
-    `rewrites` entry's `.snapshot` is returned. A `file` with no matching
-    recorded rewrite returns `text` unchanged (no-op, mirrors `links.py`'s
-    ignore-other-files behavior).
+    math (design D1/D3), unlike `bundle/links.py::reverse_link_rewrites` --
+    but DRIFT-AWARE and FAIL-CLOSED, symmetric with that same module's
+    current-bytes drift check (CRITICAL fix, review correction batch).
+
+    `text` MUST be `file`'s CURRENT on-disk content. This recomputes the
+    EXPECTED post-merge content for `file` and compares: if `text` does not
+    match, the file drifted (a legitimate edit landed on it after the merge
+    and before this `unmerge`), and this raises `ValueError` rather than
+    overwriting that edit with the stale snapshot. Only when `text` matches
+    (the clean, no-drift case) is the snapshot returned.
+
+    The expected content is reconstructed FORWARD from the recorded
+    pre-merge `snapshot`, mirroring exactly what `merge`'s Phase B write
+    loop produced for this same file (design D5): first
+    `bundle_links.apply_link_rewrites` (any `link_rewrites` entries for
+    `file`; a no-op if none), THEN `apply_relation_rewrites`. Both steps
+    apply FORWARD (never by offset), so this is immune to the offset
+    invalidation `reverse_link_rewrites` itself must guard against (design
+    D5's `unmerge` skip rule) -- a file present in both `rewrites` and
+    `link_rewrites` still gets an accurate expected-content comparison, not
+    a false drift positive.
+
+    A `file` with no matching recorded rewrite returns `text` unchanged
+    (no-op, mirrors `links.py`'s ignore-other-files behavior) -- no drift
+    check applies, since there is nothing recorded to restore or compare
+    against.
 
     Raises `ValueError` if MORE THAN ONE rewrite is recorded for the same
     `file`: `find_inbound_relation_rewrites` records at most one entry per
@@ -170,4 +209,21 @@ def reverse_relation_rewrites(
         raise ValueError(
             f"more than one relation_rewrites snapshot recorded for {file!r}"
         )
-    return matches[0].snapshot
+    snapshot = matches[0].snapshot
+    pre_relation_text = bundle_links.apply_link_rewrites(
+        snapshot, file=file, rewrites=link_rewrites
+    )
+    expected_post_merge = apply_relation_rewrites(
+        pre_relation_text,
+        file=file,
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+        rewrites=matches,
+    )
+    if text != expected_post_merge:
+        raise ValueError(
+            f"cannot reverse relation rewrite: bundle/{file} drifted since "
+            "the merge -- current content does not match what this merge "
+            "wrote there"
+        )
+    return snapshot
