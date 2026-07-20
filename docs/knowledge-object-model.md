@@ -320,7 +320,7 @@ Because OpenKOS accumulates knowledge and preserves history, removal is delibera
 
 - **Undo** — revert the last ingest.
 - **Archive** — set `status: deprecated`; the object fades from retrieval and the index but stays in history. Non-destructive.
-- **Merge** — fold a duplicate or mis-extracted object into another, preserving provenance.
+- **Merge** — fold a duplicate or mis-extracted object into another, preserving provenance. Implemented as `openkos merge <survivor-id> <absorbed-id>`: sensitivity is recomputed (never copied) to the more restrictive of the two, inbound links are repointed at the survivor, and the survivor gains an embedded `merged_from` ledger entry recording everything needed to reverse the merge. `openkos unmerge <survivor-id> <absorbed-id>` reverses the most recent merge (LIFO), restoring both objects and every rewritten link to byte parity with their pre-merge state — see `docs/cli.md`.
 - **Retire a fact** — move a stale claim into a dated snapshot (the freshness path).
 - **Delete an object** — remove a concept document and its references from `index.md`; recoverable via normal git history. From MVP 2, deletion also leaves a tombstone in `log.md`.
 - **Purge a source** — the right to be forgotten: remove the raw source and everything derived from it, rewrite git history, and clear derived indexes. Destructive and irreversible.

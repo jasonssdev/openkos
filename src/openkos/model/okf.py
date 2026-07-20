@@ -14,6 +14,7 @@ import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -34,6 +35,20 @@ _LOG_HEADING_RE: Final = re.compile(r"^## (.+)$", re.MULTILINE)
 _ISO_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 """§7's date-heading format, checked for shape only -- not calendar-validated
 (e.g. `2026-13-45` matches)."""
+
+SENSITIVITY_ORDER: Final[tuple[str, str, str]] = ("public", "private", "confidential")
+"""Least-to-most-restrictive sensitivity ordering (ADR-0003, KOM
+docs/knowledge-object-model.md:255-272): a derived object is at least as
+sensitive as its most sensitive source."""
+
+MERGED_FROM_KEY: Final = "merged_from"
+"""The survivor frontmatter key holding the reversibility ledger (ADR-0002):
+an ordinary OKF data key, not a new file type, per §4.1 tolerance."""
+
+MERGE_LEDGER_SCHEMA_V1: Final = "openkos.merge_ledger/v1"
+"""The `schema` value every `merged_from` entry currently carries -- a
+durable on-disk contract (ADR-0002) that a future format change must
+migrate rather than silently reinterpret."""
 
 
 def dump_frontmatter(metadata: dict[str, object], body: str = "") -> str:
@@ -170,6 +185,321 @@ def build_concept(
     lede = description if not body.strip() else f"{description}\n\n{body}"
     doc_body = f"# {title}\n\n{lede}\n\n## Related\n\n{related}\n"
     return dump_frontmatter(metadata, doc_body)
+
+
+def _rank(value: object) -> int:
+    """Rank a raw sensitivity `value` into `SENSITIVITY_ORDER`'s index space,
+    failing closed on anything dirty (ADR-0003).
+
+    A missing (`None`) or blank/whitespace-only string ranks as `private`
+    (the config default floor, docs/knowledge-object-model.md's
+    `default_sensitivity`). A string matching (after stripping) one of
+    `SENSITIVITY_ORDER`'s canonical members ranks at its position. Anything
+    else -- a non-string value (e.g. an `int`/`list` from dirty frontmatter)
+    or an unrecognized string -- ranks as `confidential`, the most
+    restrictive level: a security field must fail toward MORE restrictive,
+    never less.
+    """
+    if value is None:
+        return SENSITIVITY_ORDER.index("private")
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return SENSITIVITY_ORDER.index("private")
+        if stripped in SENSITIVITY_ORDER:
+            return SENSITIVITY_ORDER.index(stripped)
+    return SENSITIVITY_ORDER.index("confidential")
+
+
+def combine_sensitivity(a: object, b: object) -> str:
+    """Combine two sensitivity values into the more restrictive (max-rank)
+    of the two, per ADR-0003's high-water-mark rule.
+
+    Pure, deterministic, stdlib-only: no I/O. Always returns a canonical
+    member of `SENSITIVITY_ORDER`, even when `a`/`b` are missing or
+    malformed (`_rank` fails closed). This is the recompute step a merge
+    invokes at build time -- the result is never a verbatim copy of either
+    input's sensitivity.
+    """
+    return SENSITIVITY_ORDER[max(_rank(a), _rank(b))]
+
+
+@dataclass(frozen=True)
+class LinkRewrite:
+    """One inbound-link rewrite performed (or to be reversed) by a merge
+    (spec: Inbound-Link Rewrite; ADR-0002's `link_rewrites`).
+
+    `file` is the bundle-relative path the rewrite happened in; `old_link`/
+    `new_link` are the exact markdown link targets substituted -- the
+    values `bundle/links.py` (U3) needs to bound its reversal to these
+    specific recorded occurrences, never a blind replace-all.
+
+    `offset` is the character offset, in the POST-merge `file` text, where
+    THIS rewrite's `new_link` occurrence begins. It is the positional
+    disambiguator `reverse_link_rewrites` needs: when a file links to BOTH
+    the absorbed AND survivor concepts, after the merge there are TWO
+    `](/survivor.md)`-shaped occurrences in that file (one just rewritten,
+    one coincidentally pre-existing) and a target-string-only reverse
+    cannot tell them apart -- it may revert the wrong one and break
+    byte-parity. Reversing at the exact recorded `offset` instead removes
+    the ambiguity entirely."""
+
+    file: str
+    old_link: str
+    new_link: str
+    offset: int
+
+
+@dataclass(frozen=True)
+class MergeLedgerEntry:
+    """One `merged_from` list entry: the FULL pre-merge snapshot set for one
+    absorbed object (spec: Reversibility Ledger; ADR-0002).
+
+    Round-trip parity is logically impossible from `absorbed_snapshot`
+    alone -- provenance union, tag union, sensitivity high-water-mark, and
+    freshness-most-recent are all lossy/non-invertible -- so every field
+    below is required. `survivor_before` is the survivor's FULL verbatim
+    bytes immediately prior to THIS merge's write, explicitly RETAINING any
+    prior `merged_from` entries from earlier merges (it excludes ONLY this
+    entry, which does not yet exist at snapshot time); it does NOT strip
+    the whole `merged_from` key. This is what lets sequential pairwise
+    merges reverse losslessly in LIFO order.
+
+    `sensitivity_before` uses `""` (empty string) as the sentinel for
+    "survivor had no `sensitivity` key at merge time" -- distinct from the
+    canonical `public`/`private`/`confidential` values `SENSITIVITY_ORDER`
+    defines."""
+
+    schema: str
+    merged_at: str
+    absorbed_id: str
+    absorbed_snapshot: str
+    survivor_before: str
+    index_before: str
+    log_before: str
+    link_rewrites: list[LinkRewrite]
+    sensitivity_before: str
+    sensitivity_after: str
+
+
+def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
+    """Turn one `MergeLedgerEntry` into a plain-dict shape safe for
+    `dump_frontmatter` -- never hand-spliced YAML (ADR-0002)."""
+    return {
+        "schema": entry.schema,
+        "merged_at": entry.merged_at,
+        "absorbed_id": entry.absorbed_id,
+        "absorbed_snapshot": entry.absorbed_snapshot,
+        "survivor_before": entry.survivor_before,
+        "index_before": entry.index_before,
+        "log_before": entry.log_before,
+        "link_rewrites": [
+            {
+                "file": lr.file,
+                "old_link": lr.old_link,
+                "new_link": lr.new_link,
+                "offset": lr.offset,
+            }
+            for lr in entry.link_rewrites
+        ],
+        "sensitivity_before": entry.sensitivity_before,
+        "sensitivity_after": entry.sensitivity_after,
+    }
+
+
+def encode_merged_from(entries: list[MergeLedgerEntry]) -> list[dict[str, object]]:
+    """Encode a full `merged_from` list (LIFO order preserved) for assignment
+    onto a survivor's frontmatter metadata dict before `dump_frontmatter`."""
+    return [encode_merge_ledger_entry(entry) for entry in entries]
+
+
+def _decode_link_rewrite(raw: object) -> LinkRewrite:
+    """Parse one `link_rewrites` list item back into a `LinkRewrite`, failing
+    closed (`ValueError`) on anything malformed. `offset` is required (not
+    defaulted to `0`) -- a ledger entry missing it must never be silently
+    misread, since `reverse_link_rewrites` trusts it for exact positional
+    reversal."""
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"link_rewrites entry must be a mapping, got {type(raw).__name__}"
+        )
+    try:
+        return LinkRewrite(
+            file=str(raw["file"]),
+            old_link=str(raw["old_link"]),
+            new_link=str(raw["new_link"]),
+            offset=int(raw["offset"]),
+        )
+    except KeyError as exc:
+        raise ValueError(f"link_rewrites entry missing field {exc}") from exc
+
+
+def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
+    """Parse one `merged_from` list item back into a `MergeLedgerEntry`,
+    failing closed (`ValueError`) on any malformed or missing field -- a
+    corrupt ledger entry must never be silently misread, since `unmerge`
+    trusts it for byte-for-byte restoration."""
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"merged_from entry must be a mapping, got {type(raw).__name__}"
+        )
+    try:
+        schema = str(raw["schema"])
+        if schema != MERGE_LEDGER_SCHEMA_V1:
+            raise ValueError(f"unsupported merged_from schema version: {schema!r}")
+        link_rewrites = [_decode_link_rewrite(item) for item in raw["link_rewrites"]]
+        return MergeLedgerEntry(
+            schema=schema,
+            merged_at=str(raw["merged_at"]),
+            absorbed_id=str(raw["absorbed_id"]),
+            absorbed_snapshot=str(raw["absorbed_snapshot"]),
+            survivor_before=str(raw["survivor_before"]),
+            index_before=str(raw["index_before"]),
+            log_before=str(raw["log_before"]),
+            link_rewrites=link_rewrites,
+            sensitivity_before=str(raw["sensitivity_before"]),
+            sensitivity_after=str(raw["sensitivity_after"]),
+        )
+    except KeyError as exc:
+        raise ValueError(f"merged_from entry missing field {exc}") from exc
+    except TypeError as exc:
+        raise ValueError(f"merged_from entry malformed: {exc}") from exc
+
+
+def decode_merged_from(metadata: dict[str, object]) -> list[MergeLedgerEntry]:
+    """Read the `merged_from` ledger list off a survivor's `metadata`.
+
+    Absent key returns `[]` (no prior merges). A present-but-non-list value
+    fails closed (`ValueError`) -- a corrupt ledger key must never be
+    silently ignored."""
+    raw = metadata.get(MERGED_FROM_KEY)
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(
+            f"{MERGED_FROM_KEY!r} must be a list, got {type(raw).__name__}"
+        )
+    return [decode_merge_ledger_entry(item) for item in raw]
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    """Parse `value` as an ISO-8601 timestamp, returning `None` on anything
+    unparseable (missing, non-string, or malformed) rather than raising --
+    the freshness/timestamp merge rule fails closed to survivor-wins on any
+    parse failure."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _absorbed_is_more_recent(
+    survivor_timestamp: object, absorbed_timestamp: object
+) -> bool:
+    """True only if the absorbed side's `timestamp` is STRICTLY more recent
+    than the survivor's. Fails closed to `False` (survivor wins) when either
+    side is missing or unparseable, matching every other scalar's
+    survivor-wins default -- and ALSO fails closed when both sides parse but
+    are incomparable (one timezone-aware, one naive): stdlib `datetime`
+    raises `TypeError` for that comparison rather than picking a winner, and
+    this function must never assume a timezone to paper over it."""
+    survivor_dt = _parse_timestamp(survivor_timestamp)
+    absorbed_dt = _parse_timestamp(absorbed_timestamp)
+    if survivor_dt is None or absorbed_dt is None:
+        return False
+    try:
+        return absorbed_dt > survivor_dt
+    except TypeError:
+        return False
+
+
+def _union_dedup(first: list[object], second: list[object]) -> list[object]:
+    """Order-preserving dedup union: every item of `first`, then any item of
+    `second` not already seen, each kept in first-seen order (spec:
+    Frontmatter-Conflict Resolution, list fields).
+
+    Uses equality-based `in` against the accumulated `result` list rather
+    than a `set`, so this never calls `hash()` on an item -- a frontmatter
+    list may hold UNHASHABLE items (e.g. a list of dicts, permitted by
+    OKF's unknown-key tolerance), which would otherwise raise `TypeError`
+    and crash a destructive merge on realistic input. These lists are tiny,
+    so the resulting O(n^2) membership check is negligible. Every item of
+    `first` is kept as-is (including any internal duplicates already
+    present there); only `second`'s items are deduped against everything
+    accumulated so far."""
+    result: list[object] = list(first)
+    for item in second:
+        if item not in result:
+            result.append(item)
+    return result
+
+
+def build_merged_document(
+    survivor_metadata: dict[str, object],
+    survivor_body: str,
+    absorbed_metadata: dict[str, object],
+    absorbed_body: str,
+    absorbed_id: str,
+) -> tuple[dict[str, object], str]:
+    """Combine a survivor and an absorbed document into the merged survivor
+    document's (metadata, body) -- the frontmatter-conflict and body-append
+    rules ONLY (spec: Frontmatter-Conflict Resolution, Sensitivity
+    High-Water-Mark Recomputation). Does NOT touch the `merged_from`
+    ledger -- that is `bundle/merge.py::plan_merge`'s exclusive
+    responsibility, so any pre-existing `merged_from` key on EITHER side is
+    dropped here rather than propagated.
+
+    Field-kind rules: a scalar present on both sides keeps the SURVIVOR's
+    value; a scalar present on only one side fills the gap; a list-valued
+    field (`tags`, `provenance`, or any other list) is unioned, deduped,
+    order-preserving (survivor's items first); `sensitivity` is RECOMPUTED
+    via `combine_sensitivity`, never copied; `freshness`+`timestamp` are
+    taken TOGETHER from whichever side has the strictly more recent
+    `timestamp` (`_absorbed_is_more_recent`), falling back to the
+    survivor's own value when either timestamp is missing/unparseable.
+
+    Body: the survivor's body, then a delimited
+    `## Merged content ({absorbed_id})` heading, then the absorbed body --
+    an APPEND, never an overwrite, per the spec's "Successful merge"
+    scenario.
+    """
+    merged: dict[str, object] = dict(survivor_metadata)
+    merged.pop(MERGED_FROM_KEY, None)
+
+    if _absorbed_is_more_recent(
+        survivor_metadata.get("timestamp"), absorbed_metadata.get("timestamp")
+    ):
+        merged["timestamp"] = absorbed_metadata.get("timestamp")
+        merged["freshness"] = absorbed_metadata.get("freshness")
+    else:
+        merged["timestamp"] = survivor_metadata.get("timestamp")
+        merged["freshness"] = survivor_metadata.get("freshness")
+
+    _SPECIAL_KEYS = ("sensitivity", "freshness", "timestamp", MERGED_FROM_KEY)
+    for key, absorbed_value in absorbed_metadata.items():
+        if key in _SPECIAL_KEYS:
+            continue
+        survivor_value = merged.get(key)
+        if isinstance(absorbed_value, list) or isinstance(survivor_value, list):
+            survivor_list = survivor_value if isinstance(survivor_value, list) else []
+            absorbed_list = absorbed_value if isinstance(absorbed_value, list) else []
+            merged[key] = _union_dedup(survivor_list, absorbed_list)
+        elif key not in merged:
+            merged[key] = absorbed_value
+        # else: a scalar already present on the survivor wins -- no-op.
+
+    merged["sensitivity"] = combine_sensitivity(
+        survivor_metadata.get("sensitivity"), absorbed_metadata.get("sensitivity")
+    )
+
+    separator = f"\n\n## Merged content ({absorbed_id})\n\n"
+    merged_body = survivor_body.rstrip("\n") + separator + absorbed_body
+    if not merged_body.endswith("\n"):
+        merged_body += "\n"
+
+    return merged, merged_body
 
 
 @dataclass(frozen=True)

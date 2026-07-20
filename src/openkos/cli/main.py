@@ -13,7 +13,9 @@ from openkos import config, fsio
 from openkos import lint as lint_check
 from openkos.bundle import bundle
 from openkos.bundle import index as bundle_index
+from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
+from openkos.bundle import merge as bundle_merge
 from openkos.extraction.concept import extract_concept
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
@@ -673,27 +675,20 @@ def ingest(
     )
 
 
-def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]:
-    """Resolve `concept_id` to `(concept_file, canonical_id)` under
-    `bundle_dir`, or raise `ValueError` (`forget`'s Phase A path-safety gate,
-    mirroring `ingest`'s basename-derived containment).
-
-    The `concept_id` is canonicalized ONCE -- a redundant `.md` suffix is
-    stripped and `PurePosixPath` collapses `.` and repeated-slash segments --
-    and that single `canonical_id` is used for BOTH the filesystem path and
-    the caller's `index.md` match, so a leading `./` (or a `.md` suffix) can
-    never delete a concept file while leaving its catalog bullet dangling.
-
-    Rejects an absolute `concept_id` (a leading `/`), any `..` path segment,
-    and a reserved basename (`index`/`log`, `okf.RESERVED_FILENAMES`, matched
+def _canonicalize_concept_id(concept_id: str) -> str:
+    """Canonicalize `concept_id` to its bundle-relative form, applying every
+    path-safety check `_resolve_concept_path` applies EXCEPT existence:
+    rejects an absolute id (a leading `/`), any `..` path segment, and a
+    reserved basename (`index`/`log`, `okf.RESERVED_FILENAMES`, matched
     CASE-INSENSITIVELY so a case-insensitive filesystem -- macOS/Windows
-    default -- cannot be tricked into deleting the real `index.md`/`log.md`).
-    Every one of these is a security-relevant path-traversal check and MUST
-    run before any filesystem read tied to `concept_id` (threat matrix:
-    path-traversal deletion). Finally refuses (also `ValueError`) if the
-    resolved `<canonical_id>.md` file does not exist -- a nonexistent
-    concept-id is a clear error, never a silent no-op (spec: Nonexistent
-    Concept Refusal).
+    default -- cannot be tricked into targeting the real `index.md`/
+    `log.md`) -- but does NOT require (or refuse) that `<canonical_id>.md`
+    currently exists on disk.
+
+    Shared by `_resolve_concept_path` (which adds the existence check
+    needed for a target that must already be there) and `unmerge`'s
+    `absorbed_id`, whose file is EXPECTED to be absent -- it was removed by
+    the very merge this command reverses -- until Phase B recreates it.
     """
     if concept_id.startswith("/"):
         raise ValueError(f"'{concept_id}' must be a relative concept-id, not absolute")
@@ -706,6 +701,29 @@ def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]
     reserved = {name.lower() for name in okf.RESERVED_FILENAMES}
     if f"{posix_id.name}.md".lower() in reserved:
         raise ValueError(f"'{concept_id}' is a reserved filename")
+    return canonical_id
+
+
+def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]:
+    """Resolve `concept_id` to `(concept_file, canonical_id)` under
+    `bundle_dir`, or raise `ValueError` (`forget`'s Phase A path-safety gate,
+    mirroring `ingest`'s basename-derived containment).
+
+    The `concept_id` is canonicalized ONCE, via `_canonicalize_concept_id` --
+    a redundant `.md` suffix is stripped and `PurePosixPath` collapses `.`
+    and repeated-slash segments -- and that single `canonical_id` is used
+    for BOTH the filesystem path and the caller's `index.md` match, so a
+    leading `./` (or a `.md` suffix) can never delete a concept file while
+    leaving its catalog bullet dangling.
+
+    On top of `_canonicalize_concept_id`'s path-safety checks (all
+    security-relevant and MUST run before any filesystem read tied to
+    `concept_id`, threat matrix: path-traversal deletion), this also
+    refuses (`ValueError`) if the resolved `<canonical_id>.md` file does
+    not exist -- a nonexistent concept-id is a clear error, never a silent
+    no-op (spec: Nonexistent Concept Refusal).
+    """
+    canonical_id = _canonicalize_concept_id(concept_id)
     concept_path = bundle_dir / f"{canonical_id}.md"
     if not concept_path.is_file():
         raise ValueError(f"concept '{concept_id}' does not exist")
@@ -837,6 +855,550 @@ def forget(
 
     typer.echo(
         f"openkos forget: removed 'bundle/{canonical_id}.md' "
+        f"({index_path.name}, {log_path.name} updated)."
+    )
+
+
+def _apply_link_rewrite_idempotently(
+    text: str, *, file: str, rewrites: list[okf.LinkRewrite]
+) -> str:
+    """Apply `file`'s recorded inbound-link rewrites to `text`, but treat a
+    file that ALREADY shows every rewrite's `new_link` at its recorded
+    `offset` as a clean no-op -- returns `text` unchanged instead of
+    raising. This is the idempotency guard `merge`'s retry story needs: a
+    prior partial Phase-B attempt may have already migrated some OTHER
+    file before failing on a later one, and re-running `merge` must not
+    error out on a file that is already correctly rewritten.
+
+    Delegates to `bundle_links.apply_link_rewrites` (the SAME bounded,
+    offset-exact primitive U3 defined) for the normal not-yet-rewritten
+    case, so the bounded-rewrite guarantee is never weakened -- this
+    wrapper only adds the already-applied short-circuit."""
+    file_rewrites = [rw for rw in rewrites if rw.file == file]
+    if file_rewrites and all(
+        text[rw.offset : rw.offset + len(rw.new_link)] == rw.new_link
+        for rw in file_rewrites
+    ):
+        return text
+    return bundle_links.apply_link_rewrites(text, file=file, rewrites=rewrites)
+
+
+def _reverse_link_rewrite_idempotently(
+    text: str, *, file: str, rewrites: list[okf.LinkRewrite]
+) -> str:
+    """Reverse `file`'s recorded inbound-link rewrites in `text`, but treat
+    a file that ALREADY shows every rewrite's `old_link` at its recorded
+    `offset` as a clean no-op -- returns `text` unchanged instead of
+    raising. This is the reverse analog of `_apply_link_rewrite_idempotently`,
+    closing the same half-completed-write retry trap for `unmerge`'s Phase
+    B: each rewritten file is written atomically in one call covering ALL
+    of that file's recorded rewrites at once, so on a retry a file is
+    either fully reversed already (this short-circuit) or not reversed at
+    all (delegates to the real primitive below, unchanged).
+
+    Delegates to `bundle_links.reverse_link_rewrites` (the SAME bounded,
+    offset-exact primitive U3 defined) for the normal not-yet-reversed
+    case, so the fail-closed drift contract is never weakened: a file that
+    matches NEITHER the fully-reversed nor the not-yet-reversed state still
+    raises `ValueError` via that primitive (spec: Unmerge Achieves
+    Round-Trip Parity's idempotence/safety contract)."""
+    file_rewrites = [rw for rw in rewrites if rw.file == file]
+    if file_rewrites and all(
+        text[rw.offset : rw.offset + len(rw.old_link)] == rw.old_link
+        for rw in file_rewrites
+    ):
+        return text
+    return bundle_links.reverse_link_rewrites(text, file=file, rewrites=rewrites)
+
+
+def _expected_post_merge_index_and_log(
+    entry: okf.MergeLedgerEntry, *, survivor_id: str, absorbed_id: str
+) -> tuple[str, str]:
+    """Reconstruct what `index.md`/`log.md` looked like immediately AFTER
+    the merge `entry` records, by replaying the SAME deterministic
+    transforms `merge` itself applied to `entry.index_before`/
+    `entry.log_before` -- `bundle_index.remove_index_entry` and the exact
+    `**Merge**` log line, dated from `entry.merged_at`.
+
+    This lets `unmerge`'s Phase A tell the difference between "index.md/
+    log.md look exactly like the merge left them" and "something ELSE
+    (another `ingest`/`forget`/unrelated `merge`) touched them since" --
+    `unmerge` unconditionally overwrites both with the PRE-merge snapshot
+    regardless, but the caller uses this to decide whether to surface a
+    warning about that discard (principle #3: reviewable, not silent)."""
+    expected_index, _ = bundle_index.remove_index_entry(entry.index_before, absorbed_id)
+    merge_date = datetime.fromisoformat(entry.merged_at).astimezone().date()
+    expected_log = bundle_log.insert_log_entry(
+        entry.log_before,
+        merge_date,
+        f"**Merge**: Merged [{absorbed_id}](/{absorbed_id}.md) "
+        f"into [{survivor_id}](/{survivor_id}.md).",
+    )
+    return expected_index, expected_log
+
+
+@app.command()
+def merge(
+    survivor_id: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') that survives the merge.",
+    ),
+    absorbed_id: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') absorbed into the survivor.",
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Fuse two distinct concept-ids into one: the first DESTRUCTIVE
+    entity-resolution write (spec: Merge Fuses Two Distinct Concept-IDs).
+
+    Phase A (pure, no writes) mirrors `forget`'s gate shape exactly: the
+    current directory must already be a workspace (the same
+    `config.require_workspace` gate `ingest`/`forget`/`status` share), or
+    this refuses; both `survivor_id`/`absorbed_id` are resolved via the
+    same `_resolve_concept_path` `forget` uses -- rejecting an absolute id,
+    any `..` segment, a reserved basename, or a nonexistent concept file,
+    all as `ValueError`, all before any read. The two ids MUST resolve to
+    DISTINCT concept files, else this refuses too (spec: Same-id or unknown
+    id rejected) -- checked right after resolution, before any bundle file
+    beyond the two concepts themselves is even read.
+
+    The rest of Phase A builds the entire result in memory:
+    `bundle.merge.plan_merge` (U2) computes the merged survivor document --
+    body appended (never overwritten), scalar conflicts survivor-wins, list
+    fields unioned deduped order-preserving, freshness/timestamp taken from
+    whichever side is strictly more recent, and `sensitivity` RECOMPUTED via
+    `combine_sensitivity` (never copied, high-water-mark) -- plus the full
+    `merged_from` ledger entry (ADR-0002) capturing the pre-merge snapshot
+    set `unmerge` (a later unit) needs for round-trip parity.
+    `bundle.links.find_inbound_link_rewrites` (U3) then scans every OTHER
+    bundle concept file (never the survivor or absorbed file themselves,
+    and never `index.md`/`log.md`) for a markdown link resolving to
+    `absorbed_id`, recording the rewrite each needs to instead point at
+    `survivor_id`; a link inside a fenced code block is never matched.
+    `index.md`'s bullet for `absorbed_id` is dropped via the same
+    `bundle_index.remove_index_entry` `forget` uses (zero matches is drift,
+    not an error); a `log.md` entry describing the merge is built via
+    `bundle_log.insert_log_entry`.
+
+    The preview printed before the confirm gate surfaces exactly what a
+    reviewer needs to approve a DESTRUCTIVE, hard-to-undo-by-hand write:
+    the recomputed sensitivity outcome (`before -> after`), every OTHER
+    file whose inbound link will be rewritten, the catalog/log updates, the
+    merged survivor file, and the absorbed file that will be removed.
+
+    Confirm gate, identical precedence and mechanism to `forget`/`ingest`:
+    `--auto` skips the prompt outright; otherwise config `review: false`
+    skips it the same way; otherwise, on a TTY, `typer.confirm` asks and
+    aborts (exit 1) on decline; otherwise (non-TTY, no `--auto`) this
+    refuses to write (exit 1), telling the user to re-run with `--auto`.
+    Declining or refusing leaves the bundle completely untouched -- Phase A
+    never writes anything.
+
+    Phase B (after confirm) writes, in order: `index.md` then `log.md`
+    (`write_atomic`, catalog FIRST, mirroring `forget`'s ordering
+    invariant), then applies EVERY OTHER file's inbound-link rewrite,
+    then the merged survivor file (carrying the `merged_from` ledger),
+    and finally removes the absorbed file LAST. The survivor/ledger is
+    deliberately committed only AFTER every rewrite has succeeded: if a
+    rewrite fails partway through, the survivor has NO ledger entry yet,
+    so a clean re-run of this same command is never refused by
+    `plan_merge`'s "already merged" guard, and the absorbed file --
+    untouched until the very last step -- is still there to retry
+    against. Rewriting a file that some earlier, partial attempt already
+    migrated to `survivor_id` is a no-op skip, not a failure, so a re-run
+    after a partial rewrite failure completes cleanly. Not transactional
+    as a whole, matching `forget`'s documented limitation: a failure
+    partway through is a benign, git-recoverable partial result, never
+    silent corruption. Any failure, Phase A or Phase B, is caught and
+    reported on stderr (exit 1), not a raw traceback.
+
+    Residual recovery note: a failure while rewriting inbound links
+    (before the survivor/ledger is written) leaves no trace, so a plain
+    re-run of `merge` completes it. A failure at or after the
+    survivor/ledger write (including a failed absorbed-file removal) has
+    already committed the `merged_from` entry, so a re-run is refused by
+    `_reject_already_merged`; that narrow window is recoverable only via
+    `git` (or a future `unmerge`), same as `forget`'s own non-transactional
+    limitation.
+
+    `unmerge` (the reversal `merged_from` makes possible) is a later unit
+    and is NOT implemented here.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos merge: refusing to merge -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        survivor_path, survivor_canonical = _resolve_concept_path(
+            layout.bundle_dir, survivor_id
+        )
+        absorbed_path, absorbed_canonical = _resolve_concept_path(
+            layout.bundle_dir, absorbed_id
+        )
+        if survivor_canonical == absorbed_canonical:
+            raise ValueError(
+                "survivor and absorbed concept-ids must be distinct, both "
+                f"resolved to {survivor_canonical!r}"
+            )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos merge: refusing to merge -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    now = datetime.now(UTC)
+
+    try:
+        cfg = config.read_config(root)
+        survivor_text = survivor_path.read_text(encoding="utf-8")
+        absorbed_text = absorbed_path.read_text(encoding="utf-8")
+        index_text = index_path.read_text(encoding="utf-8")
+        log_text = log_path.read_text(encoding="utf-8")
+
+        other_files: dict[str, str] = {}
+        for path in sorted(layout.bundle_dir.rglob("*.md")):
+            if path.name in okf.RESERVED_FILENAMES:
+                continue
+            if path in (survivor_path, absorbed_path):
+                continue
+            rel = path.relative_to(layout.bundle_dir).as_posix()
+            other_files[rel] = path.read_text(encoding="utf-8")
+
+        link_rewrites = bundle_links.find_inbound_link_rewrites(
+            other_files,
+            absorbed_id=absorbed_canonical,
+            survivor_id=survivor_canonical,
+        )
+
+        plan = bundle_merge.plan_merge(
+            survivor_id=survivor_canonical,
+            absorbed_id=absorbed_canonical,
+            survivor_text=survivor_text,
+            absorbed_text=absorbed_text,
+            index_text=index_text,
+            log_text=log_text,
+            merged_at=now.isoformat(),
+            link_rewrites=link_rewrites,
+        )
+
+        new_index_text, removed = bundle_index.remove_index_entry(
+            index_text, absorbed_canonical
+        )
+        new_log_text = bundle_log.insert_log_entry(
+            log_text,
+            now.astimezone().date(),
+            f"**Merge**: Merged [{absorbed_canonical}](/{absorbed_canonical}.md) "
+            f"into [{survivor_canonical}](/{survivor_canonical}.md).",
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos merge: failed while preparing the merge -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    rewritten_files = sorted({rewrite.file for rewrite in link_rewrites})
+    sensitivity_before = plan.ledger_entry.sensitivity_before or "(none)"
+    sensitivity_after = plan.ledger_entry.sensitivity_after
+
+    typer.echo("openkos merge: proposed changes:")
+    typer.echo(f"  ~ sensitivity: {sensitivity_before} -> {sensitivity_after}")
+    for rel in rewritten_files:
+        typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
+    if removed >= 1:
+        typer.echo(f"  ~ {index_path.name} (remove entry)")
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+    typer.echo(f"  ~ bundle/{survivor_canonical}.md (merged content)")
+    typer.echo(f"  - bundle/{absorbed_canonical}.md")
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos merge: refusing to write without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        fsio.write_atomic(index_path, new_index_text)
+        fsio.write_atomic(log_path, new_log_text)
+
+        # All inbound-link rewrites are computed BEFORE any of them (or the
+        # survivor/ledger) is written: a compute-time failure on any one
+        # file thus leaves every other file untouched, so a re-run's fresh
+        # Phase-A rescan sees every still-absorbed-linked file exactly as
+        # it was and rewrites it from scratch -- no file is left silently
+        # half-migrated by this step.
+        rewritten_texts = {
+            rel: _apply_link_rewrite_idempotently(
+                other_files[rel], file=rel, rewrites=link_rewrites
+            )
+            for rel in rewritten_files
+        }
+        for rel in rewritten_files:
+            fsio.write_atomic(layout.bundle_dir / rel, rewritten_texts[rel])
+
+        # The merged survivor (with its `merged_from` ledger) is committed
+        # LAST among the writes, only once every rewrite above has
+        # succeeded -- see this command's docstring for why that ordering
+        # is what makes a mid-rewrite failure cleanly retryable.
+        fsio.write_atomic(survivor_path, plan.merged_survivor)
+        fsio.remove_file(absorbed_path)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos merge: failed while writing the merge -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos merge: merged 'bundle/{absorbed_canonical}.md' into "
+        f"'bundle/{survivor_canonical}.md' "
+        f"({index_path.name}, {log_path.name} updated)."
+    )
+
+
+@app.command()
+def unmerge(
+    survivor_id: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') that survived a prior merge.",
+    ),
+    absorbed_id: str = typer.Argument(
+        ...,
+        help=(
+            "Concept id expected to be the LIFO-tail absorbed_id of "
+            "survivor's merged_from ledger."
+        ),
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Reverse the most recent `merge` on `survivor_id`, restoring both
+    concept files to byte parity with their pre-merge state (spec: Unmerge
+    Achieves Round-Trip Parity) -- the reversal `merged_from` (ADR-0002)
+    exists to make possible.
+
+    `unmerge <survivor-id> <absorbed-id>` is two-arg and LIFO-ENFORCED: it
+    targets ONLY the most-recent unreversed `merged_from` entry (the LIFO
+    tail). `absorbed_id` MUST equal that tail entry's `absorbed_id`, else
+    this refuses with a clean error and no write -- reversing a non-tail
+    entry is unsafe, since a later merge's snapshots/rewrites may nest on
+    top of an earlier one's (spec scenario: Absorbed-id is not the LIFO
+    tail).
+
+    Phase A (pure, no writes) mirrors `merge`'s gate shape: the current
+    directory must already be a workspace (the same `config.require_workspace`
+    gate every other verb shares), or this refuses; `survivor_id` is
+    resolved via `_resolve_concept_path` (rejecting an absolute id, any
+    `..` segment, a reserved basename, or a nonexistent concept file);
+    `absorbed_id` is canonicalized via `_canonicalize_concept_id` ONLY --
+    the SAME path-safety checks minus the existence check, since the
+    absorbed file is EXPECTED to be absent (removed by the merge being
+    reversed) until Phase B recreates it. `bundle.merge.plan_unmerge` (U2)
+    then reads the survivor's `merged_from` ledger and computes the entire
+    restoration in memory: the restored survivor (`survivor_before`,
+    stripping this entry while retaining any earlier ones), the restored
+    absorbed document (`absorbed_snapshot`), and the restored `index.md`/
+    `log.md` (`index_before`/`log_before`). If a file already exists at the
+    absorbed concept's path (drift since the merge), this refuses before
+    any write (threat matrix: Unmerge restore collision). Every recorded
+    inbound-link rewrite is then read from disk and reversed in memory via
+    `bundle.links.reverse_link_rewrites` (U3) -- bounded to the exact
+    recorded `{file, old_link, new_link, offset}` occurrence, never a
+    blind replace-all -- which fails closed (`ValueError`) if a target file
+    drifted since the merge (threat matrix: Link-file drift before unmerge).
+
+    The preview printed before the confirm gate surfaces every file this
+    DESTRUCTIVE-in-reverse write will touch: each reversed inbound link,
+    the catalog/log restoration, the restored survivor, and the recreated
+    absorbed file.
+
+    Confirm gate, identical precedence and mechanism to `merge`/`forget`:
+    `--auto` skips the prompt outright; otherwise config `review: false`
+    skips it the same way; otherwise, on a TTY, `typer.confirm` asks and
+    aborts (exit 1) on decline; otherwise (non-TTY, no `--auto`) this
+    refuses to write (exit 1), telling the user to re-run with `--auto`.
+    Declining or refusing leaves the bundle completely untouched -- Phase A
+    never writes anything.
+
+    Phase B (after confirm) writes, in this order: `index.md` then
+    `log.md` restored to their EXACT pre-merge bytes (`index_before`/
+    `log_before`) first; then every reversed inbound-link file; then the
+    recreated absorbed file (`absorbed_snapshot`); then the restored
+    survivor (`survivor_before`, which drops this ledger entry while
+    keeping any earlier ones intact) -- mirroring `merge`'s own ordering
+    reasoning (the least-recoverable-if-lost artifacts land first, most
+    easily git-recoverable last); and FINALLY, only once every restore
+    above has landed, `log.md` is written a SECOND time with one
+    `**Unmerge**` audit line appended on top of the just-restored
+    `log_before` -- so the append-only audit trail net-grows by exactly
+    one line documenting the round trip, even though every other file
+    returns to its pre-merge bytes exactly. Not transactional as a whole,
+    matching `merge`/`forget`'s documented limitation: a failure partway
+    through is a benign, git-recoverable partial result, never silent
+    corruption. Any failure, Phase A or Phase B, is caught and reported on
+    stderr (exit 1), not a raw traceback.
+
+    Limitation: `unmerge` restores `index.md`/`log.md` to their EXACT
+    pre-merge snapshot (`index_before`/`log_before`), not a merge of that
+    snapshot with whatever is on disk now. If another command (`ingest`,
+    `forget`, or an unrelated `merge`) touched the catalog/log after this
+    merge, that content is discarded when `unmerge` runs -- Phase A detects
+    this drift and prints a warning in the preview before the confirm gate,
+    but does not refuse; round-trip parity assumes a prompt unmerge.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos unmerge: refusing to unmerge -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        survivor_path, survivor_canonical = _resolve_concept_path(
+            layout.bundle_dir, survivor_id
+        )
+        absorbed_canonical = _canonicalize_concept_id(absorbed_id)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos unmerge: refusing to unmerge -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    now = datetime.now(UTC)
+
+    try:
+        cfg = config.read_config(root)
+        survivor_text = survivor_path.read_text(encoding="utf-8")
+
+        plan = bundle_merge.plan_unmerge(
+            survivor_id=survivor_canonical,
+            absorbed_id=absorbed_canonical,
+            survivor_text=survivor_text,
+        )
+
+        absorbed_path = layout.bundle_dir / f"{absorbed_canonical}.md"
+        if absorbed_path.exists():
+            raise ValueError(
+                f"cannot restore 'bundle/{absorbed_canonical}.md' -- a file "
+                "already exists at that path"
+            )
+
+        current_index_text = index_path.read_text(encoding="utf-8")
+        current_log_text = log_path.read_text(encoding="utf-8")
+        expected_index_text, expected_log_text = _expected_post_merge_index_and_log(
+            plan.entry,
+            survivor_id=survivor_canonical,
+            absorbed_id=absorbed_canonical,
+        )
+        catalog_log_drifted = (
+            current_index_text != expected_index_text
+            or current_log_text != expected_log_text
+        )
+
+        rewritten_files = sorted({rewrite.file for rewrite in plan.link_rewrites})
+        other_texts = {
+            rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
+            for rel in rewritten_files
+        }
+        reversed_texts = {
+            rel: _reverse_link_rewrite_idempotently(
+                other_texts[rel], file=rel, rewrites=plan.link_rewrites
+            )
+            for rel in rewritten_files
+        }
+
+        new_log_text = bundle_log.insert_log_entry(
+            plan.restored_log,
+            now.astimezone().date(),
+            f"**Unmerge**: Restored [{absorbed_canonical}](/{absorbed_canonical}.md) "
+            f"from [{survivor_canonical}](/{survivor_canonical}.md).",
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos unmerge: proposed changes:")
+    for rel in rewritten_files:
+        typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
+    typer.echo(f"  ~ {index_path.name} (restore pre-merge contents)")
+    typer.echo(
+        f"  ~ {log_path.name} (restore pre-merge contents, append unmerge entry)"
+    )
+    typer.echo(f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents)")
+    typer.echo(f"  + bundle/{absorbed_canonical}.md (restore)")
+    if catalog_log_drifted:
+        typer.echo(
+            "Warning: index.md/log.md changed since the merge; unmerge "
+            "restores the pre-merge snapshot and will discard those changes."
+        )
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos unmerge: refusing to write without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        # `index.md`/`log.md` are restored to their EXACT pre-merge bytes
+        # FIRST -- if anything below fails, a retry (or manual inspection)
+        # finds the catalog/log already back to a consistent pre-merge
+        # state, which is idempotent to re-write on a retry.
+        fsio.write_atomic(index_path, plan.restored_index)
+        fsio.write_atomic(log_path, plan.restored_log)
+
+        for rel in rewritten_files:
+            fsio.write_atomic(layout.bundle_dir / rel, reversed_texts[rel])
+
+        # The absorbed file is recreated BEFORE the survivor is restored:
+        # the survivor's `merged_from` ledger entry (the only record of
+        # `absorbed_snapshot`) is deliberately kept intact on disk until
+        # the absorbed file it describes has actually landed, so a failure
+        # between these two steps never loses the absorbed content --
+        # it is still recoverable from the (not-yet-overwritten) survivor.
+        fsio.write_atomic(absorbed_path, plan.restored_absorbed)
+        fsio.write_atomic(survivor_path, plan.restored_survivor)
+
+        # Only once every restore above has succeeded is `log.md` written a
+        # SECOND time, with the `**Unmerge**` audit line appended on top of
+        # the just-restored `log_before` -- the append-only trail net-grows
+        # by exactly this one line.
+        fsio.write_atomic(log_path, new_log_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos unmerge: failed while writing the unmerge -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos unmerge: restored 'bundle/{absorbed_canonical}.md' from "
+        f"'bundle/{survivor_canonical}.md' "
         f"({index_path.name}, {log_path.name} updated)."
     )
 

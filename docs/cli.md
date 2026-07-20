@@ -132,6 +132,40 @@ Output is grouped by OKF type, then HIGH before LOW, and renders each group's ty
 
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status`/`lint` use. Every successful read exits 0, whether or not any candidates are found. No file under the workspace is ever created, modified, or deleted, and no `--json` or other structured output mode is offered.
 
+### `openkos merge <survivor-id> <absorbed-id>`
+
+Fuses two distinct concept-ids a human has confirmed are the same real-world entity — the first DESTRUCTIVE entity-resolution write. `survivor-id`'s id survives; `absorbed-id`'s file is removed. This is the verb `duplicates` and the (not-yet-implemented) `resolve`/`adjudicate` flow forward-reference: a candidate pair still needs an explicit `merge` to actually be fused.
+
+`merge` mirrors `forget`'s Phase A (validate + preview) / confirm gate / Phase B (write) shape, doubled for two objects. Both ids are resolved the same way `forget` resolves its target, and MUST be distinct, existing concepts — a same-id or unknown-id argument refuses (exit 1) before any read. The survivor's body gains the absorbed content by **append** (a delimited `## Merged content (<absorbed-id>)` heading, then the absorbed body) — never an overwrite. Frontmatter conflicts resolve deterministically: a scalar field (`type`/`title`/`description`/`status`/`version`/`resource`) keeps the **survivor's** value; a list field (`tags`, `provenance`) is **unioned**, deduped, order-preserving; `freshness`+`timestamp` are taken together from whichever side has the strictly more recent `timestamp`. `sensitivity` is never copied — it is **recomputed** as the high-water-mark of both sides (`public < private < confidential`; a missing value counts as `private`, an unrecognized/malformed one fails closed to `confidential`). Every one of these conflicts is shown in the Phase A preview before you confirm.
+
+Any OTHER concept file with a markdown link to the absorbed id is rewritten to point at the survivor instead (the anchor, if any, is preserved); a link inside a fenced code block is never touched. `index.md` drops the absorbed entry; `log.md` gains a `**Merge**` line.
+
+The survivor also gains a `merged_from` ledger entry — an ordinary frontmatter field, not a new file type — that captures everything needed to reverse this exact merge later: the absorbed file's full verbatim bytes, the survivor's own full verbatim bytes immediately before this write, `index.md`/`log.md`'s prior contents, and every inbound-link rewrite performed. This is what makes `unmerge` (below) possible. Merging the same survivor more than once is fine — each merge appends its own entry, oldest-first, so sequential merges reverse in last-in-first-out order.
+
+| Flag | Meaning |
+| --- | --- |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+
+`review: true` in config plus a non-TTY stdin (and no `--auto`) refuses to write rather than defaulting silently — re-run with `--auto` for unattended use. Declining, or refusing, leaves the bundle completely untouched.
+
+Writes are, like `merge`'s Phase B siblings, **not transactional** as a whole: `index.md`/`log.md` are written first, then every rewritten inbound-link file, then the merged survivor (carrying the ledger) — and only then is the absorbed file removed, **last**. A failure at any point leaves a benign, git-recoverable partial result, never silent corruption; a failure while rewriting inbound links, in particular, leaves no trace at all, so simply re-running the same `merge` command completes it.
+
+### `openkos unmerge <survivor-id> <absorbed-id>`
+
+Reverses a prior `merge`, restoring both concept files to **byte parity** with their pre-merge state — the payoff of the `merged_from` ledger `merge` writes. `unmerge` is two-arg and **LIFO-enforced**: it only ever reverses the most recent, not-yet-reversed merge recorded on the survivor (the ledger's tail entry), and the `absorbed-id` you supply must match that tail entry's absorbed id exactly, or the command refuses with a clean error and writes nothing. Reversing anything other than the most recent merge is unsafe — a later merge's snapshots and link rewrites can nest on top of an earlier one's — so it is not offered.
+
+Phase A previews every reversed inbound link, the restored `index.md`/`log.md`, the restored survivor, and the recreated absorbed file — the mirror image of `merge`'s own preview. If a file has since appeared at the absorbed concept's path (bundle drift since the merge), or a previously rewritten link no longer matches what was recorded, `unmerge` refuses (exit 1) before writing anything rather than risk overwriting or corrupting drifted content.
+
+The confirm gate is identical in precedence to `merge`/`forget`: `--auto` skips it outright; otherwise config `review: false` skips it the same way; otherwise an interactive TTY prompts and aborts on decline; otherwise (non-TTY, no `--auto`) `unmerge` refuses to write and tells you to re-run with `--auto`.
+
+| Flag | Meaning |
+| --- | --- |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+
+A full `merge` then `unmerge` round trip restores **every** bundle file to its exact pre-merge bytes, with one deliberate exception: `log.md`. Because `log.md` is an append-only audit trail, `unmerge` restores it to its pre-merge contents and then appends one new `**Unmerge**` line documenting the reversal, rather than silently erasing the fact that a merge (and its undo) ever happened. Every other file — the restored survivor, the recreated absorbed file, `index.md`, and any file whose inbound link was rewritten — matches the pre-merge bundle exactly.
+
+**Limitation:** `unmerge` restores `index.md`/`log.md` to their exact pre-merge snapshot, not a merge of that snapshot with whatever is on disk now — if an `ingest`, `forget`, or unrelated `merge` ran in between, `unmerge` discards those changes. Phase A detects this and prints a warning in the preview before the confirm gate, but does not refuse; round-trip parity assumes a prompt unmerge.
+
 ### `openkos status`
 
 **Read-only.** Reports what the bundle currently contains, in three sections: **Bundle contents** (source/concept counts from a fresh scan of `bundle/**/*.md`, never from `index.md` alone, so it stays accurate even after an interrupted `ingest`), **Recent activity** (the most recent 5 entries from `log.md`, newest-first), and **Needs attention** (OKF §9 conformance findings — unparseable frontmatter, missing/empty `type` — reused from the same check `ingest`'s generated concepts must pass). It never writes, modifies, or deletes any bundle file.

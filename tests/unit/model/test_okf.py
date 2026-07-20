@@ -858,3 +858,536 @@ def test_build_concept_backlinks_every_provenance_entry() -> None:
     first = body.index("[sources/first-source](/sources/first-source.md)")
     second = body.index("[sources/second-source](/sources/second-source.md)")
     assert first < second
+
+
+def test_sensitivity_order_pins_the_adr_0003_ordering() -> None:
+    """`SENSITIVITY_ORDER` is the canonical least-to-most-restrictive
+    ordering ADR-0003 pins; `combine_sensitivity` ranks against this exact
+    tuple."""
+    assert okf.SENSITIVITY_ORDER == ("public", "private", "confidential")
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [
+        ("public", "public", "public"),
+        ("public", "private", "private"),
+        ("public", "confidential", "confidential"),
+        ("private", "private", "private"),
+        ("private", "confidential", "confidential"),
+        ("confidential", "confidential", "confidential"),
+    ],
+)
+def test_combine_sensitivity_returns_the_more_restrictive_side(
+    a: str, b: str, expected: str
+) -> None:
+    """ADR-0003: the combined result is always the MORE sensitive (max-rank)
+    of the two inputs, per the full pairwise table."""
+    assert okf.combine_sensitivity(a, b) == expected
+
+
+@pytest.mark.parametrize(
+    ("a", "b"), [("public", "private"), ("private", "confidential")]
+)
+def test_combine_sensitivity_is_commutative(a: str, b: str) -> None:
+    """`combine_sensitivity(a, b) == combine_sensitivity(b, a)` -- order of
+    the two inputs never affects the result."""
+    assert okf.combine_sensitivity(a, b) == okf.combine_sensitivity(b, a)
+
+
+def test_combine_sensitivity_missing_value_defaults_to_private() -> None:
+    """A missing (`None`) sensitivity ranks as `private`, the documented
+    config default floor -- never the least-restrictive `public`."""
+    assert okf.combine_sensitivity(None, "public") == "private"
+
+
+def test_combine_sensitivity_blank_value_defaults_to_private() -> None:
+    """A present but blank/whitespace-only sensitivity ranks as `private`,
+    same as a missing value."""
+    assert okf.combine_sensitivity("   ", "public") == "private"
+
+
+def test_combine_sensitivity_both_missing_is_private() -> None:
+    """Two missing values combine to the `private` default, not `public`."""
+    assert okf.combine_sensitivity(None, None) == "private"
+
+
+def test_combine_sensitivity_unrecognized_string_fails_closed_to_confidential() -> None:
+    """An unrecognized (malformed) string value ranks as `confidential` --
+    the most restrictive level -- rather than being silently ignored."""
+    assert okf.combine_sensitivity("top-secret", "public") == "confidential"
+
+
+def test_combine_sensitivity_non_string_value_fails_closed_to_confidential() -> None:
+    """A present but non-string value (e.g. an int or list from dirty
+    frontmatter) ranks as `confidential`, never crashes and never silently
+    ranks as the least-restrictive level."""
+    assert okf.combine_sensitivity(42, "public") == "confidential"
+    assert okf.combine_sensitivity(["confidential"], "private") == "confidential"
+
+
+def test_combine_sensitivity_confidential_dominates_regardless_of_position() -> None:
+    """A single `confidential` input always wins, regardless of argument
+    order or what the other value is."""
+    assert okf.combine_sensitivity("confidential", "public") == "confidential"
+    assert okf.combine_sensitivity("public", "confidential") == "confidential"
+
+
+# -- U2: `build_merged_document` (Phase 2, tasks 2.1/2.2) -----------------
+
+
+def _survivor_metadata(**overrides: object) -> dict[str, object]:
+    """A realistic survivor-side frontmatter dict for merge tests, letting
+    callers override individual keys."""
+    metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": "Stoicism",
+        "description": "Survivor description.",
+        "status": "active",
+        "version": 1,
+        "tags": ["philosophy", "stoicism"],
+        "timestamp": "2026-07-10T09:00:00Z",
+        "freshness": "snapshot",
+        "sensitivity": "private",
+        "provenance": ["sources/call-a"],
+    }
+    metadata.update(overrides)
+    return metadata
+
+
+def _absorbed_metadata(**overrides: object) -> dict[str, object]:
+    """A realistic absorbed-side frontmatter dict for merge tests, mirroring
+    `_survivor_metadata` with distinct default values so conflicts are
+    exercised by default."""
+    metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": "Stoic Philosophy",
+        "description": "Absorbed description.",
+        "status": "draft",
+        "version": 3,
+        "tags": ["stoicism", "ethics"],
+        "timestamp": "2026-07-14T09:00:00Z",
+        "freshness": "verified",
+        "sensitivity": "confidential",
+        "provenance": ["sources/call-b"],
+    }
+    metadata.update(overrides)
+    return metadata
+
+
+def test_build_merged_document_scalar_fields_survivor_wins() -> None:
+    """Requirement: Frontmatter-Conflict Resolution -- a scalar present on
+    both sides keeps the SURVIVOR's value."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(),
+        "Survivor body.",
+        _absorbed_metadata(),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["title"] == "Stoicism"
+    assert merged["description"] == "Survivor description."
+    assert merged["status"] == "active"
+    assert merged["version"] == 1
+
+
+def test_build_merged_document_scalar_only_on_absorbed_fills_the_gap() -> None:
+    """A scalar present ONLY on the absorbed side (missing from the
+    survivor) fills the gap rather than being dropped."""
+    survivor = _survivor_metadata()
+    del survivor["status"]
+
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        _absorbed_metadata(),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["status"] == "draft"
+
+
+def test_build_merged_document_list_fields_union_deduped_order_preserving() -> None:
+    """List-valued fields (`tags`, `provenance`) union, deduped, preserving
+    first-seen order across survivor-then-absorbed."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(tags=["philosophy", "stoicism"]),
+        "Survivor body.",
+        _absorbed_metadata(tags=["stoicism", "ethics"]),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["tags"] == ["philosophy", "stoicism", "ethics"]
+    assert merged["provenance"] == ["sources/call-a", "sources/call-b"]
+
+
+def test_build_merged_document_freshness_and_timestamp_from_most_recent() -> None:
+    """`freshness`+`timestamp` are taken TOGETHER from whichever side has the
+    more recent `timestamp` -- here the absorbed side."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(timestamp="2026-07-10T09:00:00Z", freshness="snapshot"),
+        "Survivor body.",
+        _absorbed_metadata(timestamp="2026-07-14T09:00:00Z", freshness="verified"),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["timestamp"] == "2026-07-14T09:00:00Z"
+    assert merged["freshness"] == "verified"
+
+
+def test_build_merged_document_freshness_survivor_wins_when_more_recent() -> None:
+    """The survivor's own `freshness`/`timestamp` is kept when it is the more
+    recent of the two."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(timestamp="2026-07-20T09:00:00Z", freshness="verified"),
+        "Survivor body.",
+        _absorbed_metadata(timestamp="2026-07-01T09:00:00Z", freshness="snapshot"),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["timestamp"] == "2026-07-20T09:00:00Z"
+    assert merged["freshness"] == "verified"
+
+
+def test_build_merged_document_freshness_falls_back_to_survivor_on_malformed_timestamp() -> (
+    None
+):
+    """An unparseable timestamp on either side fails closed to the same
+    survivor-wins default as any other scalar, rather than crashing."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(timestamp="not-a-timestamp", freshness="snapshot"),
+        "Survivor body.",
+        _absorbed_metadata(timestamp="2026-07-14T09:00:00Z", freshness="verified"),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["timestamp"] == "not-a-timestamp"
+    assert merged["freshness"] == "snapshot"
+
+
+def test_build_merged_document_freshness_falls_back_to_survivor_on_non_string_timestamp() -> (
+    None
+):
+    """A non-string `timestamp` (e.g. dirty frontmatter carrying an int)
+    also fails closed to survivor-wins, same as an unparseable string."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(timestamp="2026-07-10T09:00:00Z", freshness="snapshot"),
+        "Survivor body.",
+        _absorbed_metadata(timestamp=12345, freshness="verified"),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["timestamp"] == "2026-07-10T09:00:00Z"
+    assert merged["freshness"] == "snapshot"
+
+
+def test_build_merged_document_sensitivity_recomputed_via_combine_sensitivity() -> None:
+    """Sensitivity is RECOMPUTED (high-water-mark), never copied from either
+    side verbatim."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(sensitivity="private"),
+        "Survivor body.",
+        _absorbed_metadata(sensitivity="confidential"),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["sensitivity"] == "confidential"
+
+
+def test_build_merged_document_body_appends_absorbed_under_delimited_heading() -> None:
+    """The merged body is the survivor's body, followed by a delimited
+    `## Merged content ({absorbed_id})` heading, followed by the absorbed
+    body -- never an overwrite."""
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "# Survivor\n\nSurvivor body.",
+        _absorbed_metadata(),
+        "# Absorbed\n\nAbsorbed body.",
+        "concepts/absorbed-id",
+    )
+
+    assert "Survivor body." in body
+    assert "## Merged content (concepts/absorbed-id)" in body
+    assert "Absorbed body." in body
+    assert body.index("Survivor body.") < body.index("## Merged content")
+    assert body.index("## Merged content") < body.index("Absorbed body.")
+
+
+def test_build_merged_document_body_already_newline_terminated_is_not_doubled() -> None:
+    """When the absorbed body already ends with a trailing newline, no
+    extra blank line is appended on top of it."""
+    _, body = okf.build_merged_document(
+        _survivor_metadata(),
+        "Survivor body.",
+        _absorbed_metadata(),
+        "Absorbed body.\n",
+        "absorbed-id",
+    )
+
+    assert body.endswith("Absorbed body.\n")
+    assert not body.endswith("Absorbed body.\n\n")
+
+
+def test_build_merged_document_list_union_handles_unhashable_items() -> None:
+    """A frontmatter list containing unhashable items (e.g. dicts -- OKF's
+    unknown-key tolerance permits arbitrary structured values) must union
+    without crashing: `_union_dedup` must not require hashability."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(related=[{"ref": "a"}]),
+        "Survivor body.",
+        _absorbed_metadata(related=[{"ref": "a"}, {"ref": "b"}]),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["related"] == [{"ref": "a"}, {"ref": "b"}]
+
+
+def test_build_merged_document_freshness_fails_closed_on_mixed_aware_naive_timestamps() -> (
+    None
+):
+    """A timezone-AWARE vs NAIVE timestamp pair must not crash the freshness
+    comparison; per `_absorbed_is_more_recent`'s docstring, any comparison
+    failure fails closed to `False` (survivor wins)."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(timestamp="2026-07-10T09:00:00", freshness="snapshot"),
+        "Survivor body.",
+        _absorbed_metadata(timestamp="2026-07-14T09:00:00Z", freshness="verified"),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert merged["timestamp"] == "2026-07-10T09:00:00"
+    assert merged["freshness"] == "snapshot"
+
+
+def test_build_merged_document_excludes_merged_from_key_from_generic_combine() -> None:
+    """A pre-existing `merged_from` key on either side is never propagated by
+    the generic combine -- the ledger is owned exclusively by `plan_merge`."""
+    survivor = _survivor_metadata()
+    survivor["merged_from"] = [{"schema": "x"}]
+
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        _absorbed_metadata(),
+        "Absorbed body.",
+        "absorbed-id",
+    )
+
+    assert okf.MERGED_FROM_KEY not in merged
+
+
+# -- U2: `merged_from` ledger encode/decode (Phase 2, tasks 2.3/2.4) ------
+
+
+def _sample_ledger_entry(**overrides: object) -> okf.MergeLedgerEntry:
+    """A realistic `MergeLedgerEntry`, including a snapshot whose OWN body
+    contains a `---` divider and a fenced code block, so round-trip tests
+    exercise the exact drift case ADR-0002 calls out."""
+    tricky_snapshot = (
+        "---\ntype: Concept\ntitle: Absorbed\n---\n"
+        "Body with a fence:\n\n"
+        "```python\nx = 1\n---\ny = 2\n```\n\n"
+        "And a literal --- divider in text.\n"
+    )
+    defaults: dict[str, object] = {
+        "schema": okf.MERGE_LEDGER_SCHEMA_V1,
+        "merged_at": "2026-07-20T00:00:00Z",
+        "absorbed_id": "concepts/absorbed-id",
+        "absorbed_snapshot": tricky_snapshot,
+        "survivor_before": "---\ntype: Concept\n---\nSurvivor before.\n",
+        "index_before": "---\nokf_version: '0.1'\n---\n# Concepts\n",
+        "log_before": "# Directory Update Log\n\n## 2026-07-19\n\n* Entry.\n",
+        "link_rewrites": [
+            okf.LinkRewrite(
+                file="concepts/other.md",
+                old_link="/concepts/absorbed-id.md",
+                new_link="/concepts/survivor-id.md",
+                offset=42,
+            )
+        ],
+        "sensitivity_before": "private",
+        "sensitivity_after": "confidential",
+    }
+    defaults.update(overrides)
+    return okf.MergeLedgerEntry(**defaults)  # type: ignore[arg-type]
+
+
+def test_merge_ledger_entry_round_trips_through_frontmatter_losslessly() -> None:
+    """A `merged_from` ledger entry -- including a snapshot whose OWN body
+    contains a `---` divider and a fenced code block -- round-trips
+    losslessly through `dump_frontmatter`/`load_frontmatter`: every string
+    field is restored byte-for-byte, never re-dumped from a reparsed dict
+    (D2/ADR-0002)."""
+    entry = _sample_ledger_entry()
+
+    metadata: dict[str, object] = {"type": "Concept"}
+    metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter(metadata, "Survivor body.")
+
+    loaded_metadata, _ = okf.load_frontmatter(text)
+    decoded = okf.decode_merged_from(loaded_metadata)
+
+    assert decoded == [entry]
+
+
+def test_decode_merged_from_absent_key_returns_empty_list() -> None:
+    """A survivor with no prior merges (`merged_from` absent) decodes to []."""
+    assert okf.decode_merged_from({"type": "Concept"}) == []
+
+
+def test_decode_merged_from_rejects_non_list_value() -> None:
+    """A malformed `merged_from` that is not a list fails closed."""
+    with pytest.raises(ValueError, match="merged_from"):
+        okf.decode_merged_from({"merged_from": "not-a-list"})
+
+
+def test_decode_merge_ledger_entry_rejects_missing_field() -> None:
+    """A ledger entry dict missing a required field fails closed rather than
+    silently defaulting."""
+    with pytest.raises(ValueError, match="missing field"):
+        okf.decode_merged_from(
+            {"merged_from": [{"schema": okf.MERGE_LEDGER_SCHEMA_V1}]}
+        )
+
+
+def test_decode_merge_ledger_entry_rejects_non_mapping_item() -> None:
+    """A `merged_from` list item that is not a mapping fails closed."""
+    with pytest.raises(ValueError, match="mapping"):
+        okf.decode_merged_from({"merged_from": ["not-a-dict"]})
+
+
+def _valid_encoded_entry(**overrides: object) -> dict[str, object]:
+    """A complete, valid plain-dict `merged_from` entry (as
+    `encode_merge_ledger_entry` would produce), letting tests corrupt one
+    field at a time."""
+    entry = okf.encode_merge_ledger_entry(_sample_ledger_entry())
+    entry.update(overrides)
+    return entry
+
+
+def test_decode_merge_ledger_entry_rejects_non_mapping_link_rewrite_item() -> None:
+    """A `link_rewrites` list item that is not itself a mapping fails
+    closed, distinct from a missing/malformed top-level entry field."""
+    entry = _valid_encoded_entry(link_rewrites=["not-a-dict"])
+
+    with pytest.raises(ValueError, match="link_rewrites entry must be a mapping"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_decode_merge_ledger_entry_rejects_link_rewrite_missing_field() -> None:
+    """A `link_rewrites` list item missing a required field fails closed."""
+    entry = _valid_encoded_entry(link_rewrites=[{"file": "concepts/other.md"}])
+
+    with pytest.raises(ValueError, match="link_rewrites entry missing field"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_link_rewrite_offset_round_trips_through_frontmatter_losslessly() -> None:
+    """`LinkRewrite.offset` -- the positional disambiguator that lets
+    `bundle/links.py::reverse_link_rewrites` revert an EXACT occurrence even
+    when a file's post-merge text contains two identical
+    `](/survivor.md)`-shaped targets (one rewritten, one coincidentally
+    pre-existing) -- round-trips through encode/frontmatter/decode exactly,
+    not just the pre-existing three fields."""
+    entry = _sample_ledger_entry(
+        link_rewrites=[
+            okf.LinkRewrite(
+                file="concepts/other.md",
+                old_link="/concepts/absorbed-id.md",
+                new_link="/concepts/survivor-id.md",
+                offset=123,
+            )
+        ]
+    )
+
+    metadata: dict[str, object] = {"type": "Concept"}
+    metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter(metadata, "Survivor body.")
+
+    loaded_metadata, _ = okf.load_frontmatter(text)
+    decoded = okf.decode_merged_from(loaded_metadata)
+
+    assert decoded == [entry]
+    assert decoded[0].link_rewrites[0].offset == 123
+
+
+def test_decode_merge_ledger_entry_rejects_link_rewrite_missing_offset_field() -> None:
+    """A `link_rewrites` list item missing the `offset` field fails closed,
+    same as any other required field -- a corrupt/pre-fix ledger entry must
+    never be silently re-read as `offset=0`."""
+    entry = _valid_encoded_entry(
+        link_rewrites=[
+            {
+                "file": "concepts/other.md",
+                "old_link": "/concepts/absorbed-id.md",
+                "new_link": "/concepts/survivor-id.md",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="link_rewrites entry missing field"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        pytest.param(
+            "line one   \nline two\t\nline three   \n", id="trailing-whitespace"
+        ),
+        pytest.param(
+            "---\ntitle: Ünïcödé résumé\n---\n日本語のコンテンツ\n\n🎉 emoji too.\n",
+            id="unicode",
+        ),
+        pytest.param("line one\r\nline two\r\nline three\r\n", id="crlf"),
+        pytest.param("no trailing newline at all", id="no-trailing-newline"),
+    ],
+)
+def test_merge_ledger_entry_round_trips_adversarial_snapshot_content(
+    snapshot: str,
+) -> None:
+    """Adversarial round-trip losslessness: `encode` -> frontmatter ->
+    `decode` must return the EXACT, byte-identical snapshot string for
+    trailing whitespace, unicode, CRLF line endings, and missing trailing
+    newlines -- the ledger format is verbatim-lossless, per ADR-0002."""
+    entry = _sample_ledger_entry(absorbed_snapshot=snapshot, survivor_before=snapshot)
+
+    metadata: dict[str, object] = {"type": "Concept"}
+    metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter(metadata, "Survivor body.")
+
+    loaded_metadata, _ = okf.load_frontmatter(text)
+    decoded = okf.decode_merged_from(loaded_metadata)
+
+    assert decoded == [entry]
+    assert decoded[0].absorbed_snapshot == snapshot
+    assert decoded[0].survivor_before == snapshot
+
+
+def test_decode_merge_ledger_entry_rejects_unsupported_schema_version() -> None:
+    """A `schema` value other than `MERGE_LEDGER_SCHEMA_V1` must be rejected
+    rather than silently reinterpreted as v1 -- ADR-0002's "migrate rather
+    than silently reinterpret" promise."""
+    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v2")
+
+    with pytest.raises(ValueError, match="unsupported merged_from schema version"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_decode_merge_ledger_entry_rejects_non_iterable_link_rewrites() -> None:
+    """A `link_rewrites` value that is not even iterable (e.g. an int) fails
+    closed with the "malformed" message, not a missing-field one."""
+    entry = _valid_encoded_entry(link_rewrites=123)
+
+    with pytest.raises(ValueError, match="merged_from entry malformed"):
+        okf.decode_merged_from({"merged_from": [entry]})
