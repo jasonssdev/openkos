@@ -54,15 +54,15 @@ Chain strategy: feature-branch-chain
 - [x] 4.6 GREEN: wire Phase B ordering
 
 ## Phase 5: U5 — `unmerge` + Round-Trip Parity
-- [ ] 5.1 RED (threat: collision): non-tail `absorbed-id` refuses, no write
-- [ ] 5.2 RED: unmerge of non-merged pair refuses, no write
-- [ ] 5.3 GREEN: `unmerge` verb — LIFO-tail check, restore survivor/absorbed/index/`log_before`, reverse rewrites, append audit line
-- [ ] 5.4 RED property (single): merge(A,B)→unmerge(A,B) byte-identical (log.md growth excepted)
-- [ ] 5.5 RED property (sequential/LIFO): merge(A,B)→merge(A,C)→unmerge(A,C)→unmerge(A,B) → original bytes
-- [ ] 5.6 GREEN: fix drift until 5.4/5.5 pass
-- [ ] 5.7 RED (threat: link drift): fail-closed if `new_link` absent
+- [x] 5.1 RED (threat: collision): non-tail `absorbed-id` refuses, no write
+- [x] 5.2 RED: unmerge of non-merged pair refuses, no write
+- [x] 5.3 GREEN: `unmerge` verb — LIFO-tail check, restore survivor/absorbed/index/`log_before`, reverse rewrites, append audit line
+- [x] 5.4 RED property (single): merge(A,B)→unmerge(A,B) byte-identical (log.md growth excepted)
+- [x] 5.5 RED property (sequential/LIFO): merge(A,B)→merge(A,C)→unmerge(A,C)→unmerge(A,B) → original bytes
+- [x] 5.6 GREEN: fix drift until 5.4/5.5 pass
+- [x] 5.7 RED (threat: link drift): fail-closed if `new_link` absent
 
 ## Phase 6: Docs & ADR Promotion
-- [ ] 6.1 Flip ADR-0002/0003 status Proposed→Accepted post-review
-- [ ] 6.2 Update `docs/knowledge-object-model.md`, `docs/cli.md`
-- [ ] 6.3 Verify ≥90% branch coverage, mypy strict, ruff clean
+- [ ] 6.1 Flip ADR-0002/0003 status Proposed→Accepted post-review (deferred to archive)
+- [x] 6.2 Update `docs/knowledge-object-model.md`, `docs/cli.md`
+- [x] 6.3 Verify ≥90% branch coverage, mypy strict, ruff clean
