@@ -47,8 +47,8 @@ openkos/
 │   │   ├── ollama.py
 │   │   └── openai_compat.py
 │   ├── embeddings/
-│   │   ├── base.py
-│   │   └── sentence_transformers.py
+│   │   ├── base.py            # the Embedder Protocol
+│   │   └── ollama.py          # embeddings via the same Ollama runtime
 │   ├── producers/            # ingesters — the plugin surface
 │   │   ├── base.py           # Producer interface
 │   │   ├── text.py           # MVP 1
