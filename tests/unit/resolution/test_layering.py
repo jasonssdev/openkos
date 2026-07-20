@@ -5,6 +5,12 @@ the canonical layer (`model`/`bundle`/`state`) MUST NOT import
 `openkos.resolution` (design.md's Layering section). `resolution` itself
 may import `openkos.model.okf` read-only (the reverse direction), which is
 asserted separately below, and this slice does not import `openkos.graph`.
+
+Slice 2 (entity-resolution adjudication) adds a POSITIVE assertion:
+`resolution` MAY import `openkos.llm` (a sibling, not canonical) -- the
+`adjudication` leaf injects an `LLMBackend` -- which keeps the AST guard
+non-vacuous by proving the allowed import actually happens somewhere,
+rather than merely asserting the forbidden ones don't.
 """
 
 import ast
@@ -50,6 +56,22 @@ def test_resolution_package_does_not_import_graph() -> None:
             module == "openkos.graph" or module.startswith("openkos.graph.")
             for module in modules
         ), f"{path} imports openkos.graph"
+
+
+def test_resolution_may_import_llm() -> None:
+    """`resolution` MAY import `openkos.llm` (design.md, slice 2): the
+    `adjudication` leaf injects an `LLMBackend` rather than constructing an
+    `OllamaClient` itself. A POSITIVE assertion -- not just "not
+    forbidden" -- so this guard stays non-vacuous: it proves `openkos.llm`
+    really is imported somewhere under `resolution`, and would fail loudly
+    if that import were ever removed without updating this test."""
+    resolution_dir = _SRC_ROOT / "resolution"
+    imports_llm = any(
+        module == "openkos.llm" or module.startswith("openkos.llm.")
+        for path in resolution_dir.rglob("*.py")
+        for module in _collect_imported_modules(path.read_text())
+    )
+    assert imports_llm, "expected `resolution` to import `openkos.llm` somewhere"
 
 
 def test_resolution_only_imports_model_okf_from_canonical() -> None:
