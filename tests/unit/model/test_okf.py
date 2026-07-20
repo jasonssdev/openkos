@@ -1024,6 +1024,7 @@ def test_build_merged_document_scalar_fields_survivor_wins() -> None:
         _absorbed_metadata(),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["title"] == "Stoicism"
@@ -1044,6 +1045,7 @@ def test_build_merged_document_scalar_only_on_absorbed_fills_the_gap() -> None:
         _absorbed_metadata(),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["status"] == "draft"
@@ -1058,6 +1060,7 @@ def test_build_merged_document_list_fields_union_deduped_order_preserving() -> N
         _absorbed_metadata(tags=["stoicism", "ethics"]),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["tags"] == ["philosophy", "stoicism", "ethics"]
@@ -1073,6 +1076,7 @@ def test_build_merged_document_freshness_and_timestamp_from_most_recent() -> Non
         _absorbed_metadata(timestamp="2026-07-14T09:00:00Z", freshness="verified"),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["timestamp"] == "2026-07-14T09:00:00Z"
@@ -1088,6 +1092,7 @@ def test_build_merged_document_freshness_survivor_wins_when_more_recent() -> Non
         _absorbed_metadata(timestamp="2026-07-01T09:00:00Z", freshness="snapshot"),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["timestamp"] == "2026-07-20T09:00:00Z"
@@ -1105,6 +1110,7 @@ def test_build_merged_document_freshness_falls_back_to_survivor_on_malformed_tim
         _absorbed_metadata(timestamp="2026-07-14T09:00:00Z", freshness="verified"),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["timestamp"] == "not-a-timestamp"
@@ -1122,6 +1128,7 @@ def test_build_merged_document_freshness_falls_back_to_survivor_on_non_string_ti
         _absorbed_metadata(timestamp=12345, freshness="verified"),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["timestamp"] == "2026-07-10T09:00:00Z"
@@ -1137,6 +1144,7 @@ def test_build_merged_document_sensitivity_recomputed_via_combine_sensitivity() 
         _absorbed_metadata(sensitivity="confidential"),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["sensitivity"] == "confidential"
@@ -1152,6 +1160,7 @@ def test_build_merged_document_body_appends_absorbed_under_delimited_heading() -
         _absorbed_metadata(),
         "# Absorbed\n\nAbsorbed body.",
         "concepts/absorbed-id",
+        "concepts/survivor-id",
     )
 
     assert "Survivor body." in body
@@ -1170,6 +1179,7 @@ def test_build_merged_document_body_already_newline_terminated_is_not_doubled() 
         _absorbed_metadata(),
         "Absorbed body.\n",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert body.endswith("Absorbed body.\n")
@@ -1186,6 +1196,7 @@ def test_build_merged_document_list_union_handles_unhashable_items() -> None:
         _absorbed_metadata(related=[{"ref": "a"}, {"ref": "b"}]),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["related"] == [{"ref": "a"}, {"ref": "b"}]
@@ -1203,6 +1214,7 @@ def test_build_merged_document_freshness_fails_closed_on_mixed_aware_naive_times
         _absorbed_metadata(timestamp="2026-07-14T09:00:00Z", freshness="verified"),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert merged["timestamp"] == "2026-07-10T09:00:00"
@@ -1221,6 +1233,7 @@ def test_build_merged_document_excludes_merged_from_key_from_generic_combine() -
         _absorbed_metadata(),
         "Absorbed body.",
         "absorbed-id",
+        "survivor-id",
     )
 
     assert okf.MERGED_FROM_KEY not in merged
@@ -1434,6 +1447,148 @@ def test_decode_merge_ledger_entry_rejects_non_iterable_link_rewrites() -> None:
 
 
 # -- U3: `relations:` codec (Phase 1, tasks 1.3-1.6) -----------------------
+
+
+def test_merge_relations_union_retarget_self_loop_drop_and_dedupe() -> None:
+    """`merge_relations` unions survivor+absorbed relations, retargets any
+    entry whose target is the absorbed id to the survivor id, drops every
+    RESULTING survivor->survivor self-loop (whether from a retarget or from
+    an absorbed-side edge that already pointed at the survivor), and dedupes
+    an exact-duplicate `(target, type)` collision (spec: "Outbound relations
+    move to the survivor", "Resulting self-loop is dropped, non-silently",
+    "Duplicate edge is deduped, non-silently"; design D2; task 1.1)."""
+    survivor_relations = [
+        okf.Relation(target="concepts/kept", type="references"),
+        okf.Relation(target="concepts/absorbed", type="depends_on"),
+    ]
+    absorbed_relations = [
+        okf.Relation(target="concepts/other", type="related_to"),
+        okf.Relation(target="concepts/survivor", type="caused_by"),
+        okf.Relation(target="concepts/kept", type="references"),
+    ]
+
+    merged, dropped_self_loops, deduped_collisions = okf.merge_relations(
+        survivor_relations,
+        absorbed_relations,
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+    )
+
+    assert merged == [
+        okf.Relation(target="concepts/kept", type="references"),
+        okf.Relation(target="concepts/other", type="related_to"),
+    ]
+    assert dropped_self_loops == [
+        okf.Relation(target="concepts/survivor", type="depends_on"),
+        okf.Relation(target="concepts/survivor", type="caused_by"),
+    ]
+    assert deduped_collisions == [
+        okf.Relation(target="concepts/kept", type="references")
+    ]
+
+
+def test_merge_relations_absorbed_pre_existing_self_loop_retargets_then_drops() -> (
+    None
+):
+    """The delicate absorbed-self-loop branch: an absorbed relation already
+    targeting the absorbed id itself retargets to the survivor id and is then
+    dropped as a RESULTING survivor self-loop -- never carried onto the
+    survivor as a dangling `target: absorbed_id` edge (design D2)."""
+    merged, dropped_self_loops, deduped_collisions = okf.merge_relations(
+        [],
+        [okf.Relation(target="concepts/absorbed", type="part_of")],
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+    )
+
+    assert merged == []
+    assert dropped_self_loops == [
+        okf.Relation(target="concepts/survivor", type="part_of")
+    ]
+    assert deduped_collisions == []
+
+
+def test_merge_relations_survivor_pre_existing_self_loop_is_left_untouched() -> None:
+    """The delicate survivor-self-loop branch: a survivor relation already
+    targeting the survivor id (a pre-existing self-loop unrelated to this
+    merge) is LEFT in place, not dropped -- only a self-loop RESULTING from the
+    merge (a retarget, or an absorbed-side edge to the survivor) is dropped
+    (design D2)."""
+    merged, dropped_self_loops, deduped_collisions = okf.merge_relations(
+        [okf.Relation(target="concepts/survivor", type="related_to")],
+        [],
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+    )
+
+    assert merged == [okf.Relation(target="concepts/survivor", type="related_to")]
+    assert dropped_self_loops == []
+    assert deduped_collisions == []
+
+
+def test_merge_relations_no_relations_on_either_side_returns_all_empty() -> None:
+    """Scenario: "Merge of an object with no typed relations proceeds
+    unaffected" -- no survivor/absorbed relations yields three empty
+    lists, never an error."""
+    merged, dropped_self_loops, deduped_collisions = okf.merge_relations(
+        [], [], survivor_id="concepts/survivor", absorbed_id="concepts/absorbed"
+    )
+
+    assert merged == []
+    assert dropped_self_loops == []
+    assert deduped_collisions == []
+
+
+def test_build_merged_document_relations_never_emit_absorbed_target_or_self_loop() -> (
+    None
+):
+    """`build_merged_document` never emits a `relations:` entry whose target
+    is the absorbed id (a dangling edge) or a survivor->survivor self-loop,
+    when both survivor and absorbed carry `relations:` (spec: "Merge of an
+    edge-bearing object always succeeds"; design D2; task 1.2)."""
+    survivor = _survivor_metadata(
+        relations=[{"target": "concepts/absorbed", "type": "depends_on"}]
+    )
+    absorbed = _absorbed_metadata(
+        relations=[
+            {"target": "concepts/other", "type": "related_to"},
+            {"target": "concepts/survivor", "type": "caused_by"},
+        ]
+    )
+
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        absorbed,
+        "Absorbed body.",
+        "concepts/absorbed",
+        "concepts/survivor",
+    )
+
+    relation_targets = {
+        relation.target for relation in okf.decode_relations(merged)
+    }
+    assert "concepts/absorbed" not in relation_targets
+    assert "concepts/survivor" not in relation_targets
+    assert relation_targets == {"concepts/other"}
+
+
+def test_build_merged_document_no_relations_key_when_neither_side_carries_one() -> (
+    None
+):
+    """A merge of two documents with no `relations:` key on either side does
+    not introduce one (spec: "Absent relations key is valid" preserved
+    through a merge)."""
+    merged, _ = okf.build_merged_document(
+        _survivor_metadata(),
+        "Survivor body.",
+        _absorbed_metadata(),
+        "Absorbed body.",
+        "absorbed-id",
+        "survivor-id",
+    )
+
+    assert okf.RELATIONS_KEY not in merged
 
 
 def test_relations_round_trip_through_frontmatter(tmp_path: Path) -> None:

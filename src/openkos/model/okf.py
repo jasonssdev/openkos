@@ -509,6 +509,74 @@ def decode_relations(metadata: dict[str, object]) -> list[Relation]:
     return [decode_relation(item) for item in raw]
 
 
+def merge_relations(
+    survivor_relations: list[Relation],
+    absorbed_relations: list[Relation],
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+) -> tuple[list[Relation], list[Relation], list[Relation]]:
+    """Combine a survivor's and an absorbed object's `relations:` lists into
+    the merged survivor's outbound edges (design D2; spec: "Reversible
+    Typed-Relation Rewiring"): OUTBOUND move, SELF-LOOP drop, survivor-side
+    DEDUPE -- the atomic pair with the guard removal (task 1.1-1.4). This is
+    the ONLY place that computes the OUTBOUND-merge relation set; inbound
+    third-party retargeting is a separate, later concern
+    (`bundle/relations.py`, PR2).
+
+    Every entry from `survivor_relations`, then every entry from
+    `absorbed_relations`, is considered in turn (order-preserving, mirrors
+    `_union_dedup`): an entry whose `target` equals `absorbed_id` is
+    RETARGETED to `survivor_id` regardless of which side it came from -- the
+    absorbed object's own edges move onto the survivor, and a survivor edge
+    that already pointed at the soon-to-vanish absorbed id is redirected
+    rather than left dangling.
+
+    An entry is a RESULTING self-loop -- dropped, never emitted -- when its
+    final target is `survivor_id` AND it came from the absorbed side (its
+    source object is becoming the survivor, so any edge back at the
+    survivor is now the survivor pointing at itself), OR it was retargeted
+    from `absorbed_id` (the retarget itself produced the self-loop). A
+    survivor-side entry that ALREADY targeted `survivor_id` before this
+    merge (a pre-existing, unrelated self-loop) is left untouched -- that is
+    not this merge's business to silently rewrite.
+
+    An entry duplicating one already accepted into the merged list (by
+    `(target, type)` equality) is a COLLISION -- dropped, reported, never
+    duplicated.
+
+    Returns `(merged, dropped_self_loops, deduped_collisions)`: the merged,
+    order-preserving relation list (still to be re-emitted via
+    `encode_relations` for its final `(target, type)` sort), plus the two
+    non-silent drop reports a future preview/ledger consumes (PR3).
+    """
+    merged: list[Relation] = []
+    dropped_self_loops: list[Relation] = []
+    deduped_collisions: list[Relation] = []
+
+    def _process(relation: Relation, *, from_absorbed: bool) -> None:
+        was_retargeted = relation.target == absorbed_id
+        retargeted = (
+            Relation(target=survivor_id, type=relation.type)
+            if was_retargeted
+            else relation
+        )
+        if retargeted.target == survivor_id and (from_absorbed or was_retargeted):
+            dropped_self_loops.append(retargeted)
+            return
+        if retargeted in merged:
+            deduped_collisions.append(retargeted)
+            return
+        merged.append(retargeted)
+
+    for relation in survivor_relations:
+        _process(relation, from_absorbed=False)
+    for relation in absorbed_relations:
+        _process(relation, from_absorbed=True)
+
+    return merged, dropped_self_loops, deduped_collisions
+
+
 def _parse_timestamp(value: object) -> datetime | None:
     """Parse `value` as an ISO-8601 timestamp, returning `None` on anything
     unparseable (missing, non-string, or malformed) rather than raising --
@@ -569,14 +637,16 @@ def build_merged_document(
     absorbed_metadata: dict[str, object],
     absorbed_body: str,
     absorbed_id: str,
+    survivor_id: str,
 ) -> tuple[dict[str, object], str]:
     """Combine a survivor and an absorbed document into the merged survivor
-    document's (metadata, body) -- the frontmatter-conflict and body-append
-    rules ONLY (spec: Frontmatter-Conflict Resolution, Sensitivity
-    High-Water-Mark Recomputation). Does NOT touch the `merged_from`
-    ledger -- that is `bundle/merge.py::plan_merge`'s exclusive
-    responsibility, so any pre-existing `merged_from` key on EITHER side is
-    dropped here rather than propagated.
+    document's (metadata, body) -- the frontmatter-conflict, body-append,
+    and OUTBOUND typed-relation rules (spec: Frontmatter-Conflict
+    Resolution, Sensitivity High-Water-Mark Recomputation, Reversible
+    Typed-Relation Rewiring). Does NOT touch the `merged_from` ledger --
+    that is `bundle/merge.py::plan_merge`'s exclusive responsibility, so any
+    pre-existing `merged_from` key on EITHER side is dropped here rather
+    than propagated.
 
     Field-kind rules: a scalar present on both sides keeps the SURVIVOR's
     value; a scalar present on only one side fills the gap; a list-valued
@@ -586,6 +656,15 @@ def build_merged_document(
     taken TOGETHER from whichever side has the strictly more recent
     `timestamp` (`_absorbed_is_more_recent`), falling back to the
     survivor's own value when either timestamp is missing/unparseable.
+    `relations:` is EXCLUDED from the generic list-union (which cannot tell
+    a dangling `target: {absorbed_id}` edge or a resulting self-loop from
+    any other list value) and instead computed via the dedicated
+    `merge_relations` (design D2, `survivor_id` is required for its
+    self-loop check): the merged document NEVER carries a relation
+    targeting the now-absorbed id, nor a survivor->survivor self-loop
+    introduced by this merge. An empty merged relation set omits the
+    `relations:` key entirely, preserving "absent relations key is valid"
+    through a merge with no edges on either side.
 
     Body: the survivor's body, then a delimited
     `## Merged content ({absorbed_id})` heading, then the absorbed body --
@@ -604,7 +683,13 @@ def build_merged_document(
         merged["timestamp"] = survivor_metadata.get("timestamp")
         merged["freshness"] = survivor_metadata.get("freshness")
 
-    _SPECIAL_KEYS = ("sensitivity", "freshness", "timestamp", MERGED_FROM_KEY)
+    _SPECIAL_KEYS = (
+        "sensitivity",
+        "freshness",
+        "timestamp",
+        MERGED_FROM_KEY,
+        RELATIONS_KEY,
+    )
     for key, absorbed_value in absorbed_metadata.items():
         if key in _SPECIAL_KEYS:
             continue
@@ -620,6 +705,17 @@ def build_merged_document(
     merged["sensitivity"] = combine_sensitivity(
         survivor_metadata.get("sensitivity"), absorbed_metadata.get("sensitivity")
     )
+
+    merged_relations, _dropped_self_loops, _deduped_collisions = merge_relations(
+        decode_relations(survivor_metadata),
+        decode_relations(absorbed_metadata),
+        survivor_id=survivor_id,
+        absorbed_id=absorbed_id,
+    )
+    if merged_relations:
+        merged[RELATIONS_KEY] = encode_relations(merged_relations)
+    else:
+        merged.pop(RELATIONS_KEY, None)
 
     separator = f"\n\n## Merged content ({absorbed_id})\n\n"
     merged_body = survivor_body.rstrip("\n") + separator + absorbed_body

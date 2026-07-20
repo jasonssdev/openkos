@@ -10,7 +10,6 @@ ledger primitives into the full pre-merge snapshot set ADR-0002 requires,
 and the LIFO-tail-enforced reversal `unmerge` needs.
 """
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 from openkos.model import okf
@@ -42,92 +41,6 @@ class UnmergePlan:
     restored_log: str
     link_rewrites: list[okf.LinkRewrite]
     entry: okf.MergeLedgerEntry
-
-
-@dataclass(frozen=True)
-class RelationConflict:
-    """One typed-relation edge a merge would orphan, since this slice has
-    no edge-rewiring yet (design: MERGE GUARD -- REFUSE, fail-closed).
-    `source_id` is the bundle-relative concept-id whose `relations:` entry
-    is responsible: the absorbed object itself for an OUTBOUND conflict
-    (its own edge would be stripped), or another bundle file (which may be
-    the survivor) for an INBOUND conflict (its edge would dangle, pointing
-    at a concept-id that no longer exists). `relation` is the specific
-    `okf.Relation` entry causing the conflict."""
-
-    source_id: str
-    relation: okf.Relation
-
-
-def find_relation_conflicts(
-    absorbed_id: str, files: Mapping[str, str], absorbed_text: str
-) -> list[RelationConflict]:
-    """Pure Phase-A scan: detect every typed-relation edge a merge of
-    `absorbed_id` would orphan (spec: Non-Silent Guard For Edge-Bearing
-    Merge). Full reversible rewiring of typed edges through merge/unmerge
-    is OUT OF SCOPE for this slice (Non-Goal -- deferred); this function
-    only DETECTS the conflict so the caller can refuse before any write.
-
-    Two directions are checked:
-
-    OUTBOUND -- `absorbed_text`'s OWN `relations:` entries (decoded from
-    its frontmatter): merging strips the absorbed object with no
-    rewiring, so every entry there is a conflict.
-
-    INBOUND -- every file in `files` (bundle-relative path, `.md` suffix
-    included -- mirrors `merge`'s existing `other_files` scan shape --
-    mapped to its full text already in memory) whose `relations:` contains
-    an entry whose `target` equals `absorbed_id`: that edge would dangle,
-    pointing at a concept-id that no longer exists after the merge. The
-    caller is expected to include the SURVIVOR's own text in `files` too
-    (not just files third to the merge) -- an edge FROM the survivor TO
-    the absorbed object dangles exactly the same way as one from any other
-    file.
-
-    Returns `[]` when neither direction has a hit (spec: "Merge of an
-    object with no typed relations proceeds unaffected"). A malformed
-    `relations:` shape on `absorbed_text` itself is NOT this function's
-    concern: `okf.decode_relations` raises `ValueError` on one, which
-    propagates to the caller unhandled -- fail-closed, same as any other
-    Phase-A precondition failure on the two concepts being merged directly.
-
-    The INBOUND scan over `files`, however, parses frontmatter for every
-    OTHER bundle file -- files this merge otherwise never touches. A
-    malformed or unparseable frontmatter block there (e.g. a hand-edited,
-    unrelated file with a broken YAML scalar) must not crash or block an
-    otherwise-unrelated merge: mirrors `lint.py::collect_docs`'s identical
-    broad `except Exception` around the same `okf.load_frontmatter` call,
-    for the same "a concurrent/hand edit can corrupt frontmatter mid-scan"
-    rationale. That file is simply skipped (contributes no inbound
-    conflict) rather than surfaced as a fail-closed refusal -- a malformed
-    unrelated file is a separate §9 concern for `check_conformance`/`lint`,
-    not this guard's job.
-    """
-    conflicts: list[RelationConflict] = []
-
-    absorbed_metadata, _ = okf.load_frontmatter(absorbed_text)
-    for relation in okf.decode_relations(absorbed_metadata):
-        conflicts.append(RelationConflict(source_id=absorbed_id, relation=relation))
-
-    for file, text in files.items():
-        relations: list[okf.Relation] | None
-        try:
-            metadata, _ = okf.load_frontmatter(text)
-            relations = okf.decode_relations(metadata)
-        except Exception:  # broad: a concurrent/hand edit can corrupt
-            # frontmatter mid-scan in an unrelated file; skip it rather
-            # than crash or fail-close an otherwise-unrelated merge.
-            relations = None
-        if relations is None:
-            continue
-        source_id = file.removesuffix(".md")
-        for relation in relations:
-            if relation.target == absorbed_id:
-                conflicts.append(
-                    RelationConflict(source_id=source_id, relation=relation)
-                )
-
-    return conflicts
 
 
 def _reject_same_or_blank(survivor_id: str, absorbed_id: str) -> None:
@@ -193,7 +106,12 @@ def plan_merge(
     _reject_already_merged(absorbed_id, existing_entries)
 
     merged_metadata, merged_body = okf.build_merged_document(
-        survivor_metadata, survivor_body, absorbed_metadata, absorbed_body, absorbed_id
+        survivor_metadata,
+        survivor_body,
+        absorbed_metadata,
+        absorbed_body,
+        absorbed_id,
+        survivor_id,
     )
 
     sensitivity_before = survivor_metadata.get("sensitivity")
