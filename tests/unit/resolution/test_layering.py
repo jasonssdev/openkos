@@ -4,13 +4,23 @@ Mirrors `tests/unit/graph/test_base.py`'s AST-based canonical-import guard:
 the canonical layer (`model`/`bundle`/`state`) MUST NOT import
 `openkos.resolution` (design.md's Layering section). `resolution` itself
 may import `openkos.model.okf` read-only (the reverse direction), which is
-asserted separately below, and this slice does not import `openkos.graph`.
+asserted separately below.
 
 Slice 2 (entity-resolution adjudication) adds a POSITIVE assertion:
 `resolution` MAY import `openkos.llm` (a sibling, not canonical) -- the
 `adjudication` leaf injects an `LLMBackend` -- which keeps the AST guard
 non-vacuous by proving the allowed import actually happens somewhere,
 rather than merely asserting the forbidden ones don't.
+
+MVP-2 slice 2b (`llm-edge-production`) adds a second POSITIVE assertion:
+`resolution` MAY import `openkos.graph` too, now that `edge_typing.py`
+owns the `graph` read internally (derived -> derived is allowed; only
+canonical -> `graph` and `cli` -> `graph` stay forbidden, guarded
+separately by `tests/unit/graph/test_base.py`'s canonical-layer guard and
+`tests/unit/graph/test_analysis.py`'s "No CLI Surface" guard, both
+UNMODIFIED by this slice). This supersedes the prior "this slice does not
+import `openkos.graph`" assumption (see `resolution/__init__.py`'s
+docstring).
 """
 
 import ast
@@ -45,17 +55,21 @@ def test_canonical_layer_does_not_import_resolution(layer: str) -> None:
         ), f"{path} imports openkos.resolution"
 
 
-def test_resolution_package_does_not_import_graph() -> None:
-    """`resolution` does not depend on `graph` this slice (design.md: "does
-    not import `graph` this slice")."""
+def test_resolution_may_import_graph() -> None:
+    """`resolution` MAY import `openkos.graph` (design.md, slice 2b,
+    "llm-edge-production"): `edge_typing.py` owns the `graph` read
+    internally (derived -> derived, allowed) so `cli/main.py` never has to
+    import `openkos.graph` directly. A POSITIVE assertion -- not just "not
+    forbidden" -- so this guard stays non-vacuous: it proves `openkos.graph`
+    really is imported somewhere under `resolution`, and would fail loudly
+    if that import were ever removed without updating this test."""
     resolution_dir = _SRC_ROOT / "resolution"
-    for path in resolution_dir.rglob("*.py"):
-        modules = _collect_imported_modules(path.read_text())
-
-        assert not any(
-            module == "openkos.graph" or module.startswith("openkos.graph.")
-            for module in modules
-        ), f"{path} imports openkos.graph"
+    imports_graph = any(
+        module == "openkos.graph" or module.startswith("openkos.graph.")
+        for path in resolution_dir.rglob("*.py")
+        for module in _collect_imported_modules(path.read_text())
+    )
+    assert imports_graph, "expected `resolution` to import `openkos.graph` somewhere"
 
 
 def test_resolution_may_import_llm() -> None:

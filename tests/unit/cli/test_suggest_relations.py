@@ -1,0 +1,357 @@
+"""Unit tests for the `suggest-relations` CLI command: read-only LLM
+relation-type suggestion over untyped body-link edges (MVP-2 slice 2b).
+
+`suggest-relations` mirrors `adjudicate`'s wiring exactly: `config.
+require_workspace` gate -> `config.read_config` -> a real
+`OllamaClient(model=cfg.model)` built from the workspace's configured model
+-> `resolution.edge_typing.suggest_relations` (which owns the internal
+`build_graph` read). It is read-only: no writes, no `--auto`, no
+confirmation gate.
+
+Every test that needs a specific suggestion OUTCOME patches
+`openkos.cli.main.suggest_relations` directly (mirrors how `test_adjudicate.py`
+patches `openkos.cli.main.adjudicate_candidates`) -- zero network, zero real
+Ollama process.
+"""
+
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from openkos.cli.main import app
+from openkos.graph.base import Edge
+from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
+from openkos.resolution.edge_typing import EdgeSuggestion
+
+runner = CliRunner()
+
+
+def _snapshot_entry(path: Path) -> tuple[bytes, int] | None:
+    if path.is_dir():
+        return None
+    return path.read_bytes(), path.stat().st_mtime_ns
+
+
+def _snapshot(root: Path) -> dict[Path, tuple[bytes, int] | None]:
+    """Capture every entry under `root`, keyed by relative path, as its byte
+    contents and `st_mtime_ns` -- so a rewrite-with-identical-bytes (touch)
+    regression is caught, not just a content change."""
+    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
+
+
+def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+
+
+def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: {doc_type}\ntitle: {title}\n---\n# {title}\n",
+        encoding="utf-8",
+    )
+
+
+def _suggestion(
+    *,
+    source: str = "concepts/a",
+    target: str = "concepts/b",
+    suggested_type: str | None = "references",
+    rationale: str = "stub rationale",
+) -> EdgeSuggestion:
+    return EdgeSuggestion(
+        edge=Edge(source_id=source, target_id=target),
+        suggested_type=suggested_type,
+        rationale=rationale,
+    )
+
+
+def test_suggest_relations_refuses_when_not_a_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside a workspace, `suggest-relations` refuses (exit 1), prints the
+    shared `require_workspace` reason under a `suggest-relations`-specific
+    prefix, and never calls the library function (spec: mirrors `adjudicate`)."""
+    monkeypatch.chdir(tmp_path)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_relations",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr == (
+        "openkos suggest-relations: refusing to run -- no OpenKOS workspace "
+        "found in this directory (run 'openkos init' first).\n"
+    )
+    assert "Traceback" not in result.stderr
+    assert calls == []
+
+
+def test_suggest_relations_malformed_config_maps_to_exit_one_before_calling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed `openkos.yaml` (Phase-A `read_config` guard, mirrors
+    `adjudicate`) is caught, printed as a friendly stderr message, exits 1
+    with no raw traceback, and the library function is never reached."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text("model: [unclosed\n", encoding="utf-8")
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_relations",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith(
+        "openkos suggest-relations: failed while reading the workspace -- "
+    )
+    assert "Traceback" not in result.stderr
+    assert calls == []
+
+
+def test_suggest_relations_fresh_bundle_reports_no_untyped_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshly initialized, empty bundle has zero untyped edges, so the
+    real `suggest_relations` never calls `llm.chat` -- a real `OllamaClient`
+    is safe to construct here. Prints a clear "no untyped relations" line
+    and exits 0."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert "No untyped relations found." in result.stdout
+
+
+def test_suggest_relations_never_writes_to_the_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No file under the workspace is created, modified, or deleted on any
+    run -- byte contents AND `st_mtime_ns` both unchanged (spec: Verb
+    performs zero writes)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Beta")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["suggest-relations"], catch_exceptions=True)
+
+    # Regardless of exit code (a real Ollama may or may not be reachable in
+    # this environment), the workspace bytes/mtimes must be identical --
+    # `suggest-relations` never writes, whether it succeeds or degrades.
+    assert _snapshot(tmp_path) == before
+    if result.exit_code == 0:
+        assert "openkos suggest-relations: workspace at" in result.stdout
+
+
+def test_suggest_relations_renders_type_source_target_and_rationale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed suggestion renders its suggested type, source, target,
+    and rationale, plus the closing `relate` hint, and exits 0 (spec: Verb
+    lists every untyped edge with a valid suggestion)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+        captured["bundle_dir"] = bundle_dir
+        captured["kwargs"] = kwargs
+        return [
+            _suggestion(
+                source="concepts/a",
+                target="concepts/b",
+                suggested_type="references",
+                rationale="mentions concept b",
+            )
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.suggest_relations", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert "references" in result.stdout
+    assert "concepts/a" in result.stdout
+    assert "concepts/b" in result.stdout
+    assert "mentions concept b" in result.stdout
+    assert "openkos relate" in result.stdout
+    assert captured["bundle_dir"] == tmp_path / "bundle"
+
+
+def test_suggest_relations_degraded_item_renders_as_no_valid_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A degraded suggestion (`suggested_type=None`) renders as `[?]` +
+    "no valid type suggested", never as if it were a valid suggestion
+    (spec: Invalid suggested type is not surfaced as valid)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+        return [_suggestion(suggested_type=None, rationale="malformed reply")]
+
+    monkeypatch.setattr("openkos.cli.main.suggest_relations", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert "[?]" in result.stdout
+    assert "no valid type suggested" in result.stdout
+
+
+def test_suggest_relations_builds_ollama_client_from_configured_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`suggest-relations` builds the `OllamaClient` from the model
+    configured in `openkos.yaml`, not a hardcoded value (spec: mirrors
+    `adjudicate`'s wiring)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "llama3.2:1b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {configured_model}\n", encoding="utf-8"
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.suggest_relations", _recording_suggest)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    llm = kwargs["llm"]
+    assert isinstance(llm, OllamaClient)
+    assert llm._model == configured_model
+
+
+def test_suggest_relations_ollama_unavailable_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`suggest_relations()` raising `OllamaUnavailable` is caught, printed
+    as a friendly stderr message with `ollama serve` remediation, exits 1,
+    and writes nothing (spec: mirrors `adjudicate`'s degrade-on-no-model)."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    def _raise_unavailable(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+        raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
+
+    monkeypatch.setattr("openkos.cli.main.suggest_relations", _raise_unavailable)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos suggest-relations: failed -- ")
+    assert "Ollama not reachable" in result.stderr
+    assert "ollama serve" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_suggest_relations_model_not_found_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`suggest_relations()` raising `OllamaModelNotFound` is caught,
+    printed with the CONFIGURED model tag and `ollama pull <model>`
+    remediation, exits 1, and writes nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "llama3.2:1b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {configured_model}\n", encoding="utf-8"
+    )
+    before = _snapshot(tmp_path)
+
+    def _raise_model_not_found(
+        bundle_dir: Path, **kwargs: object
+    ) -> list[EdgeSuggestion]:
+        raise OllamaModelNotFound("Model not found (404): {}")
+
+    monkeypatch.setattr("openkos.cli.main.suggest_relations", _raise_model_not_found)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos suggest-relations: failed -- ")
+    assert "is not installed" in result.stderr
+    assert f"ollama pull {configured_model}" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_suggest_relations_generic_ollama_error_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A generic `OllamaError` (neither `OllamaUnavailable` nor
+    `OllamaModelNotFound`) is caught by the 3rd-tier fallback handler."""
+    from openkos.llm.ollama import OllamaError
+
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    def _raise_generic(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+        raise OllamaError("something else went wrong")
+
+    monkeypatch.setattr("openkos.cli.main.suggest_relations", _raise_generic)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr == (
+        "openkos suggest-relations: failed -- something else went wrong.\n"
+    )
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_suggest_relations_no_auto_flag_offered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`suggest-relations` is read-only: no `--auto` or confirmation flag
+    exists, unlike `ingest`/`forget`/`relate` (spec: zero writes)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+
+
+# --- integration proof (real bundle: examples/good-life-demo) ---------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_GOOD_LIFE_ROOT = _REPO_ROOT / "examples" / "good-life-demo"
+
+
+def test_suggest_relations_over_good_life_demo_is_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Running `suggest-relations` against the real `examples/good-life-demo`
+    workspace writes nothing under the bundle regardless of outcome -- the
+    real `OllamaClient` may or may not reach a live Ollama in this
+    environment, but the zero-writes contract must hold either way."""
+    assert _GOOD_LIFE_ROOT.is_dir(), f"missing example workspace: {_GOOD_LIFE_ROOT}"
+    monkeypatch.chdir(_GOOD_LIFE_ROOT)
+    bundle_dir = _GOOD_LIFE_ROOT / "bundle"
+    before = _snapshot(bundle_dir)
+
+    result = runner.invoke(app, ["suggest-relations"], catch_exceptions=True)
+
+    assert _snapshot(bundle_dir) == before
+    if result.exit_code == 0:
+        assert "openkos suggest-relations: workspace at" in result.stdout
