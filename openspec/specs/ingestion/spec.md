@@ -592,3 +592,81 @@ slice.
 - GIVEN a workspace config with `default_sensitivity: private`
 - WHEN `openkos ingest <path>` completes
 - THEN the generated Source concept's `sensitivity` field is `private`
+
+## OKF §9 Conformance Rules 1-3
+
+The bundle MUST conform to all three rules of OKF §9 (Open Knowledge Format v0.1 schema). Rules 1-2 govern the frontmatter shape of every `.md` file in the bundle; rule 3 governs the fixed structure of reserved files. The conformance check is implemented in `okf.check_conformance`, which walks the bundle once and returns an empty list when all three rules are satisfied.
+
+### Requirement: OKF §9 Conformance — Reserved File Structure (Rule 3)
+
+`check_conformance` MUST enforce OKF §9 rule 3 (reserved-file structure) in
+addition to rules 1-2, via an additive walk over `index.md` and `log.md`
+files that MUST NOT alter the existing rule 1-2 walk (`_iter_docs`) or its
+output. `check_conformance` MUST continue to return `list[str]` violation
+messages in the existing `f"{path}: {message}"` shape; rule-3 violations
+MUST be appended to the same list as rules 1-2. Rule 3 covers exactly the two
+structural checks below; validating an `index.md`'s body shape
+(heading/bullet structure per §6) is explicitly OUT OF SCOPE for this
+requirement, as is any change to the freshness/orphan lint.
+
+#### Scenario: Reserved-file walk does not perturb rules 1-2
+
+- GIVEN a bundle previously evaluated under rules 1-2 only
+- WHEN `check_conformance` runs after rule 3 is added
+- THEN the rule 1-2 portion of the violation list is byte-identical to
+  before
+
+### Requirement: index.md Frontmatter Conformance (§6 + §11 Root Exception)
+
+For every `index.md` in the bundle tree, `check_conformance` MUST treat a
+frontmatter FENCE (opening `---` delimiter with a closing `---`, whether or
+not its YAML parses) as a violation UNLESS the file is the bundle-root
+`index.md` (`path.parent == bundle_dir`), where §11 permits an `okf_version:
+"0.1"` frontmatter block as the sole exception.
+
+#### Scenario: Root index.md with okf_version frontmatter passes
+
+- GIVEN a bundle-root `index.md` containing `okf_version: "0.1"`
+  frontmatter
+- WHEN `check_conformance` runs
+- THEN no violation is reported for that file
+
+#### Scenario: Non-root index.md with frontmatter is a violation
+
+- GIVEN an `index.md` at any depth other than the bundle root, containing a
+  frontmatter FENCE (opening and closing `---` delimiters)
+- WHEN `check_conformance` runs
+- THEN a violation naming that file's path is reported
+
+### Requirement: log.md ISO-8601 Date Heading Conformance (§7)
+
+For every `log.md` in the bundle tree, `check_conformance` MUST treat every
+`## ` heading whose text does not match `^\\d{4}-\\d{2}-\\d{2}$` as a
+violation.
+
+#### Scenario: Valid ISO date heading passes
+
+- GIVEN a `log.md` whose only `## ` heading is `## 2026-07-14`
+- WHEN `check_conformance` runs
+- THEN no violation is reported for that heading
+
+#### Scenario: Malformed date heading is a violation
+
+- GIVEN a `log.md` containing a `## ` heading that is not an ISO-8601 date,
+  e.g. `## July 2026`
+- WHEN `check_conformance` runs
+- THEN a violation naming that file's path and the offending heading is
+  reported
+
+### Requirement: Reference Bundle Full §9 Conformance
+
+The reference bundle at `examples/good-life-demo/bundle` MUST pass
+`check_conformance` with an empty violation list under all three §9 rules,
+asserted by a test that runs in CI's existing `test` job with no CI
+configuration changes required.
+
+#### Scenario: Reference bundle passes all three rules
+
+- GIVEN the bundle at `examples/good-life-demo/bundle`
+- WHEN `check_conformance` runs against it
+- THEN it returns an empty list
