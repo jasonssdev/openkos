@@ -16,6 +16,7 @@ for its own low-level cases. Phase 3 (below) exercises the friendly
 `nodes()`/`edges()`/`neighbors()` `GraphStore` query surface instead.
 """
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
@@ -606,3 +607,62 @@ def test_query_surface_is_deterministic_across_repeated_calls_and_rebuilds(
 
     assert first_nodes == second_nodes
     assert first_edges == second_edges
+
+
+# --- Spec: "Projection Is A Read-Only Derived Cache" ------------------------
+
+
+def test_build_graph_never_touches_disk(tmp_path: Path) -> None:
+    """`build_graph` (and exercising its query surface afterwards) creates no
+    `.openkos/` directory, no `*.db` file, and no new path of any kind under
+    the bundle -- the projection lives entirely in `sqlite3(":memory:")`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="See [Epicureanism](/concepts/epicureanism.md).",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    before_paths = set(bundle_dir.rglob("*"))
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        store.nodes()
+        store.edges()
+        for concept_id in store.nodes():
+            store.neighbors(concept_id)
+        db_file = store._conn.execute("PRAGMA database_list").fetchall()[0][2]
+
+    after_paths = set(bundle_dir.rglob("*"))
+
+    assert after_paths == before_paths
+    assert not (bundle_dir / ".openkos").exists()
+    assert list(bundle_dir.rglob("*.db")) == []
+    assert db_file == ""  # sqlite3(":memory:") has no backing file at all
+
+
+def test_build_graph_writes_nothing_to_the_bundle_bytes_and_mtime_unchanged() -> None:
+    """Building the projection over a real bundle (and exercising its full
+    query surface) leaves every bundle file's bytes and mtime byte-for-byte
+    identical -- the derived cache never rewrites, touches, or adds to the
+    on-disk bundle it was built from."""
+    bundle_dir = _REPO_ROOT / "examples" / "good-life-demo" / "bundle"
+    files = sorted(p for p in bundle_dir.rglob("*") if p.is_file())
+    before = {
+        path: (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+        for path in files
+    }
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        node_ids = store.nodes()
+        store.edges()
+        for concept_id in node_ids:
+            store.neighbors(concept_id)
+
+    after_files = sorted(p for p in bundle_dir.rglob("*") if p.is_file())
+    after = {
+        path: (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+        for path in after_files
+    }
+
+    assert after == before

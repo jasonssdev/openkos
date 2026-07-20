@@ -49,8 +49,8 @@ Chain strategy: pending
 
 ## Phase 4: NetworkX Conversion + Layering Guard (`graph/analysis.py`)
 
-- [ ] 4.1 RED `tests/unit/graph/test_analysis.py`: `to_digraph` preserves node ids + directed edges; empty projection converts cleanly (nodes, zero edges, isolated nodes survive, no raise).
-- [ ] 4.2 GREEN: implement `to_digraph(store) -> nx.DiGraph`.
-- [ ] 4.3 RED: ast-based guard (mirrors `test_ingest_and_forget_do_not_reference_state_fts`) — `model`/`bundle`/`state` source never imports `openkos.graph`; no `graph` CLI command in `cli/main.py`.
-- [ ] 4.4 GREEN: add a layering-boundary docstring note to each `graph/*.py` module.
-- [ ] 4.5 Integration proof: `build_graph` + `to_digraph` over `examples/good-life-demo/bundle` resolve expected concept nodes/edges (mirrors `fts.py`'s Phase 8 fixture test).
+- [x] 4.1 RED `tests/unit/graph/test_analysis.py`: `to_digraph` preserves node ids + directed edges; empty projection converts cleanly (nodes, zero edges, isolated nodes survive, no raise).
+- [x] 4.2 GREEN: implement `to_digraph(store) -> nx.DiGraph`.
+- [x] 4.3 RED: ast-based guard (mirrors `test_ingest_and_forget_do_not_reference_state_fts`) — `model`/`bundle`/`state` source never imports `openkos.graph`; no `graph` CLI command in `cli/main.py`.
+- [x] 4.4 GREEN: add a layering-boundary docstring note to each `graph/*.py` module.
+- [x] 4.5 Integration proof: `build_graph` + `to_digraph` over `examples/good-life-demo/bundle` resolve expected concept nodes/edges (mirrors `fts.py`'s Phase 8 fixture test).
