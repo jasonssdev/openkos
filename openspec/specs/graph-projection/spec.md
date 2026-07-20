@@ -12,9 +12,9 @@ It has no CLI command; its only consumers are future retrieval/lint slices.
 ## Non-Goals
 
 This spec does not define: cross-source entity resolution or reversible
-merge; hybrid vector retrieval; relation-type extraction/NLP or the
-frontmatter-vs-prose vocabulary decision (`relation_type` stays nullable and
-unpopulated); a CLI `graph` verb; persistence to `.openkos/openkos.db`; or
+merge; hybrid vector retrieval; relation-type extraction/NLP (the projection
+reads typed edges from `relations:` frontmatter but does not itself infer or
+author relations); a CLI `graph` verb; persistence to `.openkos/openkos.db`; or
 CI/import-linter layering enforcement (layering stays a followed convention).
 
 ## Requirements
@@ -76,17 +76,29 @@ produce an edge.
 - WHEN the projection is built
 - THEN neither link produces an edge, and building does not raise
 
-### Requirement: Edge Schema Reserves `relation_type` As Nullable
+### Requirement: Edge `relation_type` Populated From Frontmatter `relations:`
 
-The edge schema MUST include a `relation_type` column that is `NULL` for
-every edge produced in this slice, reserved for later typed-edge work
-without requiring a migration.
+`build_graph` MUST populate an edge's `relation_type` from the source
+document's `relations:` frontmatter entry whose `target` resolves to that
+edge's target node id. WHEN no matching `relations:` entry exists for an
+edge, `relation_type` MUST remain `NULL`, unchanged from before. The
+existing untyped `[text](/id.md)` `_LINK_RE` edge-extraction path MUST
+remain unchanged for objects without a `relations:` key.
 
-#### Scenario: Every extracted edge has a NULL relation_type
+#### Scenario: Typed relation edge carries its relation_type
 
-- GIVEN a projection built over a bundle with at least one markdown link
-- WHEN that edge is read back from the SQLite projection
-- THEN its `relation_type` value is `NULL`
+- GIVEN a document with `relations: [{target: concepts/x, type:
+  depends_on}]`
+- WHEN the projection is built
+- THEN the edge to `concepts/x` has `relation_type == "depends_on"`
+
+#### Scenario: Untyped-link edge remains NULL relation_type
+
+- GIVEN a document with no `relations:` key whose body contains a
+  bundle-relative markdown link
+- WHEN the projection is built
+- THEN the resulting edge's `relation_type` is `NULL`, matching prior
+  behavior
 
 ### Requirement: GraphStore Protocol Defines The Derived-Layer Surface
 
