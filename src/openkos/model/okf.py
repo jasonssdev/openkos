@@ -35,6 +35,11 @@ _ISO_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 """§7's date-heading format, checked for shape only -- not calendar-validated
 (e.g. `2026-13-45` matches)."""
 
+SENSITIVITY_ORDER: Final[tuple[str, str, str]] = ("public", "private", "confidential")
+"""Least-to-most-restrictive sensitivity ordering (ADR-0003, KOM
+docs/knowledge-object-model.md:255-272): a derived object is at least as
+sensitive as its most sensitive source."""
+
 
 def dump_frontmatter(metadata: dict[str, object], body: str = "") -> str:
     """Render `metadata` as a YAML frontmatter block over `body`, per §4.1."""
@@ -170,6 +175,43 @@ def build_concept(
     lede = description if not body.strip() else f"{description}\n\n{body}"
     doc_body = f"# {title}\n\n{lede}\n\n## Related\n\n{related}\n"
     return dump_frontmatter(metadata, doc_body)
+
+
+def _rank(value: object) -> int:
+    """Rank a raw sensitivity `value` into `SENSITIVITY_ORDER`'s index space,
+    failing closed on anything dirty (ADR-0003).
+
+    A missing (`None`) or blank/whitespace-only string ranks as `private`
+    (the config default floor, docs/knowledge-object-model.md's
+    `default_sensitivity`). A string matching (after stripping) one of
+    `SENSITIVITY_ORDER`'s canonical members ranks at its position. Anything
+    else -- a non-string value (e.g. an `int`/`list` from dirty frontmatter)
+    or an unrecognized string -- ranks as `confidential`, the most
+    restrictive level: a security field must fail toward MORE restrictive,
+    never less.
+    """
+    if value is None:
+        return SENSITIVITY_ORDER.index("private")
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return SENSITIVITY_ORDER.index("private")
+        if stripped in SENSITIVITY_ORDER:
+            return SENSITIVITY_ORDER.index(stripped)
+    return SENSITIVITY_ORDER.index("confidential")
+
+
+def combine_sensitivity(a: object, b: object) -> str:
+    """Combine two sensitivity values into the more restrictive (max-rank)
+    of the two, per ADR-0003's high-water-mark rule.
+
+    Pure, deterministic, stdlib-only: no I/O. Always returns a canonical
+    member of `SENSITIVITY_ORDER`, even when `a`/`b` are missing or
+    malformed (`_rank` fails closed). This is the recompute step a merge
+    invokes at build time -- the result is never a verbatim copy of either
+    input's sensitivity.
+    """
+    return SENSITIVITY_ORDER[max(_rank(a), _rank(b))]
 
 
 @dataclass(frozen=True)

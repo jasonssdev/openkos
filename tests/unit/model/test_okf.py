@@ -858,3 +858,76 @@ def test_build_concept_backlinks_every_provenance_entry() -> None:
     first = body.index("[sources/first-source](/sources/first-source.md)")
     second = body.index("[sources/second-source](/sources/second-source.md)")
     assert first < second
+
+
+def test_sensitivity_order_pins_the_adr_0003_ordering() -> None:
+    """`SENSITIVITY_ORDER` is the canonical least-to-most-restrictive
+    ordering ADR-0003 pins; `combine_sensitivity` ranks against this exact
+    tuple."""
+    assert okf.SENSITIVITY_ORDER == ("public", "private", "confidential")
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [
+        ("public", "public", "public"),
+        ("public", "private", "private"),
+        ("public", "confidential", "confidential"),
+        ("private", "private", "private"),
+        ("private", "confidential", "confidential"),
+        ("confidential", "confidential", "confidential"),
+    ],
+)
+def test_combine_sensitivity_returns_the_more_restrictive_side(
+    a: str, b: str, expected: str
+) -> None:
+    """ADR-0003: the combined result is always the MORE sensitive (max-rank)
+    of the two inputs, per the full pairwise table."""
+    assert okf.combine_sensitivity(a, b) == expected
+
+
+@pytest.mark.parametrize(
+    ("a", "b"), [("public", "private"), ("private", "confidential")]
+)
+def test_combine_sensitivity_is_commutative(a: str, b: str) -> None:
+    """`combine_sensitivity(a, b) == combine_sensitivity(b, a)` -- order of
+    the two inputs never affects the result."""
+    assert okf.combine_sensitivity(a, b) == okf.combine_sensitivity(b, a)
+
+
+def test_combine_sensitivity_missing_value_defaults_to_private() -> None:
+    """A missing (`None`) sensitivity ranks as `private`, the documented
+    config default floor -- never the least-restrictive `public`."""
+    assert okf.combine_sensitivity(None, "public") == "private"
+
+
+def test_combine_sensitivity_blank_value_defaults_to_private() -> None:
+    """A present but blank/whitespace-only sensitivity ranks as `private`,
+    same as a missing value."""
+    assert okf.combine_sensitivity("   ", "public") == "private"
+
+
+def test_combine_sensitivity_both_missing_is_private() -> None:
+    """Two missing values combine to the `private` default, not `public`."""
+    assert okf.combine_sensitivity(None, None) == "private"
+
+
+def test_combine_sensitivity_unrecognized_string_fails_closed_to_confidential() -> None:
+    """An unrecognized (malformed) string value ranks as `confidential` --
+    the most restrictive level -- rather than being silently ignored."""
+    assert okf.combine_sensitivity("top-secret", "public") == "confidential"
+
+
+def test_combine_sensitivity_non_string_value_fails_closed_to_confidential() -> None:
+    """A present but non-string value (e.g. an int or list from dirty
+    frontmatter) ranks as `confidential`, never crashes and never silently
+    ranks as the least-restrictive level."""
+    assert okf.combine_sensitivity(42, "public") == "confidential"
+    assert okf.combine_sensitivity(["confidential"], "private") == "confidential"
+
+
+def test_combine_sensitivity_confidential_dominates_regardless_of_position() -> None:
+    """A single `confidential` input always wins, regardless of argument
+    order or what the other value is."""
+    assert okf.combine_sensitivity("confidential", "public") == "confidential"
+    assert okf.combine_sensitivity("public", "confidential") == "confidential"
