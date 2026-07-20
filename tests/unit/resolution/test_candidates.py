@@ -364,3 +364,45 @@ def test_find_candidates_over_small_fixture_bundle_is_read_only(
     assert after_paths == before_paths
     assert after_bytes == before_bytes
     assert after_mtimes == before_mtimes
+
+
+# --- integration proof (real bundle: examples/good-life-demo) ---------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_GOOD_LIFE_BUNDLE = _REPO_ROOT / "examples" / "good-life-demo" / "bundle"
+
+
+def test_real_bundle_readonly() -> None:
+    """Running `find_candidates` over the real `examples/good-life-demo`
+    bundle never raises, never changes any bundle file's bytes or mtime,
+    creates no new file or directory, and returns a coherent (deterministic,
+    self-consistent) result -- the Unit 2 integration proof (tasks.md 5.1)."""
+    assert _GOOD_LIFE_BUNDLE.is_dir(), f"missing fixture bundle: {_GOOD_LIFE_BUNDLE}"
+
+    before_paths = set(_GOOD_LIFE_BUNDLE.rglob("*"))
+    before_bytes = {p: p.read_bytes() for p in before_paths if p.is_file()}
+    before_mtimes = {p: p.stat().st_mtime_ns for p in before_paths if p.is_file()}
+
+    groups = find_candidates(_GOOD_LIFE_BUNDLE)
+    groups_again = find_candidates(_GOOD_LIFE_BUNDLE)
+
+    after_paths = set(_GOOD_LIFE_BUNDLE.rglob("*"))
+    after_bytes = {p: p.read_bytes() for p in after_paths if p.is_file()}
+    after_mtimes = {p: p.stat().st_mtime_ns for p in after_paths if p.is_file()}
+
+    # Read-only: nothing under the bundle changed or was created.
+    assert after_paths == before_paths
+    assert after_bytes == before_bytes
+    assert after_mtimes == before_mtimes
+
+    # Deterministic repeated runs (spec: Repeated runs are deterministic).
+    assert groups == groups_again
+
+    # Coherent result: every group is well-formed per its own invariants.
+    for group in groups:
+        assert isinstance(group, CandidateGroup)
+        assert group.okf_type != "Source"
+        assert len(group.member_ids) >= 2
+        assert len(set(group.member_ids)) == len(group.member_ids)
+        assert group.member_ids == tuple(sorted(group.member_ids))
+        assert group.trigger
