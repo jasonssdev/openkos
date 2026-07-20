@@ -41,17 +41,17 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: PR2 — v2 Ledger + `bundle/relations.py` Trio
 
-- [ ] 2.1 RED: `tests/unit/model/test_okf.py` — `decode_merge_ledger_entry` accepts a V1 entry (no `relation_rewrites` key) and returns `relation_rewrites=[]` (spec: "Pre-slice-2a v1 ledger entry still unmerges exactly").
-- [ ] 2.2 RED: `tests/unit/model/test_okf.py` — `decode_merge_ledger_entry` requires `relation_rewrites` on a V2-schema entry, raising `ValueError` on a malformed/missing V2 entry.
-- [ ] 2.3 RED: `tests/unit/model/test_okf.py` — `encode_merge_ledger_entry`/`encode_merged_from` round-trip a `RelationRewrite(file, snapshot)` list.
-- [ ] 2.4 GREEN: `src/openkos/model/okf.py` — add `MERGE_LEDGER_SCHEMA_V2`, `RelationRewrite` dataclass, `relation_rewrites: list[RelationRewrite]` field on `MergeLedgerEntry`; update encode/decode to branch V1 (absent→`[]`) vs V2 (required key) vs unsupported schema.
-- [ ] 2.5 RED: `tests/unit/bundle/test_relations.py` (new) — `find_inbound_relation_rewrites` records one `RelationRewrite` per third-party file whose `relations:` targets `absorbed_id`, snapshot = original full text (spec: "Third-party inbound relations retarget to the survivor").
-- [ ] 2.6 RED: `tests/unit/bundle/test_relations.py` — `find_inbound_relation_rewrites` skips a file with malformed frontmatter (mirrors old `find_relation_conflicts` skip behavior).
-- [ ] 2.7 RED: `tests/unit/bundle/test_relations.py` — `apply_relation_rewrites` retargets, drops self-loops, dedupes collisions, re-emits via `encode_relations`; no-op on a file not in `rewrites`.
-- [ ] 2.8 RED: `tests/unit/bundle/test_relations.py` — `reverse_relation_rewrites` restores the recorded whole-file snapshot exactly.
-- [ ] 2.9 GREEN: `src/openkos/bundle/relations.py` (new) — implement `find_inbound_relation_rewrites`, `apply_relation_rewrites`, `reverse_relation_rewrites` per D3.
-- [ ] 2.10 GREEN: `src/openkos/bundle/merge.py` — `plan_merge` accepts/produces `relation_rewrites`, always writes `MERGE_LEDGER_SCHEMA_V2`; `plan_unmerge`/`UnmergePlan` carry `relation_rewrites`.
-- [ ] 2.11 VERIFY: `uv run pytest tests/unit/model/test_okf.py tests/unit/bundle/test_relations.py tests/unit/bundle/test_merge.py` green; `ruff check` + `mypy --strict` clean.
+- [x] 2.1 RED: `tests/unit/model/test_okf.py` — `decode_merge_ledger_entry` accepts a V1 entry (no `relation_rewrites` key) and returns `relation_rewrites=[]` (spec: "Pre-slice-2a v1 ledger entry still unmerges exactly").
+- [x] 2.2 RED: `tests/unit/model/test_okf.py` — `decode_merge_ledger_entry` requires `relation_rewrites` on a V2-schema entry, raising `ValueError` on a malformed/missing V2 entry.
+- [x] 2.3 RED: `tests/unit/model/test_okf.py` — `encode_merge_ledger_entry`/`encode_merged_from` round-trip a `RelationRewrite(file, snapshot)` list.
+- [x] 2.4 GREEN: `src/openkos/model/okf.py` — add `MERGE_LEDGER_SCHEMA_V2`, `RelationRewrite` dataclass, `relation_rewrites: list[RelationRewrite]` field on `MergeLedgerEntry`; update encode/decode to branch V1 (absent→`[]`) vs V2 (required key) vs unsupported schema.
+- [x] 2.5 RED: `tests/unit/bundle/test_relations.py` (new) — `find_inbound_relation_rewrites` records one `RelationRewrite` per third-party file whose `relations:` targets `absorbed_id`, snapshot = original full text (spec: "Third-party inbound relations retarget to the survivor").
+- [x] 2.6 RED: `tests/unit/bundle/test_relations.py` — `find_inbound_relation_rewrites` skips a file with malformed frontmatter (mirrors old `find_relation_conflicts` skip behavior).
+- [x] 2.7 RED: `tests/unit/bundle/test_relations.py` — `apply_relation_rewrites` retargets, drops self-loops, dedupes collisions, re-emits via `encode_relations`; no-op on a file not in `rewrites`.
+- [x] 2.8 RED: `tests/unit/bundle/test_relations.py` — `reverse_relation_rewrites` restores the recorded whole-file snapshot exactly.
+- [x] 2.9 GREEN: `src/openkos/bundle/relations.py` (new) — implement `find_inbound_relation_rewrites`, `apply_relation_rewrites`, `reverse_relation_rewrites` per D3.
+- [x] 2.10 GREEN: `src/openkos/bundle/merge.py` — `plan_merge` accepts/produces `relation_rewrites`, always writes `MERGE_LEDGER_SCHEMA_V2`; `plan_unmerge`/`UnmergePlan` carry `relation_rewrites`.
+- [x] 2.11 VERIFY: `uv run pytest tests/unit/model/test_okf.py tests/unit/bundle/test_relations.py tests/unit/bundle/test_merge.py` green; `ruff check` + `mypy --strict` clean.
 
 ## Phase 3: PR3 — CLI Wiring, Preview, Round-Trip/LIFO/D5
 

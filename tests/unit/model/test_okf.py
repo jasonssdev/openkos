@@ -1428,10 +1428,12 @@ def test_merge_ledger_entry_round_trips_adversarial_snapshot_content(
 
 
 def test_decode_merge_ledger_entry_rejects_unsupported_schema_version() -> None:
-    """A `schema` value other than `MERGE_LEDGER_SCHEMA_V1` must be rejected
-    rather than silently reinterpreted as v1 -- ADR-0002's "migrate rather
-    than silently reinterpret" promise."""
-    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v2")
+    """A `schema` value other than `MERGE_LEDGER_SCHEMA_V1`/`_V2` must be
+    rejected rather than silently reinterpreted as either -- ADR-0002's
+    "migrate rather than silently reinterpret" promise. (`v2` is now a
+    genuinely supported schema -- design D1/task 2.4 -- so this uses a
+    still-unsupported `v3` literal instead.)"""
+    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v3")
 
     with pytest.raises(ValueError, match="unsupported merged_from schema version"):
         okf.decode_merged_from({"merged_from": [entry]})
@@ -1444,6 +1446,112 @@ def test_decode_merge_ledger_entry_rejects_non_iterable_link_rewrites() -> None:
 
     with pytest.raises(ValueError, match="merged_from entry malformed"):
         okf.decode_merged_from({"merged_from": [entry]})
+
+
+# -- Phase 2: v2 ledger -- `relation_rewrites` (tasks 2.1-2.3) -------------
+
+
+def test_decode_merge_ledger_entry_v1_schema_absent_relation_rewrites_defaults_empty() -> (
+    None
+):
+    """A pre-slice-2a v1 `merged_from` entry -- no `relation_rewrites` key
+    at all -- still decodes, with `relation_rewrites=[]` (design D1; spec:
+    "Pre-slice-2a v1 ledger entry still unmerges exactly"; task 2.1)."""
+    entry = _valid_encoded_entry()
+    del entry["relation_rewrites"]
+
+    decoded = okf.decode_merged_from({"merged_from": [entry]})
+
+    assert decoded[0].relation_rewrites == []
+
+
+def test_decode_merge_ledger_entry_v2_schema_requires_relation_rewrites_key() -> None:
+    """Unlike the v1 branch, a V2-schema entry MUST carry the
+    `relation_rewrites` key -- omitting it fails closed (design D1; task
+    2.2)."""
+    entry = _valid_encoded_entry(schema=okf.MERGE_LEDGER_SCHEMA_V2)
+    del entry["relation_rewrites"]
+
+    with pytest.raises(ValueError, match="missing field"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_decode_merge_ledger_entry_v2_schema_rejects_malformed_relation_rewrite_item() -> (
+    None
+):
+    """A malformed `relation_rewrites` list item on a V2 entry fails closed,
+    mirroring `link_rewrites`' malformed-item guard (task 2.2)."""
+    entry = _valid_encoded_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V2, relation_rewrites=["not-a-dict"]
+    )
+
+    with pytest.raises(ValueError, match="relation_rewrites entry must be a mapping"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_decode_merge_ledger_entry_v2_schema_rejects_relation_rewrite_missing_field() -> (
+    None
+):
+    """A `relation_rewrites` list item missing a required field fails
+    closed."""
+    entry = _valid_encoded_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V2,
+        relation_rewrites=[{"file": "concepts/other.md"}],
+    )
+
+    with pytest.raises(ValueError, match="relation_rewrites entry missing field"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_encode_merge_ledger_entry_v1_schema_rejects_relation_rewrites() -> None:
+    """Correction batch, finding 2 (WARNING): `MERGE_LEDGER_SCHEMA_V1`'s own
+    docstring already promises "a V1 entry never carries
+    `relation_rewrites`" -- so a `MergeLedgerEntry` that contradicts this
+    (V1 schema, non-empty `relation_rewrites`) must fail loudly at encode
+    time rather than silently serialize a field `decode_merge_ledger_entry`
+    would then discard on the V1 branch (a silent round-trip loss, not a
+    genuine library contract)."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V1,
+        relation_rewrites=[
+            okf.RelationRewrite(file="concepts/other.md", snapshot="text\n")
+        ],
+    )
+
+    with pytest.raises(ValueError, match="relation_rewrites"):
+        okf.encode_merge_ledger_entry(entry)
+
+
+def test_relation_rewrite_round_trips_through_frontmatter_losslessly() -> None:
+    """A V2 ledger entry's `relation_rewrites` -- `RelationRewrite(file,
+    snapshot)` whole-file pre-merge snapshots -- round-trips losslessly
+    through `encode_merge_ledger_entry`/`encode_merged_from` ->
+    `dump_frontmatter` -> `load_frontmatter` -> `decode_merged_from` (design
+    D1; task 2.3)."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V2,
+        relation_rewrites=[
+            okf.RelationRewrite(
+                file="concepts/other.md",
+                snapshot="---\ntype: Concept\n---\nOther body.\n",
+            ),
+            okf.RelationRewrite(
+                file="concepts/third.md",
+                snapshot="---\ntype: Concept\nrelations:\n"
+                "- target: absorbed-id\n  type: depends_on\n---\nThird body.\n",
+            ),
+        ],
+    )
+
+    metadata: dict[str, object] = {"type": "Concept"}
+    metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter(metadata, "Survivor body.")
+
+    loaded_metadata, _ = okf.load_frontmatter(text)
+    decoded = okf.decode_merged_from(loaded_metadata)
+
+    assert decoded == [entry]
+    assert decoded[0].relation_rewrites == entry.relation_rewrites
 
 
 # -- U3: `relations:` codec (Phase 1, tasks 1.3-1.6) -----------------------

@@ -33,13 +33,18 @@ class UnmergePlan:
     entry: no bundle file has been written yet. `restored_*` are the EXACT
     pre-merge verbatim bytes a later unit writes back; `link_rewrites` are
     the recorded rewrites that same unit must reverse by bounded
-    exact-substring substitution (never a blind replace-all)."""
+    exact-substring substitution (never a blind replace-all);
+    `relation_rewrites` (design D1, v2) are the recorded third-party
+    whole-file snapshots that same unit must reverse by ABSOLUTE overwrite
+    (`bundle/relations.py::reverse_relation_rewrites`, PR3) -- `[]` for a
+    v1 (pre-slice-2a) ledger entry."""
 
     restored_survivor: str
     restored_absorbed: str
     restored_index: str
     restored_log: str
     link_rewrites: list[okf.LinkRewrite]
+    relation_rewrites: list[okf.RelationRewrite]
     entry: okf.MergeLedgerEntry
 
 
@@ -77,6 +82,7 @@ def plan_merge(
     log_text: str,
     merged_at: str,
     link_rewrites: list[okf.LinkRewrite] | None = None,
+    relation_rewrites: list[okf.RelationRewrite] | None = None,
 ) -> MergePlan:
     """Pure Phase-A planning: compute the merged survivor's full text and
     the new `merged_from` ledger entry, without writing anything.
@@ -88,6 +94,12 @@ def plan_merge(
     `index_before`/`log_before` -- this layer never computes an updated
     catalog/log (that composition is a later unit's concern). `link_rewrites`
     defaults to `[]`; the actual bundle-wide link scan is U3.
+    `relation_rewrites` (design D1, v2) similarly defaults to `[]`; the
+    actual third-party inbound scan (`bundle/relations.py`) and CLI wiring
+    are PR3's concern -- this layer only carries whatever the caller
+    injects into the new ledger entry, and ALWAYS writes
+    `MERGE_LEDGER_SCHEMA_V2` (the reader still accepts v1 entries already
+    on disk from before this merge).
 
     The new entry is appended to the survivor's EXISTING `merged_from` list
     (decoded from `survivor_text`'s own frontmatter), so the returned
@@ -116,7 +128,7 @@ def plan_merge(
 
     sensitivity_before = survivor_metadata.get("sensitivity")
     entry = okf.MergeLedgerEntry(
-        schema=okf.MERGE_LEDGER_SCHEMA_V1,
+        schema=okf.MERGE_LEDGER_SCHEMA_V2,
         merged_at=merged_at,
         absorbed_id=absorbed_id,
         absorbed_snapshot=absorbed_text,
@@ -128,6 +140,9 @@ def plan_merge(
         if sensitivity_before is None
         else str(sensitivity_before),
         sensitivity_after=str(merged_metadata.get("sensitivity")),
+        relation_rewrites=list(relation_rewrites)
+        if relation_rewrites is not None
+        else [],
     )
 
     merged_metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from(
@@ -175,5 +190,6 @@ def plan_unmerge(
         restored_index=tail.index_before,
         restored_log=tail.log_before,
         link_rewrites=list(tail.link_rewrites),
+        relation_rewrites=list(tail.relation_rewrites),
         entry=tail,
     )
