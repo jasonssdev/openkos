@@ -44,7 +44,7 @@ This layer alone is the entire storage story for MVP 1.
 
 Introduced in MVP 2. Each engine has a simple default and a documented scale path, and every derived store can be rebuilt from the canonical layer.
 
-- **Embeddings** — Sentence Transformers (Apache-2.0) or Ollama. Default to a small, high-quality model such as `bge-small-en-v1.5` (384d, MIT) or `nomic-embed-text` (768d, Apache-2.0). Smaller dimensions mean less storage and faster search at scale. The model is **pinned** (embeddings are not comparable across models), and because the canonical text is always available, the whole index can be **re-embedded** at any time.
+- **Embeddings** — served by **Ollama**, the same runtime already used for the generative model (one server, one dependency, no separate embedding stack). Default to a modern, multilingual, permissively-licensed model such as `qwen3-embedding:0.6b` (Apache-2.0, Matryoshka dimensions). Multilingual matters because a personal knowledge base is often not English-only; Matryoshka lets the dimension be truncated, so search and storage stay cheap without switching models. The model is **pinned** (embeddings are not comparable across models) and recorded in the derived state — never in the OKF bundle — and because the canonical text is always available, the whole index can be **re-embedded** at any time. The default is a starting point, settled by the same spike discipline as the generative model.
 - **Vector store** (behind a `VectorStore` interface):
   - *Default:* **sqlite-vec** (Apache-2.0) — stays inside the same SQLite file, zero extra infrastructure. Exact brute-force search; excellent up to roughly one million vectors, and kept viable well beyond that by **filter-first retrieval** (FTS5 and the graph narrow candidates first, so we rank a small filtered set rather than the whole corpus).
   - *Scale path:* **LanceDB** (Apache-2.0) — embedded, on-disk IVF-PQ indexing that handles datasets larger than RAM. The choice when a heavy, multi-year corpus grows into the millions of vectors.
@@ -73,7 +73,7 @@ Introduced in MVP 2. Each engine has a simple default and a documented scale pat
 
 | Role | Default (simple) | Scale path (millions+) | License |
 | --- | --- | --- | --- |
-| Embeddings | Sentence Transformers or Ollama; `bge-small` (384d) / `nomic-embed` (768d) | larger model if needed | MIT / Apache-2.0 |
+| Embeddings | Ollama serving `qwen3-embedding:0.6b` (multilingual, Matryoshka dims) | larger model (e.g. `qwen3-embedding:4b`, BGE-M3) if needed | Apache-2.0 |
 | Vector store (`VectorStore`) | sqlite-vec (same `.db` file) | LanceDB (on-disk IVF-PQ) | Apache-2.0 |
 | Graph store (`GraphStore`) | SQLite node-edge + recursive SQL | dedicated engine only if ever needed | — |
 | In-memory graph analysis | NetworkX (on subgraphs) | NetworkX | BSD |
@@ -109,7 +109,9 @@ Two kinds of model are used: a **generative model** (to compile, extract, and an
 
 That is the deeper point, and it is deliberate: **OpenKOS does not bless a model.** The model sits behind `LLMBackend` and is a config value, so the project has no model policy — it has a default, first-class alternatives, and a documented reason. If your organisation restricts models by origin, or you simply prefer another vendor, swap it; the engine does not care and nothing in the bundle changes.
 
-**Recommended embedding models:** `nomic-embed-text` (Apache-2.0, 768d) or `bge-small` (MIT, 384d) — small dimensions keep storage and search cheap at scale.
+**Embeddings (MVP 2)** are served through the **same Ollama runtime** as the generative model — there is no separate embedding stack and no heavy in-process dependency (e.g. no PyTorch). The embedding model sits behind an `Embedder` interface and is a config value in `openkos.yaml`, exactly like the generative model: a default with first-class alternatives, never blessed.
+
+**Recommended default** *(as of 2026-07-17, provisional until the MVP 2 spike):* `qwen3-embedding:0.6b` — Apache-2.0, multilingual (100+ languages), and **Matryoshka** (its output dimension can be truncated), so it satisfies the "small dimensions keep storage and search cheap at scale" goal without giving up a modern multilingual model. First-class alternatives: **BGE-M3** (multilingual, 8192-token context, good when embedding long documents) and **multilingual-e5**. The choice is settled by measuring retrieval quality on a real corpus, not by argument — and because re-embedding is free, being wrong costs a re-index, not data.
 
 **If no model is installed,** `openkos init` guides rather than failing silently: on a TTY it prompts for a model tag (default `qwen3:8b`), resolving the tag by precedence `--model` flag > prompt > default — it does not detect hardware or auto-pull a model. A missing model is then diagnosed by `openkos doctor`, which suggests the `ollama pull <model>` remediation. For non-technical users later, the path is an embedded runtime (no separate install), hardware-aware auto-download with a progress UI, and an optional, explicit cloud fallback — never for `confidential` content — for machines that cannot run a capable local model. There is an honest hardware floor: a weak machine runs a weaker model and leans more on review and lint.
 
