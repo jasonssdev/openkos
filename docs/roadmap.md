@@ -38,7 +38,7 @@ Deliverables:
 - Provenance chain linking every object back to its source
 - Automatic `index.md` (catalog) and `log.md` (chronological history), following the OKF reserved-file structure, with `okf_version: "0.1"` declared at the bundle root
 - A conformance check for the three rules of OKF §9, run in CI against the reference bundle
-- A **model spike**: run the same ingest against the candidate families at the 7–8B tier (Qwen3, Mistral Small) and measure which returns schema-valid extraction with fewest retries, using [`examples/good-life-demo/`](../examples/good-life-demo/) as the target shape. The default is settled by that measurement, not by argument — and it stays a config value either way. Confirm the licence of each candidate against the vendor's terms as part of the spike
+- A **model spike** (done): the same ingest was run against candidate tags at the 7–8B tier — `qwen3:8b`, `mistral:7b`, and `gemma4:e4b` — measuring which returned schema-valid extraction with fewest retries, using [`examples/good-life-demo/`](../examples/good-life-demo/) as the target shape. The measurement settled `qwen3:8b` as the default (recorded in [ADR-0001](adr/0001-default-extraction-model.md)), not argument — and it stays a config value either way. The licence of each candidate was confirmed against the vendor's terms as part of the spike
 - Lexical retrieval (SQLite FTS5) with an index-first navigation strategy
 - Query answering with citations
 - Freshness lint v0 — mechanical checks only: flag any fact whose `as of` stamp is older than the configured freshness window (default 7d), and surface orphan pages by scanning markdown links; volatility classification is deferred to MVP 2
@@ -60,9 +60,9 @@ MVP 2 turns a flat set of documents into a connected, semantically searchable gr
 
 Deliverables:
 
-- Entity, concept, and relationship extraction (LLM-assisted, human-in-the-loop)
+- Entity, concept, and relationship extraction (LLM-assisted, human-in-the-loop) — whose hard core is **cross-source entity resolution, deduplication, and reversible merge** (the "boundary problem" MVP 1 deliberately sidesteps by doing single-source extraction only). The stance, lifted from the [Knowledge Object model](knowledge-object-model.md): prefer fewer, richer objects over fragmented ones, make every merge reversible, and keep entity-resolution decisions reviewable rather than silently automatic
 - A typed knowledge graph over the bundle (markdown links plus a SQLite node-edge projection; NetworkX for analysis). The typing is an OpenKOS layer over OKF's untyped links: a bundle stays readable by any OKF consumer, which simply sees untyped edges.
-- Hybrid retrieval: lexical (FTS5) + local vectors (`sqlite-vec`) + graph traversal, with context assembly
+- Hybrid retrieval: lexical (the FTS5 foundation shipped in MVP 1) + local vectors (`sqlite-vec`) + graph traversal, with context assembly
 - Local embeddings (Sentence Transformers) and local model runtimes (Ollama)
 - The two-output rule: a good answer can be filed back as a new OKF concept
 - Incremental compilation and change tracking

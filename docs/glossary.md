@@ -49,7 +49,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **High-water-mark (sensitivity)** — The rule that a derived object is at least as sensitive as the most sensitive source it was compiled from; sensitivity propagates upward along the provenance chain.
 
-**Ingest** — The operation of compiling a raw source into the bundle: reading it, writing a summary concept, updating related concepts, and recording provenance and log entries.
+**Ingest** — The operation of compiling a raw source into the bundle: reading it, writing a summary concept, updating related concepts (MVP 2), and recording provenance and log entries.
 
 **index.md** — A catalog file that lists the bundle's concepts with short summaries, used for navigation and index-first retrieval. Defined by OKF as an optional, reserved filename.
 
