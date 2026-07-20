@@ -32,12 +32,12 @@ Chain strategy: feature-branch-chain
 - [x] 1.3 REFACTOR: extract `rank()`; mypy strict
 
 ## Phase 2: U2 — Merge Core (ledger + combine, library only)
-- [ ] 2.1 RED: `build_merged_document` scalar-survivor-wins/list-union/freshness-most-recent
-- [ ] 2.2 GREEN: `build_merged_document()` in `okf.py`
-- [ ] 2.3 RED: `merged_from` ledger encode/decode round-trips via `dump_frontmatter`/`load_frontmatter`
-- [ ] 2.4 GREEN: `MERGED_FROM_KEY` + LIFO ledger encode/decode
-- [ ] 2.5 RED: `test_merge.py`: `plan_merge`/`plan_unmerge` pure text-in/out
-- [ ] 2.6 GREEN: create `bundle/merge.py` — `MergePlan`/`UnmergePlan`, no I/O
+- [x] 2.1 RED: `build_merged_document` scalar-survivor-wins/list-union/freshness-most-recent
+- [x] 2.2 GREEN: `build_merged_document()` in `okf.py`
+- [x] 2.3 RED: `merged_from` ledger encode/decode round-trips via `dump_frontmatter`/`load_frontmatter`
+- [x] 2.4 GREEN: `MERGED_FROM_KEY` + LIFO ledger encode/decode
+- [x] 2.5 RED: `test_merge.py`: `plan_merge`/`plan_unmerge` pure text-in/out
+- [x] 2.6 GREEN: create `bundle/merge.py` — `MergePlan`/`UnmergePlan`, no I/O
 
 ## Phase 3: U3 — Inbound Link Rewrite (`bundle/links.py`)
 - [ ] 3.1 RED: `test_links.py`: fence-masked, anchor-preserving rewrite, no over-match
