@@ -455,10 +455,11 @@ def test_adjudicate_no_auto_flag_offered(
     assert isinstance(result.exception, SystemExit)
 
 
-def test_adjudicate_command_name_is_not_resolve_or_merge() -> None:
-    """`adjudicate` is registered under its own name -- `resolve`/`merge` are
-    reserved for slice 3 and MUST NOT exist yet (spec: distinct from the
-    reserved `resolve`/`merge` verbs)."""
+def test_adjudicate_command_name_is_not_resolve() -> None:
+    """`adjudicate` is registered under its own name -- `resolve` remains
+    unimplemented (spec: distinct from the reserved `resolve` verb).
+    `merge` is now implemented (entity-resolution-merge slice 3, U4) and is
+    deliberately NOT asserted absent here anymore."""
     callback_names = {
         command.callback.__name__
         for command in app.registered_commands
@@ -466,13 +467,12 @@ def test_adjudicate_command_name_is_not_resolve_or_merge() -> None:
     }
     assert "adjudicate" in callback_names
     assert "resolve" not in callback_names
-    assert "merge" not in callback_names
+    assert "merge" in callback_names
 
-    # Typer's own dispatcher independently confirms `resolve`/`merge` are
-    # unknown subcommands (exit 2, "No such command"), not merely absent
-    # from the callback-name set above.
+    # Typer's own dispatcher independently confirms `resolve` is an unknown
+    # subcommand (exit 2, "No such command"), not merely absent from the
+    # callback-name set above.
     assert runner.invoke(app, ["resolve"]).exit_code == 2
-    assert runner.invoke(app, ["merge"]).exit_code == 2
 
 
 # --- integration proof (real bundle: examples/good-life-demo) ---------------

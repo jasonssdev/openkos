@@ -46,12 +46,12 @@ Chain strategy: feature-branch-chain
 - [x] 3.4 GREEN: `reverse_link_rewrites` exact-substring bounded, fail-closed if absent
 
 ## Phase 4: U4 — `merge` Verb + Confirm Gate
-- [ ] 4.1 RED (threat: self/unknown-id): same-id, unknown-id refuse, no write
-- [ ] 4.2 RED (threat: path-traversal): both ids via `_resolve_concept_path`
-- [ ] 4.3 GREEN: `merge` verb — Phase A preview → gate (`--auto`>`review:false`>TTY>refusal) → Phase B (index/log, rewritten docs, survivor, delete absorbed last)
-- [ ] 4.4 RED: declined/non-TTY-no-auto write nothing
-- [ ] 4.5 RED (threat: partial write): survivor-before-delete stays recoverable
-- [ ] 4.6 GREEN: wire Phase B ordering
+- [x] 4.1 RED (threat: self/unknown-id): same-id, unknown-id refuse, no write
+- [x] 4.2 RED (threat: path-traversal): both ids via `_resolve_concept_path`
+- [x] 4.3 GREEN: `merge` verb — Phase A preview → gate (`--auto`>`review:false`>TTY>refusal) → Phase B (index/log, rewritten docs, survivor, delete absorbed last)
+- [x] 4.4 RED: declined/non-TTY-no-auto write nothing
+- [x] 4.5 RED (threat: partial write): survivor-before-delete stays recoverable
+- [x] 4.6 GREEN: wire Phase B ordering
 
 ## Phase 5: U5 — `unmerge` + Round-Trip Parity
 - [ ] 5.1 RED (threat: collision): non-tail `absorbed-id` refuses, no write
