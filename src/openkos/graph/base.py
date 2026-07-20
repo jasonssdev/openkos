@@ -27,8 +27,12 @@ class Edge:
     target_id: str
     """The OKF concept id this edge points to."""
     relation_type: str | None = None
-    """Reserved for typed-edge work (`knowledge-object-model.md:211-222`);
-    always `None` in this slice -- no vocabulary is committed yet."""
+    """The edge's type string, populated from the source document's
+    `relations:` frontmatter entry whose `target` resolves to this edge's
+    `target_id` (`knowledge-object-model.md:211-222`;
+    `model.okf.decode_relations`). `None` for an untyped edge extracted from
+    a bundle-relative body link -- the two kinds of edge can coexist between
+    the same `(source_id, target_id)` pair as distinct rows."""
 
 
 @runtime_checkable
