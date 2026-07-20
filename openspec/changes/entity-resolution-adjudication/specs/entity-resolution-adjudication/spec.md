@@ -23,8 +23,11 @@ content truncation/summarization of member bodies.
 ### Requirement: Per-Group LLM Adjudication Preserving Order
 
 `adjudicate_candidates(candidates, bundle_dir, llm)` MUST issue one LLM call
-per input `CandidateGroup` (Approach A) and MUST return exactly one
-`AdjudicatedCandidate` per input group, in the same order as the input list.
+per input `CandidateGroup` with readable content (Approach A) and MUST
+return exactly one `AdjudicatedCandidate` per input group, in the same order
+as the input list. A group with zero readable members is a documented
+exception: it MUST NOT trigger an `llm.chat` call (see Requirement:
+Read-Only Full-Body Member Loading, Degrade Per Member).
 
 #### Scenario: One verdict per input group, same order
 
@@ -53,7 +56,10 @@ Adjudication MUST load each candidate member's title and full body read-only
 via `okf.load_frontmatter`. A member whose document is unreadable or
 malformed at adjudication time MUST be skipped from that group's prompt
 without raising; the group MUST still be adjudicated using its remaining
-readable members.
+readable members. If EVERY member of a group is unreadable, the group MUST
+short-circuit to `Verdict.UNCERTAIN`, `confidence == 0.0`, and rationale
+`"no readable member content"` — WITHOUT calling `llm.chat` for that group
+(a documented exception to the one-call-per-group rule).
 
 #### Scenario: Unreadable member is skipped, group still adjudicated
 
@@ -62,6 +68,14 @@ readable members.
 - WHEN `adjudicate_candidates` runs
 - THEN it does not raise, the unreadable member is excluded from the
   prompt, and the group receives a verdict based on the remaining member(s)
+
+#### Scenario: All members unreadable short-circuits without an LLM call
+
+- GIVEN a candidate group where every member's document is unreadable
+- WHEN `adjudicate_candidates` runs
+- THEN the group's result is `Verdict.UNCERTAIN` with `confidence == 0.0`
+  and rationale `"no readable member content"`, and `llm.chat` is never
+  called for that group
 
 ### Requirement: Fail-Closed Reply Parsing And Validation
 

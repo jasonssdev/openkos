@@ -66,7 +66,10 @@ the malformed reply. `OllamaError`-family from `llm.chat` is **not** caught here
 Member loading (mirrors `answer.py:80-102`): `read_text` guarded `except (OSError,
 UnicodeDecodeError): continue`; `okf.load_frontmatter` guarded `except Exception: continue`;
 `title = str(metadata.get("title") or "") or concept_id`. A group whose members are all
-unreadable still yields one `AdjudicatedCandidate` (UNCERTAIN, empty-context rationale).
+unreadable still yields one `AdjudicatedCandidate` (`UNCERTAIN`, confidence `0.0`, rationale
+`"no readable member content"`) WITHOUT calling `llm.chat` for that group — a documented
+exception to the one-call-per-group rule (Approach A still holds for every group with at
+least one readable member).
 
 Prompt (mirrors `concept._build_messages`): stable system rubric — "Decide if the listed
 same-type objects are the SAME real-world entity. Return ONLY JSON {verdict, confidence,
