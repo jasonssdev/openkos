@@ -27,9 +27,9 @@ Chain strategy: pending
 
 ## Phase 1: Foundation — Protocol + Dependencies
 
-- [ ] 1.1 RED `tests/unit/graph/test_base.py`: `Edge` is a frozen dataclass (source_id/target_id/relation_type); a plain class implementing `nodes/edges/neighbors` satisfies `GraphStore` structurally (mypy).
-- [ ] 1.2 GREEN `src/openkos/graph/__init__.py` (package marker) + `src/openkos/graph/base.py`: `Edge` dataclass, `GraphStore` Protocol (`nodes()`/`edges()`/`neighbors()` only, no path method), stdlib-only leaf docstring.
-- [ ] 1.3 `pyproject.toml`: add `networkx>=3.4` to `[project].dependencies`, `types-networkx` to `dev` group; run `uv lock`.
+- [x] 1.1 RED `tests/unit/graph/test_base.py`: `Edge` is a frozen dataclass (source_id/target_id/relation_type); a plain class implementing `nodes/edges/neighbors` satisfies `GraphStore` structurally (mypy).
+- [x] 1.2 GREEN `src/openkos/graph/__init__.py` (package marker) + `src/openkos/graph/base.py`: `Edge` dataclass, `GraphStore` Protocol (`nodes()`/`edges()`/`neighbors()` only, no path method), stdlib-only leaf docstring.
+- [x] 1.3 `pyproject.toml`: add `networkx>=3.4` to `[project].dependencies`, `types-networkx` to `dev` group; run `uv lock`.
 
 ## Phase 2: Build Lifecycle + Edge Extraction (`graph/sqlite_graph.py`)
 
