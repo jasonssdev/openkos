@@ -40,10 +40,10 @@ Chain strategy: feature-branch-chain
 - [x] 2.6 GREEN: create `bundle/merge.py` — `MergePlan`/`UnmergePlan`, no I/O
 
 ## Phase 3: U3 — Inbound Link Rewrite (`bundle/links.py`)
-- [ ] 3.1 RED: `test_links.py`: fence-masked, anchor-preserving rewrite, no over-match
-- [ ] 3.2 GREEN: create `links.py` — own `_LINK_RE`/`_mask_fenced_code_blocks` (duplicated, not imported from `graph`)
-- [ ] 3.3 RED: reversal bounded to recorded `{file,old_link,new_link}`, never replace-all
-- [ ] 3.4 GREEN: `reverse_link_rewrites` exact-substring bounded, fail-closed if absent
+- [x] 3.1 RED: `test_links.py`: fence-masked, anchor-preserving rewrite, no over-match
+- [x] 3.2 GREEN: create `links.py` — own `_LINK_RE`/`_mask_fenced_code_blocks` (duplicated, not imported from `graph`)
+- [x] 3.3 RED: reversal bounded to recorded `{file,old_link,new_link}`, never replace-all
+- [x] 3.4 GREEN: `reverse_link_rewrites` exact-substring bounded, fail-closed if absent
 
 ## Phase 4: U4 — `merge` Verb + Confirm Gate
 - [ ] 4.1 RED (threat: self/unknown-id): same-id, unknown-id refuse, no write

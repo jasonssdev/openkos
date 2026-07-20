@@ -140,6 +140,7 @@ def test_plan_merge_ledger_entry_captures_full_pre_merge_snapshot_set() -> None:
         file="concepts/other.md",
         old_link="/concepts/absorbed.md",
         new_link="/concepts/survivor.md",
+        offset=42,
     )
 
     plan = bundle_merge.plan_merge(

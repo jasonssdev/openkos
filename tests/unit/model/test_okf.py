@@ -1212,6 +1212,7 @@ def _sample_ledger_entry(**overrides: object) -> okf.MergeLedgerEntry:
                 file="concepts/other.md",
                 old_link="/concepts/absorbed-id.md",
                 new_link="/concepts/survivor-id.md",
+                offset=42,
             )
         ],
         "sensitivity_before": "private",
@@ -1286,6 +1287,53 @@ def test_decode_merge_ledger_entry_rejects_non_mapping_link_rewrite_item() -> No
 def test_decode_merge_ledger_entry_rejects_link_rewrite_missing_field() -> None:
     """A `link_rewrites` list item missing a required field fails closed."""
     entry = _valid_encoded_entry(link_rewrites=[{"file": "concepts/other.md"}])
+
+    with pytest.raises(ValueError, match="link_rewrites entry missing field"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_link_rewrite_offset_round_trips_through_frontmatter_losslessly() -> None:
+    """`LinkRewrite.offset` -- the positional disambiguator that lets
+    `bundle/links.py::reverse_link_rewrites` revert an EXACT occurrence even
+    when a file's post-merge text contains two identical
+    `](/survivor.md)`-shaped targets (one rewritten, one coincidentally
+    pre-existing) -- round-trips through encode/frontmatter/decode exactly,
+    not just the pre-existing three fields."""
+    entry = _sample_ledger_entry(
+        link_rewrites=[
+            okf.LinkRewrite(
+                file="concepts/other.md",
+                old_link="/concepts/absorbed-id.md",
+                new_link="/concepts/survivor-id.md",
+                offset=123,
+            )
+        ]
+    )
+
+    metadata: dict[str, object] = {"type": "Concept"}
+    metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter(metadata, "Survivor body.")
+
+    loaded_metadata, _ = okf.load_frontmatter(text)
+    decoded = okf.decode_merged_from(loaded_metadata)
+
+    assert decoded == [entry]
+    assert decoded[0].link_rewrites[0].offset == 123
+
+
+def test_decode_merge_ledger_entry_rejects_link_rewrite_missing_offset_field() -> None:
+    """A `link_rewrites` list item missing the `offset` field fails closed,
+    same as any other required field -- a corrupt/pre-fix ledger entry must
+    never be silently re-read as `offset=0`."""
+    entry = _valid_encoded_entry(
+        link_rewrites=[
+            {
+                "file": "concepts/other.md",
+                "old_link": "/concepts/absorbed-id.md",
+                "new_link": "/concepts/survivor-id.md",
+            }
+        ]
+    )
 
     with pytest.raises(ValueError, match="link_rewrites entry missing field"):
         okf.decode_merged_from({"merged_from": [entry]})

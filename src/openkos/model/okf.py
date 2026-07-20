@@ -232,11 +232,22 @@ class LinkRewrite:
     `file` is the bundle-relative path the rewrite happened in; `old_link`/
     `new_link` are the exact markdown link targets substituted -- the
     values `bundle/links.py` (U3) needs to bound its reversal to these
-    specific recorded occurrences, never a blind replace-all."""
+    specific recorded occurrences, never a blind replace-all.
+
+    `offset` is the character offset, in the POST-merge `file` text, where
+    THIS rewrite's `new_link` occurrence begins. It is the positional
+    disambiguator `reverse_link_rewrites` needs: when a file links to BOTH
+    the absorbed AND survivor concepts, after the merge there are TWO
+    `](/survivor.md)`-shaped occurrences in that file (one just rewritten,
+    one coincidentally pre-existing) and a target-string-only reverse
+    cannot tell them apart -- it may revert the wrong one and break
+    byte-parity. Reversing at the exact recorded `offset` instead removes
+    the ambiguity entirely."""
 
     file: str
     old_link: str
     new_link: str
+    offset: int
 
 
 @dataclass(frozen=True)
@@ -283,7 +294,12 @@ def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
         "index_before": entry.index_before,
         "log_before": entry.log_before,
         "link_rewrites": [
-            {"file": lr.file, "old_link": lr.old_link, "new_link": lr.new_link}
+            {
+                "file": lr.file,
+                "old_link": lr.old_link,
+                "new_link": lr.new_link,
+                "offset": lr.offset,
+            }
             for lr in entry.link_rewrites
         ],
         "sensitivity_before": entry.sensitivity_before,
@@ -299,7 +315,10 @@ def encode_merged_from(entries: list[MergeLedgerEntry]) -> list[dict[str, object
 
 def _decode_link_rewrite(raw: object) -> LinkRewrite:
     """Parse one `link_rewrites` list item back into a `LinkRewrite`, failing
-    closed (`ValueError`) on anything malformed."""
+    closed (`ValueError`) on anything malformed. `offset` is required (not
+    defaulted to `0`) -- a ledger entry missing it must never be silently
+    misread, since `reverse_link_rewrites` trusts it for exact positional
+    reversal."""
     if not isinstance(raw, dict):
         raise ValueError(
             f"link_rewrites entry must be a mapping, got {type(raw).__name__}"
@@ -309,6 +328,7 @@ def _decode_link_rewrite(raw: object) -> LinkRewrite:
             file=str(raw["file"]),
             old_link=str(raw["old_link"]),
             new_link=str(raw["new_link"]),
+            offset=int(raw["offset"]),
         )
     except KeyError as exc:
         raise ValueError(f"link_rewrites entry missing field {exc}") from exc
