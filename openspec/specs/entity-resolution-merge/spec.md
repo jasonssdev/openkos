@@ -74,29 +74,57 @@ Unrecognized/malformed → fail-closed to `confidential`.
 
 The survivor MUST gain a `merged_from` frontmatter key (an ordinary OKF
 data key, not a new file type). Round-trip parity is logically impossible
-from the absorbed snapshot alone — provenance union, tag union, sensitivity
-high-water-mark, and freshness-most-recent are all lossy/non-invertible —
-so each ledger entry MUST hold, per absorbed object, ALL of:
-- `absorbed_snapshot` — verbatim pre-merge frontmatter+body of the absorbed
-  object;
-- `survivor_before` — the survivor's full verbatim bytes immediately prior
-  to THIS merge's write, explicitly RETAINING any prior `merged_from`
-  entries from earlier merges (it excludes ONLY the new entry being created
-  by this merge, which does not yet exist at snapshot time; it does NOT
-  strip the whole `merged_from` key);
-- `index_before` and `log_before` — the verbatim pre-merge `index.md`/
-  `log.md` state needed to restore them;
-- `link_rewrites` — the list of `{file, old_link, new_link}` rewrites
-  performed;
-- `sensitivity_before` / `sensitivity_after` — audit of the recomputed
-  value.
+from the absorbed snapshot alone — union/high-water-mark/freshness
+recomputation and typed-relation rewiring are all lossy — so each entry
+MUST hold, per absorbed object, ALL of:
+- `absorbed_snapshot` — verbatim pre-merge absorbed frontmatter+body;
+- `survivor_before` — survivor's full verbatim bytes immediately prior to
+  THIS merge, retaining prior `merged_from` entries (it excludes ONLY the
+  new entry being created by this merge, which does not yet exist at
+  snapshot time; it does NOT strip the whole `merged_from` key);
+- `index_before` / `log_before` — verbatim pre-merge catalog state;
+- `link_rewrites` — the body-link `{file, old_link, new_link}` rewrites;
+- `relation_rewrites` (v2, NEW) — for every third-party file whose
+  `relations:` were retargeted, dropped as a self-loop, or deduped, a
+  whole-file verbatim pre-merge snapshot, sufficient to reverse it
+  exactly;
+- `sensitivity_before` / `sensitivity_after`.
 
-#### Scenario: Ledger embeds the full pre-merge snapshot set and rewrites
-- GIVEN a merge that rewrote one inbound link
+`unmerge` MUST restore EVERY touched file — survivor, absorbed, and every
+file in `relation_rewrites` — byte-exact, re-materializing any dropped
+self-loop or deduped edge. Sequential merges touching OVERLAPPING
+third-party files MUST unmerge LIFO to each exact historical state. An
+entry with no `relation_rewrites` key (v1, pre-slice-2a) MUST still decode
+and unmerge exactly as before; the reader MUST accept both v1 and v2.
+(Previously: v1 schema, no relation-rewrite field; relations were
+guarded/refused, never rewired.)
+
+#### Scenario: Ledger embeds the full snapshot set plus relation rewrites
+- GIVEN a merge that rewrote one inbound link and retargeted one
+  third-party relation
 - WHEN survivor frontmatter is inspected
 - THEN `merged_from` has `absorbed_snapshot`, `survivor_before`,
-  `index_before`, `log_before`, `link_rewrites` (including that rewrite),
-  and `sensitivity_before`/`sensitivity_after`
+  `index_before`, `log_before`, `link_rewrites`, `relation_rewrites`
+  (with that file's snapshot), and `sensitivity_before`/`sensitivity_after`
+
+#### Scenario: Unmerge restores every touched file, including drops/dedupes
+- GIVEN a merge that dropped a self-loop and deduped a collision on a
+  third-party file
+- WHEN `unmerge <survivor> <absorbed>` is confirmed
+- THEN survivor, absorbed, and that third-party file are all restored
+  byte-exact, with the drop and dedupe re-materialized
+
+#### Scenario: LIFO unmerge across overlapping third-party files
+- GIVEN two sequential merges that both retargeted relations on the same
+  third-party file
+- WHEN each merge is unmerged in reverse (LIFO) order
+- THEN the file is restored to its exact byte state at each step
+
+#### Scenario: Pre-slice-2a v1 ledger entry still unmerges exactly
+- GIVEN a `merged_from` entry with no `relation_rewrites` key (v1)
+- WHEN `unmerge` runs against it
+- THEN it decodes successfully and restores survivor/absorbed/catalog
+  exactly as before slice 2a
 
 ### Requirement: Inbound-Link Rewrite
 
@@ -171,35 +199,40 @@ gate but does not refuse -- round-trip parity assumes a prompt unmerge.
 - WHEN `unmerge` runs
 - THEN it exits non-zero and writes nothing
 
-### Requirement: Non-Silent Guard For Edge-Bearing Merge
+### Requirement: Reversible Typed-Relation Rewiring
 
-Before Phase B writes, `merge` MUST check whether the absorbed object bears
-outbound `relations:` entries OR is the target of any inbound typed
-relation from another object in the bundle. WHEN either holds, `merge` MUST
-NOT proceed silently: it MUST warn or refuse (the exact choice is fixed by
-design) so the user is made aware before any write. Full reversible
-rewiring of typed edges through merge/unmerge is OUT OF SCOPE for this
-slice (Non-Goal — deferred to a later slice).
+`merge` MUST succeed regardless of typed relations on the absorbed object —
+never refuse or block on outbound `relations:` or inbound targeting. Phase
+A MUST: (a) OUTBOUND move — union absorbed's `relations:` onto the
+survivor's; (b) INBOUND retarget — rewrite every other bundle file's
+`relations:` targeting the absorbed id to target the survivor id; (c)
+SELF-LOOP drop — drop any resulting survivor→survivor edge; (d) COLLISION
+dedupe — collapse a retarget duplicating an edge a third-party file already
+holds to one entry. Drops and dedupes MUST appear in the confirm preview
+(ADR-0004) before any write; a silent relation change is a violation.
 
-#### Scenario: Merge of an object with outbound relations surfaces a guard
-
-- GIVEN the absorbed object has at least one outbound `relations:` entry
+#### Scenario: Merge of an edge-bearing object always succeeds
+- GIVEN the absorbed object bears outbound `relations:` or is an inbound
+  relation target
 - WHEN `merge <survivor> <absorbed>` runs
-- THEN the guard is triggered (warn or refuse) before any write occurs,
-  never silently
+- THEN it proceeds and writes; it never refuses or blocks on relations
 
-#### Scenario: Merge of an inbound relation target surfaces a guard
+#### Scenario: Outbound relations move to the survivor
+- GIVEN the absorbed object has an outbound `relations:` entry
+- WHEN `merge` runs
+- THEN the entry is unioned onto the survivor's `relations:`
 
-- GIVEN another object in the bundle has a `relations:` entry whose
-  `target` is the absorbed object
-- WHEN `merge <survivor> <absorbed>` runs
-- THEN the guard is triggered (warn or refuse) before any write occurs,
-  never silently
+#### Scenario: Third-party inbound relations retarget to the survivor
+- GIVEN another bundle file's `relations:` entry targets the absorbed id
+- WHEN `merge` runs
+- THEN that entry is rewritten to target the survivor id
 
-#### Scenario: Merge of an object with no typed relations proceeds unaffected
+#### Scenario: Resulting self-loop is dropped, non-silently
+- GIVEN a rewrite would produce a survivor→survivor edge
+- WHEN `merge` runs
+- THEN the edge is dropped and the drop appears in the confirm preview
 
-- GIVEN the absorbed object has no outbound `relations:` entries and is not
-  the target of any inbound typed relation
-- WHEN `merge <survivor> <absorbed>` runs
-- THEN merge proceeds exactly as specified in the existing merge
-  requirements, with no guard triggered
+#### Scenario: Duplicate edge is deduped, non-silently
+- GIVEN a retarget would duplicate an edge a third-party file already holds
+- WHEN `merge` runs
+- THEN one edge entry remains and the dedupe appears in the preview
