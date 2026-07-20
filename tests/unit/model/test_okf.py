@@ -602,6 +602,46 @@ def _build_call_concept(**overrides: object) -> str:
     return okf.build_concept(**kwargs)  # type: ignore[arg-type]
 
 
+def test_build_concept_output_byte_identical_regression() -> None:
+    """Regression guard (design: "`build_concept` does NOT emit relations =>
+    LLM ingest path byte-identical"; PR1 done-criterion): `build_concept`'s
+    full output text is pinned byte-for-byte. This slice's `relations:`
+    codec/§9 rule additions must never cause `build_concept` (or, by
+    extension, the ingest/extraction pipeline built on it) to emit a
+    `relations:` key or otherwise change a single byte of its output."""
+    text = _build_call_concept()
+
+    assert text == (
+        "---\n"
+        "description: Hellenistic school holding that virtue is the only good, and that freedom\n"
+        "  comes from knowing what is up to us.\n"
+        "freshness: snapshot\n"
+        "provenance:\n"
+        "- sources/call-with-maria-salazar\n"
+        "sensitivity: confidential\n"
+        "status: active\n"
+        "tags: []\n"
+        "timestamp: '2026-07-14T18:30:00Z'\n"
+        "title: Stoicism\n"
+        "type: Concept\n"
+        "version: 1\n"
+        "---\n"
+        "\n"
+        "# Stoicism\n"
+        "\n"
+        "Hellenistic school holding that virtue is the only good, and that freedom "
+        "comes from knowing what is up to us.\n"
+        "\n"
+        "The dichotomy of control separates what is up to us from what is not.\n"
+        "\n"
+        "## Related\n"
+        "\n"
+        "- [sources/call-with-maria-salazar](/sources/call-with-maria-salazar.md) "
+        "— source this was extracted from\n"
+    )
+    assert "relations" not in text
+
+
 def test_build_concept_emits_required_frontmatter_fields() -> None:
     """`build_concept` emits every OKF + OpenKOS-layer field
     `build_source_concept` emits, plus an empty `tags` list (design: no
@@ -1391,3 +1431,179 @@ def test_decode_merge_ledger_entry_rejects_non_iterable_link_rewrites() -> None:
 
     with pytest.raises(ValueError, match="merged_from entry malformed"):
         okf.decode_merged_from({"merged_from": [entry]})
+
+
+# -- U3: `relations:` codec (Phase 1, tasks 1.3-1.6) -----------------------
+
+
+def test_relations_round_trip_through_frontmatter(tmp_path: Path) -> None:
+    """A well-formed `relations:` list round-trips through
+    `dump_frontmatter`/`load_frontmatter` (spec: "Well-formed relations
+    entry parses"; task 1.3)."""
+    entries = [okf.Relation(target="concepts/x", type="references")]
+
+    metadata: dict[str, object] = {"type": "Concept"}
+    metadata[okf.RELATIONS_KEY] = okf.encode_relations(entries)
+    text = okf.dump_frontmatter(metadata, "Body.")
+
+    loaded_metadata, _ = okf.load_frontmatter(text)
+    decoded = okf.decode_relations(loaded_metadata)
+
+    assert decoded == entries
+
+
+def test_decode_relations_rejects_newline_in_target() -> None:
+    """A `target` containing `\\n` fails closed (spec: "Newline in target or
+    type is rejected"; task 1.4)."""
+    with pytest.raises(ValueError, match="newline"):
+        okf.decode_relations(
+            {"relations": [{"target": "concepts/x\ny", "type": "references"}]}
+        )
+
+
+def test_decode_relations_rejects_newline_in_type() -> None:
+    """A `type` containing `\\r` fails closed."""
+    with pytest.raises(ValueError, match="newline"):
+        okf.decode_relations(
+            {"relations": [{"target": "concepts/x", "type": "bad\rtype"}]}
+        )
+
+
+def test_decode_relations_rejects_empty_target() -> None:
+    """An empty/whitespace-only `target` fails closed."""
+    with pytest.raises(ValueError, match="non-empty"):
+        okf.decode_relations({"relations": [{"target": "  ", "type": "references"}]})
+
+
+def test_decode_relations_rejects_empty_type() -> None:
+    """An empty/whitespace-only `type` fails closed."""
+    with pytest.raises(ValueError, match="non-empty"):
+        okf.decode_relations({"relations": [{"target": "concepts/x", "type": ""}]})
+
+
+def test_decode_relations_absent_key_returns_empty_list() -> None:
+    """A document with no `relations:` key decodes to `[]`, no error (spec:
+    "Absent relations key is valid"; task 1.5)."""
+    assert okf.decode_relations({"type": "Concept"}) == []
+
+
+def test_decode_relations_rejects_non_list_value() -> None:
+    """A malformed `relations:` that is not a list fails closed."""
+    with pytest.raises(ValueError, match="relations"):
+        okf.decode_relations({"relations": "not-a-list"})
+
+
+def test_decode_relations_rejects_non_mapping_item() -> None:
+    """A `relations:` list item that is not a mapping fails closed."""
+    with pytest.raises(ValueError, match="mapping"):
+        okf.decode_relations({"relations": ["not-a-dict"]})
+
+
+def test_encode_relations_sorts_by_target_then_type() -> None:
+    """`encode_relations` sorts entries by `(target, type)`, deterministically,
+    regardless of input order (task 1.6)."""
+    entries = [
+        okf.Relation(target="concepts/b", type="references"),
+        okf.Relation(target="concepts/a", type="depends_on"),
+        okf.Relation(target="concepts/a", type="caused_by"),
+    ]
+
+    encoded = okf.encode_relations(entries)
+
+    assert encoded == [
+        {"target": "concepts/a", "type": "caused_by"},
+        {"target": "concepts/a", "type": "depends_on"},
+        {"target": "concepts/b", "type": "references"},
+    ]
+
+
+def test_encode_relations_strips_md_suffix_from_target() -> None:
+    """`encode_relations` strips a `.md` suffix from `target`, matching how
+    `provenance` and `MergeLedgerEntry.absorbed_id` reference objects
+    (design: SHAPE) -- never a `/...md` link, never a bare slug."""
+    entries = [okf.Relation(target="concepts/x.md", type="references")]
+
+    encoded = okf.encode_relations(entries)
+
+    assert encoded == [{"target": "concepts/x", "type": "references"}]
+
+
+def test_encode_relation_rejects_target_empty_after_md_strip() -> None:
+    """A `target` that is non-empty only by virtue of its `.md` suffix (e.g.
+    exactly ".md") must be rejected, not silently encoded to an empty
+    `target`. Stripping `.md` happens after the non-empty guard, so the guard
+    must be re-applied afterwards -- otherwise `encode_relation` emits
+    `{"target": ""}`, which its own §9 rule and `decode_relation` would then
+    reject, making the encoded output not round-trip valid."""
+    with pytest.raises(ValueError, match="non-empty"):
+        okf.encode_relation(okf.Relation(target=".md", type="references"))
+
+
+def test_encode_relations_empty_list_round_trips() -> None:
+    """An empty `relations:` list encodes/decodes to `[]`."""
+    assert okf.encode_relations([]) == []
+    assert okf.decode_relations({"relations": []}) == []
+
+
+# -- §9 additive rule: `relations:` field shape (Phase 1, tasks 1.8-1.10) --
+
+
+def test_check_conformance_reports_violation_for_malformed_relations(
+    tmp_path: Path,
+) -> None:
+    """§9 additive rule: a malformed `relations:` entry (missing `type`) is
+    reported as a violation in the existing `f"{path}: {message}"` form,
+    appended after rules 1-3 (spec: "Malformed relations entry reported as
+    violation"; task 1.8)."""
+    target = tmp_path / "concept.md"
+    target.write_text(
+        "---\ntype: Concept\nrelations:\n  - target: concepts/x\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    violations = okf.check_conformance(tmp_path)
+
+    assert len(violations) == 1
+    assert violations[0].startswith(f"{target}: ")
+
+
+def test_check_conformance_byte_identical_when_relations_absent(
+    tmp_path: Path,
+) -> None:
+    """Regression: for a document without a `relations:` key, rules 1-3
+    output is byte-identical to before this rule was added (spec: "Byte-
+    identical output when relations is absent"; task 1.9). Reuses the same
+    mixed-bundle fixture as `test_check_conformance_round_trip_regression`."""
+    (tmp_path / "index.md").write_text(
+        '---\nokf_version: "0.1"\n---\n', encoding="utf-8"
+    )
+    (tmp_path / "log.md").write_text("# Directory Update Log\n", encoding="utf-8")
+    (tmp_path / "clean.md").write_text(
+        "---\ntype: concept\n---\nBody.\n", encoding="utf-8"
+    )
+    (tmp_path / "missing-type.md").write_text(
+        "---\ntitle: no type here\n---\nBody.\n", encoding="utf-8"
+    )
+    (tmp_path / "malformed.md").write_text(
+        "---\ntype: [unclosed\n---\nBody.\n", encoding="utf-8"
+    )
+
+    violations = okf.check_conformance(tmp_path)
+
+    assert len(violations) == 2
+    malformed_path = tmp_path / "malformed.md"
+    missing_type_path = tmp_path / "missing-type.md"
+    assert violations[0].startswith(f"{malformed_path}: no parseable frontmatter (")
+    assert violations[1] == f"{missing_type_path}: missing non-empty 'type'"
+
+
+def test_check_conformance_passes_on_well_formed_relations(tmp_path: Path) -> None:
+    """A well-formed `relations:` list passes conformance with no violation
+    (spec: "Well-formed relations passes, no violation"; task 1.10)."""
+    (tmp_path / "concept.md").write_text(
+        "---\ntype: Concept\nrelations:\n"
+        "  - target: concepts/x\n    type: references\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    assert okf.check_conformance(tmp_path) == []

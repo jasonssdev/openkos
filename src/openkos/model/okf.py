@@ -41,6 +41,13 @@ SENSITIVITY_ORDER: Final[tuple[str, str, str]] = ("public", "private", "confiden
 docs/knowledge-object-model.md:255-272): a derived object is at least as
 sensitive as its most sensitive source."""
 
+RELATIONS_KEY: Final = "relations"
+"""The optional frontmatter key holding a document's outbound typed edges
+(spec: "`relations:` Frontmatter Field Shape"). Ordinary OKF data, per §4.1
+tolerance -- logically placed after `provenance` and before `merged_from`
+in a metadata dict literal, though `dump_frontmatter`'s YAML emission
+always re-sorts keys alphabetically regardless of that insertion order."""
+
 MERGED_FROM_KEY: Final = "merged_from"
 """The survivor frontmatter key holding the reversibility ledger (ADR-0002):
 an ordinary OKF data key, not a new file type, per §4.1 tolerance."""
@@ -382,6 +389,90 @@ def decode_merged_from(metadata: dict[str, object]) -> list[MergeLedgerEntry]:
     return [decode_merge_ledger_entry(item) for item in raw]
 
 
+@dataclass(frozen=True)
+class Relation:
+    """One `relations:` list entry: a typed outbound edge from this document
+    to `target` (spec: "`relations:` Frontmatter Field Shape"; design:
+    SHAPE).
+
+    `target` is the bundle-relative concept-id the edge points to, `.md`
+    stripped -- byte-identical to how `provenance` (`sources/<slug>`) and
+    `MergeLedgerEntry.absorbed_id` reference objects today (NOT a
+    `/...md` link, NOT a bare slug). `type` is the edge's relation-type
+    string: any non-empty, single-line value round-trips through this
+    codec -- `model/relations.py::validate_relation_type`'s WARN-on-unknown
+    gate is enforced by the `relate` CLI verb, not here; this layer only
+    rejects an empty/whitespace value or one containing `\\n`/`\\r`."""
+
+    target: str
+    type: str
+
+
+def _validate_relation_field(field_name: str, value: str) -> str:
+    """Shared fail-closed guard for a `Relation` field: non-empty after
+    stripping, and no embedded `\\n`/`\\r` (mirrors the existing index/log
+    newline-injection guards -- spec: "Newline in target or type is
+    rejected")."""
+    if "\n" in value or "\r" in value:
+        raise ValueError(f"relation {field_name} must not contain newlines")
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError(f"relation {field_name} must be non-empty")
+    return stripped
+
+
+def encode_relation(relation: Relation) -> dict[str, object]:
+    """Turn one `Relation` into a plain-dict shape safe for
+    `dump_frontmatter`, with `target`'s `.md` suffix stripped (design:
+    SHAPE)."""
+    target = _validate_relation_field("target", relation.target).removesuffix(".md")
+    if not target:
+        raise ValueError("relation target must be non-empty")
+    rel_type = _validate_relation_field("type", relation.type)
+    return {"target": target, "type": rel_type}
+
+
+def encode_relations(relations: list[Relation]) -> list[dict[str, object]]:
+    """Encode a full `relations:` list for assignment onto a document's
+    frontmatter metadata dict before `dump_frontmatter`.
+
+    Entries are SORTED by `(target, type)` (task 1.6) for deterministic
+    re-emission and stable dedup, regardless of the order they were built
+    in."""
+    encoded = [encode_relation(relation) for relation in relations]
+    return sorted(encoded, key=lambda entry: (entry["target"], entry["type"]))
+
+
+def decode_relation(raw: object) -> Relation:
+    """Parse one `relations:` list item back into a `Relation`, failing
+    closed (`ValueError`) on anything malformed -- a corrupt or hand-edited
+    `relations:` entry must never be silently misread."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"relations entry must be a mapping, got {type(raw).__name__}")
+    try:
+        target = str(raw["target"])
+        rel_type = str(raw["type"])
+    except KeyError as exc:
+        raise ValueError(f"relations entry missing field {exc}") from exc
+    target = _validate_relation_field("target", target)
+    rel_type = _validate_relation_field("type", rel_type)
+    return Relation(target=target, type=rel_type)
+
+
+def decode_relations(metadata: dict[str, object]) -> list[Relation]:
+    """Read the `relations:` list off a document's `metadata`.
+
+    Absent key returns `[]` (no relations -- spec: "Absent relations key is
+    valid"). A present-but-non-list value fails closed (`ValueError`) -- a
+    corrupt `relations:` key must never be silently ignored."""
+    raw = metadata.get(RELATIONS_KEY)
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"{RELATIONS_KEY!r} must be a list, got {type(raw).__name__}")
+    return [decode_relation(item) for item in raw]
+
+
 def _parse_timestamp(value: object) -> datetime | None:
     """Parse `value` as an ISO-8601 timestamp, returning `None` on anything
     unparseable (missing, non-string, or malformed) rather than raising --
@@ -693,6 +784,15 @@ def check_conformance(bundle_dir: Path) -> list[str]:
     `log.md`'s ISO-8601 date headings; its violations are appended after
     rules 1-2's.
 
+    An additive `relations:` shape rule (spec: "OKF §9 Conformance --
+    `relations:` Field Shape") runs alongside rules 1-2, gated on
+    `scan.metadata` containing a `relations` key: a malformed shape (per
+    `decode_relations`) is appended as a violation in the SAME
+    `f"{path}: {message}"` form. It is a strict ADD-ON -- a document without
+    a `relations:` key produces the exact same rules 1-2 output as before
+    this rule existed (regression-guarded by
+    `tests/unit/model/test_okf.py::test_check_conformance_byte_identical_when_relations_absent`).
+
     An empty list means conformant; a fresh, empty bundle passes vacuously
     because there are no `.md` files to violate any rule.
     May raise `OSError` or `UnicodeDecodeError` when a candidate file cannot
@@ -711,5 +811,10 @@ def check_conformance(bundle_dir: Path) -> list[str]:
             violations.append(f"{scan.path}: {scan.parse_error}")
         elif not (scan.metadata or {}).get("type"):
             violations.append(f"{scan.path}: missing non-empty 'type'")
+        elif RELATIONS_KEY in (scan.metadata or {}):
+            try:
+                decode_relations(scan.metadata or {})
+            except ValueError as exc:
+                violations.append(f"{scan.path}: {exc}")
     violations += _check_reserved_structure(bundle_dir)
     return violations
