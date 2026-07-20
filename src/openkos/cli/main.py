@@ -26,6 +26,8 @@ from openkos.llm.ollama import (
 from openkos.model import okf
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
+from openkos.resolution import find_candidates
+from openkos.resolution.candidates import Tier
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state.fts import FtsUnavailable
 
@@ -986,6 +988,57 @@ def lint() -> None:
     else:
         for finding in report.orphans:
             typer.echo(f"  {finding.path}: {finding.detail}")
+
+
+@app.command()
+def duplicates() -> None:
+    """Report cross-source candidate duplicates: read-only, Phase-A only.
+
+    A THIRD read command, mirroring `status`/`lint`'s shape exactly: no
+    Phase B, no confirm gate, no `--auto`. Refuses (exit 1) via the shared
+    `config.require_workspace` gate (D1) if the current directory is not an
+    initialized workspace -- the SAME check `status`/`lint` use -- printing
+    the reason to stderr with no raw traceback.
+
+    On a workspace, `resolution.find_candidates` performs one read-only,
+    whole-bundle pass and returns candidate groups: same-type OKF objects
+    that MIGHT be the same real-world entity, at a HIGH (exact normalized
+    title) or LOW (near-match) confidence tier. This is a REPORT ONLY --
+    `duplicates` never merges, deletes, or otherwise adjudicates a
+    candidate; that is reserved for a later, explicitly-named `resolve`/
+    `merge` verb (spec: Read-Only CLI Candidate Report Verb).
+
+    Output is grouped by OKF `type`, then by tier, mirroring
+    `find_candidates`'s own stable ordering: each group renders its type,
+    tier, member concept_ids, and the trigger (the shared normalized key
+    for HIGH, the similarity score for LOW). An empty result renders a
+    clear "No candidates found." line instead of an empty section. Every
+    successful read exits 0, whether or not any candidates are found (spec:
+    No candidates still exits 0). No file under the workspace is ever
+    created, modified, or deleted, and no `--json` or other structured
+    output mode is offered (spec: Read-Only and Human-Readable Only).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos duplicates: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    groups = find_candidates(layout.bundle_dir)
+
+    typer.echo(f"openkos duplicates: workspace at {root}")
+    typer.echo()
+    if not groups:
+        typer.echo("No candidates found.")
+        return
+
+    for group in groups:
+        tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
+        typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
+        for member_id in group.member_ids:
+            typer.echo(f"  - {member_id}")
+        typer.echo()
 
 
 def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
