@@ -1172,6 +1172,15 @@ def merge(
     not an error); a `log.md` entry describing the merge is built via
     `bundle_log.insert_log_entry`.
 
+    `bundle.merge.find_relation_conflicts` then guards typed relations
+    (spec: Non-Silent Guard For Edge-Bearing Merge): this slice has no
+    edge-rewiring yet, so if the absorbed object bears its OWN `relations:`
+    entries (outbound), or any OTHER bundle file's `relations:` -- the
+    survivor's included -- targets the absorbed object (inbound), this
+    REFUSES (exit 1) before any write, naming every conflicting relation
+    and noting that full rewiring is deferred to a future slice. An object
+    with no typed relations proceeds unaffected.
+
     The preview printed before the confirm gate surfaces exactly what a
     reviewer needs to approve a DESTRUCTIVE, hard-to-undo-by-hand write:
     the recomputed sensitivity outcome (`before -> after`), every OTHER
@@ -1268,6 +1277,23 @@ def merge(
             absorbed_id=absorbed_canonical,
             survivor_id=survivor_canonical,
         )
+
+        relation_conflicts = bundle_merge.find_relation_conflicts(
+            absorbed_canonical,
+            {**other_files, f"{survivor_canonical}.md": survivor_text},
+            absorbed_text,
+        )
+        if relation_conflicts:
+            conflict_list = ", ".join(
+                f"{conflict.source_id} -> {conflict.relation.target} "
+                f"({conflict.relation.type})"
+                for conflict in relation_conflicts
+            )
+            raise ValueError(
+                "merging would orphan typed relation(s) with no rewiring "
+                f"available in this slice: {conflict_list}; full edge "
+                "rewiring is deferred to a future slice"
+            )
 
         plan = bundle_merge.plan_merge(
             survivor_id=survivor_canonical,

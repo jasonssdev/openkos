@@ -84,6 +84,27 @@ def _write_concept(
     index_path.write_text(new_index_text, encoding="utf-8")
 
 
+def _write_concept_with_relations(
+    tmp_path: Path,
+    concept_id: str,
+    *,
+    title: str,
+    relations: list[dict[str, str]] | None = None,
+) -> None:
+    """Write a concept file directly to the bundle via `okf.dump_frontmatter`,
+    optionally carrying a `relations:` list -- deliberately NOT registered
+    in `index.md` (unneeded: the merge-guard tests below fail closed before
+    `index.md` is ever touched)."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {"type": "Concept", "title": title}
+    if relations is not None:
+        metadata["relations"] = relations
+    concept_path.write_text(
+        okf.dump_frontmatter(metadata, f"# {title}\n\nBody.\n"), encoding="utf-8"
+    )
+
+
 def test_successful_merge_writes_ledger_rewrites_links_removes_absorbed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -637,4 +658,114 @@ def test_path_traversal_on_survivor_id_refuses_no_write(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
+    assert _snapshot(tmp_path) == before
+
+
+def test_merge_refuses_when_absorbed_has_outbound_relations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`merge` refuses (fail-closed, exit 1) before any write when the
+    absorbed object bears its own typed `relations:` entries -- slice 1 has
+    no edge-rewiring (spec: Non-Silent Guard For Edge-Bearing Merge)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        relations=[{"target": "concepts/other", "type": "depends_on"}],
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "concepts/absorbed" in result.stderr
+    assert "depends_on" in result.stderr
+    assert "deferred" in result.stderr.lower()
+    assert _snapshot(tmp_path) == before
+
+
+def test_merge_refuses_when_another_file_has_inbound_relation_to_absorbed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`merge` refuses when a THIRD bundle file's typed relation targets the
+    absorbed object -- that edge would dangle with no rewiring available
+    (spec: Non-Silent Guard For Edge-Bearing Merge)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept_with_relations(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/other",
+        title="Other",
+        relations=[{"target": "concepts/absorbed", "type": "references"}],
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "concepts/other" in result.stderr
+    assert "references" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_merge_succeeds_despite_unrelated_file_with_malformed_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A THIRD, wholly unrelated bundle file with malformed YAML
+    frontmatter must not crash or block a merge between a clean survivor
+    and absorbed pair -- the inbound `find_relation_conflicts` scan reads
+    every other bundle file's frontmatter, but a hand-edited/corrupt file
+    elsewhere in the bundle is not this merge's concern (correction batch,
+    finding 1: unhandled `yaml.YAMLError` escaping the `except (OSError,
+    ValueError)` fail-closed handler and crashing with a raw traceback
+    instead of completing cleanly)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    broken_path = tmp_path / "bundle" / "concepts" / "broken.md"
+    broken_path.write_text('---\ntitle: "Broken\n---\n\nBody.\n', encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert result.exception is None
+    assert not (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()
+
+
+def test_merge_refuses_when_survivor_has_inbound_relation_to_absorbed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The SURVIVOR's own `relations:` entry targeting the absorbed object
+    also dangles after merge -- the inbound scan MUST include the
+    survivor, not just other bundle files (design: MERGE GUARD)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        relations=[{"target": "concepts/absorbed", "type": "references"}],
+    )
+    _write_concept_with_relations(tmp_path, "concepts/absorbed", title="Absorbed")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "concepts/survivor" in result.stderr
+    assert "references" in result.stderr
     assert _snapshot(tmp_path) == before

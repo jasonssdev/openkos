@@ -416,6 +416,98 @@ def test_plan_unmerge_rejects_self_merge_ids() -> None:
         )
 
 
+def test_find_relation_conflicts_detects_absorbed_outbound_relations() -> None:
+    """Scenario: merge of an object with outbound relations surfaces a
+    guard -- the absorbed object's OWN `relations:` entries would be
+    stripped with no rewiring available in this slice."""
+    absorbed_text = _absorbed_text(
+        relations=[{"target": "concepts/other", "type": "depends_on"}]
+    )
+
+    conflicts = bundle_merge.find_relation_conflicts(
+        absorbed_id="concepts/absorbed", files={}, absorbed_text=absorbed_text
+    )
+
+    assert len(conflicts) == 1
+    assert conflicts[0].source_id == "concepts/absorbed"
+    assert conflicts[0].relation == okf.Relation(
+        target="concepts/other", type="depends_on"
+    )
+
+
+def test_find_relation_conflicts_detects_inbound_typed_relation() -> None:
+    """Scenario: merge of an inbound relation target surfaces a guard --
+    another bundle file's typed relation pointing AT the absorbed object
+    would dangle after merge."""
+    other_text = okf.dump_frontmatter(
+        {
+            "type": "Concept",
+            "title": "Other",
+            "relations": [{"target": "concepts/absorbed", "type": "references"}],
+        },
+        "# Other\n",
+    )
+
+    conflicts = bundle_merge.find_relation_conflicts(
+        absorbed_id="concepts/absorbed",
+        files={"concepts/other.md": other_text},
+        absorbed_text=_absorbed_text(),
+    )
+
+    assert len(conflicts) == 1
+    assert conflicts[0].source_id == "concepts/other"
+    assert conflicts[0].relation == okf.Relation(
+        target="concepts/absorbed", type="references"
+    )
+
+
+def test_find_relation_conflicts_empty_when_no_typed_relations() -> None:
+    """Scenario: merge of an object with no typed relations proceeds
+    unaffected -- no `relations:` key anywhere (outbound or inbound)
+    yields zero conflicts."""
+    other_text = okf.dump_frontmatter(
+        {"type": "Concept", "title": "Other"}, "# Other\n"
+    )
+
+    conflicts = bundle_merge.find_relation_conflicts(
+        absorbed_id="concepts/absorbed",
+        files={"concepts/other.md": other_text},
+        absorbed_text=_absorbed_text(),
+    )
+
+    assert conflicts == []
+
+
+def test_find_relation_conflicts_detects_non_canonical_leading_slash_target() -> None:
+    """Scenario (correction batch, finding 2): an inbound relation stored
+    with a hand-authored, non-canonical `target` (a leading `/`, mirroring
+    the `[text](/id.md)` link style this codebase emits) still triggers
+    the guard -- raw string equality against the canonicalized
+    `absorbed_id` must not silently miss it just because the on-disk form
+    was not produced by `relate` (the only in-repo writer, which always
+    canonicalizes)."""
+    other_text = okf.dump_frontmatter(
+        {
+            "type": "Concept",
+            "title": "Other",
+            "relations": [{"target": "/concepts/absorbed", "type": "references"}],
+        },
+        "# Other\n",
+    )
+
+    conflicts = bundle_merge.find_relation_conflicts(
+        absorbed_id="concepts/absorbed",
+        files={"concepts/other.md": other_text},
+        absorbed_text=_absorbed_text(),
+    )
+
+    assert len(conflicts) == 1
+    assert conflicts[0].source_id == "concepts/other"
+    assert conflicts[0].relation == okf.Relation(
+        target="concepts/absorbed", type="references"
+    )
+
+
 def test_plan_unmerge_rejects_blank_ids() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         bundle_merge.plan_unmerge(
