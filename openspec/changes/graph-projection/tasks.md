@@ -44,8 +44,8 @@ Chain strategy: pending
 
 ## Phase 3: GraphStore Query Surface
 
-- [ ] 3.1 RED: `nodes()`/`edges()`/`neighbors(concept_id)` return sorted, deterministic results, including on an empty projection.
-- [ ] 3.2 GREEN: implement `nodes/edges/neighbors` on `SqliteGraphStore`.
+- [x] 3.1 RED: `nodes()`/`edges()`/`neighbors(concept_id)` return sorted, deterministic results, including on an empty projection.
+- [x] 3.2 GREEN: implement `nodes/edges/neighbors` on `SqliteGraphStore`.
 
 ## Phase 4: NetworkX Conversion + Layering Guard (`graph/analysis.py`)
 
