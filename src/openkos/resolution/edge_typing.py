@@ -3,9 +3,15 @@ the derived graph projection (MVP-2 slice 2b).
 
 Mirrors `resolution/adjudication.py` one layer over: `suggest_relations`
 OWNS the `openkos.graph` read internally -- opens `sqlite_graph.build_graph`,
-filters `edges()` down to `relation_type is None` (`untyped_edges`), and
-delegates to `suggest_edge_types`, the config-free LLM leaf, for one
-`EdgeSuggestion` per untyped edge, in order.
+narrows `edges()` to the candidate set (`_candidate_edges`: untyped rows
+whose `(source_id, target_id)` pair does NOT already carry a typed edge
+elsewhere in the graph), and delegates to `suggest_edge_types`, the
+config-free LLM leaf, for one `EdgeSuggestion` per candidate edge, in order.
+The pair-level exclusion matters because an untyped body-link edge and a
+`relations:`-typed edge for the SAME pair can coexist as two distinct graph
+rows (`graph.base.Edge.relation_type`'s docstring); filtering on
+`relation_type is None` alone (`untyped_edges`) would re-suggest an already-
+accepted pair forever.
 
 Config-free leaf (mirrors `adjudication.py`, `extraction/concept.py`, and
 `retrieval/answer.py`): this module never imports `openkos.config`; the
@@ -41,6 +47,16 @@ _MALFORMED_REPLY_RATIONALE = (
 """Stable rationale for a reply that fails fail-closed parsing (mirrors
 `adjudication.py`'s `_MALFORMED_REPLY_RATIONALE`)."""
 
+_DEGRADED_RATIONALE_FALLBACK = "no rationale provided for a fail-closed degrade"
+"""Stable rationale fallback for a well-formed-JSON reply whose `type` is
+missing/non-string/invalid (`suggested_type=None`) AND whose parsed
+`rationale` is empty or whitespace-only. Distinct from
+`_MALFORMED_REPLY_RATIONALE`, which is for a reply that could not be parsed
+as a JSON object at all -- this constant is used to uphold
+`EdgeSuggestion.rationale`'s "never blank on the fail-closed degrade paths"
+invariant when the model DID reply with parseable JSON but left `rationale`
+blank."""
+
 _SYSTEM_PROMPT = (
     "You are a relation-type suggester in a local-first knowledge engine. "
     "Given a SOURCE and a TARGET concept connected by an existing untyped "
@@ -75,10 +91,41 @@ class EdgeSuggestion:
 
 def untyped_edges(store: GraphStore) -> list[Edge]:
     """Return every edge in `store` whose `relation_type is None`, in
-    `store.edges()`'s own (sorted, deterministic) order. Already-typed
-    edges are excluded -- never re-suggested (spec: "Already-typed edges
-    are excluded from suggestions")."""
+    `store.edges()`'s own (sorted, deterministic) order.
+
+    This is a ROW-level filter only: it does NOT exclude an untyped edge
+    whose `(source_id, target_id)` pair also has a SEPARATE typed edge row
+    elsewhere in the graph -- the two can coexist as distinct rows
+    (`graph.base.Edge.relation_type`'s docstring). Pair-level exclusion
+    (spec: "Already-typed edges are excluded from suggestions") is
+    `_candidate_edges`'s responsibility, used by `suggest_relations`, NOT
+    this function's."""
     return [edge for edge in store.edges() if edge.relation_type is None]
+
+
+def _candidate_edges(store: GraphStore) -> list[Edge]:
+    """The actual suggestion candidate set: `untyped_edges(store)` minus any
+    edge whose `(source_id, target_id)` pair ALREADY has a typed edge
+    anywhere in `store` (spec: "Already-typed edges are excluded from
+    suggestions", at the PAIR level -- `untyped_edges` alone only excludes
+    already-typed ROWS).
+
+    This is the fix for the forever-re-suggested bug: once a human accepts a
+    suggestion via `relate`, the resulting typed `relations:` frontmatter
+    entry becomes a NEW, separate graph row for that pair (the original
+    untyped body-link row is never removed by `relate`) -- so row-level
+    filtering alone would keep re-surfacing that pair on every subsequent
+    `suggest-relations` run. Order is preserved from `untyped_edges`."""
+    typed_pairs = {
+        (edge.source_id, edge.target_id)
+        for edge in store.edges()
+        if edge.relation_type is not None
+    }
+    return [
+        edge
+        for edge in untyped_edges(store)
+        if (edge.source_id, edge.target_id) not in typed_pairs
+    ]
 
 
 def _load_doc(bundle_dir: Path, concept_id: str) -> tuple[str, str]:
@@ -158,9 +205,14 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
     An unparseable or non-object reply degrades to `(None,
     _MALFORMED_REPLY_RATIONALE)`. Otherwise `type` is coerced to a string
     (non-string -> `None`) and run through `validate_relation_type`: a
-    `ValueError` (blank after stripping) degrades to `suggested_type=None`,
-    never surfaced as valid, while the parsed `rationale` is KEPT either
-    way; `rationale` is used as-is if it is a string, else `""`."""
+    `ValueError` (blank after stripping) degrades to `suggested_type=None`.
+    On EITHER of those two degrade branches, the parsed `rationale` is used
+    as-is if it is a non-blank string, but falls back to
+    `_DEGRADED_RATIONALE_FALLBACK` when it is missing, non-string, or
+    blank/whitespace-only -- `EdgeSuggestion.rationale` is never blank on a
+    fail-closed degrade path (its own docstring's invariant). On the
+    successful (non-degrade) path, `rationale` is kept as-is (including
+    blank) since a well-formed reply is allowed to omit one."""
     data = _extract_json_object(raw)
     if data is None:
         return None, _MALFORMED_REPLY_RATIONALE
@@ -170,12 +222,12 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
 
     type_raw = data.get("type")
     if not isinstance(type_raw, str):
-        return None, rationale
+        return None, rationale if rationale.strip() else _DEGRADED_RATIONALE_FALLBACK
 
     try:
         suggested_type = validate_relation_type(type_raw)
     except ValueError:
-        return None, rationale
+        return None, rationale if rationale.strip() else _DEGRADED_RATIONALE_FALLBACK
     return suggested_type, rationale
 
 
@@ -207,11 +259,11 @@ def suggest_edge_types(
 
 def suggest_relations(bundle_dir: Path, *, llm: LLMBackend) -> list[EdgeSuggestion]:
     """Orchestrate the whole read-only suggestion flow: open `build_graph`
-    over `bundle_dir` internally, filter down to untyped edges
-    (`untyped_edges`), and delegate to `suggest_edge_types` -- the only
-    entry point the CLI verb calls (design D2: the `graph` read is
-    encapsulated here so `cli/main.py` never imports `openkos.graph`
-    directly)."""
+    over `bundle_dir` internally, narrow down to the candidate set
+    (`_candidate_edges`: untyped edges whose pair is not already typed
+    elsewhere), and delegate to `suggest_edge_types` -- the only entry point
+    the CLI verb calls (design D2: the `graph` read is encapsulated here so
+    `cli/main.py` never imports `openkos.graph` directly)."""
     with build_graph(bundle_dir) as store:
-        edges = untyped_edges(store)
+        edges = _candidate_edges(store)
     return suggest_edge_types(edges, bundle_dir=bundle_dir, llm=llm)

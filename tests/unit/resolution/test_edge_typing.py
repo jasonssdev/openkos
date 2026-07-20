@@ -97,6 +97,20 @@ def test_untyped_edges_preserves_store_order_deterministically() -> None:
     assert edge_typing_mod.untyped_edges(store) == [first, second]
 
 
+def test_untyped_edges_does_not_exclude_already_typed_pairs_row_level_only() -> None:
+    """`untyped_edges` is a ROW-level filter only -- it does NOT exclude an
+    untyped edge whose `(source, target)` pair also has a separate typed edge
+    row. Pair-level exclusion lives in `suggest_relations`'s candidate
+    selection (`_candidate_edges`), not here (docstring correction)."""
+    typed = Edge(source_id="a", target_id="b", relation_type="references")
+    untyped_same_pair = Edge(source_id="a", target_id="b")
+    store: GraphStore = _FakeGraphStore([typed, untyped_same_pair])
+
+    result = edge_typing_mod.untyped_edges(store)
+
+    assert result == [untyped_same_pair]
+
+
 def test_edge_suggestion_carries_edge_suggested_type_and_rationale() -> None:
     edge = Edge(source_id="a", target_id="b")
 
@@ -304,6 +318,42 @@ def test_suggest_edge_types_reply_that_is_valid_json_but_not_an_object_degrades(
     assert result[0].rationale == edge_typing_mod._MALFORMED_REPLY_RATIONALE
 
 
+def test_suggest_edge_types_degrade_with_blank_rationale_falls_back_to_stable_text(
+    tmp_path: Path,
+) -> None:
+    """A reply that fails `validate_relation_type` (blank `type` after
+    stripping) AND omits `rationale` entirely must not surface a blank
+    rationale on the degrade path (`EdgeSuggestion.rationale` docstring:
+    "never blank on the fail-closed degrade paths")."""
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    edges = [Edge(source_id="a", target_id="b")]
+    llm = _FakeLLM(replies=['{"type": "   "}'])
+
+    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+
+    assert len(result) == 1
+    assert result[0].suggested_type is None
+    assert result[0].rationale.strip() != ""
+
+
+def test_suggest_edge_types_non_string_type_with_blank_rationale_falls_back(
+    tmp_path: Path,
+) -> None:
+    """Same invariant as above, on the OTHER degrade branch: `type` present
+    but not a string, and `rationale` present but blank."""
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    edges = [Edge(source_id="a", target_id="b")]
+    llm = _FakeLLM(replies=['{"type": 42, "rationale": "   "}'])
+
+    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+
+    assert len(result) == 1
+    assert result[0].suggested_type is None
+    assert result[0].rationale.strip() != ""
+
+
 def test_suggest_edge_types_builds_a_two_message_json_only_prompt(
     tmp_path: Path,
 ) -> None:
@@ -322,6 +372,55 @@ def test_suggest_edge_types_builds_a_two_message_json_only_prompt(
     assert "Alpha" in messages[1]["content"]
     assert "Beta" in messages[1]["content"]
     assert "JSON" in messages[0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.5: Pair-level candidate exclusion (`_candidate_edges`) -- fixes the
+# CRITICAL forever-re-suggested bug: `untyped_edges` alone only excludes
+# already-typed ROWS, not already-typed PAIRS, so an untyped body-link edge
+# and a `relations:`-typed edge for the SAME (source, target) pair coexisted
+# as two distinct rows and `suggest-relations` re-suggested the accepted
+# pair forever.
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_edges_excludes_untyped_edge_whose_pair_has_a_typed_edge() -> None:
+    """A pair (a, b) has BOTH a typed edge (as written by `relate`) AND a
+    coexisting untyped body-link row for the SAME pair -- the candidate set
+    must exclude the untyped row so an accepted suggestion is never
+    re-suggested. An unrelated untyped-only pair stays included."""
+    typed = Edge(source_id="a", target_id="b", relation_type="references")
+    untyped_same_pair = Edge(source_id="a", target_id="b")
+    untyped_other_pair = Edge(source_id="c", target_id="d")
+    store: GraphStore = _FakeGraphStore([typed, untyped_same_pair, untyped_other_pair])
+
+    result = edge_typing_mod._candidate_edges(store)
+
+    assert result == [untyped_other_pair]
+
+
+def test_candidate_edges_includes_untyped_edge_with_no_typed_counterpart() -> None:
+    untyped_only = Edge(source_id="c", target_id="d")
+    store: GraphStore = _FakeGraphStore([untyped_only])
+
+    result = edge_typing_mod._candidate_edges(store)
+
+    assert result == [untyped_only]
+
+
+def test_candidate_edges_keeps_different_pairs_typed_excluded_untyped_included() -> (
+    None
+):
+    """Regression: the ordinary case (typed and untyped edges on DIFFERENT
+    pairs) that `untyped_edges` already handled correctly stays correct
+    through `_candidate_edges`."""
+    typed = Edge(source_id="a", target_id="b", relation_type="references")
+    untyped = Edge(source_id="c", target_id="d")
+    store: GraphStore = _FakeGraphStore([typed, untyped])
+
+    result = edge_typing_mod._candidate_edges(store)
+
+    assert result == [untyped]
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +458,41 @@ def test_suggest_relations_reads_graph_filters_untyped_and_delegates(
     assert result[0].edge.target_id == "concepts/c"
     assert result[0].edge.relation_type is None
     assert result[0].suggested_type == "related_to"
+
+
+def test_suggest_relations_excludes_untyped_edge_when_pair_already_typed(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: a pair with BOTH a `relations:`-typed edge and a
+    coexisting untyped body-link duplicate for the SAME target is excluded
+    entirely from candidates -- the LLM is never called for it -- while an
+    unrelated untyped-only pair still produces a suggestion. This is the
+    same-pair re-suggestion scenario `relate` -> `suggest-relations` ->
+    `relate` -> ... previously hit forever."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\n"
+        "relations:\n  - target: concepts/b\n    type: references\n"
+        "---\nAlso see [B](/concepts/b.md) again, and [C](/concepts/c.md).\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\n---\nBody.\n", encoding="utf-8"
+    )
+    (bundle_dir / "concepts" / "c.md").write_text(
+        "---\ntype: Concept\ntitle: C\n---\nBody.\n", encoding="utf-8"
+    )
+    llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions C")])
+
+    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+
+    assert len(result) == 1
+    assert result[0].edge.source_id == "concepts/a"
+    assert result[0].edge.target_id == "concepts/c"
+    assert result[0].edge.relation_type is None
+    assert len(llm.calls) == 1
 
 
 def test_suggest_relations_on_bundle_with_no_untyped_edges_returns_empty(

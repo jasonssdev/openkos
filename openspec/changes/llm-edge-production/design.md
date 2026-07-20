@@ -40,14 +40,25 @@ which is the one package the CLI is forbidden to touch. `cli/main.py:33-34` alre
 that precedent exactly. `resolution/__init__.py` already anticipates this: it notes the
 package "does not import `openkos.graph` **this slice**" — slice 2b is that slice.
 
-### D3 — Candidate sourcing: filter `edges()` internally, no Protocol change (unchanged)
-**Choice**: `untyped_edges(store) = [e for e in store.edges() if e.relation_type is None]`,
-encapsulated INSIDE `edge_typing.py`. No new `GraphStore` method.
-**Rationale**: `build_graph` already dedupes the untyped pass on `(source, target)`; `edges()`
-returns deterministic `ORDER BY source, target, relation_type` (NULL first). Because the
-candidate set is filtered to `relation_type is None`, already-typed edges are inherently
-excluded and never re-surfaced — this directly satisfies the spec's "Already-typed edges are
-excluded" scenario with no extra logic. Batching/bounding deferred (read-only).
+### D3 — Candidate sourcing: filter `edges()` internally, no Protocol change — CORRECTED (post-review fix)
+**Choice**: `untyped_edges(store) = [e for e in store.edges() if e.relation_type is None]` stays
+as the truthful ROW-level primitive, encapsulated INSIDE `edge_typing.py`. No new `GraphStore`
+method. A separate `_candidate_edges(store)` computes the actual suggestion candidate set:
+`untyped_edges(store)` minus any edge whose `(source_id, target_id)` pair ALREADY has a typed
+edge elsewhere in the graph (`typed_pairs = {(e.source_id, e.target_id) for e in store.edges()
+if e.relation_type is not None}`). `suggest_relations` calls `_candidate_edges`, not
+`untyped_edges`, directly.
+**Rationale**: `build_graph` dedupes the untyped pass on `(source, target)` and the typed pass
+on `(source, target, relation_type)` — but a typed edge and an untyped edge for the SAME pair
+are DISTINCT rows that coexist (`sqlite_graph.py`'s module docstring; `graph.base.Edge`'s
+`relation_type` field docstring). `relate` only APPENDS a typed frontmatter relation; it never
+removes the original untyped body-link edge. So filtering on `relation_type is None` alone (row
+level) is NOT sufficient to satisfy the spec's "Already-typed edges are excluded from
+suggestions" scenario at the pair level — a bounded 4R review confirmed this as a CRITICAL
+finding: without pair-level exclusion, `suggest-relations` → accept via `relate` →
+`suggest-relations` again re-suggests the SAME pair forever. `_candidate_edges` closes that gap;
+`untyped_edges` keeps its narrower, honest row-level contract. Batching/bounding deferred
+(read-only).
 
 ### D4 — Prompt + fail-closed output contract (mirrors `adjudication.py`) (unchanged)
 Per edge, guarded read-only re-read of source AND target docs (skip on `OSError`/parse fail).
