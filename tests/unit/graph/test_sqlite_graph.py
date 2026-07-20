@@ -43,6 +43,25 @@ def _write_doc(
     )
 
 
+def _write_doc_with_relations(
+    path: Path,
+    *,
+    doc_type: str = "Concept",
+    title: str = "Stub",
+    relations: str,
+    body: str = "",
+) -> None:
+    """Write a doc whose frontmatter includes a `relations:` block, given as
+    raw YAML-shaped text (e.g. `"  - target: concepts/x\\n    type: depends_on\\n"`),
+    mirroring `test_okf.py`'s raw-frontmatter-text fixture style for
+    `relations:` (see `test_check_conformance_passes_on_well_formed_relations`)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: {doc_type}\ntitle: {title}\nrelations:\n{relations}---\n{body}",
+        encoding="utf-8",
+    )
+
+
 def _node_ids(store: sqlite_graph.SqliteGraphStore) -> list[str]:
     rows = store._conn.execute(
         "SELECT concept_id FROM nodes ORDER BY concept_id"
@@ -444,6 +463,164 @@ def test_link_to_a_skipped_doc_produces_no_edge_and_does_not_raise(
 
     assert edges == []
     assert store.skipped == ["concepts/flaky.md: skipped (unreadable)"]
+
+
+# --- PR3 (typed-relationships): typed edges from `relations:` frontmatter --
+
+
+def test_typed_relation_edge_carries_its_relation_type(tmp_path: Path) -> None:
+    """A `relations:` entry whose `target` resolves to a known node becomes a
+    typed edge carrying that entry's `type` as `relation_type` (spec: "Typed
+    relation edge carries its relation_type"; task 3.1)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_relations(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        relations="  - target: concepts/epicureanism\n    type: depends_on\n",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+
+    assert edges == [
+        ("concepts/stoicism", "concepts/epicureanism", "depends_on"),
+    ]
+
+
+def test_untyped_link_edge_remains_null_relation_type_without_relations_key(
+    tmp_path: Path,
+) -> None:
+    """Approval test (safety net): a doc with no `relations:` key, whose body
+    has an ordinary bundle-relative link, still produces an untyped edge with
+    `relation_type IS NULL` -- unaffected by the new typed-edge second pass
+    (spec: "Untyped-link edge remains NULL relation_type"; task 3.2)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="See [Epicureanism](/concepts/epicureanism.md) for the contrast.",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+
+    assert edges == [("concepts/stoicism", "concepts/epicureanism", None)]
+
+
+def test_untyped_link_extraction_byte_identical_regression_when_relations_absent(
+    tmp_path: Path,
+) -> None:
+    """Regression (approval test): for a mixed bundle of docs that all lack a
+    `relations:` key, the untyped `_LINK_RE` node/edge set is byte-identical
+    to what it was before this PR added the typed-edge second pass (task
+    3.3)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body=(
+            "See [Epicureanism](/concepts/epicureanism.md) and "
+            "[Call](/sources/call.md)."
+        ),
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+    _write_doc(bundle_dir / "sources" / "call.md", doc_type="Source", title="Call")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        node_ids = _node_ids(store)
+        edges = _edge_rows(store)
+
+    assert node_ids == ["concepts/epicureanism", "concepts/stoicism", "sources/call"]
+    assert edges == [
+        ("concepts/stoicism", "concepts/epicureanism", None),
+        ("concepts/stoicism", "sources/call", None),
+    ]
+
+
+def test_relation_entry_with_unresolvable_target_produces_no_typed_edge(
+    tmp_path: Path,
+) -> None:
+    """A `relations:` entry whose `target` does not resolve to a known node
+    id is dropped silently -- consistent with the existing untyped-link
+    drop-if-unknown behavior -- while a second, resolvable entry on the same
+    doc still produces its own typed edge (design: drop-if-unresolvable;
+    task 3.4)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_relations(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        relations=(
+            "  - target: concepts/does-not-exist\n    type: references\n"
+            "  - target: concepts/epicureanism\n    type: depends_on\n"
+        ),
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+
+    assert edges == [
+        ("concepts/stoicism", "concepts/epicureanism", "depends_on"),
+    ]
+
+
+def test_typed_and_untyped_edge_between_same_pair_coexist_as_two_rows(
+    tmp_path: Path,
+) -> None:
+    """A typed `relations:` edge and an untyped `_LINK_RE` body-link edge
+    between the SAME `(source, target)` pair are DISTINCT rows -- deduping is
+    keyed on `(source_id, target_id, relation_type)`, not `(source_id,
+    target_id)` alone, so a `NULL` row and a typed row for the same pair both
+    survive, with the `NULL` row sorted first (design: dedup key + `NULLs
+    first` ordering; task 3.4/3.6)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_relations(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        relations="  - target: concepts/epicureanism\n    type: depends_on\n",
+        body="See [Epicureanism](/concepts/epicureanism.md) for the contrast.",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = store.edges()
+
+    assert edges == [
+        Edge(source_id="concepts/stoicism", target_id="concepts/epicureanism"),
+        Edge(
+            source_id="concepts/stoicism",
+            target_id="concepts/epicureanism",
+            relation_type="depends_on",
+        ),
+    ]
+
+
+def test_malformed_relations_contributes_no_typed_edges_and_is_noted_in_skipped(
+    tmp_path: Path,
+) -> None:
+    """A doc whose `relations:` frontmatter is malformed (here, a non-list
+    scalar, which makes `okf.decode_relations` fail closed with
+    `ValueError`) still becomes a node and never crashes the build, but
+    contributes ZERO typed edges AND is recorded in `store.skipped` --
+    mirroring the other skip paths' `_skip_note` format -- instead of
+    degrading silently and unobservably."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\nrelations: not-a-list\n---\n",
+        encoding="utf-8",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        node_ids = _node_ids(store)
+        edges = _edge_rows(store)
+
+    assert node_ids == ["concepts/epicureanism", "concepts/stoicism"]
+    assert edges == []
+    assert store.skipped == ["concepts/stoicism.md: skipped (malformed relations)"]
 
 
 # --- Phase 3.1/3.2: GraphStore query surface --------------------------------

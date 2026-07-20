@@ -64,13 +64,13 @@ Spec: `relate` CLI Verb Writes A Typed Relation; Seeded-But-Extensible Relation 
 
 Spec: Edge `relation_type` Populated From Frontmatter `relations:`.
 
-- [ ] 3.1 RED: `tests/unit/graph/test_sqlite_graph.py` — typed relation edge carries its `relation_type` (`relations: [{target: concepts/x, type: depends_on}]` → edge `relation_type == "depends_on"`) (Scenario: typed relation edge carries its relation_type).
-- [ ] 3.2 RED: untyped-link edge (no `relations:` key, bundle-relative link in body) keeps `relation_type` `NULL`, unchanged (Scenario: untyped-link edge remains NULL relation_type).
-- [ ] 3.3 RED: regression — existing untyped `_LINK_RE` edge extraction output is byte-identical for objects without `relations:` (before/after this change).
-- [ ] 3.4 RED: `relations:` entry whose target is unknown/unresolvable is dropped (consistent with existing untyped-link drop-if-unknown behavior); dedup key is `(source_id, target_id, relation_type)` so typed and untyped edges between the same pair coexist as two rows.
-- [ ] 3.5 GREEN: extend `build_graph` in `src/openkos/graph/sqlite_graph.py` with a second pass populating `Edge.relation_type` from decoded `relations:`, keyed on `(source, target, relation_type)`; leave the existing untyped `_LINK_RE` pass unchanged.
-- [ ] 3.6 GREEN: extend `_SELECT_EDGES_SQL` ORDER BY to include `relation_type` (NULLs first).
-- [ ] 3.7 VERIFY: `uv run pytest tests/unit/graph/` green; `ruff check` and `mypy --strict` clean on `sqlite_graph.py`.
+- [x] 3.1 RED: `tests/unit/graph/test_sqlite_graph.py` — typed relation edge carries its `relation_type` (`relations: [{target: concepts/x, type: depends_on}]` → edge `relation_type == "depends_on"`) (Scenario: typed relation edge carries its relation_type).
+- [x] 3.2 RED: untyped-link edge (no `relations:` key, bundle-relative link in body) keeps `relation_type` `NULL`, unchanged (Scenario: untyped-link edge remains NULL relation_type).
+- [x] 3.3 RED: regression — existing untyped `_LINK_RE` edge extraction output is byte-identical for objects without `relations:` (before/after this change).
+- [x] 3.4 RED: `relations:` entry whose target is unknown/unresolvable is dropped (consistent with existing untyped-link drop-if-unknown behavior); dedup key is `(source_id, target_id, relation_type)` so typed and untyped edges between the same pair coexist as two rows.
+- [x] 3.5 GREEN: extend `build_graph` in `src/openkos/graph/sqlite_graph.py` with a second pass populating `Edge.relation_type` from decoded `relations:`, keyed on `(source, target, relation_type)`; leave the existing untyped `_LINK_RE` pass unchanged.
+- [x] 3.6 GREEN: extend `_SELECT_EDGES_SQL` ORDER BY to include `relation_type` (NULLs first).
+- [x] 3.7 VERIFY: `uv run pytest tests/unit/graph/` green; `ruff check` and `mypy --strict` clean on `sqlite_graph.py`.
 
 ## Phase 4 (PR4 → PR3): Merge Guard — Fail-Closed Refusal
 
@@ -86,8 +86,8 @@ Spec: Non-Silent Guard For Edge-Bearing Merge.
 
 ## Cross-PR Regression Guard
 
-- [ ] 5.1 After each PR: `uv run pytest` (full suite) green; branch/line coverage stays at or above the existing ~90% branch bar. (PR1: 896 passed; PR2: 911 passed, full suite green; PR2 correction batch: 916 passed, full suite green)
-- [ ] 5.2 After each PR: `build_concept`/LLM ingest output remains byte-identical (no `relations:` emitted by `build_concept`) — assert via existing ingest golden/regression tests. (PR1: `test_build_concept_output_byte_identical_regression` added and passing; PR2: unaffected — `relate` never touches `build_concept`, regression test still passing)
+- [ ] 5.1 After each PR: `uv run pytest` (full suite) green; branch/line coverage stays at or above the existing ~90% branch bar. (PR1: 896 passed; PR2: 911 passed, full suite green; PR2 correction batch: 916 passed, full suite green; PR3: 921 passed, full suite green)
+- [ ] 5.2 After each PR: `build_concept`/LLM ingest output remains byte-identical (no `relations:` emitted by `build_concept`) — assert via existing ingest golden/regression tests. (PR1: `test_build_concept_output_byte_identical_regression` added and passing; PR2: unaffected — `relate` never touches `build_concept`, regression test still passing; PR3: unaffected — `build_graph` change is graph-projection-only, ingest golden test still passing)
 
 ## PR2 Correction Batch (post-review, pre-commit)
 

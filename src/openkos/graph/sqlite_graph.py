@@ -6,20 +6,35 @@ a single `okf._iter_docs` pass, and a TOCTOU-guarded body re-read, with
 unreadable/unparseable docs skipped and noted rather than crashing the build.
 Nodes are OKF concept ids (bundle-relative path, `.md` suffix removed), one
 per non-reserved doc `_iter_docs` yields -- the same identity `fts.py` and
-`forget` use. Edges are directed links between two known nodes, extracted
-from doc bodies by `_LINK_RE`: a bundle-relative `[text](/….md)` markdown
-link, with any `#anchor` stripped. Edges to a target that does not resolve
-to a known node in the same projection (external, non-bundle-relative,
-non-`.md`, or dangling) are dropped silently -- the build never raises
-because of them. A doc body is fence-masked (`_mask_fenced_code_blocks`)
-before edge extraction, so a link inside a fenced code block (e.g. raw
-ingested source material embedded verbatim under `## Source content`, see
-`okf.build_source_concept`) never produces a spurious edge, while the same
-link in ordinary prose or `## Related` still resolves. Duplicate
-`(source_id, target_id)` pairs are deduped before
-insert, and rows are inserted in sorted order so a rebuild over an unchanged
-bundle is deterministic. `relation_type` is a reserved, always-`NULL` column
-this slice -- no typed-edge vocabulary is committed yet.
+`forget` use. Edges come from TWO independent passes over the same doc set,
+inserted as separate rows even between the same `(source_id, target_id)`
+pair:
+
+1. UNTYPED, from `_LINK_RE`: a bundle-relative `[text](/….md)` markdown
+   link in the doc body, with any `#anchor` stripped, `relation_type` always
+   `NULL`. Edges to a target that does not resolve to a known node in the
+   same projection (external, non-bundle-relative, non-`.md`, or dangling)
+   are dropped silently -- the build never raises because of them. A doc
+   body is fence-masked (`_mask_fenced_code_blocks`) before edge extraction,
+   so a link inside a fenced code block (e.g. raw ingested source material
+   embedded verbatim under `## Source content`, see
+   `okf.build_source_concept`) never produces a spurious edge, while the
+   same link in ordinary prose or `## Related` still resolves.
+2. TYPED, from the doc's `relations:` frontmatter (`okf.decode_relations`):
+   one edge per entry whose `target` resolves to a known node, carrying that
+   entry's `type` as `relation_type`. A `relations:` entry whose `target`
+   does not resolve is dropped silently -- the same drop-if-unresolvable
+   rule the untyped pass already applies. A doc whose `relations:` fails to
+   decode (malformed shape) contributes no typed edges rather than crashing
+   the build, mirroring this module's existing degrade-not-crash posture.
+
+Each pass dedupes its own rows before insert -- the untyped pass on
+`(source_id, target_id)`, the typed pass on `(source_id, target_id,
+relation_type)` -- and both are inserted in sorted order so a rebuild over
+an unchanged bundle is deterministic. A typed edge and an untyped edge
+between the same pair are DISTINCT rows: this dedup key is why a doc can
+have both a `## Related` link AND a `relations:` entry pointing at the same
+target without collapsing into one row.
 
 Any exception during the build closes the in-memory connection before
 propagating, so a failed build never leaks it -- only a successful build
@@ -106,8 +121,12 @@ _SELECT_NODES_SQL = "SELECT concept_id FROM nodes ORDER BY concept_id"
 
 _SELECT_EDGES_SQL = (
     "SELECT source_id, target_id, relation_type FROM edges "
-    "ORDER BY source_id, target_id"
+    "ORDER BY source_id, target_id, relation_type"
 )
+"""`relation_type` is included last in the `ORDER BY` so a `NULL` (untyped)
+row and one or more typed rows for the same `(source_id, target_id)` pair
+sort together, `NULL` first -- SQLite's default ascending-order behavior for
+`NULL` requires no explicit `CASE`/`COALESCE`."""
 
 _SELECT_NEIGHBORS_SQL = (
     "SELECT target_id FROM edges WHERE source_id = ? ORDER BY target_id"
@@ -146,8 +165,8 @@ class SqliteGraphStore:
 
     def edges(self) -> list[Edge]:
         """Return every edge in the projection as `Edge` instances, sorted
-        by `(source_id, target_id)`. `relation_type` is always `None` this
-        slice -- reserved, unpopulated."""
+        by `(source_id, target_id, relation_type)` (`NULL` -- untyped --
+        first for a given pair)."""
         rows = self._conn.execute(_SELECT_EDGES_SQL).fetchall()
         return [
             Edge(source_id=str(row[0]), target_id=str(row[1]), relation_type=row[2])
@@ -189,10 +208,13 @@ def build_graph(bundle_dir: Path) -> SqliteGraphStore:
     `CREATE TABLE`, no migration needed for a later `:memory:`-to-file flip),
     then walks `okf._iter_docs` once: a `read_error`/`parse_error` doc is
     skipped and noted, never crashing the build (mirrors `fts.build_index`);
-    a valid doc has its body re-read and re-parsed via `okf.load_frontmatter`
-    (the same TOCTOU guard `fts.build_index` uses) and becomes one node. Any
-    exception raised anywhere in this build closes the in-memory connection
-    before propagating.
+    a valid doc has its body AND metadata re-read and re-parsed via
+    `okf.load_frontmatter` (the same TOCTOU guard `fts.build_index` uses) and
+    becomes one node. Edges are then extracted in two independent passes over
+    that same doc set -- untyped from body links, typed from `relations:`
+    frontmatter -- as documented at module level. Any exception raised
+    anywhere in this build closes the in-memory connection before
+    propagating.
     """
     conn = sqlite3.connect(":memory:")
     try:
@@ -204,6 +226,7 @@ def build_graph(bundle_dir: Path) -> SqliteGraphStore:
         skipped: list[str] = []
         node_ids: set[str] = set()
         bodies: list[tuple[str, str]] = []
+        metadatas: list[tuple[str, dict[str, object]]] = []
         for scan in okf._iter_docs(bundle_dir):
             concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
             if scan.read_error is not None:
@@ -218,7 +241,7 @@ def build_graph(bundle_dir: Path) -> SqliteGraphStore:
                 skipped.append(_skip_note(concept_id, reason="unreadable"))
                 continue
             try:
-                _, body = okf.load_frontmatter(text)
+                metadata, body = okf.load_frontmatter(text)
             except Exception:  # broad: a concurrent edit can corrupt frontmatter
                 skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
                 continue
@@ -226,6 +249,7 @@ def build_graph(bundle_dir: Path) -> SqliteGraphStore:
             conn.execute(_INSERT_NODE_SQL, (concept_id,))
             node_ids.add(concept_id)
             bodies.append((concept_id, body))
+            metadatas.append((concept_id, metadata))
 
         edge_pairs: set[tuple[str, str]] = set()
         for source_id, body in bodies:
@@ -235,6 +259,19 @@ def build_graph(bundle_dir: Path) -> SqliteGraphStore:
                     edge_pairs.add((source_id, target_id))
         for source_id, target_id in sorted(edge_pairs):
             conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
+
+        typed_edges: set[tuple[str, str, str]] = set()
+        for source_id, metadata in metadatas:
+            try:
+                relations = okf.decode_relations(metadata)
+            except ValueError:  # malformed relations: contributes no typed edges
+                skipped.append(_skip_note(source_id, reason="malformed relations"))
+                continue
+            for relation in relations:
+                if relation.target in node_ids:
+                    typed_edges.add((source_id, relation.target, relation.type))
+        for source_id, target_id, relation_type in sorted(typed_edges):
+            conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, relation_type))
     except BaseException:
         conn.close()
         raise
