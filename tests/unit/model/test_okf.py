@@ -1545,6 +1545,24 @@ def test_encode_relations_empty_list_round_trips() -> None:
     assert okf.decode_relations({"relations": []}) == []
 
 
+def test_decode_relation_strips_md_suffix_from_target() -> None:
+    """`decode_relation` strips a `.md` suffix from `target`, symmetric with
+    `encode_relation` (PR2 correction batch, finding 1: encode/decode `.md`
+    asymmetry). A stored `.md`-suffixed target (e.g. hand-edited) must decode
+    to its stripped form so round-tripping and idempotency dedup both work."""
+    relation = okf.decode_relation({"target": "concepts/x.md", "type": "references"})
+
+    assert relation == okf.Relation(target="concepts/x", type="references")
+
+
+def test_decode_relation_rejects_target_empty_after_md_strip() -> None:
+    """A `target` that is non-empty only by virtue of its `.md` suffix (e.g.
+    exactly ".md") must be rejected by `decode_relation`, mirroring
+    `encode_relation`'s equivalent guard."""
+    with pytest.raises(ValueError, match="non-empty"):
+        okf.decode_relation({"target": ".md", "type": "references"})
+
+
 # -- §9 additive rule: `relations:` field shape (Phase 1, tasks 1.8-1.10) --
 
 
