@@ -27,7 +27,7 @@ In June 2026 Google Cloud published a vendor-neutral specification for that patt
 | | Without OpenKOS | With OpenKOS |
 | --- | --- | --- |
 | Asking your AI about your own notes | It re-reads raw files every time | It answers from a compiled, cited knowledge base |
-| New source | Piles up unread | Compiled into concepts; existing pages updated; contradictions flagged |
+| New source | Piles up unread | Compiled into a Source plus typed knowledge objects, each linked to its source |
 | Provenance | "Where did this come from?" is a guess | Every object links back to its immutable source |
 | Facts that change | Old claims quietly rot | Freshness stamps keep the base honest over time |
 | Portability | Trapped in one app | Plain OKF files — open in Obsidian, VS Code, GitHub, anything |
@@ -46,7 +46,7 @@ openkos query "what did I conclude about how to live well?"
 openkos lint
 ```
 
-*(Illustrative of the intended MVP 1 experience. The full command set is `init`, `ingest`, `query`, `lint`, `status`, and a basic `forget` — see [`docs/cli.md`](docs/cli.md). Nothing runs yet.)*
+*(Illustrative of the intended MVP 1 experience. The full command set is `init`, `ingest`, `query`, `lint`, `status`, a basic `forget`, and `doctor` — see [`docs/cli.md`](docs/cli.md). Nothing runs yet.)*
 
 ## Getting started
 

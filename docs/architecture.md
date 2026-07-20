@@ -14,7 +14,7 @@ sensitivity: public
 
 # Architecture
 
-This document maps how OpenKOS is organized — both the engine's source code and the user's knowledge bundle — and how raw source material is stored and versioned. It is **forward-looking**: the code does not exist yet (the project is pre-alpha). It describes the *mature* shape so the structure is a stable contract to fill in incrementally. What each MVP actually needs is called out at the end.
+This document maps how OpenKOS is organized — both the engine's source code and the user's knowledge bundle — and how raw source material is stored and versioned. It describes the *mature* shape so the structure is a stable contract to fill in incrementally: MVP 1 modules now exist, while later layers do not yet. What each MVP actually needs is called out at the end. Note that MVP 1's actual module names (for example `extraction/concept.py`, `cli/main.py`, `retrieval/answer.py`, `state/fts.py`) differ from the forward-looking mature tree shown below, which is filled in incrementally.
 
 Two ideas from elsewhere in the docs anchor everything here: the split between a **durable canonical layer** (files + SQLite + git) and a **rebuildable derived layer** (vectors, graph) from [`tech_stack.md`](tech_stack.md), and the Knowledge Object model from [`knowledge-object-model.md`](knowledge-object-model.md).
 
@@ -80,7 +80,7 @@ openkos/
 │   ├── sensitivity/          # boundary enforcement
 │   ├── config.py             # openkos.yaml
 │   ├── engine.py             # thin orchestrator (wiring / composition only)
-│   ├── cli/                  # Typer (MVP 1): init, ingest, query, lint, status, forget
+│   ├── cli/                  # Typer (MVP 1): init, ingest, query, lint, status, forget, doctor
 │   ├── api/                  # FastAPI local API (MVP 3)
 │   └── mcp/                  # MCP server (MVP 3)
 ├── tests/{unit,integration,e2e,fixtures,evals}/
@@ -103,7 +103,7 @@ The principles that shape it:
 A few conventions keep the repository clean as it grows:
 
 - **Start lean, grow by MVP.** The tree above is the mature target, not a scaffold to create empty. Begin with the MVP 1 subset — `model`, `bundle`, `state`, `llm`, `producers`, `compiler`, `retrieval` (lexical + context), `lint`, `lifecycle`, `config`, `cli` — then add `embeddings`, `retrieval/vector`, `graph`, and `consumers` in MVP 2, and `api`, `mcp`, and `memory` in MVP 3. A folder is created when its code arrives.
-- **`pyproject.toml` is the single source of config** — dependencies, the console entry point (currently `openkos = "openkos:main"`, a pre-MVP stub that will move to `openkos.cli.main:app` when the `cli` package lands in MVP 1), and the Ruff / MyPy / Pytest settings all live there.
+- **`pyproject.toml` is the single source of config** — dependencies, the console entry point (now `openkos = "openkos.cli.main:app"`, since the `cli` package has landed in MVP 1), and the Ruff / MyPy / Pytest settings all live there.
 - **Specs are the contract, and they live in `openspec/`.** Behavior is agreed before it is built: `openspec/specs/{domain}/spec.md` is the living per-domain contract, and `openspec/changes/{change-name}/` carries a change in flight — proposal, delta specs, design, tasks — until it lands and its deltas merge into the main spec. The directory is tracked and reviewed like any other file, so the contract is readable by contributors rather than private to whoever wrote the code. `openspec/config.yaml` configures that process only; it does not compete with `pyproject.toml`, which remains the single source of config for the toolchain.
 - **Ship types.** Include an empty `src/openkos/py.typed` marker so type information is published to tools and to packages that extend OpenKOS.
 - **Extension interfaces are `typing.Protocol`.** `Producer`, `Consumer`, `VectorStore`, `GraphStore`, and `LLMBackend` are Protocols (structural typing), so an external plugin implements the shape without importing or subclassing core classes. Plugins are discovered through entry points (for example the `openkos.producers` group), defined from MVP 1 even though the first producers are built in.
