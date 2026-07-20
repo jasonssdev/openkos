@@ -119,7 +119,7 @@ no canonical files, bundle bytes, or persisted derived state touched.
 
 ## Open Questions
 
-- [ ] Relation-typing populate path (frontmatter key vs. prose) — RESERVED, later slice.
-- [ ] Dangling/orphan-link detection — RESERVED, out of scope this slice. Links
+- [x] Relation-typing populate path (frontmatter key vs. prose) — RESERVED, later slice (deferred to MVP-2 non-goals; not resolved by this change).
+- [x] Dangling/orphan-link detection — RESERVED, out of scope this slice. Links
   that resolve to no known node produce no edge here; surfacing them is a
   separate lint concern for a later slice, not a driver of edge insertion.

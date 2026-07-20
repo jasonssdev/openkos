@@ -61,7 +61,7 @@ Delete `src/openkos/graph/` and revert the `networkx` line in `pyproject.toml`. 
 
 ## Success Criteria
 
-- [ ] `graph/` package builds a `nodes`/`edges` projection in-memory from a bundle with zero writes to `bundle/`.
-- [ ] Edges reflect bundle-relative markdown links; `relation_type` is present and NULL.
-- [ ] `GraphStore` Protocol exposes neighbor/adjacency queries; path finding via `analysis.py`/NetworkX; `analysis.py` returns an `nx.DiGraph`.
-- [ ] No CLI verb, no `.openkos/openkos.db` file, no imports from `graph` into `model`/`bundle`/`state`.
+- [x] `graph/` package builds a `nodes`/`edges` projection in-memory from a bundle with zero writes to `bundle/`.
+- [x] Edges reflect bundle-relative markdown links; `relation_type` is present and NULL.
+- [x] `GraphStore` Protocol exposes neighbor/adjacency queries; path finding via `analysis.py`/NetworkX; `analysis.py` returns an `nx.DiGraph`.
+- [x] No CLI verb, no `.openkos/openkos.db` file, no imports from `graph` into `model`/`bundle`/`state`.

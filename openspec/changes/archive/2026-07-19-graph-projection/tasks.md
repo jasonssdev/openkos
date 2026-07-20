@@ -9,11 +9,11 @@
 | Chained PRs recommended | Yes |
 | Suggested split | PR1 base.py+deps -> PR2 build/extraction -> PR3 query surface -> PR4 analysis.py+layering guard |
 | Delivery strategy | ask-on-risk |
-| Chain strategy | pending (recommended: feature-branch-chain) |
+| Chain strategy | feature-branch-chain (resolved) |
 
-Decision needed before apply: Yes
+Decision needed before apply: Yes (resolved: feature-branch-chain)
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 ### Suggested Work Units
@@ -54,3 +54,5 @@ Chain strategy: pending
 - [x] 4.3 RED: ast-based guard (mirrors `test_ingest_and_forget_do_not_reference_state_fts`) — `model`/`bundle`/`state` source never imports `openkos.graph`; no `graph` CLI command in `cli/main.py`.
 - [x] 4.4 GREEN: add a layering-boundary docstring note to each `graph/*.py` module.
 - [x] 4.5 Integration proof: `build_graph` + `to_digraph` over `examples/good-life-demo/bundle` resolve expected concept nodes/edges (mirrors `fts.py`'s Phase 8 fixture test).
+
+**Status**: 18/18 tasks complete. All 4 units of the graph-projection feature-branch-chain are implemented and landed to `main` (commit a655f62). Post-verify follow-up (2 additional runtime tests closing CRITICAL gaps flagged in the verify report — see `verify-report.md`/`archive-report.md`) landed as part of the same chain before merge; no task-text changes were required since 18/18 were already checked.
