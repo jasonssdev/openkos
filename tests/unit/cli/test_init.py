@@ -7,9 +7,12 @@ directory exactly as it was found.
 
 import os
 import stat
+import subprocess
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -17,9 +20,31 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config
 from openkos.cli.main import app
+from openkos.config import DEFAULT_MODEL
+from openkos.llm.ollama import OllamaUnavailable
 from openkos.model import okf
 
 runner = CliRunner()
+
+
+def _fake_ollama_client(
+    *, installed: list[str] | None = None, error: Exception | None = None
+) -> Callable[..., Any]:
+    """Build a fake `OllamaClient` factory exposing ONLY `list_models` --
+    mirrors `test_doctor.py`'s stub. Deliberately has no `pull`/`serve`-style
+    method, so any attempt by the preflight to call one raises
+    `AttributeError` and fails the test loudly (task 2.6 guard)."""
+
+    class _FakeOllamaClient:
+        def __init__(self, model: str, **kwargs: object) -> None:
+            self.model = model
+
+        def list_models(self) -> list[str]:
+            if error is not None:
+                raise error
+            return list(installed or [])
+
+    return _FakeOllamaClient
 
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -565,3 +590,132 @@ def test_write_failure_surfaces_cleanly(
     assert isinstance(result.exception, SystemExit)
     assert "openkos init" in result.stderr
     assert "failed" in result.stderr
+
+
+def test_preflight_reachable_with_model_is_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama reachable AND the resolved model installed: no preflight
+    warning is printed, and `init` still exits 0 (scenario 2.1)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "doctor" not in result.stderr
+
+
+def test_preflight_unreachable_ollama_warns_but_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama unreachable (`OllamaUnavailable`): `init` still exits 0, and
+    stderr carries a warning naming `openkos doctor` (scenario 2.2)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "openkos doctor" in result.stderr
+
+
+def test_preflight_model_missing_warns_but_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama reachable but the resolved model is NOT installed
+    (`model_tag_matches` is `False`): `init` still exits 0, and stderr
+    carries a warning naming `openkos doctor` (scenario 2.3)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=["some-other-model:1b"]),
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "openkos doctor" in result.stderr
+
+
+def test_preflight_unexpected_probe_error_is_non_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A probe failure that is NOT an `OllamaError` subclass (an unexpected
+    exception) is still caught non-fatally: `init` exits 0, prints the
+    doctor-pointing warning, and no traceback reaches stderr (scenario 2.4)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=RuntimeError("unexpected probe failure")),
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "openkos doctor" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_preflight_outcome_never_changes_written_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every preflight outcome (reachable/model-present, unreachable,
+    model-missing, unexpected error) writes the SAME five workspace
+    artifacts -- the preflight probe runs strictly after Phase B and never
+    influences what was written (scenario 2.5, pure-file-writer guarantee)."""
+    outcomes: dict[str, Callable[..., Any]] = {
+        "reachable": _fake_ollama_client(installed=[DEFAULT_MODEL]),
+        "unreachable": _fake_ollama_client(
+            error=OllamaUnavailable("Ollama not reachable")
+        ),
+        "model_missing": _fake_ollama_client(installed=["other:1b"]),
+        "unexpected_error": _fake_ollama_client(error=RuntimeError("boom")),
+    }
+
+    snapshots: dict[str, dict[Path, bytes | None | tuple[str, str]]] = {}
+    for name, fake_client in outcomes.items():
+        workspace = tmp_path / name
+        workspace.mkdir()
+        monkeypatch.chdir(workspace)
+        monkeypatch.setattr("openkos.cli.main.OllamaClient", fake_client)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0
+        snapshots[name] = _snapshot(workspace)
+
+    reference = snapshots["reachable"]
+    for name, snapshot in snapshots.items():
+        assert snapshot == reference, f"{name} wrote different files than 'reachable'"
+
+
+def test_preflight_never_pulls_or_spawns_a_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preflight probe never invokes `ollama pull`/`ollama serve` or
+    spawns any subprocess: `subprocess.run`/`subprocess.Popen` are patched
+    to raise if called at all, and the fake `OllamaClient` exposes ONLY
+    `list_models` -- any unexpected `pull`/`serve`-style call raises
+    `AttributeError` (scenario 2.6)."""
+    monkeypatch.chdir(tmp_path)
+
+    def _forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("init preflight must never spawn a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", _forbidden)
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0

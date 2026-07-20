@@ -353,6 +353,9 @@ def test_query_ollama_unavailable_maps_to_exit_one(
     assert result.stderr.startswith("openkos query: failed -- ")
     assert "Ollama not reachable" in result.stderr
     assert "ollama serve" in result.stderr
+    assert result.stderr.rstrip("\n").endswith(
+        "Or run `openkos doctor` to diagnose the environment."
+    )
     assert "Traceback" not in result.stderr
 
 
@@ -381,6 +384,7 @@ def test_query_model_not_found_maps_to_exit_one(
     assert result.stderr.startswith("openkos query: failed -- ")
     assert "is not installed" in result.stderr
     assert f"ollama pull {configured_model}" in result.stderr
+    assert "openkos doctor" not in result.stderr
     assert "Traceback" not in result.stderr
 
 
