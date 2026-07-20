@@ -122,6 +122,16 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 **Lint is not a conformance checker.** It reports OpenKOS's opinion about knowledge *health*, not OKF's verdict about *validity*. OKF explicitly tolerates broken links and missing index entries (§5.3, §9), so a bundle can fail every check here and still be perfectly conformant. Conformance is verified separately, against the three rules of §9.
 
+### `openkos duplicates`
+
+**Read-only.** Reports cross-source CANDIDATE duplicates: same-type concepts that MIGHT be the same real-world entity (for example, "Stoicism" and "Stoic Philosophy" living as two separate documents). Mirrors `status`/`lint`'s shape exactly: no Phase B, no confirm gate, no `--auto`. This is a **report only** — `duplicates` never merges, deletes, or otherwise adjudicates a candidate; that is reserved for a later, explicitly-named `resolve`/`merge` verb.
+
+One read-only, whole-bundle pass compares titles only within the same declared OKF `type` (a `Concept` is never compared against an `Entity`, even with an identical title) and proposes two deterministic, stdlib-only confidence tiers: **HIGH** — titles that normalize to an identical key (case-folded, punctuation-stripped, diacritics-removed, whitespace-collapsed); and **LOW** — titles that clear a fixed near-match threshold (`difflib`-based token-subset similarity) without being normalized-identical. Neither tier uses an LLM or embeddings in this slice.
+
+Output is grouped by OKF type, then HIGH before LOW, and renders each group's type, tier, member concept_ids, and the trigger (the shared normalized key for HIGH, the similarity score for LOW). An empty result prints a clear "No candidates found." line instead of an empty section.
+
+Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status`/`lint` use. Every successful read exits 0, whether or not any candidates are found. No file under the workspace is ever created, modified, or deleted, and no `--json` or other structured output mode is offered.
+
 ### `openkos status`
 
 **Read-only.** Reports what the bundle currently contains, in three sections: **Bundle contents** (source/concept counts from a fresh scan of `bundle/**/*.md`, never from `index.md` alone, so it stays accurate even after an interrupted `ingest`), **Recent activity** (the most recent 5 entries from `log.md`, newest-first), and **Needs attention** (OKF §9 conformance findings — unparseable frontmatter, missing/empty `type` — reused from the same check `ingest`'s generated concepts must pass). It never writes, modifies, or deletes any bundle file.
