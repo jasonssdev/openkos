@@ -35,6 +35,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final
 
+from openkos.graph.base import Edge
 from openkos.model import okf
 
 _LINK_RE: Final = re.compile(r"\[[^\]]*\]\(/([^)\s#]+\.md)(?:#[^)]*)?\)")
@@ -101,6 +102,17 @@ _INSERT_EDGE_SQL = (
     "INSERT INTO edges (source_id, target_id, relation_type) VALUES (?, ?, ?)"
 )
 
+_SELECT_NODES_SQL = "SELECT concept_id FROM nodes ORDER BY concept_id"
+
+_SELECT_EDGES_SQL = (
+    "SELECT source_id, target_id, relation_type FROM edges "
+    "ORDER BY source_id, target_id"
+)
+
+_SELECT_NEIGHBORS_SQL = (
+    "SELECT target_id FROM edges WHERE source_id = ? ORDER BY target_id"
+)
+
 
 def _skip_note(concept_id: str, *, reason: str) -> str:
     """Build one skip notice, `fts.py`/`lint.collect_docs`-shaped."""
@@ -112,8 +124,10 @@ class SqliteGraphStore:
 
     A context manager (mirrors `FtsIndex`): `with build_graph(bundle) as
     store: ...` closes the in-memory connection on block exit, dropping the
-    database. Query methods (`nodes()`/`edges()`/`neighbors()`) arrive in a
-    later slice; this phase's tests read the `nodes`/`edges` tables directly.
+    database. Satisfies `graph.base.GraphStore` structurally via its
+    `nodes()`/`edges()`/`neighbors()` query methods, each reading the
+    `nodes`/`edges` tables with an explicit `ORDER BY` so results are sorted
+    and deterministic regardless of insertion order.
     """
 
     skipped: list[str]
@@ -124,6 +138,30 @@ class SqliteGraphStore:
         """Wrap an already-populated `conn` and its build-time `skipped` notes."""
         self._conn = conn
         self.skipped = skipped
+
+    def nodes(self) -> list[str]:
+        """Return every node id (OKF concept id) in the projection, sorted."""
+        rows = self._conn.execute(_SELECT_NODES_SQL).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def edges(self) -> list[Edge]:
+        """Return every edge in the projection as `Edge` instances, sorted
+        by `(source_id, target_id)`. `relation_type` is always `None` this
+        slice -- reserved, unpopulated."""
+        rows = self._conn.execute(_SELECT_EDGES_SQL).fetchall()
+        return [
+            Edge(source_id=str(row[0]), target_id=str(row[1]), relation_type=row[2])
+            for row in rows
+        ]
+
+    def neighbors(self, concept_id: str) -> list[str]:
+        """Return the out-edge target node ids for `concept_id`, sorted.
+
+        Degrades to `[]` for a `concept_id` with no out-edges, and for a
+        `concept_id` that is not even a node in the projection -- never
+        raises."""
+        rows = self._conn.execute(_SELECT_NEIGHBORS_SQL, (concept_id,)).fetchall()
+        return [str(row[0]) for row in rows]
 
     def close(self) -> None:
         """Close the underlying connection, dropping the in-memory database."""

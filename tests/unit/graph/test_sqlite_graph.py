@@ -10,10 +10,10 @@ scoped to links that resolve to a KNOWN node id in the same projection --
 external, non-bundle-relative, non-`.md`, and dangling-target links produce
 NO edge, and the build never raises because of them.
 
-Phase 3 (a later slice) adds the friendly `nodes()`/`edges()`/`neighbors()`
-query surface on `SqliteGraphStore`; this phase's tests query the raw
-`nodes`/`edges` tables directly via `store._conn`, mirroring how
-`test_fts.py` exercises `idx._conn` directly for its own low-level cases.
+Phase 2's tests query the raw `nodes`/`edges` tables directly via
+`store._conn`, mirroring how `test_fts.py` exercises `idx._conn` directly
+for its own low-level cases. Phase 3 (below) exercises the friendly
+`nodes()`/`edges()`/`neighbors()` `GraphStore` query surface instead.
 """
 
 import sqlite3
@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from openkos.graph import sqlite_graph
+from openkos.graph.base import Edge, GraphStore
 from openkos.model import okf
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -442,3 +443,166 @@ def test_link_to_a_skipped_doc_produces_no_edge_and_does_not_raise(
 
     assert edges == []
     assert store.skipped == ["concepts/flaky.md: skipped (unreadable)"]
+
+
+# --- Phase 3.1/3.2: GraphStore query surface --------------------------------
+
+
+def test_sqlite_graph_store_satisfies_graphstore_protocol_at_runtime(
+    tmp_path: Path,
+) -> None:
+    """`SqliteGraphStore` is now a genuine `GraphStore`: `isinstance` holds
+    via `@runtime_checkable`, without any explicit inheritance."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        assert isinstance(store, GraphStore)
+
+
+def test_nodes_returns_every_built_node_sorted(tmp_path: Path) -> None:
+    """`nodes()` returns exactly the projection's node ids, in sorted
+    (not insertion) order."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+    _write_doc(bundle_dir / "sources" / "call.md", doc_type="Source", title="Call")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        node_ids = store.nodes()
+
+    assert node_ids == [
+        "concepts/epicureanism",
+        "concepts/stoicism",
+        "sources/call",
+    ]
+
+
+def test_nodes_on_empty_projection_returns_empty_list(tmp_path: Path) -> None:
+    """An empty bundle (no docs at all) yields an empty, non-raising
+    `nodes()` result."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir(parents=True)
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        node_ids = store.nodes()
+
+    assert node_ids == []
+
+
+def test_edges_returns_every_built_edge_as_edge_objects_sorted(
+    tmp_path: Path,
+) -> None:
+    """`edges()` returns exactly the projection's edges as `Edge` instances,
+    sorted by `(source_id, target_id)`, each with `relation_type is None`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body=(
+            "See [Epicureanism](/concepts/epicureanism.md) and "
+            "[Call](/sources/call.md)."
+        ),
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+    _write_doc(bundle_dir / "sources" / "call.md", doc_type="Source", title="Call")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = store.edges()
+
+    assert edges == [
+        Edge(source_id="concepts/stoicism", target_id="concepts/epicureanism"),
+        Edge(source_id="concepts/stoicism", target_id="sources/call"),
+    ]
+    assert all(edge.relation_type is None for edge in edges)
+
+
+def test_edges_on_empty_projection_returns_empty_list(tmp_path: Path) -> None:
+    """A bundle with docs but no resolving links yields an empty, non-raising
+    `edges()` result."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = store.edges()
+
+    assert edges == []
+
+
+def test_neighbors_returns_out_edge_targets_sorted(tmp_path: Path) -> None:
+    """`neighbors(concept_id)` returns the out-neighbor node ids for a node
+    with multiple out-edges, sorted."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body=(
+            "See [Epicureanism](/concepts/epicureanism.md) and "
+            "[Call](/sources/call.md)."
+        ),
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+    _write_doc(bundle_dir / "sources" / "call.md", doc_type="Source", title="Call")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        neighbor_ids = store.neighbors("concepts/stoicism")
+
+    assert neighbor_ids == ["concepts/epicureanism", "sources/call"]
+
+
+def test_neighbors_of_a_node_with_no_out_edges_returns_empty_list(
+    tmp_path: Path,
+) -> None:
+    """A node with no out-edges (but that DOES exist as a node) returns
+    `[]` from `neighbors()`, not a raise."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        neighbor_ids = store.neighbors("concepts/stoicism")
+
+    assert neighbor_ids == []
+
+
+def test_neighbors_of_an_unknown_node_id_returns_empty_list_without_raising(
+    tmp_path: Path,
+) -> None:
+    """`neighbors()` on a concept id that is not even a node in the
+    projection degrades to `[]` rather than raising."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        neighbor_ids = store.neighbors("concepts/does-not-exist")
+
+    assert neighbor_ids == []
+
+
+def test_query_surface_is_deterministic_across_repeated_calls_and_rebuilds(
+    tmp_path: Path,
+) -> None:
+    """Calling `nodes()`/`edges()`/`neighbors()` twice on the SAME store
+    yields identical results, and rebuilding the SAME unchanged bundle
+    yields identical `nodes()`/`edges()` results too."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="See [Epicureanism](/concepts/epicureanism.md).",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        assert store.nodes() == store.nodes()
+        assert store.edges() == store.edges()
+        assert store.neighbors("concepts/stoicism") == store.neighbors(
+            "concepts/stoicism"
+        )
+
+    with sqlite_graph.build_graph(bundle_dir) as first:
+        first_nodes, first_edges = first.nodes(), first.edges()
+    with sqlite_graph.build_graph(bundle_dir) as second:
+        second_nodes, second_edges = second.nodes(), second.edges()
+
+    assert first_nodes == second_nodes
+    assert first_edges == second_edges
