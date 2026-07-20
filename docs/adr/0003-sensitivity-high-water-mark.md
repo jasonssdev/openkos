@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0003: Sensitivity high-water-mark ordering and fail-closed combine"
 description: How a derived object's sensitivity is recomputed when sources combine.
-status: Proposed
+status: Accepted
 date: 2026-07-20
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0003: Sensitivity high-water-mark ordering and fail-closed combine
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-20
 
 ## Context

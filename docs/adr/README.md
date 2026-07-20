@@ -37,5 +37,5 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | ADR | Title | Status | Date |
 | --- | --- | --- | --- |
 | [0001](0001-default-extraction-model.md) | Default extraction model settled by measurement | Accepted | 2026-07-19 |
-| [0002](0002-reversible-merge-ledger.md) | Reversible merge ledger with embedded verbatim snapshots | Proposed | 2026-07-20 |
-| [0003](0003-sensitivity-high-water-mark.md) | Sensitivity high-water-mark ordering and fail-closed combine | Proposed | 2026-07-20 |
+| [0002](0002-reversible-merge-ledger.md) | Reversible merge ledger with embedded verbatim snapshots | Accepted | 2026-07-20 |
+| [0003](0003-sensitivity-high-water-mark.md) | Sensitivity high-water-mark ordering and fail-closed combine | Accepted | 2026-07-20 |
