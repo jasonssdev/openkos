@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0002: Reversible merge ledger with embedded verbatim snapshots"
 description: The on-disk format that makes object merges losslessly reversible.
-status: Proposed
+status: Accepted
 date: 2026-07-20
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0002: Reversible merge ledger with embedded verbatim snapshots
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-20
 
 ## Context

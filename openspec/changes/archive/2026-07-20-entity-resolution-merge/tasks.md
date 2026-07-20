@@ -63,6 +63,6 @@ Chain strategy: feature-branch-chain
 - [x] 5.7 RED (threat: link drift): fail-closed if `new_link` absent
 
 ## Phase 6: Docs & ADR Promotion
-- [ ] 6.1 Flip ADR-0002/0003 status Proposed→Accepted post-review (deferred to archive)
+- [x] 6.1 Flip ADR-0002/0003 status Proposed→Accepted post-review (deferred to archive) — done during `sdd-archive`: both ADR files' frontmatter `status:` and body `**Status:**` flipped to Accepted, `docs/adr/README.md` index rows updated to Accepted
 - [x] 6.2 Update `docs/knowledge-object-model.md`, `docs/cli.md`
 - [x] 6.3 Verify ≥90% branch coverage, mypy strict, ruff clean
