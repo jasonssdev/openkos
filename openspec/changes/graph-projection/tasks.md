@@ -33,14 +33,14 @@ Chain strategy: pending
 
 ## Phase 2: Build Lifecycle + Edge Extraction (`graph/sqlite_graph.py`)
 
-- [ ] 2.1 RED: one node per non-reserved doc; node id = bundle-relative path minus `.md`.
-- [ ] 2.2 RED: `[t](/concepts/x.md)` link to an existing node -> directed edge with `relation_type IS NULL`.
-- [ ] 2.3 RED: external URL / no leading `/` / non-`.md` / dangling-target links produce NO edge; build does not raise.
-- [ ] 2.4 RED: duplicate `(source,target)` edges dedup before insert.
-- [ ] 2.5 RED: TOCTOU — doc vanishes/corrupts between `_iter_docs` and body re-read -> skipped + noted (mirrors `fts.py`).
-- [ ] 2.6 RED: no bundle bytes/mtime change; rebuild over unchanged bundle yields an equivalent node/edge set; conn closes on any build exception.
-- [ ] 2.7 GREEN: implement `_LINK_RE`, DDL constants, `build_graph(bundle_dir)`, `SqliteGraphStore` context manager satisfying 2.1-2.6.
-- [ ] 2.8 REFACTOR: align skip-note shape and exception handling with `fts.py`.
+- [x] 2.1 RED: one node per non-reserved doc; node id = bundle-relative path minus `.md`.
+- [x] 2.2 RED: `[t](/concepts/x.md)` link to an existing node -> directed edge with `relation_type IS NULL`.
+- [x] 2.3 RED: external URL / no leading `/` / non-`.md` / dangling-target links produce NO edge; build does not raise.
+- [x] 2.4 RED: duplicate `(source,target)` edges dedup before insert.
+- [x] 2.5 RED: TOCTOU — doc vanishes/corrupts between `_iter_docs` and body re-read -> skipped + noted (mirrors `fts.py`).
+- [x] 2.6 RED: no bundle bytes/mtime change; rebuild over unchanged bundle yields an equivalent node/edge set; conn closes on any build exception.
+- [x] 2.7 GREEN: implement `_LINK_RE`, DDL constants, `build_graph(bundle_dir)`, `SqliteGraphStore` context manager satisfying 2.1-2.6.
+- [x] 2.8 REFACTOR: align skip-note shape and exception handling with `fts.py`.
 
 ## Phase 3: GraphStore Query Surface
 
