@@ -1563,6 +1563,19 @@ def test_decode_relation_rejects_target_empty_after_md_strip() -> None:
         okf.decode_relation({"target": ".md", "type": "references"})
 
 
+def test_decode_relation_normalizes_leading_slash_target() -> None:
+    """A hand-authored, non-canonical `target` with a leading `/` (mirroring
+    the `[text](/id.md)` link style this codebase emits elsewhere) must
+    decode to the SAME canonical bundle-relative form a plain `concepts/x`
+    target would (correction batch, finding 2): `.md` stripped AND the
+    leading `/` stripped, so raw string equality against a canonicalized
+    `absorbed_id` (the merge guard's inbound scan; the graph's node-id
+    match) is not silently missed."""
+    relation = okf.decode_relation({"target": "/concepts/x.md", "type": "references"})
+
+    assert relation == okf.Relation(target="concepts/x", type="references")
+
+
 # -- §9 additive rule: `relations:` field shape (Phase 1, tasks 1.8-1.10) --
 
 

@@ -15,7 +15,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Final
 
 import frontmatter
@@ -421,19 +421,39 @@ def _validate_relation_field(field_name: str, value: str) -> str:
     return stripped
 
 
+def _normalize_relation_path(value: str) -> str:
+    """Normalize a bundle-relative path-shaped string to its canonical
+    relative-posix form (correction batch, finding 2): strip a leading `/`
+    (a hand-authored target may mirror this codebase's own
+    `[text](/id.md)` link style) and collapse redundant separators/`.`
+    segments (e.g. `concepts//absorbed`, `./concepts/absorbed`) via
+    `PurePosixPath`.
+
+    Deliberately does NOT reject `..` traversal -- that is left as-is (it
+    simply will not match any real node/target-id, same as today) rather
+    than adding a new path-security layer in this batch; a future slice may
+    add explicit rejection if a real need for one is found."""
+    normalized = PurePosixPath(value.lstrip("/")).as_posix()
+    return "" if normalized == "." else normalized
+
+
 def _validate_relation_target(value: str) -> str:
     """Shared target-normalization guard: fail-closed field validation, then
+    canonicalize the path shape (leading `/`, redundant separators) and
     strip a `.md` suffix (design: SHAPE), then re-check non-empty (a target
     that is non-empty only by virtue of its `.md` suffix, e.g. exactly
     ".md", must still be rejected).
 
-    Shared by `encode_relation` and `decode_relation` so `.md`-suffix
-    handling is symmetric on both sides of the codec: a stored
-    `.md`-suffixed target (e.g. hand-edited) always decodes to the same
-    stripped form it would have been encoded to, keeping the codec
-    round-trip stable and `relate`'s idempotency dedup correct regardless
-    of how the `relations:` entry was produced."""
-    target = _validate_relation_field("target", value).removesuffix(".md")
+    Shared by `encode_relation` and `decode_relation` so this normalization
+    is symmetric on both sides of the codec: a stored non-canonical target
+    (e.g. hand-edited with a leading `/`, or a `.md` suffix) always decodes
+    to the same canonical form it would have been encoded to, keeping the
+    codec round-trip stable and both `relate`'s idempotency dedup and the
+    merge guard's/graph's raw string-equality target match correct
+    regardless of how the `relations:` entry was produced."""
+    target = _normalize_relation_path(
+        _validate_relation_field("target", value)
+    ).removesuffix(".md")
     if not target:
         raise ValueError("relation target must be non-empty")
     return target

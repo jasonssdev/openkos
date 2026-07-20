@@ -18,18 +18,21 @@ _MODULE_PATH = Path(relations.__file__)
 
 def test_seeded_relation_types_has_eight_kom_defaults() -> None:
     """`SEEDED_RELATION_TYPES` is exactly KOM's 8 default relation types."""
-    assert frozenset(
-        {
-            "references",
-            "depends_on",
-            "derived_from",
-            "related_to",
-            "caused_by",
-            "part_of",
-            "member_of",
-            "produced_by",
-        }
-    ) == relations.SEEDED_RELATION_TYPES
+    assert (
+        frozenset(
+            {
+                "references",
+                "depends_on",
+                "derived_from",
+                "related_to",
+                "caused_by",
+                "part_of",
+                "member_of",
+                "produced_by",
+            }
+        )
+        == relations.SEEDED_RELATION_TYPES
+    )
 
 
 def test_module_has_zero_openkos_imports() -> None:
