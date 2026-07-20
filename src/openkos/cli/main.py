@@ -27,6 +27,7 @@ from openkos.model import okf
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates
+from openkos.resolution.adjudication import Verdict, adjudicate_candidates
 from openkos.resolution.candidates import Tier
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state.fts import FtsUnavailable
@@ -1038,6 +1039,114 @@ def duplicates() -> None:
         typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
         for member_id in group.member_ids:
             typer.echo(f"  - {member_id}")
+        typer.echo()
+
+
+@app.command()
+def adjudicate(
+    same_only: bool = typer.Option(
+        False,
+        "--same-only",
+        help="Only show SAME-verdict groups in the printed report.",
+    ),
+) -> None:
+    """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
+
+    A FOURTH read command, mirroring `query`'s wiring exactly: the shared
+    `config.require_workspace` gate (D1), then a Phase-A `read_config` guard
+    (`except (OSError, ValueError)`, lint parity), then a real
+    `OllamaClient(model=cfg.model)` is built and injected -- as the
+    `LLMBackend` -- into `resolution.find_candidates` followed by
+    `resolution.adjudication.adjudicate_candidates`. Distinct from the
+    reserved `resolve`/`merge` verbs (slice 3): `adjudicate` never merges,
+    writes, or decides -- it only prints a verdict for human review. No
+    `--auto`, no confirmation gate, no `--json` or other structured mode.
+
+    Output mirrors `duplicates`'s grouped render (type, tier, trigger,
+    members) with each group's verdict, confidence, and rationale appended.
+    `--same-only` is a DISPLAY-only filter: it hides non-`SAME` verdicts from
+    the printed report, but `adjudicate_candidates` always receives -- and
+    returns -- every candidate group regardless of the flag; the library
+    itself never filters.
+
+    A no-model/no-Ollama run degrades via the SAME 3-tier ORDERED handler
+    `query` uses -- `OllamaUnavailable`, then `OllamaModelNotFound`, then the
+    generic `OllamaError` fallback -- each with its own actionable stderr
+    message, exit 1, and zero writes.
+
+    No file under the workspace is ever created, modified, or deleted (spec:
+    Verb renders verdicts with zero writes).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos adjudicate: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos adjudicate: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    candidates = find_candidates(layout.bundle_dir)
+    llm = OllamaClient(model=cfg.model)
+    try:
+        results = adjudicate_candidates(
+            candidates, bundle_dir=layout.bundle_dir, llm=llm
+        )
+    except OllamaUnavailable as exc:
+        typer.echo(
+            f"openkos adjudicate: failed -- {exc}. Start it with `ollama serve`, "
+            "then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    except OllamaModelNotFound as exc:
+        typer.echo(
+            f"openkos adjudicate: failed -- model '{cfg.model}' is not "
+            f"installed. Pull it with `ollama pull {cfg.model}`, then try "
+            "again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    # The two specific handlers above MUST precede this generic handler:
+    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
+    # `OllamaError`, so reordering would silently funnel them into this
+    # fallback and lose their actionable remediation messages (mirrors
+    # `query`'s ordering).
+    except OllamaError as exc:
+        typer.echo(f"openkos adjudicate: failed -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"openkos adjudicate: workspace at {root}")
+    typer.echo()
+    if not results:
+        typer.echo("No candidates found.")
+        return
+
+    displayed = [
+        result for result in results if not same_only or result.verdict is Verdict.SAME
+    ]
+    if not displayed:
+        typer.echo("No SAME-verdict candidates to display (--same-only).")
+        return
+
+    for result in displayed:
+        group = result.candidate
+        tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
+        typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
+        for member_id in group.member_ids:
+            typer.echo(f"  - {member_id}")
+        typer.echo(
+            f"  verdict: {result.verdict.value.upper()} "
+            f"(confidence: {result.confidence:.2f})"
+        )
+        typer.echo(f"  rationale: {result.rationale}")
         typer.echo()
 
 

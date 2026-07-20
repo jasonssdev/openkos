@@ -52,14 +52,14 @@ Chain strategy: pending
 
 ## Phase 5: CLI Verb
 
-- [ ] 5.1 RED: `adjudicate` wires `require_workspace`, `read_config`, `OllamaClient(model=cfg.model)`, `find_candidates`, `adjudicate_candidates`; prints grouped verdict/confidence/rationale.
-- [ ] 5.2 RED: read-only — bundle bytes/mtime unchanged.
-- [ ] 5.3 RED: `--same-only` hides non-SAME from output only; library still receives every group.
-- [ ] 5.4 RED: 3-tier degrade — `OllamaUnavailable` → `OllamaModelNotFound` → generic `OllamaError`, actionable message, exit 1, zero writes.
-- [ ] 5.5 GREEN: add the verb per design's File Changes.
+- [x] 5.1 RED: `adjudicate` wires `require_workspace`, `read_config`, `OllamaClient(model=cfg.model)`, `find_candidates`, `adjudicate_candidates`; prints grouped verdict/confidence/rationale.
+- [x] 5.2 RED: read-only — bundle bytes/mtime unchanged.
+- [x] 5.3 RED: `--same-only` hides non-SAME from output only; library still receives every group.
+- [x] 5.4 RED: 3-tier degrade — `OllamaUnavailable` → `OllamaModelNotFound` → generic `OllamaError`, actionable message, exit 1, zero writes.
+- [x] 5.5 GREEN: add the verb per design's File Changes.
 
 ## Phase 6: Layering And Integration Proof
 
-- [ ] 6.1 Extend `test_layering.py`: `resolution` MAY import `openkos.llm`, still forbids `bundle`/`state`/`graph`.
-- [ ] 6.2 Read-only demo: `adjudicate_candidates` end-to-end, fake backend, small bundle fixture, zero writes.
-- [ ] 6.3 Run `uv run pytest --cov` (≥90% branch), `mypy --strict`, `ruff check`.
+- [x] 6.1 Extend `test_layering.py`: `resolution` MAY import `openkos.llm`, still forbids `bundle`/`state`/`graph`.
+- [x] 6.2 Read-only demo: `adjudicate_candidates` end-to-end, fake backend, small bundle fixture, zero writes.
+- [x] 6.3 Run `uv run pytest --cov` (≥90% branch), `mypy --strict`, `ruff check`.
