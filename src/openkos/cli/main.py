@@ -33,6 +33,7 @@ from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates
 from openkos.resolution.adjudication import Verdict, adjudicate_candidates
 from openkos.resolution.candidates import Tier
+from openkos.resolution.edge_typing import suggest_relations
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state.fts import FtsUnavailable
 
@@ -2010,6 +2011,107 @@ def adjudicate(
         )
         typer.echo(f"  rationale: {result.rationale}")
         typer.echo()
+
+
+@app.command("suggest-relations")
+def suggest_relations_cmd() -> None:
+    """LLM-suggest a relation `type` for every existing UNTYPED body-link
+    edge: read-only, like `adjudicate`.
+
+    A FIFTH read command, mirroring `adjudicate`'s wiring exactly: the
+    shared `config.require_workspace` gate (D1), then a Phase-A
+    `read_config` guard (`except (OSError, ValueError)`, lint parity), then
+    a real `OllamaClient(model=cfg.model)` is built and injected -- as the
+    `LLMBackend` -- into `resolution.edge_typing.suggest_relations`, which
+    OWNS the internal `openkos.graph` read (design D2/D6, "No CLI Surface"):
+    this module imports ONLY from `openkos.resolution.edge_typing`, never
+    `openkos.graph` directly.
+
+    `suggest-relations` never writes, merges, or decides -- it only prints a
+    suggested `type` + rationale per untyped edge for human review, plus a
+    closing hint pointing at the existing `relate` verb, the ONLY write path
+    for an accepted suggestion (spec: Human-In-The-Loop Write Path
+    Unchanged). No `--auto`, no confirmation gate, no `--json` or other
+    structured mode.
+
+    A degraded suggestion (`suggested_type=None` -- a malformed LLM reply,
+    or a suggested type that failed `validate_relation_type`) renders as
+    `[?]` plus a `note: no valid type suggested` line, never as if it were a
+    valid suggestion (spec: Invalid suggested type is not surfaced as
+    valid). Already-typed edges never appear at all -- `suggest_relations`
+    filters them out before this command ever sees them (spec: Already-typed
+    edges are excluded from suggestions).
+
+    A no-model/no-Ollama run degrades via the SAME 3-tier ORDERED handler
+    `adjudicate`/`query` use -- `OllamaUnavailable`, then
+    `OllamaModelNotFound`, then the generic `OllamaError` fallback -- each
+    with its own actionable stderr message, exit 1, and zero writes.
+
+    No file under the workspace is ever created, modified, or deleted
+    (spec: Verb performs zero writes).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos suggest-relations: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos suggest-relations: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    llm = OllamaClient(model=cfg.model)
+    try:
+        results = suggest_relations(layout.bundle_dir, llm=llm)
+    except OllamaUnavailable as exc:
+        typer.echo(
+            f"openkos suggest-relations: failed -- {exc}. Start it with "
+            "`ollama serve`, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    except OllamaModelNotFound as exc:
+        typer.echo(
+            f"openkos suggest-relations: failed -- model '{cfg.model}' is "
+            f"not installed. Pull it with `ollama pull {cfg.model}`, then "
+            "try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    # The two specific handlers above MUST precede this generic handler:
+    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
+    # `OllamaError`, so reordering would silently funnel them into this
+    # fallback and lose their actionable remediation messages (mirrors
+    # `adjudicate`'s ordering).
+    except OllamaError as exc:
+        typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"openkos suggest-relations: workspace at {root}")
+    typer.echo()
+    if not results:
+        typer.echo("No untyped relations found.")
+        return
+
+    for result in results:
+        edge = result.edge
+        if result.suggested_type is None:
+            typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
+            typer.echo("  note: no valid type suggested")
+        else:
+            typer.echo(
+                f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}"
+            )
+            typer.echo(f"  rationale: {result.rationale}")
+        typer.echo()
+
+    typer.echo("Next: openkos relate <source> <type> <target>")
 
 
 def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
