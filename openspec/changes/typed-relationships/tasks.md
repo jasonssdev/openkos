@@ -49,16 +49,16 @@ Spec: `relations:` Frontmatter Field Shape; OKF §9 Conformance — `relations:`
 
 Spec: `relate` CLI Verb Writes A Typed Relation; Seeded-But-Extensible Relation Vocabulary; Target Containment Consistent With Existing Verbs.
 
-- [ ] 2.1 RED: `tests/unit/cli/test_relate.py` — successful `relate a references b` (confirmed/`--auto`) appends `{target: b, type: references}` to `a`'s `relations:`, updates log.md (Scenario: successful relate writes into source frontmatter).
-- [ ] 2.2 RED: missing target fails closed — no write, non-zero exit, clear error (Scenario: missing target fails closed).
-- [ ] 2.3 RED: missing source fails closed — no write, non-zero exit, clear error (Scenario: missing source fails closed).
-- [ ] 2.4 RED: non-TTY without `--auto` refuses, nothing written (Scenario: non-TTY without --auto refuses).
-- [ ] 2.5 RED: known relation type accepted silently; unknown type accepted with WARN to stderr; empty/whitespace type rejected with no write (Scenarios: known/unknown/empty type).
-- [ ] 2.6 RED: traversal-shaped id (`../../evil`) for source or target is refused, no write (Threat Matrix: path traversal).
-- [ ] 2.7 RED: `source == target` is rejected before any write.
-- [ ] 2.8 RED: duplicate `(target, rel)` relate call is idempotent (no duplicate entry).
-- [ ] 2.9 GREEN: implement `relate` command in `src/openkos/cli/main.py`, mirroring the `forget` verb scaffold: Phase A `require_workspace` + `_resolve_concept_path` on both source/target, preview/confirm/`--auto`/`review:` gate; Phase B writes source concept file + `**Relate**` log.md line only (no index.md).
-- [ ] 2.10 VERIFY: `uv run pytest tests/unit/cli/test_relate.py` green; `ruff check` and `mypy --strict` clean on `main.py` relate hunk.
+- [x] 2.1 RED: `tests/unit/cli/test_relate.py` — successful `relate a references b` (confirmed/`--auto`) appends `{target: b, type: references}` to `a`'s `relations:`, updates log.md (Scenario: successful relate writes into source frontmatter).
+- [x] 2.2 RED: missing target fails closed — no write, non-zero exit, clear error (Scenario: missing target fails closed).
+- [x] 2.3 RED: missing source fails closed — no write, non-zero exit, clear error (Scenario: missing source fails closed).
+- [x] 2.4 RED: non-TTY without `--auto` refuses, nothing written (Scenario: non-TTY without --auto refuses).
+- [x] 2.5 RED: known relation type accepted silently; unknown type accepted with WARN to stderr; empty/whitespace type rejected with no write (Scenarios: known/unknown/empty type).
+- [x] 2.6 RED: traversal-shaped id (`../../evil`) for source or target is refused, no write (Threat Matrix: path traversal).
+- [x] 2.7 RED: `source == target` is rejected before any write.
+- [x] 2.8 RED: duplicate `(target, rel)` relate call is idempotent (no duplicate entry).
+- [x] 2.9 GREEN: implement `relate` command in `src/openkos/cli/main.py`, mirroring the `forget` verb scaffold: Phase A `require_workspace` + `_resolve_concept_path` on both source/target, preview/confirm/`--auto`/`review:` gate; Phase B writes source concept file + `**Relate**` log.md line only (no index.md).
+- [x] 2.10 VERIFY: `uv run pytest tests/unit/cli/test_relate.py` green; `ruff check` and `mypy --strict` clean on `main.py` relate hunk.
 
 ## Phase 3 (PR3 → PR2): Graph Projection Typed Edges
 
@@ -86,5 +86,14 @@ Spec: Non-Silent Guard For Edge-Bearing Merge.
 
 ## Cross-PR Regression Guard
 
-- [ ] 5.1 After each PR: `uv run pytest` (full suite) green; branch/line coverage stays at or above the existing ~90% branch bar.
-- [ ] 5.2 After each PR: `build_concept`/LLM ingest output remains byte-identical (no `relations:` emitted by `build_concept`) — assert via existing ingest golden/regression tests.
+- [ ] 5.1 After each PR: `uv run pytest` (full suite) green; branch/line coverage stays at or above the existing ~90% branch bar. (PR1: 896 passed; PR2: 911 passed, full suite green; PR2 correction batch: 916 passed, full suite green)
+- [ ] 5.2 After each PR: `build_concept`/LLM ingest output remains byte-identical (no `relations:` emitted by `build_concept`) — assert via existing ingest golden/regression tests. (PR1: `test_build_concept_output_byte_identical_regression` added and passing; PR2: unaffected — `relate` never touches `build_concept`, regression test still passing)
+
+## PR2 Correction Batch (post-review, pre-commit)
+
+Bounded correction applied against `feat/tr-02-relate-verb` in response to a reliability review of PR2. TDD (RED confirmed before each fix). Not new feature work.
+
+- [x] C1 RED/GREEN (CRITICAL): fixed encode/decode `.md`-suffix asymmetry — `decode_relation` did not strip a trailing `.md` from `target` while `encode_relation` did, so a hand-edited `.md`-suffixed stored target was not recognized by `relate`'s idempotency dedup and could produce a literal duplicate entry on disk. Factored `_validate_relation_target` (shared, DRY) in `src/openkos/model/okf.py`, called from both `encode_relation` and `decode_relation`. RED: `tests/unit/model/test_okf.py::test_decode_relation_strips_md_suffix_from_target`, `::test_decode_relation_rejects_target_empty_after_md_strip`; `tests/unit/cli/test_relate.py::test_duplicate_relate_recognizes_hand_edited_md_suffixed_target` (all 3 failed pre-fix, confirmed).
+- [x] C2 RED/GREEN (WARNING): fixed misleading `relate` preview on a no-op repeat — preview always printed `+{target: ..., type: ...}` even when `already_present`. Branched the preview in `src/openkos/cli/main.py` on `already_present` (unchanged/already-present line, count stays `N -> N`, no `+`). RED: `tests/unit/cli/test_relate.py::test_repeated_relate_preview_shows_no_change_not_addition` (failed pre-fix, confirmed).
+- [x] C3 (coverage gap, low severity): added `tests/unit/cli/test_relate.py::test_relate_review_false_skips_the_prompt_like_auto`, mirroring `forget`'s equivalent test — passed immediately (gate code is byte-identical to `forget`'s), coverage-only as flagged.
+- [x] C4 VERIFY: `uv run pytest` → 916 passed (911 + 5 new: 2 in `test_okf.py`, 3 in `test_relate.py`); `uv run ruff check .` → All checks passed; `uv run mypy` → Success, no issues in 82 source files; `uv run ruff format` applied to `test_relate.py` for style consistency (no logic change, tests stayed green).
