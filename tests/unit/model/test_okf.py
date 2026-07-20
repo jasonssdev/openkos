@@ -14,6 +14,8 @@ import pytest
 
 from openkos.model import okf
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 def test_okf_version_is_0_1() -> None:
     """The engine targets OKF v0.1, per docs/okf-alignment.md:65."""
@@ -181,6 +183,105 @@ def test_check_conformance_still_raises_oserror_after_refactor(
             okf.check_conformance(tmp_path)
     finally:
         target.chmod(original_mode)
+
+
+def test_check_conformance_passes_on_root_index_with_frontmatter(
+    tmp_path: Path,
+) -> None:
+    """§9 rule 3 + §11: the bundle-ROOT `index.md` is exempt from the
+    frontmatter ban -- an `okf_version` frontmatter block there is not a
+    violation."""
+    (tmp_path / "index.md").write_text(
+        '---\nokf_version: "0.1"\n---\n', encoding="utf-8"
+    )
+
+    assert okf.check_conformance(tmp_path) == []
+
+
+def test_check_conformance_fails_on_nested_index_with_parseable_frontmatter(
+    tmp_path: Path,
+) -> None:
+    """§9 rule 3 + §6: a non-root `index.md` MUST NOT carry a frontmatter
+    block at all -- one with parseable YAML is a violation."""
+    nested = tmp_path / "sub"
+    nested.mkdir()
+    (nested / "index.md").write_text('---\nokf_version: "0.1"\n---\n', encoding="utf-8")
+
+    violations = okf.check_conformance(tmp_path)
+
+    assert len(violations) == 1
+    assert str(nested / "index.md") in violations[0]
+
+
+def test_check_conformance_fails_on_nested_index_with_malformed_fence(
+    tmp_path: Path,
+) -> None:
+    """§9 rule 3 detects frontmatter by FENCE PRESENCE, not parseability: a
+    non-root `index.md` opening with a `---` delimiter and a closing `---`
+    fence is a violation even when the YAML between them does not parse --
+    §6 forbids frontmatter entirely, so a malformed block is still
+    frontmatter."""
+    nested = tmp_path / "sub"
+    nested.mkdir()
+    (nested / "index.md").write_text(
+        "---\nokf_version: [unclosed\n---\n", encoding="utf-8"
+    )
+
+    violations = okf.check_conformance(tmp_path)
+
+    assert len(violations) == 1
+    assert str(nested / "index.md") in violations[0]
+
+
+def test_check_conformance_passes_on_nested_index_without_frontmatter(
+    tmp_path: Path,
+) -> None:
+    """A non-root `index.md` with no frontmatter block at all is conformant
+    (the only shape §6 allows for a nested `index.md`)."""
+    nested = tmp_path / "sub"
+    nested.mkdir()
+    (nested / "index.md").write_text(
+        "# Sub-index\n\nNo frontmatter here.\n", encoding="utf-8"
+    )
+
+    assert okf.check_conformance(tmp_path) == []
+
+
+def test_check_conformance_passes_on_log_with_valid_iso_date_heading(
+    tmp_path: Path,
+) -> None:
+    """§9 rule 3 + §7: a `log.md` `## ` heading matching `YYYY-MM-DD` is
+    conformant."""
+    (tmp_path / "log.md").write_text(
+        "# Directory Update Log\n\n## 2026-07-14\n\n* Entry.\n", encoding="utf-8"
+    )
+
+    assert okf.check_conformance(tmp_path) == []
+
+
+def test_check_conformance_fails_on_log_with_malformed_date_heading(
+    tmp_path: Path,
+) -> None:
+    """§9 rule 3 + §7: a `log.md` `## ` heading that is not an ISO-8601 date
+    is a violation naming the file and the offending heading."""
+    (tmp_path / "log.md").write_text(
+        "# Directory Update Log\n\n## July 2026\n\n* Entry.\n", encoding="utf-8"
+    )
+
+    violations = okf.check_conformance(tmp_path)
+
+    assert len(violations) == 1
+    assert str(tmp_path / "log.md") in violations[0]
+    assert "July 2026" in violations[0]
+
+
+def test_check_conformance_passes_on_reference_bundle() -> None:
+    """The reference bundle at `examples/good-life-demo/bundle` satisfies all
+    three §9 rules, including the rule-3 reserved-file structure this test
+    adds -- runs in CI's existing `test` job with no `ci.yml` change."""
+    bundle_dir = _REPO_ROOT / "examples" / "good-life-demo" / "bundle"
+
+    assert okf.check_conformance(bundle_dir) == []
 
 
 def test_survey_bundle_fresh_empty_bundle(tmp_path: Path) -> None:
