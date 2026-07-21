@@ -2,7 +2,9 @@
 
 import re
 import shutil
+import sqlite3
 import sys
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -39,6 +41,7 @@ from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state import reindex as reindex_module
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import (
+    VectorStoreDB,
     VecUnavailable,
     open_vector_store,
     probe_vec_loadable,
@@ -2180,6 +2183,30 @@ def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
     raise ValueError(f"unexpected no_match_cause: {cause!r}")
 
 
+def _open_vector_store_or_degrade(
+    path: Path,
+) -> tuple[AbstractContextManager["VectorStoreDB | None"], bool]:
+    """Existence-gated store open for `query`'s read-only dense seam.
+
+    `query` never CREATES `vectors.db` -- `open_vector_store` (which lazily
+    creates `.openkos/vectors.db` on a successful open) is only called when
+    `path` already exists on disk. Returns a context manager yielding either
+    an open `VectorStoreDB` or `None`, plus whether the CLI itself detected
+    the store as unavailable this call (absent, `VecUnavailable` at open,
+    or a raw `sqlite3.Error` -- e.g. a corrupt/locked EXISTING `vectors.db`
+    raising `DatabaseError`/`OperationalError` from `open_vector_store`'s
+    CREATE TABLE step, which is not mapped to `VecUnavailable`) -- distinct
+    from `AnswerResult.dense_degraded`, which is set INSIDE `answer()` for a
+    read-path failure at query time. The caller's reindex hint fires on
+    either signal."""
+    if not path.exists():
+        return nullcontext(None), True
+    try:
+        return open_vector_store(path), False
+    except (VecUnavailable, sqlite3.Error):
+        return nullcontext(None), True
+
+
 @app.command()
 def query(
     question: str = typer.Argument(
@@ -2193,16 +2220,22 @@ def query(
 
     Read-only, like `status` and `lint`: no writes, no confirmation prompt,
     no `--auto`. Must be run inside an initialized workspace; outside one it
-    refuses (exit 1) with a short reason on stderr.
+    refuses (exit 1) with a short reason on stderr. Retrieval is hybrid:
+    lexical (FTS5) hits and dense (`vectors.db`) hits are fused via
+    reciprocal rank fusion. `query` never WRITES `vectors.db` -- an absent
+    or unusable store degrades cleanly to FTS-only, never creating one.
 
     Every completed run (successful answer or no-match) prints a one-line
-    `retrieval:` summary to STDERR reporting the raw FTS hit count, whether
-    the LLM was invoked, and how many sources were cited -- so a silent
-    short-circuit (e.g. zero hits, so the LLM never ran) is always visible,
-    even though STDOUT stays pipe-clean. When the build skipped any
-    unreadable/unparseable files, an `index:` skip-notice block follows the
-    summary on stderr, worded as a whole-bundle build diagnostic -- it never
-    implies the skipped files were candidates for THIS query's match.
+    `retrieval:` summary to STDERR reporting the raw FTS hit count, the raw
+    dense hit count, the fused count, whether the LLM was invoked, and how
+    many sources were cited -- so a silent short-circuit (e.g. zero hits, so
+    the LLM never ran) is always visible, even though STDOUT stays
+    pipe-clean. When dense retrieval degraded (the store is absent, or
+    unavailable/corrupt), an additional stderr line hints at running
+    `openkos reindex` to enable semantic retrieval. When the build skipped
+    any unreadable/unparseable files, an `index:` skip-notice block follows
+    the summary on stderr, worded as a whole-bundle build diagnostic -- it
+    never implies the skipped files were candidates for THIS query's match.
 
     On a successful answer, STDOUT carries exactly the answer text, then
     (only when at least one concept was cited) a blank line, `Citations:`,
@@ -2235,37 +2268,60 @@ def query(
         raise typer.Exit(code=1) from exc
 
     llm = OllamaClient(model=cfg.model)
-    try:
-        result = answer(question, bundle_dir=layout.bundle_dir, llm=llm, limit=limit)
-    except OllamaUnavailable as exc:
-        typer.echo(
-            f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
-            f"then try again.{_DOCTOR_HINT}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    except OllamaModelNotFound as exc:
-        typer.echo(
-            f"openkos query: failed -- model '{cfg.model}' is not installed. "
-            f"Pull it with `ollama pull {cfg.model}`, then try again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # The two specific handlers above MUST precede this generic tuple:
-    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
-    # `OllamaError`, so reordering would silently funnel them into this
-    # fallback and lose their actionable remediation messages.
-    except (FtsUnavailable, OllamaError) as exc:
-        typer.echo(f"openkos query: failed -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
+    embedder = OllamaClient(model=cfg.embedding_model)
+    vector_store_cm, store_was_unavailable = _open_vector_store_or_degrade(
+        layout.vectors_db_path
+    )
+    with vector_store_cm as vector_store:
+        try:
+            result = answer(
+                question,
+                bundle_dir=layout.bundle_dir,
+                llm=llm,
+                embedder=embedder,
+                vector_store=vector_store,
+                limit=limit,
+            )
+        except OllamaUnavailable as exc:
+            typer.echo(
+                f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
+                f"then try again.{_DOCTOR_HINT}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        except OllamaModelNotFound as exc:
+            # Names the REAL failing model from the exception text -- `query`
+            # now builds TWO Ollama-backed seams (chat `llm` + `embedder`), so
+            # a hardcoded `cfg.model` would be wrong whenever the embedding
+            # model is the one that actually 404'd.
+            typer.echo(
+                f"openkos query: failed -- {exc}. Pull it with "
+                "`ollama pull <model>`, then try again.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        # The two specific handlers above MUST precede this generic tuple:
+        # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
+        # `OllamaError`, so reordering would silently funnel them into this
+        # fallback and lose their actionable remediation messages.
+        except (FtsUnavailable, OllamaError) as exc:
+            typer.echo(f"openkos query: failed -- {exc}.", err=True)
+            raise typer.Exit(code=1) from exc
 
     cited_count = len(result.citations)
     llm_status = "invoked" if result.llm_invoked else "skipped"
     typer.echo(
-        f"retrieval: {result.fts_hit_count} FTS hit{_plural(result.fts_hit_count)} "
-        f"→ LLM {llm_status} → {cited_count} source{_plural(cited_count)} cited",
+        f"retrieval: {result.fts_hit_count} FTS + {result.dense_hit_count} "
+        f"dense → {result.fused_count} fused → LLM {llm_status} → "
+        f"{cited_count} cited",
         err=True,
     )
+    if store_was_unavailable or result.dense_degraded:
+        typer.echo(
+            "hint: dense retrieval is unavailable this run -- run "
+            "`openkos reindex` to enable semantic retrieval.",
+            err=True,
+        )
     if result.skip_notices:
         typer.echo(
             f"index: {len(result.skip_notices)} "

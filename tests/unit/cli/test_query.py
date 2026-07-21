@@ -23,15 +23,23 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
+from openkos.state import vectorstore
 from openkos.state.fts import FtsUnavailable
+from openkos.state.vectorstore import VecUnavailable
 
 runner = CliRunner()
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Initialize a workspace AND backfill an (empty) `vectors.db`, so
+    `query`'s dense seams are healthy by default -- most tests here exercise
+    the answer-rendering/stderr-format contract, not the dense-degrade/hint
+    behavior, which has its own dedicated tests below using a workspace with
+    no `vectors.db` (or one that fails to open)."""
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
+    vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db").close()
 
 
 def test_query_refuses_when_not_a_workspace(
@@ -58,7 +66,7 @@ def test_query_refuses_when_not_a_workspace(
     assert calls == []
 
 
-def test_query_matching_answer_renders_citations_in_hit_rank_order(
+def test_query_matching_answer_renders_citations_in_fused_rank_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A workspace whose bundle answers the question renders the answer text
@@ -76,6 +84,9 @@ def test_query_matching_answer_renders_citations_in_hit_rank_order(
         llm_invoked=True,
         no_match_cause="none",
         skip_notices=[],
+        dense_hit_count=2,
+        fused_count=2,
+        dense_degraded=False,
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -89,7 +100,9 @@ def test_query_matching_answer_renders_citations_in_hit_rank_order(
         "  → concepts/stoicism (Stoicism)\n"
         "  → concepts/epictetus (Epictetus)\n"
     )
-    assert result.stderr == "retrieval: 3 FTS hits → LLM invoked → 2 sources cited\n"
+    assert result.stderr == (
+        "retrieval: 3 FTS + 2 dense → 2 fused → LLM invoked → 2 cited\n"
+    )
 
 
 def test_query_zero_hits_renders_zero_hits_message(
@@ -118,7 +131,9 @@ def test_query_zero_hits_renders_zero_hits_message(
         "what the bundle contains.\n"
     )
     assert "Citations:" not in result.stdout
-    assert result.stderr == "retrieval: 0 FTS hits → LLM skipped → 0 sources cited\n"
+    assert result.stderr == (
+        "retrieval: 0 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
+    )
 
 
 def test_query_all_unreadable_renders_corruption_message(
@@ -147,7 +162,9 @@ def test_query_all_unreadable_renders_corruption_message(
         "check bundle health.\n"
     )
     assert "Citations:" not in result.stdout
-    assert result.stderr == "retrieval: 2 FTS hits → LLM skipped → 0 sources cited\n"
+    assert result.stderr == (
+        "retrieval: 2 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
+    )
 
 
 def test_query_empty_question_renders_prompt_message(
@@ -174,7 +191,9 @@ def test_query_empty_question_renders_prompt_message(
         'openkos query "what is stoicism?".\n'
     )
     assert "Citations:" not in result.stdout
-    assert result.stderr == "retrieval: 0 FTS hits → LLM skipped → 0 sources cited\n"
+    assert result.stderr == (
+        "retrieval: 0 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
+    )
 
 
 def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
@@ -192,6 +211,9 @@ def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
         llm_invoked=True,
         no_match_cause="none",
         skip_notices=["concepts/corrupt.md: skipped (unreadable)"],
+        dense_hit_count=0,
+        fused_count=1,
+        dense_degraded=False,
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -205,7 +227,7 @@ def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
         "  → concepts/stoicism (Stoicism)\n"
     )
     assert result.stderr == (
-        "retrieval: 1 FTS hit → LLM invoked → 1 source cited\n"
+        "retrieval: 1 FTS + 0 dense → 1 fused → LLM invoked → 1 cited\n"
         "index: 1 doc skipped while building the search index (whole-bundle, "
         "not this query's hits):\n"
         "  concepts/corrupt.md: skipped (unreadable)\n"
@@ -225,13 +247,18 @@ def test_query_no_skip_notices_omits_skip_block(
         llm_invoked=True,
         no_match_cause="none",
         skip_notices=[],
+        dense_hit_count=0,
+        fused_count=1,
+        dense_degraded=False,
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
     result = runner.invoke(app, ["query", "what is stoicism?"])
 
     assert result.exit_code == 0
-    assert result.stderr == "retrieval: 1 FTS hit → LLM invoked → 1 source cited\n"
+    assert result.stderr == (
+        "retrieval: 1 FTS + 0 dense → 1 fused → LLM invoked → 1 cited\n"
+    )
 
 
 def test_query_limit_flag_is_forwarded_unchanged(
@@ -264,6 +291,8 @@ def test_query_limit_flag_is_forwarded_unchanged(
     assert kwargs["bundle_dir"] == tmp_path / "bundle"
     assert kwargs["limit"] == 3
     assert captured["question"] == "what is stoicism?"
+    assert isinstance(kwargs["embedder"], OllamaClient)
+    assert kwargs["vector_store"] is not None
 
 
 def test_query_omitted_limit_defaults_to_five(
@@ -293,6 +322,226 @@ def test_query_omitted_limit_defaults_to_five(
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["limit"] == 5
+
+
+def test_query_builds_and_injects_embedder_and_vector_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`query` builds an `Embedder` (`OllamaClient(cfg.embedding_model)`) and
+    opens the vector store via `open_vector_store(layout.vectors_db_path)`,
+    injecting both into `answer()` (spec: Happy-Path Answer Rendering --
+    Matching answer with citations)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    embedder = kwargs["embedder"]
+    assert isinstance(embedder, OllamaClient)
+    assert embedder._model == "qwen3-embedding:0.6b"
+    assert kwargs["vector_store"] is not None
+
+
+def test_query_never_creates_vectors_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`query` is read-only over the vector store: a fresh workspace with no
+    `vectors.db` never gets one created by `query` (spec: Query never
+    creates vectors.db)."""
+    monkeypatch.chdir(tmp_path)
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *args, **kwargs: AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        ),
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / ".openkos" / "vectors.db").exists()
+
+
+def test_query_cold_store_hints_at_reindex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace with no `vectors.db` (never reindexed) still completes on
+    the FTS-only fused result, exits 0, and prints a reindex hint on stderr
+    -- even when the injected `AnswerResult.dense_degraded` is `False`, since
+    the CLI itself detected the absent store (spec: Cold store hints at
+    reindex)."""
+    monkeypatch.chdir(tmp_path)
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=0,
+        fused_count=1,
+        dense_degraded=False,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "openkos reindex" in result.stderr
+
+
+def test_query_vec_unavailable_at_open_degrades_with_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `vectors.db` that exists but fails to open (`VecUnavailable`)
+    degrades to `vector_store=None`, exits 0 on the FTS-only fused result,
+    and prints the same reindex hint (spec: Locked or corrupt vectors.db
+    degrades with the same hint)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.open_vector_store",
+        lambda path: (_ for _ in ()).throw(VecUnavailable("boom")),
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["vector_store"] is None
+    assert "openkos reindex" in result.stderr
+
+
+def test_query_corrupt_vectors_db_degrades_with_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EXISTING `vectors.db` that is corrupt at the filesystem level (not
+    a valid SQLite file, or exclusively locked) raises a raw `sqlite3.Error`
+    from `open_vector_store`'s CREATE TABLE step -- NOT `VecUnavailable` --
+    but `query` must still degrade to FTS-only fusion, printing the answer
+    and citations to STDOUT and the reindex hint on stderr, rather than
+    crashing with a raw traceback (spec: Locked or corrupt vectors.db
+    degrades with the same hint)."""
+    monkeypatch.chdir(tmp_path)
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"not a database")
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=0,
+        fused_count=1,
+        dense_degraded=False,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "Traceback" not in result.stderr
+    assert result.stdout == (
+        "Stoicism teaches the dichotomy of control.\n"
+        "\n"
+        "Citations:\n"
+        "  → concepts/stoicism (Stoicism)\n"
+    )
+    assert "openkos reindex" in result.stderr
+
+
+def test_query_dense_degraded_hints_at_reindex_even_with_store_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`AnswerResult.dense_degraded=True` (a read-path failure caught inside
+    `answer()`) prints the reindex hint even though the CLI's OWN store-open
+    succeeded (spec: Dense-Unavailable Runs Degrade And Hint At Reindex)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=0,
+        fused_count=1,
+        dense_degraded=True,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "openkos reindex" in result.stderr
+
+
+def test_query_no_hint_when_dense_healthy_and_store_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A healthy run (store present, `dense_degraded=False`) prints no
+    reindex hint at all."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=1,
+        fused_count=1,
+        dense_degraded=False,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "reindex" not in result.stderr
 
 
 def test_query_builds_ollama_client_from_configured_model(
@@ -362,18 +611,25 @@ def test_query_ollama_unavailable_maps_to_exit_one(
 def test_query_model_not_found_maps_to_exit_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`answer()` raising `OllamaModelNotFound` is caught, printed as a
-    friendly stderr message naming the CONFIGURED model tag and the
-    `ollama pull <model>` remediation, and exits 1 with no raw traceback
-    (spec: Configured model not installed)."""
+    """`answer()` raising `OllamaModelNotFound` is caught and printed with
+    the REAL failing model name taken from the exception text (`{exc}`) --
+    NOT a hardcoded `cfg.model`, which would name the wrong one of the two
+    Ollama-backed models `query` now builds (chat vs. embedding) whenever
+    the embedding model is the one that actually 404'd -- plus `ollama pull`
+    remediation, and exits 1 with no raw traceback (spec: Configured model
+    not installed)."""
     _init_workspace(tmp_path, monkeypatch)
-    configured_model = "llama3.2:1b-openkos-test"
+    configured_chat_model = "llama3.2:1b-openkos-test"
     (tmp_path / "openkos.yaml").write_text(
-        f"model: {configured_model}\n", encoding="utf-8"
+        f"model: {configured_chat_model}\n", encoding="utf-8"
     )
+    failing_embedding_model = "qwen3-embedding:0.6b"
 
     def _raise_model_not_found(*args: object, **kwargs: object) -> AnswerResult:
-        raise OllamaModelNotFound("Model not found (404): {}")
+        raise OllamaModelNotFound(
+            f'Model not found (404): model "{failing_embedding_model}" not '
+            "found, try pulling it first"
+        )
 
     monkeypatch.setattr("openkos.cli.main.answer", _raise_model_not_found)
 
@@ -382,8 +638,9 @@ def test_query_model_not_found_maps_to_exit_one(
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
     assert result.stderr.startswith("openkos query: failed -- ")
-    assert "is not installed" in result.stderr
-    assert f"ollama pull {configured_model}" in result.stderr
+    assert failing_embedding_model in result.stderr
+    assert configured_chat_model not in result.stderr
+    assert "ollama pull" in result.stderr
     assert "openkos doctor" not in result.stderr
     assert "Traceback" not in result.stderr
 
@@ -433,14 +690,14 @@ def test_query_specific_ollama_subclasses_do_not_fall_through_to_generic(
     assert "ollama serve" in result.stderr
 
     def _raise_model_not_found(*args: object, **kwargs: object) -> AnswerResult:
-        raise OllamaModelNotFound("Model not found (404): {}")
+        raise OllamaModelNotFound("Model not found (404): model not found")
 
     monkeypatch.setattr("openkos.cli.main.answer", _raise_model_not_found)
     result = runner.invoke(app, ["query", "what is stoicism?"])
-    # The generic tuple fallback would echo the raw exception text
-    # ("Model not found (404): ...") -- proves `OllamaModelNotFound` reached
-    # its OWN handler instead.
-    assert "Model not found (404)" not in result.stderr
+    # The generic tuple fallback would print exactly the bare
+    # "openkos query: failed -- {exc}.\n" shape with no remediation -- the
+    # `ollama pull` remediation text proves `OllamaModelNotFound` reached its
+    # OWN handler instead.
     assert "ollama pull" in result.stderr
 
 
