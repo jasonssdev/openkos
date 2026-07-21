@@ -289,6 +289,23 @@ def test_fresh_empty_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert "openkos ingest" in result.stdout
 
 
+def test_init_creates_no_openkos_dir_or_vectors_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`init` writes only the five workspace artifacts -- it never creates
+    `.openkos/` or `.openkos/vectors.db` (embedding-vector-store spec: No
+    CLI Surface, No Init-Time Side Effect). Those are engine-cache paths a
+    future `state.vectorstore` consumer creates lazily on first open, not
+    part of what a freshly initialized workspace contains."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / ".openkos").exists()
+    assert not (tmp_path / ".openkos" / "vectors.db").exists()
+
+
 def test_model_flag_writes_chosen_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

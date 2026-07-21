@@ -1,13 +1,14 @@
 """Unit tests for the `doctor` CLI command: read-only environment health scan.
 
-`doctor` runs ALL six checks (workspace-initialized, config-valid,
+`doctor` runs ALL seven checks (workspace-initialized, config-valid,
 Ollama-reachable, model-installed, embedding-model-installed,
-bundle-readable), renders every result unconditionally
-(accumulate-then-exit-once, D5), and exits 1 iff any CRITICAL check failed.
-`embedding-model-installed` is informational (non-critical): Slice 1 does
-not wire embeddings into any consumed feature yet, so a failing check must
-not flip the exit code. Every test patches `openkos.cli.main.OllamaClient`
-with a fake stub (D-seam) -- zero network, zero real Ollama process.
+bundle-readable, vector-extension-loadable), renders every result
+unconditionally (accumulate-then-exit-once, D5), and exits 1 iff any
+CRITICAL check failed. `embedding-model-installed` and
+`vector-extension-loadable` are both informational (non-critical): neither
+is wired into any consumed feature yet, so a failing check must not flip
+the exit code. Every test patches `openkos.cli.main.OllamaClient` with a
+fake stub (D-seam) -- zero network, zero real Ollama process.
 """
 
 import shutil
@@ -72,18 +73,19 @@ def test_doctor_all_healthy_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A fully healthy workspace prints one `[PASS]` per applicable check
-    (six total) and exits 0 (Scenario: Healthy workspace prints all
+    (seven total) and exits 0 (Scenario: Healthy workspace prints all
     applicable checks)."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 6
+    assert result.stdout.count("[PASS]") == 7
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
@@ -92,6 +94,7 @@ def test_doctor_all_healthy_exits_zero(
     assert f"[PASS] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in (
         result.stdout
     )
+    assert "[PASS] Vector extension loadable" in result.stdout
 
 
 def test_doctor_ollama_down_shows_start_server_remediation(
@@ -493,3 +496,86 @@ def test_doctor_embedding_model_check_does_not_construct_extra_client(
 
     assert result.exit_code == 0
     assert len(calls) == 1
+
+
+# --- vector-extension-loadable check (non-fatal, no SKIP branch) -----------
+
+
+def test_doctor_vector_extension_loadable_shows_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A loadable `sqlite-vec` extension prints `[PASS] Vector extension
+    loadable` and does not affect the exit code."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Vector extension loadable" in result.stdout
+    assert result.stdout.count("[PASS]") == 7
+
+
+def test_doctor_vector_extension_not_loadable_fails_but_exit_stays_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-loadable `sqlite-vec` extension prints `[FAIL] Vector extension
+    loadable` with a remediation naming an extension-capable interpreter
+    (not system/Homebrew Python), but stays informational: the process still
+    exits 0 when every critical check passes."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: False)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[FAIL] Vector extension loadable" in result.stdout
+    assert "uv" in result.stdout
+    assert "system Python" not in result.stdout
+    assert "Homebrew" not in result.stdout
+
+
+def test_doctor_vector_extension_check_runs_even_when_ollama_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike the embedding-model check, the vector-extension check has no
+    SKIP branch: it runs (and can `[PASS]`) even when Ollama is unreachable,
+    since it shares no root cause with the Ollama checks."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "[PASS] Vector extension loadable" in result.stdout
+    assert "[SKIP] Vector extension loadable" not in result.stdout
+
+
+def test_doctor_vector_extension_check_runs_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside an initialized workspace, the vector-extension check still
+    runs -- it depends on neither workspace state nor Ollama."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Vector extension loadable" in result.stdout

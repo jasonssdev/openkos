@@ -14,6 +14,24 @@ import pytest
 
 from openkos import config
 
+# --- WorkspaceLayout: engine-cache paths (pure derivation, not init-written) --
+
+
+def test_workspace_layout_openkos_dir_resolves_under_root(tmp_path: Path) -> None:
+    """`openkos_dir` resolves to `<root>/.openkos`, a pure path derivation."""
+    layout = config.WorkspaceLayout(tmp_path)
+
+    assert layout.openkos_dir == tmp_path / ".openkos"
+
+
+def test_workspace_layout_vectors_db_path_resolves_under_openkos_dir(
+    tmp_path: Path,
+) -> None:
+    """`vectors_db_path` resolves to `<root>/.openkos/vectors.db`."""
+    layout = config.WorkspaceLayout(tmp_path)
+
+    assert layout.vectors_db_path == tmp_path / ".openkos" / "vectors.db"
+
 
 def test_is_workspace_false_on_empty_directory(tmp_path: Path) -> None:
     """An empty directory is not a workspace; init may proceed there."""
