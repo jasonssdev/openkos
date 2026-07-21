@@ -33,6 +33,7 @@ from pathlib import Path
 
 from openkos.llm.base import Embedder
 from openkos.model import okf
+from openkos.state import derived, fts
 from openkos.state.vectorstore import VectorStore, content_hash
 
 
@@ -55,15 +56,45 @@ class ReindexReport:
     embed attempt failed)."""
 
 
+def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
+    """Rebuild `fts_db_path` iff the bundle's manifest hash changed since the
+    last `reindex` run, or `force` (derived-index-cache: Bundle-Manifest-Hash
+    Cache Key; Whole-Index Rebuild On Manifest Change).
+
+    Opens `fts_db_path` (lazily creating `.openkos/` on first call, mirroring
+    `open_vector_store`) to read the PREVIOUSLY stored `meta.manifest_hash`,
+    then computes the bundle's CURRENT manifest hash via
+    `derived.bundle_manifest_hash` -- this comparison is the ONLY place
+    staleness is decided anywhere in the system (D2 binding contract): a
+    match (and no `force`) skips the whole rebuild entirely; a mismatch (or
+    absent stored hash, or `force`) triggers `fts.write_fts_index`, which
+    always performs a full DROP+repopulate rebuild and re-stores the new
+    manifest hash itself, in ONE commit for this call.
+    """
+    conn = derived.open_derived_connection(fts_db_path)
+    try:
+        current_manifest = derived.read_manifest_hash(conn)
+    finally:
+        conn.close()
+
+    new_manifest = derived.bundle_manifest_hash(bundle_dir)
+    if force or current_manifest != new_manifest:
+        fts.write_fts_index(fts_db_path, bundle_dir)
+
+
 def reindex(
     bundle_dir: Path,
     db: VectorStore,
     embedder: Embedder,
     *,
     force: bool = False,
+    fts_db_path: Path | None = None,
 ) -> ReindexReport:
     """Walk `bundle_dir`, embed changed/new/forced docs through `embedder`,
     upsert into `db`, then prune any `db` row whose source file vanished.
+    ALSO rebuilds the on-disk FTS index at `fts_db_path` when given, gated
+    by the SAME bundle-manifest-hash cache key (reindex-command: Reindex
+    Becomes Sole Writer Of FTS And Graph Derived Indexes).
 
     Two passes over the walk's results: the first classifies every
     discovered doc (skip on read/parse failure, cache-hit on a matching
@@ -77,6 +108,11 @@ def reindex(
     this run's walk hit a directory-scan error (`okf._walk_errors`), in
     which case the entire prune pass is skipped instead (an unreadable
     subtree can make a still-existing document look absent from the walk).
+
+    `fts_db_path` defaults to `None`: omitting it leaves the FTS side a pure
+    no-op, preserving every pre-Slice-5 caller's behavior unchanged. When
+    given, `_reindex_fts` decides independently whether to rebuild -- it
+    never affects the vector-store passes above, and vice versa.
     """
     cached_hashes = db.meta_hashes()
     seen: set[str] = set()
@@ -127,6 +163,9 @@ def reindex(
             if concept_id not in seen:
                 db.prune(concept_id)
                 pruned += 1
+
+    if fts_db_path is not None:
+        _reindex_fts(bundle_dir, fts_db_path, force=force)
 
     return ReindexReport(
         embedded=embedded, cache_hits=cache_hits, pruned=pruned, skipped=skipped
