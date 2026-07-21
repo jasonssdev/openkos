@@ -25,6 +25,7 @@ import pytest
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.model import okf
+from openkos.state import derived
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -843,3 +844,381 @@ def test_build_graph_writes_nothing_to_the_bundle_bytes_and_mtime_unchanged() ->
     }
 
     assert after == before
+
+
+# --- Phase 2 (Slice 5, PR2): on-disk persistence ----------------------------
+
+
+def test_write_graph_store_persists_the_same_nodes_and_edges_build_graph_produces(
+    tmp_path: Path,
+) -> None:
+    """`write_graph_store` writes an on-disk projection containing the SAME
+    nodes/edges `build_graph` would produce in memory over the same bundle
+    (graph-projection: Reindex persists the graph index to disk; one node
+    per concept)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="See [Epicureanism](/concepts/epicureanism.md).",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+    db_path = tmp_path / ".openkos" / "graph.db"
+
+    sqlite_graph.write_graph_store(db_path, bundle_dir)
+
+    with sqlite_graph.build_graph(bundle_dir) as expected_store:
+        expected_nodes = expected_store.nodes()
+        expected_edges = expected_store.edges()
+
+    conn = sqlite3.connect(str(db_path))
+    on_disk_nodes = [
+        row[0]
+        for row in conn.execute("SELECT concept_id FROM nodes ORDER BY concept_id")
+    ]
+    on_disk_edges = [
+        Edge(source_id=row[0], target_id=row[1], relation_type=row[2])
+        for row in conn.execute(
+            "SELECT source_id, target_id, relation_type FROM edges "
+            "ORDER BY source_id, target_id, relation_type"
+        )
+    ]
+    conn.close()
+
+    assert on_disk_nodes == expected_nodes
+    assert on_disk_edges == expected_edges
+    assert on_disk_nodes == ["concepts/epicureanism", "concepts/stoicism"]
+
+
+def test_write_graph_store_creates_no_footprint_before_first_call(
+    tmp_path: Path,
+) -> None:
+    """No `.openkos/graph.db` exists before `write_graph_store` runs
+    (derived-index-cache: No derived index before first reindex)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "graph.db"
+
+    assert not db_path.exists()
+
+    sqlite_graph.write_graph_store(db_path, bundle_dir)
+
+    assert db_path.exists()
+
+
+def test_write_graph_store_stores_a_caller_supplied_manifest_hash_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller-supplied `manifest_hash` is stored as-is, never recomputed --
+    mirrors `state/fts.py::write_fts_index`'s carried-over correction
+    (Finding C): `state/reindex.py`'s decision digest and the persisted
+    value must be the SAME bundle snapshot."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "graph.db"
+
+    def _fail_if_called(bundle_dir_arg: Path) -> str:
+        raise AssertionError(
+            "bundle_manifest_hash must not be recomputed when manifest_hash is supplied"
+        )
+
+    monkeypatch.setattr(derived, "bundle_manifest_hash", _fail_if_called)
+
+    sqlite_graph.write_graph_store(db_path, bundle_dir, manifest_hash="caller-digest")
+
+    conn = sqlite3.connect(str(db_path))
+    stored = derived.read_manifest_hash(conn)
+    conn.close()
+    assert stored == "caller-digest"
+
+
+def test_write_graph_store_leaves_prior_projection_intact_on_mid_rebuild_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure mid-rebuild rolls back completely -- the PRIOR nodes/edges
+    and PRIOR `meta.manifest_hash` survive untouched, mirroring
+    `state/fts.py::write_fts_index`'s atomicity correction (Finding B):
+    the DROP + rebuild + manifest write all happen inside one explicit
+    transaction."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="version one"
+    )
+    db_path = tmp_path / ".openkos" / "graph.db"
+
+    sqlite_graph.write_graph_store(db_path, bundle_dir, manifest_hash="digest-one")
+    conn = sqlite3.connect(str(db_path))
+    prior_nodes = conn.execute("SELECT concept_id FROM nodes").fetchall()
+    prior_manifest = derived.read_manifest_hash(conn)
+    conn.close()
+    assert prior_nodes == [("concepts/stoicism",)]
+    assert prior_manifest == "digest-one"
+
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="version two"
+    )
+    original_populate = sqlite_graph._populate_graph_tables
+
+    def _crashing_populate(conn: sqlite3.Connection, bundle_dir_arg: Path) -> list[str]:
+        original_populate(conn, bundle_dir_arg)
+        raise RuntimeError("simulated crash mid-rebuild")
+
+    monkeypatch.setattr(sqlite_graph, "_populate_graph_tables", _crashing_populate)
+
+    with pytest.raises(RuntimeError, match="simulated crash mid-rebuild"):
+        sqlite_graph.write_graph_store(db_path, bundle_dir, manifest_hash="digest-two")
+
+    conn = sqlite3.connect(str(db_path))
+    nodes_after = conn.execute("SELECT concept_id FROM nodes").fetchall()
+    manifest_after = derived.read_manifest_hash(conn)
+    conn.close()
+
+    assert nodes_after == prior_nodes
+    assert manifest_after == prior_manifest
+
+
+def test_build_graph_direct_call_still_creates_no_disk_footprint_after_persistence_added(
+    tmp_path: Path,
+) -> None:
+    """A direct `build_graph(bundle_dir)` call remains entirely in-memory
+    even though the on-disk writer path now exists (graph-projection:
+    Projection never touches disk, regression)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    before = set(tmp_path.rglob("*"))
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        store.nodes()
+
+    after = set(tmp_path.rglob("*"))
+    assert after == before
+    assert not (bundle_dir / ".openkos").exists()
+
+
+def test_open_graph_store_readonly_returns_none_when_absent(tmp_path: Path) -> None:
+    """`open_graph_store_readonly` returns `None` for a non-existent path,
+    never creating one (graph-projection: Persisted index read-only for
+    non-reindex consumers)."""
+    db_path = tmp_path / ".openkos" / "graph.db"
+
+    assert sqlite_graph.open_graph_store_readonly(db_path) is None
+    assert not db_path.exists()
+    assert not db_path.parent.exists()
+
+
+def test_open_graph_store_readonly_reads_persisted_data_without_writing(
+    tmp_path: Path,
+) -> None:
+    """A read-only open reads the persisted nodes/edges correctly, and
+    performs zero writes to the on-disk file (graph-projection: Persisted
+    index read-only for non-reindex consumers)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="See [Epicureanism](/concepts/epicureanism.md).",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+    db_path = tmp_path / ".openkos" / "graph.db"
+    sqlite_graph.write_graph_store(db_path, bundle_dir)
+    bytes_before = db_path.read_bytes()
+
+    store = sqlite_graph.open_graph_store_readonly(db_path)
+    assert store is not None
+    nodes = store.nodes()
+    edges = store.edges()
+    store.close()
+
+    assert nodes == ["concepts/epicureanism", "concepts/stoicism"]
+    assert edges == [
+        Edge(
+            source_id="concepts/stoicism",
+            target_id="concepts/epicureanism",
+            relation_type=None,
+        )
+    ]
+    assert db_path.read_bytes() == bytes_before
+
+
+def test_open_graph_store_readonly_never_writes_even_on_write_attempt(
+    tmp_path: Path,
+) -> None:
+    """A read-only handle's underlying connection refuses a write attempt --
+    proves the open is genuinely read-only, not merely conventionally
+    unused."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "graph.db"
+    sqlite_graph.write_graph_store(db_path, bundle_dir)
+
+    store = sqlite_graph.open_graph_store_readonly(db_path)
+    assert store is not None
+    with pytest.raises(sqlite3.OperationalError):
+        store._conn.execute("INSERT INTO nodes (concept_id) VALUES ('x')")
+    store.close()
+
+
+# --- reindex_graph (mirrors state/reindex.py's `_reindex_fts` gate) ---------
+
+
+def _graph_canary_node_exists(graph_db_path: Path) -> bool:
+    """Probe whether a hand-inserted sentinel node survives a
+    `reindex_graph` call -- mirrors `test_reindex.py`'s FTS canary helper."""
+    conn = sqlite3.connect(str(graph_db_path))
+    try:
+        row = conn.execute(
+            "SELECT concept_id FROM nodes WHERE concept_id = 'zz-canary'"
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def _insert_graph_canary_node(graph_db_path: Path) -> None:
+    conn = sqlite3.connect(str(graph_db_path))
+    try:
+        conn.execute("INSERT INTO nodes (concept_id) VALUES ('zz-canary')")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_reindex_graph_first_run_persists_store_matching_build_graph(
+    tmp_path: Path,
+) -> None:
+    """A first `reindex_graph()` call writes an on-disk graph projection
+    matching an equivalent `build_graph` call (graph-projection: Reindex
+    persists the graph index to disk)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    graph_db_path = tmp_path / ".openkos" / "graph.db"
+    assert not graph_db_path.exists()
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+
+    assert graph_db_path.exists()
+    with sqlite_graph.build_graph(bundle_dir) as expected_store:
+        expected = set(expected_store.nodes())
+    conn = sqlite3.connect(str(graph_db_path))
+    on_disk = {row[0] for row in conn.execute("SELECT concept_id FROM nodes")}
+    conn.close()
+
+    assert on_disk == expected
+    assert on_disk == {"concepts/stoicism"}
+
+
+def test_reindex_graph_unchanged_bundle_skips_rebuild(tmp_path: Path) -> None:
+    """A second `reindex_graph()` run over an UNCHANGED bundle does not
+    rebuild the tables at all (derived-index-cache: Unchanged bundle reuses
+    the cached index)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    graph_db_path = tmp_path / ".openkos" / "graph.db"
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+    _insert_graph_canary_node(graph_db_path)
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+
+    assert _graph_canary_node_exists(graph_db_path)
+
+
+def test_reindex_graph_any_document_change_rebuilds_whole_index(
+    tmp_path: Path,
+) -> None:
+    """Editing a single document invalidates the manifest, triggering a
+    FULL rebuild on the next `reindex_graph()` run (derived-index-cache: Any
+    document change invalidates the cache; Single-document edit triggers a
+    full rebuild)."""
+    bundle_dir = tmp_path / "bundle"
+    doc_path = bundle_dir / "concepts" / "stoicism.md"
+    _write_doc(doc_path, title="Stoicism", body="version one")
+    graph_db_path = tmp_path / ".openkos" / "graph.db"
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+    _insert_graph_canary_node(graph_db_path)
+
+    _write_doc(doc_path, title="Stoicism", body="version two")
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+
+    assert not _graph_canary_node_exists(graph_db_path)
+    conn = sqlite3.connect(str(graph_db_path))
+    rows = conn.execute("SELECT concept_id FROM nodes").fetchall()
+    conn.close()
+    assert {row[0] for row in rows} == {"concepts/stoicism"}
+
+
+def test_reindex_graph_force_rebuilds_even_when_manifest_unchanged(
+    tmp_path: Path,
+) -> None:
+    """`force=True` rebuilds even when the manifest hash is unchanged."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    graph_db_path = tmp_path / ".openkos" / "graph.db"
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+    _insert_graph_canary_node(graph_db_path)
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path, force=True)
+
+    assert not _graph_canary_node_exists(graph_db_path)
+
+
+def test_reindex_graph_meta_manifest_matches_derived_bundle_manifest_hash(
+    tmp_path: Path,
+) -> None:
+    """The persisted `meta.manifest_hash` equals
+    `derived.bundle_manifest_hash(bundle_dir)` computed independently."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    graph_db_path = tmp_path / ".openkos" / "graph.db"
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+
+    conn = sqlite3.connect(str(graph_db_path))
+    stored = derived.read_manifest_hash(conn)
+    conn.close()
+
+    assert stored == derived.bundle_manifest_hash(bundle_dir)
+
+
+def test_reindex_graph_edited_doc_stays_invisible_to_readonly_open_until_next_run(
+    tmp_path: Path,
+) -> None:
+    """An edited doc's graph node/edge changes stay invisible to a
+    read-only `open_graph_store_readonly` handle until the NEXT
+    `reindex_graph` run -- no auto-refresh, no query-side recompute
+    (derived-index-cache: Edited doc stays invisible to query until the
+    next reindex)."""
+    bundle_dir = tmp_path / "bundle"
+    doc_path = bundle_dir / "concepts" / "stoicism.md"
+    _write_doc(doc_path, title="Stoicism", body="version one")
+    graph_db_path = tmp_path / ".openkos" / "graph.db"
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+
+    _write_doc(bundle_dir / "concepts" / "new-target.md", title="New Target")
+    _write_doc(
+        doc_path, title="Stoicism", body="See [New Target](/concepts/new-target.md)."
+    )
+
+    store_before = sqlite_graph.open_graph_store_readonly(graph_db_path)
+    assert store_before is not None
+    edges_before = store_before.edges()
+    store_before.close()
+
+    sqlite_graph.reindex_graph(bundle_dir, graph_db_path)
+
+    store_after = sqlite_graph.open_graph_store_readonly(graph_db_path)
+    assert store_after is not None
+    edges_after = store_after.edges()
+    store_after.close()
+
+    assert edges_before == []
+    assert edges_after == [
+        Edge(
+            source_id="concepts/stoicism",
+            target_id="concepts/new-target",
+            relation_type=None,
+        )
+    ]
