@@ -120,7 +120,8 @@ class _FakeEmbedder:
 
 
 class _FakeVectorStore:
-    """A structural `VectorStore`: implements all 5 Protocol methods.
+    """A structural `VectorStore`: implements all 8 Protocol methods
+    (Slice 5, follow-up #4 added `upsert_many`/`prune_many`/`commit`).
     `query` returns fixed `hits`, or raises `raises` if set (never both)."""
 
     def __init__(
@@ -135,6 +136,9 @@ class _FakeVectorStore:
     ) -> None:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
+    def upsert_many(self, items: Sequence[tuple[str, Sequence[float], str]]) -> None:
+        raise NotImplementedError  # pragma: no cover -- unused by answer()
+
     def query(self, embedding: Sequence[float], k: int) -> list[VecHit]:
         self.calls.append((list(embedding), k))
         if self._raises is not None:
@@ -145,6 +149,12 @@ class _FakeVectorStore:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
     def prune(self, concept_id: str) -> None:
+        raise NotImplementedError  # pragma: no cover -- unused by answer()
+
+    def prune_many(self, concept_ids: Sequence[str]) -> None:
+        raise NotImplementedError  # pragma: no cover -- unused by answer()
+
+    def commit(self) -> None:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
     def close(self) -> None:

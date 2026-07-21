@@ -76,6 +76,11 @@ _QUERY_VECTORS_SQL = (
 
 _SELECT_META_HASHES_SQL = "SELECT concept_id, content_hash FROM vector_meta"
 
+_BUSY_TIMEOUT_MS = 5000
+"""Busy-timeout (milliseconds) set on the `vectors.db` connection, matching
+`state/derived.py`'s `_BUSY_TIMEOUT_MS` for `fts.db`/`graph.db` -- keeps all
+three on-disk derived stores consistent (Slice 5, follow-up #4)."""
+
 
 class VecUnavailable(RuntimeError):
     """Raised when the `sqlite-vec` extension cannot be loaded into SQLite
@@ -99,18 +104,28 @@ class VectorStore(Protocol):
     `LLMBackend`, `llm/base.py`).
 
     Extended additively in Slice 2b: `upsert`/`query`/`meta_hashes`/`prune`
-    joined the Slice 2a lifecycle-only (`close()`) contract. This grows the
-    Protocol's SHAPE -- any concrete implementer (`VectorStoreDB`, or a test
-    fake assigned to this type) must now provide every method here; a fake
-    declaring only `close()` no longer satisfies it, since Python's
-    structural Protocol typing requires ALL declared members, with no
-    partial/optional subset."""
+    joined the Slice 2a lifecycle-only (`close()`) contract. Extended
+    additively AGAIN in Slice 5, follow-up #4: `upsert_many`/`prune_many`/
+    `commit` joined so `state/reindex.py` can batch an entire run's writes
+    into ONE commit instead of one per document, without changing `upsert`/
+    `prune`'s own existing per-call-commits contract for any other caller.
+    Each Protocol growth grows the SHAPE -- any concrete implementer
+    (`VectorStoreDB`, or a test fake assigned to this type) must now provide
+    every method here; a fake missing one no longer satisfies it, since
+    Python's structural Protocol typing requires ALL declared members, with
+    no partial/optional subset."""
 
     def upsert(
         self, concept_id: str, embedding: Sequence[float], content_hash: str
     ) -> None:
         """Replace `concept_id`'s stored vector and hash with `embedding`/
-        `content_hash`."""
+        `content_hash`, committing once for this call."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def upsert_many(self, items: Sequence[tuple[str, Sequence[float], str]]) -> None:
+        """Replace MANY `(concept_id, embedding, content_hash)` rows in one
+        call, WITHOUT committing -- the caller commits once via `commit()`
+        (Slice 5, follow-up #4: single commit per store per run)."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
     def query(self, embedding: Sequence[float], k: int) -> list[VecHit]:
@@ -123,7 +138,19 @@ class VectorStore(Protocol):
         ...  # pragma: no cover -- Protocol stub body, never executed
 
     def prune(self, concept_id: str) -> None:
-        """Remove `concept_id`'s stored vector and hash, if present."""
+        """Remove `concept_id`'s stored vector and hash, if present,
+        committing once for this call."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def prune_many(self, concept_ids: Sequence[str]) -> None:
+        """Remove MANY `concept_id`s' stored vectors/hashes in one call,
+        WITHOUT committing -- the caller commits once via `commit()` (Slice
+        5, follow-up #4: single commit per store per run)."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def commit(self) -> None:
+        """Commit the current transaction (Slice 5, follow-up #4) -- pairs
+        with `upsert_many`/`prune_many`, which never commit on their own."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
     def close(self) -> None:
@@ -243,6 +270,8 @@ def open_vector_store(
         parent.mkdir(parents=True, exist_ok=True)
         conn = connect(str(path))
         _load_vec_extension(conn)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
         conn.execute(_CREATE_VECTORS_TABLE_SQL)
         conn.execute(_CREATE_VECTOR_META_TABLE_SQL)
         conn.commit()
@@ -286,6 +315,19 @@ class VectorStoreDB:
         self._conn.execute(_UPSERT_VECTOR_META_SQL, (concept_id, content_hash))
         self._conn.commit()
 
+    def upsert_many(self, items: Sequence[tuple[str, Sequence[float], str]]) -> None:
+        """Replace MANY `(concept_id, embedding, content_hash)` rows in one
+        call (spec: Slice 5, follow-up #4 -- single commit per store per
+        run), reusing `upsert`'s own per-item DELETE-then-INSERT sequence
+        for each item -- WITHOUT committing here; the caller commits once
+        via `commit()`, typically after also calling `prune_many` for the
+        same run."""
+        for concept_id, embedding, content_hash in items:
+            blob = sqlite_vec.serialize_float32(list(embedding))
+            self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
+            self._conn.execute(_INSERT_VECTOR_SQL, (blob, concept_id, content_hash))
+            self._conn.execute(_UPSERT_VECTOR_META_SQL, (concept_id, content_hash))
+
     def query(self, embedding: Sequence[float], k: int) -> list[VecHit]:
         """Return up to `k` `VecHit`s nearest to `embedding`, ascending
         distance (spec: k-NN Query Data Flow).
@@ -311,6 +353,22 @@ class VectorStoreDB:
         error."""
         self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
         self._conn.execute(_DELETE_VECTOR_META_BY_CONCEPT_ID_SQL, (concept_id,))
+        self._conn.commit()
+
+    def prune_many(self, concept_ids: Sequence[str]) -> None:
+        """Remove MANY `concept_id`s' rows from both `vectors` and
+        `vector_meta` in one call (spec: Slice 5, follow-up #4 -- single
+        commit per store per run), reusing `prune`'s own per-item DELETE
+        sequence for each id -- WITHOUT committing here; the caller commits
+        once via `commit()`."""
+        for concept_id in concept_ids:
+            self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
+            self._conn.execute(_DELETE_VECTOR_META_BY_CONCEPT_ID_SQL, (concept_id,))
+
+    def commit(self) -> None:
+        """Commit the current transaction (spec: Slice 5, follow-up #4) --
+        pairs with `upsert_many`/`prune_many`, which never commit on their
+        own, so a caller can batch an entire run's writes into ONE commit."""
         self._conn.commit()
 
     def close(self) -> None:
