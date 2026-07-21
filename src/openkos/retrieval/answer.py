@@ -1,17 +1,29 @@
-"""Cited answer library: retrieve -> fuse -> assemble -> answer over a
-compiled bundle.
+"""Cited answer library: retrieve -> fuse -> seed a graph stage -> fuse
+again -> assemble -> answer over a compiled bundle.
 
-`answer()` composes four archived seams end-to-end: `state.fts.build_index`
+`answer()` composes five archived seams end-to-end: `state.fts.build_index`
 (lexical retrieval), an injected `Embedder` + `VectorStore` (dense
-retrieval, optional), `retrieval.fusion.fuse` (rank-position fusion of both
-retrievers), a per-hit guarded `okf.load_frontmatter` re-read (assemble),
-and an injected `llm.LLMBackend` (answer). Core is synchronous; `llm`,
-`embedder`, and `vector_store` are all caller-supplied, so this module
-never imports `openkos.config` (mirrors `llm/ollama.py`'s leaf discipline).
-Typed exceptions (`FtsUnavailable`, the `OllamaError` family) propagate
-unswallowed to the caller, such as the `query` command; dense retrieval
-failures (`VecUnavailable`, a read-path `sqlite3.Error`) are the one
-exception -- they degrade to FTS-only fusion instead of propagating.
+retrieval, optional), `retrieval.fusion.fuse` (rank-position fusion,
+called TWICE -- once to derive graph seeds, once as the final fusion),
+`graph.sqlite_graph.build_graph` + `retrieval.graph_retrieve.graph_rank`
+(an in-process, seeded personalized-PageRank second retrieval stage,
+optional/degrading), a per-hit guarded `okf.load_frontmatter` re-read
+(assemble), and an injected `llm.LLMBackend` (answer). Core is synchronous;
+`llm`, `embedder`, and `vector_store` are all caller-supplied, so this
+module never imports `openkos.config` (mirrors `llm/ollama.py`'s leaf
+discipline). Typed exceptions (`FtsUnavailable`, the `OllamaError` family)
+propagate unswallowed to the caller, such as the `query` command; dense
+retrieval failures (`VecUnavailable`, a read-path `sqlite3.Error`) and
+graph retrieval failures (any `Exception` from `build_graph`/`graph_rank`)
+are the exceptions -- both degrade independently instead of propagating.
+
+Degrade matrix (graph column): healthy build+PPR -> `graph_degraded=False`;
+no seeds (both initial retrievers empty) -> build skipped entirely,
+`graph_degraded=True`; `build_graph`/`graph_rank` raising -> `[]`,
+`graph_degraded=True`; an edgeless graph (build succeeds, zero edges) ->
+`[]`, `graph_degraded=False` (the build itself succeeded). Graph never
+affects FTS/dense outcomes, and FTS stays mandatory -- a `FtsUnavailable`
+still propagates unchanged.
 """
 
 import sqlite3
@@ -19,9 +31,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from openkos.graph import sqlite_graph
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.model import okf
-from openkos.retrieval import fusion
+from openkos.retrieval import fusion, graph_retrieve
 from openkos.state import fts
 from openkos.state.vectorstore import VecHit, VectorStore, VecUnavailable
 
@@ -94,6 +107,15 @@ class AnswerResult:
     `vector_store`, `VecUnavailable`, or a read-path `sqlite3.Error`) and
     FTS-only fusion was used instead; `False` when dense retrieval ran
     normally (additive)."""
+    graph_hit_count: int = 0
+    """Raw personalized-PageRank pool size returned by `graph_rank` for
+    this call, BEFORE the final fusion's truncation to `limit` (additive)."""
+    graph_degraded: bool = False
+    """`True` when graph retrieval could not proceed this call (no seeds
+    from the initial fuse, or `build_graph`/`graph_rank` raised) and an
+    empty graph list was used instead; `False` when graph retrieval ran
+    normally, including the edgeless-graph case where the build itself
+    succeeded (additive)."""
 
 
 def _assemble_context(
@@ -173,6 +195,28 @@ def _dense_search(
         return [], True
 
 
+def _graph_search(
+    bundle_dir: Path, seeds: list[str], *, limit: int
+) -> tuple[list[fusion.GraphHit], bool]:
+    """Run the graph retrieval sub-phase: build an in-process node/edge
+    projection over `bundle_dir` and rank up to `limit` concepts related to
+    `seeds` via personalized PageRank.
+
+    Degrades to `([], True)` -- `graph_degraded=True`, an empty graph list
+    folded into the final fusion -- whenever `build_graph` or `graph_rank`
+    raises ANY `Exception` (broad, mirroring `sqlite_graph`'s own
+    degrade-not-crash posture): graph retrieval is purely additive and must
+    never break FTS/dense answering. Only ever called with a non-empty
+    `seeds` list -- the caller skips this entirely when the initial fuse
+    produced no seeds.
+    """
+    try:
+        with sqlite_graph.build_graph(bundle_dir) as store:
+            return graph_retrieve.graph_rank(store, seeds, limit=limit), False
+    except Exception:  # broad: any build/PPR failure degrades, never crashes (D-graph)
+        return [], True
+
+
 def answer(
     question: str,
     *,
@@ -184,13 +228,20 @@ def answer(
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
-    See module docstring for the retrieve/fuse/assemble/answer flow.
+    See module docstring for the retrieve/fuse/seed/graph/fuse/assemble/
+    answer flow.
 
     An empty/whitespace-only `question` short-circuits BEFORE any
-    retrieval -- `FtsIndex.search`, `embedder.embed`, and
-    `vector_store.query` are never called. Otherwise, both retrievers are
-    queried with `pool_limit = max(limit, 10)`, fused via
-    `retrieval.fusion.fuse`, and the fused list is truncated to `limit`
+    retrieval -- `FtsIndex.search`, `embedder.embed`, `vector_store.query`,
+    `build_graph`, and `graph_rank` are never called. Otherwise, both
+    retrievers are queried with `pool_limit = max(limit, 10)` and fused via
+    `retrieval.fusion.fuse` into an INITIAL fused list; the top
+    `min(limit, 5)` `concept_id`s of that initial list become the graph
+    stage's `seeds`. WHEN seeds exist, `_graph_search` builds a graph and
+    runs personalized PageRank for up to `max(limit, 10)` related concepts;
+    WHEN no seeds exist (both retrievers found nothing), the graph build is
+    skipped entirely and `graph_degraded=True`. A FINAL `fusion.fuse(hits,
+    vec_hits, graph_hits)` folds all three lists, truncated to `limit`,
     before context assembly.
     """
     if not question.split():
@@ -213,7 +264,16 @@ def answer(
         question, embedder=embedder, vector_store=vector_store, pool_limit=pool_limit
     )
 
-    fused_ids = fusion.fuse(hits, vec_hits)[:limit]
+    initial_fused = fusion.fuse(hits, vec_hits)
+    seeds = initial_fused[: min(limit, 5)]
+    if seeds:
+        graph_hits, graph_degraded = _graph_search(
+            bundle_dir, seeds, limit=max(limit, 10)
+        )
+    else:
+        graph_hits, graph_degraded = [], True
+
+    fused_ids = fusion.fuse(hits, vec_hits, graph_hits)[:limit]
     context_blocks, citations = _assemble_context(bundle_dir, fused_ids)
 
     if not context_blocks:
@@ -227,6 +287,8 @@ def answer(
             dense_hit_count=len(vec_hits),
             fused_count=len(fused_ids),
             dense_degraded=dense_degraded,
+            graph_hit_count=len(graph_hits),
+            graph_degraded=graph_degraded,
         )
 
     reply = llm.chat(_build_messages(context_blocks, question))
@@ -240,4 +302,6 @@ def answer(
         dense_hit_count=len(vec_hits),
         fused_count=len(fused_ids),
         dense_degraded=dense_degraded,
+        graph_hit_count=len(graph_hits),
+        graph_degraded=graph_degraded,
     )

@@ -2220,22 +2220,28 @@ def query(
 
     Read-only, like `status` and `lint`: no writes, no confirmation prompt,
     no `--auto`. Must be run inside an initialized workspace; outside one it
-    refuses (exit 1) with a short reason on stderr. Retrieval is hybrid:
-    lexical (FTS5) hits and dense (`vectors.db`) hits are fused via
-    reciprocal rank fusion. `query` never WRITES `vectors.db` -- an absent
-    or unusable store degrades cleanly to FTS-only, never creating one.
+    refuses (exit 1) with a short reason on stderr. Retrieval fuses THREE
+    lists: lexical (FTS5) hits, dense (`vectors.db`) hits, and a second-stage
+    seeded personalized-PageRank graph pool (built in-process from the
+    bundle -- no persisted state, no CLI-level graph command), all combined
+    via reciprocal rank fusion. `query` never WRITES `vectors.db` -- an
+    absent or unusable store degrades cleanly to FTS-only, never creating
+    one.
 
     Every completed run (successful answer or no-match) prints a one-line
     `retrieval:` summary to STDERR reporting the raw FTS hit count, the raw
-    dense hit count, the fused count, whether the LLM was invoked, and how
-    many sources were cited -- so a silent short-circuit (e.g. zero hits, so
-    the LLM never ran) is always visible, even though STDOUT stays
-    pipe-clean. When dense retrieval degraded (the store is absent, or
-    unavailable/corrupt), an additional stderr line hints at running
-    `openkos reindex` to enable semantic retrieval. When the build skipped
-    any unreadable/unparseable files, an `index:` skip-notice block follows
-    the summary on stderr, worded as a whole-bundle build diagnostic -- it
-    never implies the skipped files were candidates for THIS query's match.
+    dense hit count, the raw graph hit count, the fused count, whether the
+    LLM was invoked, and how many sources were cited -- so a silent
+    short-circuit (e.g. zero hits, so the LLM never ran) is always visible,
+    even though STDOUT stays pipe-clean. When dense retrieval degraded (the
+    store is absent, or unavailable/corrupt), an additional stderr line
+    hints at running `openkos reindex` to enable semantic retrieval. When
+    graph retrieval degraded (no seeds, or the in-process graph build/rank
+    step failed), a separate stderr note says so -- graph retrieval never
+    affects the FTS/dense outcome. When the build skipped any
+    unreadable/unparseable files, an `index:` skip-notice block follows the
+    summary on stderr, worded as a whole-bundle build diagnostic -- it never
+    implies the skipped files were candidates for THIS query's match.
 
     On a successful answer, STDOUT carries exactly the answer text, then
     (only when at least one concept was cited) a blank line, `Citations:`,
@@ -2312,14 +2318,20 @@ def query(
     llm_status = "invoked" if result.llm_invoked else "skipped"
     typer.echo(
         f"retrieval: {result.fts_hit_count} FTS + {result.dense_hit_count} "
-        f"dense → {result.fused_count} fused → LLM {llm_status} → "
-        f"{cited_count} cited",
+        f"dense + {result.graph_hit_count} graph → {result.fused_count} "
+        f"fused → LLM {llm_status} → {cited_count} cited",
         err=True,
     )
     if store_was_unavailable or result.dense_degraded:
         typer.echo(
             "hint: dense retrieval is unavailable this run -- run "
             "`openkos reindex` to enable semantic retrieval.",
+            err=True,
+        )
+    if result.graph_degraded:
+        typer.echo(
+            "note: graph retrieval degraded for this run -- falling back to "
+            "FTS+dense fusion only.",
             err=True,
         )
     if result.skip_notices:
