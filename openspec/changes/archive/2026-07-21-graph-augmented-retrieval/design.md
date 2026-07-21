@@ -1,7 +1,6 @@
 # Design: Graph-Augmented Retrieval (MVP-2 Slice 4)
 
 ## Technical Approach
-
 Approach A from the proposal. A new pure module `retrieval/graph_retrieve.py` owns
 Personalized PageRank (PPR) over a `GraphStore`, producing a `GraphHit` list.
 `answer()` runs a two-stage flow: `fuse(fts, vec)` -> derive seeds -> `build_graph` +
@@ -92,7 +91,7 @@ def fuse(fts_hits, vec_hits, graph_hits: list[GraphHit] | None = None) -> list[s
 # retrieval/graph_retrieve.py
 def graph_rank(store: GraphStore, seeds: Sequence[str], *, limit: int) -> list[GraphHit]:
     # to_digraph(store).to_undirected(); valid_seeds = seeds present in graph (dedup, sorted)
-    # if no valid seeds or 0 edges: return []
+    # if no valid_seeds or 0 edges: return []
     # nx.pagerank(view, alpha=0.85, personalization={s:1.0 for s in valid_seeds})
     # drop valid_seeds; sort (-score, concept_id); return top `limit` as GraphHit(rank order)
 
