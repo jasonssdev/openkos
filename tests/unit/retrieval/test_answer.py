@@ -16,9 +16,13 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
+from openkos.graph import sqlite_graph
+from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import EMBED_DIM, Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.retrieval import answer as answer_mod
+from openkos.retrieval import fusion, graph_retrieve
+from openkos.retrieval.fusion import GraphHit
 from openkos.state import fts
 from openkos.state.vectorstore import VecHit, VecUnavailable
 
@@ -116,6 +120,39 @@ class _FakeVectorStore:
 
     def close(self) -> None:
         pass
+
+
+class _FakeGraphStore:
+    """A minimal `GraphStore` fixture over an explicit node/edge list."""
+
+    def __init__(self, nodes: list[str], edges: list[Edge]) -> None:
+        self._nodes = nodes
+        self._edges = edges
+
+    def nodes(self) -> list[str]:
+        return self._nodes
+
+    def edges(self) -> list[Edge]:
+        return self._edges
+
+    def neighbors(self, concept_id: str) -> list[str]:
+        return [edge.target_id for edge in self._edges if edge.source_id == concept_id]
+
+
+class _FakeGraphStoreCM:
+    """A context-manager wrapper mirroring `SqliteGraphStore`'s contract:
+    `with build_graph(bundle) as store: ...` -- so a monkeypatched
+    `build_graph` can return a fake `GraphStore` through the same `with`
+    protocol `_graph_search` uses."""
+
+    def __init__(self, store: GraphStore) -> None:
+        self._store = store
+
+    def __enter__(self) -> GraphStore:
+        return self._store
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
 
 
 # --- Phase 1: scaffold -------------------------------------------------
@@ -846,6 +883,290 @@ def test_fts_unavailable_propagates_despite_dense_seams_injected(
             embedder=_FakeEmbedder(),
             vector_store=_FakeVectorStore(hits=[]),
         )
+
+
+# --- Phase 3 (graph slice): two-stage seeded graph retrieval --------------
+
+
+def test_graph_reachable_concept_absent_from_fts_and_dense_appears_via_graph(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A concept reachable via graph proximity to the seeds -- absent from
+    both FTS and dense hits -- appears in the final answer's citations via
+    its `graph_hits` rank (spec: Graph contributes a concept absent from
+    FTS and dense hits)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "graph-neighbor.md",
+        title="Graph Neighbor",
+        body="reachable only via the graph, not lexically or semantically",
+    )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/stoicism", score=0.0)]
+    )
+    monkeypatch.setattr(fts, "build_index", lambda _bundle_dir: recording_index)
+    fake_store = _FakeGraphStore(
+        nodes=["concepts/stoicism", "concepts/graph-neighbor"],
+        edges=[
+            Edge(source_id="concepts/stoicism", target_id="concepts/graph-neighbor")
+        ],
+    )
+    monkeypatch.setattr(
+        sqlite_graph, "build_graph", lambda _bundle_dir: _FakeGraphStoreCM(fake_store)
+    )
+    llm = _FakeLLM(reply="cites the graph neighbor too")
+
+    result = answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm)
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/graph-neighbor" in cited_ids
+
+
+def test_seeds_come_from_the_initial_fuse_not_a_raw_union(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The seed set passed as `graph_rank`'s `seeds` equals the top
+    `min(limit, 5)` `concept_id`s of the INITIAL `fuse(hits, vec_hits)`, not
+    a raw union of FTS-only and dense-only top hits (spec: Seeds come from
+    the initial fuse, not a raw union)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    fts_hits = [fts.FtsHit(concept_id=f"concepts/f{i}", score=0.0) for i in range(1, 7)]
+    recording_index = _RecordingIndex(hits=fts_hits)
+    monkeypatch.setattr(fts, "build_index", lambda _bundle_dir: recording_index)
+    vector_store = _FakeVectorStore(
+        hits=[VecHit(concept_id="concepts/d1", distance=0.0)]
+    )
+    embedder = _FakeEmbedder()
+    expected_seeds = fusion.fuse(
+        fts_hits, [VecHit(concept_id="concepts/d1", distance=0.0)]
+    )[:5]
+    recorded_seeds: list[list[str]] = []
+    original_rank = graph_retrieve.graph_rank
+
+    def _spy_graph_rank(
+        store: GraphStore, seeds: list[str], *, limit: int
+    ) -> list[GraphHit]:
+        recorded_seeds.append(list(seeds))
+        return original_rank(store, seeds, limit=limit)
+
+    monkeypatch.setattr(graph_retrieve, "graph_rank", _spy_graph_rank)
+    monkeypatch.setattr(
+        sqlite_graph,
+        "build_graph",
+        lambda _bundle_dir: _FakeGraphStoreCM(_FakeGraphStore(nodes=[], edges=[])),
+    )
+
+    answer_mod.answer(
+        "q",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(),
+        embedder=embedder,
+        vector_store=vector_store,
+    )
+
+    assert recorded_seeds == [expected_seeds]
+    assert expected_seeds != [hit.concept_id for hit in fts_hits[:5]]
+
+
+def test_graph_hit_count_equals_raw_pool_size_before_truncation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`graph_hit_count` equals the raw pool size returned by `graph_rank`
+    before final-fusion truncation (spec: Graph counts reflect retrieval)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "seed.md", title="Seed", body="dichotomyzz seed"
+    )
+    for i in range(6):
+        _write_doc(
+            bundle_dir / "concepts" / f"n{i}.md", title=f"N{i}", body=f"neighbor {i}"
+        )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/seed", score=0.0)]
+    )
+    monkeypatch.setattr(fts, "build_index", lambda _bundle_dir: recording_index)
+    fake_store = _FakeGraphStore(
+        nodes=["concepts/seed"] + [f"concepts/n{i}" for i in range(6)],
+        edges=[
+            Edge(source_id="concepts/seed", target_id=f"concepts/n{i}")
+            for i in range(6)
+        ],
+    )
+    monkeypatch.setattr(
+        sqlite_graph, "build_graph", lambda _bundle_dir: _FakeGraphStoreCM(fake_store)
+    )
+    llm = _FakeLLM(reply="counts reflect the pool")
+
+    result = answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm, limit=3)
+
+    assert result.graph_hit_count == 6
+
+
+def test_build_graph_raising_degrades_gracefully(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`build_graph` raising any `Exception` sets `graph_degraded=True`,
+    `graph_hit_count=0`, propagates no exception, and the FTS+dense answer
+    is still produced (spec: Graph build failure degrades cleanly)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    llm = _FakeLLM(reply="answered despite the graph failure")
+
+    def _raise_build_graph(_bundle_dir: Path) -> sqlite_graph.SqliteGraphStore:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(sqlite_graph, "build_graph", _raise_build_graph)
+
+    result = answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm)
+
+    assert result.graph_degraded is True
+    assert result.graph_hit_count == 0
+    assert result.llm_invoked is True
+    assert result.answer == "answered despite the graph failure"
+
+
+def test_edgeless_graph_is_not_a_degrade(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A graph projection that builds successfully but has zero edges
+    yields `graph_hits=[]` and `graph_degraded=False` -- the build itself
+    succeeded (spec: Edgeless bundle yields an empty graph list, not a
+    failure)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    fake_store = _FakeGraphStore(
+        nodes=["concepts/stoicism", "concepts/other"], edges=[]
+    )
+    monkeypatch.setattr(
+        sqlite_graph, "build_graph", lambda _bundle_dir: _FakeGraphStoreCM(fake_store)
+    )
+    llm = _FakeLLM(reply="fine without graph edges")
+
+    result = answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm)
+
+    assert result.graph_hit_count == 0
+    assert result.graph_degraded is False
+    assert result.llm_invoked is True
+
+
+def test_no_seeds_skips_graph_build_entirely(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An empty initial fuse (zero hits from both retrievers) means no
+    seeds exist -- `build_graph`/`graph_rank` are never called, and
+    `graph_degraded=True`, `graph_hit_count=0` (spec: no seeds skips the
+    build)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    recording_index = _RecordingIndex(hits=[])
+    monkeypatch.setattr(fts, "build_index", lambda _bundle_dir: recording_index)
+    build_calls: list[Path] = []
+
+    def _recording_build_graph(target_bundle_dir: Path) -> _FakeGraphStoreCM:
+        build_calls.append(target_bundle_dir)
+        return _FakeGraphStoreCM(_FakeGraphStore(nodes=[], edges=[]))
+
+    monkeypatch.setattr(sqlite_graph, "build_graph", _recording_build_graph)
+    rank_calls: list[tuple[object, ...]] = []
+
+    def _recording_graph_rank(
+        store: GraphStore, seeds: list[str], *, limit: int
+    ) -> list[GraphHit]:
+        rank_calls.append((store, seeds, limit))
+        return []
+
+    monkeypatch.setattr(graph_retrieve, "graph_rank", _recording_graph_rank)
+    llm = _FakeLLM()
+
+    result = answer_mod.answer("q", bundle_dir=bundle_dir, llm=llm)
+
+    assert build_calls == []
+    assert rank_calls == []
+    assert result.graph_degraded is True
+    assert result.graph_hit_count == 0
+
+
+def test_empty_question_never_calls_build_graph_or_graph_rank(
+    tmp_path: Path,
+) -> None:
+    """A whitespace-only question short-circuits BEFORE any retrieval --
+    `build_graph`/`graph_rank` are never called, alongside the existing
+    `embedder.embed`/`vector_store.query` short-circuit assertions (spec:
+    Empty Query Sets A Distinct No-Match Cause)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    embedder = _FakeEmbedder()
+    vector_store = _FakeVectorStore(hits=[])
+    llm = _FakeLLM()
+
+    result = answer_mod.answer(
+        "   ",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        embedder=embedder,
+        vector_store=vector_store,
+    )
+
+    assert embedder.calls == []
+    assert vector_store.calls == []
+    assert llm.calls == []
+    assert result.no_match_cause == "empty_query"
+    assert result.graph_degraded is False
+    assert result.graph_hit_count == 0
+
+
+def test_graph_retrieval_is_deterministic_across_repeated_calls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Same bundle and question, `answer()` called twice, produces
+    identical `graph_hits` ordering (spied via `graph_retrieve.graph_rank`)
+    and an identical final fused, limit-truncated `concept_id` list (spec:
+    Personalized PageRank Is Deterministic)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control [Related](/concepts/related.md)",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "related.md",
+        title="Related",
+        body="a related concept reachable via the graph",
+    )
+    recorded_ranks: list[list[GraphHit]] = []
+    original_rank = graph_retrieve.graph_rank
+
+    def _recording_rank(
+        store: GraphStore, seeds: list[str], *, limit: int
+    ) -> list[GraphHit]:
+        result = original_rank(store, seeds, limit=limit)
+        recorded_ranks.append(result)
+        return result
+
+    monkeypatch.setattr(graph_retrieve, "graph_rank", _recording_rank)
+
+    first = answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=_FakeLLM())
+    second = answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=_FakeLLM())
+
+    assert len(recorded_ranks) == 2
+    assert recorded_ranks[0] == recorded_ranks[1]
+    assert [c.concept_id for c in first.citations] == [
+        c.concept_id for c in second.citations
+    ]
 
 
 # --- Phase 6/7: title fallback -------------------------------------------

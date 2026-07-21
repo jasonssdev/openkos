@@ -101,7 +101,7 @@ def test_query_matching_answer_renders_citations_in_fused_rank_order(
         "  → concepts/epictetus (Epictetus)\n"
     )
     assert result.stderr == (
-        "retrieval: 3 FTS + 2 dense → 2 fused → LLM invoked → 2 cited\n"
+        "retrieval: 3 FTS + 2 dense + 0 graph → 2 fused → LLM invoked → 2 cited\n"
     )
 
 
@@ -132,7 +132,7 @@ def test_query_zero_hits_renders_zero_hits_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 0 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 0 FTS + 0 dense + 0 graph → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -163,7 +163,7 @@ def test_query_all_unreadable_renders_corruption_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 2 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 2 FTS + 0 dense + 0 graph → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -192,7 +192,7 @@ def test_query_empty_question_renders_prompt_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 0 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 0 FTS + 0 dense + 0 graph → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -227,7 +227,7 @@ def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
         "  → concepts/stoicism (Stoicism)\n"
     )
     assert result.stderr == (
-        "retrieval: 1 FTS + 0 dense → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense + 0 graph → 1 fused → LLM invoked → 1 cited\n"
         "index: 1 doc skipped while building the search index (whole-bundle, "
         "not this query's hits):\n"
         "  concepts/corrupt.md: skipped (unreadable)\n"
@@ -257,7 +257,7 @@ def test_query_no_skip_notices_omits_skip_block(
 
     assert result.exit_code == 0
     assert result.stderr == (
-        "retrieval: 1 FTS + 0 dense → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense + 0 graph → 1 fused → LLM invoked → 1 cited\n"
     )
 
 
@@ -542,6 +542,103 @@ def test_query_no_hint_when_dense_healthy_and_store_present(
 
     assert result.exit_code == 0
     assert "reindex" not in result.stderr
+
+
+def test_query_retrieval_summary_includes_graph_hit_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `retrieval:` stderr summary reports `graph_hit_count` alongside
+    the existing FTS/dense/fused counts (spec: Stderr Retrieval Summary On
+    Every Run)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=3,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=2,
+        fused_count=2,
+        dense_degraded=False,
+        graph_hit_count=4,
+        graph_degraded=False,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert result.stderr == (
+        "retrieval: 3 FTS + 2 dense + 4 graph → 2 fused → LLM invoked → 1 cited\n"
+    )
+    assert result.stdout == (
+        "Stoicism teaches the dichotomy of control.\n"
+        "\n"
+        "Citations:\n"
+        "  → concepts/stoicism (Stoicism)\n"
+    )
+
+
+def test_query_graph_degraded_adds_a_stderr_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`graph_degraded=True` prints an additional stderr note, mirroring
+    the existing dense-degrade hint shape; stdout is unaffected (spec:
+    Graph degrade is noted alongside the summary)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=0,
+        fused_count=1,
+        dense_degraded=False,
+        graph_hit_count=0,
+        graph_degraded=True,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "graph retrieval degraded" in result.stderr
+    assert result.stdout == (
+        "Stoicism teaches the dichotomy of control.\n"
+        "\n"
+        "Citations:\n"
+        "  → concepts/stoicism (Stoicism)\n"
+    )
+
+
+def test_query_no_graph_degrade_note_when_graph_healthy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A healthy graph run (`graph_degraded=False`) prints no graph-degrade
+    note at all."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=1,
+        fused_count=1,
+        dense_degraded=False,
+        graph_hit_count=2,
+        graph_degraded=False,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "graph retrieval degraded" not in result.stderr
 
 
 def test_query_builds_ollama_client_from_configured_model(
