@@ -19,7 +19,13 @@ holds that the walk did NOT see on disk this run is `prune`d from both
 tables -- this is reserved for docs genuinely gone from the bundle; a doc
 that exists on disk but failed to read/parse/decode is counted as `skipped`,
 never pruned, mirroring `fts.build_index`'s degrade-not-crash posture for a
-transient per-doc failure.
+transient per-doc failure. WHEN `okf._walk_errors(bundle_dir)` reports one or
+more directory-scan errors for this run (e.g. a permission-denied
+subdirectory `_iter_docs`'s `rglob` walk silently could not descend into),
+the ENTIRE prune pass is skipped for that run -- an unreadable subtree can
+make a still-existing document look absent from the walk, and pruning on
+that false signal would silently destroy a valid vector; the embed and
+cache-hit passes still run normally regardless of walk errors.
 """
 
 from dataclasses import dataclass
@@ -67,7 +73,10 @@ def reindex(
     is embedded in ONE `embedder.embed([...])` call, then each result is
     `upsert`ed in the same order. The second pass prunes any `concept_id`
     `db.meta_hashes()` already held that `seen` does NOT contain -- a doc
-    genuinely removed from the bundle since the last `reindex` run.
+    genuinely removed from the bundle since the last `reindex` run -- UNLESS
+    this run's walk hit a directory-scan error (`okf._walk_errors`), in
+    which case the entire prune pass is skipped instead (an unreadable
+    subtree can make a still-existing document look absent from the walk).
     """
     cached_hashes = db.meta_hashes()
     seen: set[str] = set()
@@ -113,10 +122,11 @@ def reindex(
             embedded += 1
 
     pruned = 0
-    for concept_id in cached_hashes:
-        if concept_id not in seen:
-            db.prune(concept_id)
-            pruned += 1
+    if not okf._walk_errors(bundle_dir):
+        for concept_id in cached_hashes:
+            if concept_id not in seen:
+                db.prune(concept_id)
+                pruned += 1
 
     return ReindexReport(
         embedded=embedded, cache_hits=cache_hits, pruned=pruned, skipped=skipped

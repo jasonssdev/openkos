@@ -9,8 +9,12 @@ never triggers an `embed()` call. Every test here is hermetic: a fake
 against a `tmp_path` database (no Ollama, no CLI).
 """
 
+import os
+import stat
 from collections.abc import Sequence
 from pathlib import Path
+
+import pytest
 
 from openkos.llm.base import EMBED_DIM
 from openkos.state import reindex, vectorstore
@@ -278,6 +282,67 @@ def test_reindex_skips_unreadable_doc_and_reports_it(tmp_path: Path) -> None:
     assert set(hashes) == {"concepts/readable"}
     assert report.skipped == 1
     assert report.embedded == 1
+
+
+# --- Phase 4: walk-error prune guard ----------------------------------------
+
+
+def test_walk_error_suppresses_pruning_for_the_whole_run(tmp_path: Path) -> None:
+    """A directory-scan error during this run's bundle walk (e.g. a
+    permission-denied subdirectory) skips the ENTIRE prune pass -- a
+    concept whose file lives under that unreadable subtree must NOT be
+    pruned, even though the walk didn't see it this run; the embed and
+    cache-hit passes still complete normally for every doc the walk DID
+    reach (spec: Walk error suppresses pruning for the whole run)."""
+    if os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0):
+        pytest.skip("permission-based read failures require a POSIX non-root user")
+    bundle_dir = tmp_path / "bundle"
+    locked_dir = bundle_dir / "locked"
+    _write_doc(locked_dir / "hidden.md", title="Hidden")
+    _write_doc(bundle_dir / "concepts" / "reachable.md", title="Reachable")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        assert "locked/hidden" in db.meta_hashes()
+        assert "concepts/reachable" in db.meta_hashes()
+
+        original_mode = stat.S_IMODE(locked_dir.stat().st_mode)
+        locked_dir.chmod(0o000)
+        try:
+            embedder = _FakeEmbedder()
+            report = reindex.reindex(bundle_dir, db, embedder)
+            hashes = db.meta_hashes()
+        finally:
+            locked_dir.chmod(original_mode)
+
+    assert "locked/hidden" in hashes
+    assert report.pruned == 0
+    # The reachable doc's cache-hit pass still ran normally despite the walk
+    # error suppressing pruning -- only the prune pass is affected.
+    assert "concepts/reachable" in hashes
+    assert report.cache_hits == 1
+
+
+def test_no_walk_errors_preserves_normal_pruning_behavior(tmp_path: Path) -> None:
+    """A bundle whose walk completes with zero directory-scan errors prunes
+    exactly as before this change (spec: No walk errors preserves normal
+    pruning behavior)."""
+    bundle_dir = tmp_path / "bundle"
+    doc_path = bundle_dir / "concepts" / "gone.md"
+    _write_doc(doc_path, title="Gone")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        assert "concepts/gone" in db.meta_hashes()
+
+        doc_path.unlink()
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        hashes = db.meta_hashes()
+
+    assert "concepts/gone" not in hashes
+    assert report.pruned == 1
 
 
 def test_reindex_skipped_doc_still_present_on_disk_is_not_pruned(
