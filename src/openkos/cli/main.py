@@ -1,6 +1,7 @@
 """Typer application object exposed as the `openkos` console script."""
 
 import re
+import shutil
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,6 +39,16 @@ from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state.fts import FtsUnavailable
 
 app = typer.Typer()
+
+# doctor and init's Ollama preflight are both fast interactive diagnostics:
+# use a short timeout so a hung/firewalled host fails quickly instead of
+# blocking on OllamaClient's DEFAULT_TIMEOUT.
+_PREFLIGHT_TIMEOUT = 5.0
+
+# Shared remediation clause appended to the OllamaUnavailable handlers of
+# query, adjudicate, and suggest-relations -- kept as a single constant so
+# the three verbs cannot drift from each other in wording.
+_DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
 
 
 @app.callback()
@@ -139,6 +150,27 @@ def init(
         f"{layout.config_path.name})."
     )
     typer.echo("Next: run `openkos ingest <path>` to import your first source.")
+
+    # Non-fatal Ollama preflight (D2): purely observational, runs strictly
+    # after the workspace already exists. `except Exception` (not
+    # `BaseException`) deliberately catches OllamaUnavailable/
+    # OllamaModelNotFound/OllamaError AND any unexpected probe error while
+    # still letting Ctrl-C/SystemExit propagate; nothing here ever raises
+    # `typer.Exit` or pulls a model/spawns a server -- init's exit code
+    # stays 0 on every outcome, and the file-writer guarantee above is
+    # unaffected either way.
+    try:
+        probe = OllamaClient(model=resolved_model, timeout=_PREFLIGHT_TIMEOUT)
+        ready = model_tag_matches(resolved_model, probe.list_models())
+    except Exception:
+        ready = False
+    if not ready:
+        typer.echo(
+            "openkos init: note -- Ollama isn't ready for model "
+            f"'{resolved_model}' yet. Run `openkos doctor` to diagnose "
+            "(ingest and query need it; the workspace was still created).",
+            err=True,
+        )
 
 
 def _plural(n: int) -> str:
@@ -1965,7 +1997,7 @@ def adjudicate(
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos adjudicate: failed -- {exc}. Start it with `ollama serve`, "
-            "then try again.",
+            f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
@@ -2072,7 +2104,7 @@ def suggest_relations_cmd() -> None:
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos suggest-relations: failed -- {exc}. Start it with "
-            "`ollama serve`, then try again.",
+            f"`ollama serve`, then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
@@ -2202,7 +2234,7 @@ def query(
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
-            "then try again.",
+            f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
@@ -2346,9 +2378,7 @@ def doctor() -> None:
     # 3. Ollama-reachable (critical, always)
     reachable = False
     installed: list[str] = []
-    # doctor is a fast interactive diagnostic: use a short preflight timeout so a
-    # hung/firewalled host fails quickly instead of blocking on DEFAULT_TIMEOUT.
-    client = OllamaClient(model=model, timeout=5.0)
+    client = OllamaClient(model=model, timeout=_PREFLIGHT_TIMEOUT)
     try:
         installed = client.list_models()
         reachable = True
@@ -2361,12 +2391,20 @@ def doctor() -> None:
             )
         )
     except OllamaUnavailable as exc:
+        if shutil.which("ollama") is None:
+            remediation = (
+                "no `ollama` binary found on PATH -- install from "
+                "https://ollama.com, or if Ollama is already installed "
+                "(e.g. the macOS app) start it with `ollama serve`"
+            )
+        else:
+            remediation = "ollama serve"
         results.append(
             CheckResult(
                 "Ollama reachable",
                 "fail",
                 critical=True,
-                remediation="ollama serve",
+                remediation=remediation,
                 detail=str(exc),
             )
         )

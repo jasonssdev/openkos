@@ -345,6 +345,9 @@ def test_adjudicate_ollama_unavailable_maps_to_exit_one(
     assert result.stderr.startswith("openkos adjudicate: failed -- ")
     assert "Ollama not reachable" in result.stderr
     assert "ollama serve" in result.stderr
+    assert result.stderr.rstrip("\n").endswith(
+        "Or run `openkos doctor` to diagnose the environment."
+    )
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
 
@@ -378,6 +381,7 @@ def test_adjudicate_model_not_found_maps_to_exit_one(
     assert result.stderr.startswith("openkos adjudicate: failed -- ")
     assert "is not installed" in result.stderr
     assert f"ollama pull {configured_model}" in result.stderr
+    assert "openkos doctor" not in result.stderr
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
 

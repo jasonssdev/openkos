@@ -49,6 +49,8 @@ Creates a new workspace in the current directory: `raw/` for immutable sources, 
 
 The model written into `openkos.yaml` resolves in this order: the `--model <tag>` flag, if given; otherwise, when stdin is a TTY, an interactive prompt offering the default `qwen3:8b`; otherwise the default `qwen3:8b` is used silently, no prompt shown. A blank value, or one containing whitespace, a quote (`'`/`"`), or `#`, refuses (exit 1) before anything is written; a colon is allowed, since Ollama `name:tag` tags (including the default) contain one.
 
+After the workspace is written, `init` runs one non-fatal, bounded-timeout Ollama preflight (reusing the same short timeout as `doctor`): if Ollama is unreachable, the resolved model is not installed, or the probe itself fails unexpectedly, a one-line note pointing at `openkos doctor` is printed to stderr. This is purely observational — it never pulls a model, never starts a server, and never changes `init`'s exit code (always `0` on success); a clean, ready Ollama produces no extra output.
+
 | Flag | Meaning |
 | --- | --- |
 | `--model <tag>` | Ollama model tag to write into `openkos.yaml`. Skips the prompt even on a TTY. Defaults to `qwen3:8b`. |
@@ -107,7 +109,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 Output is answer-first and banner-free: the answer text, then (only when at least one citation exists) a blank line, `Citations:`, and one `  → <concept_id> (<title>)` line per citation, in the same order the answer cited them. On every completed run — successful answer or no-match — a one-line `retrieval: <n> FTS hit(s) → LLM invoked|skipped → <m> source(s) cited` summary prints to **stderr**, so a silent short-circuit (e.g. zero hits, so the LLM never ran) is always visible even though stdout stays pipe-clean. When the bundle build skipped any unreadable/unparseable files, an `index:` skip-notice block follows the summary on stderr, worded as a whole-bundle build diagnostic — never implying the skipped files were candidates for the current question.
 
-When nothing in the bundle matches, `query` prints a cause-specific stdout message instead of the answer, and still exits `0` — a valid "no answer found" response is not an error: zero FTS hits states nothing matched and suggests trying different wording or `openkos status`; hits found but all unreadable points at possible bundle corruption and suggests `openkos lint`; an empty or whitespace-only question prompts the user to provide one. A malformed or unreadable `openkos.yaml` (caught the same way `lint` handles an unreadable workspace), a failure to reach Ollama, or a missing/unusable FTS5 index is caught and reported on stderr (exit 1), never a raw traceback — an unreachable Ollama and a not-installed configured model print actionable guidance (`ollama serve` / `ollama pull <model>`).
+When nothing in the bundle matches, `query` prints a cause-specific stdout message instead of the answer, and still exits `0` — a valid "no answer found" response is not an error: zero FTS hits states nothing matched and suggests trying different wording or `openkos status`; hits found but all unreadable points at possible bundle corruption and suggests `openkos lint`; an empty or whitespace-only question prompts the user to provide one. A malformed or unreadable `openkos.yaml` (caught the same way `lint` handles an unreadable workspace), a failure to reach Ollama, or a missing/unusable FTS5 index is caught and reported on stderr (exit 1), never a raw traceback — an unreachable Ollama and a not-installed configured model print actionable guidance (`ollama serve` / `ollama pull <model>`); an unreachable Ollama also points at `openkos doctor` to diagnose further. `adjudicate` and `suggest-relations` degrade the same way on an unreachable/missing-model Ollama.
 
 A good answer can be filed back as a new concept (the two-output rule) — that re-filing step is not automated in this slice.
 
@@ -196,7 +198,7 @@ Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it ru
 
 1. **Workspace initialized** — informational.
 2. **Config valid** — critical, workspace-only (`[SKIP]` outside a workspace).
-3. **Ollama reachable** — critical, always runs.
+3. **Ollama reachable** — critical, always runs. If unreachable, the remediation is binary-aware: when `ollama` is found on `PATH`, it stays exactly `ollama serve`; when no `ollama` binary is found at all, it names that ("no `ollama` binary found on PATH — install from https://ollama.com") rather than the over-claim "not installed", since a missing `PATH` entry does not prove Ollama was never installed (e.g. the macOS app).
 4. **Model `<tag>` installed** — critical, always runs; `[SKIP]` (not `[FAIL]`) when Ollama is unreachable, since the two share one root cause. A configured tag counts as installed if it matches an installed tag exactly, or matches that tag's `<name>:latest` form.
 5. **Bundle readable** — informational, workspace-only (`[SKIP]` outside a workspace).
 

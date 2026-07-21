@@ -7,6 +7,7 @@ CRITICAL check failed. Every test patches `openkos.cli.main.OllamaClient`
 with a fake stub (D-seam) -- zero network, zero real Ollama process.
 """
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,11 @@ def test_doctor_ollama_down_shows_start_server_remediation(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
     )
+    # Pin `shutil.which` so the remediation is deterministic regardless of
+    # whether the test host has the `ollama` binary on PATH (CI does not):
+    # this scenario is "installed but off" -> `ollama serve`. The not-on-PATH
+    # variant is covered by test_doctor_no_ollama_binary_on_path_*.
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/ollama")
 
     result = runner.invoke(app, ["doctor"])
 
@@ -323,3 +329,46 @@ def test_doctor_model_installed_honors_latest_normalization(
     assert result.exit_code == 0
     assert f"[PASS] Model '{configured_model}' installed" in result.stdout
     assert "[FAIL]" not in result.stdout
+
+
+def test_doctor_no_ollama_binary_on_path_never_claims_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `shutil.which("ollama")` finds no binary, the remediation names
+    the missing binary + install URL, and NEVER claims Ollama "is not
+    installed" (an over-claim `which` alone cannot support -- scenario 3.1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "[FAIL] Ollama reachable" in result.stdout
+    assert "no `ollama` binary found on PATH" in result.stdout
+    assert "https://ollama.com" in result.stdout
+    assert "is not installed" not in result.stdout
+
+
+def test_doctor_ollama_binary_present_keeps_serve_remediation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `shutil.which("ollama")` finds a binary, the remediation stays
+    exactly `ollama serve` -- present-but-refused is a different situation
+    than not-installed (scenario 3.2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/ollama")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "[FAIL] Ollama reachable" in result.stdout
+    assert "  -> ollama serve" in result.stdout
+    assert "https://ollama.com" not in result.stdout
