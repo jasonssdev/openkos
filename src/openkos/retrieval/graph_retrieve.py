@@ -21,6 +21,7 @@ import networkx as nx
 
 from openkos.graph.analysis import to_digraph
 from openkos.graph.base import GraphStore
+from openkos.retrieval import pool
 from openkos.retrieval.fusion import GraphHit
 
 _ALPHA = 0.85
@@ -47,11 +48,12 @@ def graph_rank(
     already first-class members of the fts/vec fusion lists (design:
     "EXCLUDE seeds from graph results"). The remaining candidates are
     ordered by `(-score, concept_id)` -- descending PPR score, ties broken
-    by `concept_id` ascending -- and truncated to the top `max(limit, 10)`
-    (the pool-cap hub-drift safety valve). Deterministic for a fixed
-    `store`/`seeds`/`limit`: `store.nodes()`/`store.edges()` are themselves
-    sorted and deterministic, and `nx.pagerank`'s power-iteration is a pure
-    function of its inputs.
+    by `concept_id` ascending -- and truncated to the top `pool.pool_limit(limit)`
+    (the pool-cap hub-drift safety valve, DRYed via `retrieval/pool.py` --
+    design D5, follow-up #2 -- rather than a locally-duplicated `max(limit,
+    10)`). Deterministic for a fixed `store`/`seeds`/`limit`:
+    `store.nodes()`/`store.edges()` are themselves sorted and deterministic,
+    and `nx.pagerank`'s power-iteration is a pure function of its inputs.
     """
     graph_nodes = set(store.nodes())
     valid_seeds = sorted({seed for seed in seeds if seed in graph_nodes})
@@ -66,11 +68,10 @@ def graph_rank(
         view, alpha=_ALPHA, personalization={seed: 1.0 for seed in valid_seeds}
     )
 
-    pool_limit = max(limit, 10)
     candidates = [
         GraphHit(concept_id=concept_id, score=score)
         for concept_id, score in scores.items()
         if concept_id not in valid_seeds
     ]
     candidates.sort(key=lambda hit: (-hit.score, hit.concept_id))
-    return candidates[:pool_limit]
+    return candidates[: pool.pool_limit(limit)]
