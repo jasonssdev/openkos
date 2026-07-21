@@ -213,6 +213,7 @@ def test_reindex_does_not_prune_concepts_still_present_on_disk(
 
     assert report.pruned == 0
     assert set(hashes) == {"concepts/a"}
+    assert report.prune_skipped is False
 
 
 # --- Phase 4: --force --------------------------------------------------------
@@ -319,6 +320,7 @@ def test_walk_error_suppresses_pruning_for_the_whole_run(tmp_path: Path) -> None
 
     assert "locked/hidden" in hashes
     assert report.pruned == 0
+    assert report.prune_skipped is True
     # The reachable doc's cache-hit pass still ran normally despite the walk
     # error suppressing pruning -- only the prune pass is affected.
     assert "concepts/reachable" in hashes
@@ -344,6 +346,7 @@ def test_no_walk_errors_preserves_normal_pruning_behavior(tmp_path: Path) -> Non
 
     assert "concepts/gone" not in hashes
     assert report.pruned == 1
+    assert report.prune_skipped is False
 
 
 def test_reindex_skipped_doc_still_present_on_disk_is_not_pruned(

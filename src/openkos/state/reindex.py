@@ -54,6 +54,14 @@ class ReindexReport:
     """Discovered docs that could not be read, parsed, or UTF-8 decoded --
     neither embedded nor pruned (the file still exists; only THIS run's
     embed attempt failed)."""
+    prune_skipped: bool = False
+    """`True` when this run's directory-scan walk hit one or more errors
+    (`okf._walk_errors`), so the ENTIRE prune pass was suppressed for this
+    run -- distinguishes "prune ran and genuinely found nothing to prune"
+    (`pruned == 0`, `prune_skipped == False`) from "prune was suppressed
+    because an unreadable subtree could have hidden a still-existing doc"
+    (`pruned == 0`, `prune_skipped == True`) -- otherwise indistinguishable
+    from `pruned` alone (review carry-over, fold-in #3)."""
 
 
 def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
@@ -151,7 +159,8 @@ def reindex(
             embedded += 1
 
     pruned = 0
-    if not okf._walk_errors(bundle_dir):
+    prune_skipped = bool(okf._walk_errors(bundle_dir))
+    if not prune_skipped:
         for concept_id in cached_hashes:
             if concept_id not in seen:
                 db.prune(concept_id)
@@ -161,5 +170,9 @@ def reindex(
         _reindex_fts(bundle_dir, fts_db_path, force=force)
 
     return ReindexReport(
-        embedded=embedded, cache_hits=cache_hits, pruned=pruned, skipped=skipped
+        embedded=embedded,
+        cache_hits=cache_hits,
+        pruned=pruned,
+        skipped=skipped,
+        prune_skipped=prune_skipped,
     )

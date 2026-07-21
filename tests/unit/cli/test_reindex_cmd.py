@@ -80,6 +80,48 @@ def test_reindex_successful_run_prints_summary_and_exits_zero(
     assert "0 skipped" in result.stdout
 
 
+def test_reindex_summary_notes_when_prune_pass_was_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ReindexReport.prune_skipped=True` (a walk-error-suppressed prune
+    pass) is surfaced in the printed summary, distinguishing it from a run
+    where zero concepts genuinely qualified for pruning (review carry-over,
+    fold-in #3; reindex-command: Summary reports when the prune pass was
+    skipped)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=1, cache_hits=0, pruned=0, skipped=0, prune_skipped=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "prune pass" in result.stdout.lower()
+    assert "skipped" in result.stdout.lower().split("prune pass")[1]
+
+
+def test_reindex_summary_omits_prune_skip_note_when_prune_ran_normally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A normal run (`prune_skipped=False`) prints the standard summary
+    line with no walk-error-suppression note."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=1, cache_hits=0, pruned=1, skipped=0, prune_skipped=False
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "prune pass" not in result.stdout.lower()
+
+
 def test_reindex_builds_ollama_client_from_configured_embedding_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
