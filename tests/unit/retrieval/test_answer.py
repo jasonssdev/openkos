@@ -1239,12 +1239,17 @@ def test_absent_graph_index_degrades_cleanly(tmp_path: Path) -> None:
 
 
 def test_graph_retrieval_is_deterministic_across_repeated_calls(
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Same bundle and question, `answer()` called twice, produces
-    identical `graph_hits` ordering and an identical final fused,
-    limit-truncated `concept_id` list (spec: Personalized PageRank Is
-    Deterministic)."""
+    identical `graph_hits` ordering (spied via `graph_retrieve.graph_rank`,
+    asserting the RAW pre-truncation output is byte-for-byte identical
+    across both calls -- score-level determinism, not just the final
+    low-limit citation ordering, which could otherwise mask a
+    nondeterministic tie-break the truncation happens to hide) AND an
+    identical final fused, limit-truncated `concept_id` list (spec:
+    Personalized PageRank Is Deterministic; review finding R3: restores the
+    stronger raw-output spy assertion the DI migration had dropped)."""
     bundle_dir = tmp_path / "bundle"
     _write_doc(
         bundle_dir / "concepts" / "stoicism.md",
@@ -1256,6 +1261,17 @@ def test_graph_retrieval_is_deterministic_across_repeated_calls(
         title="Related",
         body="a related concept reachable via the graph",
     )
+    recorded_ranks: list[list[GraphHit]] = []
+    original_rank = graph_retrieve.graph_rank
+
+    def _recording_rank(
+        store: GraphStore, seeds: list[str], *, limit: int
+    ) -> list[GraphHit]:
+        result = original_rank(store, seeds, limit=limit)
+        recorded_ranks.append(result)
+        return result
+
+    monkeypatch.setattr(graph_retrieve, "graph_rank", _recording_rank)
 
     with (
         fts.build_index(bundle_dir) as idx_one,
@@ -1280,6 +1296,8 @@ def test_graph_retrieval_is_deterministic_across_repeated_calls(
             graph_index=store_two,
         )
 
+    assert len(recorded_ranks) == 2
+    assert recorded_ranks[0] == recorded_ranks[1]
     assert [c.concept_id for c in first.citations] == [
         c.concept_id for c in second.citations
     ]
