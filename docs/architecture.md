@@ -138,6 +138,8 @@ my-knowledge/             # the WORKSPACE (the git repository)
     └── raw-store/        # content-addressed binary originals
 ```
 
+*(As actually shipped in MVP 2 — performance-caching Slice 5 — the SQLite state above lives in three SEPARATE files rather than one consolidated `openkos.db`: `.openkos/vectors.db` (the dense index), `.openkos/fts.db` (the lexical index), and `.openkos/graph.db` (the node-edge projection). All three are written ONLY by `openkos reindex`, gated by a shared bundle-manifest-hash cache key that triggers a whole-index rebuild on any bundle change; `query`/`answer()` open them read-only and degrade to an empty list for whichever store is absent or unavailable/corrupt, never writing to any of them. This keeps each store's lifecycle, commit boundary, and rollback independent — see `design D1` in the `performance-caching` change record — but the mature-target consolidation shown above remains an open long-term option, not a decision this slice reversed.)*
+
 ### Why `raw/` is outside the bundle
 
 This split is the load-bearing decision in the layout, and it is worth being explicit about why, because the obvious alternative — dropping `raw/` inside the bundle next to the concepts — is what most tools would do.

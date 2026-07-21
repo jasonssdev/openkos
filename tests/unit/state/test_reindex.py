@@ -213,6 +213,7 @@ def test_reindex_does_not_prune_concepts_still_present_on_disk(
 
     assert report.pruned == 0
     assert set(hashes) == {"concepts/a"}
+    assert report.prune_skipped is False
 
 
 # --- Phase 4: --force --------------------------------------------------------
@@ -319,6 +320,7 @@ def test_walk_error_suppresses_pruning_for_the_whole_run(tmp_path: Path) -> None
 
     assert "locked/hidden" in hashes
     assert report.pruned == 0
+    assert report.prune_skipped is True
     # The reachable doc's cache-hit pass still ran normally despite the walk
     # error suppressing pruning -- only the prune pass is affected.
     assert "concepts/reachable" in hashes
@@ -344,6 +346,7 @@ def test_no_walk_errors_preserves_normal_pruning_behavior(tmp_path: Path) -> Non
 
     assert "concepts/gone" not in hashes
     assert report.pruned == 1
+    assert report.prune_skipped is False
 
 
 def test_reindex_skipped_doc_still_present_on_disk_is_not_pruned(
@@ -560,3 +563,101 @@ def test_reindex_computes_bundle_manifest_hash_exactly_once_per_rebuild_run(
         reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
 
     assert call_count == 1
+
+
+# --- Phase 7 (Slice 5, follow-up #4): single commit per run for vectors.db --
+
+
+def test_reindex_commits_vectors_exactly_once_when_docs_are_embedded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `reindex()` run that embeds multiple NEW docs commits `vectors.db`
+    exactly ONCE, not once per document (reindex-command: single run
+    performs one commit per store, not once per document)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    _write_doc(bundle_dir / "concepts" / "c.md", title="C")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        commit_calls = 0
+        original_commit = db.commit
+
+        def _counting_commit() -> None:
+            nonlocal commit_calls
+            commit_calls += 1
+            original_commit()
+
+        monkeypatch.setattr(db, "commit", _counting_commit)
+
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        hashes = db.meta_hashes()
+
+    assert commit_calls == 1
+    assert report.embedded == 3
+    assert set(hashes) == {"concepts/a", "concepts/b", "concepts/c"}
+
+
+def test_reindex_does_not_commit_vectors_when_nothing_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second `reindex()` run over an UNCHANGED bundle (zero docs to embed,
+    zero docs to prune) never calls `commit()` at all -- "at most once per
+    run" degrades to zero when there is nothing to write."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder())
+
+        commit_calls = 0
+
+        def _counting_commit() -> None:
+            nonlocal commit_calls
+            commit_calls += 1
+
+        monkeypatch.setattr(db, "commit", _counting_commit)
+
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+
+    assert commit_calls == 0
+    assert report.embedded == 0
+    assert report.cache_hits == 1
+    assert report.pruned == 0
+
+
+def test_reindex_commits_vectors_exactly_once_when_both_embedding_and_pruning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single `reindex()` run that BOTH embeds a new doc AND prunes a
+    removed doc still commits `vectors.db` exactly ONCE -- the embed batch
+    and the prune batch share ONE commit, not two."""
+    bundle_dir = tmp_path / "bundle"
+    doc_gone = bundle_dir / "concepts" / "gone.md"
+    _write_doc(doc_gone, title="Gone")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        doc_gone.unlink()
+        _write_doc(bundle_dir / "concepts" / "new.md", title="New")
+
+        commit_calls = 0
+        original_commit = db.commit
+
+        def _counting_commit() -> None:
+            nonlocal commit_calls
+            commit_calls += 1
+            original_commit()
+
+        monkeypatch.setattr(db, "commit", _counting_commit)
+
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        hashes = db.meta_hashes()
+
+    assert commit_calls == 1
+    assert report.embedded == 1
+    assert report.pruned == 1
+    assert set(hashes) == {"concepts/new"}

@@ -142,12 +142,15 @@ def test_content_hash_differs_for_differing_bytes() -> None:
 
 
 def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
-    """A fake implementing `close`/`upsert`/`query`/`meta_hashes`/`prune`
-    satisfies `VectorStore` structurally -- mirrors `Embedder`/`LLMBackend`
-    (`llm/base.py`); mypy accepts the assignment below (`uv run mypy .`
-    gate). The Protocol extension is additive: this is the SAME lifecycle
-    seam 2a defined, now with the Slice 2b data-flow methods added (spec:
-    Protocol Extended Additively -- Extended fake satisfies the Protocol).
+    """A fake implementing `close`/`upsert`/`upsert_many`/`query`/
+    `meta_hashes`/`prune`/`prune_many`/`commit` satisfies `VectorStore`
+    structurally -- mirrors `Embedder`/`LLMBackend` (`llm/base.py`); mypy
+    accepts the assignment below (`uv run mypy .` gate). The Protocol
+    extension is additive: the SAME lifecycle seam 2a defined, with the
+    Slice 2b data-flow methods (`upsert`/`query`/`meta_hashes`/`prune`), and
+    now the Slice 5 follow-up #4 batch methods (`upsert_many`/`prune_many`/
+    `commit`), all added on top (spec: Protocol Extended Additively --
+    Extended fake satisfies the Protocol).
 
     A fake declaring ONLY `close()` can no longer satisfy the now-larger
     `VectorStore` Protocol -- verified directly against mypy's own Protocol
@@ -164,6 +167,7 @@ def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
             self.closed = False
             self.upserts: list[tuple[str, list[float], str]] = []
             self.pruned: list[str] = []
+            self.committed = False
 
         def close(self) -> None:
             self.closed = True
@@ -173,6 +177,12 @@ def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
         ) -> None:
             self.upserts.append((concept_id, list(embedding), content_hash))
 
+        def upsert_many(
+            self, items: Sequence[tuple[str, Sequence[float], str]]
+        ) -> None:
+            for concept_id, embedding, content_hash in items:
+                self.upserts.append((concept_id, list(embedding), content_hash))
+
         def query(self, embedding: Sequence[float], k: int) -> list[vectorstore.VecHit]:
             return []
 
@@ -181,6 +191,12 @@ def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
 
         def prune(self, concept_id: str) -> None:
             self.pruned.append(concept_id)
+
+        def prune_many(self, concept_ids: Sequence[str]) -> None:
+            self.pruned.extend(concept_ids)
+
+        def commit(self) -> None:
+            self.committed = True
 
     fake: vectorstore.VectorStore = _FakeVectorStore()
     fake.upsert("concepts/a", [0.0] * EMBED_DIM, "hash")
@@ -910,3 +926,108 @@ def test_preexisting_vectors_db_survives_a_failed_reopen(tmp_path: Path) -> None
 
     assert db_path.exists()
     assert db_path.read_bytes() == original_bytes
+
+
+# --- Phase 7 (Slice 5, follow-up #4): WAL/busy_timeout + batched writes ------
+
+
+def test_open_vector_store_sets_wal_journal_mode_and_busy_timeout(
+    tmp_path: Path,
+) -> None:
+    """`open_vector_store` sets `PRAGMA journal_mode=WAL` and a non-zero
+    `busy_timeout` on the opened connection, mirroring
+    `state/derived.py::open_derived_connection`'s posture for the
+    (pre-existing, Slice 2b) `vectors.db` store too (reindex-command: WAL
+    mode is active on every derived connection, including vectors.db)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        journal_mode = db._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        busy_timeout = db._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+
+    assert str(journal_mode).lower() == "wal"
+    assert int(busy_timeout) > 0
+
+
+def test_upsert_many_writes_all_items_in_one_batch(tmp_path: Path) -> None:
+    """`upsert_many` writes every item's `vectors`/`vector_meta` rows,
+    mirroring `upsert`'s own per-item DELETE-then-INSERT semantics, just for
+    many `concept_id`s in one call."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    items = [
+        ("concepts/a", [0.1] * EMBED_DIM, "hash-a"),
+        ("concepts/b", [0.2] * EMBED_DIM, "hash-b"),
+    ]
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many(items)
+        db.commit()
+        hashes = db.meta_hashes()
+
+    assert hashes == {"concepts/a": "hash-a", "concepts/b": "hash-b"}
+
+
+def test_upsert_many_does_not_commit_until_commit_is_called(tmp_path: Path) -> None:
+    """`upsert_many` writes are NOT durable to a SEPARATE reader connection
+    until `commit()` is explicitly called -- proves the batching contract:
+    the write path defers its single commit to the caller (reindex-command:
+    single run performs one commit per store, not once per document)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [0.1] * EMBED_DIM, "hash-a")])
+
+        reader = sqlite3.connect(str(db_path))
+        rows_before_commit = reader.execute(
+            "SELECT concept_id FROM vector_meta"
+        ).fetchall()
+        reader.close()
+
+        db.commit()
+
+        reader2 = sqlite3.connect(str(db_path))
+        rows_after_commit = reader2.execute(
+            "SELECT concept_id FROM vector_meta"
+        ).fetchall()
+        reader2.close()
+
+    assert rows_before_commit == []
+    assert rows_after_commit == [("concepts/a",)]
+
+
+def test_prune_many_removes_all_given_concept_ids_in_one_batch(
+    tmp_path: Path,
+) -> None:
+    """`prune_many` removes matching rows from both `vectors` and
+    `vector_meta` for every given `concept_id`, mirroring `prune`'s own
+    per-item semantics for many `concept_id`s in one call."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+        db.upsert("concepts/b", [0.2] * EMBED_DIM, "hash-b")
+        db.upsert("concepts/c", [0.3] * EMBED_DIM, "hash-c")
+
+        db.prune_many(["concepts/a", "concepts/b"])
+        db.commit()
+        hashes = db.meta_hashes()
+
+    assert hashes == {"concepts/c": "hash-c"}
+
+
+def test_commit_persists_writes_to_a_separate_reader_connection(
+    tmp_path: Path,
+) -> None:
+    """`commit()` makes prior `upsert_many`/`prune_many` writes durable and
+    visible to a brand-new connection to the same file."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert_many([("concepts/a", [0.1] * EMBED_DIM, "hash-a")])
+        db.commit()
+
+    reader = sqlite3.connect(str(db_path))
+    rows = reader.execute("SELECT concept_id FROM vector_meta").fetchall()
+    reader.close()
+
+    assert rows == [("concepts/a",)]

@@ -42,6 +42,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
+from typing import Protocol
 from urllib.parse import quote
 
 from openkos.model import okf
@@ -78,6 +79,25 @@ class FtsHit:
     """The OKF concept ID (bundle-relative path, `.md` suffix removed)."""
     score: float
     """The `bm25` rank -- lower is more relevant."""
+
+
+class FtsSearchHandle(Protocol):
+    """The structural seam `retrieval/answer.py` injects as `fts_index`
+    (Slice 5, PR3): any object with a `search(query, limit)` method and a
+    `skipped` list satisfies this -- the real `FtsIndex` (in-memory,
+    returned by `build_index`, or on-disk read-only, returned by
+    `open_fts_index_readonly`) and lightweight test doubles alike. Mirrors
+    `VectorStore`/`GraphStore`'s own Protocol-seam pattern (`llm/base.py`,
+    `vectorstore.py`, `graph/base.py`)."""
+
+    skipped: list[str]
+    """Skip notices from whatever build produced this handle -- `[]` for a
+    read-only-opened handle (the persisted store does not carry its
+    original reindex-time skip notices forward)."""
+
+    def search(self, query: str, limit: int = 10) -> list[FtsHit]:
+        """Return up to `limit` `FtsHit`s for `query`."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
 
 
 def _quote_query(query: str) -> str | None:
@@ -298,13 +318,25 @@ def open_fts_index_readonly(path: Path) -> "FtsIndex | None":
     creating one -- only `reindex`'s `write_fts_index` ever creates this
     file. Opens via a `file:...?mode=ro` SQLite URI connection, so the
     returned handle's connection genuinely refuses any write attempt at the
-    SQLite level (not merely by convention). NEVER computes or compares a
-    bundle manifest hash -- staleness detection is exclusively `reindex`'s
-    job; a caller here always gets whatever `reindex` last wrote, however
-    stale, exactly like the shipped `vectors.db` read path already behaves.
+    SQLite level (not merely by convention). Immediately after connecting,
+    runs one cheap validating read (`SELECT 1 FROM docs LIMIT 1`) so a file
+    that EXISTS but is not a valid SQLite database (or lacks the `docs`
+    table entirely) raises a `sqlite3.Error` HERE, at open time -- mirroring
+    `open_vector_store`'s own CREATE-TABLE-forces-validation posture --
+    rather than only failing later on the caller's first real `search()`
+    call. This gives the CLI's open-or-degrade layer a single, well-defined
+    call site to catch (Slice 5, PR3). NEVER computes or compares a bundle
+    manifest hash -- staleness detection is exclusively `reindex`'s job; a
+    caller here always gets whatever `reindex` last wrote, however stale,
+    exactly like the shipped `vectors.db` read path already behaves.
     """
     if not path.exists():
         return None
     uri = f"file:{quote(str(path))}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.execute("SELECT 1 FROM docs LIMIT 1")
+    except BaseException:
+        conn.close()
+        raise
     return FtsIndex(conn, [])

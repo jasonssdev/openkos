@@ -57,6 +57,25 @@ def test_fts_unavailable_is_a_runtime_error() -> None:
     assert issubclass(fts.FtsUnavailable, RuntimeError)
 
 
+def test_fake_satisfies_fts_search_handle_protocol_structurally() -> None:
+    """A fake implementing `search()` + `skipped` satisfies `FtsSearchHandle`
+    structurally (Slice 5, PR3: `answer()`'s injected FTS seam) -- mirrors
+    `VectorStore`/`GraphStore`'s own Protocol-satisfaction tests; mypy
+    accepts the assignment below (`uv run mypy .` gate). The real `FtsIndex`
+    (in-memory or on-disk) already satisfies this shape without any change."""
+
+    class _FakeFtsSearchHandle:
+        def __init__(self) -> None:
+            self.skipped: list[str] = []
+
+        def search(self, query: str, limit: int = 10) -> list[fts.FtsHit]:
+            return []
+
+    handle: fts.FtsSearchHandle = _FakeFtsSearchHandle()
+    assert handle.search("q") == []
+    assert handle.skipped == []
+
+
 # --- Phase 2: build -- enumeration, identity, reserved-skip, empty bundle
 
 
@@ -770,6 +789,24 @@ def test_open_fts_index_readonly_never_writes_even_on_write_attempt(
     with pytest.raises(sqlite3.OperationalError):
         idx._conn.execute("INSERT INTO docs (concept_id) VALUES ('x')")
     idx.close()
+
+
+def test_open_fts_index_readonly_raises_on_a_corrupt_existing_file(
+    tmp_path: Path,
+) -> None:
+    """An EXISTING `fts.db` that is not a valid SQLite/`docs`-table file
+    raises a `sqlite3.Error` immediately at open time -- rather than only
+    failing later on the first real `search()` call -- so the CLI's
+    open-or-degrade layer can catch it at a single, well-defined call site
+    (Slice 5, PR3: query-command's absent-OR-unopenable/corrupt degrade
+    trigger; mirrors `open_vector_store`'s own CREATE-TABLE-forces-validation
+    posture)."""
+    db_path = tmp_path / ".openkos" / "fts.db"
+    db_path.parent.mkdir(parents=True)
+    db_path.write_bytes(b"not a database")
+
+    with pytest.raises(sqlite3.Error):
+        fts.open_fts_index_readonly(db_path)
 
 
 def test_build_index_direct_call_still_creates_no_disk_footprint(

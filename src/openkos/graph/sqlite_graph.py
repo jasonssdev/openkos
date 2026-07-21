@@ -392,15 +392,26 @@ def open_graph_store_readonly(path: Path) -> "SqliteGraphStore | None":
     creating one -- only `reindex`'s `write_graph_store` ever creates this
     file. Opens via a `file:...?mode=ro` SQLite URI connection, so the
     returned handle's connection genuinely refuses any write attempt at the
-    SQLite level (not merely by convention). NEVER computes or compares a
+    SQLite level (not merely by convention). Immediately after connecting,
+    runs one cheap validating read (`SELECT 1 FROM nodes LIMIT 1`) so a file
+    that EXISTS but is not a valid SQLite database (or lacks the `nodes`
+    table entirely) raises a `sqlite3.Error` HERE, at open time, giving the
+    CLI's open-or-degrade layer a single, well-defined call site to catch
+    (Slice 5, PR3, mirrors `state/fts.py::open_fts_index_readonly`'s
+    identical validation-probe posture). NEVER computes or compares a
     bundle manifest hash -- staleness detection is exclusively `reindex`'s
     job; a caller here always gets whatever `reindex` last wrote, however
-    stale, mirroring `state/fts.py::open_fts_index_readonly`.
+    stale.
     """
     if not path.exists():
         return None
     uri = f"file:{quote(str(path))}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.execute("SELECT 1 FROM nodes LIMIT 1")
+    except BaseException:
+        conn.close()
+        raise
     return SqliteGraphStore(conn, [])
 
 

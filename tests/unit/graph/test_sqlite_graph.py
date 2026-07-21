@@ -1058,6 +1058,24 @@ def test_open_graph_store_readonly_never_writes_even_on_write_attempt(
     store.close()
 
 
+def test_open_graph_store_readonly_raises_on_a_corrupt_existing_file(
+    tmp_path: Path,
+) -> None:
+    """An EXISTING `graph.db` that is not a valid SQLite/`nodes`-table file
+    raises a `sqlite3.Error` immediately at open time -- rather than only
+    failing later on the first real query call -- so the CLI's
+    open-or-degrade layer can catch it at a single, well-defined call site
+    (Slice 5, PR3: query-command's absent-OR-unopenable/corrupt degrade
+    trigger; mirrors `state/fts.py::open_fts_index_readonly`'s identical
+    validation-probe posture)."""
+    db_path = tmp_path / ".openkos" / "graph.db"
+    db_path.parent.mkdir(parents=True)
+    db_path.write_bytes(b"not a database")
+
+    with pytest.raises(sqlite3.Error):
+        sqlite_graph.open_graph_store_readonly(db_path)
+
+
 # --- reindex_graph (mirrors state/reindex.py's `_reindex_fts` gate) ---------
 
 

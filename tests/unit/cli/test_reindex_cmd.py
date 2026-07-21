@@ -12,6 +12,7 @@ scenarios don't specifically fake it, since it only touches local SQLite
 (no network).
 """
 
+import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -77,6 +78,48 @@ def test_reindex_successful_run_prints_summary_and_exits_zero(
     assert "2 cache-hit" in result.stdout
     assert "1 pruned" in result.stdout
     assert "0 skipped" in result.stdout
+
+
+def test_reindex_summary_notes_when_prune_pass_was_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ReindexReport.prune_skipped=True` (a walk-error-suppressed prune
+    pass) is surfaced in the printed summary, distinguishing it from a run
+    where zero concepts genuinely qualified for pruning (review carry-over,
+    fold-in #3; reindex-command: Summary reports when the prune pass was
+    skipped)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=1, cache_hits=0, pruned=0, skipped=0, prune_skipped=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "prune pass" in result.stdout.lower()
+    assert "skipped" in result.stdout.lower().split("prune pass")[1]
+
+
+def test_reindex_summary_omits_prune_skip_note_when_prune_ran_normally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A normal run (`prune_skipped=False`) prints the standard summary
+    line with no walk-error-suppression note."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=1, cache_hits=0, pruned=1, skipped=0, prune_skipped=False
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "prune pass" not in result.stdout.lower()
 
 
 def test_reindex_builds_ollama_client_from_configured_embedding_model(
@@ -333,6 +376,79 @@ def test_reindex_persists_graph_db_end_to_end(
     assert vectors_db_path.exists()
     assert fts_db_path.exists()
     assert graph_db_path.exists()
+
+
+def test_reindex_graph_write_failure_after_vectors_and_fts_succeed_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sqlite_graph.reindex_graph` raising a `sqlite3.Error` (e.g.
+    permission-denied, corrupt `graph.db`, disk-IO failure) AFTER
+    `vectors.db`/`fts.db` already succeeded is caught, printed as a clean
+    stderr message identifying the graph store, and exits 1 with no raw
+    traceback (PR3 carry-over fix, Engram bug #1470: the graph reindex
+    ladder gap -- the `reindex_graph` call sat in the try block but no
+    `except` clause covered a bare `sqlite3.Error` from it)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=1, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    def _raise_graph_write_failure(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.sqlite_graph.reindex_graph", _raise_graph_write_failure
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed")
+    assert "graph" in result.stderr
+    assert "disk I/O error" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_reindex_summary_and_prune_skipped_notice_still_surface_when_graph_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `sqlite_graph.reindex_graph` fails AFTER `vectors.db`/`fts.db`
+    already succeeded, the user still sees the embedded/cache-hit/pruned/
+    skipped summary AND the `prune_skipped` follow-up notice for the work
+    that DID durably happen -- not just the graph failure message -- and the
+    process still exits 1 (review finding R4: the summary/prune_skipped
+    print block used to sit AFTER the graph write, so a graph-write failure
+    silently swallowed it even though vectors.db/fts.db had already
+    committed)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=3, cache_hits=1, pruned=0, skipped=0, prune_skipped=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    def _raise_graph_write_failure(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.sqlite_graph.reindex_graph", _raise_graph_write_failure
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "3 embedded" in result.stdout
+    assert "1 cache-hit" in result.stdout
+    assert "0 pruned" in result.stdout
+    assert "0 skipped" in result.stdout
+    assert "prune pass" in result.stdout.lower()
+    assert "skipped" in result.stdout.lower().split("prune pass")[1]
+    assert "graph" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_reindex_malformed_config_maps_to_exit_one_before_calling_orchestrator(

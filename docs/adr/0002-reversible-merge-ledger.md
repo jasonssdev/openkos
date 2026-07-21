@@ -29,9 +29,15 @@ combined value cannot recover either input), provenance is union-deduped
 (/absorbed.md)` links across the bundle are rewritten. The absorbed file is
 deleted. A durable, engine-driven `unmerge` must restore the exact pre-merge
 bundle without depending on the user's git discipline or an intact `.git`
-(exports may ship without it). The graph is ephemeral (rebuilt per run), so
-there is no store to repair — the only durable representation is markdown
-text.
+(exports may ship without it). At the time of this decision, the graph was
+ephemeral (rebuilt per run), so there was no store to repair — the only
+durable representation was markdown text. (Update, performance-caching
+Slice 5: the graph — like FTS and the vector store — is now ALSO persisted
+to `.openkos/graph.db`, written only by `reindex` and rebuilt wholesale on
+the next `reindex` run after any bundle change; it remains a rebuildable
+DERIVED cache, never the source of truth, so this ADR's core reasoning is
+unaffected — merge/unmerge's reversibility contract still rests entirely
+on markdown text, never on the graph store.)
 
 ## Decision
 
