@@ -12,13 +12,16 @@ scenarios don't specifically fake it, since it only touches local SQLite
 (no network).
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
+from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.state.fts import FtsUnavailable
 from openkos.state.reindex import ReindexReport
 from openkos.state.vectorstore import VecUnavailable
 
@@ -240,6 +243,69 @@ def test_reindex_vec_unavailable_maps_to_exit_one(
     assert result.stderr.startswith("openkos reindex: failed -- ")
     assert "sqlite-vec" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_reindex_fts_unavailable_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The orchestrator raising `FtsUnavailable` (SQLite's `fts5` module not
+    compiled in, e.g. from the new FTS-persistence write path) is caught,
+    printed as a friendly stderr message, and exits 1 with no raw traceback
+    -- `reindex`'s own docstring already claims this ladder mirrors
+    `query`'s (`VecUnavailable` substituted for `FtsUnavailable`), and
+    `query` already catches `FtsUnavailable`; `reindex` must too (review
+    correction, Finding A)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_fts_unavailable(*args: object, **kwargs: object) -> ReindexReport:
+        raise FtsUnavailable("SQLite's fts5 module is not available")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", _raise_fts_unavailable
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed -- ")
+    assert "fts5" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+class _FakeEmbedder:
+    """A hermetic stand-in for `OllamaClient` -- no network, no real Ollama
+    process, deterministic vectors of `EMBED_DIM` length."""
+
+    def __init__(self, *, model: str = "fake") -> None:
+        self._model = model
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        return [[float(i)] * EMBED_DIM for i, _ in enumerate(texts)]
+
+
+def test_reindex_persists_fts_db_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real (unmocked) `reindex` run -- through the CLI, `open_vector_store`,
+    and `state.reindex.reindex` -- persists `.openkos/fts.db` alongside
+    `vectors.db` (reindex-command: Reindex writes all three derived stores;
+    here, the FTS one PR1 delivers), proving `WorkspaceLayout.fts_db_path` is
+    genuinely threaded through the CLI's thin-wiring call, not just present
+    on the dataclass."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\ndescription: ''\n---\ndichotomyzz\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeEmbedder)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+    assert fts_db_path.exists()
 
 
 def test_reindex_malformed_config_maps_to_exit_one_before_calling_orchestrator(

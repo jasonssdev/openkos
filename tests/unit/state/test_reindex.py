@@ -10,6 +10,7 @@ against a `tmp_path` database (no Ollama, no CLI).
 """
 
 import os
+import sqlite3
 import stat
 from collections.abc import Sequence
 from pathlib import Path
@@ -17,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from openkos.llm.base import EMBED_DIM
-from openkos.state import reindex, vectorstore
+from openkos.state import derived, fts, reindex, vectorstore
 
 
 def _write_doc(
@@ -363,3 +364,199 @@ def test_reindex_skipped_doc_still_present_on_disk_is_not_pruned(
 
     assert report.pruned == 0
     assert hashes == {}
+
+
+# --- Phase 5 (Slice 5, PR1): FTS on-disk persistence gate --------------------
+
+
+def _canary_row_exists(fts_db_path: Path) -> bool:
+    """Probe whether a hand-inserted sentinel row survives a `reindex()`
+    call -- if the `docs` table was DROPped and rebuilt, the sentinel is
+    gone; if the run skipped the rebuild (cache-hit), it survives. A
+    behavioral proxy for "was the whole FTS table rebuilt", robust against
+    WAL/journal side-file churn that a raw byte-diff of `fts_db_path` would
+    otherwise pick up even on a genuine skip."""
+    conn = sqlite3.connect(str(fts_db_path))
+    try:
+        row = conn.execute(
+            "SELECT concept_id FROM docs WHERE concept_id = 'zz-canary'"
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def _insert_canary_row(fts_db_path: Path) -> None:
+    conn = sqlite3.connect(str(fts_db_path))
+    try:
+        conn.execute(
+            "INSERT INTO docs (concept_id, title, description, tags, body) "
+            "VALUES ('zz-canary', '', '', '', '')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_reindex_first_run_persists_fts_index_matching_build_index(
+    tmp_path: Path,
+) -> None:
+    """A first `reindex()` call with `fts_db_path` set writes an on-disk FTS
+    index containing the same rows an equivalent `build_index` call would
+    produce (fts-state: Reindex persists the FTS index to disk)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+    assert not fts_db_path.exists()
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+
+    assert fts_db_path.exists()
+    with fts.build_index(bundle_dir) as expected_idx:
+        expected = {
+            row[0]
+            for row in expected_idx._conn.execute(
+                "SELECT concept_id FROM docs"
+            ).fetchall()
+        }
+    conn = sqlite3.connect(str(fts_db_path))
+    on_disk = {row[0] for row in conn.execute("SELECT concept_id FROM docs").fetchall()}
+    conn.close()
+
+    assert on_disk == expected
+    assert on_disk == {"concepts/stoicism"}
+
+
+def test_reindex_unchanged_bundle_skips_fts_rebuild(tmp_path: Path) -> None:
+    """A second `reindex()` run over an UNCHANGED bundle does not rebuild the
+    FTS table at all (derived-index-cache: Unchanged bundle reuses the
+    cached index)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+        _insert_canary_row(fts_db_path)
+
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+
+    assert _canary_row_exists(fts_db_path)
+
+
+def test_reindex_any_document_change_rebuilds_fts_index(tmp_path: Path) -> None:
+    """Editing a single document invalidates the manifest, triggering a
+    FULL FTS rebuild on the next `reindex()` run (derived-index-cache: Any
+    document change invalidates the cache; Single-document edit triggers a
+    full rebuild)."""
+    bundle_dir = tmp_path / "bundle"
+    doc_path = bundle_dir / "concepts" / "stoicism.md"
+    _write_doc(doc_path, title="Stoicism", body="version one")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+        _insert_canary_row(fts_db_path)
+
+        _write_doc(doc_path, title="Stoicism", body="version two")
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+
+    assert not _canary_row_exists(fts_db_path)
+    conn = sqlite3.connect(str(fts_db_path))
+    rows = conn.execute("SELECT concept_id FROM docs").fetchall()
+    conn.close()
+    assert {row[0] for row in rows} == {"concepts/stoicism"}
+
+
+def test_reindex_force_rebuilds_fts_even_when_manifest_unchanged(
+    tmp_path: Path,
+) -> None:
+    """`force=True` rebuilds the FTS index even when the manifest hash is
+    unchanged, mirroring the vector store's own `--force` semantics."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+        _insert_canary_row(fts_db_path)
+
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path, force=True
+        )
+
+    assert not _canary_row_exists(fts_db_path)
+
+
+def test_reindex_without_fts_db_path_never_touches_disk_for_fts(
+    tmp_path: Path,
+) -> None:
+    """Omitting `fts_db_path` (the default) leaves `reindex()`'s FTS
+    behavior a pure no-op -- no `.openkos/fts.db` is created, preserving
+    every pre-Slice-5 caller's behavior unchanged."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder())
+
+    assert not (tmp_path / ".openkos" / "fts.db").exists()
+
+
+def test_reindex_fts_meta_manifest_matches_derived_bundle_manifest_hash(
+    tmp_path: Path,
+) -> None:
+    """The persisted `meta.manifest_hash` value equals
+    `derived.bundle_manifest_hash(bundle_dir)` computed independently over
+    the same bundle -- proves reindex stores the SAME digest this module
+    computes, not an ad-hoc one."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+
+    conn = sqlite3.connect(str(fts_db_path))
+    stored = derived.read_manifest_hash(conn)
+    conn.close()
+
+    assert stored == derived.bundle_manifest_hash(bundle_dir)
+
+
+def test_reindex_computes_bundle_manifest_hash_exactly_once_per_rebuild_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `reindex()` run that rebuilds the FTS index computes
+    `derived.bundle_manifest_hash` exactly ONCE for that run -- the decision
+    snapshot (`_reindex_fts`'s skip/rebuild comparison) and the persisted
+    value must be the SAME walk, not two independently-taken snapshots of a
+    bundle that could mutate between them (review correction, Finding C:
+    triple-walk/TOCTOU). `write_fts_index` must receive and store the
+    ALREADY-computed digest rather than recomputing its own."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+
+    call_count = 0
+    original_manifest_hash = derived.bundle_manifest_hash
+
+    def _counting_manifest_hash(bundle_dir_arg: Path) -> str:
+        nonlocal call_count
+        call_count += 1
+        return original_manifest_hash(bundle_dir_arg)
+
+    monkeypatch.setattr(derived, "bundle_manifest_hash", _counting_manifest_hash)
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+
+    assert call_count == 1
