@@ -6,12 +6,30 @@ node/edge set fidelity against a `GraphStore`, isolated-node survival, empty
 projection, determinism, `relation_type` attribute propagation, and a
 round-trip integration over the `good-life-demo` bundle via `build_graph`.
 
-Also asserts the CLI half of the "No CLI Surface" layering boundary:
-`cli/main.py` neither imports `openkos.graph` nor registers a `graph`
-command. The canonical-layer half of this same boundary (`model`/`bundle`/
-`state` never import `openkos.graph`) already lives in
-`test_base.py::test_canonical_layer_does_not_import_graph` and is not
-duplicated here.
+Also asserts the CLI half of the "No CLI Surface, No Canonical-Layer Import"
+requirement's ACTUAL scope (`openspec/specs/graph-projection/spec.md`): no
+`graph` command is ever registered. The canonical-layer half of that same
+requirement (`model`/`bundle`/`state` never import `openkos.graph`) already
+lives in `test_base.py::test_canonical_layer_does_not_import_graph` and is
+not duplicated here.
+
+Slice 5 (performance-caching) PR2 correction: this file's own test used to
+ALSO assert "`cli/main.py` never imports `openkos.graph`" -- an
+implementation-detail proxy that happened to hold only because no CLI
+command needed that import yet, not something the spec itself requires (the
+spec's own scenario text scopes the import guard to `model`/`bundle`/`state`
+only). `reindex` now legitimately needs `openkos.graph.sqlite_graph.
+reindex_graph` to write `.openkos/graph.db` in the same CLI invocation that
+writes `vectors.db`/`fts.db` -- state/reindex.py itself cannot call it
+(canonical layer must never import derived), so this entry-layer command is
+the seam that ties both together. This mirrors the EXACT precedent already
+recorded for `state.fts`: `add-query-command`'s task 10.4 rewrote
+`test_cli_module_does_not_import_state_fts` (which asserted "no CLI import of
+state" as a proxy) into `test_ingest_and_forget_do_not_reference_state_fts`
+(the actual invariant: named commands never reference it) once `query`
+legitimately started importing `state.fts`. This test now protects the SAME
+actual invariant the spec requires (no `graph` CLI verb), not the broader
+"no import at all" restriction that was never the letter of the requirement.
 """
 
 import ast
@@ -141,30 +159,19 @@ def test_build_graph_to_digraph_round_trip_over_good_life_demo_bundle() -> None:
 # --- Layering guard: No CLI Surface (cli/main.py half) ----------------------
 
 
-def _collect_imported_modules(source: str) -> set[str]:
-    tree = ast.parse(source)
-    modules: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.add(node.module)
-    return modules
-
-
-def test_cli_main_never_imports_graph_and_registers_no_graph_command() -> None:
-    """Mirrors `test_ingest_and_forget_do_not_reference_state_fts`'s AST-guard
-    pattern (spec: No CLI Surface): `cli/main.py` must never import
-    `openkos.graph`, and none of its `@app.command()`-decorated functions may
-    be named `graph`."""
+def test_cli_main_registers_no_graph_command() -> None:
+    """`cli/main.py` never registers a `graph` command (spec:
+    graph-projection, "No graph CLI verb exists") -- the ACTUAL scenario the
+    "No CLI Surface, No Canonical-Layer Import" requirement specifies for
+    the CLI. `cli/main.py` importing `openkos.graph` directly is NOT itself
+    a spec violation (the requirement's canonical-layer import guard scopes
+    to `model`/`bundle`/`state`, covered separately by
+    `test_base.py::test_canonical_layer_does_not_import_graph`); Slice 5
+    PR2's `reindex` command legitimately imports `openkos.graph.sqlite_graph`
+    to write `.openkos/graph.db`, mirroring how `query` legitimately imports
+    `state.fts`."""
     cli_main = _REPO_ROOT / "src" / "openkos" / "cli" / "main.py"
     source = cli_main.read_text(encoding="utf-8")
-
-    modules = _collect_imported_modules(source)
-    assert not any(
-        module == "openkos.graph" or module.startswith("openkos.graph.")
-        for module in modules
-    )
 
     tree = ast.parse(source)
     command_names = {
