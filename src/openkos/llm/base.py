@@ -24,3 +24,19 @@ class LLMBackend(Protocol):
     def chat(self, messages: Sequence[Message]) -> str:
         """Send `messages` to the backend and return the assistant's reply text."""
         ...  # pragma: no cover -- Protocol stub body, never executed
+
+
+EMBED_DIM = 1024
+"""Fixed dimension every `Embedder.embed()` row must have (contract constant)."""
+
+
+class Embedder(Protocol):
+    """A text-embedding backend: send `texts`, get one order-preserving
+    `EMBED_DIM`-float vector back per input."""
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """Return one `EMBED_DIM`-float vector per entry in `texts`, in order.
+
+        Empty `texts` returns an empty list.
+        """
+        ...  # pragma: no cover -- Protocol stub body, never executed

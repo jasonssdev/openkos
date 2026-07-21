@@ -192,7 +192,7 @@ You can also just delete the file by hand — the bundle is your files. `forget`
 
 ### `openkos doctor`
 
-**Read-only.** A fixed environment health scan: five checks against the local workspace and the local Ollama server, each printed as one `[PASS]`, `[FAIL]`, or `[SKIP]` line. Every `[FAIL]` line is immediately followed by an indented `  -> <fix command>` line naming the user's own next command (`ollama serve`, `ollama pull <model>`, `openkos init`) — `doctor` never runs these commands itself.
+**Read-only.** A fixed environment health scan: six checks against the local workspace and the local Ollama server, each printed as one `[PASS]`, `[FAIL]`, or `[SKIP]` line. Every `[FAIL]` line is immediately followed by an indented `  -> <fix command>` line naming the user's own next command (`ollama serve`, `ollama pull <model>`, `openkos init`) — `doctor` never runs these commands itself.
 
 Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it runs and prints **all** applicable checks, then exits once. The checks, in order:
 
@@ -200,11 +200,12 @@ Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it ru
 2. **Config valid** — critical, workspace-only (`[SKIP]` outside a workspace).
 3. **Ollama reachable** — critical, always runs. If unreachable, the remediation is binary-aware: when `ollama` is found on `PATH`, it stays exactly `ollama serve`; when no `ollama` binary is found at all, it names that ("no `ollama` binary found on PATH — install from https://ollama.com") rather than the over-claim "not installed", since a missing `PATH` entry does not prove Ollama was never installed (e.g. the macOS app).
 4. **Model `<tag>` installed** — critical, always runs; `[SKIP]` (not `[FAIL]`) when Ollama is unreachable, since the two share one root cause. A configured tag counts as installed if it matches an installed tag exactly, or matches that tag's `<name>:latest` form.
-5. **Bundle readable** — informational, workspace-only (`[SKIP]` outside a workspace).
+5. **Embedding model `<tag>` installed** — informational, always runs, reusing the same installed-tag list and `[SKIP]`-when-unreachable behavior as the model-installed check (one root cause, never double-reported). Slice 1 does not yet wire embeddings into any consumed feature, so a failure here never affects the exit code.
+6. **Bundle readable** — informational, workspace-only (`[SKIP]` outside a workspace).
 
-Exit code reflects **critical** failures only: `doctor` exits `1` if config-valid, Ollama-reachable, or model-installed failed, and `0` otherwise — the two informational checks (workspace-initialized, bundle-readable) never affect the exit code on their own.
+Exit code reflects **critical** failures only: `doctor` exits `1` if config-valid, Ollama-reachable, or model-installed failed, and `0` otherwise — the informational checks (workspace-initialized, embedding-model-installed, bundle-readable) never affect the exit code on their own.
 
-`doctor` also works **outside an initialized workspace**, as a pure Ollama preflight: the workspace-initialized check reports an informational `[FAIL]` with `openkos init` remediation, config-valid and bundle-readable are skipped as not applicable, and Ollama-reachable/model-installed still run — checked against the packaged default model — and still determine the exit code.
+`doctor` also works **outside an initialized workspace**, as a pure Ollama preflight: the workspace-initialized check reports an informational `[FAIL]` with `openkos init` remediation, config-valid and bundle-readable are skipped as not applicable, and Ollama-reachable/model-installed/embedding-model-installed still run — checked against the packaged default model/embedding model — and Ollama-reachable/model-installed still determine the exit code.
 
 `doctor` never creates, modifies, or deletes any file.
 

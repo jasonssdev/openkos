@@ -63,7 +63,7 @@ Deliverables:
 - Entity, concept, and relationship extraction (LLM-assisted, human-in-the-loop) — whose hard core is **cross-source entity resolution, deduplication, and reversible merge** (the "boundary problem" MVP 1 deliberately sidesteps by doing single-source extraction only). The stance, lifted from the [Knowledge Object model](knowledge-object-model.md): prefer fewer, richer objects over fragmented ones, make every merge reversible, and keep entity-resolution decisions reviewable rather than silently automatic
 - A typed knowledge graph over the bundle (markdown links plus a SQLite node-edge projection; NetworkX for analysis). The typing is an OpenKOS layer over OKF's untyped links: a bundle stays readable by any OKF consumer, which simply sees untyped edges.
 - Hybrid retrieval: lexical (the FTS5 foundation shipped in MVP 1) + local vectors (`sqlite-vec`) + graph traversal, with context assembly
-- Local embeddings served through Ollama (default `qwen3-embedding:0.6b`, multilingual), behind a configurable `Embedder` interface
+- Local embeddings served through Ollama (default `qwen3-embedding:0.6b`, multilingual), behind a configurable `Embedder` interface — **Slice 1 delivered**: the `Embedder` protocol, `OllamaClient.embed()`, and the `embedding_model` config default are shipped; `sqlite-vec` storage, hybrid fusion, and graph traversal remain pending
 - The two-output rule: a good answer can be filed back as a new OKF concept
 - Incremental compilation and change tracking
 - Freshness lint v1 — volatility classification with volatility-aware windows (per-type, LLM-suggested), contradiction and staleness detection, and a guided reconcile workflow

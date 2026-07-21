@@ -447,6 +447,45 @@ def test_read_config_raises_clear_error_when_config_missing(tmp_path: Path) -> N
     assert set(tmp_path.iterdir()) == before
 
 
+def test_read_config_reads_present_embedding_model(tmp_path: Path) -> None:
+    """An `embedding_model` present in `openkos.yaml` passes through verbatim,
+    distinct from the chat `model` field."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: gemma3\nembedding_model: nomic-embed-text\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.embedding_model == "nomic-embed-text"
+    assert result.model == "gemma3"
+
+
+def test_read_config_falls_back_to_default_embedding_model_when_absent(
+    tmp_path: Path,
+) -> None:
+    """`embedding_model` absent from `openkos.yaml` falls back to
+    `DEFAULT_EMBEDDING_MODEL` (default-only: no template line for this slice)."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.embedding_model == config.DEFAULT_EMBEDDING_MODEL
+    assert config.DEFAULT_EMBEDDING_MODEL == "qwen3-embedding:0.6b"
+
+
+def test_read_config_falls_back_to_default_embedding_model_on_explicit_null(
+    tmp_path: Path,
+) -> None:
+    """`embedding_model: null` (present but explicit null) also falls back to
+    `DEFAULT_EMBEDDING_MODEL` -- mirrors the `is not None` fallback used for
+    every other field."""
+    (tmp_path / "openkos.yaml").write_text("embedding_model: null\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.embedding_model == config.DEFAULT_EMBEDDING_MODEL
+
+
 def test_read_config_preserves_explicit_review_false(tmp_path: Path) -> None:
     """An explicit `review: false` is a real value, not an absence -- the
     None-fallback fix must not coerce it to the packaged default (`True`).

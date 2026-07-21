@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from openkos.llm.base import Message
+from openkos.llm.base import EMBED_DIM, Embedder, Message
 from openkos.llm.ollama import (
     OllamaClient,
     OllamaError,
@@ -115,6 +115,38 @@ def test_message_typed_dict_holds_role_and_content() -> None:
     assert message["role"] == "user"
     assert message["content"] == "hi"
     # Triangulation skipped: purely structural TypedDict, single possible shape.
+
+
+class _FakeEmbedder:
+    """A structural `Embedder`: records every `embed` call, returns fixed
+    vectors. Mirrors `_FakeLLM`'s injection pattern in
+    `tests/unit/retrieval/test_answer.py`."""
+
+    def __init__(self, vectors: list[list[float]] | None = None) -> None:
+        self.vectors = vectors if vectors is not None else []
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        return self.vectors
+
+
+def test_embedder_protocol_is_satisfied_by_structural_fake() -> None:
+    """A fake exposing `embed(texts) -> list[list[float]]` satisfies `Embedder`
+    structurally (no explicit inheritance required), mirroring the fake
+    `LLMBackend` injection pattern used for `chat()`."""
+    fake = _FakeEmbedder(vectors=[[0.1] * EMBED_DIM])
+
+    embedder: Embedder = fake
+    result = embedder.embed(["hello"])
+
+    assert result == [[0.1] * EMBED_DIM]
+    assert fake.calls == [["hello"]]
+
+
+def test_embed_dim_is_1024() -> None:
+    """`EMBED_DIM` is the fixed contract dimension every embedding row uses."""
+    assert EMBED_DIM == 1024
 
 
 # --- Phase 2/3: success + request shape --------------------------------------
@@ -592,6 +624,202 @@ def test_model_tag_matches_no_match_returns_false() -> None:
 def test_model_tag_matches_case_sensitive_mismatch() -> None:
     """Differing case never matches (D4 honest exact match, no lowercasing)."""
     assert model_tag_matches("Qwen3:8b", ["qwen3:8b"]) is False
+
+
+# --- Phase 11: embed() ---------------------------------------------------------
+
+
+def _embed_body(rows: list[list[float]]) -> bytes:
+    """Build a well-formed `/api/embed` success body using the plural
+    `embeddings` key (current Ollama response shape)."""
+    return json.dumps({"embeddings": rows}).encode("utf-8")
+
+
+def _embed_body_singular(row: list[float]) -> bytes:
+    """Build a `/api/embed` success body using the legacy singular
+    `embedding` key (older Ollama response shape, D2 field variance)."""
+    return json.dumps({"embedding": row}).encode("utf-8")
+
+
+def _poison_urlopen(
+    request: urllib.request.Request, timeout: float | None = None
+) -> Any:
+    """An `urlopen` stand-in that fails the test if it is ever called --
+    used to prove the empty-input short-circuit makes zero network calls."""
+    raise AssertionError("urlopen must not be called")
+
+
+def test_embed_empty_input_returns_empty_list_without_network_call() -> None:
+    """`embed([])` short-circuits to `[]` with no HTTP call at all."""
+    client = OllamaClient("qwen3-embedding:0.6b", urlopen=_poison_urlopen)
+
+    result = client.embed([])
+
+    assert result == []
+
+
+def test_embed_success_posts_model_and_input_returns_ordered_rows() -> None:
+    """`embed(texts)` POSTs `{model, input}` to `{host}/api/embed` and returns
+    one `EMBED_DIM`-float row per input, in the same order (embeddings-key
+    happy path)."""
+    captured: list[urllib.request.Request] = []
+    row_a = [0.1] * EMBED_DIM
+    row_b = [0.2] * EMBED_DIM
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        host="http://example.internal:11434",
+        urlopen=_fake_urlopen(_embed_body([row_a, row_b]), captured),
+    )
+
+    result = client.embed(["a", "b"])
+
+    assert result == [row_a, row_b]
+    assert captured[0].full_url == "http://example.internal:11434/api/embed"
+    sent = _sent_body(captured[0])
+    assert sent["model"] == "qwen3-embedding:0.6b"
+    assert sent["input"] == ["a", "b"]
+
+
+def test_embed_row_count_mismatch_fewer_rows_raises_ollama_error() -> None:
+    """Ollama returning fewer embedding rows than input texts violates the
+    Embedder contract (one row per input, in order) and must raise
+    `OllamaError` rather than silently returning a length-mismatched list."""
+    row = [0.1] * EMBED_DIM
+    client = OllamaClient(
+        "qwen3-embedding:0.6b", urlopen=_fake_urlopen(_embed_body([row]), [])
+    )
+
+    with pytest.raises(OllamaError):
+        client.embed(["a", "b"])
+
+
+def test_embed_row_count_mismatch_more_rows_raises_ollama_error() -> None:
+    """Ollama returning more embedding rows than input texts also violates
+    the Embedder contract and must raise `OllamaError`."""
+    row_a = [0.1] * EMBED_DIM
+    row_b = [0.2] * EMBED_DIM
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(_embed_body([row_a, row_b]), []),
+    )
+
+    with pytest.raises(OllamaError):
+        client.embed(["only"])
+
+
+def test_embed_singular_embedding_key_wrapped_as_one_item_list() -> None:
+    """A legacy singular `embedding` key (one row, no `embeddings` plural) is
+    parsed and wrapped as a one-item list (D2 response-shape drift)."""
+    row = [0.3] * EMBED_DIM
+    client = OllamaClient(
+        "qwen3-embedding:0.6b", urlopen=_fake_urlopen(_embed_body_singular(row), [])
+    )
+
+    result = client.embed(["only"])
+
+    assert result == [row]
+
+
+def test_embed_row_wrong_dimension_raises_ollama_error() -> None:
+    """A returned row whose length is not `EMBED_DIM` raises `OllamaError`."""
+    short_row = [0.1] * (EMBED_DIM - 1)
+    client = OllamaClient(
+        "qwen3-embedding:0.6b", urlopen=_fake_urlopen(_embed_body([short_row]), [])
+    )
+
+    with pytest.raises(OllamaError):
+        client.embed(["a"])
+
+
+def test_embed_row_non_numeric_values_raises_ollama_error() -> None:
+    """A returned row containing a non-numeric value raises `OllamaError`
+    even when its length matches `EMBED_DIM`."""
+    bad_row: list[Any] = [0.1] * (EMBED_DIM - 1) + ["not-a-float"]
+    body = json.dumps({"embeddings": [bad_row]}).encode("utf-8")
+    client = OllamaClient("qwen3-embedding:0.6b", urlopen=_fake_urlopen(body, []))
+
+    with pytest.raises(OllamaError):
+        client.embed(["a"])
+
+
+def test_embed_malformed_json_raises_ollama_error() -> None:
+    """A 200 body that is not valid JSON raises `OllamaError`."""
+    client = OllamaClient(
+        "qwen3-embedding:0.6b", urlopen=_fake_urlopen(b"not json at all {{{", [])
+    )
+
+    with pytest.raises(OllamaError):
+        client.embed(["a"])
+
+
+def test_embed_non_object_json_body_raises_ollama_error() -> None:
+    """A 200 body that is valid JSON but not a JSON object at the top level
+    (e.g. a bare list) raises `OllamaError`, not an unguarded `TypeError`."""
+    body = json.dumps([0.1] * EMBED_DIM).encode("utf-8")
+    client = OllamaClient("qwen3-embedding:0.6b", urlopen=_fake_urlopen(body, []))
+
+    with pytest.raises(OllamaError):
+        client.embed(["a"])
+
+
+def test_embed_missing_embeddings_and_embedding_keys_raises_ollama_error() -> None:
+    """A well-formed JSON body carrying neither `embeddings` nor `embedding`
+    (response-shape drift beyond the two recognized keys) raises `OllamaError`."""
+    body = json.dumps({"unexpected": "shape"}).encode("utf-8")
+    client = OllamaClient("qwen3-embedding:0.6b", urlopen=_fake_urlopen(body, []))
+
+    with pytest.raises(OllamaError):
+        client.embed(["a"])
+
+
+def test_embed_connect_phase_transport_failure_raises_ollama_unavailable() -> None:
+    """A `URLError` while connecting maps to `OllamaUnavailable` (mirrors `chat()`)."""
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_raising_urlopen(urllib.error.URLError("Connection refused")),
+    )
+
+    with pytest.raises(OllamaUnavailable):
+        client.embed(["a"])
+
+
+def test_embed_read_phase_transport_failure_raises_ollama_unavailable() -> None:
+    """A `TimeoutError` while reading the response body (not while connecting)
+    still maps to `OllamaUnavailable` (mirrors `chat()`'s body-read guard)."""
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen_returning(
+            _RaisingReadResponse(TimeoutError("timed out mid-read"))
+        ),
+    )
+
+    with pytest.raises(OllamaUnavailable):
+        client.embed(["a"])
+
+
+def test_embed_non_404_http_error_raises_ollama_error() -> None:
+    """A non-404 HTTP error is mapped to `OllamaError` (reuses `_map_http_error`)."""
+    body = json.dumps({"error": "internal server error"}).encode("utf-8")
+    client = OllamaClient(
+        "qwen3-embedding:0.6b", urlopen=_raising_urlopen(_http_error(500, body))
+    )
+
+    with pytest.raises(OllamaError) as excinfo:
+        client.embed(["a"])
+
+    assert not isinstance(excinfo.value, OllamaModelNotFound)
+
+
+def test_embed_404_model_not_found_body_raises_ollama_model_not_found() -> None:
+    """A 404 whose body reports the model tag as not found raises
+    `OllamaModelNotFound` (reuses `_map_http_error`)."""
+    body = json.dumps({"error": "model 'ghost-embed:latest' not found"}).encode("utf-8")
+    client = OllamaClient(
+        "ghost-embed:latest", urlopen=_raising_urlopen(_http_error(404, body))
+    )
+
+    with pytest.raises(OllamaModelNotFound):
+        client.embed(["a"])
 
 
 # --- Phase 8: layering guard --------------------------------------------------
