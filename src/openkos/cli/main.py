@@ -2412,7 +2412,11 @@ def reindex(
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
-                layout.bundle_dir, db, embedder, force=force
+                layout.bundle_dir,
+                db,
+                embedder,
+                force=force,
+                fts_db_path=layout.fts_db_path,
             )
     except OllamaUnavailable as exc:
         typer.echo(

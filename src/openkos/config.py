@@ -118,6 +118,15 @@ class WorkspaceLayout:
         """`.openkos/vectors.db`: the sqlite-vec vector store database."""
         return self.openkos_dir / "vectors.db"
 
+    @property
+    def fts_db_path(self) -> Path:
+        """`.openkos/fts.db`: the persisted FTS5 derived index (Slice 5).
+
+        Mirrors `vectors_db_path`'s pure-derivation contract: written ONLY
+        by `state.reindex.reindex`, lazily -- this property never creates
+        anything on disk by itself."""
+        return self.openkos_dir / "fts.db"
+
 
 class RefusalCondition(NamedTuple):
     """One reason `init` might refuse to write, with its workspace classification."""
