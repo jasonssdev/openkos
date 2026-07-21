@@ -112,8 +112,9 @@ cases:
 
 - WHEN the raised exception is `OllamaUnavailable`, the stderr message MUST
   state that Ollama is not responding, MUST include the Ollama host it tried
-  to reach, and MUST tell the user to start Ollama, referencing the
-  `ollama serve` command.
+  to reach, MUST tell the user to start Ollama, referencing the
+  `ollama serve` command, and MUST additionally point to `openkos doctor`
+  to diagnose the environment.
 - WHEN the raised exception is `OllamaModelNotFound`, the stderr message MUST
   name the configured model that could not be found, and MUST tell the user
   how to install it, referencing the `ollama pull <model>` command with the
@@ -122,9 +123,8 @@ cases:
   `query` MUST print a friendly (non-actionable-specific) failure message to
   stderr — unchanged from prior behavior.
 
-(Previously: all `OllamaError`-family exceptions and `FtsUnavailable` were
-caught in a single combined handler that printed one generic friendly
-message with no cause-specific remediation.)
+(Previously: the `OllamaUnavailable` message told the user to run
+`ollama serve` with no additional pointer to `openkos doctor`.)
 
 #### Scenario: Ollama backend unreachable
 
@@ -132,7 +132,8 @@ message with no cause-specific remediation.)
   or not reachable at the configured host
 - WHEN `openkos query "<question>"` is run
 - THEN stderr states that Ollama is not responding, names the host it tried
-  to reach, and tells the user to run `ollama serve`
+  to reach, tells the user to run `ollama serve`, and also names
+  `openkos doctor` to diagnose the environment
 - AND the process exits 1 with no raw traceback shown
 
 #### Scenario: Configured model not installed
