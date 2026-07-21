@@ -599,3 +599,120 @@ def test_build_index_over_good_life_demo_bundle_resolves_expected_concepts() -> 
     assert "concepts/stoicism" in [h.concept_id for h in stoicism_hits]
     assert "concepts/stoicism" in [h.concept_id for h in apatheia_hits]
     assert "concepts/stoicism" in [h.concept_id for h in philosophy_hits]
+
+
+# --- Phase 9: on-disk persistence (fts-state ADDED requirement) ------------
+
+
+def test_write_fts_index_persists_the_same_rows_build_index_produces(
+    tmp_path: Path,
+) -> None:
+    """`write_fts_index` writes an on-disk index containing the SAME rows
+    `build_index` would produce in memory over the same bundle (fts-state:
+    Reindex persists the FTS index to disk)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="dichotomyzz"
+    )
+    _write_doc(
+        bundle_dir / "sources" / "call.md", doc_type="Source", title="Call", body="ph"
+    )
+    db_path = tmp_path / ".openkos" / "fts.db"
+
+    fts.write_fts_index(db_path, bundle_dir)
+
+    with fts.build_index(bundle_dir) as in_memory_idx:
+        expected = set(
+            in_memory_idx._conn.execute("SELECT concept_id FROM docs").fetchall()
+        )
+
+    conn = sqlite3.connect(str(db_path))
+    on_disk_rows = set(conn.execute("SELECT concept_id FROM docs").fetchall())
+    conn.close()
+
+    assert on_disk_rows == expected
+    assert on_disk_rows == {("concepts/stoicism",), ("sources/call",)}
+
+
+def test_write_fts_index_creates_no_footprint_before_first_call(tmp_path: Path) -> None:
+    """No `.openkos/fts.db` exists before `write_fts_index` runs (derived-index-cache:
+    No derived index before first reindex)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "fts.db"
+
+    assert not db_path.exists()
+
+    fts.write_fts_index(db_path, bundle_dir)
+
+    assert db_path.exists()
+
+
+def test_open_fts_index_readonly_returns_none_when_absent(tmp_path: Path) -> None:
+    """`open_fts_index_readonly` returns `None` for a non-existent path,
+    never creating one (fts-state: Persisted index read-only for non-reindex
+    consumers)."""
+    db_path = tmp_path / ".openkos" / "fts.db"
+
+    assert fts.open_fts_index_readonly(db_path) is None
+    assert not db_path.exists()
+    assert not db_path.parent.exists()
+
+
+def test_open_fts_index_readonly_reads_persisted_rows_without_writing(
+    tmp_path: Path,
+) -> None:
+    """A read-only open searches the persisted rows correctly, and performs
+    zero writes to the on-disk file (fts-state: Persisted index read-only
+    for non-reindex consumers)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="dichotomyzz"
+    )
+    db_path = tmp_path / ".openkos" / "fts.db"
+    fts.write_fts_index(db_path, bundle_dir)
+    bytes_before = db_path.read_bytes()
+
+    idx = fts.open_fts_index_readonly(db_path)
+    assert idx is not None
+    hits = idx.search("dichotomyzz")
+    idx.close()
+
+    assert [h.concept_id for h in hits] == ["concepts/stoicism"]
+    assert db_path.read_bytes() == bytes_before
+
+
+def test_open_fts_index_readonly_never_writes_even_on_write_attempt(
+    tmp_path: Path,
+) -> None:
+    """A read-only handle's underlying connection refuses a write attempt --
+    proves the open is genuinely read-only, not merely conventionally
+    unused."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "fts.db"
+    fts.write_fts_index(db_path, bundle_dir)
+
+    idx = fts.open_fts_index_readonly(db_path)
+    assert idx is not None
+    with pytest.raises(sqlite3.OperationalError):
+        idx._conn.execute("INSERT INTO docs (concept_id) VALUES ('x')")
+    idx.close()
+
+
+def test_build_index_direct_call_still_creates_no_disk_footprint(
+    tmp_path: Path,
+) -> None:
+    """A direct `build_index(bundle_dir)` call remains entirely in-memory even
+    though the on-disk writer path now exists (fts-state: Index never touches
+    disk, regression)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    before = set(tmp_path.rglob("*"))
+
+    with fts.build_index(bundle_dir) as idx:
+        idx.search("Stoicism")
+
+    after = set(tmp_path.rglob("*"))
+    assert after == before
+    assert not (bundle_dir / ".openkos").exists()
