@@ -98,6 +98,11 @@ def test_doctor_ollama_down_shows_start_server_remediation(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
     )
+    # Pin `shutil.which` so the remediation is deterministic regardless of
+    # whether the test host has the `ollama` binary on PATH (CI does not):
+    # this scenario is "installed but off" -> `ollama serve`. The not-on-PATH
+    # variant is covered by test_doctor_no_ollama_binary_on_path_*.
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/ollama")
 
     result = runner.invoke(app, ["doctor"])
 
