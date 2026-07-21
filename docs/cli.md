@@ -210,6 +210,18 @@ Exit code reflects **critical** failures only: `doctor` exits `1` if config-vali
 
 `doctor` never creates, modifies, or deletes any file.
 
+### `openkos reindex` (MVP 2)
+
+**Backfills `.openkos/vectors.db`** — the first writer of the on-disk vector store's data (embedding-vector-store, Slice 2b). Mirrors `query`'s read-only shape over the bundle: no confirmation prompt, no `--auto`. Refuses (exit 1) outside an initialized workspace, using the same shared `require_workspace` check `query`/`ingest` use.
+
+Walks the compiled bundle (the same walk `query`'s lexical index uses), keys each document by `concept_id` (bundle-relative path minus `.md` — identical to `forget`'s identity), and embeds its raw decoded text through a local Ollama server running the model configured as `embedding_model` in `openkos.yaml` (default `qwen3-embedding:0.6b`). Re-embedding is gated by a `content_hash` cache: an unchanged document costs zero Ollama calls. Any stored vector whose source document no longer exists on disk is pruned. Prints one summary line reporting how many documents were embedded, cache-hit, pruned, and skipped, then exits 0.
+
+| Flag | Meaning |
+| --- | --- |
+| `--force` | Re-embed every discovered document, ignoring the content-hash cache. |
+
+An unreachable Ollama, a missing embedding model, or an unusable `sqlite-vec` extension is reported on stderr with no raw traceback and exits 1 — the same ordered ladder `query` uses. `reindex` never alters `query`'s own behavior: retrieval stays lexical-only (FTS5) in this slice; `.openkos/vectors.db` has no consumer yet.
+
 ## `openkos.yaml` (workspace config)
 
 Structured settings for the workspace, read by the engine. It lives at the workspace root, beside `raw/` and `bundle/` — not inside the bundle, which holds concept documents and nothing else.

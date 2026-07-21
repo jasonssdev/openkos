@@ -1,23 +1,35 @@
-"""On-disk sqlite-vec vector store scaffolding (Slice 2a).
+"""On-disk sqlite-vec vector store: schema, lifecycle, and data flow.
 
 Mirrors `state/fts.py`'s guarded-open / connection-ownership posture, but
 persists to disk instead of `:memory:`: `open_vector_store` loads the
 `sqlite-vec` extension into a `sqlite3.Connection`, creates the `vectors`
 vec0 virtual table (idempotently) plus a `vector_meta` companion table for
 hash-keyed lookups, and hands the open connection to a `VectorStoreDB`
-context manager that owns it thereafter.
+context manager that owns it thereafter. `.openkos/` is created LAZILY
+here, on first SUCCESSFUL open -- never by `init` (embedding-vector-store
+spec: No Init-Time Side Effect), and never as a side effect of a failed
+open: ANY failure (not just `VecUnavailable`) leaves no new on-disk
+footprint (single-level cleanup invariant -- only `.openkos/`/`vectors.db`
+artifacts THIS call created are removed; the enclosing workspace root and
+any pre-existing `vectors.db` are never touched).
 
-This slice is additive infrastructure only: `VectorStore` is a lifecycle-only
-Protocol (`close()`), there is no vec0 upsert/query data flow, and nothing in
-the engine calls `open_vector_store` yet. `.openkos/` is created LAZILY here,
-on first SUCCESSFUL open -- never by `init` (embedding-vector-store spec: No
-Init-Time Side Effect), and never as a side effect of a failed open: ANY
-failure (not just `VecUnavailable`) leaves no new on-disk footprint.
+Slice 2a shipped this module as additive infrastructure only (lifecycle-only
+`VectorStore` Protocol, no data flow, no consumer). Slice 2b makes the seam
+real: `upsert`/`query` on `VectorStoreDB`, plus the `meta_hashes`/`prune`
+cache accessors `state/reindex.py` needs, with the `VectorStore` Protocol
+extended additively to match. The confirmed vec0 0.1.9 semantics (a spike
+test in `tests/unit/state/test_vectorstore.py`, gated on
+`probe_vec_loadable()`, proved both hold against the real extension): a
+plain `DELETE FROM vectors WHERE concept_id = ?` works directly against the
+metadata column (no rowid indirection needed), and
+`embedding MATCH ? AND k = ? ORDER BY distance` returns `(concept_id,
+distance)` rows ordered nearest-first.
 """
 
 import hashlib
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol
@@ -41,19 +53,78 @@ CREATE TABLE IF NOT EXISTS vector_meta (
 )
 """
 
+# Confirmed against the real sqlite-vec 0.1.9 extension by the spike tests in
+# `tests/unit/state/test_vectorstore.py` (Phase 1): DELETE-by-`concept_id`
+# (a metadata column, not the vec0 `embedding` column) works directly, no
+# rowid lookup needed.
+_DELETE_VECTOR_BY_CONCEPT_ID_SQL = "DELETE FROM vectors WHERE concept_id = ?"
+
+_INSERT_VECTOR_SQL = (
+    "INSERT INTO vectors (embedding, concept_id, content_hash) VALUES (?, ?, ?)"
+)
+
+_UPSERT_VECTOR_META_SQL = (
+    "INSERT OR REPLACE INTO vector_meta (concept_id, content_hash) VALUES (?, ?)"
+)
+
+_DELETE_VECTOR_META_BY_CONCEPT_ID_SQL = "DELETE FROM vector_meta WHERE concept_id = ?"
+
+_QUERY_VECTORS_SQL = (
+    "SELECT concept_id, distance FROM vectors "
+    "WHERE embedding MATCH ? AND k = ? ORDER BY distance"
+)
+
+_SELECT_META_HASHES_SQL = "SELECT concept_id, content_hash FROM vector_meta"
+
 
 class VecUnavailable(RuntimeError):
     """Raised when the `sqlite-vec` extension cannot be loaded into SQLite
     (missing `enable_load_extension` support, or the loader/DDL fails)."""
 
 
-class VectorStore(Protocol):
-    """A vector store handle's lifecycle seam (structural, mirrors
-    `Embedder`/`LLMBackend`, `llm/base.py`).
+@dataclass(frozen=True)
+class VecHit:
+    """One `query` result: an OKF concept ID and its vec0 KNN distance.
 
-    Lifecycle-only for Slice 2a: no upsert/query stub is pre-declared here
-    (YAGNI -- there is no 2a consumer). Slice 2b extends this Protocol
-    additively; a fake matching `close()` alone remains valid."""
+    Mirrors `state/fts.py`'s `FtsHit` shape."""
+
+    concept_id: str
+    """The OKF concept ID (bundle-relative path, `.md` suffix removed)."""
+    distance: float
+    """The vec0 KNN distance -- lower is more similar."""
+
+
+class VectorStore(Protocol):
+    """A vector store handle's seam (structural, mirrors `Embedder`/
+    `LLMBackend`, `llm/base.py`).
+
+    Extended additively in Slice 2b: `upsert`/`query`/`meta_hashes`/`prune`
+    joined the Slice 2a lifecycle-only (`close()`) contract. This grows the
+    Protocol's SHAPE -- any concrete implementer (`VectorStoreDB`, or a test
+    fake assigned to this type) must now provide every method here; a fake
+    declaring only `close()` no longer satisfies it, since Python's
+    structural Protocol typing requires ALL declared members, with no
+    partial/optional subset."""
+
+    def upsert(
+        self, concept_id: str, embedding: Sequence[float], content_hash: str
+    ) -> None:
+        """Replace `concept_id`'s stored vector and hash with `embedding`/
+        `content_hash`."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def query(self, embedding: Sequence[float], k: int) -> list[VecHit]:
+        """Return up to `k` `VecHit`s nearest to `embedding`, ascending
+        distance."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def meta_hashes(self) -> dict[str, str]:
+        """Return `{concept_id: content_hash}` for every stored row."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def prune(self, concept_id: str) -> None:
+        """Remove `concept_id`'s stored vector and hash, if present."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
 
     def close(self) -> None:
         """Release the underlying resource."""
@@ -196,8 +267,61 @@ class VectorStoreDB:
         """Wrap an already-initialized `conn`."""
         self._conn = conn
 
+    def upsert(
+        self, concept_id: str, embedding: Sequence[float], content_hash: str
+    ) -> None:
+        """Replace `concept_id`'s stored vector and hash with `embedding`/
+        `content_hash` (spec: Vector Upsert Data Flow).
+
+        Serializes `embedding` via `sqlite_vec.serialize_float32`, deletes
+        any existing `vectors` row for `concept_id` (confirmed safe against
+        the metadata column by the Phase 1 spike -- no rowid lookup needed),
+        inserts the new row, then `INSERT OR REPLACE`s the matching
+        `vector_meta` row, and commits once. A first upsert of a new
+        `concept_id` leaves exactly one row in each table; a re-upsert
+        leaves the SAME one row, now holding the new embedding/hash."""
+        blob = sqlite_vec.serialize_float32(list(embedding))
+        self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
+        self._conn.execute(_INSERT_VECTOR_SQL, (blob, concept_id, content_hash))
+        self._conn.execute(_UPSERT_VECTOR_META_SQL, (concept_id, content_hash))
+        self._conn.commit()
+
+    def query(self, embedding: Sequence[float], k: int) -> list[VecHit]:
+        """Return up to `k` `VecHit`s nearest to `embedding`, ascending
+        distance (spec: k-NN Query Data Flow).
+
+        `embedding MATCH ? AND k = ? ORDER BY distance` against the empty
+        `vectors` table returns zero rows -- `query` returns `[]` rather
+        than raising (spec: Query against an empty store returns no
+        results)."""
+        blob = sqlite_vec.serialize_float32(list(embedding))
+        rows = self._conn.execute(_QUERY_VECTORS_SQL, (blob, k)).fetchall()
+        return [VecHit(concept_id=str(row[0]), distance=float(row[1])) for row in rows]
+
+    def meta_hashes(self) -> dict[str, str]:
+        """Return `{concept_id: content_hash}` for every `vector_meta` row --
+        the reindex orchestrator's content-hash cache gate reads this to
+        decide which discovered docs are unchanged."""
+        rows = self._conn.execute(_SELECT_META_HASHES_SQL).fetchall()
+        return {str(row[0]): str(row[1]) for row in rows}
+
+    def prune(self, concept_id: str) -> None:
+        """Remove `concept_id`'s row from both `vectors` and `vector_meta`,
+        if present; a `concept_id` with no stored row is a no-op, not an
+        error."""
+        self._conn.execute(_DELETE_VECTOR_BY_CONCEPT_ID_SQL, (concept_id,))
+        self._conn.execute(_DELETE_VECTOR_META_BY_CONCEPT_ID_SQL, (concept_id,))
+        self._conn.commit()
+
     def close(self) -> None:
-        """Close the underlying connection."""
+        """Close the underlying connection.
+
+        Idempotent (spec: Idempotent Double-Close): `sqlite3.Connection.close()`
+        is itself safe to call more than once (CPython's sqlite3 module
+        documents `close()` as a no-op on an already-closed connection), so
+        no guard is needed here beyond delegating straight through -- a
+        second `close()` call, whether direct or via a second `with` block
+        exit, never raises."""
         self._conn.close()
 
     def __enter__(self) -> "VectorStoreDB":
