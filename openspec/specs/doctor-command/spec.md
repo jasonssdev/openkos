@@ -13,16 +13,18 @@ checks against the local workspace and the local Ollama server, printed as
 
 `doctor` MUST execute all checks applicable to the current context —
 workspace initialized, `openkos.yaml` valid, Ollama reachable, configured
-model installed, bundle readable — and print exactly one `[PASS]`/`[FAIL]`
-line per applicable check. It MUST NOT stop or skip remaining checks after
-any single check fails.
+chat model installed, configured embedding model installed, bundle
+readable — and print exactly one `[PASS]`/`[FAIL]`/`[SKIP]` line per
+applicable check. It MUST NOT stop or skip remaining checks after any
+single check fails.
 
 #### Scenario: Healthy workspace prints all applicable checks
 
 - GIVEN an initialized workspace, valid config, reachable Ollama, the
-  configured model installed, and a readable bundle
+  configured chat and embedding models both installed, and a readable
+  bundle
 - WHEN `openkos doctor` runs
-- THEN it prints one `[PASS]` line per check, covering all 5 checks
+- THEN it prints one `[PASS]` line per check, covering all 6 checks
 
 #### Scenario: A failing check does not stop later checks from running
 
@@ -94,14 +96,14 @@ PATH.)
 ### Requirement: Exit Code Reflects Critical Failures Only
 
 `doctor` MUST exit with code 1 if any CRITICAL check (config valid, Ollama
-reachable, model installed) failed, and MUST exit 0 otherwise. Informational
-checks (workspace initialized, bundle readable) failing alone MUST NOT
-cause a non-zero exit.
+reachable, chat model installed) failed, and MUST exit 0 otherwise.
+Informational checks (workspace initialized, bundle readable, embedding
+model installed) failing alone MUST NOT cause a non-zero exit.
 
 #### Scenario: Informational-only failure still exits zero
 
-- GIVEN the workspace-initialized check fails but every critical check
-  passes
+- GIVEN the workspace-initialized check fails, or the embedding-model
+  check fails, while every critical check passes
 - WHEN `openkos doctor` runs
 - THEN the process exits with code 0
 
@@ -116,21 +118,23 @@ cause a non-zero exit.
 Outside an initialized workspace, `doctor` MUST still run: the
 workspace-initialized check reports an informational `[FAIL]` with init
 remediation, the config-valid and bundle-readable checks are skipped as
-not applicable, and the Ollama-reachable and model-installed checks MUST
-still run — checked against the default model — and MUST still determine
-the exit code.
+not applicable, and the Ollama-reachable and chat-model-installed checks
+MUST still run — checked against the default chat model — and MUST still
+determine the exit code. The embedding-model-installed check MUST also
+still run pre-init, checked against the default `embedding_model`, as an
+informational (non-exit-code-affecting) check.
 
 #### Scenario: Unhealthy pre-init environment exits one
 
 - GIVEN no initialized workspace and Ollama unreachable
 - WHEN `openkos doctor` runs
-- THEN it prints results for workspace, Ollama-reachable, and
-  model-installed, and exits with code 1
+- THEN it prints results for workspace, Ollama-reachable, chat
+  model-installed, and embedding model-installed, and exits with code 1
 
 #### Scenario: Healthy pre-init environment exits zero
 
-- GIVEN no initialized workspace, Ollama reachable, and the default model
-  installed
+- GIVEN no initialized workspace, Ollama reachable, and the default chat
+  and embedding models both installed
 - WHEN `openkos doctor` runs
 - THEN every applicable check passes and the process exits with code 0
 
@@ -153,6 +157,42 @@ installed if it matches an installed tag exactly, or matches that tag's
   normalization
 - WHEN `openkos doctor` runs
 - THEN the model-installed check prints `[FAIL]` with a pull remediation
+
+### Requirement: Embedding-Model-Installed Check
+
+`doctor` MUST report whether the configured (or, outside a workspace,
+default) `embedding_model` is installed, using the same tag-normalized
+`model_tag_matches()` comparison and `[PASS]`/`[FAIL]`/`[SKIP]` +
+remediation pattern as the chat model-installed check. This check MUST be
+informational (its failure alone MUST NOT affect the exit code). WHEN
+Ollama is unreachable, this check MUST print `[SKIP]` with a
+blocked-by-unreachable detail rather than `[FAIL]`, to avoid
+double-reporting the same root cause already surfaced by the
+Ollama-reachable check.
+
+#### Scenario: Embedding model installed passes
+
+- GIVEN Ollama is reachable and the configured `embedding_model` tag is
+  installed (exact or `:latest`-normalized match)
+- WHEN `openkos doctor` runs
+- THEN the embedding-model check prints `[PASS]`
+
+#### Scenario: Embedding model missing shows a pull remediation
+
+- GIVEN Ollama is reachable but the configured `embedding_model` tag is
+  not installed
+- WHEN `openkos doctor` runs
+- THEN the embedding-model check prints `[FAIL]` followed by an indented
+  fix line naming a pull command for that exact tag, and the process still
+  exits 0 if every critical check otherwise passes
+
+#### Scenario: Ollama unreachable skips the embedding-model check
+
+- GIVEN Ollama is unreachable
+- WHEN `openkos doctor` runs
+- THEN the embedding-model check prints `[SKIP]` with a
+  blocked-by-unreachable detail, not `[FAIL]`, and the Ollama-reachable
+  check alone reports the root cause
 
 ### Requirement: Doctor Is Read-Only
 
