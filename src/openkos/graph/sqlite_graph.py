@@ -1,4 +1,5 @@
-"""In-memory SQLite node-edge projection over the compiled bundle.
+"""In-memory SQLite node-edge projection over the compiled bundle, plus
+(Slice 5) an on-disk persisted variant written only by `reindex`.
 
 The derived-layer counterpart to `state/fts.py`: `build_graph` mirrors
 `build_index` EXACTLY -- a rebuild-per-run `sqlite3(":memory:")` connection,
@@ -40,8 +41,35 @@ Any exception during the build closes the in-memory connection before
 propagating, so a failed build never leaks it -- only a successful build
 hands the open connection off to the returned `SqliteGraphStore`.
 
+`_populate_graph_tables` is the shared node/edge-population core both
+`build_graph` (against a fresh `:memory:` connection) and `write_graph_store`
+(against an on-disk connection opened via `state/derived.py`) delegate to --
+one doc-walk/extraction implementation, two targets, mirroring `state/fts.py`'s
+`_populate_docs_table` split exactly.
+
+`write_graph_store(path, bundle_dir)` (Slice 5, `derived-index-cache`) is
+invoked ONLY by `reindex`: it always performs a full rebuild (DROP + repopulate)
+against `.openkos/graph.db`, targeted via `derived.open_derived_connection`'s
+WAL/busy_timeout/lazy-create posture. The DROP, rebuild, and manifest write
+all happen inside one explicit SQLite transaction (mirrors `state/fts.py`'s
+atomicity fix): a crash mid-rebuild rolls back completely rather than
+leaving an empty projection paired with a stale-but-unchanged manifest hash.
+`manifest_hash`, when given, is stored VERBATIM rather than recomputed here
+-- `state/reindex.py`'s decision digest is the single source of truth, never
+a second/third independently-taken bundle walk. The SKIP-vs-REBUILD decision
+itself lives entirely in `state/reindex.py`; this function never decides
+whether to run, only how to write when called. `open_graph_store_readonly`
+is the read-only counterpart every non-`reindex` consumer uses:
+existence-gated (returns `None` for an absent file, never creating one),
+opened via a `file:...?mode=ro` URI connection so a write attempt against
+the returned handle fails at the SQLite level, and it NEVER computes or
+compares a manifest hash -- staleness detection is exclusively `reindex`'s
+job (D2 binding contract).
+
 Layering boundary: the canonical layer (`openkos.model`, `openkos.bundle`,
-`openkos.state`) MUST NOT import `openkos.graph`.
+`openkos.state`) MUST NOT import `openkos.graph`; `openkos.graph` (derived)
+importing `openkos.state.derived` (canonical) below is the ALLOWED direction
+-- derived depends on canonical, never the reverse.
 """
 
 import re
@@ -49,9 +77,11 @@ import sqlite3
 from pathlib import Path
 from types import TracebackType
 from typing import Final
+from urllib.parse import quote
 
 from openkos.graph.base import Edge
 from openkos.model import okf
+from openkos.state import derived
 
 _LINK_RE: Final = re.compile(r"\[[^\]]*\]\(/([^)\s#]+\.md)(?:#[^)]*)?\)")
 """A bundle-relative `[text](/….md)` markdown link, per
@@ -200,80 +230,199 @@ class SqliteGraphStore:
         self.close()
 
 
+def _populate_graph_tables(conn: sqlite3.Connection, bundle_dir: Path) -> list[str]:
+    """Shared node/edge-population core (D-refactor, dedupes the in-memory/
+    on-disk writer paths): creates the `nodes`/`edges` tables + indexes on
+    `conn`, then walks `okf._iter_docs(bundle_dir)` once and extracts nodes
+    and edges exactly as documented at module level, returning the skip
+    notices for anything that could not be projected.
+
+    A `read_error`/`parse_error` doc is skipped and noted, never crashing
+    the build (mirrors `fts.build_index`); a valid doc has its body AND
+    metadata re-read and re-parsed via `okf.load_frontmatter` (the same
+    TOCTOU guard `fts.build_index` uses) and becomes one node. Edges are
+    then extracted in two independent passes over that same doc set --
+    untyped from body links, typed from `relations:` frontmatter. Callers
+    own `conn`'s lifecycle -- any exception raised here propagates to the
+    caller unchanged, closing/cleanup is the caller's responsibility.
+    """
+    conn.execute(_CREATE_NODES_SQL)
+    conn.execute(_CREATE_EDGES_SQL)
+    conn.execute(_CREATE_EDGES_SOURCE_INDEX_SQL)
+    conn.execute(_CREATE_EDGES_TARGET_INDEX_SQL)
+
+    skipped: list[str] = []
+    node_ids: set[str] = set()
+    bodies: list[tuple[str, str]] = []
+    metadatas: list[tuple[str, dict[str, object]]] = []
+    for scan in okf._iter_docs(bundle_dir):
+        concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        if scan.read_error is not None:
+            skipped.append(_skip_note(concept_id, reason="unreadable"))
+            continue
+        if scan.parse_error is not None:
+            skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
+            continue
+        try:
+            text = scan.path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            skipped.append(_skip_note(concept_id, reason="unreadable"))
+            continue
+        try:
+            metadata, body = okf.load_frontmatter(text)
+        except Exception:  # broad: a concurrent edit can corrupt frontmatter
+            skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
+            continue
+
+        conn.execute(_INSERT_NODE_SQL, (concept_id,))
+        node_ids.add(concept_id)
+        bodies.append((concept_id, body))
+        metadatas.append((concept_id, metadata))
+
+    edge_pairs: set[tuple[str, str]] = set()
+    for source_id, body in bodies:
+        for match in _LINK_RE.finditer(_mask_fenced_code_blocks(body)):
+            target_id = match.group(1).removesuffix(".md")
+            if target_id in node_ids:
+                edge_pairs.add((source_id, target_id))
+    for source_id, target_id in sorted(edge_pairs):
+        conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
+
+    typed_edges: set[tuple[str, str, str]] = set()
+    for source_id, metadata in metadatas:
+        try:
+            relations = okf.decode_relations(metadata)
+        except ValueError:  # malformed relations: contributes no typed edges
+            skipped.append(_skip_note(source_id, reason="malformed relations"))
+            continue
+        for relation in relations:
+            if relation.target in node_ids:
+                typed_edges.add((source_id, relation.target, relation.type))
+    for source_id, target_id, relation_type in sorted(typed_edges):
+        conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, relation_type))
+
+    return skipped
+
+
 def build_graph(bundle_dir: Path) -> SqliteGraphStore:
     """Build an in-memory node-edge projection over every eligible doc under
     `bundle_dir`.
 
-    Opens `sqlite3(":memory:")`, creates the `nodes`/`edges` tables (plain
-    `CREATE TABLE`, no migration needed for a later `:memory:`-to-file flip),
-    then walks `okf._iter_docs` once: a `read_error`/`parse_error` doc is
-    skipped and noted, never crashing the build (mirrors `fts.build_index`);
-    a valid doc has its body AND metadata re-read and re-parsed via
-    `okf.load_frontmatter` (the same TOCTOU guard `fts.build_index` uses) and
-    becomes one node. Edges are then extracted in two independent passes over
-    that same doc set -- untyped from body links, typed from `relations:`
-    frontmatter -- as documented at module level. Any exception raised
-    anywhere in this build closes the in-memory connection before
-    propagating.
+    Opens `sqlite3(":memory:")` and delegates to `_populate_graph_tables` for
+    the table DDL + doc-walk + node/edge-extraction sequence. Any exception
+    raised anywhere in that call closes the in-memory connection before
+    propagating -- a failed build never leaks it; only a successful build
+    hands the open connection off to the returned `SqliteGraphStore`. Never
+    touches disk -- persistence exists only via the distinct
+    `write_graph_store` path `reindex` calls (graph-projection: Projection
+    never touches disk).
     """
     conn = sqlite3.connect(":memory:")
     try:
-        conn.execute(_CREATE_NODES_SQL)
-        conn.execute(_CREATE_EDGES_SQL)
-        conn.execute(_CREATE_EDGES_SOURCE_INDEX_SQL)
-        conn.execute(_CREATE_EDGES_TARGET_INDEX_SQL)
-
-        skipped: list[str] = []
-        node_ids: set[str] = set()
-        bodies: list[tuple[str, str]] = []
-        metadatas: list[tuple[str, dict[str, object]]] = []
-        for scan in okf._iter_docs(bundle_dir):
-            concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
-            if scan.read_error is not None:
-                skipped.append(_skip_note(concept_id, reason="unreadable"))
-                continue
-            if scan.parse_error is not None:
-                skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
-                continue
-            try:
-                text = scan.path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                skipped.append(_skip_note(concept_id, reason="unreadable"))
-                continue
-            try:
-                metadata, body = okf.load_frontmatter(text)
-            except Exception:  # broad: a concurrent edit can corrupt frontmatter
-                skipped.append(_skip_note(concept_id, reason="unparseable frontmatter"))
-                continue
-
-            conn.execute(_INSERT_NODE_SQL, (concept_id,))
-            node_ids.add(concept_id)
-            bodies.append((concept_id, body))
-            metadatas.append((concept_id, metadata))
-
-        edge_pairs: set[tuple[str, str]] = set()
-        for source_id, body in bodies:
-            for match in _LINK_RE.finditer(_mask_fenced_code_blocks(body)):
-                target_id = match.group(1).removesuffix(".md")
-                if target_id in node_ids:
-                    edge_pairs.add((source_id, target_id))
-        for source_id, target_id in sorted(edge_pairs):
-            conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
-
-        typed_edges: set[tuple[str, str, str]] = set()
-        for source_id, metadata in metadatas:
-            try:
-                relations = okf.decode_relations(metadata)
-            except ValueError:  # malformed relations: contributes no typed edges
-                skipped.append(_skip_note(source_id, reason="malformed relations"))
-                continue
-            for relation in relations:
-                if relation.target in node_ids:
-                    typed_edges.add((source_id, relation.target, relation.type))
-        for source_id, target_id, relation_type in sorted(typed_edges):
-            conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, relation_type))
+        skipped = _populate_graph_tables(conn, bundle_dir)
     except BaseException:
         conn.close()
         raise
 
     return SqliteGraphStore(conn, skipped)
+
+
+def write_graph_store(
+    path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+) -> None:
+    """Write a full, on-disk node-edge projection for `bundle_dir` to `path`,
+    invoked ONLY by `reindex` (derived-index-cache: On-Disk Persistence Of
+    Derived Indexes; graph-projection: Reindex persists the graph index to
+    disk).
+
+    Opens `path` via `state.derived.open_derived_connection` (lazy
+    `.openkos/` creation, WAL + busy_timeout PRAGMAs, shared `meta` table),
+    then drops any prior `nodes`/`edges` tables and delegates to the SAME
+    `_populate_graph_tables` core `build_graph` uses -- the on-disk
+    projection always contains exactly the nodes/edges an equivalent
+    `build_graph` call would produce in memory. This function always
+    performs a full rebuild when called -- it makes no skip/rebuild decision
+    of its own; that comparison against the PREVIOUSLY stored manifest hash
+    is `state/reindex.py`'s exclusive responsibility (D2 binding contract).
+
+    `manifest_hash`, when given, is stored VERBATIM rather than recomputed
+    here: `state/reindex.py`'s `_reindex_graph` passes the SAME digest it
+    already computed for its skip/rebuild decision, so the stored value
+    always corresponds to that exact bundle snapshot instead of a THIRD,
+    independently-taken walk (mirrors `state/fts.py::write_fts_index`'s
+    Finding-C correction). Omitting it (the default) computes one fresh, for
+    direct/standalone callers with no separate decision step of their own.
+
+    The `DROP`s, the full rebuild, and the manifest write ALL happen inside
+    one explicit SQLite transaction (`BEGIN IMMEDIATE` ... `commit()`/
+    `rollback()`), mirroring `state/fts.py::write_fts_index`'s Finding-B
+    atomicity correction: a crash mid-rebuild rolls back completely, leaving
+    the PRIOR `nodes`/`edges` tables and PRIOR `meta.manifest_hash` exactly
+    as they were, rather than a structurally-valid but EMPTY/partial
+    projection paired with a stale-but-unchanged manifest hash.
+    """
+    conn = derived.open_derived_connection(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DROP TABLE IF EXISTS nodes")
+            conn.execute("DROP TABLE IF EXISTS edges")
+            _populate_graph_tables(conn, bundle_dir)
+            digest = (
+                manifest_hash
+                if manifest_hash is not None
+                else derived.bundle_manifest_hash(bundle_dir)
+            )
+            derived.write_manifest_hash(conn, digest)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+
+
+def open_graph_store_readonly(path: Path) -> "SqliteGraphStore | None":
+    """Open the on-disk graph projection at `path` read-only, for future
+    `answer()` consumers (derived-index-cache: Consumers Read Persisted
+    Indexes Read-Only; graph-projection: Persisted index read-only for
+    non-reindex consumers).
+
+    Existence-gated: returns `None` if `path` does not exist rather than
+    creating one -- only `reindex`'s `write_graph_store` ever creates this
+    file. Opens via a `file:...?mode=ro` SQLite URI connection, so the
+    returned handle's connection genuinely refuses any write attempt at the
+    SQLite level (not merely by convention). NEVER computes or compares a
+    bundle manifest hash -- staleness detection is exclusively `reindex`'s
+    job; a caller here always gets whatever `reindex` last wrote, however
+    stale, mirroring `state/fts.py::open_fts_index_readonly`.
+    """
+    if not path.exists():
+        return None
+    uri = f"file:{quote(str(path))}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    return SqliteGraphStore(conn, [])
+
+
+def reindex_graph(bundle_dir: Path, path: Path, *, force: bool = False) -> None:
+    """Rebuild the on-disk graph projection at `path` iff the bundle's
+    manifest hash changed since the last run, or `force` (mirrors
+    `state/reindex.py`'s `_reindex_fts` gate for the FTS store).
+
+    A thin, graph-specific wrapper around `derived.reindex_gate` (the shared
+    manifest-gate-and-rebuild helper, task 2.11 REFACTOR): the gate decides
+    skip-vs-rebuild by comparing the bundle's CURRENT manifest hash against
+    the PREVIOUSLY stored one (D2 binding contract), then calls
+    `write_graph_store` with that SAME digest on a mismatch/absent/`force`.
+
+    Deliberately lives HERE in `openkos.graph` rather than in
+    `state/reindex.py`: `state/reindex.py` is canonical-layer code and MUST
+    NOT import `openkos.graph` (derived layer) -- the entry layer
+    (`cli/main.py`'s `reindex` command) calls `state.reindex.reindex(...)`
+    for `vectors.db`/`fts.db` and THIS function separately for `graph.db`,
+    within the same CLI invocation, so `openkos reindex` still writes all
+    three derived stores in one run (reindex-command: Reindex writes all
+    three derived stores in one run) without violating the documented
+    canonical/derived layering boundary (docs/architecture.md).
+    """
+    derived.reindex_gate(bundle_dir, path, force=force, write=write_graph_store)

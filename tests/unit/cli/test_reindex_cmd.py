@@ -308,6 +308,33 @@ def test_reindex_persists_fts_db_end_to_end(
     assert fts_db_path.exists()
 
 
+def test_reindex_persists_graph_db_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real (unmocked) `reindex` run persists `.openkos/graph.db`
+    alongside `vectors.db`/`fts.db` (reindex-command: Reindex writes all
+    three derived stores in one run) -- proves
+    `WorkspaceLayout.graph_db_path` and `sqlite_graph.reindex_graph` are
+    genuinely threaded through the CLI's thin-wiring call (Slice 5, PR2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\ndescription: ''\n---\ndichotomyzz\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeEmbedder)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+    graph_db_path = tmp_path / ".openkos" / "graph.db"
+    assert vectors_db_path.exists()
+    assert fts_db_path.exists()
+    assert graph_db_path.exists()
+
+
 def test_reindex_malformed_config_maps_to_exit_one_before_calling_orchestrator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

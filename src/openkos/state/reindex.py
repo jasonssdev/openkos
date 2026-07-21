@@ -61,28 +61,18 @@ def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
     last `reindex` run, or `force` (derived-index-cache: Bundle-Manifest-Hash
     Cache Key; Whole-Index Rebuild On Manifest Change).
 
-    Opens `fts_db_path` (lazily creating `.openkos/` on first call, mirroring
-    `open_vector_store`) to read the PREVIOUSLY stored `meta.manifest_hash`,
-    then computes the bundle's CURRENT manifest hash via
-    `derived.bundle_manifest_hash` -- this comparison is the ONLY place
-    staleness is decided anywhere in the system (D2 binding contract): a
-    match (and no `force`) skips the whole rebuild entirely; a mismatch (or
-    absent stored hash, or `force`) triggers `fts.write_fts_index`, which
-    always performs a full, atomic DROP+repopulate rebuild. The SAME
-    `new_manifest` digest computed here for the decision is passed straight
-    into `write_fts_index` to be stored -- it is never recomputed a second
-    time there (review correction, Finding C), so the decision snapshot and
-    the persisted value are guaranteed to be the SAME bundle walk.
+    A thin, FTS-specific wrapper around `derived.reindex_gate` (the shared
+    manifest-gate-and-rebuild helper, review carry-over task 2.11 REFACTOR):
+    the gate itself decides skip-vs-rebuild by comparing the bundle's CURRENT
+    manifest hash against the PREVIOUSLY stored one (D2 binding contract --
+    the ONLY place staleness is decided anywhere in the system), then calls
+    `fts.write_fts_index` with that SAME digest on a mismatch/absent/`force`,
+    so it is never recomputed a second time there (review correction,
+    Finding C carried over from PR1).
     """
-    conn = derived.open_derived_connection(fts_db_path)
-    try:
-        current_manifest = derived.read_manifest_hash(conn)
-    finally:
-        conn.close()
-
-    new_manifest = derived.bundle_manifest_hash(bundle_dir)
-    if force or current_manifest != new_manifest:
-        fts.write_fts_index(fts_db_path, bundle_dir, manifest_hash=new_manifest)
+    derived.reindex_gate(
+        bundle_dir, fts_db_path, force=force, write=fts.write_fts_index
+    )
 
 
 def reindex(
