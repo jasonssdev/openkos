@@ -47,6 +47,27 @@ def _fake_ollama_client(
     return _FakeOllamaClient
 
 
+@pytest.fixture(autouse=True)
+def _mock_ollama_client_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hermetic default for every `init` invocation in this module.
+
+    `init`'s post-success preflight builds a real `OllamaClient` and probes
+    `localhost:11434` on every successful run -- without this autouse
+    fixture, every test in this file that does not set up its own
+    `OllamaClient` mock (i.e. all the non-preflight-focused tests) would
+    perform real, unmocked network I/O. The default fake reports Ollama
+    reachable with `DEFAULT_MODEL` already installed, so the preflight stays
+    silent and none of this module's existing stdout/stderr assertions are
+    perturbed. The 6 preflight-focused tests below call
+    `monkeypatch.setattr("openkos.cli.main.OllamaClient", ...)` themselves,
+    which cleanly overrides this fixture's default for that one test.
+    """
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+    )
+
+
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make `sys.stdin.isatty()` report `True` inside a `CliRunner.invoke` call.
 

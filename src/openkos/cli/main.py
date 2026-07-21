@@ -45,6 +45,11 @@ app = typer.Typer()
 # blocking on OllamaClient's DEFAULT_TIMEOUT.
 _PREFLIGHT_TIMEOUT = 5.0
 
+# Shared remediation clause appended to the OllamaUnavailable handlers of
+# query, adjudicate, and suggest-relations -- kept as a single constant so
+# the three verbs cannot drift from each other in wording.
+_DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
+
 
 @app.callback()
 def callback() -> None:
@@ -1992,7 +1997,7 @@ def adjudicate(
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos adjudicate: failed -- {exc}. Start it with `ollama serve`, "
-            "then try again. Or run `openkos doctor` to diagnose the environment.",
+            f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
@@ -2099,8 +2104,7 @@ def suggest_relations_cmd() -> None:
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos suggest-relations: failed -- {exc}. Start it with "
-            "`ollama serve`, then try again. Or run `openkos doctor` to "
-            "diagnose the environment.",
+            f"`ollama serve`, then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
@@ -2230,7 +2234,7 @@ def query(
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos query: failed -- {exc}. Start it with `ollama serve`, "
-            "then try again. Or run `openkos doctor` to diagnose the environment.",
+            f"then try again.{_DOCTOR_HINT}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
