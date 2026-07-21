@@ -10,12 +10,14 @@ message. Every test patches `openkos.cli.main.answer` (D4) -- zero
 network, zero real Ollama process, zero real FTS5 index.
 """
 
+import ast
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
+from openkos.graph import sqlite_graph
 from openkos.llm.ollama import (
     OllamaClient,
     OllamaError,
@@ -23,23 +25,29 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
-from openkos.state import vectorstore
+from openkos.state import fts, vectorstore
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import VecUnavailable
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 runner = CliRunner()
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Initialize a workspace AND backfill an (empty) `vectors.db`, so
-    `query`'s dense seams are healthy by default -- most tests here exercise
-    the answer-rendering/stderr-format contract, not the dense-degrade/hint
-    behavior, which has its own dedicated tests below using a workspace with
-    no `vectors.db` (or one that fails to open)."""
+    """Initialize a workspace AND backfill an (empty) `vectors.db`, `fts.db`,
+    and `graph.db`, so `query`'s three derived-index seams are ALL healthy
+    by default -- most tests here exercise the answer-rendering/stderr-format
+    contract, not the absent/corrupt-index-degrade/hint behavior, which has
+    its own dedicated tests below using a workspace missing one or more of
+    the three stores (or one that fails to open)."""
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
     vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db").close()
+    bundle_dir = tmp_path / "bundle"
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    sqlite_graph.write_graph_store(tmp_path / ".openkos" / "graph.db", bundle_dir)
 
 
 def test_query_refuses_when_not_a_workspace(
@@ -358,6 +366,46 @@ def test_query_builds_and_injects_embedder_and_vector_store(
     assert kwargs["vector_store"] is not None
 
 
+def test_query_builds_and_injects_fts_index_and_graph_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`query` opens the persisted FTS and graph derived indexes read-only
+    and injects both into `answer()` alongside the embedder/vector store
+    (Slice 5, PR3; spec: Happy-Path Answer Rendering -- Matching answer with
+    citations)."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\ndescription: ''\n---\ndichotomyzz\n",
+        encoding="utf-8",
+    )
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    sqlite_graph.write_graph_store(tmp_path / ".openkos" / "graph.db", bundle_dir)
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["fts_index"] is not None
+    assert kwargs["graph_index"] is not None
+
+
 def test_query_never_creates_vectors_db(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -383,6 +431,74 @@ def test_query_never_creates_vectors_db(
 
     assert result.exit_code == 0
     assert not (tmp_path / ".openkos" / "vectors.db").exists()
+
+
+def test_query_never_creates_fts_db_or_graph_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`query` is read-only over the FTS/graph derived indexes too: a fresh
+    workspace with no `fts.db`/`graph.db` never gets either created by
+    `query` (Slice 5, PR3; reindex-command: Query never writes to a derived
+    store)."""
+    monkeypatch.chdir(tmp_path)
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *args, **kwargs: AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        ),
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / ".openkos" / "fts.db").exists()
+    assert not (tmp_path / ".openkos" / "graph.db").exists()
+
+
+def test_query_performs_zero_writes_to_an_existing_fts_db_or_graph_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace with ALREADY-persisted `fts.db`/`graph.db` is left
+    byte-for-byte unmodified by `query` (Slice 5, PR3; query-command:
+    Happy-Path Answer Rendering; reindex-command: Query never writes to a
+    derived store)."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\ndescription: ''\n---\ndichotomyzz\n",
+        encoding="utf-8",
+    )
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+    graph_db_path = tmp_path / ".openkos" / "graph.db"
+    fts.write_fts_index(fts_db_path, bundle_dir)
+    sqlite_graph.write_graph_store(graph_db_path, bundle_dir)
+    fts_bytes_before = fts_db_path.read_bytes()
+    graph_bytes_before = graph_db_path.read_bytes()
+    monkeypatch.setattr(
+        "openkos.cli.main.answer",
+        lambda *args, **kwargs: AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        ),
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert fts_db_path.read_bytes() == fts_bytes_before
+    assert graph_db_path.read_bytes() == graph_bytes_before
 
 
 def test_query_cold_store_hints_at_reindex(
@@ -490,6 +606,128 @@ def test_query_corrupt_vectors_db_degrades_with_hint(
         "Citations:\n"
         "  → concepts/stoicism (Stoicism)\n"
     )
+    assert "openkos reindex" in result.stderr
+
+
+def test_query_cold_fts_and_graph_stores_hint_at_reindex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace with no `fts.db`/`graph.db` (never reindexed) still
+    completes on whatever retrieval lists remain available, exits 0, and
+    prints the reindex hint -- mirroring the existing dense-cold-store
+    behavior (Slice 5, PR3; query-command: FTS/Graph-Unavailable Runs
+    Degrade And Hint At Reindex -- Never-reindexed workspace hints at
+    reindex for FTS/graph too)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / ".openkos" / "fts.db").unlink()
+    (tmp_path / ".openkos" / "graph.db").unlink()
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=0,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=1,
+        fused_count=1,
+        dense_degraded=False,
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return fake_result
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["fts_index"] is None
+    assert kwargs["graph_index"] is None
+    assert "openkos reindex" in result.stderr
+
+
+def test_query_corrupt_fts_db_degrades_with_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EXISTING `fts.db` that is corrupt at the filesystem level raises a
+    raw `sqlite3.Error` from `open_fts_index_readonly`'s validating read --
+    `query` must still degrade to dense-only fusion, printing the answer and
+    citations to STDOUT and the reindex hint on stderr, rather than crashing
+    with a raw traceback (Slice 5, PR3; query-command: Corrupt or unopenable
+    FTS/graph index degrades with the same hint)."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    (openkos_dir / "fts.db").write_bytes(b"not a database")
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=0,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=1,
+        fused_count=1,
+        dense_degraded=False,
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return fake_result
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "Traceback" not in result.stderr
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["fts_index"] is None
+    assert "openkos reindex" in result.stderr
+
+
+def test_query_corrupt_graph_db_degrades_with_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EXISTING `graph.db` that is corrupt at the filesystem level raises
+    a raw `sqlite3.Error` from `open_graph_store_readonly`'s validating read
+    -- `query` must still degrade cleanly, rather than crashing with a raw
+    traceback (Slice 5, PR3; query-command: Corrupt or unopenable FTS/graph
+    index degrades with the same hint)."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    (openkos_dir / "graph.db").write_bytes(b"not a database")
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=1,
+        fused_count=1,
+        dense_degraded=False,
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return fake_result
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "Traceback" not in result.stderr
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["graph_index"] is None
     assert "openkos reindex" in result.stderr
 
 
@@ -843,3 +1081,22 @@ def test_query_malformed_config_maps_to_exit_one_before_calling_answer(
     )
     assert "Traceback" not in result.stderr
     assert calls == []
+
+
+def test_query_docstring_no_longer_claims_no_persisted_state() -> None:
+    """`query`'s docstring no longer states that graph/FTS retrieval carries
+    "no persisted state, no CLI-level graph command" -- it now describes
+    both as reading persisted, `reindex`-written on-disk indexes (Slice 5,
+    PR3; query-command: Docstring reflects persisted-index contract)."""
+    cli_main = _REPO_ROOT / "src" / "openkos" / "cli" / "main.py"
+    tree = ast.parse(cli_main.read_text(encoding="utf-8"))
+    query_docstring = next(
+        ast.get_docstring(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "query"
+    )
+    assert query_docstring is not None
+    assert "no persisted state" not in query_docstring
+    assert "no CLI-level graph command" not in query_docstring
+    assert "persisted" in query_docstring.lower()
+    assert "reindex" in query_docstring

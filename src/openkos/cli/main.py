@@ -22,6 +22,7 @@ from openkos.bundle import merge as bundle_merge
 from openkos.bundle import relations as bundle_relations
 from openkos.extraction.concept import extract_concept
 from openkos.graph import sqlite_graph
+from openkos.graph.base import GraphStore
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
     OllamaClient,
@@ -39,6 +40,7 @@ from openkos.resolution.adjudication import Verdict, adjudicate_candidates
 from openkos.resolution.candidates import Tier
 from openkos.resolution.edge_typing import suggest_relations
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
+from openkos.state import fts
 from openkos.state import reindex as reindex_module
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import (
@@ -2208,6 +2210,53 @@ def _open_vector_store_or_degrade(
         return nullcontext(None), True
 
 
+def _open_fts_or_degrade(
+    path: Path,
+) -> tuple[AbstractContextManager["fts.FtsIndex | None"], bool]:
+    """Existence-gated, read-only handle open for `query`'s persisted FTS
+    seam (Slice 5, PR3; mirrors `_open_vector_store_or_degrade` exactly).
+
+    `query` never CREATES `fts.db` -- `fts.open_fts_index_readonly` is
+    already existence-gated and never creates one regardless. Returns a
+    context manager yielding either an open `FtsIndex` or `None`, plus
+    whether the CLI itself detected the store as unavailable this call
+    (absent, or a raw `sqlite3.Error` from `open_fts_index_readonly`'s
+    open-time validating read against a corrupt/invalid EXISTING `fts.db`).
+    The caller's reindex hint fires on either signal; `answer()` itself only
+    ever sees "handle or `None`" (the exception-vs-degrade boundary lives
+    entirely at this call site, never inside `answer()`)."""
+    try:
+        handle = fts.open_fts_index_readonly(path)
+    except sqlite3.Error:
+        return nullcontext(None), True
+    if handle is None:
+        return nullcontext(None), True
+    return handle, False
+
+
+def _open_graph_or_degrade(
+    path: Path,
+) -> tuple[AbstractContextManager["GraphStore | None"], bool]:
+    """Existence-gated, read-only handle open for `query`'s persisted graph
+    seam (Slice 5, PR3; mirrors `_open_vector_store_or_degrade`/
+    `_open_fts_or_degrade` exactly).
+
+    `query` never CREATES `graph.db` -- `sqlite_graph.open_graph_store_readonly`
+    is already existence-gated and never creates one regardless. Returns a
+    context manager yielding either an open `SqliteGraphStore` (satisfying
+    `GraphStore` structurally) or `None`, plus whether the CLI itself
+    detected the store as unavailable this call (absent, or a raw
+    `sqlite3.Error` from `open_graph_store_readonly`'s open-time validating
+    read against a corrupt/invalid EXISTING `graph.db`)."""
+    try:
+        handle = sqlite_graph.open_graph_store_readonly(path)
+    except sqlite3.Error:
+        return nullcontext(None), True
+    if handle is None:
+        return nullcontext(None), True
+    return handle, False
+
+
 @app.command()
 def query(
     question: str = typer.Argument(
@@ -2223,26 +2272,31 @@ def query(
     no `--auto`. Must be run inside an initialized workspace; outside one it
     refuses (exit 1) with a short reason on stderr. Retrieval fuses THREE
     lists: lexical (FTS5) hits, dense (`vectors.db`) hits, and a second-stage
-    seeded personalized-PageRank graph pool (built in-process from the
-    bundle -- no persisted state, no CLI-level graph command), all combined
-    via reciprocal rank fusion. `query` never WRITES `vectors.db` -- an
-    absent or unusable store degrades cleanly to FTS-only, never creating
-    one.
+    seeded personalized-PageRank graph pool -- all three now read PERSISTED,
+    read-only on-disk indexes under `.openkos/` (`fts.db`, `vectors.db`,
+    `graph.db`) that `reindex` maintains, rather than rebuilding anything
+    in-process per call (Slice 5, PR3). `query` never WRITES to any of the
+    three derived stores -- an absent or unavailable/corrupt store degrades
+    cleanly (FTS/graph fall back to the remaining lists; dense falls back to
+    FTS-only), never creating or repairing one; only `reindex` writes.
 
     Every completed run (successful answer or no-match) prints a one-line
     `retrieval:` summary to STDERR reporting the raw FTS hit count, the raw
     dense hit count, the raw graph hit count, the fused count, whether the
     LLM was invoked, and how many sources were cited -- so a silent
     short-circuit (e.g. zero hits, so the LLM never ran) is always visible,
-    even though STDOUT stays pipe-clean. When dense retrieval degraded (the
-    store is absent, or unavailable/corrupt), an additional stderr line
-    hints at running `openkos reindex` to enable semantic retrieval. When
-    graph retrieval degraded (no seeds, or the in-process graph build/rank
-    step failed), a separate stderr note says so -- graph retrieval never
-    affects the FTS/dense outcome. When the build skipped any
-    unreadable/unparseable files, an `index:` skip-notice block follows the
-    summary on stderr, worded as a whole-bundle build diagnostic -- it never
-    implies the skipped files were candidates for THIS query's match.
+    even though STDOUT stays pipe-clean. When any derived index is absent or
+    unavailable/corrupt (FTS, dense, or graph), an additional stderr line
+    hints at running `openkos reindex` to enable full retrieval -- `query`
+    itself never recomputes or compares the bundle's manifest hash to reach
+    this decision; staleness detection is `reindex`'s exclusive job (D2).
+    When graph retrieval degraded (absent/unopenable index, no seeds, or a
+    PageRank failure), a separate stderr note says so -- graph retrieval
+    never affects the FTS/dense outcome. When the FTS index build skipped
+    any unreadable/unparseable files (at the LAST `reindex` run), an
+    `index:` skip-notice block follows the summary on stderr, worded as a
+    whole-bundle build diagnostic -- it never implies the skipped files were
+    candidates for THIS query's match.
 
     On a successful answer, STDOUT carries exactly the answer text, then
     (only when at least one concept was cited) a blank line, `Citations:`,
@@ -2279,7 +2333,13 @@ def query(
     vector_store_cm, store_was_unavailable = _open_vector_store_or_degrade(
         layout.vectors_db_path
     )
-    with vector_store_cm as vector_store:
+    fts_index_cm, fts_was_unavailable = _open_fts_or_degrade(layout.fts_db_path)
+    graph_index_cm, graph_was_unavailable = _open_graph_or_degrade(layout.graph_db_path)
+    with (
+        vector_store_cm as vector_store,
+        fts_index_cm as fts_index,
+        graph_index_cm as graph_index,
+    ):
         try:
             result = answer(
                 question,
@@ -2287,6 +2347,8 @@ def query(
                 llm=llm,
                 embedder=embedder,
                 vector_store=vector_store,
+                fts_index=fts_index,
+                graph_index=graph_index,
                 limit=limit,
             )
         except OllamaUnavailable as exc:
@@ -2323,10 +2385,15 @@ def query(
         f"fused → LLM {llm_status} → {cited_count} cited",
         err=True,
     )
-    if store_was_unavailable or result.dense_degraded:
+    if (
+        store_was_unavailable
+        or fts_was_unavailable
+        or graph_was_unavailable
+        or result.dense_degraded
+    ):
         typer.echo(
-            "hint: dense retrieval is unavailable this run -- run "
-            "`openkos reindex` to enable semantic retrieval.",
+            "hint: one or more derived indexes are unavailable this run -- "
+            "run `openkos reindex` to enable full retrieval.",
             err=True,
         )
     if result.graph_degraded:
@@ -2487,6 +2554,13 @@ def reindex(
         f"cache-hit{_plural(report.cache_hits)}, {report.pruned} pruned, "
         f"{report.skipped} skipped."
     )
+    if report.prune_skipped:
+        typer.echo(
+            "openkos reindex: prune pass was skipped this run -- a "
+            "directory-scan error made part of the bundle unreadable, so no "
+            "concept was pruned even if some appeared absent (review "
+            "carry-over, fold-in #3)."
+        )
 
 
 @dataclass(frozen=True)
