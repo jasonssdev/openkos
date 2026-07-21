@@ -37,6 +37,7 @@ from openkos.resolution.candidates import Tier
 from openkos.resolution.edge_typing import suggest_relations
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state.fts import FtsUnavailable
+from openkos.state.vectorstore import probe_vec_loadable
 
 app = typer.Typer()
 
@@ -2314,7 +2315,7 @@ def doctor() -> None:
     with actionable remediation, usable even before `openkos init`.
 
     Deliberately NEW control-flow shape versus `status`/`lint`/`query`:
-    instead of exiting on the first failure, this runs ALL six checks,
+    instead of exiting on the first failure, this runs ALL seven checks,
     appends each to a `list[CheckResult]`, renders every line
     unconditionally, then exits ONCE (`code=1`) if any CRITICAL check
     failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
@@ -2331,8 +2332,14 @@ def doctor() -> None:
     (never `[FAIL]`) when Ollama is unreachable, for the same D6 reason --
     Slice 1 does not wire embeddings into any consumed feature yet, so a
     failure here must not flip the exit code; (6) bundle-readable --
-    informational, workspace-only, `[SKIP]` outside a workspace. Outside a
-    workspace, checks (3)/(4)/(5) still run against `config.DEFAULT_MODEL`/
+    informational, workspace-only, `[SKIP]` outside a workspace; (7)
+    vector-extension-loadable -- informational, always, via
+    `state.vectorstore.probe_vec_loadable()` against a throwaway `:memory:`
+    connection; UNLIKE (5), this check has NO `[SKIP]` branch -- it depends
+    on neither workspace state nor Ollama reachability, so it shares no root
+    cause with any other check (embedding-vector-store, Slice 2a; the
+    scaffolding this checks has no consumed feature yet either). Outside a
+    workspace, checks (3)/(4)/(5)/(7) still run against `config.DEFAULT_MODEL`/
     `config.DEFAULT_EMBEDDING_MODEL` and (3)/(4) still determine the exit
     code (spec: Doctor Works Outside An Initialized Workspace).
 
@@ -2487,6 +2494,27 @@ def doctor() -> None:
             )
     else:
         results.append(CheckResult("Bundle readable", "skip", critical=False))
+
+    # 7. vector-extension-loadable (informational, always; NO SKIP branch --
+    # unlike embedding-model-installed, this shares no root cause with any
+    # other check: it depends only on the local Python/SQLite build, never
+    # on workspace state or Ollama reachability). Probes a throwaway
+    # `:memory:` connection -- creates no files (D: Doctor Is Read-Only).
+    if probe_vec_loadable():
+        results.append(CheckResult("Vector extension loadable", "pass", critical=False))
+    else:
+        results.append(
+            CheckResult(
+                "Vector extension loadable",
+                "fail",
+                critical=False,
+                remediation=(
+                    "run openkos with an extension-capable Python interpreter "
+                    "(e.g. a uv-managed interpreter) that supports SQLite "
+                    "extension loading"
+                ),
+            )
+        )
 
     typer.echo(f"openkos doctor: checking environment at {root}")
     typer.echo()

@@ -73,7 +73,16 @@ def validate_model(tag: str) -> str:
 
 @dataclass(frozen=True)
 class WorkspaceLayout:
-    """The four paths init reads and writes at a workspace root."""
+    """The four paths init reads and writes at a workspace root, plus the
+    engine's own cache paths (`openkos_dir`/`vectors_db_path`).
+
+    The cache paths are PURE path derivation, like every property here --
+    resolving them creates nothing on disk. Unlike the four init paths
+    above, `openkos_dir`/`vectors_db_path` are never written by `init`
+    (embedding-vector-store, Slice 2a): they are engine-cache paths a
+    consumer (e.g. `state.vectorstore.open_vector_store`) creates lazily on
+    first open, not part of a freshly initialized workspace's file set.
+    """
 
     root: Path
 
@@ -96,6 +105,18 @@ class WorkspaceLayout:
     def bundle_dir(self) -> Path:
         """`bundle/`: the OKF bundle root."""
         return self.root / "bundle"
+
+    @property
+    def openkos_dir(self) -> Path:
+        """`.openkos/`: the engine's own on-disk cache directory (e.g. the
+        vector store). NOT created by `init` -- a consumer creates it lazily
+        on first open."""
+        return self.root / ".openkos"
+
+    @property
+    def vectors_db_path(self) -> Path:
+        """`.openkos/vectors.db`: the sqlite-vec vector store database."""
+        return self.openkos_dir / "vectors.db"
 
 
 class RefusalCondition(NamedTuple):
