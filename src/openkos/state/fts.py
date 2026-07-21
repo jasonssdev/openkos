@@ -229,30 +229,62 @@ def build_index(bundle_dir: Path) -> FtsIndex:
     return FtsIndex(conn, skipped)
 
 
-def write_fts_index(path: Path, bundle_dir: Path) -> None:
+def write_fts_index(
+    path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+) -> None:
     """Write a full, on-disk FTS5 index for `bundle_dir` to `path`, invoked
     ONLY by `reindex` (derived-index-cache: On-Disk Persistence Of Derived
     Indexes; fts-state: Reindex persists the FTS index to disk).
 
     Opens `path` via `state.derived.open_derived_connection` (lazy
     `.openkos/` creation, WAL + busy_timeout PRAGMAs, shared `meta` table),
-    drops any prior `docs` table (idempotent across repeated calls), then
-    delegates to the SAME `_populate_docs_table` core `build_index` uses --
-    the on-disk index always contains exactly the rows an equivalent
-    `build_index` call would produce in memory. Stores the bundle's current
-    manifest hash in `meta` and commits ONCE for this call (reindex-command:
-    single commit per store per run). This function always performs a full
-    rebuild when called -- it makes no skip/rebuild decision of its own;
-    that comparison against the PREVIOUSLY stored manifest hash is
-    `state/reindex.py`'s exclusive responsibility (D2 binding contract).
+    then drops any prior `docs` table and delegates to the SAME
+    `_populate_docs_table` core `build_index` uses -- the on-disk index
+    always contains exactly the rows an equivalent `build_index` call would
+    produce in memory. This function always performs a full rebuild when
+    called -- it makes no skip/rebuild decision of its own; that comparison
+    against the PREVIOUSLY stored manifest hash is `state/reindex.py`'s
+    exclusive responsibility (D2 binding contract).
+
+    `manifest_hash`, when given, is stored VERBATIM rather than recomputed
+    here: `state/reindex.py`'s `_reindex_fts` passes the SAME digest it
+    already computed for its skip/rebuild decision, so the stored value
+    always corresponds to that exact bundle snapshot instead of a THIRD,
+    independently-taken walk that could observe a bundle mutation the
+    decision/populate passes did not (review correction, Finding C --
+    triple-walk/TOCTOU). Omitting it (the default) computes one fresh, for
+    direct/standalone callers with no separate decision step of their own.
+
+    The `DROP`, the full rebuild, and the manifest write ALL happen inside
+    one explicit SQLite transaction (`BEGIN IMMEDIATE` ... `commit()`/
+    `rollback()`) rather than relying on `sqlite3`'s own implicit-transaction
+    handling: left to itself, a DDL statement (`DROP TABLE`, `CREATE VIRTUAL
+    TABLE`) auto-commits independently of the later `INSERT`/meta-write
+    commit, so a crash mid-rebuild could destroy the PRIOR working index
+    without ever completing the new one (review correction, Finding B).
+    Wrapping the whole sequence in one explicit transaction makes the
+    rebuild atomic: any failure here rolls back completely, leaving the
+    PRIOR `docs` table and PRIOR `meta.manifest_hash` exactly as they were --
+    the next `reindex` run's manifest comparison then correctly sees the
+    same (stale) hash and retries the rebuild, rather than silently reading
+    an empty index forever.
     """
     conn = derived.open_derived_connection(path)
     try:
-        conn.execute("DROP TABLE IF EXISTS docs")
-        _populate_docs_table(conn, bundle_dir)
-        digest = derived.bundle_manifest_hash(bundle_dir)
-        derived.write_manifest_hash(conn, digest)
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DROP TABLE IF EXISTS docs")
+            _populate_docs_table(conn, bundle_dir)
+            digest = (
+                manifest_hash
+                if manifest_hash is not None
+                else derived.bundle_manifest_hash(bundle_dir)
+            )
+            derived.write_manifest_hash(conn, digest)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
     finally:
         conn.close()
 

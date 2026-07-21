@@ -529,3 +529,34 @@ def test_reindex_fts_meta_manifest_matches_derived_bundle_manifest_hash(
     conn.close()
 
     assert stored == derived.bundle_manifest_hash(bundle_dir)
+
+
+def test_reindex_computes_bundle_manifest_hash_exactly_once_per_rebuild_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `reindex()` run that rebuilds the FTS index computes
+    `derived.bundle_manifest_hash` exactly ONCE for that run -- the decision
+    snapshot (`_reindex_fts`'s skip/rebuild comparison) and the persisted
+    value must be the SAME walk, not two independently-taken snapshots of a
+    bundle that could mutate between them (review correction, Finding C:
+    triple-walk/TOCTOU). `write_fts_index` must receive and store the
+    ALREADY-computed digest rather than recomputing its own."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+
+    call_count = 0
+    original_manifest_hash = derived.bundle_manifest_hash
+
+    def _counting_manifest_hash(bundle_dir_arg: Path) -> str:
+        nonlocal call_count
+        call_count += 1
+        return original_manifest_hash(bundle_dir_arg)
+
+    monkeypatch.setattr(derived, "bundle_manifest_hash", _counting_manifest_hash)
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), fts_db_path=fts_db_path)
+
+    assert call_count == 1

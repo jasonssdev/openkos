@@ -68,8 +68,11 @@ def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
     staleness is decided anywhere in the system (D2 binding contract): a
     match (and no `force`) skips the whole rebuild entirely; a mismatch (or
     absent stored hash, or `force`) triggers `fts.write_fts_index`, which
-    always performs a full DROP+repopulate rebuild and re-stores the new
-    manifest hash itself, in ONE commit for this call.
+    always performs a full, atomic DROP+repopulate rebuild. The SAME
+    `new_manifest` digest computed here for the decision is passed straight
+    into `write_fts_index` to be stored -- it is never recomputed a second
+    time there (review correction, Finding C), so the decision snapshot and
+    the persisted value are guaranteed to be the SAME bundle walk.
     """
     conn = derived.open_derived_connection(fts_db_path)
     try:
@@ -79,7 +82,7 @@ def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
 
     new_manifest = derived.bundle_manifest_hash(bundle_dir)
     if force or current_manifest != new_manifest:
-        fts.write_fts_index(fts_db_path, bundle_dir)
+        fts.write_fts_index(fts_db_path, bundle_dir, manifest_hash=new_manifest)
 
 
 def reindex(

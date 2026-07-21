@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from openkos.model import okf
-from openkos.state import fts
+from openkos.state import derived, fts
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -646,6 +646,78 @@ def test_write_fts_index_creates_no_footprint_before_first_call(tmp_path: Path) 
     fts.write_fts_index(db_path, bundle_dir)
 
     assert db_path.exists()
+
+
+def test_write_fts_index_stores_a_caller_supplied_manifest_hash_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller-supplied `manifest_hash` is stored as-is, never recomputed
+    (review correction, Finding C: `state/reindex.py`'s decision digest and
+    the persisted value must be the SAME bundle snapshot, not two
+    independently-taken walks)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "fts.db"
+
+    def _fail_if_called(bundle_dir_arg: Path) -> str:
+        raise AssertionError(
+            "bundle_manifest_hash must not be recomputed when manifest_hash is supplied"
+        )
+
+    monkeypatch.setattr(derived, "bundle_manifest_hash", _fail_if_called)
+
+    fts.write_fts_index(db_path, bundle_dir, manifest_hash="caller-digest")
+
+    conn = sqlite3.connect(str(db_path))
+    stored = derived.read_manifest_hash(conn)
+    conn.close()
+    assert stored == "caller-digest"
+
+
+def test_write_fts_index_leaves_prior_index_intact_on_mid_rebuild_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure mid-rebuild (after the `DROP`/`CREATE`, while re-populating)
+    rolls back completely -- the PRIOR `docs` rows and PRIOR
+    `meta.manifest_hash` survive untouched, rather than leaving a
+    structurally-valid but EMPTY table paired with a stale manifest hash
+    that a later unchanged-bundle run would then skip rebuilding forever
+    (review correction, Finding B: atomicity)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="version one"
+    )
+    db_path = tmp_path / ".openkos" / "fts.db"
+
+    fts.write_fts_index(db_path, bundle_dir, manifest_hash="digest-one")
+    conn = sqlite3.connect(str(db_path))
+    prior_rows = conn.execute("SELECT concept_id FROM docs").fetchall()
+    prior_manifest = derived.read_manifest_hash(conn)
+    conn.close()
+    assert prior_rows == [("concepts/stoicism",)]
+    assert prior_manifest == "digest-one"
+
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="version two"
+    )
+    original_populate = fts._populate_docs_table
+
+    def _crashing_populate(conn: sqlite3.Connection, bundle_dir_arg: Path) -> list[str]:
+        original_populate(conn, bundle_dir_arg)
+        raise RuntimeError("simulated crash mid-rebuild")
+
+    monkeypatch.setattr(fts, "_populate_docs_table", _crashing_populate)
+
+    with pytest.raises(RuntimeError, match="simulated crash mid-rebuild"):
+        fts.write_fts_index(db_path, bundle_dir, manifest_hash="digest-two")
+
+    conn = sqlite3.connect(str(db_path))
+    rows_after = conn.execute("SELECT concept_id FROM docs").fetchall()
+    manifest_after = derived.read_manifest_hash(conn)
+    conn.close()
+
+    assert rows_after == prior_rows
+    assert manifest_after == prior_manifest
 
 
 def test_open_fts_index_readonly_returns_none_when_absent(tmp_path: Path) -> None:
