@@ -14,6 +14,7 @@ import io
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -126,7 +127,7 @@ class _FakeEmbedder:
         self.vectors = vectors if vectors is not None else []
         self.calls: list[list[str]] = []
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
         self.calls.append(list(texts))
         return self.vectors
 
