@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.state.fts import FtsUnavailable
 from openkos.state.reindex import ReindexReport
 from openkos.state.vectorstore import VecUnavailable
 
@@ -241,6 +242,34 @@ def test_reindex_vec_unavailable_maps_to_exit_one(
     assert isinstance(result.exception, SystemExit)
     assert result.stderr.startswith("openkos reindex: failed -- ")
     assert "sqlite-vec" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_reindex_fts_unavailable_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The orchestrator raising `FtsUnavailable` (SQLite's `fts5` module not
+    compiled in, e.g. from the new FTS-persistence write path) is caught,
+    printed as a friendly stderr message, and exits 1 with no raw traceback
+    -- `reindex`'s own docstring already claims this ladder mirrors
+    `query`'s (`VecUnavailable` substituted for `FtsUnavailable`), and
+    `query` already catches `FtsUnavailable`; `reindex` must too (review
+    correction, Finding A)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_fts_unavailable(*args: object, **kwargs: object) -> ReindexReport:
+        raise FtsUnavailable("SQLite's fts5 module is not available")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", _raise_fts_unavailable
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed -- ")
+    assert "fts5" in result.stderr
     assert "Traceback" not in result.stderr
 
 

@@ -2435,8 +2435,14 @@ def reindex(
         raise typer.Exit(code=1) from exc
     # The two specific handlers above MUST precede this generic tuple, same
     # ordering rationale as `query`'s ladder: both `OllamaUnavailable` and
-    # `OllamaModelNotFound` subclass `OllamaError`.
-    except (VecUnavailable, OllamaError) as exc:
+    # `OllamaModelNotFound` subclass `OllamaError`. `FtsUnavailable` joins
+    # `VecUnavailable` here (Slice 5 review correction, Finding A): reindex
+    # now reaches the FTS write path (`state.reindex._reindex_fts` ->
+    # `fts.write_fts_index`), which raises `FtsUnavailable` exactly like
+    # `query`'s FTS read path already does -- this mirrors `query`'s own
+    # `(FtsUnavailable, OllamaError)` ladder instead of leaving it as a raw,
+    # uncaught traceback.
+    except (VecUnavailable, FtsUnavailable, OllamaError) as exc:
         typer.echo(f"openkos reindex: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
