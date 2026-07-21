@@ -26,6 +26,16 @@ the ENTIRE prune pass is skipped for that run -- an unreadable subtree can
 make a still-existing document look absent from the walk, and pruning on
 that false signal would silently destroy a valid vector; the embed and
 cache-hit passes still run normally regardless of walk errors.
+
+Slice 5, follow-up #4: the embed batch and the prune batch are written via
+`db.upsert_many`/`db.prune_many` (neither commits on its own) and this
+function commits `vectors.db` ONCE at the end of the run -- covering BOTH
+batches together -- rather than once per document as the original Slice 2b
+`upsert`/`prune` single-item methods did. A run with nothing to embed AND
+nothing to prune calls `commit()` zero times ("at most once per run").
+`vectors.db`'s connection also now sets `PRAGMA journal_mode=WAL` and a
+`busy_timeout` at open (`state/vectorstore.py::open_vector_store`), matching
+`fts.db`/`graph.db`'s posture (`state/derived.py::open_derived_connection`).
 """
 
 from dataclasses import dataclass
@@ -154,17 +164,28 @@ def reindex(
     embedded = 0
     if to_embed:
         vectors = embedder.embed([text for _, text, _ in to_embed])
-        for (concept_id, _text, digest), vector in zip(to_embed, vectors, strict=True):
-            db.upsert(concept_id, vector, digest)
-            embedded += 1
+        items = [
+            (concept_id, vector, digest)
+            for (concept_id, _text, digest), vector in zip(
+                to_embed, vectors, strict=True
+            )
+        ]
+        db.upsert_many(items)
+        embedded = len(items)
 
     pruned = 0
     prune_skipped = bool(okf._walk_errors(bundle_dir))
+    to_prune: list[str] = []
     if not prune_skipped:
-        for concept_id in cached_hashes:
-            if concept_id not in seen:
-                db.prune(concept_id)
-                pruned += 1
+        to_prune = [
+            concept_id for concept_id in cached_hashes if concept_id not in seen
+        ]
+        if to_prune:
+            db.prune_many(to_prune)
+            pruned = len(to_prune)
+
+    if to_embed or to_prune:
+        db.commit()
 
     if fts_db_path is not None:
         _reindex_fts(bundle_dir, fts_db_path, force=force)
