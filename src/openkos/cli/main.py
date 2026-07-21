@@ -2214,17 +2214,24 @@ def _open_fts_or_degrade(
     path: Path,
 ) -> tuple[AbstractContextManager["fts.FtsIndex | None"], bool]:
     """Existence-gated, read-only handle open for `query`'s persisted FTS
-    seam (Slice 5, PR3; mirrors `_open_vector_store_or_degrade` exactly).
+    seam (Slice 5, PR3).
 
-    `query` never CREATES `fts.db` -- `fts.open_fts_index_readonly` is
-    already existence-gated and never creates one regardless. Returns a
-    context manager yielding either an open `FtsIndex` or `None`, plus
-    whether the CLI itself detected the store as unavailable this call
-    (absent, or a raw `sqlite3.Error` from `open_fts_index_readonly`'s
-    open-time validating read against a corrupt/invalid EXISTING `fts.db`).
-    The caller's reindex hint fires on either signal; `answer()` itself only
-    ever sees "handle or `None`" (the exception-vs-degrade boundary lives
-    entirely at this call site, never inside `answer()`)."""
+    Same INTENT and RETURN SHAPE as `_open_vector_store_or_degrade` --
+    `(context_manager, bool)`, degrading to `(nullcontext(None), True)` on
+    absence or failure -- but NOT structurally identical (review finding
+    R2: the two are related, not "mirrored exactly"). Two deliberate
+    differences: (1) `_open_vector_store_or_degrade` checks `path.exists()`
+    explicitly, because `open_vector_store` does not existence-gate itself;
+    this function has NO explicit existence check of its own, because
+    `fts.open_fts_index_readonly` is ALREADY existence-gated internally and
+    returns `None` for an absent path on its own. (2) `_open_vector_store_or_degrade`
+    catches `(VecUnavailable, sqlite3.Error)`; this function catches ONLY
+    `sqlite3.Error`, since FTS has no typed "unavailable" exception analogous
+    to `VecUnavailable` (plain `CREATE`/`SELECT`, no extension-load step to
+    fail). The caller's reindex hint fires on either signal (absent or
+    caught error); `answer()` itself only ever sees "handle or `None`" (the
+    exception-vs-degrade boundary lives entirely at this call site, never
+    inside `answer()`)."""
     try:
         handle = fts.open_fts_index_readonly(path)
     except sqlite3.Error:
@@ -2238,16 +2245,19 @@ def _open_graph_or_degrade(
     path: Path,
 ) -> tuple[AbstractContextManager["GraphStore | None"], bool]:
     """Existence-gated, read-only handle open for `query`'s persisted graph
-    seam (Slice 5, PR3; mirrors `_open_vector_store_or_degrade`/
-    `_open_fts_or_degrade` exactly).
+    seam (Slice 5, PR3).
 
-    `query` never CREATES `graph.db` -- `sqlite_graph.open_graph_store_readonly`
-    is already existence-gated and never creates one regardless. Returns a
-    context manager yielding either an open `SqliteGraphStore` (satisfying
-    `GraphStore` structurally) or `None`, plus whether the CLI itself
-    detected the store as unavailable this call (absent, or a raw
-    `sqlite3.Error` from `open_graph_store_readonly`'s open-time validating
-    read against a corrupt/invalid EXISTING `graph.db`)."""
+    Structurally IDENTICAL to `_open_fts_or_degrade` (same two deliberate
+    differences from `_open_vector_store_or_degrade` documented there: no
+    explicit `path.exists()` guard here either, since
+    `sqlite_graph.open_graph_store_readonly` is already existence-gated
+    internally; catches only `sqlite3.Error`, since the graph store has no
+    typed "unavailable" exception either). Returns a context manager
+    yielding either an open `SqliteGraphStore` (satisfying `GraphStore`
+    structurally) or `None`, plus whether the CLI itself detected the store
+    as unavailable this call (absent, or a raw `sqlite3.Error` from
+    `open_graph_store_readonly`'s open-time validating read against a
+    corrupt/invalid EXISTING `graph.db`)."""
     try:
         handle = sqlite_graph.open_graph_store_readonly(path)
     except sqlite3.Error:
@@ -2522,6 +2532,28 @@ def reindex(
         typer.echo(f"openkos reindex: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    # The vectors.db/fts.db summary is printed HERE, BEFORE the graph write
+    # attempt below -- not after it, as an earlier revision did (review
+    # finding R4). `report` already reflects durably-committed work at this
+    # point (`state.reindex.reindex` returned successfully); if the graph
+    # write below then fails, the user must still see what DID happen
+    # (embedded/cache-hit/pruned/skipped counts, and the `prune_skipped`
+    # follow-up notice) rather than losing that signal behind the graph
+    # error -- printing it first guarantees it always reaches the user,
+    # regardless of what happens next.
+    typer.echo(
+        f"openkos reindex: {report.embedded} embedded, {report.cache_hits} "
+        f"cache-hit{_plural(report.cache_hits)}, {report.pruned} pruned, "
+        f"{report.skipped} skipped."
+    )
+    if report.prune_skipped:
+        typer.echo(
+            "openkos reindex: prune pass was skipped this run -- a "
+            "directory-scan error made part of the bundle unreadable, so no "
+            "concept was pruned even if some appeared absent (review "
+            "carry-over, fold-in #3)."
+        )
+
     # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`
     # itself: `state/reindex.py` is canonical-layer code and must not import
     # `openkos.graph` (derived layer, docs/architecture.md); this entry-layer
@@ -2548,19 +2580,6 @@ def reindex(
             err=True,
         )
         raise typer.Exit(code=1) from exc
-
-    typer.echo(
-        f"openkos reindex: {report.embedded} embedded, {report.cache_hits} "
-        f"cache-hit{_plural(report.cache_hits)}, {report.pruned} pruned, "
-        f"{report.skipped} skipped."
-    )
-    if report.prune_skipped:
-        typer.echo(
-            "openkos reindex: prune pass was skipped this run -- a "
-            "directory-scan error made part of the bundle unreadable, so no "
-            "concept was pruned even if some appeared absent (review "
-            "carry-over, fold-in #3)."
-        )
 
 
 @dataclass(frozen=True)

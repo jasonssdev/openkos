@@ -411,6 +411,46 @@ def test_reindex_graph_write_failure_after_vectors_and_fts_succeed_maps_to_exit_
     assert "Traceback" not in result.stderr
 
 
+def test_reindex_summary_and_prune_skipped_notice_still_surface_when_graph_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `sqlite_graph.reindex_graph` fails AFTER `vectors.db`/`fts.db`
+    already succeeded, the user still sees the embedded/cache-hit/pruned/
+    skipped summary AND the `prune_skipped` follow-up notice for the work
+    that DID durably happen -- not just the graph failure message -- and the
+    process still exits 1 (review finding R4: the summary/prune_skipped
+    print block used to sit AFTER the graph write, so a graph-write failure
+    silently swallowed it even though vectors.db/fts.db had already
+    committed)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=3, cache_hits=1, pruned=0, skipped=0, prune_skipped=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    def _raise_graph_write_failure(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.sqlite_graph.reindex_graph", _raise_graph_write_failure
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "3 embedded" in result.stdout
+    assert "1 cache-hit" in result.stdout
+    assert "0 pruned" in result.stdout
+    assert "0 skipped" in result.stdout
+    assert "prune pass" in result.stdout.lower()
+    assert "skipped" in result.stdout.lower().split("prune pass")[1]
+    assert "graph" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_reindex_malformed_config_maps_to_exit_one_before_calling_orchestrator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
