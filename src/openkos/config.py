@@ -20,6 +20,12 @@ from openkos import fsio
 DEFAULT_MODEL = "qwen3:8b"
 """The packaged default Ollama model tag, offered when no `--model` is given."""
 
+DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:0.6b"
+"""The packaged default Ollama embedding model tag. Default-only for this
+slice (hybrid-retrieval Slice 1): not written to `openkos.yaml.template`,
+resolved solely via `read_config`'s `is not None` fallback, distinct from
+the chat `DEFAULT_MODEL`."""
+
 DEFAULT_REVIEW = True
 """Packaged default for `review`: show a preview and confirm before saving."""
 
@@ -270,13 +276,16 @@ class Config:
 
     Fields absent from the file fall back to the same packaged defaults
     `openkos.yaml.template` ships (D3): `DEFAULT_MODEL`, `DEFAULT_REVIEW`,
-    `DEFAULT_SENSITIVITY`, `DEFAULT_FRESHNESS_WINDOW`.
+    `DEFAULT_SENSITIVITY`, `DEFAULT_FRESHNESS_WINDOW`. `embedding_model` is
+    default-only (`DEFAULT_EMBEDDING_MODEL`): it is not part of
+    `openkos.yaml.template`, but a user may hand-add the key to override it.
     """
 
     model: str
     review: bool
     default_sensitivity: str
     freshness_window: str
+    embedding_model: str
 
 
 def read_config(root: Path) -> Config:
@@ -310,6 +319,7 @@ def read_config(root: Path) -> Config:
     review = raw.get("review")
     default_sensitivity = raw.get("default_sensitivity")
     freshness_window = raw.get("freshness_window")
+    embedding_model = raw.get("embedding_model")
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,
@@ -322,5 +332,8 @@ def read_config(root: Path) -> Config:
             freshness_window
             if freshness_window is not None
             else DEFAULT_FRESHNESS_WINDOW
+        ),
+        embedding_model=(
+            embedding_model if embedding_model is not None else DEFAULT_EMBEDDING_MODEL
         ),
     )

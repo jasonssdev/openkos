@@ -13,7 +13,7 @@ import urllib.request
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from openkos.llm.base import Message
+from openkos.llm.base import EMBED_DIM, Message
 
 DEFAULT_HOST = "http://localhost:11434"
 """Ollama's own local default, used when no override is given (D2)."""
@@ -117,6 +117,71 @@ class OllamaClient:
             )
         return content
 
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """POST `texts` to `{host}/api/embed` and return one `EMBED_DIM`-float
+        vector per input, in order (Embedder contract).
+
+        Short-circuits to `[]` with no HTTP call when `texts` is empty.
+        Reuses `chat()`'s connect/read transport ladder and `_map_http_error`.
+        Parses defensively: prefers the plural `embeddings` key, falls back
+        to the legacy singular `embedding` key (wrapped as a one-item list),
+        and validates every returned row is exactly `EMBED_DIM` numeric
+        values -- any other shape raises `OllamaError`.
+        """
+        if not texts:
+            return []
+        url = f"{self._host}/api/embed"
+        payload = json.dumps({"model": self._model, "input": list(texts)}).encode(
+            "utf-8"
+        )
+        # Same trusted-host rationale as `chat()`'s S310 note (D2: host is
+        # user/env config, normalized to a scheme, never derived from
+        # document content).
+        request = urllib.request.Request(  # noqa: S310
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            response = self._urlopen(request, timeout=self._timeout)
+        except urllib.error.HTTPError as exc:
+            raise _map_http_error(exc) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise self._unavailable(exc) from exc
+
+        try:
+            body = response.read()
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            http.client.IncompleteRead,
+        ) as exc:
+            # Same rationale as `chat()`'s read-phase guard: a transport
+            # failure can strike mid-stream too, not only while connecting.
+            raise self._unavailable(exc) from exc
+
+        try:
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                raise TypeError(f"expected a JSON object, got {type(data)!r}")
+            if "embeddings" in data:
+                rows = data["embeddings"]
+            elif "embedding" in data:
+                rows = [data["embedding"]]
+            else:
+                raise KeyError("embeddings")
+            if len(rows) != len(texts):
+                raise ValueError(
+                    f"Ollama /api/embed returned {len(rows)} embeddings "
+                    f"for {len(texts)} inputs"
+                )
+            result = [_validate_embedding_row(row) for row in rows]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise OllamaError(f"Malformed response from Ollama: {exc}") from exc
+        return result
+
     def list_models(self) -> list[str]:
         """GET `{host}/api/tags`; return installed model tags (D1). Config-free."""
         url = f"{self._host}/api/tags"
@@ -178,6 +243,26 @@ def model_tag_matches(configured: str, installed: list[str]) -> bool:
         if normalized == wanted:
             return True
     return False
+
+
+def _validate_embedding_row(row: object) -> list[float]:
+    """Validate one embedding row: exactly `EMBED_DIM` numeric entries,
+    coerced to `float` (Embedder contract). Raises `ValueError` on a wrong
+    length or a non-numeric entry, always caught and rewrapped as
+    `OllamaError` by the caller."""
+    if not isinstance(row, list) or len(row) != EMBED_DIM:
+        got = len(row) if isinstance(row, list) else type(row).__name__
+        raise ValueError(
+            f"expected each embedding row to have exactly {EMBED_DIM} entries, got {got}"
+        )
+    validated: list[float] = []
+    for value in row:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"expected each embedding entry to be numeric, got {type(value)!r}"
+            )
+        validated.append(float(value))
+    return validated
 
 
 def _map_http_error(exc: urllib.error.HTTPError) -> OllamaError:

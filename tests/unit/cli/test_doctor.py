@@ -1,9 +1,12 @@
 """Unit tests for the `doctor` CLI command: read-only environment health scan.
 
-`doctor` runs ALL five checks (workspace-initialized, config-valid,
-Ollama-reachable, model-installed, bundle-readable), renders every result
-unconditionally (accumulate-then-exit-once, D5), and exits 1 iff any
-CRITICAL check failed. Every test patches `openkos.cli.main.OllamaClient`
+`doctor` runs ALL six checks (workspace-initialized, config-valid,
+Ollama-reachable, model-installed, embedding-model-installed,
+bundle-readable), renders every result unconditionally
+(accumulate-then-exit-once, D5), and exits 1 iff any CRITICAL check failed.
+`embedding-model-installed` is informational (non-critical): Slice 1 does
+not wire embeddings into any consumed feature yet, so a failing check must
+not flip the exit code. Every test patches `openkos.cli.main.OllamaClient`
 with a fake stub (D-seam) -- zero network, zero real Ollama process.
 """
 
@@ -16,7 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
-from openkos.config import DEFAULT_MODEL
+from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL
 from openkos.llm.ollama import OllamaError, OllamaUnavailable
 
 runner = CliRunner()
@@ -69,22 +72,26 @@ def test_doctor_all_healthy_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A fully healthy workspace prints one `[PASS]` per applicable check
-    and exits 0 (Scenario: Healthy workspace prints all applicable checks)."""
+    (six total) and exits 0 (Scenario: Healthy workspace prints all
+    applicable checks)."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
-        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 5
+    assert result.stdout.count("[PASS]") == 6
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
     assert f"[PASS] Config valid — model {DEFAULT_MODEL}" in result.stdout
     assert f"[PASS] Model '{DEFAULT_MODEL}' installed" in result.stdout
+    assert f"[PASS] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in (
+        result.stdout
+    )
 
 
 def test_doctor_ollama_down_shows_start_server_remediation(
@@ -321,7 +328,9 @@ def test_doctor_model_installed_honors_latest_normalization(
     )
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
-        _fake_ollama_client(installed=[f"{configured_model}:latest"]),
+        _fake_ollama_client(
+            installed=[f"{configured_model}:latest", DEFAULT_EMBEDDING_MODEL]
+        ),
     )
 
     result = runner.invoke(app, ["doctor"])
@@ -372,3 +381,115 @@ def test_doctor_ollama_binary_present_keeps_serve_remediation(
     assert "[FAIL] Ollama reachable" in result.stdout
     assert "  -> ollama serve" in result.stdout
     assert "https://ollama.com" not in result.stdout
+
+
+# --- embedding-model-installed check (non-fatal) -------------------------------
+
+
+def test_doctor_embedding_model_installed_shows_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A configured embedding model tag present in the installed list prints
+    `[PASS] Embedding model '<tag>' installed` and does not affect the exit
+    code (Scenario: embedding-model-installed check passes)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert (
+        f"[PASS] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in result.stdout
+    )
+
+
+def test_doctor_embedding_model_missing_shows_pull_remediation_but_exit_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A configured embedding model tag absent from the installed list prints
+    `[FAIL] Embedding model '<tag>' installed` with an `ollama pull <tag>`
+    remediation, but the check is informational so the process still exits 0
+    (Scenario: embedding-model-installed check fails, stays non-fatal)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert (
+        f"[FAIL] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in result.stdout
+    )
+    assert f"  -> ollama pull {DEFAULT_EMBEDDING_MODEL}" in result.stdout
+
+
+def test_doctor_embedding_model_check_skips_when_ollama_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When Ollama is unreachable, the embedding-model-installed check prints
+    `[SKIP]` (not `[FAIL]`), reusing the same `reachable` flag as the
+    chat-model check -- one root cause, not double-reported (Scenario:
+    embedding-model-installed check skips when Ollama is unreachable)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert (
+        f"[SKIP] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in result.stdout
+    )
+    assert (
+        f"[FAIL] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed"
+        not in result.stdout
+    )
+
+
+def test_doctor_embedding_model_check_runs_outside_workspace_against_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside an initialized workspace, the embedding-model-installed check
+    still runs, against `config.DEFAULT_EMBEDDING_MODEL`, and stays
+    informational (Scenario: embedding-model-installed check runs outside a
+    workspace)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert (
+        f"[PASS] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in result.stdout
+    )
+
+
+def test_doctor_embedding_model_check_does_not_construct_extra_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The embedding-model-installed check reuses the `installed` list and
+    `reachable` flag already fetched by the Ollama-reachable check -- it does
+    NOT construct a second `OllamaClient` (D: reuse, not a new preflight)."""
+    _init_workspace(tmp_path, monkeypatch)
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL], record=calls
+        ),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1

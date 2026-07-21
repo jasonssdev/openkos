@@ -2314,7 +2314,7 @@ def doctor() -> None:
     with actionable remediation, usable even before `openkos init`.
 
     Deliberately NEW control-flow shape versus `status`/`lint`/`query`:
-    instead of exiting on the first failure, this runs ALL five checks,
+    instead of exiting on the first failure, this runs ALL six checks,
     appends each to a `list[CheckResult]`, renders every line
     unconditionally, then exits ONCE (`code=1`) if any CRITICAL check
     failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
@@ -2326,10 +2326,15 @@ def doctor() -> None:
     critical, always, via `OllamaClient.list_models()`; (4) model-installed
     -- critical, always, via `model_tag_matches`; `[SKIP]` (never `[FAIL]`)
     when Ollama is unreachable, since the two share one root cause (D6);
-    (5) bundle-readable -- informational, workspace-only, `[SKIP]` outside a
-    workspace. Outside a workspace, checks (3)/(4) still run against
-    `config.DEFAULT_MODEL` and still determine the exit code (spec: Doctor
-    Works Outside An Initialized Workspace).
+    (5) embedding-model-installed -- informational, always, via the SAME
+    already-fetched `installed` list and `model_tag_matches`; `[SKIP]`
+    (never `[FAIL]`) when Ollama is unreachable, for the same D6 reason --
+    Slice 1 does not wire embeddings into any consumed feature yet, so a
+    failure here must not flip the exit code; (6) bundle-readable --
+    informational, workspace-only, `[SKIP]` outside a workspace. Outside a
+    workspace, checks (3)/(4)/(5) still run against `config.DEFAULT_MODEL`/
+    `config.DEFAULT_EMBEDDING_MODEL` and (3)/(4) still determine the exit
+    code (spec: Doctor Works Outside An Initialized Workspace).
 
     Never creates, modifies, or deletes any file, and never runs a
     remediation command itself (spec: Doctor Is Read-Only).
@@ -2374,6 +2379,9 @@ def doctor() -> None:
         results.append(CheckResult("Config valid", "skip", critical=True))
 
     model = cfg.model if cfg is not None else config.DEFAULT_MODEL
+    embedding_model = (
+        cfg.embedding_model if cfg is not None else config.DEFAULT_EMBEDDING_MODEL
+    )
 
     # 3. Ollama-reachable (critical, always)
     reachable = False
@@ -2430,7 +2438,33 @@ def doctor() -> None:
             )
         )
 
-    # 5. bundle-readable (informational, workspace-only; SKIP outside)
+    # 5. embedding-model-installed (informational, always; SKIP-blocked if
+    # unreachable, same D6 rationale as model-installed -- one root cause,
+    # never double-reported). Reuses the already-fetched `installed` list,
+    # constructs no additional `OllamaClient`.
+    embedding_label = f"Embedding model '{embedding_model}' installed"
+    if not reachable:
+        results.append(
+            CheckResult(
+                embedding_label,
+                "skip",
+                critical=False,
+                detail="blocked: Ollama unreachable",
+            )
+        )
+    elif model_tag_matches(embedding_model, installed):
+        results.append(CheckResult(embedding_label, "pass", critical=False))
+    else:
+        results.append(
+            CheckResult(
+                embedding_label,
+                "fail",
+                critical=False,
+                remediation=f"ollama pull {embedding_model}",
+            )
+        )
+
+    # 6. bundle-readable (informational, workspace-only; SKIP outside)
     if in_workspace:
         survey = okf.survey_bundle(config.WorkspaceLayout(root).bundle_dir)
         if not survey.findings:
