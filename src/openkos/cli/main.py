@@ -2427,14 +2427,6 @@ def reindex(
                 force=force,
                 fts_db_path=layout.fts_db_path,
             )
-        # graph.db is written by a separate call, not by `state.reindex.reindex`
-        # itself: `state/reindex.py` is canonical-layer code and must not
-        # import `openkos.graph` (derived layer, docs/architecture.md); this
-        # entry-layer command is the seam that ties both together so a single
-        # `openkos reindex` invocation still writes all three derived stores
-        # (Slice 5, PR2; reindex-command: Reindex writes all three derived
-        # stores in one run).
-        sqlite_graph.reindex_graph(layout.bundle_dir, layout.graph_db_path, force=force)
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos reindex: failed -- {exc}. Start it with `ollama serve`, "
@@ -2461,6 +2453,33 @@ def reindex(
     # uncaught traceback.
     except (VecUnavailable, FtsUnavailable, OllamaError) as exc:
         typer.echo(f"openkos reindex: failed -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`
+    # itself: `state/reindex.py` is canonical-layer code and must not import
+    # `openkos.graph` (derived layer, docs/architecture.md); this entry-layer
+    # command is the seam that ties both together so a single `openkos
+    # reindex` invocation still writes all three derived stores (Slice 5,
+    # PR2; reindex-command: Reindex writes all three derived stores in one
+    # run). This call has its OWN try/except, deliberately separate from the
+    # vectors/FTS ladder above: `sqlite_graph.reindex_graph` raises no typed
+    # "unavailable" exception (plain `CREATE TABLE`, no extension dependency
+    # like `fts5`/`sqlite-vec`) -- its only failure mode is a bare
+    # `sqlite3.Error` (permission/IO/corrupt `graph.db`), which the vectors/FTS
+    # ladder above was never scoped to catch (PR3 carry-over fix, Engram bug
+    # #1470: the graph reindex ladder gap -- a graph-write failure after
+    # vectors.db/fts.db already succeeded used to crash with a raw traceback
+    # instead of the documented clean exit 1). Deliberately narrow: catches
+    # ONLY this call's `sqlite3.Error`, not the separate, still-open,
+    # known-and-deferred follow-up of generic lock-contention errors from the
+    # vectors/FTS ladder above.
+    try:
+        sqlite_graph.reindex_graph(layout.bundle_dir, layout.graph_db_path, force=force)
+    except sqlite3.Error as exc:
+        typer.echo(
+            f"openkos reindex: failed while writing the graph index -- {exc}.",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
 
     typer.echo(

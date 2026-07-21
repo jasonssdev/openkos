@@ -12,6 +12,7 @@ scenarios don't specifically fake it, since it only touches local SQLite
 (no network).
 """
 
+import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -333,6 +334,39 @@ def test_reindex_persists_graph_db_end_to_end(
     assert vectors_db_path.exists()
     assert fts_db_path.exists()
     assert graph_db_path.exists()
+
+
+def test_reindex_graph_write_failure_after_vectors_and_fts_succeed_maps_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sqlite_graph.reindex_graph` raising a `sqlite3.Error` (e.g.
+    permission-denied, corrupt `graph.db`, disk-IO failure) AFTER
+    `vectors.db`/`fts.db` already succeeded is caught, printed as a clean
+    stderr message identifying the graph store, and exits 1 with no raw
+    traceback (PR3 carry-over fix, Engram bug #1470: the graph reindex
+    ladder gap -- the `reindex_graph` call sat in the try block but no
+    `except` clause covered a bare `sqlite3.Error` from it)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=1, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    def _raise_graph_write_failure(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(
+        "openkos.cli.main.sqlite_graph.reindex_graph", _raise_graph_write_failure
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed")
+    assert "graph" in result.stderr
+    assert "disk I/O error" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_reindex_malformed_config_maps_to_exit_one_before_calling_orchestrator(
