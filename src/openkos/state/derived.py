@@ -31,6 +31,7 @@ import hashlib
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 
 from openkos.model import okf
 from openkos.state.vectorstore import content_hash
@@ -140,3 +141,54 @@ def write_manifest_hash(conn: sqlite3.Connection, digest: str) -> None:
     commit -- callers commit once alongside their own writes (reindex-command:
     single commit per store per run)."""
     conn.execute(_UPSERT_META_SQL, (MANIFEST_HASH_KEY, digest))
+
+
+class DerivedStoreWriter(Protocol):
+    """The shape `reindex_gate` calls on a manifest mismatch (or `force`):
+    every persisted derived store's writer (`fts.write_fts_index`,
+    `sqlite_graph.write_graph_store`) satisfies this structurally."""
+
+    def __call__(
+        self, path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+    ) -> None:
+        """Fully rebuild the store at `path` for `bundle_dir`, storing
+        `manifest_hash` verbatim (never recomputing it) when given."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+
+def reindex_gate(
+    bundle_dir: Path, db_path: Path, *, force: bool, write: DerivedStoreWriter
+) -> None:
+    """Shared manifest-gate-and-rebuild helper reused by every persisted
+    derived store's reindex orchestration (fts-state/graph-projection alike)
+    -- extracted so `state/reindex.py`'s FTS gate and `graph/sqlite_graph.py`'s
+    graph gate share ONE implementation instead of two near-identical copies
+    (review carry-over: task 2.11 REFACTOR).
+
+    Reads the PREVIOUSLY stored `meta.manifest_hash` at `db_path` (lazily
+    creating `.openkos/` on first call, mirroring `open_vector_store`), then
+    computes the bundle's CURRENT manifest hash via `bundle_manifest_hash` --
+    this comparison is the ONLY place staleness is decided anywhere in the
+    system (D2 binding contract): a match (and no `force`) skips the write
+    entirely; a mismatch (or absent stored hash, or `force`) calls
+    `write(db_path, bundle_dir, manifest_hash=new_manifest)` -- the SAME
+    digest computed here for the decision, so it is never recomputed a
+    second/third time inside `write` (review correction carried over from
+    PR1's Finding C: triple-walk/TOCTOU).
+
+    Deliberately store-agnostic: lives in `state/derived.py` (canonical
+    layer) rather than `state/reindex.py`, so BOTH the canonical-layer FTS
+    gate and the derived-layer (`openkos.graph`) graph gate can import and
+    reuse it without `state/reindex.py` ever importing `openkos.graph` --
+    canonical must never depend on derived (docs/architecture.md); derived
+    depending on canonical (this module) is the allowed direction.
+    """
+    conn = open_derived_connection(db_path)
+    try:
+        current_manifest = read_manifest_hash(conn)
+    finally:
+        conn.close()
+
+    new_manifest = bundle_manifest_hash(bundle_dir)
+    if force or current_manifest != new_manifest:
+        write(db_path, bundle_dir, manifest_hash=new_manifest)

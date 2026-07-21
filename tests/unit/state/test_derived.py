@@ -139,3 +139,100 @@ def test_open_derived_connection_leaves_no_new_footprint_on_failure(
 
     assert not parent.exists()
     assert not db_path.exists()
+
+
+# --- reindex_gate (Slice 5, PR2 REFACTOR: shared FTS+graph gate helper) -----
+
+
+def test_reindex_gate_writes_on_first_call_with_no_stored_manifest(
+    tmp_path: Path,
+) -> None:
+    """A store with no stored `manifest_hash` (first call ever) always
+    triggers a write, passing the freshly computed digest through."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "stub.db"
+    calls: list[tuple[Path, Path, str | None]] = []
+
+    def _fake_write(
+        path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+    ) -> None:
+        calls.append((path, bundle_dir, manifest_hash))
+
+    derived.reindex_gate(bundle_dir, db_path, force=False, write=_fake_write)
+
+    assert len(calls) == 1
+    written_path, written_bundle_dir, written_digest = calls[0]
+    assert written_path == db_path
+    assert written_bundle_dir == bundle_dir
+    assert written_digest == derived.bundle_manifest_hash(bundle_dir)
+
+
+def test_reindex_gate_skips_write_when_manifest_unchanged(tmp_path: Path) -> None:
+    """A stored `manifest_hash` matching the bundle's current digest skips
+    the write entirely (derived-index-cache: Unchanged bundle reuses the
+    cached index)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "stub.db"
+    conn = derived.open_derived_connection(db_path)
+    derived.write_manifest_hash(conn, derived.bundle_manifest_hash(bundle_dir))
+    conn.commit()
+    conn.close()
+    calls: list[object] = []
+
+    def _fake_write(
+        path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+    ) -> None:
+        calls.append((path, bundle_dir, manifest_hash))
+
+    derived.reindex_gate(bundle_dir, db_path, force=False, write=_fake_write)
+
+    assert calls == []
+
+
+def test_reindex_gate_writes_when_manifest_changed(tmp_path: Path) -> None:
+    """A stored `manifest_hash` that no longer matches the bundle's current
+    digest triggers a write (derived-index-cache: Any document change
+    invalidates the cache)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="v1")
+    db_path = tmp_path / ".openkos" / "stub.db"
+    conn = derived.open_derived_connection(db_path)
+    derived.write_manifest_hash(conn, derived.bundle_manifest_hash(bundle_dir))
+    conn.commit()
+    conn.close()
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="v2")
+    calls: list[object] = []
+
+    def _fake_write(
+        path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+    ) -> None:
+        calls.append((path, bundle_dir, manifest_hash))
+
+    derived.reindex_gate(bundle_dir, db_path, force=False, write=_fake_write)
+
+    assert len(calls) == 1
+
+
+def test_reindex_gate_force_writes_even_when_manifest_unchanged(
+    tmp_path: Path,
+) -> None:
+    """`force=True` writes even when the stored manifest already matches."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism")
+    db_path = tmp_path / ".openkos" / "stub.db"
+    conn = derived.open_derived_connection(db_path)
+    derived.write_manifest_hash(conn, derived.bundle_manifest_hash(bundle_dir))
+    conn.commit()
+    conn.close()
+    calls: list[object] = []
+
+    def _fake_write(
+        path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+    ) -> None:
+        calls.append((path, bundle_dir, manifest_hash))
+
+    derived.reindex_gate(bundle_dir, db_path, force=True, write=_fake_write)
+
+    assert len(calls) == 1
