@@ -21,6 +21,7 @@ from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
 from openkos.bundle import relations as bundle_relations
 from openkos.extraction.concept import extract_concept
+from openkos.graph import sqlite_graph
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
     OllamaClient,
@@ -2364,23 +2365,31 @@ def reindex(
         help="Re-embed every discovered doc, ignoring the content-hash cache.",
     ),
 ) -> None:
-    """Backfill `.openkos/vectors.db` from the compiled bundle -- the first
-    writer of the vector store's data (spec: reindex-command).
+    """Backfill `.openkos/vectors.db`, `.openkos/fts.db`, and
+    `.openkos/graph.db` from the compiled bundle -- the sole writer of every
+    derived store's data (spec: reindex-command).
 
-    Read-only over the bundle, write-only to `.openkos/vectors.db`: no
-    bundle file is ever touched, no confirmation prompt, no `--auto`,
-    mirroring `query`'s D1 gate shape (bare `require_workspace`, no Phase
-    B). Must run inside an initialized workspace; outside one it refuses
-    (exit 1) with a short reason on stderr (spec: Run outside a workspace
-    refuses).
+    Read-only over the bundle, write-only to the three `.openkos/*.db`
+    derived stores: no bundle file is ever touched, no confirmation prompt,
+    no `--auto`, mirroring `query`'s D1 gate shape (bare `require_workspace`,
+    no Phase B). Must run inside an initialized workspace; outside one it
+    refuses (exit 1) with a short reason on stderr (spec: Run outside a
+    workspace refuses).
 
     Thin wiring only (spec: CLI Verb Is Thin Wiring): `require_workspace` →
     `read_config` → `open_vector_store(vectors_db_path)` →
-    `state.reindex.reindex(bundle_dir, db, embedder, force=force)` → print a
-    summary of embedded/cache-hit/pruned/skipped counts and exit 0. The
+    `state.reindex.reindex(bundle_dir, db, embedder, force=force,
+    fts_db_path=...)` → `sqlite_graph.reindex_graph(bundle_dir,
+    graph_db_path, force=force)` → print a summary of
+    embedded/cache-hit/pruned/skipped counts and exit 0. The vector/FTS
     orchestrator (`state/reindex.py`) owns the bundle walk, the
-    `content_hash` cache gate, and the prune pass; this command owns none of
-    that logic.
+    `content_hash` cache gate, the prune pass, and the FTS manifest gate;
+    the graph gate (`openkos.graph.sqlite_graph.reindex_graph`) is called
+    SEPARATELY rather than from inside `state/reindex.py`, because
+    `state/reindex.py` is canonical-layer code and must not import
+    `openkos.graph` (derived layer) -- this command is the entry-layer seam
+    that ties both together so a single invocation still writes all three
+    stores. This command owns none of the gate/rebuild logic itself.
 
     Embeds through a local Ollama server running the model configured as
     `embedding_model` in `openkos.yaml` (default `qwen3-embedding:0.6b`).
@@ -2418,6 +2427,14 @@ def reindex(
                 force=force,
                 fts_db_path=layout.fts_db_path,
             )
+        # graph.db is written by a separate call, not by `state.reindex.reindex`
+        # itself: `state/reindex.py` is canonical-layer code and must not
+        # import `openkos.graph` (derived layer, docs/architecture.md); this
+        # entry-layer command is the seam that ties both together so a single
+        # `openkos reindex` invocation still writes all three derived stores
+        # (Slice 5, PR2; reindex-command: Reindex writes all three derived
+        # stores in one run).
+        sqlite_graph.reindex_graph(layout.bundle_dir, layout.graph_db_path, force=force)
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos reindex: failed -- {exc}. Start it with `ollama serve`, "

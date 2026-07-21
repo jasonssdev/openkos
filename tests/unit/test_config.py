@@ -44,6 +44,17 @@ def test_workspace_layout_fts_db_path_resolves_under_openkos_dir(
     assert not layout.fts_db_path.exists()
 
 
+def test_workspace_layout_graph_db_path_resolves_under_openkos_dir(
+    tmp_path: Path,
+) -> None:
+    """`graph_db_path` resolves to `<root>/.openkos/graph.db` (Slice 5, PR2),
+    a pure path derivation that creates nothing on disk by itself."""
+    layout = config.WorkspaceLayout(tmp_path)
+
+    assert layout.graph_db_path == tmp_path / ".openkos" / "graph.db"
+    assert not layout.graph_db_path.exists()
+
+
 def test_is_workspace_false_on_empty_directory(tmp_path: Path) -> None:
     """An empty directory is not a workspace; init may proceed there."""
     assert config.is_workspace(tmp_path) is False

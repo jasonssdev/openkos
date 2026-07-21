@@ -127,6 +127,15 @@ class WorkspaceLayout:
         anything on disk by itself."""
         return self.openkos_dir / "fts.db"
 
+    @property
+    def graph_db_path(self) -> Path:
+        """`.openkos/graph.db`: the persisted graph projection (Slice 5, PR2).
+
+        Mirrors `fts_db_path`'s pure-derivation contract: written ONLY by
+        `openkos.graph.sqlite_graph.reindex_graph`, lazily -- this property
+        never creates anything on disk by itself."""
+        return self.openkos_dir / "graph.db"
+
 
 class RefusalCondition(NamedTuple):
     """One reason `init` might refuse to write, with its workspace classification."""
