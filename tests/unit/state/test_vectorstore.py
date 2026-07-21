@@ -2,20 +2,115 @@
 
 Slice 2a is additive infrastructure only -- a guarded sqlite-vec extension
 loader, an injectable `VectorStore` Protocol seam (lifecycle-only: `close()`),
-and an idempotent `vectors.db` schema at `<root>/.openkos/vectors.db`. There
-is no vec0 upsert/query data flow yet (deferred to Slice 2b): this module
-has no CLI surface and no consumer in this slice.
+and an idempotent `vectors.db` schema at `<root>/.openkos/vectors.db`.
+Slice 2b makes the seam real: `upsert`/`query` data flow plus the
+`meta_hashes`/`prune` cache accessors the reindex orchestrator needs. This
+module still has no CLI surface -- the `reindex` command (`cli/main.py`) is
+its first consumer.
 """
 
 import hashlib
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 import pytest
 import sqlite_vec
 
 from openkos.llm.base import EMBED_DIM
 from openkos.state import vectorstore
+
+
+def _serialize(values: list[float]) -> bytes:
+    """Build a raw vec0 embedding blob without depending on `upsert` (Slice
+    2b's own subject under test) -- delegates to `sqlite_vec.serialize_float32`,
+    the same serializer `upsert` itself will use. `sqlite-vec` ships no type
+    stubs, so its return is `Any`; `cast` documents the known real type
+    without weakening `strict` mode elsewhere (mirrors the `pyproject.toml`
+    override's rationale)."""
+    return cast(bytes, sqlite_vec.serialize_float32(values))
+
+
+# --- Phase 1: vec0 semantics spike (gates all Slice 2b data-flow work) -----
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_vec0_delete_by_concept_id_then_reinsert_survives_with_one_row(
+    tmp_path: Path,
+) -> None:
+    """Real sqlite-vec 0.1.9 extension: `DELETE FROM vectors WHERE
+    concept_id = ?` (metadata-column delete, no rowid lookup) removes the
+    prior row for that `concept_id`, and a subsequent `INSERT` leaves exactly
+    one row for it -- proves `upsert`'s planned
+    delete-by-concept_id-then-insert sequence is valid against the real
+    extension (design Open Question: confirm DELETE-by-metadata works in
+    0.1.9, else fall back to DELETE-by-rowid)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO vectors (embedding, concept_id, content_hash) "
+            "VALUES (?, ?, ?)",
+            (_serialize([1.0] * EMBED_DIM), "concepts/a", "hash-one"),
+        )
+        conn.commit()
+
+        conn.execute("DELETE FROM vectors WHERE concept_id = ?", ("concepts/a",))
+        conn.execute(
+            "INSERT INTO vectors (embedding, concept_id, content_hash) "
+            "VALUES (?, ?, ?)",
+            (_serialize([2.0] * EMBED_DIM), "concepts/a", "hash-two"),
+        )
+        conn.commit()
+
+        rows = conn.execute(
+            "SELECT concept_id, content_hash FROM vectors WHERE concept_id = ?",
+            ("concepts/a",),
+        ).fetchall()
+
+    assert rows == [("concepts/a", "hash-two")]
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_vec0_metadata_filtered_knn_returns_expected_concept_id_ascending(
+    tmp_path: Path,
+) -> None:
+    """Real sqlite-vec 0.1.9 extension: `embedding MATCH ? AND k = ? ORDER BY
+    distance` returns `(concept_id, distance)` rows, nearest first -- proves
+    `query`'s planned KNN statement is valid against the real extension."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        conn = db._conn
+        near = [1.0] + [0.0] * (EMBED_DIM - 1)
+        far = [0.0, 1.0] + [0.0] * (EMBED_DIM - 2)
+        conn.execute(
+            "INSERT INTO vectors (embedding, concept_id, content_hash) "
+            "VALUES (?, ?, ?)",
+            (_serialize(near), "concepts/near", "hash-near"),
+        )
+        conn.execute(
+            "INSERT INTO vectors (embedding, concept_id, content_hash) "
+            "VALUES (?, ?, ?)",
+            (_serialize(far), "concepts/far", "hash-far"),
+        )
+        conn.commit()
+
+        rows = conn.execute(
+            "SELECT concept_id, distance FROM vectors "
+            "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+            (_serialize(near), 2),
+        ).fetchall()
+
+    assert [row[0] for row in rows] == ["concepts/near", "concepts/far"]
+    assert rows[0][1] < rows[1][1]
+
 
 # --- Phase 3: content_hash --------------------------------------------------
 
@@ -46,23 +141,56 @@ def test_content_hash_differs_for_differing_bytes() -> None:
 # --- Phase 4: VecUnavailable + VectorStore Protocol + loader + schema ------
 
 
-def test_close_only_fake_satisfies_vector_store_protocol_structurally() -> None:
-    """A fake exposing only `close()` is structurally a `VectorStore` --
-    mirrors `Embedder`/`LLMBackend` (`llm/base.py`); mypy accepts the
-    assignment below (`uv run mypy .` gate)."""
+def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
+    """A fake implementing `close`/`upsert`/`query`/`meta_hashes`/`prune`
+    satisfies `VectorStore` structurally -- mirrors `Embedder`/`LLMBackend`
+    (`llm/base.py`); mypy accepts the assignment below (`uv run mypy .`
+    gate). The Protocol extension is additive: this is the SAME lifecycle
+    seam 2a defined, now with the Slice 2b data-flow methods added (spec:
+    Protocol Extended Additively -- Extended fake satisfies the Protocol).
+
+    A fake declaring ONLY `close()` can no longer satisfy the now-larger
+    `VectorStore` Protocol -- verified directly against mypy's own Protocol
+    structural-typing rules, which require EVERY declared member to be
+    present, with no partial/optional subset (Protocol methods are
+    implicitly abstract; a subclass missing one is rejected, and a
+    non-subclassed structural match is rejected the same way). "Additive"
+    therefore means the Protocol's SHAPE grows without dropping `close()`,
+    not that a minimal old fake remains valid against the new, larger shape.
+    """
 
     class _FakeVectorStore:
         def __init__(self) -> None:
             self.closed = False
+            self.upserts: list[tuple[str, list[float], str]] = []
+            self.pruned: list[str] = []
 
         def close(self) -> None:
             self.closed = True
 
+        def upsert(
+            self, concept_id: str, embedding: Sequence[float], content_hash: str
+        ) -> None:
+            self.upserts.append((concept_id, list(embedding), content_hash))
+
+        def query(self, embedding: Sequence[float], k: int) -> list[vectorstore.VecHit]:
+            return []
+
+        def meta_hashes(self) -> dict[str, str]:
+            return {}
+
+        def prune(self, concept_id: str) -> None:
+            self.pruned.append(concept_id)
+
     fake: vectorstore.VectorStore = _FakeVectorStore()
+    fake.upsert("concepts/a", [0.0] * EMBED_DIM, "hash")
+    fake.prune("concepts/a")
     fake.close()
 
     assert isinstance(fake, _FakeVectorStore)
     assert fake.closed is True
+    assert fake.upserts == [("concepts/a", [0.0] * EMBED_DIM, "hash")]
+    assert fake.pruned == ["concepts/a"]
 
 
 def test_vec_unavailable_is_a_runtime_error() -> None:
@@ -473,7 +601,7 @@ def test_probe_vec_loadable_does_not_swallow_keyboard_interrupt(
         vectorstore.probe_vec_loadable()
 
 
-# --- Review Correction 2: connect()/schema footprint on real-path failure --
+# --- Phase 5b: real-path connect()/schema footprint on failure -------------
 
 
 class _FailingRealConnectFactory:
@@ -544,3 +672,241 @@ def test_open_vector_store_leaves_no_new_footprint_on_mid_schema_failure(
 
     assert not db_path.parent.exists()
     assert not db_path.exists()
+
+
+# --- Phase 2: upsert/query data flow ----------------------------------------
+
+
+def test_upsert_first_insert_creates_one_vectors_row_and_one_meta_row(
+    tmp_path: Path,
+) -> None:
+    """First `upsert` of a new `concept_id` inserts exactly one `vectors` row
+    and one `vector_meta` row for it (spec: First upsert of a new concept
+    inserts one row)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    embedding = [0.1] * EMBED_DIM
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", embedding, "hash-1")
+        vector_rows = db._conn.execute(
+            "SELECT concept_id, content_hash FROM vectors"
+        ).fetchall()
+        meta_rows = db._conn.execute(
+            "SELECT concept_id, content_hash FROM vector_meta"
+        ).fetchall()
+
+    assert vector_rows == [("concepts/a", "hash-1")]
+    assert meta_rows == [("concepts/a", "hash-1")]
+
+
+def test_upsert_reupsert_replaces_prior_vector_and_updates_meta_hash(
+    tmp_path: Path,
+) -> None:
+    """Re-`upsert` of an existing `concept_id` removes the old row, leaves
+    exactly one row, and `vector_meta` reflects the new `content_hash`
+    (spec: Re-upsert replaces the prior vector)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-1")
+        db.upsert("concepts/a", [0.2] * EMBED_DIM, "hash-2")
+        vector_rows = db._conn.execute(
+            "SELECT concept_id, content_hash FROM vectors"
+        ).fetchall()
+        meta_rows = db._conn.execute(
+            "SELECT concept_id, content_hash FROM vector_meta"
+        ).fetchall()
+
+    assert vector_rows == [("concepts/a", "hash-2")]
+    assert meta_rows == [("concepts/a", "hash-2")]
+
+
+def test_upsert_does_not_affect_other_concept_ids(tmp_path: Path) -> None:
+    """`upsert` of one `concept_id` never touches another's row (baseline
+    isolation, guards the DELETE-by-`concept_id` statement's WHERE clause)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+        db.upsert("concepts/b", [0.2] * EMBED_DIM, "hash-b")
+        db.upsert("concepts/a", [0.3] * EMBED_DIM, "hash-a2")
+        rows = dict(
+            db._conn.execute(
+                "SELECT concept_id, content_hash FROM vector_meta"
+            ).fetchall()
+        )
+
+    assert rows == {"concepts/a": "hash-a2", "concepts/b": "hash-b"}
+
+
+def test_query_returns_k_nearest_ordered_by_ascending_distance(
+    tmp_path: Path,
+) -> None:
+    """`query(embedding, k)` returns up to `k` `VecHit`s, nearest first
+    (spec: Query returns nearest neighbors ordered by distance)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    near = [1.0] + [0.0] * (EMBED_DIM - 1)
+    far = [0.0, 1.0] + [0.0] * (EMBED_DIM - 2)
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/near", near, "hash-near")
+        db.upsert("concepts/far", far, "hash-far")
+        hits = db.query(near, k=2)
+
+    assert [hit.concept_id for hit in hits] == ["concepts/near", "concepts/far"]
+    assert all(isinstance(hit, vectorstore.VecHit) for hit in hits)
+    assert hits[0].distance < hits[1].distance
+
+
+def test_query_respects_k_limit(tmp_path: Path) -> None:
+    """`query` never returns more than `k` hits, even when more rows exist."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        for i in range(5):
+            vec = [0.0] * EMBED_DIM
+            vec[0] = float(i)
+            db.upsert(f"concepts/{i}", vec, f"hash-{i}")
+        hits = db.query([0.0] * EMBED_DIM, k=2)
+
+    assert len(hits) == 2
+
+
+def test_query_against_empty_store_returns_empty_list_not_an_error(
+    tmp_path: Path,
+) -> None:
+    """`query` against a store with no upserted vectors returns `[]`, not an
+    error (spec: Query against an empty store returns no results)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        hits = db.query([0.0] * EMBED_DIM, k=5)
+
+    assert hits == []
+
+
+def test_vec_hit_is_a_frozen_dataclass_with_concept_id_and_distance() -> None:
+    """`VecHit` mirrors `FtsHit`'s shape: a frozen dataclass with
+    `concept_id`/`distance` fields."""
+    hit = vectorstore.VecHit(concept_id="concepts/a", distance=0.5)
+
+    assert hit.concept_id == "concepts/a"
+    assert hit.distance == 0.5
+    with pytest.raises(AttributeError):
+        hit.concept_id = "concepts/b"  # type: ignore[misc]
+
+
+# --- Phase 3: meta_hashes/prune cache accessors -----------------------------
+
+
+def test_meta_hashes_returns_concept_id_to_content_hash_mapping(
+    tmp_path: Path,
+) -> None:
+    """`meta_hashes()` returns `{concept_id: content_hash}` for every row."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+        db.upsert("concepts/b", [0.2] * EMBED_DIM, "hash-b")
+        hashes = db.meta_hashes()
+
+    assert hashes == {"concepts/a": "hash-a", "concepts/b": "hash-b"}
+
+
+def test_meta_hashes_on_empty_store_returns_empty_dict(tmp_path: Path) -> None:
+    """`meta_hashes()` against an empty store returns `{}`, not an error."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        hashes = db.meta_hashes()
+
+    assert hashes == {}
+
+
+def test_prune_removes_rows_from_both_vectors_and_vector_meta(
+    tmp_path: Path,
+) -> None:
+    """`prune(concept_id)` removes matching rows from both `vectors` and
+    `vector_meta` (spec: `prune(concept_id)` removes matching rows from both
+    tables)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+        db.upsert("concepts/b", [0.2] * EMBED_DIM, "hash-b")
+        db.prune("concepts/a")
+        vector_ids = {
+            str(row[0])
+            for row in db._conn.execute("SELECT concept_id FROM vectors").fetchall()
+        }
+        meta_ids = set(db.meta_hashes())
+
+    assert vector_ids == {"concepts/b"}
+    assert meta_ids == {"concepts/b"}
+
+
+def test_prune_of_absent_concept_id_is_a_no_op(tmp_path: Path) -> None:
+    """Pruning a `concept_id` with no stored row does not raise and leaves
+    other rows untouched."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+        db.prune("concepts/does-not-exist")
+        hashes = db.meta_hashes()
+
+    assert hashes == {"concepts/a": "hash-a"}
+
+
+# --- Phase 6: deferred 2a follow-ups -----------------------------------------
+
+
+def test_second_close_call_does_not_raise(tmp_path: Path) -> None:
+    """(c) `VectorStoreDB.close()` is safe to call more than once; a second
+    call does not raise (spec: Idempotent Double-Close)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    db = vectorstore.open_vector_store(db_path)
+
+    db.close()
+    db.close()  # must not raise
+
+
+def test_workspace_root_and_other_files_survive_a_failed_open(
+    tmp_path: Path,
+) -> None:
+    """(a) A failed `open_vector_store` (after `.openkos/` was created but
+    before the real connect/DDL succeeds) removes only the `.openkos/`
+    artifacts THIS call created -- the enclosing workspace root and its
+    other files are left fully intact (spec: Workspace root survives a
+    failed open)."""
+    other_file = tmp_path / "AGENTS.md"
+    other_file.write_text("workspace marker", encoding="utf-8")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    assert not db_path.parent.exists()
+
+    with pytest.raises(PermissionError):
+        vectorstore.open_vector_store(db_path, connect=_FailingRealConnectFactory())
+
+    assert tmp_path.is_dir()
+    assert other_file.read_text(encoding="utf-8") == "workspace marker"
+    assert not db_path.parent.exists()
+
+
+def test_preexisting_vectors_db_survives_a_failed_reopen(tmp_path: Path) -> None:
+    """(d) When `path` already exists (`db_preexisted=True`) and a later
+    step in `open_vector_store` fails (schema DDL on the real connection),
+    the pre-existing file is left untouched -- its bytes are unchanged
+    (spec: Pre-existing vectors.db survives a failed reopen)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    with vectorstore.open_vector_store(db_path):
+        pass
+    original_bytes = db_path.read_bytes()
+
+    def fake_connect(database: str) -> sqlite3.Connection:
+        return sqlite3.connect(database, factory=_FailingVectorMetaConnection)
+
+    with pytest.raises(sqlite3.OperationalError):
+        vectorstore.open_vector_store(db_path, connect=fake_connect)
+
+    assert db_path.exists()
+    assert db_path.read_bytes() == original_bytes

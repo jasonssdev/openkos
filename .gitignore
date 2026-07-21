@@ -250,3 +250,9 @@ $RECYCLE.BIN/
 # End of https://www.toptal.com/developers/gitignore/api/windows,linux,macos,python
 # Local AI runtime state
 .atl/
+
+# OpenKOS engine cache: a rebuildable vector store (`.openkos/vectors.db`),
+# lazily created by `state.vectorstore.open_vector_store` on first
+# successful open, never written by `openkos init` (design: embedding-vector-store,
+# Decision #4).
+.openkos/

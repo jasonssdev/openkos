@@ -36,8 +36,13 @@ from openkos.resolution.adjudication import Verdict, adjudicate_candidates
 from openkos.resolution.candidates import Tier
 from openkos.resolution.edge_typing import suggest_relations
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
+from openkos.state import reindex as reindex_module
 from openkos.state.fts import FtsUnavailable
-from openkos.state.vectorstore import probe_vec_loadable
+from openkos.state.vectorstore import (
+    VecUnavailable,
+    open_vector_store,
+    probe_vec_loadable,
+)
 
 app = typer.Typer()
 
@@ -2281,6 +2286,93 @@ def query(
         typer.echo("Citations:")
         for citation in result.citations:
             typer.echo(f"  → {citation.concept_id} ({citation.title})")
+
+
+@app.command()
+def reindex(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Re-embed every discovered doc, ignoring the content-hash cache.",
+    ),
+) -> None:
+    """Backfill `.openkos/vectors.db` from the compiled bundle -- the first
+    writer of the vector store's data (spec: reindex-command).
+
+    Read-only over the bundle, write-only to `.openkos/vectors.db`: no
+    bundle file is ever touched, no confirmation prompt, no `--auto`,
+    mirroring `query`'s D1 gate shape (bare `require_workspace`, no Phase
+    B). Must run inside an initialized workspace; outside one it refuses
+    (exit 1) with a short reason on stderr (spec: Run outside a workspace
+    refuses).
+
+    Thin wiring only (spec: CLI Verb Is Thin Wiring): `require_workspace` →
+    `read_config` → `open_vector_store(vectors_db_path)` →
+    `state.reindex.reindex(bundle_dir, db, embedder, force=force)` → print a
+    summary of embedded/cache-hit/pruned/skipped counts and exit 0. The
+    orchestrator (`state/reindex.py`) owns the bundle walk, the
+    `content_hash` cache gate, and the prune pass; this command owns none of
+    that logic.
+
+    Embeds through a local Ollama server running the model configured as
+    `embedding_model` in `openkos.yaml` (default `qwen3-embedding:0.6b`).
+    An unreachable Ollama, a missing embedding model, or an unusable
+    `sqlite-vec` extension is reported on stderr with no raw traceback and
+    exits 1 -- the SAME ordered ladder `query` uses (`OllamaUnavailable` →
+    `OllamaModelNotFound` → a generic `(VecUnavailable, OllamaError)`
+    fallback), with `VecUnavailable` substituted for `FtsUnavailable` (spec:
+    Error Ladder Mirrors query). Never alters `query`'s own behavior or
+    `retrieval/answer.py` (spec: No Retrieval Consumer Introduced).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos reindex: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos reindex: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    embedder = OllamaClient(model=cfg.embedding_model)
+    try:
+        with open_vector_store(layout.vectors_db_path) as db:
+            report = reindex_module.reindex(
+                layout.bundle_dir, db, embedder, force=force
+            )
+    except OllamaUnavailable as exc:
+        typer.echo(
+            f"openkos reindex: failed -- {exc}. Start it with `ollama serve`, "
+            f"then try again.{_DOCTOR_HINT}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    except OllamaModelNotFound as exc:
+        typer.echo(
+            "openkos reindex: failed -- embedding model "
+            f"'{cfg.embedding_model}' is not installed. Pull it with "
+            f"`ollama pull {cfg.embedding_model}`, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    # The two specific handlers above MUST precede this generic tuple, same
+    # ordering rationale as `query`'s ladder: both `OllamaUnavailable` and
+    # `OllamaModelNotFound` subclass `OllamaError`.
+    except (VecUnavailable, OllamaError) as exc:
+        typer.echo(f"openkos reindex: failed -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos reindex: {report.embedded} embedded, {report.cache_hits} "
+        f"cache-hit{_plural(report.cache_hits)}, {report.pruned} pruned, "
+        f"{report.skipped} skipped."
+    )
 
 
 @dataclass(frozen=True)
