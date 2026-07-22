@@ -12,8 +12,12 @@ any bundle file.
 This spec does not define: CI-gating, non-zero exit on findings, or severity
 thresholds (findings are informational only, mirroring `status`); error vs.
 warning tiers (flat warning-level in MVP-1); `--json` or any structured
-output; volatility classification via the `freshness` field (lint never
-reads it); conformance checking (`check_conformance` / OKF §9 stays a
+output; volatility classification via the `freshness` field remains out of
+scope — `freshness` stays a binary snapshot/non-snapshot skip flag,
+orthogonal to volatility; volatility classification is instead read from
+the concept's `volatility` field and per-type registry default (see
+`concept-volatility`), applied only to resolve each concept's stale-stamp
+window; conformance checking (`check_conformance` / OKF §9 stays a
 separate vocabulary).
 
 ## Requirements
@@ -34,25 +38,50 @@ NOT produce a raw traceback.
 ### Requirement: Stale-Stamp Scan
 
 `openkos lint` MUST scan concept bodies for inline `(as of YYYY-MM-DD)`
-stamps and flag any stamp older than the configured `freshness_window`
-(default `7d`) as a stale-stamp finding. The scan MUST read only inline
-body text, never the `freshness` field, EXCEPT that the scan MUST skip
-entirely any concept whose `freshness` field is `snapshot` — such concepts
-(as produced by `openkos ingest`) embed verbatim source text that MAY
-coincidentally contain an `(as of ...)`-shaped string, and that text is
-not a maintained freshness stamp.
+stamps and flag any stamp older than that concept's volatility-resolved
+stale window (per `concept-volatility` precedence: per-concept `volatility`
+override → per-type default → global `freshness_window` fallback, default
+`7d`) as a stale-stamp finding. `static`-tier concepts MUST NEVER be
+flagged regardless of stamp age. The scan MUST read only inline body text
+for the stamp itself, never `freshness` for age, EXCEPT that the scan MUST
+skip entirely any concept whose `freshness` field is `snapshot` — such
+concepts (as produced by `openkos ingest`) embed verbatim source text that
+MAY coincidentally contain an `(as of ...)`-shaped string, and that text is
+not a maintained freshness stamp, independent of resolved volatility tier.
 
 #### Scenario: Stale stamp is flagged
 
 - GIVEN a non-snapshot concept body containing `(as of YYYY-MM-DD)` older
-  than the configured `freshness_window`
+  than the concept's volatility-resolved stale window
 - WHEN `openkos lint` runs
 - THEN the concept is reported as a stale-stamp finding
 
 #### Scenario: Fresh stamp is not flagged
 
 - GIVEN a non-snapshot concept body containing `(as of YYYY-MM-DD)` within
-  the configured `freshness_window`
+  the concept's volatility-resolved stale window
+- WHEN `openkos lint` runs
+- THEN the concept is NOT reported as a stale-stamp finding
+
+#### Scenario: static-tier concept is never flagged
+
+- GIVEN a `static`-tier concept (by `volatility` override or per-type
+  default) with an arbitrarily old `(as of YYYY-MM-DD)` stamp
+- WHEN `openkos lint` runs
+- THEN the concept is NOT reported as a stale-stamp finding
+
+#### Scenario: Per-concept override wins over type default
+
+- GIVEN a `Procedure` concept (whose type default is `volatile`) with
+  `volatility: static` and an old `(as of YYYY-MM-DD)` stamp
+- WHEN `openkos lint` runs
+- THEN the concept is NOT reported as a stale-stamp finding
+
+#### Scenario: Type default wins over global fallback
+
+- GIVEN a `slow`-tier concept whose resolved window is longer than the
+  global `freshness_window` fallback, with a stamp older than the fallback
+  but within the `slow`-tier window
 - WHEN `openkos lint` runs
 - THEN the concept is NOT reported as a stale-stamp finding
 
@@ -62,14 +91,23 @@ not a maintained freshness stamp.
   produced by `openkos ingest`
 - WHEN `openkos lint` runs
 - THEN it reports zero stale-stamp findings, regardless of any
-  `(as of ...)`-shaped text embedded in their bodies
+  `(as of ...)`-shaped text embedded in their bodies or resolved
+  volatility tier
 
 #### Scenario: Snapshot concept with an embedded stamp-shaped string is not flagged
 
 - GIVEN a `freshness: snapshot` Source concept whose embedded verbatim
   content contains text matching `(as of YYYY-MM-DD)`
 - WHEN `openkos lint` runs
-- THEN no stale-stamp finding is reported for that concept
+- THEN no stale-stamp finding is reported for that concept, regardless of
+  its resolved volatility tier
+
+#### Scenario: Unresolvable volatility still degrades to the global fallback
+
+- GIVEN a concept with an unknown `type` AND an invalid `volatility` value
+- WHEN `openkos lint` runs
+- THEN its stale window resolves to the global `freshness_window` fallback
+  and the scan never raises
 
 ### Requirement: Orphan-Page Scan
 

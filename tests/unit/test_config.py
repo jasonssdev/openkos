@@ -535,3 +535,56 @@ def test_read_config_preserves_explicit_review_false(tmp_path: Path) -> None:
     result = config.read_config(tmp_path)
 
     assert result.review is False
+
+
+# --- freshness-lint-v1: per-tier default windows (config.py) ---
+
+
+def test_default_volatility_windows_matches_design() -> None:
+    """`DEFAULT_VOLATILITY_WINDOWS` is the packaged per-tier default map
+    (design: "Per-tier windows (CONCRETE, FINAL)"): `slow` = 90d, `volatile`
+    = 7d (continuity with today's global default for fast types). `static`
+    has no window value -- it is never in this map."""
+    assert config.DEFAULT_VOLATILITY_WINDOWS == {"slow": "90d", "volatile": "7d"}
+
+
+def test_read_config_volatility_windows_defaults_to_empty_map_when_absent(
+    tmp_path: Path,
+) -> None:
+    """`volatility_windows` absent from `openkos.yaml` falls back to `{}` --
+    grammar parsing/tier-default fallback stays in `lint.resolve_windows`,
+    not here (design: "raw passthrough only")."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.volatility_windows == {}
+
+
+def test_read_config_volatility_windows_falls_back_to_empty_map_on_explicit_null(
+    tmp_path: Path,
+) -> None:
+    """A `volatility_windows: null` (present but explicit null) falls back to
+    `{}`, mirroring every other field's `is not None` fallback."""
+    (tmp_path / "openkos.yaml").write_text(
+        "volatility_windows: null\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.volatility_windows == {}
+
+
+def test_read_config_volatility_windows_passes_through_verbatim(
+    tmp_path: Path,
+) -> None:
+    """A present `volatility_windows` map passes through verbatim -- raw
+    passthrough only, no duration-grammar validation at this layer."""
+    (tmp_path / "openkos.yaml").write_text(
+        "volatility_windows:\n  slow: 30d\n  volatile: 3d\n",
+        encoding="utf-8",
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.volatility_windows == {"slow": "30d", "volatile": "3d"}

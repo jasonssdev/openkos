@@ -148,3 +148,56 @@ def test_canonical_section_order_inserts_project_after_decisions() -> None:
         "Organizations",
         "Sources",
     )
+
+
+# --- freshness-lint-v1: per-type default volatility tier ---
+
+
+def test_volatility_tiers_is_the_closed_three_value_set() -> None:
+    """`VOLATILITY_TIERS` is exactly the fixed three-tier taxonomy (spec:
+    `concept-volatility`, "Fixed Three-Tier Volatility Taxonomy")."""
+    assert frozenset({"static", "slow", "volatile"}) == types.VOLATILITY_TIERS
+
+
+@pytest.mark.parametrize(
+    ("type_name", "expected_tier"),
+    [
+        ("Place", "static"),
+        ("Event", "static"),
+        ("Decision", "static"),
+        ("Source", "static"),
+        ("Concept", "slow"),
+        ("Entity", "slow"),
+        ("Person", "slow"),
+        ("Organization", "slow"),
+        ("Procedure", "volatile"),
+        ("Project", "volatile"),
+    ],
+)
+def test_registry_default_volatility_per_type(
+    type_name: str, expected_tier: str
+) -> None:
+    """Each `ObjectType.default_volatility` matches the fixed per-type
+    registry (design: "Per-type default tier on registry"): static =
+    {Place, Event, Decision, Source}; slow = {Concept, Entity, Person,
+    Organization}; volatile = {Procedure, Project}."""
+    by_name = {ot.name: ot for ot in types.REGISTRY}
+    assert by_name[type_name].default_volatility == expected_tier
+
+
+def test_type_to_default_volatility_matches_registry() -> None:
+    """`TYPE_TO_DEFAULT_VOLATILITY` is the derived `name -> default_volatility`
+    projection of the full registry, including `Source` (non-classifiable
+    but still tiered)."""
+    assert types.TYPE_TO_DEFAULT_VOLATILITY == {
+        "Concept": "slow",
+        "Entity": "slow",
+        "Place": "static",
+        "Event": "static",
+        "Procedure": "volatile",
+        "Decision": "static",
+        "Project": "volatile",
+        "Person": "slow",
+        "Organization": "slow",
+        "Source": "static",
+    }

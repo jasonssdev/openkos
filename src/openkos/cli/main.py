@@ -1842,20 +1842,25 @@ def lint() -> None:
     fails to `read_text()` is the only OTHER non-zero path: caught here and
     reported the same way, never left to raise a raw traceback.
 
-    On a workspace, the flow is: `read_config(root).freshness_window` is
-    resolved via `lint.resolve_window` (Q4) -- an invalid/zero/negative
-    value never raises, it falls back to the packaged default and prints a
-    fallback-notice line instead. `today` is computed ONCE via
+    On a workspace, the flow is: `read_config(root)`'s `freshness_window`
+    and `volatility_windows` are resolved together via
+    `lint.resolve_windows` (freshness-lint-v1, Q4) into one
+    `lint.VolatilityWindows` -- an invalid/zero/negative/non-mapping value,
+    for any tier, never raises; it falls back to the packaged default and
+    prints a fallback-notice line instead. `today` is computed ONCE via
     `datetime.now(UTC).date()` and injected into `lint.check_stale_stamps`
     (the clock is never read inside `lint.py` itself, keeping every scan
     deterministic and testable). `lint.collect_docs` reuses `okf._iter_docs`
     for the single walk, returning `(docs, skip_notices)` so a skipped
     file never silently shrinks the scan; `lint.check_stale_stamps` scans
-    inline `(as of YYYY-MM-DD)` body stamps (never the `freshness` field);
+    inline `(as of YYYY-MM-DD)` body stamps (never the `freshness` field),
+    resolving each doc's own stale window via `lint.window_for_doc`'s
+    per-concept-override -> per-type-default -> global-fallback precedence
+    (a `static`-tier doc, by override or type default, is never flagged);
     `lint.check_orphans` scans markdown links from `index.md` and every
     doc body (never `log.md` -- see its docstring for why).
 
-    The window and skip notices feed one `lint.LintReport`, rendered
+    The volatility-window and skip notices feed one `lint.LintReport`, rendered
     under two sections, `Stale stamps:` and `Orphan pages:`, each with its
     own empty-state line when there is nothing to report. Every
     successful read exits 0, whether the bundle is clean or
@@ -1881,11 +1886,11 @@ def lint() -> None:
         )
         raise typer.Exit(code=1) from exc
 
-    window, window_notice = lint_check.resolve_window(cfg.freshness_window)
+    windows, window_notices = lint_check.resolve_windows(cfg)
     today = datetime.now(UTC).date()
-    stale = lint_check.check_stale_stamps(docs, today=today, window=window)
+    stale = lint_check.check_stale_stamps(docs, today=today, windows=windows)
     orphans = lint_check.check_orphans(docs, index_text=index_text)
-    notices = ([window_notice] if window_notice is not None else []) + skip_notices
+    notices = window_notices + skip_notices
     report = lint_check.LintReport(stale=stale, orphans=orphans, notices=notices)
 
     typer.echo(f"openkos lint: workspace at {root}")

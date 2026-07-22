@@ -16,16 +16,23 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from openkos import lint
+from openkos import config, lint
 from openkos.model import okf
 
 
-def _write_doc(path: Path, *, doc_type: str = "Concept", body: str = "") -> None:
+def _write_doc(
+    path: Path,
+    *,
+    doc_type: str = "Concept",
+    body: str = "",
+    volatility: str | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\ntype: {doc_type}\ntitle: Stub\n---\n{body}",
-        encoding="utf-8",
-    )
+    frontmatter = f"---\ntype: {doc_type}\ntitle: Stub\n"
+    if volatility is not None:
+        frontmatter += f"volatility: {volatility}\n"
+    frontmatter += "---\n"
+    path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
 
 def test_collect_docs_computes_identity_rel_dir_and_body(tmp_path: Path) -> None:
@@ -149,6 +156,65 @@ def test_collect_docs_top_level_doc_has_empty_rel_dir(tmp_path: Path) -> None:
     assert docs[0].rel_dir == ""
 
 
+# --- freshness-lint-v1: LintDoc `type`/`volatility` fields ---
+
+
+def test_collect_docs_reads_type_field(tmp_path: Path) -> None:
+    """`collect_docs` reads the doc's frontmatter `type` field into
+    `LintDoc.type` (design: "LintDoc before/after")."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "procedures" / "deploy.md", doc_type="Procedure")
+
+    docs, _skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].type == "Procedure"
+
+
+def test_collect_docs_reads_volatility_field_when_present(tmp_path: Path) -> None:
+    """`collect_docs` reads the doc's frontmatter `volatility` field into
+    `LintDoc.volatility` when present."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "procedures" / "deploy.md",
+        doc_type="Procedure",
+        volatility="static",
+    )
+
+    docs, _skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].volatility == "static"
+
+
+def test_collect_docs_defaults_volatility_to_empty_string_when_absent(
+    tmp_path: Path,
+) -> None:
+    """`LintDoc.volatility` defaults to `""` when the frontmatter field is
+    absent -- absent-by-default (design: never emitted at ingest, never
+    required at read time)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md")
+
+    docs, _skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].volatility == ""
+
+
+def test_collect_docs_defaults_type_to_empty_string_when_absent(
+    tmp_path: Path,
+) -> None:
+    """`LintDoc.type` defaults to `""` when the frontmatter field is absent
+    (malformed/hand-authored doc with no `type:` line)."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "untyped.md").write_text(
+        "---\ntitle: Stub\n---\nBody.\n", encoding="utf-8"
+    )
+
+    docs, _skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].type == ""
+
+
 @pytest.mark.parametrize(
     ("raw", "expected_days"),
     [
@@ -216,7 +282,14 @@ def test_resolve_window_falls_back_on_non_string_input(raw: object) -> None:
     assert "not a valid duration" in notice
 
 
-def _doc(identity: str, body: str, *, freshness: str = "current") -> lint.LintDoc:
+def _doc(
+    identity: str,
+    body: str,
+    *,
+    freshness: str = "current",
+    type: str = "",
+    volatility: str = "",
+) -> lint.LintDoc:
     rel_dir = str(PurePosixPath(identity).parent)
     if rel_dir == ".":
         rel_dir = ""
@@ -226,6 +299,8 @@ def _doc(identity: str, body: str, *, freshness: str = "current") -> lint.LintDo
         rel_dir=rel_dir,
         body=body,
         freshness=freshness,
+        type=type,
+        volatility=volatility,
     )
 
 
@@ -234,7 +309,13 @@ def test_check_stale_stamps_flags_a_stamp_beyond_the_window() -> None:
     docs = [_doc("concepts/stoicism", "Body text (as of 2026-07-01).")]
 
     findings = lint.check_stale_stamps(
-        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+        docs,
+        today=date(2026, 7, 20),
+        windows=lint.VolatilityWindows(
+            slow=timedelta(days=7),
+            volatile=timedelta(days=7),
+            fallback=timedelta(days=7),
+        ),
     )
 
     assert len(findings) == 1
@@ -249,7 +330,13 @@ def test_check_stale_stamps_does_not_flag_a_stamp_within_the_window() -> None:
     docs = [_doc("concepts/stoicism", "Body text (as of 2026-07-18).")]
 
     findings = lint.check_stale_stamps(
-        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+        docs,
+        today=date(2026, 7, 20),
+        windows=lint.VolatilityWindows(
+            slow=timedelta(days=7),
+            volatile=timedelta(days=7),
+            fallback=timedelta(days=7),
+        ),
     )
 
     assert findings == []
@@ -260,7 +347,13 @@ def test_check_stale_stamps_exact_boundary_is_not_stale() -> None:
     docs = [_doc("concepts/stoicism", "Body text (as of 2026-07-13).")]
 
     findings = lint.check_stale_stamps(
-        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+        docs,
+        today=date(2026, 7, 20),
+        windows=lint.VolatilityWindows(
+            slow=timedelta(days=7),
+            volatile=timedelta(days=7),
+            fallback=timedelta(days=7),
+        ),
     )
 
     assert findings == []
@@ -272,7 +365,13 @@ def test_check_stale_stamps_skips_malformed_calendar_dates() -> None:
     docs = [_doc("concepts/stoicism", "Body text (as of 2026-13-45).")]
 
     findings = lint.check_stale_stamps(
-        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+        docs,
+        today=date(2026, 7, 20),
+        windows=lint.VolatilityWindows(
+            slow=timedelta(days=7),
+            volatile=timedelta(days=7),
+            fallback=timedelta(days=7),
+        ),
     )
 
     assert findings == []
@@ -288,7 +387,13 @@ def test_check_stale_stamps_dedupes_duplicate_stamps() -> None:
     ]
 
     findings = lint.check_stale_stamps(
-        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+        docs,
+        today=date(2026, 7, 20),
+        windows=lint.VolatilityWindows(
+            slow=timedelta(days=7),
+            volatile=timedelta(days=7),
+            fallback=timedelta(days=7),
+        ),
     )
 
     assert len(findings) == 1
@@ -306,7 +411,13 @@ def test_check_stale_stamps_pure_ingest_bundle_has_zero_findings() -> None:
     ]
 
     findings = lint.check_stale_stamps(
-        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+        docs,
+        today=date(2026, 7, 20),
+        windows=lint.VolatilityWindows(
+            slow=timedelta(days=7),
+            volatile=timedelta(days=7),
+            fallback=timedelta(days=7),
+        ),
     )
 
     assert findings == []
@@ -327,7 +438,13 @@ def test_check_stale_stamps_skips_snapshot_docs_with_stamp_shaped_text() -> None
     ]
 
     findings = lint.check_stale_stamps(
-        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+        docs,
+        today=date(2026, 7, 20),
+        windows=lint.VolatilityWindows(
+            slow=timedelta(days=7),
+            volatile=timedelta(days=7),
+            fallback=timedelta(days=7),
+        ),
     )
 
     assert findings == []
@@ -347,11 +464,124 @@ def test_check_stale_stamps_still_flags_non_snapshot_docs() -> None:
     ]
 
     findings = lint.check_stale_stamps(
-        docs, today=date(2026, 7, 20), window=timedelta(days=7)
+        docs,
+        today=date(2026, 7, 20),
+        windows=lint.VolatilityWindows(
+            slow=timedelta(days=7),
+            volatile=timedelta(days=7),
+            fallback=timedelta(days=7),
+        ),
     )
 
     assert len(findings) == 1
     assert findings[0].kind == "stale"
+
+
+# --- freshness-lint-v1: check_stale_stamps volatility-aware windows ---
+
+
+_MIXED_WINDOWS = lint.VolatilityWindows(
+    slow=timedelta(days=90), volatile=timedelta(days=7), fallback=timedelta(days=7)
+)
+
+
+def test_check_stale_stamps_static_tier_never_flagged() -> None:
+    """A `static`-tier doc (by type default) is NEVER flagged, however
+    ancient its stamp (spec: "static-tier concept is never flagged")."""
+    docs = [
+        _doc(
+            "events/founding",
+            "Founded (as of 1900-01-01).",
+            type="Event",
+        )
+    ]
+
+    findings = lint.check_stale_stamps(
+        docs, today=date(2026, 7, 20), windows=_MIXED_WINDOWS
+    )
+
+    assert findings == []
+
+
+def test_check_stale_stamps_per_concept_override_beats_type_default() -> None:
+    """A per-concept `volatility: static` override on a normally
+    `volatile`-tier `Procedure` wins over its type default -- old stamp is
+    NOT flagged (spec: "Per-concept override wins over type default")."""
+    docs = [
+        _doc(
+            "procedures/legacy",
+            "Deploy steps (as of 2000-01-01).",
+            type="Procedure",
+            volatility="static",
+        )
+    ]
+
+    findings = lint.check_stale_stamps(
+        docs, today=date(2026, 7, 20), windows=_MIXED_WINDOWS
+    )
+
+    assert findings == []
+
+
+def test_check_stale_stamps_slow_tier_default_wins_over_shorter_fallback() -> None:
+    """A `slow`-tier (`Concept`) doc uses the 90d `slow` window, not the
+    shorter 7d global fallback -- a stamp 30 days old is within the `slow`
+    window (spec: "Type default wins over global fallback")."""
+    docs = [
+        _doc(
+            "concepts/stoicism",
+            "Recorded (as of 2026-06-20).",
+            type="Concept",
+        )
+    ]
+
+    findings = lint.check_stale_stamps(
+        docs, today=date(2026, 7, 20), windows=_MIXED_WINDOWS
+    )
+
+    assert findings == []
+
+
+def test_check_stale_stamps_slow_tier_still_flags_beyond_its_own_window() -> None:
+    """The SAME `slow`-tier doc IS flagged once the stamp exceeds the
+    90d `slow` window itself -- pinning that the wider window is real, not
+    a blanket exemption."""
+    docs = [
+        _doc(
+            "concepts/stoicism",
+            "Recorded (as of 2020-01-01).",
+            type="Concept",
+        )
+    ]
+
+    findings = lint.check_stale_stamps(
+        docs, today=date(2026, 7, 20), windows=_MIXED_WINDOWS
+    )
+
+    assert len(findings) == 1
+    assert findings[0].kind == "stale"
+
+
+def test_check_stale_stamps_unresolvable_volatility_degrades_to_fallback() -> None:
+    """An unknown type AND an invalid `volatility` value degrades to the
+    global fallback window and never raises (spec: "Unresolvable
+    volatility... still degrades to the global fallback window")."""
+    docs = [
+        _doc(
+            "misc/mystery",
+            "Recorded (as of 2026-07-01).",
+            type="UnknownType",
+            volatility="not-a-real-tier",
+        )
+    ]
+
+    findings = lint.check_stale_stamps(
+        docs, today=date(2026, 7, 20), windows=_MIXED_WINDOWS
+    )
+
+    assert len(findings) == 1
+    assert findings[0].kind == "stale"
+    assert "window 7d" in findings[0].detail
 
 
 def test_normalize_link_rooted_slash() -> None:
@@ -532,3 +762,157 @@ def test_check_orphans_ignores_external_links_in_doc_body() -> None:
     findings = lint.check_orphans(docs, index_text='---\nokf_version: "0.1"\n---\n')
 
     assert [f.path for f in findings] == ["concepts/stoicism.md"]
+
+
+# --- freshness-lint-v1: resolve_windows(cfg) (load-bearing, never-raising) ---
+
+
+def _cfg(
+    *,
+    freshness_window: str = "7d",
+    volatility_windows: object = None,
+) -> config.Config:
+    return config.Config(
+        model="qwen3:8b",
+        review=True,
+        default_sensitivity="private",
+        freshness_window=freshness_window,
+        embedding_model="bge-m3",
+        volatility_windows=({} if volatility_windows is None else volatility_windows),  # type: ignore[arg-type]
+    )
+
+
+def test_resolve_windows_valid_map_values() -> None:
+    """A fully valid `volatility_windows` map resolves every tier verbatim,
+    with zero notices."""
+    cfg = _cfg(
+        freshness_window="7d",
+        volatility_windows={"slow": "30d", "volatile": "3d"},
+    )
+
+    windows, notices = lint.resolve_windows(cfg)
+
+    assert windows.slow == timedelta(days=30)
+    assert windows.volatile == timedelta(days=3)
+    assert windows.fallback == timedelta(days=7)
+    assert notices == []
+
+
+def test_resolve_windows_absent_keys_fall_to_packaged_defaults() -> None:
+    """An empty `volatility_windows` map falls back to
+    `config.DEFAULT_VOLATILITY_WINDOWS` per tier (design: "absent key falls
+    to DEFAULT_VOLATILITY_WINDOWS[tier]")."""
+    cfg = _cfg(volatility_windows={})
+
+    windows, notices = lint.resolve_windows(cfg)
+
+    assert windows.slow == timedelta(days=90)
+    assert windows.volatile == timedelta(days=7)
+    assert notices == []
+
+
+@pytest.mark.parametrize("tier", ["slow", "volatile"])
+def test_resolve_windows_malformed_tier_value_degrades_with_notice(
+    tier: str,
+) -> None:
+    """A malformed per-tier value degrades to `DEFAULT_FRESHNESS_WINDOW`
+    (reusing `resolve_window`'s existing fallback), never raises, and
+    returns a notice (design: "malformed tier window in config
+    degrades... reuses resolve_window")."""
+    cfg = _cfg(volatility_windows={tier: "not-a-duration"})
+
+    windows, notices = lint.resolve_windows(cfg)
+
+    assert getattr(windows, tier) == timedelta(days=7)
+    assert len(notices) == 1
+    assert "not-a-duration" in notices[0]
+
+
+@pytest.mark.parametrize(
+    "bogus_map",
+    [None, [], "not-a-map", 42, ["slow", "90d"]],
+)
+def test_resolve_windows_non_map_treated_as_empty(bogus_map: object) -> None:
+    """A `volatility_windows` that is not a map at all (`null`, a list, a
+    scalar) is treated as empty -- every tier falls to its packaged default,
+    never raises (design: "non-map/null treated empty")."""
+    cfg = _cfg(volatility_windows=bogus_map)
+
+    windows, notices = lint.resolve_windows(cfg)
+
+    assert windows.slow == timedelta(days=90)
+    assert windows.volatile == timedelta(days=7)
+    assert notices == []
+
+
+def test_resolve_windows_fallback_uses_freshness_window() -> None:
+    """`windows.fallback` resolves from `cfg.freshness_window`, exactly like
+    today's global-window path."""
+    cfg = _cfg(freshness_window="14d")
+
+    windows, _notices = lint.resolve_windows(cfg)
+
+    assert windows.fallback == timedelta(days=14)
+
+
+def test_resolve_windows_malformed_fallback_degrades_with_notice() -> None:
+    """A malformed `freshness_window` still degrades via `resolve_window`,
+    surfacing its own notice alongside any tier notices."""
+    cfg = _cfg(freshness_window="not-a-duration")
+
+    windows, notices = lint.resolve_windows(cfg)
+
+    assert windows.fallback == timedelta(days=7)
+    assert any("not-a-duration" in notice for notice in notices)
+
+
+def test_resolve_windows_never_raises() -> None:
+    """`resolve_windows` never raises on any combination of bad config
+    (Q4/read-only-never-fail contract)."""
+    cfg = _cfg(
+        freshness_window="garbage",
+        volatility_windows={"slow": "garbage", "volatile": None},
+    )
+
+    lint.resolve_windows(cfg)
+
+
+# --- freshness-lint-v1: window_for_doc(doc, windows) precedence ---
+
+
+_WINDOWS = lint.VolatilityWindows(
+    slow=timedelta(days=90), volatile=timedelta(days=7), fallback=timedelta(days=7)
+)
+
+
+@pytest.mark.parametrize(
+    ("doc_type", "volatility", "expected"),
+    [
+        # Per-concept override wins over type default.
+        ("Concept", "volatile", _WINDOWS.volatile),  # slow default overridden
+        ("Procedure", "static", None),  # volatile default overridden to static
+        # Absent volatility -> per-type default.
+        ("Procedure", "", _WINDOWS.volatile),
+        ("Concept", "", _WINDOWS.slow),
+        ("Place", "", None),  # static type default -> never flagged
+        # Unknown volatility value -> per-type default.
+        ("Person", "not-a-tier", _WINDOWS.slow),
+        # Unknown/absent type + no override -> global fallback.
+        ("", "", _WINDOWS.fallback),
+        ("SomeUnknownType", "", _WINDOWS.fallback),
+        # static tier (override or default) -> never flagged.
+        ("Event", "", None),
+        ("Source", "", None),
+        ("Decision", "", None),
+    ],
+)
+def test_window_for_doc_precedence_table(
+    doc_type: str, volatility: str, expected: timedelta | None
+) -> None:
+    """Exhaustive precedence table (design: "Resolution algorithm"): per-
+    concept override -> per-type default -> global fallback; `static`
+    (by override or type default) always resolves to `None` (never
+    flagged)."""
+    doc = _doc("concepts/x", "body", type=doc_type, volatility=volatility)
+
+    assert lint.window_for_doc(doc, _WINDOWS) == expected

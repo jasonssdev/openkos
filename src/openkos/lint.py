@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
 
 from openkos import config
-from openkos.model import okf
+from openkos.model import okf, types
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,19 @@ class LintDoc:
     `freshness` is `"snapshot"` -- such docs (as produced by `openkos
     ingest`) embed verbatim source text that MAY coincidentally contain an
     `(as of ...)`-shaped string that is not a maintained freshness stamp."""
+
+    type: str
+    """The doc's frontmatter `type` field, or `""` if absent
+    (freshness-lint-v1). Feeds `window_for_doc`'s per-type default
+    volatility lookup."""
+
+    volatility: str
+    """The doc's frontmatter `volatility` field, or `""` if absent
+    (freshness-lint-v1, `concept-volatility` spec). Absent-by-default:
+    `openkos ingest` never emits this key, so `""` is the overwhelmingly
+    common case, meaning resolution falls through to the per-type default.
+    Distinct from `freshness`, which stays a binary snapshot/non-snapshot
+    skip flag, never a volatility signal."""
 
 
 @dataclass(frozen=True)
@@ -104,6 +117,8 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
                 rel_dir=rel_dir,
                 body=body,
                 freshness=str(metadata.get("freshness", "")),
+                type=str(metadata.get("type", "")),
+                volatility=str(metadata.get("volatility", "")),
             )
         )
     return docs, skip_notices
@@ -157,31 +172,120 @@ def resolve_window(raw: object) -> tuple[timedelta, str | None]:
         return parse_window(config.DEFAULT_FRESHNESS_WINDOW), notice
 
 
+@dataclass(frozen=True)
+class VolatilityWindows:
+    """The three resolved stale-stamp windows `window_for_doc` picks from
+    (freshness-lint-v1, design: "Data-model change"). `static` has no
+    window value here -- a `static`-tier doc always resolves to `None`
+    (never flagged) in `window_for_doc`, never reading this dataclass."""
+
+    slow: timedelta
+    volatile: timedelta
+    fallback: timedelta
+    """Global `freshness_window` fallback, used when a doc's type is
+    unresolvable (unknown or absent) AND it carries no per-concept
+    `volatility` override -- the same window MVP-1 applied uniformly."""
+
+
+def resolve_windows(cfg: config.Config) -> tuple[VolatilityWindows, list[str]]:
+    """Resolve `cfg.volatility_windows`/`cfg.freshness_window` to a
+    `(VolatilityWindows, notices)` pair, never raising (freshness-lint-v1,
+    load-bearing).
+
+    Precedence per tier: a present `volatility_windows[tier]` value wins;
+    an absent key falls to `config.DEFAULT_VOLATILITY_WINDOWS[tier]`. Each
+    resolved raw value -- including the `slow`/`volatile` defaults
+    themselves -- is parsed via `resolve_window` (Q4), which ALREADY
+    degrades a malformed/non-string value to `config.DEFAULT_FRESHNESS_WINDOW`
+    with a notice, so a malformed per-tier override never raises here
+    either; the fallback tier resolves the SAME way `lint`'s CLI has always
+    resolved `cfg.freshness_window`. `cfg.volatility_windows` not being a
+    mapping at all (`None`, a list, a scalar -- e.g. from hand-edited
+    `openkos.yaml`) is treated as an empty map, so every tier falls to its
+    packaged default rather than raising an `AttributeError` on `.get`.
+    """
+    # `cfg.volatility_windows` is typed `dict[str, str]`, but a hand-edited
+    # `openkos.yaml` can hold a non-mapping at runtime (e.g. a list or a bare
+    # scalar) -- widen to `object` first so the `isinstance` runtime guard
+    # below is not mypy-redundant against the (merely aspirational) static
+    # type.
+    raw_windows: object = cfg.volatility_windows
+    raw_map = raw_windows if isinstance(raw_windows, dict) else {}
+    notices: list[str] = []
+    slow_window, slow_notice = resolve_window(
+        raw_map.get("slow", config.DEFAULT_VOLATILITY_WINDOWS["slow"])
+    )
+    volatile_window, volatile_notice = resolve_window(
+        raw_map.get("volatile", config.DEFAULT_VOLATILITY_WINDOWS["volatile"])
+    )
+    fallback_window, fallback_notice = resolve_window(cfg.freshness_window)
+    for notice in (slow_notice, volatile_notice, fallback_notice):
+        if notice is not None:
+            notices.append(notice)
+    windows = VolatilityWindows(
+        slow=slow_window, volatile=volatile_window, fallback=fallback_window
+    )
+    return windows, notices
+
+
+def window_for_doc(doc: "LintDoc", windows: VolatilityWindows) -> timedelta | None:
+    """Resolve `doc`'s stale-stamp window, or `None` if it must never be
+    flagged (freshness-lint-v1, load-bearing precedence).
+
+    Tier precedence: (1) `doc.volatility.strip()`, if a member of
+    `types.VOLATILITY_TIERS` -- the per-concept override always wins; (2)
+    else `types.TYPE_TO_DEFAULT_VOLATILITY.get(doc.type)` -- the per-type
+    registry default; (3) else the global fallback tier. An unknown or
+    absent `volatility` value degrades silently to step 2, exactly like an
+    unknown or absent `type` degrades silently to step 3 -- neither ever
+    raises. `static` (reached via override or type default) resolves to
+    `None`; `slow`/`volatile` resolve to their `windows` entry; the
+    fallback tier resolves to `windows.fallback`.
+    """
+    tier = doc.volatility.strip()
+    if tier not in types.VOLATILITY_TIERS:
+        tier = types.TYPE_TO_DEFAULT_VOLATILITY.get(doc.type, "")
+    if tier == "static":
+        return None
+    if tier == "slow":
+        return windows.slow
+    if tier == "volatile":
+        return windows.volatile
+    return windows.fallback
+
+
 _STAMP_RE = re.compile(r"\(as of (\d{4}-\d{2}-\d{2})\)")
 
 
 def check_stale_stamps(
-    docs: list[LintDoc], *, today: date, window: timedelta
+    docs: list[LintDoc], *, today: date, windows: VolatilityWindows
 ) -> list[LintFinding]:
-    """Flag any inline `(as of YYYY-MM-DD)` stamp older than `window` (Q5).
+    """Flag any inline `(as of YYYY-MM-DD)` stamp older than its doc's
+    volatility-resolved window (Q5, freshness-lint-v1).
 
     Reads only inline body text, EXCEPT that any doc whose `freshness` is
     `"snapshot"` is skipped entirely (ingest-source-body D4): such docs (as
     produced by `openkos ingest`) embed verbatim source text that MAY
     coincidentally contain an `(as of ...)`-shaped string, and that text is
-    not a maintained freshness stamp. `_STAMP_RE` shape-matches, then
+    not a maintained freshness stamp. Each surviving doc's window is
+    resolved via `window_for_doc(doc, windows)` -- a `None` result means
+    `static` tier (by override or type default): the doc is skipped
+    entirely, regardless of stamp age. `_STAMP_RE` shape-matches, then
     `date(y, m, d)` is attempted in a `try`/`except ValueError` -- a
     non-date like `2026-13-45` is silently skipped, never flagged, never
-    crashes (MVP-1 lenient). A stamp is stale iff `today - stamp > window`
-    (an exact-boundary stamp is NOT stale). One finding is produced per
-    unique `(identity, stamp text)` pair, so a stamp repeated verbatim
-    within one body never double-counts. `today` and `window` are always
-    injected -- this function never calls `datetime.now()`.
+    crashes (MVP-1 lenient). A stamp is stale iff `today - stamp >
+    resolved_window` (an exact-boundary stamp is NOT stale). One finding is
+    produced per unique `(identity, stamp text)` pair, so a stamp repeated
+    verbatim within one body never double-counts. `today` and `windows` are
+    always injected -- this function never calls `datetime.now()`.
     """
     findings: list[LintFinding] = []
     seen: set[tuple[str, str]] = set()
     for doc in docs:
         if doc.freshness == "snapshot":
+            continue
+        window = window_for_doc(doc, windows)
+        if window is None:
             continue
         for stamp_text in _STAMP_RE.findall(doc.body):
             key = (doc.identity, stamp_text)

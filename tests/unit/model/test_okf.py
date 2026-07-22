@@ -510,6 +510,16 @@ def test_build_source_concept_emits_required_frontmatter_fields() -> None:
     assert "# Citations" in body
 
 
+def test_build_source_concept_emits_no_volatility_key() -> None:
+    """`build_source_concept` never emits a `volatility` key
+    (freshness-lint-v1, design: "INGEST UNCHANGED"): the field is
+    absent-by-default and read-only for `lint`, never written at ingest, so
+    a Source concept's output stays byte-stable across this change."""
+    text = _build_call_source()
+
+    assert "volatility" not in text
+
+
 def test_build_source_concept_passes_check_conformance(tmp_path: Path) -> None:
     """The generated concept passes `check_conformance` (§9 rules 1-2)."""
     text = _build_call_source()
@@ -640,6 +650,16 @@ def test_build_concept_output_byte_identical_regression() -> None:
         "— source this was extracted from\n"
     )
     assert "relations" not in text
+
+
+def test_build_concept_emits_no_volatility_key() -> None:
+    """`build_concept` never emits a `volatility` key (freshness-lint-v1,
+    design: "INGEST UNCHANGED"), mirroring
+    `test_build_source_concept_emits_no_volatility_key`: absent-by-default,
+    read-only for `lint`, never written at ingest."""
+    text = _build_call_concept()
+
+    assert "volatility" not in text
 
 
 def test_build_concept_emits_required_frontmatter_fields() -> None:
