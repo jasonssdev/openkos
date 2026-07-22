@@ -53,7 +53,7 @@ and query-side degrade. The retry concern is split from the isolation concern.
 | D1 | Retry home | `OllamaClient.embed` (transparent, reusable) | in `reindex` only | Transport resilience is generic; the query-side question embed benefits too. Isolation stays run-aware in `reindex` (D2). |
 | D2 | Isolation grain + **precise per-doc catch** | Per-doc embed loop in `reindex`: iterate `to_embed`, `embedder.embed([text])` each. **`except (OllamaUnavailable, OllamaModelNotFound): raise` FIRST (fatal, exit 1), THEN `except OllamaError: embed_failed += 1; continue`** (order matters — subclasses re-raised before the generic base is caught) | adaptive bisect sub-batch; bare `except OllamaError` | #1523: batch total is not the driver; failure is ~per-input. Per-doc is the exact grain. A bare `except OllamaError` would swallow a fully-unreachable server (`OllamaUnavailable`) or a missing model (`OllamaModelNotFound`) as "every doc skipped, exit 0", contradicting the existing "Error Ladder Mirrors query" mainline (unreachable/missing → exit 1). Only the generic transient `OllamaError` (400 EOF) is a per-doc `embed_failed`. |
 | D3 | Retry trigger + policy | Client retries the **generic transient `OllamaError`** (400 EOF) with N attempts (default 3) + exponential backoff, both injectable (no real sleep in tests). **`OllamaModelNotFound` is NEVER retried** (a pull can't happen mid-run). `OllamaUnavailable` may retry but is ultimately FATAL if exhausted. Only after the generic `OllamaError` exhausts retries does `reindex` (D2) turn it into a per-doc `embed_failed` skip | retry all `OllamaError`; broad `Exception` | The EOF is HTTP 400 → `_map_http_error` (400≠404) → generic **`OllamaError`** (NOT `Unavailable`, NOT `ModelNotFound`). Retrying the two fatal subclasses is pointless/harmful. Retry reduces transient loss only; `bge-m3` is the reliability guarantee (ADR-0006). |
-| D4 | Query degrade | Add `OllamaError` to `_dense_search`'s catch → `([], True)` `dense_degraded` | broad `Exception` (like `_graph_search`) | Precise: the measured failure is `OllamaError`; avoids masking real bugs. Accepts a retrieval→`llm.ollama` import, consistent with the existing `VecUnavailable` import; dense is additive like graph. |
+| D4 | Query degrade + **precise catch** (review correction) | `_dense_search`: `except (OllamaUnavailable, OllamaModelNotFound): raise` FIRST (fatal, propagates to `query`'s exit-1 ladder), THEN `except (VecUnavailable, sqlite3.Error, OllamaError): return [], True` (`dense_degraded`) | broad `Exception` (like `_graph_search`); unqualified `OllamaError` catch | Precise, mirroring D2's reindex-side split: a down server or a missing model is an environment failure, not a per-question transient — it must reach `query`'s existing fatal exit-1 ladder (`cli/main.py:2373`/`2380`), not silently degrade to FTS-only. The `bge-m3` default (D5) makes an unpulled model a common first-run trigger, raising the cost of masking it. Only the generic transient `OllamaError` (400 EOF) degrades. Accepts a retrieval→`llm.ollama` import, consistent with the existing `VecUnavailable` import; dense is additive like graph. |
 | D5 | Default model | `DEFAULT_EMBEDDING_MODEL = "bge-m3"` (`config.py:23`) + docstring | keep qwen3 | ADR-0006: reliability-first. 1024-dim satisfies `EMBED_DIM`; migrates via tag gate. |
 
 ## Data Flow
@@ -68,6 +68,7 @@ and query-side degrade. The retry concern is split from the isolation concern.
              if embed_failed > 0: stderr re-run notice
 
     query: _dense_search → embedder.embed([q])
+             except (OllamaUnavailable, OllamaModelNotFound): raise         # FATAL, query's exit-1 ladder
              except (VecUnavailable, sqlite3.Error, OllamaError) → ([], True)
 
 ## File Changes
@@ -77,7 +78,7 @@ and query-side degrade. The retry concern is split from the isolation concern.
 | `llm/ollama.py` (~120) | Modify | Retry-with-backoff wrapper in `embed`; injectable attempts/backoff; skip `OllamaModelNotFound` |
 | `state/reindex.py` (~222) | Modify | Replace single-batch embed with per-doc loop; precise catch (fatal `Unavailable`/`ModelNotFound` re-raise, transient generic `OllamaError` → new `embed_failed` tally); tag gate widens to `skipped==0 and embed_failed==0`; `embed_failed>0` stderr re-run notice; keep single end-of-run commit |
 | `state/reindex.py` `ReindexReport` (~58) | Modify | Add `embed_failed: int` field (transient embed-EOF skips), **separate** from the existing `skipped` (permanent unreadable/parse/decode). Docstring both, and the union-keyed tag gate |
-| `retrieval/answer.py` (~236) | Modify | Import `OllamaError`; add to `_dense_search` catch |
+| `retrieval/answer.py` (~236) | Modify | Import `OllamaUnavailable`, `OllamaModelNotFound`, `OllamaError`; `_dense_search` re-raises the two fatal subclasses first, then degrades (`dense_degraded=True`) on the generic transient `OllamaError` alongside the existing `VecUnavailable`/`sqlite3.Error` catch |
 | `config.py` (:23) | Modify | Default → `bge-m3` + docstring |
 | `docs/adr/0006-*.md` | Create | ADR (done this phase) |
 | `docs/tech_stack.md` | Modify | bge-m3 default, reliability-first framing (done this phase) |
@@ -89,7 +90,7 @@ and query-side degrade. The retry concern is split from the isolation concern.
 |-------|------|----------|
 | Unit (ollama) | `embed` retries transient `OllamaError` then succeeds; gives up after N → raises; `OllamaModelNotFound` not retried; no real sleep | fake `urlopen`, injected backoff |
 | Unit (reindex) | transient-EOF doc → survivors committed, `embed_failed==1`, `skipped==0`, exit 0, re-run notice on stderr; `OllamaUnavailable`/`OllamaModelNotFound` mid-loop → re-raised, exit 1, no commit of survivors-only-then-crash side effects (error ladder unchanged); tag withheld when `embed_failed>0` OR `skipped>0`; next run re-forces; all-clear run persists tag; permanent skip does NOT fire re-run notice; single commit preserved | fake Embedder raising a chosen exception per marked text |
-| Unit (answer) | question embed raising `OllamaError` → `dense_degraded=True`, FTS-only, no raise | spy embedder |
+| Unit (answer) | question embed raising the generic transient `OllamaError` → `dense_degraded=True`, FTS-only, no raise; question embed raising `OllamaUnavailable`/`OllamaModelNotFound` → re-raised, propagates unswallowed | spy embedder |
 | Integration | reindex realistic bundle completes without abort | real sqlite-vec |
 
 ## Test Churn (call out for sdd-tasks)
