@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0007: Volatility taxonomy and volatility-aware freshness windows"
 description: A fixed static/slow/volatile taxonomy, a per-type default tier on the object registry, and an absent-by-default `volatility` frontmatter override drive lint's per-doc stale window instead of one global window.
-status: Proposed
+status: Accepted
 date: 2026-07-22
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0007: Volatility taxonomy and volatility-aware freshness windows
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-22
 
 ## Context
