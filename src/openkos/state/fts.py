@@ -195,6 +195,15 @@ def _populate_docs_table(conn: sqlite3.Connection, bundle_dir: Path) -> list[str
     try:
         conn.execute(_CREATE_TABLE_SQL)
     except sqlite3.OperationalError as exc:
+        # A lock-contention failure (a concurrent writer holding `fts.db`'s
+        # write lock past `busy_timeout`) is NOT a missing-fts5-module
+        # failure -- propagate it UNCHANGED so the caller's lock-contention
+        # handling (`cli/main.py`'s reindex ladder) can catch it, instead of
+        # mislabeling it `FtsUnavailable` (reindex-lock-handling; spec:
+        # fts-state -- CREATE VIRTUAL TABLE failure is discriminated by
+        # errorcode).
+        if derived.is_lock_contention(exc):
+            raise
         raise FtsUnavailable(
             "SQLite's fts5 module is not available in this environment"
         ) from exc

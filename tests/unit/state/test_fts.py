@@ -17,6 +17,7 @@ import pytest
 
 from openkos.model import okf
 from openkos.state import derived, fts
+from tests.unit.conftest import make_locked_error
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -517,6 +518,47 @@ def test_build_index_raises_fts_unavailable_when_fts5_not_compiled(
 
     with pytest.raises(fts.FtsUnavailable):
         fts.build_index(bundle_dir)
+
+
+class _LockedAtCreateConnection(sqlite3.Connection):
+    """A `sqlite3.Connection` subclass simulating a locked `fts.db` at the
+    `CREATE VIRTUAL TABLE` step -- distinct from `_NoFts5Connection` above,
+    which simulates a genuinely missing fts5 module (subclassed for the
+    same C-extension reason)."""
+
+    def execute(self, sql: str, *args: object, **kwargs: object) -> sqlite3.Cursor:
+        """Raise a lock-contention `OperationalError` for the FTS5 DDL,
+        delegate everything else."""
+        if "VIRTUAL TABLE" in sql:
+            raise make_locked_error()
+        return super().execute(sql, *args, **kwargs)  # type: ignore[arg-type]
+
+
+def test_populate_docs_table_propagates_a_locked_create_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock-contention `OperationalError` (`SQLITE_BUSY`/`SQLITE_LOCKED`)
+    at `CREATE VIRTUAL TABLE` propagates UNCHANGED as `sqlite3.OperationalError`
+    -- it must NOT be converted to `FtsUnavailable`, so the caller's
+    lock-contention handling (`cli/main.py`'s reindex ladder) can catch it
+    instead (spec: fts-state -- CREATE VIRTUAL TABLE failure is
+    discriminated by errorcode; task 2.1)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    original_connect = sqlite3.connect
+
+    def fake_connect(
+        database: str, *args: object, **kwargs: object
+    ) -> sqlite3.Connection:
+        return original_connect(database, factory=_LockedAtCreateConnection)
+
+    monkeypatch.setattr(sqlite3, "connect", fake_connect)
+
+    with pytest.raises(sqlite3.OperationalError) as exc_info:
+        fts.build_index(bundle_dir)
+
+    assert not isinstance(exc_info.value, fts.FtsUnavailable)
+    assert derived.is_lock_contention(exc_info.value)
 
 
 class _FailingInsertConnection(sqlite3.Connection):

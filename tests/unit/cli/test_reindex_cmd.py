@@ -26,6 +26,7 @@ from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailab
 from openkos.state.fts import FtsUnavailable
 from openkos.state.reindex import ReindexReport
 from openkos.state.vectorstore import VecUnavailable, open_vector_store
+from tests.unit.conftest import make_locked_error, make_non_lock_operational_error
 
 runner = CliRunner()
 
@@ -445,6 +446,105 @@ def test_reindex_fts_unavailable_maps_to_exit_one(
     assert "Traceback" not in result.stderr
 
 
+# --- reindex-lock-handling: ladder 1 (vectors/fts) --------------------------
+
+_LOCK_MESSAGE_FRAGMENT = "holding the workspace lock"
+
+
+def test_reindex_locked_vectors_db_at_open_exits_one_with_the_retry_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock-contention `OperationalError` raised at `open_vector_store`
+    (store open) is caught, prints the uniform lock-contention retry
+    message, and exits 1 with no raw traceback (spec: Locked vectors.db
+    exits 1 with the retry message, no traceback; task 3.1)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_locked(*args: object, **kwargs: object) -> None:
+        raise make_locked_error()
+
+    monkeypatch.setattr("openkos.cli.main.open_vector_store", _raise_locked)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed -- ")
+    assert _LOCK_MESSAGE_FRAGMENT in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_reindex_locked_vectors_db_at_upsert_or_commit_exits_one_with_the_retry_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock-contention `OperationalError` raised inside
+    `state.reindex.reindex` (representing a lock hit at `upsert_many`/the
+    end-of-run `commit`) is caught the same way, exits 1, no traceback
+    (task 3.2)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_locked(*args: object, **kwargs: object) -> ReindexReport:
+        raise make_locked_error()
+
+    monkeypatch.setattr("openkos.cli.main.reindex_module.reindex", _raise_locked)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed -- ")
+    assert _LOCK_MESSAGE_FRAGMENT in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_reindex_locked_fts_db_at_begin_immediate_exits_one_with_the_retry_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock-contention `OperationalError` raised inside
+    `state.reindex.reindex` (representing a lock hit at `write_fts_index`'s
+    `BEGIN IMMEDIATE`, propagated unchanged per `state/fts.py`'s errorcode
+    discrimination) is caught the SAME way, exits 1, no traceback (spec:
+    Locked fts.db, including at BEGIN IMMEDIATE, exits 1 with the retry
+    message; task 3.3)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_locked(*args: object, **kwargs: object) -> ReindexReport:
+        raise make_locked_error("database is locked", errorcode=sqlite3.SQLITE_LOCKED)
+
+    monkeypatch.setattr("openkos.cli.main.reindex_module.reindex", _raise_locked)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed -- ")
+    assert _LOCK_MESSAGE_FRAGMENT in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_reindex_non_lock_operational_error_is_re_raised_not_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-lock `sqlite3.OperationalError` (e.g. `SQLITE_ERROR`) is NOT
+    caught by the lock-contention handler -- it keeps its EXISTING
+    (uncaught, pre-this-change) behavior rather than being swallowed into a
+    generic clean exit (spec: A non-lock operational error is not
+    mislabeled as lock contention; task 3.4)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_non_lock(*args: object, **kwargs: object) -> ReindexReport:
+        raise make_non_lock_operational_error("disk I/O error")
+
+    monkeypatch.setattr("openkos.cli.main.reindex_module.reindex", _raise_non_lock)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert not isinstance(result.exception, SystemExit)
+    assert isinstance(result.exception, sqlite3.OperationalError)
+    assert _LOCK_MESSAGE_FRAGMENT not in (result.stderr or "")
+
+
 class _FakeEmbedder:
     """A hermetic stand-in for `OllamaClient` -- no network, no real Ollama
     process, deterministic vectors of `EMBED_DIM` length."""
@@ -577,6 +677,71 @@ def test_reindex_summary_and_prune_skipped_notice_still_surface_when_graph_write
     assert "prune pass" in result.stdout.lower()
     assert "skipped" in result.stdout.lower().split("prune pass")[1]
     assert "graph" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+# --- reindex-lock-handling: ladder 2 (graph) --------------------------------
+
+
+def test_reindex_locked_graph_db_exits_one_with_the_same_retry_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock-contention `OperationalError` raised by
+    `sqlite_graph.reindex_graph` -- a concurrent process holding `graph.db`'s
+    write lock past `busy_timeout`, e.g. at its own `BEGIN IMMEDIATE` -- is
+    caught and reports the SAME uniform lock-contention message ladder 1
+    uses for vectors.db/fts.db, exiting 1 with no raw traceback -- NOT the
+    graph-specific "failed while writing the graph index" message a
+    non-lock `sqlite3.Error` still gets (spec: Locked graph.db exits 1 with
+    the SAME uniform message; task 4.1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=1, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    def _raise_locked(*args: object, **kwargs: object) -> None:
+        raise make_locked_error()
+
+    monkeypatch.setattr("openkos.cli.main.sqlite_graph.reindex_graph", _raise_locked)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed -- ")
+    assert _LOCK_MESSAGE_FRAGMENT in result.stderr
+    assert "writing the graph index" not in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_reindex_non_lock_graph_error_keeps_the_existing_graph_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-lock `sqlite3.Error` from `sqlite_graph.reindex_graph` (e.g.
+    permission-denied, corrupt `graph.db`) keeps its EXISTING, graph-specific
+    "failed while writing the graph index" message -- NOT the uniform
+    lock-contention message -- proving the two are still discriminated
+    after the lock-contention branch was added (task 4.2 regression;
+    mirrors `test_reindex_graph_write_failure_after_vectors_and_fts_succeed_maps_to_exit_one`
+    but asserts the NEGATIVE: the lock message must NOT appear here)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=1, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    def _raise_non_lock(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr("openkos.cli.main.sqlite_graph.reindex_graph", _raise_non_lock)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "failed while writing the graph index" in result.stderr
+    assert _LOCK_MESSAGE_FRAGMENT not in result.stderr
     assert "Traceback" not in result.stderr
 
 
