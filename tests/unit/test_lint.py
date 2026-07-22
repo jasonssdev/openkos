@@ -998,6 +998,31 @@ def test_window_for_doc_type_tiers_invalid_tier_value_falls_through() -> None:
     assert lint.window_for_doc(doc, windows) == windows.slow
 
 
+def test_window_for_doc_type_tiers_unhashable_list_value_degrades() -> None:
+    """A `type_tiers` entry whose value is an unhashable list (e.g. a
+    hand-edited `openkos.yaml` with `type_tiers: {Person: [slow]}`) never
+    raises `TypeError` from the `VOLATILITY_TIERS` membership check --
+    resolution degrades to the per-type registry default, same as any
+    other invalid tier value (resilience fix, freshness-suggest-windows
+    PR1 correction)."""
+    windows = _windows_with_tiers({"Person": ["slow"]})  # type: ignore[dict-item]
+    doc = _doc("people/ada", "body", type="Person", volatility="")
+
+    # Person's registry default ("slow") applies; the unhashable entry is ignored.
+    assert lint.window_for_doc(doc, windows) == windows.slow
+
+
+def test_window_for_doc_type_tiers_unhashable_dict_value_degrades() -> None:
+    """A `type_tiers` entry whose value is an unhashable dict never raises
+    `TypeError` from the `VOLATILITY_TIERS` membership check -- resolution
+    degrades to the per-type registry default (resilience fix,
+    freshness-suggest-windows PR1 correction)."""
+    windows = _windows_with_tiers({"Person": {"tier": "slow"}})  # type: ignore[dict-item]
+    doc = _doc("people/ada", "body", type="Person", volatility="")
+
+    assert lint.window_for_doc(doc, windows) == windows.slow
+
+
 def test_window_for_doc_type_tiers_unknown_type_key_is_ignored() -> None:
     """A `type_tiers` entry for a type absent from the registry never
     matches any doc, and never raises -- resolution for an unregistered
