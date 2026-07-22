@@ -48,19 +48,19 @@ PR 1 and PR 2 touch disjoint files (config/lint vs. new engine module) and can b
 
 ## Phase 4: Engine Leaf — `resolution/volatility_typing.py` (PR 2)
 
-- [ ] 4.1 RED: create `tests/unit/resolution/test_volatility_typing.py` (mirror `test_edge_typing.py` structure) covering: one `TierSuggestion` per distinct type in sorted-name order; fail-closed JSON parse (missing/malformed/invalid-tier → `suggested_tier=None`, `rationale` never blank); `OllamaError` propagates unswallowed from `llm.chat`; deterministic sampling — same bundle yields identical set+order of sampled bodies across two calls (N=5 concepts by sorted `identity`, truncated to M=1000 chars) per spec's "Deterministic Input Selection" scenario.
-- [ ] 4.2 GREEN: create `src/openkos/resolution/volatility_typing.py` — config-free leaf, `TierSuggestion` frozen dataclass (`type_name`, `current_default`, `suggested_tier: str | None`, `rationale`), `suggest_volatility(bundle_dir: Path, *, llm: LLMBackend) -> list[TierSuggestion]`; reuse `lint.collect_docs` to group bodies by type; one `llm.chat` per type.
-- [ ] 4.3 REFACTOR: dedupe JSON-extraction/parse helpers against `edge_typing.py`'s pattern only if it does not violate the "no cross-import of `_`-prefixed symbols" convention (design D4) — otherwise keep the module-local copy.
+- [x] 4.1 RED: create `tests/unit/resolution/test_volatility_typing.py` (mirror `test_edge_typing.py` structure) covering: one `TierSuggestion` per distinct type in sorted-name order; fail-closed JSON parse (missing/malformed/invalid-tier → `suggested_tier=None`, `rationale` never blank); `OllamaError` propagates unswallowed from `llm.chat`; deterministic sampling — same bundle yields identical set+order of sampled bodies across two calls (N=5 concepts by sorted `identity`, truncated to M=1000 chars) per spec's "Deterministic Input Selection" scenario.
+- [x] 4.2 GREEN: create `src/openkos/resolution/volatility_typing.py` — config-free leaf, `TierSuggestion` frozen dataclass (`type_name`, `current_default`, `suggested_tier: str | None`, `rationale`), `suggest_volatility(bundle_dir: Path, *, llm: LLMBackend) -> list[TierSuggestion]`; reuse `lint.collect_docs` to group bodies by type; one `llm.chat` per type.
+- [x] 4.3 REFACTOR: dedupe JSON-extraction/parse helpers against `edge_typing.py`'s pattern only if it does not violate the "no cross-import of `_`-prefixed symbols" convention (design D4) — otherwise keep the module-local copy. **Result**: kept the module-local copy (design D4 forbids cross-importing `_`-prefixed symbols from `edge_typing.py`); no further extraction needed.
 
 ## Phase 5: CLI Verb — `suggest-volatility` (PR 3)
 
-- [ ] 5.1 RED: create `tests/unit/cli/test_suggest_volatility.py` (mirror `test_suggest_relations.py`) covering: require_workspace gate fires before any LLM call; `read_config` `(OSError, ValueError)` guard; 3-tier ordered `OllamaUnavailable` → `OllamaModelNotFound` → generic `OllamaError` handling, each exit 1 with zero writes; report shape (`[{tier}] {TypeName}` + `  rationale:`, or `[?]` + `  note: no valid tier suggested`); closing `Next: edit type_tiers in openkos.yaml` hint; "No concept types found." empty case; zero writes to bundle/index/log/config on a full successful run.
-- [ ] 5.2 GREEN: add `@app.command("suggest-volatility")` to `src/openkos/cli/main.py` (clone `suggest_relations_cmd`, main.py:2074) wired to `resolution.volatility_typing.suggest_volatility`.
+- [x] 5.1 RED: create `tests/unit/cli/test_suggest_volatility.py` (mirror `test_suggest_relations.py`) covering: require_workspace gate fires before any LLM call; `read_config` `(OSError, ValueError)` guard; 3-tier ordered `OllamaUnavailable` → `OllamaModelNotFound` → generic `OllamaError` handling, each exit 1 with zero writes; report shape (`[{tier}] {TypeName}` + `  rationale:`, or `[?]` + `  note: no valid tier suggested`); closing `Next: edit type_tiers in openkos.yaml` hint; "No concept types found." empty case; zero writes to bundle/index/log/config on a full successful run.
+- [x] 5.2 GREEN: add `@app.command("suggest-volatility")` to `src/openkos/cli/main.py` (clone `suggest_relations_cmd`, main.py:2074) wired to `resolution.volatility_typing.suggest_volatility`.
 
 ## Phase 6: Verification Gate (all PRs, before each merge)
 
-- [ ] 6.1 Run `uv run pytest` — full suite green.
-- [ ] 6.2 Run `uv run ruff check .` — clean.
-- [ ] 6.3 Run `uv run ruff format .` then `uv run ruff format --check .` — clean, formatted before commit.
-- [ ] 6.4 Run `uv run mypy .` — clean.
-- [ ] 6.5 Confirm no edits were made to `docs/adr/0007*` (extends, does not modify, the existing ADR).
+- [x] 6.1 Run `uv run pytest` — full suite green. (1387 passed)
+- [x] 6.2 Run `uv run ruff check .` — clean.
+- [x] 6.3 Run `uv run ruff format .` then `uv run ruff format --check .` — clean, formatted before commit.
+- [x] 6.4 Run `uv run mypy .` — clean.
+- [x] 6.5 Confirm no edits were made to `docs/adr/0007*` (extends, does not modify, the existing ADR). Confirmed via `git status`/`git diff` — only `src/openkos/cli/main.py` (modified) and 3 new files touched this batch.
