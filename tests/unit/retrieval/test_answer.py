@@ -26,7 +26,7 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import EMBED_DIM, Message
-from openkos.llm.ollama import OllamaError, OllamaUnavailable
+from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.retrieval import answer as answer_mod
 from openkos.retrieval import fusion, graph_retrieve
 from openkos.retrieval.fusion import GraphHit
@@ -923,6 +923,59 @@ def test_question_embed_ollama_error_degrades_to_fts_only(tmp_path: Path) -> Non
     assert result.llm_invoked is True
     assert result.answer == "fts only reply"
     assert vector_store.calls == []  # query() never reached -- embed failed first
+
+
+def test_question_embed_ollama_unavailable_propagates(tmp_path: Path) -> None:
+    """`embedder.embed([question])` raising `OllamaUnavailable` (a down
+    server, `OllamaError` subclass) PROPAGATES out of `answer()` -- it must
+    NOT be swallowed into `dense_degraded=True` -- so `query`'s fatal exit-1
+    ladder can report it (mirrors the same fatal-subclass carve-out already
+    fixed on the reindex side)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    llm = _FakeLLM(reply="unused")
+    embedder = _FakeEmbedder(raises=OllamaUnavailable("connection refused"))
+    vector_store = _FakeVectorStore()
+
+    with fts.build_index(bundle_dir) as idx, pytest.raises(OllamaUnavailable):
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            embedder=embedder,
+            vector_store=vector_store,
+            fts_index=idx,
+        )
+
+
+def test_question_embed_ollama_model_not_found_propagates(tmp_path: Path) -> None:
+    """`embedder.embed([question])` raising `OllamaModelNotFound` (an
+    `OllamaError` subclass) PROPAGATES out of `answer()` -- it must NOT
+    degrade to FTS-only, so `query`'s fatal exit-1 ladder can report the
+    actionable missing-model message."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    llm = _FakeLLM(reply="unused")
+    embedder = _FakeEmbedder(raises=OllamaModelNotFound("model not found"))
+    vector_store = _FakeVectorStore()
+
+    with fts.build_index(bundle_dir) as idx, pytest.raises(OllamaModelNotFound):
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            embedder=embedder,
+            vector_store=vector_store,
+            fts_index=idx,
+        )
 
 
 def test_cold_store_vector_store_none_degrades_cleanly(tmp_path: Path) -> None:
