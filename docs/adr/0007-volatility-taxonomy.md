@@ -48,7 +48,7 @@ defaults to `90d`, `volatile` defaults to `7d` (continuity with today's
 global default for fast-moving types).
 
 We attach a **per-type default tier** to `model/types.py`'s `ObjectType`
-registry (a new `default_volatility` attribute on the frozen dataclass):
+registry (a new `default_tier` attribute on the frozen dataclass):
 `static` = {Place, Event, Decision, Source}; `slow` = {Concept, Entity,
 Person, Organization}; `volatile` = {Procedure, Project}.
 

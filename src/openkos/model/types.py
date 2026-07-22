@@ -26,7 +26,7 @@ class ObjectType:
     llm_classifiable: bool
     """Whether the LLM classifier/`okf.build_concept` accept this type."""
 
-    default_volatility: str
+    default_tier: str
     """This type's default knowledge-volatility tier (freshness-lint-v1,
     `concept-volatility` spec): one of `VOLATILITY_TIERS`. Used by `lint`'s
     stale-stamp window resolution when a concept carries no per-concept
@@ -80,7 +80,7 @@ VOLATILITY_TIERS: frozenset[str] = frozenset({"static", "slow", "volatile"})
 valid."""
 
 TYPE_TO_DEFAULT_VOLATILITY: dict[str, str] = {
-    ot.name: ot.default_volatility for ot in REGISTRY
+    ot.name: ot.default_tier for ot in REGISTRY
 }
 """`type` -> default volatility tier, for EVERY registry entry (including
 `Source`, unlike `TYPE_TO_LINK_DIR`/`TYPE_TO_SECTION` which are

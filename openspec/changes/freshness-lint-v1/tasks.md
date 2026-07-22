@@ -24,8 +24,8 @@ Chain strategy: pending
 
 ## Phase 1: Registry — Per-Type Default Volatility (types.py)
 
-- [x] 1.1 RED: `tests/unit/model/test_types.py` — table test asserting `ObjectType.default_volatility` per name (`static`={Place,Event,Decision,Source}, `slow`={Concept,Entity,Person,Organization}, `volatile`={Procedure,Project}); assert `VOLATILITY_TIERS == {"static","slow","volatile"}`; assert `TYPE_TO_DEFAULT_VOLATILITY` matches registry. Run `uv run pytest tests/unit/model/test_types.py -k volatility` — confirm RED (AttributeError/NameError).
-- [x] 1.2 GREEN: `src/openkos/model/types.py` — add `default_volatility: str` to `ObjectType`; update all 10 `REGISTRY` entries with their tier; add `VOLATILITY_TIERS: frozenset[str]` and `TYPE_TO_DEFAULT_VOLATILITY: dict[str,str]`. Run `uv run pytest tests/unit/model/test_types.py` — confirm GREEN; confirm no other `REGISTRY`/`ObjectType(...)` call site broke (positional-arg registry entries).
+- [x] 1.1 RED: `tests/unit/model/test_types.py` — table test asserting `ObjectType.default_tier` per name (`static`={Place,Event,Decision,Source}, `slow`={Concept,Entity,Person,Organization}, `volatile`={Procedure,Project}); assert `VOLATILITY_TIERS == {"static","slow","volatile"}`; assert `TYPE_TO_DEFAULT_VOLATILITY` matches registry. Run `uv run pytest tests/unit/model/test_types.py -k volatility` — confirm RED (AttributeError/NameError).
+- [x] 1.2 GREEN: `src/openkos/model/types.py` — add `default_tier: str` to `ObjectType`; update all 10 `REGISTRY` entries with their tier; add `VOLATILITY_TIERS: frozenset[str]` and `TYPE_TO_DEFAULT_VOLATILITY: dict[str,str]`. Run `uv run pytest tests/unit/model/test_types.py` — confirm GREEN; confirm no other `REGISTRY`/`ObjectType(...)` call site broke (positional-arg registry entries).
 - [x] 1.3 REFACTOR: `uv run ruff check src/openkos/model/types.py && uv run mypy src/openkos/model/types.py`.
 
 ## Phase 2: Config — `volatility_windows` (config.py)

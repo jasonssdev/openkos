@@ -9,7 +9,7 @@ Make lint's stale-stamp window depend on knowledge volatility instead of one glo
 | Decision | Choice | Alternatives rejected | Rationale |
 |---|---|---|---|
 | Window values + config shape | Per-tier `volatility_windows:` map; legacy `freshness_window` retained as ultimate fallback | Direct per-type numeric windows (no named tiers, ADR-rejected); keep single global | Named tiers are the stable interface; 3 knobs beat 10; legacy key stays valid |
-| Where volatility lives | `default_volatility` attr on registry + absent-by-default `volatility:` frontmatter override; **ingest unchanged** | Emit `volatility` from `build_concept` | Absent-by-default keeps ingest output byte-stable; derived concepts already carry `freshness:snapshot` (skipped anyway) |
+| Where volatility lives | `default_tier` attr on registry + absent-by-default `volatility:` frontmatter override; **ingest unchanged** | Emit `volatility` from `build_concept` | Absent-by-default keeps ingest output byte-stable; derived concepts already carry `freshness:snapshot` (skipped anyway) |
 | Resolution home | `VolatilityWindows` value resolved once from config; per-doc resolution inside `check_stale_stamps` | `Callable` window per doc; resolve in CLI | Keeps injected/deterministic shape; pure value is trivially table-testable |
 
 ## Per-Tier Windows (concrete)
@@ -54,7 +54,7 @@ def window_for_doc(doc, windows) -> timedelta | None: ...             # None = s
 
 ## Registry Change
 
-Add `default_volatility: str` to the frozen `ObjectType`; populate all 10 entries. Add `VOLATILITY_TIERS: frozenset = {"static","slow","volatile"}` and derived `TYPE_TO_DEFAULT_VOLATILITY = {ot.name: ot.default_volatility for ot in REGISTRY}`. `types.py` stays a zero-dependency leaf (strings only; window values live in `config.py`).
+Add `default_tier: str` to the frozen `ObjectType`; populate all 10 entries. Add `VOLATILITY_TIERS: frozenset = {"static","slow","volatile"}` and derived `TYPE_TO_DEFAULT_VOLATILITY = {ot.name: ot.default_tier for ot in REGISTRY}`. `types.py` stays a zero-dependency leaf (strings only; window values live in `config.py`).
 
 ## Resolution Algorithm (never-fail — load-bearing)
 
@@ -82,7 +82,7 @@ All notices flow into `LintReport.notices`, matching the existing pattern.
 
 | File | Action | Description |
 |---|---|---|
-| `src/openkos/model/types.py` | Modify | `default_volatility` on `ObjectType`; `VOLATILITY_TIERS`, `TYPE_TO_DEFAULT_VOLATILITY` |
+| `src/openkos/model/types.py` | Modify | `default_tier` on `ObjectType`; `VOLATILITY_TIERS`, `TYPE_TO_DEFAULT_VOLATILITY` |
 | `src/openkos/config.py` | Modify | `DEFAULT_VOLATILITY_WINDOWS`; read `volatility_windows` into `Config` |
 | `src/openkos/lint.py` | Modify | `LintDoc.type/volatility`; `VolatilityWindows`, `resolve_windows`, `window_for_doc`; `check_stale_stamps` signature |
 | `src/openkos/cli/main.py` | Modify | `resolve_windows(cfg)`, pass `windows`, surface notices |

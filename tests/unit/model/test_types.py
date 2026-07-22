@@ -177,16 +177,16 @@ def test_volatility_tiers_is_the_closed_three_value_set() -> None:
 def test_registry_default_volatility_per_type(
     type_name: str, expected_tier: str
 ) -> None:
-    """Each `ObjectType.default_volatility` matches the fixed per-type
+    """Each `ObjectType.default_tier` matches the fixed per-type
     registry (design: "Per-type default tier on registry"): static =
     {Place, Event, Decision, Source}; slow = {Concept, Entity, Person,
     Organization}; volatile = {Procedure, Project}."""
     by_name = {ot.name: ot for ot in types.REGISTRY}
-    assert by_name[type_name].default_volatility == expected_tier
+    assert by_name[type_name].default_tier == expected_tier
 
 
 def test_type_to_default_volatility_matches_registry() -> None:
-    """`TYPE_TO_DEFAULT_VOLATILITY` is the derived `name -> default_volatility`
+    """`TYPE_TO_DEFAULT_VOLATILITY` is the derived `name -> default_tier`
     projection of the full registry, including `Source` (non-classifiable
     but still tiered)."""
     assert types.TYPE_TO_DEFAULT_VOLATILITY == {
