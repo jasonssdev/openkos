@@ -54,10 +54,10 @@ Chain strategy: pending
 
 ## Phase 4: Actionable Re-Run Notice (CLI, keys on `embed_failed`)
 
-- [ ] 4.1 RED: `test_reindex_cmd.py` — `embed_failed>0` prints a re-run notice on stderr, distinct from the permanent-skip diagnostic.
-- [ ] 4.2 RED: `skipped>0` with `embed_failed==0` does NOT print the notice.
-- [ ] 4.3 RED: model-switch run with partial `embed_failed>0` also fires the notice.
-- [ ] 4.4 GREEN: `cli/main.py` reindex (~2519-2620) — read `report.embed_failed`, print notice iff `>0`; fatal ladder still exits before the summary.
+- [x] 4.1 RED: `test_reindex_cmd.py` — `embed_failed>0` prints a re-run notice on stderr, distinct from the permanent-skip diagnostic.
+- [x] 4.2 RED: `skipped>0` with `embed_failed==0` does NOT print the notice.
+- [x] 4.3 RED: model-switch run with partial `embed_failed>0` also fires the notice.
+- [x] 4.4 GREEN: `cli/main.py` reindex (~2519-2620) — read `report.embed_failed`, print notice iff `>0`; fatal ladder still exits before the summary.
 
 ## Phase 5: Query-Side Dense Degrade On `OllamaError` (D4)
 

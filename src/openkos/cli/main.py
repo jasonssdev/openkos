@@ -2622,6 +2622,23 @@ def reindex(
             f"{report.skipped} doc{_plural(report.skipped)} could not be "
             "re-embedded, will retry next run."
         )
+    # Actionable re-run notice (reindex-embedding-resilience): keys ONLY on
+    # `embed_failed` -- transient embed-EOF skips (retry budget exhausted at
+    # the OllamaClient layer) are self-healing, unlike the permanent
+    # `skipped` diagnostics above (unreadable/parse/decode failures a re-run
+    # will NOT fix). Deliberately NEVER keys on `skipped` alone, so the two
+    # skip kinds stay distinct on stderr, matching `ReindexReport.skipped`
+    # vs `embed_failed`'s separation. This only reaches an exit-0 run: the
+    # fatal ladder above (`OllamaUnavailable`/`OllamaModelNotFound`) exits 1
+    # before the summary is ever printed.
+    if report.embed_failed > 0:
+        typer.echo(
+            "openkos reindex: INCOMPLETE -- "
+            f"{report.embed_failed} doc{_plural(report.embed_failed)} could "
+            "not be embedded (transient failure). Run `openkos reindex` "
+            "again to complete it.",
+            err=True,
+        )
 
     # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`
     # itself: `state/reindex.py` is canonical-layer code and must not import

@@ -224,6 +224,75 @@ def test_reindex_summary_omits_model_tag_note_on_an_ordinary_run(
     assert "embedding model" not in result.stdout.lower()
 
 
+def test_reindex_embed_failed_prints_actionable_rerun_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ReindexReport.embed_failed > 0` prints a distinct, actionable stderr
+    notice stating the run is incomplete and advising a re-run (spec:
+    reindex-command Reindex Surfaces An Actionable Re-Run Notice On
+    Embed-Failure Skips)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=9, cache_hits=0, pruned=0, skipped=0, embed_failed=1
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "incomplete" in result.stderr.lower()
+    assert "openkos reindex" in result.stderr.lower()
+
+
+def test_reindex_ordinary_skip_does_not_print_embed_failure_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permanent `skipped > 0` (unreadable/parse failure) with
+    `embed_failed == 0` does NOT print the embed-failure re-run notice --
+    the two skip kinds are never conflated (spec: An ordinary unreadable-
+    file skip does not print the embed-failure notice)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=2, cache_hits=0, pruned=0, skipped=1, embed_failed=0
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
+
+
+def test_reindex_model_switch_partial_embed_failure_prints_the_same_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model-switch run with a partial `embed_failed > 0` also fires the
+    actionable notice, even though `model_reembedded=True` (spec:
+    Model-switch run with a partial embed failure prints the same
+    notice)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=1,
+        cache_hits=0,
+        pruned=0,
+        skipped=0,
+        embed_failed=1,
+        model_reembedded=True,
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "incomplete" in result.stderr.lower()
+
+
 def test_reindex_builds_ollama_client_from_configured_embedding_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
