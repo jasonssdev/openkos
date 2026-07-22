@@ -2648,7 +2648,9 @@ def reindex(
     try:
         sqlite_graph.reindex_graph(layout.bundle_dir, layout.graph_db_path, force=force)
     except sqlite3.Error as exc:
-        if isinstance(exc, sqlite3.OperationalError) and derived.is_lock_contention(exc):
+        if isinstance(exc, sqlite3.OperationalError) and derived.is_lock_contention(
+            exc
+        ):
             typer.echo(_LOCK_CONTENTION_MSG, err=True)
             raise typer.Exit(code=1) from exc
         typer.echo(
