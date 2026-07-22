@@ -89,6 +89,23 @@ the stderr re-run notice, not the primary stdout tally.)
 - THEN the printed summary states that the prune pass was skipped for this
   run, distinct from a run where zero concepts qualified for pruning
 
+#### Scenario: Zero embed failures still show the counter
+
+- GIVEN a run where every document embeds successfully (embed_failed == 0)
+- WHEN `openkos reindex` prints its stdout summary
+- THEN the summary includes `0 embed-failed`, matching the always-shown
+  convention already used for `0 skipped`
+
+#### Scenario: Nonzero embed failures surface in both the stdout tally and the stderr notice
+
+- GIVEN a run where one or more documents fail to embed (embed_failed > 0)
+- WHEN `openkos reindex` completes
+- THEN the stdout summary reports the nonzero `embed-failed` count as part of
+  the complete tally
+- AND the stderr re-run call-to-action notice is printed separately and
+  unchanged, so the two signals remain distinct — a factual stdout count vs.
+  an actionable stderr prompt
+
 ### Requirement: Bundle Walk And Concept Identity
 
 The orchestrator MUST discover documents via the existing `okf._iter_docs`
