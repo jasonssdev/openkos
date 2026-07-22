@@ -302,12 +302,7 @@ def reindex(
     # cannot narrow `model_tag` from a separate bool variable (round-2
     # review correction, SUGGESTION finding).
     tag_written = False
-    if (
-        model_changed
-        and skipped == 0
-        and embed_failed == 0
-        and model_tag is not None
-    ):
+    if model_changed and skipped == 0 and embed_failed == 0 and model_tag is not None:
         db.write_model_tag(model_tag)
         tag_written = True
 

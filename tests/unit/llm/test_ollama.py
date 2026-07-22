@@ -897,7 +897,10 @@ def test_embed_transient_error_retries_then_succeeds() -> None:
     client = OllamaClient(
         "qwen3-embedding:0.6b",
         urlopen=_sequenced_urlopen(
-            [_http_error(500, b'{"error": "internal"}'), _FakeResponse(_embed_body([row]))]
+            [
+                _http_error(500, b'{"error": "internal"}'),
+                _FakeResponse(_embed_body([row])),
+            ]
         ),
         sleep=sleep_spy,
     )

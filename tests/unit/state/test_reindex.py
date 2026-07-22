@@ -722,7 +722,9 @@ def test_reindex_model_tag_mismatch_forces_full_reembed_and_persists_new_tag(
 
     assert report.embedded == 2
     assert report.cache_hits == 0
-    assert embedder.call_count == 2  # per-doc grain (design D2): one embed() call per doc
+    assert (
+        embedder.call_count == 2
+    )  # per-doc grain (design D2): one embed() call per doc
     assert stored_tag == "nomic-embed-text"
     assert hashes_after == hashes_before  # same content_hash values, re-embedded anyway
 
