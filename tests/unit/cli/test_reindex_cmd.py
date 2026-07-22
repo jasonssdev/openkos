@@ -149,6 +149,11 @@ def test_reindex_summary_notes_when_model_tag_forced_the_reembed(
     assert "embedding model" in result.stdout.lower()
     assert "old-model" in result.stdout
     assert "qwen3-embedding:0.6b" in result.stdout  # DEFAULT_EMBEDDING_MODEL
+    # skipped == 0: the summary must read as a COMPLETE re-embed and must NOT
+    # borrow the skipped>0 branch's "incomplete" wording (symmetric guard to
+    # the unhealed-case tests, so a branch mix-up on the complete path fails).
+    assert "re-embedded all vectors" in result.stdout.lower()
+    assert "incomplete" not in result.stdout.lower()
 
 
 def test_reindex_summary_notes_when_model_reembed_left_docs_unhealed(
