@@ -245,8 +245,13 @@ def reindex(
     # genuinely covered every discovered doc -- a doc left in `skipped`
     # still carries its stale old-model vector, so persisting early would
     # strand it permanently (review correction, CRITICAL finding above).
+    # The trailing `model_tag is not None` is a type-checker artifact, not
+    # a second business rule: `model_changed` already guarantees it at
+    # runtime (see its definition above) -- it stays only because mypy
+    # cannot narrow `model_tag` from a separate bool variable (round-2
+    # review correction, SUGGESTION finding).
     tag_written = False
-    if model_tag is not None and model_changed and skipped == 0:
+    if model_changed and skipped == 0 and model_tag is not None:
         db.write_model_tag(model_tag)
         tag_written = True
 

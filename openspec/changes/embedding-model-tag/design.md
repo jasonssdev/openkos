@@ -65,9 +65,14 @@ N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classi
 
 Idempotent additive migration: `open_vector_store` creates the `meta` table on every open;
 a pre-slice db simply has no `embedding_model` row → `read_model_tag()` is `None` → one
-forced re-embed-all, then the tag is written and subsequent runs are incremental. Self-healing,
-one-time cost. Rollback = revert three edits; the leftover `meta` table is harmless (unread by
-reverted code). No destructive migration.
+forced re-embed-all, then the tag is written and subsequent runs are incremental. Self-healing;
+one-time cost ONLY in the common case where that forced re-embed run covers every discovered
+doc (`skipped == 0`). The new tag is deliberately withheld until then (round-2 review
+correction, CRITICAL finding): if any doc hits the transient skip path during a model-change
+run, the OLD tag is left in place, so the NEXT `reindex()` still sees the mismatch and repeats
+the full re-embed -- for as many runs as it takes -- rather than persisting early and silently
+stranding that doc's stale old-model vector forever. Rollback = revert three edits; the
+leftover `meta` table is harmless (unread by reverted code). No destructive migration.
 
 **Latent out-of-scope risk (documented, NOT handled):** `EMBED_DIM=1024` is fixed at vec0
 CREATE (`vectorstore.py:43`, `llm/base.py:29`) and enforced at embed time. Re-embed-all is
