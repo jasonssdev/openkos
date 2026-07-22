@@ -104,11 +104,15 @@ class ReindexReport:
     changes or `force=True` -- lets a caller tell a heavy, embedding-model-
     driven full re-embed apart from a large but ordinary content change.
     `True` regardless of whether the new tag was actually PERSISTED this
-    run: read it alongside `skipped` -- `model_reembedded and skipped > 0`
-    means the tag was deliberately NOT persisted (a doc could not be
-    re-embedded this run) and the NEXT run will force the same full
-    re-embed again, until one run finally covers every doc (review
-    correction, CRITICAL + WARNING findings)."""
+    run: read it alongside BOTH `skipped` AND `embed_failed` -- the tag is
+    withheld whenever `skipped > 0 OR embed_failed > 0` (persisted only
+    when `skipped == 0 AND embed_failed == 0`, matching the gate below).
+    `model_reembedded and (skipped > 0 or embed_failed > 0)` means the tag
+    was deliberately NOT persisted (a doc could not be re-embedded this
+    run, whether permanently unreadable or a transient embed failure) and
+    the NEXT run will force the same full re-embed again, until one run
+    finally covers every doc (review correction, CRITICAL + WARNING
+    findings)."""
 
 
 def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:

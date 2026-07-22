@@ -1181,6 +1181,64 @@ def test_reindex_ollama_model_not_found_mid_loop_is_reraised_not_counted_as_embe
     assert hashes == {}
 
 
+def test_reindex_model_tag_mismatch_with_an_embed_failed_doc_converges_across_runs(
+    tmp_path: Path,
+) -> None:
+    """Multi-run convergence for the `embed_failed` half of the tag-persist
+    gate (mirrors the `skipped` convergence test above, ~982-1057): a
+    model-switch run whose `embed_failed > 0` withholds the tag; the NEXT
+    run, once the previously-poisoned doc embeds successfully, finally
+    covers every doc (`skipped == 0 AND embed_failed == 0`) and persists
+    the tag -- proving the self-heal actually CONVERGES for `embed_failed`,
+    not merely that it withholds once (fix 4, cheap WARNING follow-up)."""
+    bundle_dir = tmp_path / "bundle"
+    a_path = bundle_dir / "concepts" / "a.md"
+    b_path = bundle_dir / "concepts" / "b.md"
+    _write_doc(a_path, title="A", body="fine")
+    _write_doc(b_path, title="B", body="poison")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        # b.md transiently fails to embed during the model-switch run.
+        first_embedder = _FaultyEmbedder({"poison": OllamaError("EOF after retries")})
+        first_report = reindex.reindex(
+            bundle_dir, db, first_embedder, model_tag="new-model"
+        )
+        tag_after_first = db.read_model_tag()
+
+        # b.md now embeds fine (the transient failure has cleared) -- a
+        # second call with the SAME model_tag still forces a full re-embed
+        # (the tag was never persisted) and this time covers every doc.
+        second_embedder = _FakeEmbedder()
+        second_report = reindex.reindex(
+            bundle_dir, db, second_embedder, model_tag="new-model"
+        )
+        tag_after_second = db.read_model_tag()
+
+        # A normal incremental run: the tag now matches, both docs cache-hit.
+        third_embedder = _FakeEmbedder()
+        third_report = reindex.reindex(
+            bundle_dir, db, third_embedder, model_tag="new-model"
+        )
+
+    assert first_report.embedded == 1  # a.md only
+    assert first_report.embed_failed == 1  # b.md
+    assert first_report.skipped == 0
+    assert first_report.model_reembedded is True
+    assert tag_after_first is None  # withheld -- b.md was NOT embedded
+
+    assert second_report.embedded == 2  # a.md AND b.md, both covered this run
+    assert second_report.skipped == 0
+    assert second_report.embed_failed == 0
+    assert second_report.model_reembedded is True
+    assert tag_after_second == "new-model"  # NOW persisted -- run was complete
+
+    assert third_report.embedded == 0
+    assert third_report.cache_hits == 2
+    assert third_report.model_reembedded is False
+    assert third_embedder.call_count == 0
+
+
 def test_reindex_tag_persist_gate_withheld_when_embed_failed_even_if_skipped_zero(
     tmp_path: Path,
 ) -> None:

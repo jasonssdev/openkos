@@ -293,6 +293,37 @@ def test_reindex_model_switch_partial_embed_failure_prints_the_same_notice(
     assert "incomplete" in result.stderr.lower()
 
 
+def test_reindex_model_switch_embed_failed_does_not_claim_re_embedded_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model-switch run with `skipped == 0` but `embed_failed > 0` must NOT
+    print the "re-embedded all vectors" success line -- the tag-persist gate
+    (`state/reindex.py`) withholds the new tag whenever `skipped > 0 OR
+    embed_failed > 0`, so a `skipped == 0`-only success message would claim a
+    complete re-embed while the tag was actually withheld (review
+    correction, CRITICAL finding: the summary gate did not match the widened
+    tag-persist gate). The actionable INCOMPLETE re-run notice on stderr
+    must still fire."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=1,
+        cache_hits=0,
+        pruned=0,
+        skipped=0,
+        embed_failed=1,
+        model_reembedded=True,
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "re-embedded all vectors" not in result.stdout.lower()
+    assert "incomplete" in result.stderr.lower()
+
+
 def test_reindex_builds_ollama_client_from_configured_embedding_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
