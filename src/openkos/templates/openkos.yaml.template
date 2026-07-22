@@ -2,6 +2,9 @@ model: __OPENKOS_MODEL__  # local model served via Ollama; see tech_stack.md
 review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
+# volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
+#   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
+#   volatile: 7d
 
 # Layout — where the engine keeps things, relative to this file.
 raw: raw/                 # immutable sources; any extension, never rewritten

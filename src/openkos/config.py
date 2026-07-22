@@ -40,6 +40,15 @@ DEFAULT_FRESHNESS_WINDOW = "7d"
 Raw passthrough only -- the `"7d"`/`"2w"` duration grammar is parsed by
 `lint.parse_window`, not here (policy stays out of `config`)."""
 
+DEFAULT_VOLATILITY_WINDOWS: dict[str, str] = {"slow": "90d", "volatile": "7d"}
+"""Packaged per-tier default windows (freshness-lint-v1, design: "Per-tier
+windows (CONCRETE, FINAL)"): `slow` = 90d, `volatile` = 7d -- continuity
+with today's global default for fast-moving types. `static` has no window
+value (never flagged), so it is never a key of this map. Raw passthrough
+only, like `DEFAULT_FRESHNESS_WINDOW` -- the duration grammar and the
+tier-resolution precedence are `lint.resolve_windows`'s job, not
+`config`'s."""
+
 _MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9._:/-]+")
 
 
@@ -327,6 +336,12 @@ class Config:
     default_sensitivity: str
     freshness_window: str
     embedding_model: str
+    volatility_windows: dict[str, str]
+    """Raw `volatility_windows` passthrough (freshness-lint-v1): `{}` when
+    absent or explicitly null, matching every other field's `is not None`
+    fallback. A present map passes through verbatim -- duration-grammar
+    parsing and the `static`/`slow`/`volatile` precedence stay in
+    `lint.resolve_windows`, not here."""
 
 
 def read_config(root: Path) -> Config:
@@ -361,6 +376,7 @@ def read_config(root: Path) -> Config:
     default_sensitivity = raw.get("default_sensitivity")
     freshness_window = raw.get("freshness_window")
     embedding_model = raw.get("embedding_model")
+    volatility_windows = raw.get("volatility_windows")
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,
@@ -376,5 +392,8 @@ def read_config(root: Path) -> Config:
         ),
         embedding_model=(
             embedding_model if embedding_model is not None else DEFAULT_EMBEDDING_MODEL
+        ),
+        volatility_windows=(
+            volatility_windows if volatility_windows is not None else {}
         ),
     )

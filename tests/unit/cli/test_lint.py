@@ -2,12 +2,14 @@
 
 `lint` is the SECOND read command (after `status`): no Phase B, no confirm
 gate, no `--auto`. It composes `config.require_workspace` (exit gate),
-`config.read_config` (`freshness_window`), `lint.resolve_window`,
-`lint.collect_docs`, `lint.check_stale_stamps`, and `lint.check_orphans`,
-then renders two sections via `typer.echo`. Exit 0 on every successful
-read; the ONLY non-zero exit path is an absent/unreadable workspace.
+`config.read_config` (`freshness_window`/`volatility_windows`),
+`lint.resolve_windows`, `lint.collect_docs`, `lint.check_stale_stamps`, and
+`lint.check_orphans`, then renders two sections via `typer.echo`. Exit 0 on
+every successful read; the ONLY non-zero exit path is an absent/unreadable
+workspace.
 """
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -240,6 +242,59 @@ def test_lint_rejects_json_flag(
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
+
+
+def test_lint_wires_volatility_windows_into_the_stale_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`lint` resolves `windows` via `lint.resolve_windows(cfg)` (not the
+    old `resolve_window(cfg.freshness_window)`) and passes them to
+    `check_stale_stamps` -- a `Concept` (`slow`-tier default, packaged 90d
+    window) with a 30-day-old stamp is NOT flagged, even though 30 days
+    exceeds the OLD global 7d default (freshness-lint-v1, design: "CLI
+    wiring")."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    stamp = (datetime.now(UTC).date() - timedelta(days=30)).isoformat()
+    (concepts_dir / "stoicism.md").write_text(
+        f"---\ntype: Concept\ntitle: Stoicism\n---\nRecorded (as of {stamp}).\n",
+        encoding="utf-8",
+    )
+    index_path = tmp_path / "bundle" / "index.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8")
+        + "\n# Concepts\n\n* [Stoicism](/concepts/stoicism.md) - test fixture.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "  No stale stamps." in result.stdout
+
+
+def test_lint_surfaces_a_notice_on_malformed_volatility_window_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed `volatility_windows.slow` value in `openkos.yaml`
+    degrades to the packaged `DEFAULT_FRESHNESS_WINDOW` and surfaces a
+    fallback notice, alongside any skip notices -- `lint` never crashes on
+    bad `volatility_windows` config."""
+    _init_workspace(tmp_path, monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "volatility_windows:\n  slow: not-a-duration\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "not-a-duration" in result.stdout
+    assert "not a valid duration" in result.stdout
+    assert "using default 7d" in result.stdout
 
 
 def test_lint_never_writes_to_the_workspace(

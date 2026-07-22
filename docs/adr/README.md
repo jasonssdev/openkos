@@ -41,3 +41,5 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0003](0003-sensitivity-high-water-mark.md) | Sensitivity high-water-mark ordering and fail-closed combine | Accepted | 2026-07-20 |
 | [0004](0004-typed-relationships-frontmatter.md) | Typed relationships in frontmatter; guard-then-rewire staging | Accepted | 2026-07-20 |
 | [0005](0005-merge-edge-rewiring.md) | Merge edge rewiring -- refuse-then-rewire reversal, v2 ledger contract | Accepted | 2026-07-20 |
+| [0006](0006-default-embedding-model.md) | Default embedding model -- bge-m3, reliability as the prior filter | Accepted | 2026-07-22 |
+| [0007](0007-volatility-taxonomy.md) | Volatility taxonomy and volatility-aware freshness windows | Proposed | 2026-07-22 |
