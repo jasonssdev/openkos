@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from openkos.llm.base import EMBED_DIM
+from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.state import derived, fts, reindex, vectorstore
 
 
@@ -57,6 +58,35 @@ class _FakeEmbedder:
         """Every text ever passed to `embed()`, flattened, call order
         preserved."""
         return [text for call in self.calls for text in call]
+
+
+class _FaultyEmbedder:
+    """A call-counting fake `Embedder` that raises a configured exception for
+    any text CONTAINING a marker substring (the doc body, since the full
+    text passed to `embed()` also carries frontmatter), embedding everything
+    else normally -- proves `reindex`'s per-doc embed loop (design D2) calls
+    `embed()` once per queued doc (asserted via the `len(texts) == 1` guard)
+    and isolates a poison doc's failure from its siblings."""
+
+    def __init__(self, fail_markers: dict[str, Exception]) -> None:
+        self._fail_markers = fail_markers
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        assert len(texts) == 1, (
+            "reindex() must embed one queued doc per call (per-doc grain, design D2)"
+        )
+        text = texts[0]
+        for marker, exc in self._fail_markers.items():
+            if marker in text:
+                raise exc
+        return [[float(len(self.calls))] * EMBED_DIM]
+
+    @property
+    def call_count(self) -> int:
+        """Total number of `embed()` invocations (not total texts)."""
+        return len(self.calls)
 
 
 # --- Phase 4: bundle walk + concept identity + reserved-file exclusion -----
@@ -692,7 +722,7 @@ def test_reindex_model_tag_mismatch_forces_full_reembed_and_persists_new_tag(
 
     assert report.embedded == 2
     assert report.cache_hits == 0
-    assert embedder.call_count == 1
+    assert embedder.call_count == 2  # per-doc grain (design D2): one embed() call per doc
     assert stored_tag == "nomic-embed-text"
     assert hashes_after == hashes_before  # same content_hash values, re-embedded anyway
 
@@ -1053,3 +1083,123 @@ def test_reindex_model_reembedded_flag_reflects_the_tag_gate_only(
         )
 
     assert tag_mismatch_report.model_reembedded is True
+
+
+# --- Phase 9 (reindex-embedding-resilience): per-doc embed isolation -------
+
+
+def test_reindex_one_poison_doc_survives_as_partial_progress_run(
+    tmp_path: Path,
+) -> None:
+    """A single doc whose embed call raises the generic transient
+    `OllamaError` (retries already exhausted at the `OllamaClient` layer) is
+    isolated: the other queued doc still embeds, upserts, and commits; the
+    poison doc counts as `embed_failed`, NOT `skipped`; and `reindex` does
+    not raise (spec: reindex-command Per-Doc Embed Failure Is Isolated, Not
+    Fatal -- one poison doc among many survives)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="poison")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B", body="fine")
+    embedder = _FaultyEmbedder({"poison": OllamaError("EOF after retries")})
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder)
+        hashes = db.meta_hashes()
+
+    assert report.embedded == 1
+    assert report.embed_failed == 1
+    assert report.skipped == 0
+    assert set(hashes) == {"concepts/b"}
+
+
+def test_reindex_every_doc_transiently_fails_leaves_empty_embed_pass_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """Every queued doc's embed call transiently fails: `embedded` is `0`,
+    `embed_failed` equals the queued count, no exception propagates (spec:
+    Every queued doc transiently fails leaves an empty embed pass, not a
+    crash)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="poison-a")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B", body="poison-b")
+    embedder = _FaultyEmbedder(
+        {
+            "poison-a": OllamaError("EOF after retries"),
+            "poison-b": OllamaError("EOF after retries"),
+        }
+    )
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder)
+        hashes = db.meta_hashes()
+
+    assert report.embedded == 0
+    assert report.embed_failed == 2
+    assert hashes == {}
+
+
+def test_reindex_ollama_unavailable_mid_loop_is_reraised_not_counted_as_embed_failed(
+    tmp_path: Path,
+) -> None:
+    """`OllamaUnavailable` raised mid-loop is FATAL, not a per-doc skip: it
+    propagates unchanged, the remaining queued docs are never processed, and
+    nothing from this interrupted run is committed (spec: Unreachable Ollama
+    mid-embed-loop is fatal, not a per-doc skip)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="fine")
+    _write_doc(bundle_dir / "concepts" / "z.md", title="Z", body="unreachable")
+    embedder = _FaultyEmbedder(
+        {"unreachable": OllamaUnavailable("Ollama not reachable")}
+    )
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        with pytest.raises(OllamaUnavailable):
+            reindex.reindex(bundle_dir, db, embedder)
+        hashes = db.meta_hashes()
+
+    assert hashes == {}
+
+
+def test_reindex_ollama_model_not_found_mid_loop_is_reraised_not_counted_as_embed_failed(
+    tmp_path: Path,
+) -> None:
+    """`OllamaModelNotFound` raised mid-loop is FATAL, not a per-doc skip: it
+    propagates unchanged (spec: Missing embedding model mid-embed-loop is
+    fatal, not a per-doc skip)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="fine")
+    _write_doc(bundle_dir / "concepts" / "z.md", title="Z", body="missing-model")
+    embedder = _FaultyEmbedder(
+        {"missing-model": OllamaModelNotFound("model not installed")}
+    )
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        with pytest.raises(OllamaModelNotFound):
+            reindex.reindex(bundle_dir, db, embedder)
+        hashes = db.meta_hashes()
+
+    assert hashes == {}
+
+
+def test_reindex_tag_persist_gate_withheld_when_embed_failed_even_if_skipped_zero(
+    tmp_path: Path,
+) -> None:
+    """The model-tag-persist gate withholds the new tag when `embed_failed >
+    0`, even though `skipped == 0` -- the union-keyed gate (spec:
+    Embedding-Model Tag Gate Forces Full Re-Embed On Mismatch, MODIFIED:
+    `skipped == 0 AND embed_failed == 0`)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="fine")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B", body="poison")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        embedder = _FaultyEmbedder({"poison": OllamaError("EOF after retries")})
+        report = reindex.reindex(
+            bundle_dir, db, embedder, model_tag="qwen3-embedding:0.6b"
+        )
+        stored_tag = db.read_model_tag()
+
+    assert report.skipped == 0
+    assert report.embed_failed == 1
+    assert stored_tag is None  # withheld -- NOT "qwen3-embedding:0.6b"

@@ -41,16 +41,16 @@ Chain strategy: pending
 
 ## Phase 3: Per-Doc Embed Isolation In `reindex()` (D2)
 
-- [ ] 3.1 RED: `test_reindex.py` — poison doc (embed raises, retries exhausted) → `embed_failed==1`, `skipped==0`, survivors committed, no raise.
-- [ ] 3.2 RED: every doc transiently fails → `embed_failed==N`, no crash.
-- [ ] 3.3 RED: `OllamaUnavailable` mid-loop → re-raised, NOT counted as `embed_failed`.
-- [ ] 3.4 RED: `OllamaModelNotFound` mid-loop → re-raised, NOT counted as `embed_failed`.
-- [ ] 3.5 RED: tag-persist gate withheld when `embed_failed>0` even if `skipped==0`.
-- [ ] 3.6 RED: line 695 `embedder.call_count` (`embedded==2`) → `2`; verify lines 149/169 (`==1`, single doc) and 565 (unrelated counter) pass unmodified.
-- [ ] 3.7 GREEN: `state/reindex.py:~58` `ReindexReport` — add `embed_failed: int = 0` field + docstring.
-- [ ] 3.8 GREEN: `state/reindex.py:~221-231` — single-batch `embedder.embed([...])` → per-doc loop; catch order `except (OllamaUnavailable, OllamaModelNotFound): raise` BEFORE `except OllamaError: embed_failed += 1; continue`; keep `upsert_many` + single commit.
-- [ ] 3.9 GREEN: `state/reindex.py:~254` — gate → `model_changed and skipped == 0 and embed_failed == 0`.
-- [ ] 3.10 REFACTOR: update `reindex()` docstrings (per-doc loop replaces "ONE batch call").
+- [x] 3.1 RED: `test_reindex.py` — poison doc (embed raises, retries exhausted) → `embed_failed==1`, `skipped==0`, survivors committed, no raise.
+- [x] 3.2 RED: every doc transiently fails → `embed_failed==N`, no crash.
+- [x] 3.3 RED: `OllamaUnavailable` mid-loop → re-raised, NOT counted as `embed_failed`.
+- [x] 3.4 RED: `OllamaModelNotFound` mid-loop → re-raised, NOT counted as `embed_failed`.
+- [x] 3.5 RED: tag-persist gate withheld when `embed_failed>0` even if `skipped==0`.
+- [x] 3.6 RED: line 695 `embedder.call_count` (`embedded==2`) → `2`; verify lines 149/169 (`==1`, single doc) and 565 (unrelated counter) pass unmodified.
+- [x] 3.7 GREEN: `state/reindex.py:~58` `ReindexReport` — add `embed_failed: int = 0` field + docstring.
+- [x] 3.8 GREEN: `state/reindex.py:~221-231` — single-batch `embedder.embed([...])` → per-doc loop; catch order `except (OllamaUnavailable, OllamaModelNotFound): raise` BEFORE `except OllamaError: embed_failed += 1; continue`; keep `upsert_many` + single commit.
+- [x] 3.9 GREEN: `state/reindex.py:~254` — gate → `model_changed and skipped == 0 and embed_failed == 0`.
+- [x] 3.10 REFACTOR: update `reindex()` docstrings (per-doc loop replaces "ONE batch call").
 
 ## Phase 4: Actionable Re-Run Notice (CLI, keys on `embed_failed`)
 
