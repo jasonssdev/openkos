@@ -944,3 +944,112 @@ def test_pre_slice_vectors_db_self_heals_in_exactly_one_reindex_run(
     assert steady_report.embedded == 0
     assert steady_report.cache_hits == 2
     assert steady_embedder.call_count == 0
+
+
+# --- Phase 8 review correction: stranded concept on a partial model switch --
+
+
+def test_reindex_model_tag_mismatch_with_a_skipped_doc_does_not_persist_the_new_tag(
+    tmp_path: Path,
+) -> None:
+    """CRITICAL review finding: if a model-tag mismatch run cannot re-embed
+    EVERY discovered doc (one hits the transient skip path), the new tag
+    must NOT be persisted -- otherwise the skipped doc's stale old-model
+    vector would silently survive forever (the next run would see a
+    MATCHING tag and treat the doc as a content_hash cache-hit). Instead:
+    a partial (skipped > 0) model-change run keeps re-forcing the full
+    re-embed on every subsequent call until one run finally covers every
+    doc (skipped == 0), at which point the tag is finally persisted (spec:
+    reindex-command Embedding-Model Tag Persisted Only After A Complete
+    Re-Embed)."""
+    bundle_dir = tmp_path / "bundle"
+    a_path = bundle_dir / "concepts" / "a.md"
+    b_path = bundle_dir / "concepts" / "b.md"
+    _write_doc(a_path, title="A")
+    _write_doc(b_path, title="B")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), model_tag="old-model")
+        assert db.read_model_tag() == "old-model"
+
+        # b.md now hits the transient skip path (undecodable bytes) during
+        # the model-switch run.
+        b_path.write_bytes(b"\xff\xfe\x00\x01not-utf8")
+
+        first_embedder = _FakeEmbedder()
+        first_report = reindex.reindex(
+            bundle_dir, db, first_embedder, model_tag="new-model"
+        )
+        tag_after_first = db.read_model_tag()
+
+        # Tag still wasn't persisted -- b.md is STILL unreadable -- so a
+        # second call with the SAME new model_tag keeps forcing a.md's
+        # re-embed too (safe/expensive, not silently wrong).
+        second_embedder = _FakeEmbedder()
+        second_report = reindex.reindex(
+            bundle_dir, db, second_embedder, model_tag="new-model"
+        )
+        tag_after_second = db.read_model_tag()
+
+        # b.md becomes readable again -- this run finally covers every doc.
+        _write_doc(b_path, title="B")
+        third_embedder = _FakeEmbedder()
+        third_report = reindex.reindex(
+            bundle_dir, db, third_embedder, model_tag="new-model"
+        )
+        tag_after_third = db.read_model_tag()
+
+        # A normal incremental run: the tag now matches, both docs cache-hit.
+        fourth_embedder = _FakeEmbedder()
+        fourth_report = reindex.reindex(
+            bundle_dir, db, fourth_embedder, model_tag="new-model"
+        )
+
+    assert first_report.embedded == 1  # a.md only
+    assert first_report.skipped == 1  # b.md
+    assert first_report.model_reembedded is True
+    assert tag_after_first == "old-model"  # NOT persisted -- b.md was skipped
+
+    assert second_report.embedded == 1  # a.md re-forced again
+    assert second_report.skipped == 1  # b.md still unreadable
+    assert second_report.model_reembedded is True
+    assert tag_after_second == "old-model"  # still NOT persisted
+
+    assert third_report.embedded == 2  # a.md AND b.md, both covered this run
+    assert third_report.skipped == 0
+    assert third_report.model_reembedded is True
+    assert tag_after_third == "new-model"  # NOW persisted -- run was complete
+
+    assert fourth_report.embedded == 0
+    assert fourth_report.cache_hits == 2
+    assert fourth_report.model_reembedded is False
+    assert fourth_embedder.call_count == 0
+
+
+def test_reindex_model_reembedded_flag_reflects_the_tag_gate_only(
+    tmp_path: Path,
+) -> None:
+    """`ReindexReport.model_reembedded` is `True` exactly when a model-tag
+    mismatch forced this run's re-embed, and `False` for an ordinary
+    content-change run (even one that embeds every doc) -- it is NOT a
+    generic "something was embedded" flag (review WARNING finding:
+    observability for the model-tag force)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="v1")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        ordinary_report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        assert ordinary_report.model_reembedded is False
+
+        _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="v2")
+        content_change_report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        assert content_change_report.embedded == 1
+        assert content_change_report.model_reembedded is False
+
+        tag_mismatch_report = reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="some-model"
+        )
+
+    assert tag_mismatch_report.model_reembedded is True

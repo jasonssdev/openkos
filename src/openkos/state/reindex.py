@@ -80,6 +80,17 @@ class ReindexReport:
     because an unreadable subtree could have hidden a still-existing doc"
     (`pruned == 0`, `prune_skipped == True`) -- otherwise indistinguishable
     from `pruned` alone (review carry-over, fold-in #3)."""
+    model_reembedded: bool = False
+    """`True` when this run's embed pass was forced by an absent/changed
+    `model_tag` (MVP-2 follow-up #5), rather than by ordinary content
+    changes or `force=True` -- lets a caller tell a heavy, embedding-model-
+    driven full re-embed apart from a large but ordinary content change.
+    `True` regardless of whether the new tag was actually PERSISTED this
+    run: read it alongside `skipped` -- `model_reembedded and skipped > 0`
+    means the tag was deliberately NOT persisted (a doc could not be
+    re-embedded this run) and the NEXT run will force the same full
+    re-embed again, until one run finally covers every doc (review
+    correction, CRITICAL + WARNING findings)."""
 
 
 def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
@@ -152,7 +163,22 @@ def reindex(
     via `db.write_model_tag` in the SAME single commit this run already uses
     for the vector writes (D4; the commit condition is broadened to include
     a tag write alone, so an empty bundle with an absent/changed tag still
-    persists it).
+    persists it) -- BUT ONLY when this run's forced re-embed genuinely
+    covered EVERY discovered doc (`skipped == 0`); review correction,
+    CRITICAL finding: a doc that fell into the transient skip path during a
+    model-change run keeps its stale old-model vector untouched, so
+    persisting the new tag anyway would let that doc's next run see a
+    MATCHING tag and silently treat it as a content_hash cache-hit forever
+    -- permanently stranding it on the old model with no further chance to
+    heal. Withholding the tag write instead makes the run self-healing: the
+    NEXT `reindex()` call still sees the OLD (or absent) tag, so
+    `model_changed` stays `True` and the full re-embed is forced again,
+    giving the previously-skipped doc(s) another chance -- repeating for as
+    many runs as it takes until one run finally has `skipped == 0`, at
+    which point the tag is finally persisted. `ReindexReport.model_reembedded`
+    (`True` whenever this gate forced the run, independent of whether the
+    tag ended up persisted) makes both the heavy re-embed AND a persistently
+    unhealed doc visible to a caller instead of leaving them silent.
     """
     cached_hashes = db.meta_hashes()
     stored_model_tag = db.read_model_tag()
@@ -215,9 +241,14 @@ def reindex(
             db.prune_many(to_prune)
             pruned = len(to_prune)
 
-    tag_written = model_changed
-    if model_tag is not None and model_changed:
+    # Persist the new tag ONLY when this run's model-change re-embed
+    # genuinely covered every discovered doc -- a doc left in `skipped`
+    # still carries its stale old-model vector, so persisting early would
+    # strand it permanently (review correction, CRITICAL finding above).
+    tag_written = False
+    if model_tag is not None and model_changed and skipped == 0:
         db.write_model_tag(model_tag)
+        tag_written = True
 
     if to_embed or to_prune or tag_written:
         db.commit()
@@ -231,4 +262,5 @@ def reindex(
         pruned=pruned,
         skipped=skipped,
         prune_skipped=prune_skipped,
+        model_reembedded=model_changed,
     )
