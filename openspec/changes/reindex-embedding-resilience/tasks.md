@@ -32,12 +32,12 @@ Chain strategy: pending
 
 ## Phase 2: Retry-With-Backoff in `OllamaClient.embed` (D1/D3)
 
-- [ ] 2.1 RED: `test_ollama.py` — transient generic `OllamaError` fails attempt 1, succeeds attempt 2; injected `sleep` spy proves no real sleep.
-- [ ] 2.2 RED: exhausts default 3 attempts on persistent `OllamaError` → raises; sleep called exactly 2x, exponential.
-- [ ] 2.3 RED: `OllamaModelNotFound` never retried — raised immediately, sleep never called.
-- [ ] 2.4 RED: `OllamaUnavailable` may retry but raises once exhausted.
-- [ ] 2.5 GREEN: `llm/ollama.py:~120` — injectable attempts/backoff/sleep ctor params; retry loop around `embed()`'s HTTP call, catching generic `OllamaError` only, re-raising `OllamaModelNotFound` immediately; update docstring.
-- [ ] 2.6 REFACTOR: clean naming/docstrings; no scope creep into `chat()`.
+- [x] 2.1 RED: `test_ollama.py` — transient generic `OllamaError` fails attempt 1, succeeds attempt 2; injected `sleep` spy proves no real sleep.
+- [x] 2.2 RED: exhausts default 3 attempts on persistent `OllamaError` → raises; sleep called exactly 2x, exponential.
+- [x] 2.3 RED: `OllamaModelNotFound` never retried — raised immediately, sleep never called.
+- [x] 2.4 RED: `OllamaUnavailable` may retry but raises once exhausted.
+- [x] 2.5 GREEN: `llm/ollama.py:~120` — injectable attempts/backoff/sleep ctor params; retry loop around `embed()`'s HTTP call, catching generic `OllamaError` only, re-raising `OllamaModelNotFound` immediately; update docstring.
+- [x] 2.6 REFACTOR: clean naming/docstrings; no scope creep into `chat()`. Also fixed 10 pre-existing `embed()` error-path tests that unintentionally real-slept under the new retry wrapper (added `embed_retry_attempts=1`, out of scope of design.md's listed churn but required for test hermeticity).
 
 ## Phase 3: Per-Doc Embed Isolation In `reindex()` (D2)
 

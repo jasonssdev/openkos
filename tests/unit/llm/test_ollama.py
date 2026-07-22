@@ -687,7 +687,9 @@ def test_embed_row_count_mismatch_fewer_rows_raises_ollama_error() -> None:
     `OllamaError` rather than silently returning a length-mismatched list."""
     row = [0.1] * EMBED_DIM
     client = OllamaClient(
-        "qwen3-embedding:0.6b", urlopen=_fake_urlopen(_embed_body([row]), [])
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(_embed_body([row]), []),
+        embed_retry_attempts=1,
     )
 
     with pytest.raises(OllamaError):
@@ -702,6 +704,7 @@ def test_embed_row_count_mismatch_more_rows_raises_ollama_error() -> None:
     client = OllamaClient(
         "qwen3-embedding:0.6b",
         urlopen=_fake_urlopen(_embed_body([row_a, row_b]), []),
+        embed_retry_attempts=1,
     )
 
     with pytest.raises(OllamaError):
@@ -725,7 +728,9 @@ def test_embed_row_wrong_dimension_raises_ollama_error() -> None:
     """A returned row whose length is not `EMBED_DIM` raises `OllamaError`."""
     short_row = [0.1] * (EMBED_DIM - 1)
     client = OllamaClient(
-        "qwen3-embedding:0.6b", urlopen=_fake_urlopen(_embed_body([short_row]), [])
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(_embed_body([short_row]), []),
+        embed_retry_attempts=1,
     )
 
     with pytest.raises(OllamaError):
@@ -737,7 +742,11 @@ def test_embed_row_non_numeric_values_raises_ollama_error() -> None:
     even when its length matches `EMBED_DIM`."""
     bad_row: list[Any] = [0.1] * (EMBED_DIM - 1) + ["not-a-float"]
     body = json.dumps({"embeddings": [bad_row]}).encode("utf-8")
-    client = OllamaClient("qwen3-embedding:0.6b", urlopen=_fake_urlopen(body, []))
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(body, []),
+        embed_retry_attempts=1,
+    )
 
     with pytest.raises(OllamaError):
         client.embed(["a"])
@@ -746,7 +755,9 @@ def test_embed_row_non_numeric_values_raises_ollama_error() -> None:
 def test_embed_malformed_json_raises_ollama_error() -> None:
     """A 200 body that is not valid JSON raises `OllamaError`."""
     client = OllamaClient(
-        "qwen3-embedding:0.6b", urlopen=_fake_urlopen(b"not json at all {{{", [])
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(b"not json at all {{{", []),
+        embed_retry_attempts=1,
     )
 
     with pytest.raises(OllamaError):
@@ -757,7 +768,11 @@ def test_embed_non_object_json_body_raises_ollama_error() -> None:
     """A 200 body that is valid JSON but not a JSON object at the top level
     (e.g. a bare list) raises `OllamaError`, not an unguarded `TypeError`."""
     body = json.dumps([0.1] * EMBED_DIM).encode("utf-8")
-    client = OllamaClient("qwen3-embedding:0.6b", urlopen=_fake_urlopen(body, []))
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(body, []),
+        embed_retry_attempts=1,
+    )
 
     with pytest.raises(OllamaError):
         client.embed(["a"])
@@ -767,17 +782,25 @@ def test_embed_missing_embeddings_and_embedding_keys_raises_ollama_error() -> No
     """A well-formed JSON body carrying neither `embeddings` nor `embedding`
     (response-shape drift beyond the two recognized keys) raises `OllamaError`."""
     body = json.dumps({"unexpected": "shape"}).encode("utf-8")
-    client = OllamaClient("qwen3-embedding:0.6b", urlopen=_fake_urlopen(body, []))
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(body, []),
+        embed_retry_attempts=1,
+    )
 
     with pytest.raises(OllamaError):
         client.embed(["a"])
 
 
 def test_embed_connect_phase_transport_failure_raises_ollama_unavailable() -> None:
-    """A `URLError` while connecting maps to `OllamaUnavailable` (mirrors `chat()`)."""
+    """A `URLError` while connecting maps to `OllamaUnavailable` (mirrors
+    `chat()`). `embed_retry_attempts=1`: this test asserts the error
+    MAPPING, not the retry loop (D3's retry behavior has its own dedicated
+    tests) -- no real sleep."""
     client = OllamaClient(
         "qwen3-embedding:0.6b",
         urlopen=_raising_urlopen(urllib.error.URLError("Connection refused")),
+        embed_retry_attempts=1,
     )
 
     with pytest.raises(OllamaUnavailable):
@@ -792,6 +815,7 @@ def test_embed_read_phase_transport_failure_raises_ollama_unavailable() -> None:
         urlopen=_fake_urlopen_returning(
             _RaisingReadResponse(TimeoutError("timed out mid-read"))
         ),
+        embed_retry_attempts=1,
     )
 
     with pytest.raises(OllamaUnavailable):
@@ -802,7 +826,9 @@ def test_embed_non_404_http_error_raises_ollama_error() -> None:
     """A non-404 HTTP error is mapped to `OllamaError` (reuses `_map_http_error`)."""
     body = json.dumps({"error": "internal server error"}).encode("utf-8")
     client = OllamaClient(
-        "qwen3-embedding:0.6b", urlopen=_raising_urlopen(_http_error(500, body))
+        "qwen3-embedding:0.6b",
+        urlopen=_raising_urlopen(_http_error(500, body)),
+        embed_retry_attempts=1,
     )
 
     with pytest.raises(OllamaError) as excinfo:
@@ -821,6 +847,193 @@ def test_embed_404_model_not_found_body_raises_ollama_model_not_found() -> None:
 
     with pytest.raises(OllamaModelNotFound):
         client.embed(["a"])
+
+
+# --- Phase 12: embed() retry-with-backoff (D1/D3) -------------------------
+
+
+def _sequenced_urlopen(effects: list[Any]) -> Any:
+    """Return an `urlopen` stand-in that replays `effects` in order: an
+    `Exception` instance is raised, anything else is returned as the
+    response. Raises `AssertionError` if called more times than `effects`
+    provides -- proves the retry loop makes exactly the expected number of
+    attempts, no more."""
+    state = {"calls": 0}
+
+    def _urlopen(request: urllib.request.Request, timeout: float | None = None) -> Any:
+        idx = state["calls"]
+        state["calls"] += 1
+        if idx >= len(effects):
+            raise AssertionError(
+                f"urlopen called {idx + 1} times, only {len(effects)} effects configured"
+            )
+        effect = effects[idx]
+        if isinstance(effect, Exception):
+            raise effect
+        return effect
+
+    return _urlopen
+
+
+class _SleepSpy:
+    """A `sleep`-shaped fake: records every duration it was called with,
+    never actually sleeps (Strict TDD: no real sleep in tests)."""
+
+    def __init__(self) -> None:
+        self.calls: list[float] = []
+
+    def __call__(self, seconds: float) -> None:
+        self.calls.append(seconds)
+
+
+def test_embed_transient_error_retries_then_succeeds() -> None:
+    """A transient generic `OllamaError` on attempt 1 (a 500) is retried, and
+    a success on attempt 2 returns the vectors with no exception raised --
+    the caller observes no partial result and no trace of the retry beyond
+    the injected sleep spy (llm-client: Transient failure followed by
+    success is transparent to the caller)."""
+    row = [0.1] * EMBED_DIM
+    sleep_spy = _SleepSpy()
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_sequenced_urlopen(
+            [_http_error(500, b'{"error": "internal"}'), _FakeResponse(_embed_body([row]))]
+        ),
+        sleep=sleep_spy,
+    )
+
+    result = client.embed(["a"])
+
+    assert result == [row]
+    assert sleep_spy.calls == [pytest.approx(0.5)]
+
+
+def test_embed_immediate_success_makes_no_retry_attempt() -> None:
+    """A first-attempt success makes exactly one request and never calls
+    `sleep` (llm-client: Immediate success makes no retry attempt)."""
+    row = [0.1] * EMBED_DIM
+    captured: list[urllib.request.Request] = []
+    sleep_spy = _SleepSpy()
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(_embed_body([row]), captured),
+        sleep=sleep_spy,
+    )
+
+    result = client.embed(["a"])
+
+    assert result == [row]
+    assert len(captured) == 1
+    assert sleep_spy.calls == []
+
+
+def test_embed_persistent_error_exhausts_default_retries_and_raises() -> None:
+    """A generic `OllamaError` (500) on every attempt exhausts the default 3
+    attempts, then raises -- `sleep` is called exactly 2 times (between the
+    3 attempts), with exponentially increasing durations (llm-client:
+    Exhausted retry budget raises to the caller)."""
+    sleep_spy = _SleepSpy()
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_sequenced_urlopen(
+            [
+                _http_error(500, b'{"error": "internal"}'),
+                _http_error(500, b'{"error": "internal"}'),
+                _http_error(500, b'{"error": "internal"}'),
+            ]
+        ),
+        sleep=sleep_spy,
+    )
+
+    with pytest.raises(OllamaError) as excinfo:
+        client.embed(["a"])
+
+    assert not isinstance(excinfo.value, (OllamaUnavailable, OllamaModelNotFound))
+    assert sleep_spy.calls == [pytest.approx(0.5), pytest.approx(1.0)]
+
+
+def test_embed_model_not_found_never_retried() -> None:
+    """`OllamaModelNotFound` raises immediately on its first occurrence,
+    consuming zero retry attempts -- `sleep` is never called and `urlopen`
+    is called exactly once (llm-client: OllamaModelNotFound is never
+    retried)."""
+    sleep_spy = _SleepSpy()
+    body = json.dumps({"error": "model 'ghost-embed:latest' not found"}).encode("utf-8")
+    client = OllamaClient(
+        "ghost-embed:latest",
+        urlopen=_sequenced_urlopen([_http_error(404, body)]),
+        sleep=sleep_spy,
+    )
+
+    with pytest.raises(OllamaModelNotFound):
+        client.embed(["a"])
+
+    assert sleep_spy.calls == []
+
+
+def test_embed_ollama_unavailable_may_retry_but_raises_once_exhausted() -> None:
+    """An unreachable server (`OllamaUnavailable` on every attempt) may be
+    retried like the generic case, but still ultimately raises once the
+    retry budget is exhausted (design D3: OllamaUnavailable may retry but
+    is ultimately FATAL if exhausted)."""
+    sleep_spy = _SleepSpy()
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_sequenced_urlopen(
+            [
+                urllib.error.URLError("Connection refused"),
+                urllib.error.URLError("Connection refused"),
+                urllib.error.URLError("Connection refused"),
+            ]
+        ),
+        sleep=sleep_spy,
+    )
+
+    with pytest.raises(OllamaUnavailable):
+        client.embed(["a"])
+
+    assert sleep_spy.calls == [pytest.approx(0.5), pytest.approx(1.0)]
+
+
+def test_embed_retry_attempts_and_backoff_base_are_injectable() -> None:
+    """`embed_retry_attempts` and `embed_retry_backoff_base` constructor
+    args override the defaults, proving both knobs are independently
+    injectable (D3: both injectable)."""
+    sleep_spy = _SleepSpy()
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_sequenced_urlopen(
+            [
+                _http_error(500, b'{"error": "internal"}'),
+                _http_error(500, b'{"error": "internal"}'),
+            ]
+        ),
+        sleep=sleep_spy,
+        embed_retry_attempts=2,
+        embed_retry_backoff_base=0.1,
+    )
+
+    with pytest.raises(OllamaError):
+        client.embed(["a"])
+
+    assert sleep_spy.calls == [pytest.approx(0.1)]
+
+
+def test_chat_never_retries_on_transient_error() -> None:
+    """`chat()` is untouched by the `embed()` retry loop (D1: retry home is
+    `embed` only, no scope creep into `chat`) -- a single transient failure
+    raises immediately, `sleep` is never called."""
+    sleep_spy = _SleepSpy()
+    client = OllamaClient(
+        "qwen3",
+        urlopen=_raising_urlopen(_http_error(500, b'{"error": "internal"}')),
+        sleep=sleep_spy,
+    )
+
+    with pytest.raises(OllamaError):
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert sleep_spy.calls == []
 
 
 # --- Phase 8: layering guard --------------------------------------------------
