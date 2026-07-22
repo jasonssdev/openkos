@@ -8,6 +8,7 @@ in as an argument.
 import http.client
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
@@ -19,6 +20,13 @@ DEFAULT_HOST = "http://localhost:11434"
 """Ollama's own local default, used when no override is given (D2)."""
 DEFAULT_TIMEOUT = 120.0
 """Generous default: model inference is slow, avoid premature timeouts (D6)."""
+DEFAULT_EMBED_RETRY_ATTEMPTS = 3
+"""Default number of `embed()` attempts (1 initial + 2 retries) before
+raising a persistent `OllamaError`-family failure to the caller (D3)."""
+DEFAULT_EMBED_RETRY_BACKOFF_BASE = 0.5
+"""Default exponential-backoff base, in seconds, between `embed()` retry
+attempts: sleep duration is `base * 2 ** (attempt - 1)` for the failed
+1-indexed `attempt` (D3)."""
 
 
 class OllamaError(Exception):
@@ -53,11 +61,23 @@ class OllamaClient:
         host: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
+        embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
+        embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        """Resolve `host` (arg > `OLLAMA_HOST` env > default) and store config (D2)."""
+        """Resolve `host` (arg > `OLLAMA_HOST` env > default) and store config (D2).
+
+        `embed_retry_attempts`/`embed_retry_backoff_base`/`sleep` configure
+        ONLY `embed()`'s retry-with-backoff loop (D1/D3) -- `chat()` and
+        `list_models()` are untouched, never retried. `sleep` defaults to
+        the real `time.sleep`; tests inject a spy to prove no real sleep
+        occurs and to observe the backoff schedule."""
         self._model = model
         self._timeout = timeout
         self._urlopen = urlopen
+        self._embed_retry_attempts = embed_retry_attempts
+        self._embed_retry_backoff_base = embed_retry_backoff_base
+        self._sleep = sleep
         resolved_host = host or os.environ.get("OLLAMA_HOST") or DEFAULT_HOST
         self._host = _normalize_host(resolved_host).rstrip("/")
 
@@ -122,14 +142,45 @@ class OllamaClient:
         vector per input, in order (Embedder contract).
 
         Short-circuits to `[]` with no HTTP call when `texts` is empty.
+        Wraps `_embed_once` in a retry-with-backoff loop (D1/D3, llm-client:
+        Transient Embed Failures Are Retried Before Propagating):
+        `OllamaModelNotFound` raises immediately, consuming no retry attempt
+        -- a missing model cannot heal mid-run. Every other `OllamaError`
+        (the generic transient class, AND `OllamaUnavailable`) is retried up
+        to `embed_retry_attempts` times total, sleeping
+        `embed_retry_backoff_base * 2 ** (attempt - 1)` between attempts
+        (exponential). WHEN a retried attempt succeeds, the result is
+        returned exactly as a first-attempt success would be -- no
+        observable trace of the retry beyond the injected `sleep` calls.
+        WHEN the retry budget is exhausted, the last exception raises
+        unchanged to the caller.
+        """
+        if not texts:
+            return []
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self._embed_once(texts)
+            except OllamaModelNotFound:
+                raise
+            except OllamaError:
+                if attempt >= self._embed_retry_attempts:
+                    raise
+                backoff = self._embed_retry_backoff_base * 2 ** (attempt - 1)
+                self._sleep(backoff)
+
+    def _embed_once(self, texts: Sequence[str]) -> list[list[float]]:
+        """One `embed()` attempt: a single POST to `{host}/api/embed` and
+        response parse, with no retry logic of its own (the retry loop lives
+        in `embed()`).
+
         Reuses `chat()`'s connect/read transport ladder and `_map_http_error`.
         Parses defensively: prefers the plural `embeddings` key, falls back
         to the legacy singular `embedding` key (wrapped as a one-item list),
         and validates every returned row is exactly `EMBED_DIM` numeric
         values -- any other shape raises `OllamaError`.
         """
-        if not texts:
-            return []
         url = f"{self._host}/api/embed"
         payload = json.dumps({"model": self._model, "input": list(texts)}).encode(
             "utf-8"

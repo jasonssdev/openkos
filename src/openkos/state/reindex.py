@@ -11,15 +11,23 @@ A per-doc `content_hash` gate against `db.meta_hashes()` (the cache
 authority) keeps this an INCREMENTAL backfill: an unchanged hash is a
 cache-hit -- zero `Embedder` calls, the stored vector untouched -- while a
 changed or absent hash queues the doc for re-embedding. `force=True` bypasses
-the gate entirely, re-embedding every discovered doc. Every queued doc across
-one `reindex()` call is embedded in a SINGLE `embedder.embed([...])` batch
-call (not one call per doc), keeping the common case of many changed docs to
-one round trip. After the walk, any `concept_id` `meta_hashes()` already
-holds that the walk did NOT see on disk this run is `prune`d from both
-tables -- this is reserved for docs genuinely gone from the bundle; a doc
-that exists on disk but failed to read/parse/decode is counted as `skipped`,
-never pruned, mirroring `fts.build_index`'s degrade-not-crash posture for a
-transient per-doc failure. WHEN `okf._walk_errors(bundle_dir)` reports one or
+the gate entirely, re-embedding every discovered doc. reindex-embedding-
+resilience: every queued doc is embedded in its OWN `embedder.embed([text])`
+call -- PER-DOC grain, not one whole-batch call -- so a single doc's embed
+failure never aborts its siblings (see `embed_failed` below). After the
+walk, any `concept_id` `meta_hashes()` already holds that the walk did NOT
+see on disk this run is `prune`d from both tables -- this is reserved for
+docs genuinely gone from the bundle; a doc that exists on disk but failed to
+read/parse/decode is counted as `skipped` (PERMANENT), never pruned,
+mirroring `fts.build_index`'s degrade-not-crash posture for a transient
+per-doc failure. A doc that reads/parses fine but whose embed call
+transiently fails (the generic `OllamaError` EOF class, after the client-
+layer retry budget is exhausted) is counted separately as `embed_failed`
+(TRANSIENT) -- also never pruned, but distinct from `skipped` since a re-run
+gives it another chance. `OllamaUnavailable`/`OllamaModelNotFound` mid-loop
+are NOT per-doc failures at all: they re-raise immediately, propagating out
+of this function (reindex-embedding-resilience: Per-Doc Embed Failure Is
+Isolated, Not Fatal). WHEN `okf._walk_errors(bundle_dir)` reports one or
 more directory-scan errors for this run (e.g. a permission-denied
 subdirectory `_iter_docs`'s `rglob` walk silently could not descend into),
 the ENTIRE prune pass is skipped for that run -- an unreadable subtree can
@@ -50,6 +58,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from openkos.llm.base import Embedder
+from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.model import okf
 from openkos.state import derived, fts
 from openkos.state.vectorstore import VectorStore, content_hash
@@ -70,8 +79,17 @@ class ReindexReport:
     exists on disk."""
     skipped: int
     """Discovered docs that could not be read, parsed, or UTF-8 decoded --
-    neither embedded nor pruned (the file still exists; only THIS run's
-    embed attempt failed)."""
+    PERMANENT: neither embedded nor pruned, and a re-run will NOT help (the
+    file still exists; only THIS run's read/parse attempt failed)."""
+    embed_failed: int = 0
+    """Discovered, readable docs whose individual `embedder.embed([text])`
+    call raised the generic transient `OllamaError` (HTTP-400 EOF class)
+    after the client-layer retry budget was exhausted -- TRANSIENT and
+    DISTINCT from `skipped`: never embedded or pruned THIS run, but a re-run
+    WILL give it another chance once Ollama recovers (reindex-embedding-
+    resilience: Per-Doc Embed Failure Is Isolated, Not Fatal). Never
+    conflated with `skipped`; the model-tag-persist gate below keys on the
+    UNION of both (`skipped == 0 AND embed_failed == 0`)."""
     prune_skipped: bool = False
     """`True` when this run's directory-scan walk hit one or more errors
     (`okf._walk_errors`), so the ENTIRE prune pass was suppressed for this
@@ -86,11 +104,15 @@ class ReindexReport:
     changes or `force=True` -- lets a caller tell a heavy, embedding-model-
     driven full re-embed apart from a large but ordinary content change.
     `True` regardless of whether the new tag was actually PERSISTED this
-    run: read it alongside `skipped` -- `model_reembedded and skipped > 0`
-    means the tag was deliberately NOT persisted (a doc could not be
-    re-embedded this run) and the NEXT run will force the same full
-    re-embed again, until one run finally covers every doc (review
-    correction, CRITICAL + WARNING findings)."""
+    run: read it alongside BOTH `skipped` AND `embed_failed` -- the tag is
+    withheld whenever `skipped > 0 OR embed_failed > 0` (persisted only
+    when `skipped == 0 AND embed_failed == 0`, matching the gate below).
+    `model_reembedded and (skipped > 0 or embed_failed > 0)` means the tag
+    was deliberately NOT persisted (a doc could not be re-embedded this
+    run, whether permanently unreadable or a transient embed failure) and
+    the NEXT run will force the same full re-embed again, until one run
+    finally covers every doc (review correction, CRITICAL + WARNING
+    findings)."""
 
 
 def _reindex_fts(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
@@ -131,9 +153,17 @@ def reindex(
     discovered doc (skip on read/parse failure, cache-hit on a matching
     hash, else queue for embedding) and builds the `seen` set of every
     `concept_id` the walk found on disk (skipped docs included -- their file
-    DOES exist, it just could not be processed this run). Every queued doc
-    is embedded in ONE `embedder.embed([...])` call, then each result is
-    `upsert`ed in the same order. The second pass prunes any `concept_id`
+    DOES exist, it just could not be processed this run). reindex-embedding-
+    resilience: every queued doc is embedded in its OWN `embedder.embed([text])`
+    call (per-doc grain, replacing the earlier single whole-batch call) --
+    `OllamaUnavailable`/`OllamaModelNotFound` re-raise immediately (checked
+    FIRST: both subclass the generic `OllamaError`, so this order is
+    safety-critical -- a bare `except OllamaError` would silently swallow a
+    fatal condition as "every doc skipped, exit 0"), while the generic
+    transient `OllamaError` (retry budget already exhausted at the
+    `OllamaClient` layer) increments `embed_failed` and continues to the
+    next doc. Every successfully embedded doc is `upsert`ed together in one
+    `db.upsert_many` call. The second pass prunes any `concept_id`
     `db.meta_hashes()` already held that `seen` does NOT contain -- a doc
     genuinely removed from the bundle since the last `reindex` run -- UNLESS
     this run's walk hit a directory-scan error (`okf._walk_errors`), in
@@ -164,21 +194,24 @@ def reindex(
     for the vector writes (D4; the commit condition is broadened to include
     a tag write alone, so an empty bundle with an absent/changed tag still
     persists it) -- BUT ONLY when this run's forced re-embed genuinely
-    covered EVERY discovered doc (`skipped == 0`); review correction,
-    CRITICAL finding: a doc that fell into the transient skip path during a
-    model-change run keeps its stale old-model vector untouched, so
-    persisting the new tag anyway would let that doc's next run see a
-    MATCHING tag and silently treat it as a content_hash cache-hit forever
-    -- permanently stranding it on the old model with no further chance to
-    heal. Withholding the tag write instead makes the run self-healing: the
-    NEXT `reindex()` call still sees the OLD (or absent) tag, so
-    `model_changed` stays `True` and the full re-embed is forced again,
-    giving the previously-skipped doc(s) another chance -- repeating for as
-    many runs as it takes until one run finally has `skipped == 0`, at
-    which point the tag is finally persisted. `ReindexReport.model_reembedded`
-    (`True` whenever this gate forced the run, independent of whether the
-    tag ended up persisted) makes both the heavy re-embed AND a persistently
-    unhealed doc visible to a caller instead of leaving them silent.
+    covered EVERY discovered doc (`skipped == 0 AND embed_failed == 0`,
+    reindex-embedding-resilience: widened from `skipped == 0` alone to this
+    UNION); review correction, CRITICAL finding: a doc that fell into
+    either the permanent `skipped` path or the transient `embed_failed`
+    path during a model-change run keeps its stale old-model vector
+    untouched, so persisting the new tag anyway would let that doc's next
+    run see a MATCHING tag and silently treat it as a content_hash cache-hit
+    forever -- permanently stranding it on the old model with no further
+    chance to heal. Withholding the tag write instead makes the run
+    self-healing: the NEXT `reindex()` call still sees the OLD (or absent)
+    tag, so `model_changed` stays `True` and the full re-embed is forced
+    again, giving the previously-unhealed doc(s) another chance -- repeating
+    for as many runs as it takes until one run finally has
+    `skipped == 0 AND embed_failed == 0`, at which point the tag is finally
+    persisted. `ReindexReport.model_reembedded` (`True` whenever this gate
+    forced the run, independent of whether the tag ended up persisted)
+    makes both the heavy re-embed AND a persistently unhealed doc visible to
+    a caller instead of leaving them silent.
     """
     cached_hashes = db.meta_hashes()
     stored_model_tag = db.read_model_tag()
@@ -219,15 +252,33 @@ def reindex(
         to_embed.append((concept_id, text, digest))
 
     embedded = 0
+    embed_failed = 0
     if to_embed:
-        vectors = embedder.embed([text for _, text, _ in to_embed])
-        items = [
-            (concept_id, vector, digest)
-            for (concept_id, _text, digest), vector in zip(
-                to_embed, vectors, strict=True
-            )
-        ]
-        db.upsert_many(items)
+        items: list[tuple[str, list[float], str]] = []
+        for concept_id, text, digest in to_embed:
+            try:
+                vector = embedder.embed([text])[0]
+            except (OllamaUnavailable, OllamaModelNotFound):
+                # FATAL, not a per-doc skip (design D2/D3): an unreachable
+                # server or a missing model cannot serve ANY embed, so this
+                # is not a transient per-input failure. Re-raise immediately
+                # -- no further queued docs are processed, and nothing from
+                # this interrupted run is committed (the loop never reaches
+                # `db.upsert_many`/`commit()` below). MUST be checked BEFORE
+                # the generic `OllamaError` catch: both subclass it, and a
+                # bare `except OllamaError` here would silently swallow a
+                # fatal condition as "every doc skipped, exit 0".
+                raise
+            except OllamaError:
+                # Generic transient failure (the HTTP-400 EOF class) with
+                # the client-layer retry budget (llm/ollama.py) already
+                # exhausted -- isolate THIS doc only and keep processing the
+                # rest (design D2: per-doc grain is the exact failure unit).
+                embed_failed += 1
+                continue
+            items.append((concept_id, vector, digest))
+        if items:
+            db.upsert_many(items)
         embedded = len(items)
 
     pruned = 0
@@ -251,7 +302,7 @@ def reindex(
     # cannot narrow `model_tag` from a separate bool variable (round-2
     # review correction, SUGGESTION finding).
     tag_written = False
-    if model_changed and skipped == 0 and model_tag is not None:
+    if model_changed and skipped == 0 and embed_failed == 0 and model_tag is not None:
         db.write_model_tag(model_tag)
         tag_written = True
 
@@ -266,6 +317,7 @@ def reindex(
         cache_hits=cache_hits,
         pruned=pruned,
         skipped=skipped,
+        embed_failed=embed_failed,
         prune_skipped=prune_skipped,
         model_reembedded=model_changed,
     )

@@ -2484,7 +2484,7 @@ def reindex(
     owns none of the gate/rebuild logic itself.
 
     Embeds through a local Ollama server running the model configured as
-    `embedding_model` in `openkos.yaml` (default `qwen3-embedding:0.6b`).
+    `embedding_model` in `openkos.yaml` (default `bge-m3`, ADR-0006).
     An unreachable Ollama, a missing embedding model, or an unusable
     `sqlite-vec` extension is reported on stderr with no raw traceback and
     exits 1 -- the SAME ordered ladder `query` uses (`OllamaUnavailable` →
@@ -2606,10 +2606,18 @@ def reindex(
     # ACCURATE to whether the re-embed actually covered every doc this run
     # (round-2 review correction, WARNING finding): claiming "re-embedded
     # all vectors" while ALSO reporting docs that could not be re-embedded
-    # is self-contradictory, so the complete (`skipped == 0`) and
-    # incomplete (`skipped > 0`) cases get distinct, non-overlapping
-    # wording instead of one unconditional line plus a caveat.
-    if report.model_reembedded and report.skipped == 0:
+    # is self-contradictory, so the complete (`skipped == 0 AND
+    # embed_failed == 0`) and incomplete (`skipped > 0 OR embed_failed >
+    # 0`) cases get distinct, non-overlapping wording instead of one
+    # unconditional line plus a caveat. The success branch's gate MUST
+    # mirror `state.reindex`'s tag-persist gate exactly (`skipped == 0 AND
+    # embed_failed == 0`) -- reindex-embedding-resilience widened the
+    # tag-persist gate to also withhold on `embed_failed > 0`, so a
+    # `skipped == 0`-only success check here would print a false success
+    # while the tag was actually withheld (review correction, CRITICAL
+    # finding).
+    incomplete_count = report.skipped + report.embed_failed
+    if report.model_reembedded and incomplete_count == 0:
         typer.echo(
             "openkos reindex: re-embedded all vectors -- embedding model "
             f"changed ({previous_model_tag or 'unset'} -> "
@@ -2619,8 +2627,25 @@ def reindex(
         typer.echo(
             f"openkos reindex: embedding model changed ({previous_model_tag or 'unset'} "
             f"-> {cfg.embedding_model}); re-embedding all vectors -- INCOMPLETE: "
-            f"{report.skipped} doc{_plural(report.skipped)} could not be "
+            f"{incomplete_count} doc{_plural(incomplete_count)} could not be "
             "re-embedded, will retry next run."
+        )
+    # Actionable re-run notice (reindex-embedding-resilience): keys ONLY on
+    # `embed_failed` -- transient embed-EOF skips (retry budget exhausted at
+    # the OllamaClient layer) are self-healing, unlike the permanent
+    # `skipped` diagnostics above (unreadable/parse/decode failures a re-run
+    # will NOT fix). Deliberately NEVER keys on `skipped` alone, so the two
+    # skip kinds stay distinct on stderr, matching `ReindexReport.skipped`
+    # vs `embed_failed`'s separation. This only reaches an exit-0 run: the
+    # fatal ladder above (`OllamaUnavailable`/`OllamaModelNotFound`) exits 1
+    # before the summary is ever printed.
+    if report.embed_failed > 0:
+        typer.echo(
+            "openkos reindex: INCOMPLETE -- "
+            f"{report.embed_failed} doc{_plural(report.embed_failed)} could "
+            "not be embedded (transient failure). Run `openkos reindex` "
+            "again to complete it.",
+            err=True,
         )
 
     # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`
