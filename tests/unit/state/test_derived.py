@@ -236,3 +236,62 @@ def test_reindex_gate_force_writes_even_when_manifest_unchanged(
     derived.reindex_gate(bundle_dir, db_path, force=True, write=_fake_write)
 
     assert len(calls) == 1
+
+
+# --- is_lock_contention (reindex-lock-handling) -----------------------------
+
+
+def test_sqlite_operational_error_supports_manual_errorcode_assignment() -> None:
+    """Spike/decision test (task 1.1): confirms `sqlite_errorcode` is
+    settable and readable on a MANUALLY constructed `sqlite3.OperationalError`
+    on this interpreter (Python 3.13) -- this is what lets tests inject a
+    lock-contention failure at any write surface without a real concurrent
+    second connection. If this assumption ever regresses on a future
+    interpreter, the documented fallback is a real 2nd-connection `BEGIN
+    IMMEDIATE` + `busy_timeout=0` competing-lock scenario (design:
+    sdd/reindex-lock-handling)."""
+    exc = sqlite3.OperationalError("database is locked")
+    exc.sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+    assert exc.sqlite_errorcode == sqlite3.SQLITE_BUSY
+
+
+def test_is_lock_contention_true_for_sqlite_busy() -> None:
+    """`is_lock_contention` is `True` for `SQLITE_BUSY` (spec:
+    reindex-command -- lock discriminated by errorcode, not message text)."""
+    exc = sqlite3.OperationalError("database is locked")
+    exc.sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+    assert derived.is_lock_contention(exc) is True
+
+
+def test_is_lock_contention_true_for_sqlite_locked() -> None:
+    """`is_lock_contention` is `True` for `SQLITE_LOCKED` (a table-level
+    lock, distinct from `SQLITE_BUSY`'s database-level lock -- both count
+    as lock contention)."""
+    exc = sqlite3.OperationalError("database table is locked")
+    exc.sqlite_errorcode = sqlite3.SQLITE_LOCKED
+
+    assert derived.is_lock_contention(exc) is True
+
+
+def test_is_lock_contention_false_for_a_non_lock_operational_error() -> None:
+    """A non-lock `OperationalError` (e.g. `SQLITE_ERROR`, the generic
+    catch-all SQLite raises for something like a missing fts5 module) is
+    NOT lock contention -- discrimination must be by errorcode, never by
+    message substring (spec: A non-lock operational error is not
+    mislabeled as lock contention)."""
+    exc = sqlite3.OperationalError("no such module: fts5")
+    exc.sqlite_errorcode = sqlite3.SQLITE_ERROR
+
+    assert derived.is_lock_contention(exc) is False
+
+
+def test_is_lock_contention_false_when_errorcode_was_never_set() -> None:
+    """A manually-`raise`d `OperationalError` that never went through the
+    real `sqlite3` driver (e.g. a test double simulating an unrelated
+    failure) has no `sqlite_errorcode` attribute at all -- `is_lock_contention`
+    degrades to `False` rather than raising `AttributeError`."""
+    exc = sqlite3.OperationalError("some other failure")
+
+    assert derived.is_lock_contention(exc) is False

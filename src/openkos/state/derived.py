@@ -56,6 +56,39 @@ _SELECT_META_SQL = "SELECT value FROM meta WHERE key = ?"
 _UPSERT_META_SQL = "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)"
 
 
+def is_lock_contention(exc: sqlite3.OperationalError) -> bool:
+    """Return `True` when `exc` represents a SQLite lock-contention failure
+    (`SQLITE_BUSY`/`SQLITE_LOCKED`), discriminated by `exc.sqlite_errorcode`
+    -- NOT by matching the exception's message text, which is fragile and
+    would silently break on a SQLite build/locale that phrases the message
+    differently (reindex-lock-handling design, decision 1).
+
+    `sqlite_errorcode` is populated by the `sqlite3` module on the errors IT
+    raises; on Python 3.13 it is also reliably settable on a manually
+    constructed `OperationalError` (confirmed by
+    `tests/unit/state/test_derived.py`'s spike test), which is how tests
+    inject a lock-contention failure at any write surface without a real
+    concurrent second connection holding the lock.
+
+    A locked `vectors.db`/`fts.db`/`graph.db` write raises exactly this
+    shape; every reindex write surface (`cli/main.py`'s two error ladders)
+    and `state/fts.py`'s `CREATE VIRTUAL TABLE` catch reuse this ONE
+    predicate so a locked store is never misclassified (e.g. as
+    `FtsUnavailable`) and always gets the SAME uniform retry message.
+
+    Reads `sqlite_errorcode` via `getattr` (default `None`, never
+    `SQLITE_BUSY`/`SQLITE_LOCKED`) rather than direct attribute access: a
+    manually-`raise`d `OperationalError` that never went through the real
+    `sqlite3` driver (e.g. a test double simulating a DIFFERENT failure,
+    like `tests/unit/state/test_fts.py`'s no-fts5-module connection) has no
+    `sqlite_errorcode` attribute at all, and must degrade to `False` rather
+    than raising `AttributeError` here."""
+    return getattr(exc, "sqlite_errorcode", None) in (
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_LOCKED,
+    )
+
+
 def bundle_manifest_hash(bundle_dir: Path) -> str:
     """Return the sha256 hex digest cache key for `bundle_dir`'s current
     document set (derived-index-cache: Bundle-Manifest-Hash Cache Key).
