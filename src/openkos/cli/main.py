@@ -40,7 +40,7 @@ from openkos.resolution.adjudication import Verdict, adjudicate_candidates
 from openkos.resolution.candidates import Tier
 from openkos.resolution.edge_typing import suggest_relations
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
-from openkos.state import fts
+from openkos.state import derived, fts
 from openkos.state import reindex as reindex_module
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import (
@@ -61,6 +61,15 @@ _PREFLIGHT_TIMEOUT = 5.0
 # query, adjudicate, and suggest-relations -- kept as a single constant so
 # the three verbs cannot drift from each other in wording.
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
+
+# Uniform lock-contention message for `reindex`'s two error ladders
+# (vectors/fts and graph) -- a single source of truth so a locked
+# vectors.db/fts.db/graph.db always reads identically regardless of which
+# store hit the lock (reindex-lock-handling, decision 5).
+_LOCK_CONTENTION_MSG = (
+    "openkos reindex: failed -- another process is holding the workspace "
+    "lock (a concurrent reindex?); wait for it to finish, then try again."
+)
 
 
 @app.callback()
@@ -2481,7 +2490,14 @@ def reindex(
     exits 1 -- the SAME ordered ladder `query` uses (`OllamaUnavailable` →
     `OllamaModelNotFound` → a generic `(VecUnavailable, OllamaError)`
     fallback), with `VecUnavailable` substituted for `FtsUnavailable` (spec:
-    Error Ladder Mirrors query). Never alters `query`'s own behavior or
+    Error Ladder Mirrors query). A concurrent process holding a write lock
+    on `vectors.db`/`fts.db`/`graph.db` past `busy_timeout` (e.g. a
+    concurrent `reindex`) is ALSO caught -- at store open, `upsert_many`/the
+    end-of-run `commit`, or a store's `BEGIN IMMEDIATE` -- and reported with
+    the SAME uniform retry message across all three stores, discriminated
+    from any other operational failure by `state.derived.is_lock_contention`
+    (errorcode, never message text), never by a raw traceback
+    (reindex-lock-handling). Never alters `query`'s own behavior or
     `retrieval/answer.py` (spec: No Retrieval Consumer Introduced).
     """
     root = Path.cwd()
@@ -2531,6 +2547,24 @@ def reindex(
             err=True,
         )
         raise typer.Exit(code=1) from exc
+    # A lock-contention OperationalError (a concurrent process holding
+    # vectors.db/fts.db's write lock past busy_timeout) can be raised at
+    # ANY write surface inside the `with open_vector_store(...)` block
+    # above -- store open, `upsert_many`/the end-of-run `commit`, or FTS's
+    # `BEGIN IMMEDIATE` (propagated unchanged by `state/fts.py`'s errorcode
+    # discrimination) -- so this clause wraps the ENTIRE try, catching all
+    # three. Placed BEFORE the generic `(VecUnavailable, FtsUnavailable,
+    # OllamaError)` tuple below (reindex-lock-handling, decision 2): a
+    # non-lock `OperationalError` is deliberately RE-RAISED, not swallowed
+    # into a generic clean exit -- this stays strictly additive, matching
+    # this catch's ONLY documented job (lock contention), and preserves
+    # whatever pre-existing (uncaught) behavior a different operational
+    # failure already had.
+    except sqlite3.OperationalError as exc:
+        if derived.is_lock_contention(exc):
+            typer.echo(_LOCK_CONTENTION_MSG, err=True)
+            raise typer.Exit(code=1) from exc
+        raise
     # The two specific handlers above MUST precede this generic tuple, same
     # ordering rationale as `query`'s ladder: both `OllamaUnavailable` and
     # `OllamaModelNotFound` subclass `OllamaError`. `FtsUnavailable` joins
