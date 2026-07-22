@@ -1,72 +1,14 @@
-# Concept Volatility Specification
+# Delta for Concept Volatility
 
-## Purpose
-
-Classifies every concept into one of three fixed knowledge-volatility
-tiers — `static`, `slow`, `volatile` — so downstream freshness logic (the
-`lint` capability) can apply a stale window proportional to how quickly a
-concept's kind of knowledge decays, instead of one fixed global window for
-every document.
-
-## Non-Goals
-
-This spec does not define: LLM-suggested tier windows or an LLM-facing
-`suggest-volatility` verb (see the `volatility-suggestion` capability);
-contradiction detection (S3); a reconcile/write workflow (S4); any change to
-`freshness: snapshot` semantics, which remains an orthogonal skip flag,
-never a volatility signal.
-
-## Requirements
-
-### Requirement: Fixed Three-Tier Volatility Taxonomy
-
-The system MUST classify every resolvable concept into exactly one of three
-tiers: `static`, `slow`, `volatile`. No other tier value is valid.
-
-#### Scenario: Only the three defined tiers are valid
-
-- GIVEN any volatility resolution (per-concept, per-type, or fallback)
-- WHEN a tier is produced
-- THEN the tier is exactly one of `static`, `slow`, `volatile`
-
-### Requirement: Per-Concept `volatility` Frontmatter Override
-
-The system MUST support an optional `volatility:` frontmatter field on any
-concept, holding one of the three tier values, distinct from and orthogonal
-to `freshness`. WHEN absent, the field MUST NOT be treated as an error;
-resolution MUST fall through to the per-type default.
-
-#### Scenario: Explicit per-concept override is honored
-
-- GIVEN a concept with `volatility: volatile` whose type default is `slow`
-- WHEN its window is resolved
-- THEN the `volatile`-tier window is used, not the type default
-
-#### Scenario: Absent field falls through to type default
-
-- GIVEN a concept with no `volatility` field
-- WHEN its window is resolved
-- THEN resolution proceeds to the concept's per-type default tier
-
-### Requirement: Per-Type Default Volatility Registry
-
-Each `ObjectType` in the registry MUST carry a default volatility tier:
-`static` for `Place`, `Event`, `Decision`, `Source`; `slow` for `Concept`,
-`Entity`, `Person`, `Organization`; `volatile` for `Procedure`, `Project`.
-
-#### Scenario: Type default applies when no override is present
-
-- GIVEN a `Procedure` concept with no `volatility` field
-- WHEN its window is resolved
-- THEN the `volatile`-tier default for `Procedure` is used
+## ADDED Requirements
 
 ### Requirement: `type_tiers` Config Override Layer
 
 The system MUST support an optional `type_tiers:` map in `openkos.yaml`
 (concept-type-name → tier value), read-only, absent-default `{}`. An entry
-MUST be ignored — resolution falls through to the next precedence step,
-never raising — if EITHER its type name is unknown (absent from the
-registry) OR its tier value is not one of `static`, `slow`, `volatile`.
+whose type name is unknown or whose tier value is not one of `static`,
+`slow`, `volatile` MUST be ignored — resolution falls through to the next
+precedence step — and MUST NOT raise.
 
 #### Scenario: Valid `type_tiers` entry overrides the registry default
 
@@ -91,6 +33,8 @@ registry) OR its tier value is not one of `static`, `slow`, `volatile`.
 - THEN the result is identical to S1 behavior with no `type_tiers` step
   present
 
+## MODIFIED Requirements
+
 ### Requirement: Deterministic, Never-Raising Window Resolution
 
 Resolving a concept's effective volatility tier and window MUST follow the
@@ -101,6 +45,9 @@ injected clock, and config; it MUST NOT raise on an unknown type, an
 invalid `volatility` value, an invalid or unknown `type_tiers` entry, or
 missing config — each such case MUST degrade to the next step in the
 precedence chain.
+(Previously: precedence was per-concept `volatility` override → per-type
+registry default → global `freshness_window` fallback, with no
+config-layer override step.)
 
 #### Scenario: Unknown or invalid volatility degrades without raising
 

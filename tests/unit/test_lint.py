@@ -771,6 +771,7 @@ def _cfg(
     *,
     freshness_window: str = "7d",
     volatility_windows: object = None,
+    type_tiers: object = None,
 ) -> config.Config:
     return config.Config(
         model="qwen3:8b",
@@ -779,6 +780,7 @@ def _cfg(
         freshness_window=freshness_window,
         embedding_model="bge-m3",
         volatility_windows=({} if volatility_windows is None else volatility_windows),  # type: ignore[arg-type]
+        type_tiers=({} if type_tiers is None else type_tiers),  # type: ignore[arg-type]
     )
 
 
@@ -877,6 +879,39 @@ def test_resolve_windows_never_raises() -> None:
     lint.resolve_windows(cfg)
 
 
+# --- freshness-suggest-windows: resolve_windows(cfg) type_tiers guard ---
+
+
+def test_resolve_windows_type_tiers_passes_through_verbatim() -> None:
+    """A valid `type_tiers` map is threaded onto the resolved
+    `VolatilityWindows` verbatim."""
+    cfg = _cfg(type_tiers={"Person": "volatile"})
+
+    windows, notices = lint.resolve_windows(cfg)
+
+    assert windows.type_tiers == {"Person": "volatile"}
+    assert notices == []
+
+
+@pytest.mark.parametrize(
+    "bogus_map",
+    [None, [], "not-a-map", 42, ["Person", "volatile"]],
+)
+def test_resolve_windows_type_tiers_non_map_treated_as_empty(
+    bogus_map: object,
+) -> None:
+    """A `type_tiers` that is not a map at all (`null`, a list, a scalar)
+    degrades to `{}` on the resolved `VolatilityWindows`, mirroring
+    `volatility_windows`'s non-mapping guard (lint.py:212-213) -- never
+    raises."""
+    cfg = _cfg(type_tiers=bogus_map)
+
+    windows, notices = lint.resolve_windows(cfg)
+
+    assert windows.type_tiers == {}
+    assert notices == []
+
+
 # --- freshness-lint-v1: window_for_doc(doc, windows) precedence ---
 
 
@@ -916,3 +951,96 @@ def test_window_for_doc_precedence_table(
     doc = _doc("concepts/x", "body", type=doc_type, volatility=volatility)
 
     assert lint.window_for_doc(doc, _WINDOWS) == expected
+
+
+# --- freshness-suggest-windows: window_for_doc `type_tiers` override step ---
+
+
+def _windows_with_tiers(type_tiers: dict[str, str]) -> lint.VolatilityWindows:
+    return lint.VolatilityWindows(
+        slow=timedelta(days=90),
+        volatile=timedelta(days=7),
+        fallback=timedelta(days=7),
+        type_tiers=type_tiers,
+    )
+
+
+def test_window_for_doc_type_tiers_override_wins_over_registry_default() -> None:
+    """A valid `type_tiers` entry overrides the per-type registry default
+    when no per-concept `volatility` is present (concept-volatility spec,
+    ADDED requirement: `type_tiers` Config Override Layer)."""
+    windows = _windows_with_tiers({"Person": "volatile"})
+    doc = _doc("people/ada", "body", type="Person", volatility="")
+
+    # Person's registry default is "slow"; type_tiers overrides to "volatile".
+    assert lint.window_for_doc(doc, windows) == windows.volatile
+
+
+def test_window_for_doc_per_concept_volatility_still_wins_over_type_tiers() -> None:
+    """A per-concept `volatility` override still wins over a `type_tiers`
+    entry for the same type -- `type_tiers` sits BETWEEN the per-concept
+    override and the registry default in the precedence chain, never above
+    it."""
+    windows = _windows_with_tiers({"Person": "volatile"})
+    doc = _doc("people/ada", "body", type="Person", volatility="static")
+
+    assert lint.window_for_doc(doc, windows) is None
+
+
+def test_window_for_doc_type_tiers_invalid_tier_value_falls_through() -> None:
+    """A `type_tiers` entry whose value is not a member of
+    `types.VOLATILITY_TIERS` is ignored -- resolution falls through to the
+    per-type registry default, never raises."""
+    windows = _windows_with_tiers({"Person": "bogus-tier"})
+    doc = _doc("people/ada", "body", type="Person", volatility="")
+
+    # Person's registry default ("slow") applies; the invalid entry is ignored.
+    assert lint.window_for_doc(doc, windows) == windows.slow
+
+
+def test_window_for_doc_type_tiers_unknown_type_key_is_ignored() -> None:
+    """A `type_tiers` entry for a type absent from the registry never
+    matches any doc, and never raises -- resolution for an unregistered
+    type falls straight through to the global fallback, same as with no
+    `type_tiers` at all."""
+    windows = _windows_with_tiers({"UnknownTypeName": "slow"})
+    doc = _doc("x/y", "body", type="UnknownTypeName", volatility="")
+
+    assert lint.window_for_doc(doc, windows) == windows.fallback
+
+
+def test_window_for_doc_type_tiers_resolving_to_static_is_never_flagged() -> None:
+    """A `type_tiers` entry resolving to `static` is never flagged stale,
+    identical to any other `static` resolution (concept-volatility spec
+    scenario: "`type_tiers` resolving to `static` is never flagged")."""
+    windows = _windows_with_tiers({"Person": "static"})
+    doc = _doc("people/ada", "body", type="Person", volatility="")
+
+    assert lint.window_for_doc(doc, windows) is None
+
+
+def test_window_for_doc_absent_type_tiers_reproduces_s1_precedence_table() -> None:
+    """Regression pin: a `VolatilityWindows` built with no `type_tiers`
+    (default `{}`) reproduces byte-identical S1 precedence for every case in
+    `test_window_for_doc_precedence_table` (concept-volatility spec
+    scenario: "Absent `type_tiers` reproduces exact S1 behavior")."""
+    windows = lint.VolatilityWindows(
+        slow=timedelta(days=90), volatile=timedelta(days=7), fallback=timedelta(days=7)
+    )
+    assert windows.type_tiers == {}
+    cases = [
+        ("Concept", "volatile", windows.volatile),
+        ("Procedure", "static", None),
+        ("Procedure", "", windows.volatile),
+        ("Concept", "", windows.slow),
+        ("Place", "", None),
+        ("Person", "not-a-tier", windows.slow),
+        ("", "", windows.fallback),
+        ("SomeUnknownType", "", windows.fallback),
+        ("Event", "", None),
+        ("Source", "", None),
+        ("Decision", "", None),
+    ]
+    for doc_type, volatility, expected in cases:
+        doc = _doc("concepts/x", "body", type=doc_type, volatility=volatility)
+        assert lint.window_for_doc(doc, windows) == expected

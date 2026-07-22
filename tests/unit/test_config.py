@@ -588,3 +588,44 @@ def test_read_config_volatility_windows_passes_through_verbatim(
     result = config.read_config(tmp_path)
 
     assert result.volatility_windows == {"slow": "30d", "volatile": "3d"}
+
+
+# --- freshness-suggest-windows: type_tiers config override layer (config.py) ---
+
+
+def test_read_config_type_tiers_defaults_to_empty_map_when_absent(
+    tmp_path: Path,
+) -> None:
+    """`type_tiers` absent from `openkos.yaml` falls back to `{}` --
+    unknown/invalid-entry validation and precedence stay in
+    `lint.window_for_doc`, not here (design: "raw passthrough only")."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.type_tiers == {}
+
+
+def test_read_config_type_tiers_falls_back_to_empty_map_on_explicit_null(
+    tmp_path: Path,
+) -> None:
+    """A `type_tiers: null` (present but explicit null) falls back to `{}`,
+    mirroring every other field's `is not None` fallback."""
+    (tmp_path / "openkos.yaml").write_text("type_tiers: null\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.type_tiers == {}
+
+
+def test_read_config_type_tiers_passes_through_verbatim(tmp_path: Path) -> None:
+    """A present `type_tiers` map passes through verbatim -- unknown-type/
+    invalid-tier validation happens in `lint.window_for_doc`, not here."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_tiers:\n  Person: volatile\n  Project: static\n",
+        encoding="utf-8",
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.type_tiers == {"Person": "volatile", "Project": "static"}
