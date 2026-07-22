@@ -80,6 +80,7 @@ def test_reindex_successful_run_prints_summary_and_exits_zero(
     assert "2 cache-hit" in result.stdout
     assert "1 pruned" in result.stdout
     assert "0 skipped" in result.stdout
+    assert "0 embed-failed" in result.stdout
 
 
 def test_reindex_summary_notes_when_prune_pass_was_skipped(
@@ -242,6 +243,7 @@ def test_reindex_embed_failed_prints_actionable_rerun_notice(
     result = runner.invoke(app, ["reindex"])
 
     assert result.exit_code == 0
+    assert "1 embed-failed" in result.stdout
     assert "incomplete" in result.stderr.lower()
     assert "openkos reindex" in result.stderr.lower()
 
@@ -835,6 +837,7 @@ def test_reindex_summary_and_prune_skipped_notice_still_surface_when_graph_write
     assert "1 cache-hit" in result.stdout
     assert "0 pruned" in result.stdout
     assert "0 skipped" in result.stdout
+    assert "0 embed-failed" in result.stdout
     assert "prune pass" in result.stdout.lower()
     assert "skipped" in result.stdout.lower().split("prune pass")[1]
     assert "graph" in result.stderr

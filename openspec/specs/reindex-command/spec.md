@@ -63,16 +63,18 @@ document, reducing write contention among the three on-disk writers.
 on-disk `vectors.db`, FTS, and graph derived stores under `.openkos/`
 (`open_vector_store` plus the FTS/graph store openers), invoke the
 `state/reindex.py` orchestrator to write all three, then print a summary of
-embedded/cache-hit/pruned/skipped counts — including whether the prune pass
-was skipped due to a walk error — and exit 0.
+embedded/cache-hit/pruned/skipped/embed-failed counts — including whether the
+prune pass was skipped due to a walk error — and exit 0.
 (Previously: `reindex` opened and wrote only `vectors.db`; the summary line
-carried no prune-skip indicator.)
+carried no prune-skip indicator, and `embed_failed` was surfaced solely via
+the stderr re-run notice, not the primary stdout tally.)
 
 #### Scenario: Successful run prints a summary and exits 0
 
 - GIVEN an initialized workspace with a reachable Ollama server
 - WHEN `openkos reindex` runs
-- THEN it prints embedded/cache-hit/pruned/skipped counts and exits 0
+- THEN it prints embedded/cache-hit/pruned/skipped/embed-failed counts and
+  exits 0
 
 #### Scenario: Run outside a workspace refuses
 
