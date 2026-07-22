@@ -155,10 +155,11 @@ def test_reindex_summary_notes_when_model_reembed_left_docs_unhealed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A model-tag-forced run that STILL has `skipped > 0` surfaces a
-    second line making the CRITICAL-fix's repeated-forcing case visible:
-    the tag was deliberately not persisted, so the next run will force the
-    same full re-embed again (review correction, CRITICAL + WARNING
-    findings)."""
+    non-contradictory summary: it must NOT claim "re-embedded all vectors"
+    (unqualified) while ALSO saying some docs could not be re-embedded --
+    instead it says the re-embed is incomplete and will retry next run
+    (review correction round 2, WARNING finding: self-contradictory
+    wording)."""
     _init_workspace(tmp_path, monkeypatch)
     fake_report = ReindexReport(
         embedded=1, cache_hits=0, pruned=0, skipped=1, model_reembedded=True
@@ -172,6 +173,31 @@ def test_reindex_summary_notes_when_model_reembed_left_docs_unhealed(
     assert result.exit_code == 0
     assert "not" in result.stdout.lower()
     assert "next" in result.stdout.lower()
+    assert "re-embedded all vectors" not in result.stdout.lower()
+    assert "incomplete" in result.stdout.lower()
+
+
+def test_reindex_summary_notes_when_model_reembed_left_every_doc_unhealed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The most extreme unhealed case (the WHOLE bundle was transiently
+    unreadable this run: `embedded=0`, `skipped=` every discovered doc)
+    must still avoid claiming "re-embedded all vectors" -- the wording
+    stays accurate even when literally nothing was re-embedded (review
+    correction round 2, WARNING finding)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=0, cache_hits=0, pruned=0, skipped=3, model_reembedded=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "re-embedded all vectors" not in result.stdout.lower()
+    assert "incomplete" in result.stdout.lower()
 
 
 def test_reindex_summary_omits_model_tag_note_on_an_ordinary_run(

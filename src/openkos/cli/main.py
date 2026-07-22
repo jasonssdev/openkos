@@ -2568,24 +2568,26 @@ def reindex(
     # Model-tag force observability (review correction, WARNING finding):
     # a model-tag mismatch triggers an operationally heavy full re-embed
     # that is otherwise indistinguishable from an ordinary large content
-    # change -- name the old and new tag explicitly. When `skipped > 0` on
-    # such a run, the tag was deliberately NOT persisted (CRITICAL finding
-    # fix, `state/reindex.py::reindex`), so also say so: the NEXT run will
-    # force the same full re-embed again until one run finally covers
-    # every doc.
-    if report.model_reembedded:
+    # change -- name the old and new tag explicitly. The wording must stay
+    # ACCURATE to whether the re-embed actually covered every doc this run
+    # (round-2 review correction, WARNING finding): claiming "re-embedded
+    # all vectors" while ALSO reporting docs that could not be re-embedded
+    # is self-contradictory, so the complete (`skipped == 0`) and
+    # incomplete (`skipped > 0`) cases get distinct, non-overlapping
+    # wording instead of one unconditional line plus a caveat.
+    if report.model_reembedded and report.skipped == 0:
         typer.echo(
             "openkos reindex: re-embedded all vectors -- embedding model "
             f"changed ({previous_model_tag or 'unset'} -> "
             f"{cfg.embedding_model})."
         )
-        if report.skipped:
-            typer.echo(
-                "openkos reindex: the embedding-model tag was NOT updated "
-                f"-- {report.skipped} doc{_plural(report.skipped)} could "
-                "not be re-embedded this run, so the next reindex will "
-                "force the same full re-embed again."
-            )
+    elif report.model_reembedded:
+        typer.echo(
+            f"openkos reindex: embedding model changed ({previous_model_tag or 'unset'} "
+            f"-> {cfg.embedding_model}); re-embedding all vectors -- INCOMPLETE: "
+            f"{report.skipped} doc{_plural(report.skipped)} could not be "
+            "re-embedded, will retry next run."
+        )
 
     # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`
     # itself: `state/reindex.py` is canonical-layer code and must not import
