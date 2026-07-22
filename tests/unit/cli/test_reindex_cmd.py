@@ -191,6 +191,34 @@ def test_reindex_omitted_force_defaults_to_false(
     assert kwargs["force"] is False
 
 
+def test_reindex_passes_configured_embedding_model_as_model_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reindex` forwards the workspace's configured `embedding_model` as
+    `model_tag` into `state.reindex.reindex(...)` (MVP-2 follow-up #5;
+    spec: reindex-command `reindex()` Accepts An Explicit Model Tag
+    Parameter -- CLI wires `cfg.embedding_model` into `reindex`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_embedding_model = "custom-embed:test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"embedding_model: {configured_embedding_model}\n", encoding="utf-8"
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_reindex(*args: object, **kwargs: object) -> ReindexReport:
+        captured["kwargs"] = kwargs
+        return ReindexReport(embedded=0, cache_hits=0, pruned=0, skipped=0)
+
+    monkeypatch.setattr("openkos.cli.main.reindex_module.reindex", _recording_reindex)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["model_tag"] == configured_embedding_model
+
+
 def test_reindex_ollama_unavailable_maps_to_exit_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

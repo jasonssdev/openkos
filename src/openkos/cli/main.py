@@ -2456,17 +2456,20 @@ def reindex(
     Thin wiring only (spec: CLI Verb Is Thin Wiring): `require_workspace` →
     `read_config` → `open_vector_store(vectors_db_path)` →
     `state.reindex.reindex(bundle_dir, db, embedder, force=force,
-    fts_db_path=...)` → `sqlite_graph.reindex_graph(bundle_dir,
-    graph_db_path, force=force)` → print a summary of
-    embedded/cache-hit/pruned/skipped counts and exit 0. The vector/FTS
-    orchestrator (`state/reindex.py`) owns the bundle walk, the
-    `content_hash` cache gate, the prune pass, and the FTS manifest gate;
-    the graph gate (`openkos.graph.sqlite_graph.reindex_graph`) is called
-    SEPARATELY rather than from inside `state/reindex.py`, because
-    `state/reindex.py` is canonical-layer code and must not import
-    `openkos.graph` (derived layer) -- this command is the entry-layer seam
-    that ties both together so a single invocation still writes all three
-    stores. This command owns none of the gate/rebuild logic itself.
+    fts_db_path=..., model_tag=cfg.embedding_model)` →
+    `sqlite_graph.reindex_graph(bundle_dir, graph_db_path, force=force)` →
+    print a summary of embedded/cache-hit/pruned/skipped counts and exit 0.
+    The vector/FTS orchestrator (`state/reindex.py`) owns the bundle walk,
+    the `content_hash` cache gate, the prune pass, the FTS manifest gate,
+    AND the embedding-model tag gate (MVP-2 follow-up #5: a stored tag
+    absent or different from `cfg.embedding_model` forces one full
+    re-embed, independent of `--force`); the graph gate
+    (`openkos.graph.sqlite_graph.reindex_graph`) is called SEPARATELY
+    rather than from inside `state/reindex.py`, because `state/reindex.py`
+    is canonical-layer code and must not import `openkos.graph` (derived
+    layer) -- this command is the entry-layer seam that ties both together
+    so a single invocation still writes all three stores. This command
+    owns none of the gate/rebuild logic itself.
 
     Embeds through a local Ollama server running the model configured as
     `embedding_model` in `openkos.yaml` (default `qwen3-embedding:0.6b`).
@@ -2503,6 +2506,7 @@ def reindex(
                 embedder,
                 force=force,
                 fts_db_path=layout.fts_db_path,
+                model_tag=cfg.embedding_model,
             )
     except OllamaUnavailable as exc:
         typer.echo(
