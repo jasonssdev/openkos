@@ -5,6 +5,8 @@ freshness_window: 7d      # age after which a stamp is flagged for re-observatio
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
+# type_tiers:             # per-concept-type volatility tier overrides (overrides
+#   Person: volatile      # the built-in registry default; see docs/adr/0007)
 
 # Layout — where the engine keeps things, relative to this file.
 raw: raw/                 # immutable sources; any extension, never rewritten

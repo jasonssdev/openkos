@@ -342,6 +342,13 @@ class Config:
     fallback. A present map passes through verbatim -- duration-grammar
     parsing and the `static`/`slow`/`volatile` precedence stay in
     `lint.resolve_windows`, not here."""
+    type_tiers: dict[str, str]
+    """Raw `type_tiers` passthrough (freshness-suggest-windows,
+    `concept-volatility` spec): `{}` when absent or explicitly null,
+    mirroring `volatility_windows`'s `is not None` fallback. A present map
+    passes through verbatim -- unknown-type/invalid-tier validation and the
+    override step in the `volatility`/`type_tiers`/registry-default/fallback
+    precedence stay in `lint.window_for_doc`, not here."""
 
 
 def read_config(root: Path) -> Config:
@@ -377,6 +384,7 @@ def read_config(root: Path) -> Config:
     freshness_window = raw.get("freshness_window")
     embedding_model = raw.get("embedding_model")
     volatility_windows = raw.get("volatility_windows")
+    type_tiers = raw.get("type_tiers")
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,
@@ -396,4 +404,5 @@ def read_config(root: Path) -> Config:
         volatility_windows=(
             volatility_windows if volatility_windows is not None else {}
         ),
+        type_tiers=(type_tiers if type_tiers is not None else {}),
     )

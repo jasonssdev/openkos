@@ -14,7 +14,7 @@ function here is deterministic and testable with fixed inputs.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
 
@@ -186,6 +186,24 @@ class VolatilityWindows:
     unresolvable (unknown or absent) AND it carries no per-concept
     `volatility` override -- the same window MVP-1 applied uniformly."""
 
+    type_tiers: dict[str, str] = field(default_factory=dict)
+    """`type_tiers` config override map (freshness-suggest-windows,
+    `concept-volatility` spec ADDED requirement), already guarded to a
+    mapping by `resolve_windows` (mirroring the `volatility_windows`
+    non-mapping guard). Read by `window_for_doc`'s new precedence step,
+    which sits between the per-concept `volatility` override and the
+    per-type registry default: a `type_tiers[doc.type]` value that is a
+    `str` member of `types.VOLATILITY_TIERS` overrides the registry
+    default; an unknown `doc.type` key, a non-`str` value (e.g. a
+    list/dict from a hand-edited `openkos.yaml` -- unhashable against the
+    `VOLATILITY_TIERS` frozenset), or an invalid tier value is ignored --
+    `.get` never raises on a missing key, and an `isinstance(str)` guard
+    runs BEFORE the `VOLATILITY_TIERS` membership check so a non-`str`
+    value never reaches (and never raises against) that `frozenset`
+    `in`/`not in` test. Defaults to `{}` so every construction that omits
+    it (including every pre-existing test fixture) reproduces exact S1
+    precedence unchanged."""
+
 
 def resolve_windows(cfg: config.Config) -> tuple[VolatilityWindows, list[str]]:
     """Resolve `cfg.volatility_windows`/`cfg.freshness_window` to a
@@ -203,14 +221,20 @@ def resolve_windows(cfg: config.Config) -> tuple[VolatilityWindows, list[str]]:
     mapping at all (`None`, a list, a scalar -- e.g. from hand-edited
     `openkos.yaml`) is treated as an empty map, so every tier falls to its
     packaged default rather than raising an `AttributeError` on `.get`.
+    `cfg.type_tiers` (freshness-suggest-windows) gets the SAME non-mapping
+    guard and is threaded onto the result verbatim -- validating individual
+    entries (unknown type key, invalid tier value) is `window_for_doc`'s
+    job, not this function's.
     """
-    # `cfg.volatility_windows` is typed `dict[str, str]`, but a hand-edited
-    # `openkos.yaml` can hold a non-mapping at runtime (e.g. a list or a bare
-    # scalar) -- widen to `object` first so the `isinstance` runtime guard
-    # below is not mypy-redundant against the (merely aspirational) static
-    # type.
+    # `cfg.volatility_windows`/`cfg.type_tiers` are typed `dict[str, str]`,
+    # but a hand-edited `openkos.yaml` can hold a non-mapping at runtime
+    # (e.g. a list or a bare scalar) -- widen to `object` first so the
+    # `isinstance` runtime guards below are not mypy-redundant against the
+    # (merely aspirational) static type.
     raw_windows: object = cfg.volatility_windows
     raw_map = raw_windows if isinstance(raw_windows, dict) else {}
+    raw_type_tiers: object = cfg.type_tiers
+    type_tiers_map = raw_type_tiers if isinstance(raw_type_tiers, dict) else {}
     notices: list[str] = []
     slow_window, slow_notice = resolve_window(
         raw_map.get("slow", config.DEFAULT_VOLATILITY_WINDOWS["slow"])
@@ -223,26 +247,61 @@ def resolve_windows(cfg: config.Config) -> tuple[VolatilityWindows, list[str]]:
         if notice is not None:
             notices.append(notice)
     windows = VolatilityWindows(
-        slow=slow_window, volatile=volatile_window, fallback=fallback_window
+        slow=slow_window,
+        volatile=volatile_window,
+        fallback=fallback_window,
+        type_tiers=type_tiers_map,
     )
     return windows, notices
 
 
 def window_for_doc(doc: "LintDoc", windows: VolatilityWindows) -> timedelta | None:
     """Resolve `doc`'s stale-stamp window, or `None` if it must never be
-    flagged (freshness-lint-v1, load-bearing precedence).
+    flagged (freshness-lint-v1 + freshness-suggest-windows, load-bearing
+    precedence).
 
     Tier precedence: (1) `doc.volatility.strip()`, if a member of
     `types.VOLATILITY_TIERS` -- the per-concept override always wins; (2)
-    else `types.TYPE_TO_DEFAULT_VOLATILITY.get(doc.type)` -- the per-type
-    registry default; (3) else the global fallback tier. An unknown or
-    absent `volatility` value degrades silently to step 2, exactly like an
-    unknown or absent `type` degrades silently to step 3 -- neither ever
-    raises. `static` (reached via override or type default) resolves to
-    `None`; `slow`/`volatile` resolve to their `windows` entry; the
-    fallback tier resolves to `windows.fallback`.
+    else `windows.type_tiers.get(doc.type)`, if `doc.type` is itself a
+    REGISTERED type (a key of `types.TYPE_TO_DEFAULT_VOLATILITY`) AND the
+    looked-up value is a `str` member of `types.VOLATILITY_TIERS` -- the
+    config `type_tiers` override (freshness-suggest-windows,
+    `concept-volatility` spec ADDED requirement: an entry is ignored if
+    its type name is unknown, its tier value is invalid, OR its tier
+    value is not even a `str` -- e.g. a hand-edited `openkos.yaml` holding
+    a list/dict/int/bool/None -- so all three conditions are checked here,
+    not just tier-value validity); (3) else
+    `types.TYPE_TO_DEFAULT_VOLATILITY.get(doc.type)` -- the per-type
+    registry default; (4) else the global fallback tier. An unknown or
+    absent `volatility` value degrades silently to step 2, an unregistered
+    `doc.type`, a non-`str` `type_tiers` value (list/dict/int/bool/None,
+    including unhashable ones that would otherwise raise `TypeError`
+    against the `VOLATILITY_TIERS` frozenset), or an invalid tier value in
+    `type_tiers` degrades silently to step 3, and an unknown or absent
+    `type` degrades silently to step 4 -- none of these degrade paths ever
+    raises. `static` (reached via
+    override, `type_tiers`, or type default) resolves to `None`;
+    `slow`/`volatile` resolve to their `windows` entry; the fallback tier
+    resolves to `windows.fallback`.
     """
     tier = doc.volatility.strip()
+    if (
+        tier not in types.VOLATILITY_TIERS
+        and doc.type in types.TYPE_TO_DEFAULT_VOLATILITY
+    ):
+        # `windows.type_tiers` is typed `dict[str, str]`, but a hand-edited
+        # `openkos.yaml` can hold a non-string value (unhashable list/dict,
+        # or a hashable int/bool/None) at runtime -- widen to `object`
+        # first so the `isinstance` guard below is not mypy-redundant
+        # against the (merely aspirational) static type, mirroring
+        # `resolve_windows`'s same widen-then-guard pattern above.
+        candidate_tier: object = windows.type_tiers.get(doc.type, "")
+        # Guard with `isinstance` BEFORE the `VOLATILITY_TIERS` membership
+        # check below, since `in`/`not in` against a `frozenset` raises
+        # `TypeError` on an unhashable value instead of degrading. A
+        # non-`str` candidate degrades to `""`, which falls through to the
+        # registry default exactly like any other invalid tier value.
+        tier = candidate_tier if isinstance(candidate_tier, str) else ""
     if tier not in types.VOLATILITY_TIERS:
         tier = types.TYPE_TO_DEFAULT_VOLATILITY.get(doc.type, "")
     if tier == "static":
