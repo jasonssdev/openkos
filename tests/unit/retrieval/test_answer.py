@@ -26,7 +26,7 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import EMBED_DIM, Message
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.ollama import OllamaError, OllamaUnavailable
 from openkos.retrieval import answer as answer_mod
 from openkos.retrieval import fusion, graph_retrieve
 from openkos.retrieval.fusion import GraphHit
@@ -109,13 +109,18 @@ class _SpyFtsIndex:
 class _FakeEmbedder:
     """A structural `Embedder`: records every `embed()` call's texts, returns
     a fixed `EMBED_DIM`-float vector per input (exact Protocol signature,
-    Engram #1363 -- `Sequence[str]`, never narrowed to `list[str]`)."""
+    Engram #1363 -- `Sequence[str]`, never narrowed to `list[str]`). Raises
+    `raises` instead, if set (never both) -- mirrors `_FakeVectorStore`'s
+    `raises` seam, used to exercise the question-embed dense-degrade path."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, raises: Exception | None = None) -> None:
         self.calls: list[list[str]] = []
+        self._raises = raises
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         self.calls.append(list(texts))
+        if self._raises is not None:
+            raise self._raises
         return [[0.0] * EMBED_DIM for _ in texts]
 
 
@@ -884,6 +889,40 @@ def test_vector_store_query_raises_sqlite_error_degrades_to_fts_only(
     assert result.dense_degraded is True
     assert result.dense_hit_count == 0
     assert result.llm_invoked is True
+
+
+def test_question_embed_ollama_error_degrades_to_fts_only(tmp_path: Path) -> None:
+    """`embedder.embed([question])` raising an `OllamaError`-family exception
+    (the flaky embedding path) degrades to FTS-only fusion, sets
+    `dense_degraded=True`, and never raises from `answer` -- the caller
+    (`query`) still exits 0 (spec: query-answer Dense Retrieval Degrades To
+    FTS-Only -- Question-embed OllamaError degrades to FTS-only, not exit
+    1)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    llm = _FakeLLM(reply="fts only reply")
+    embedder = _FakeEmbedder(raises=OllamaError("EOF mid-embed"))
+    vector_store = _FakeVectorStore()
+
+    with fts.build_index(bundle_dir) as idx:
+        result = answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            embedder=embedder,
+            vector_store=vector_store,
+            fts_index=idx,
+        )
+
+    assert result.dense_degraded is True
+    assert result.dense_hit_count == 0
+    assert result.llm_invoked is True
+    assert result.answer == "fts only reply"
+    assert vector_store.calls == []  # query() never reached -- embed failed first
 
 
 def test_cold_store_vector_store_none_degrades_cleanly(tmp_path: Path) -> None:

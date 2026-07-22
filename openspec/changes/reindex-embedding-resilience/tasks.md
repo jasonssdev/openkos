@@ -61,9 +61,9 @@ Chain strategy: pending
 
 ## Phase 5: Query-Side Dense Degrade On `OllamaError` (D4)
 
-- [ ] 5.1 RED: `test_answer.py` — `_dense_search` question-embed raising `OllamaError` returns `([], True)`, `dense_degraded=True`, no raise.
-- [ ] 5.2 RED: regression — `llm.chat`'s `OllamaError` still propagates unswallowed elsewhere.
-- [ ] 5.3 GREEN: `retrieval/answer.py:~236` — import `OllamaError`, add to `_dense_search`'s except tuple.
+- [x] 5.1 RED: `test_answer.py` — `_dense_search` question-embed raising `OllamaError` returns `([], True)`, `dense_degraded=True`, no raise.
+- [x] 5.2 Verify: regression — `llm.chat`'s `OllamaError` still propagates unswallowed elsewhere (covered by existing `test_llm_chat_error_propagates_unswallowed`, stayed green throughout — no new test needed, no edit).
+- [x] 5.3 GREEN: `retrieval/answer.py:~236` — import `OllamaError`, add to `_dense_search`'s except tuple.
 
 ## Phase 6: Integration, Docs Verify, Full Gate
 

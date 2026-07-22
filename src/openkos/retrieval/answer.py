@@ -53,6 +53,7 @@ from typing import Literal
 
 from openkos.graph.base import GraphStore
 from openkos.llm.base import Embedder, LLMBackend, Message
+from openkos.llm.ollama import OllamaError
 from openkos.model import okf
 from openkos.retrieval import fusion, graph_retrieve, pool
 from openkos.state import fts
@@ -224,8 +225,12 @@ def _dense_search(
 
     Degrades to `([], True)` -- FTS-only fusion, `dense_degraded=True` --
     whenever dense retrieval cannot proceed this call: `embedder` or
-    `vector_store` absent (e.g. a cold store the CLI passes as `None`), or a
-    `VecUnavailable`/read-path `sqlite3.Error` raised by `vector_store.query`.
+    `vector_store` absent (e.g. a cold store the CLI passes as `None`), a
+    `VecUnavailable`/read-path `sqlite3.Error` raised by `vector_store.query`,
+    OR an `OllamaError`-family exception raised while embedding the question
+    (`embedder.embed([question])`) -- reindex-embedding-resilience: a flaky
+    embedding path degrades the QUESTION embed the same way a flaky vector
+    read already degrades, rather than aborting the whole `query` call (D4).
     Never raises; only ever called with a non-empty/whitespace `question`.
     """
     if embedder is None or vector_store is None:
@@ -233,7 +238,7 @@ def _dense_search(
     try:
         embedding = embedder.embed([question])[0]
         return vector_store.query(embedding, k=pool_limit), False
-    except (VecUnavailable, sqlite3.Error):
+    except (VecUnavailable, sqlite3.Error, OllamaError):
         return [], True
 
 
