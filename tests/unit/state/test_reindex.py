@@ -661,3 +661,395 @@ def test_reindex_commits_vectors_exactly_once_when_both_embedding_and_pruning(
     assert report.embedded == 1
     assert report.pruned == 1
     assert set(hashes) == {"concepts/new"}
+
+
+# --- Phase 8 (MVP-2 follow-up #5): embedding-model tag gate ------------------
+
+
+def test_reindex_model_tag_mismatch_forces_full_reembed_and_persists_new_tag(
+    tmp_path: Path,
+) -> None:
+    """A stored `embedding_model` tag that no longer matches the CURRENT
+    `model_tag` param forces a full re-embed of every discovered concept
+    this run (bypassing the content_hash cache entirely), and the new tag
+    is persisted (spec: reindex-command Embedding-Model Tag Gate Forces
+    Full Re-Embed On Mismatch)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="qwen3-embedding:0.6b"
+        )
+        hashes_before = db.meta_hashes()
+
+        embedder = _FakeEmbedder()
+        report = reindex.reindex(bundle_dir, db, embedder, model_tag="nomic-embed-text")
+        stored_tag = db.read_model_tag()
+        hashes_after = db.meta_hashes()
+
+    assert report.embedded == 2
+    assert report.cache_hits == 0
+    assert embedder.call_count == 1
+    assert stored_tag == "nomic-embed-text"
+    assert hashes_after == hashes_before  # same content_hash values, re-embedded anyway
+
+
+def test_reindex_absent_model_tag_forces_one_reembed_then_self_heals(
+    tmp_path: Path,
+) -> None:
+    """A pre-follow-up-#5 `vectors.db` (no `embedding_model` row at all)
+    forces exactly ONE full re-embed on the FIRST `reindex()` call that
+    passes a `model_tag`, then self-heals: the SECOND call with the SAME
+    `model_tag` is a normal incremental (cache-hit) run (spec:
+    reindex-command -- absent tag forces one re-embed then self-heals)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        assert db.read_model_tag() is None
+
+        first_embedder = _FakeEmbedder()
+        first_report = reindex.reindex(
+            bundle_dir, db, first_embedder, model_tag="qwen3-embedding:0.6b"
+        )
+
+        second_embedder = _FakeEmbedder()
+        second_report = reindex.reindex(
+            bundle_dir, db, second_embedder, model_tag="qwen3-embedding:0.6b"
+        )
+
+    assert first_report.embedded == 1
+    assert first_report.cache_hits == 0
+    assert second_report.embedded == 0
+    assert second_report.cache_hits == 1
+
+
+def test_reindex_matching_model_tag_leaves_content_hash_gate_unchanged(
+    tmp_path: Path,
+) -> None:
+    """A `model_tag` that ALREADY matches the stored tag leaves the existing
+    content_hash cache-hit/re-embed behavior completely unchanged: an
+    unchanged doc is still a cache-hit, zero `Embedder` calls (spec:
+    reindex-command Content-Hash Cache Gate, unmodified scenario)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="qwen3-embedding:0.6b"
+        )
+
+        embedder = _FakeEmbedder()
+        report = reindex.reindex(
+            bundle_dir, db, embedder, model_tag="qwen3-embedding:0.6b"
+        )
+
+    assert report.embedded == 0
+    assert report.cache_hits == 1
+    assert embedder.call_count == 0
+
+
+def test_reindex_model_tag_none_stays_inert_for_back_compat(tmp_path: Path) -> None:
+    """Omitting `model_tag` (the default `None`) makes the tag gate a pure
+    no-op: no forced re-embed, no tag ever written -- every pre-follow-up-#5
+    caller's behavior is completely unchanged (spec: reindex() Accepts An
+    Explicit Model Tag Parameter -- `None` default preserves back-compat)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder())
+
+        embedder = _FakeEmbedder()
+        report = reindex.reindex(bundle_dir, db, embedder)
+        stored_tag = db.read_model_tag()
+
+    assert report.embedded == 0
+    assert report.cache_hits == 1
+    assert embedder.call_count == 0
+    assert stored_tag is None
+
+
+def test_reindex_model_tag_write_shares_the_single_commit_per_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Persisting the new `embedding_model` tag on a mismatch shares the
+    SAME single commit the embed batch already uses -- not a second,
+    separate commit (Slice 5 single-commit-per-run contract, extended to
+    cover the tag write too)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        commit_calls = 0
+        original_commit = db.commit
+
+        def _counting_commit() -> None:
+            nonlocal commit_calls
+            commit_calls += 1
+            original_commit()
+
+        monkeypatch.setattr(db, "commit", _counting_commit)
+
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="qwen3-embedding:0.6b"
+        )
+        stored_tag = db.read_model_tag()
+
+    assert commit_calls == 1
+    assert stored_tag == "qwen3-embedding:0.6b"
+
+
+def test_reindex_empty_bundle_with_absent_tag_still_persists_the_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EMPTY bundle (nothing to embed, nothing to prune) still persists
+    the `model_tag` when none was stored before -- the broadened commit
+    condition (`to_embed or to_prune or tag_written`) covers this edge case
+    the plain `to_embed or to_prune` check would otherwise miss."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        commit_calls = 0
+        original_commit = db.commit
+
+        def _counting_commit() -> None:
+            nonlocal commit_calls
+            commit_calls += 1
+            original_commit()
+
+        monkeypatch.setattr(db, "commit", _counting_commit)
+
+        report = reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="qwen3-embedding:0.6b"
+        )
+        stored_tag = db.read_model_tag()
+
+    assert report.embedded == 0
+    assert commit_calls == 1
+    assert stored_tag == "qwen3-embedding:0.6b"
+
+
+def test_reindex_model_tag_mismatch_does_not_trigger_fts_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `model_tag` mismatch that forces a full VECTOR re-embed does NOT
+    trigger an FTS rebuild -- the FTS gate stays keyed purely on the bundle
+    manifest hash, completely independent of the embedding model (design D5
+    -- Slice-5 separation, PINNED; reindex-command: model-tag gate lives
+    ONLY in the vector pass)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    vectors_db_path = tmp_path / ".openkos" / "vectors.db"
+    fts_db_path = tmp_path / ".openkos" / "fts.db"
+
+    with vectorstore.open_vector_store(vectors_db_path) as db:
+        reindex.reindex(
+            bundle_dir,
+            db,
+            _FakeEmbedder(),
+            fts_db_path=fts_db_path,
+            model_tag="qwen3-embedding:0.6b",
+        )
+        fts_bytes_before = fts_db_path.read_bytes()
+
+        reindex.reindex(
+            bundle_dir,
+            db,
+            _FakeEmbedder(),
+            fts_db_path=fts_db_path,
+            model_tag="a-completely-different-model",
+        )
+        fts_bytes_after = fts_db_path.read_bytes()
+
+    assert fts_bytes_after == fts_bytes_before
+
+
+def test_bundle_manifest_hash_is_unaffected_by_the_model_tag(tmp_path: Path) -> None:
+    """`derived.bundle_manifest_hash` -- the FTS/graph gate's cache key --
+    is computed PURELY from bundle content and never references the
+    embedding-model tag at all: the SAME bundle produces the IDENTICAL
+    manifest digest regardless of which `model_tag` a `reindex()` call in
+    between used (spec: vector-store Model Tag Independent Of The
+    Bundle-Manifest Hash; design D5, PINNED). Proves the non-coupling
+    directly at the function that would have to change if it were coupled."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    digest_before = derived.bundle_manifest_hash(bundle_dir)
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), model_tag="model-one")
+        reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="a-totally-different-model"
+        )
+
+    digest_after = derived.bundle_manifest_hash(bundle_dir)
+
+    assert digest_after == digest_before
+
+
+def test_pre_slice_vectors_db_self_heals_in_exactly_one_reindex_run(
+    tmp_path: Path,
+) -> None:
+    """Runtime-harness integration proof (Phase 5): a GENUINELY pre-slice
+    `vectors.db` -- vectors written directly via `upsert()`, never through a
+    `model_tag`-aware `reindex()` call, simulating a real production
+    database from before this follow-up existed -- self-heals in EXACTLY
+    ONE `reindex()` run once a `model_tag` is finally supplied: that first
+    call force-re-embeds every concept (even though their content_hash
+    already matched) and persists the tag; every SUBSEQUENT call with the
+    SAME tag is then a normal incremental cache-hit run, with zero further
+    forced re-embeds."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md", title="Stoicism", body="v1")
+    _write_doc(bundle_dir / "concepts" / "epictetus.md", title="Epictetus", body="v1")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    # Simulate a genuinely pre-slice vectors.db: vectors upserted directly,
+    # with no model_tag ever having been passed to reindex() at all.
+    pre_slice_hash_stoicism = vectorstore.content_hash(
+        b"whatever raw bytes produced this vector"
+    )
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/stoicism", [0.1] * EMBED_DIM, pre_slice_hash_stoicism)
+        db.upsert("concepts/epictetus", [0.2] * EMBED_DIM, "pre-slice-hash-epictetus")
+        assert db.read_model_tag() is None
+
+    with vectorstore.open_vector_store(db_path) as db:
+        heal_embedder = _FakeEmbedder()
+        heal_report = reindex.reindex(
+            bundle_dir, db, heal_embedder, model_tag="qwen3-embedding:0.6b"
+        )
+        healed_tag = db.read_model_tag()
+
+        steady_embedder = _FakeEmbedder()
+        steady_report = reindex.reindex(
+            bundle_dir, db, steady_embedder, model_tag="qwen3-embedding:0.6b"
+        )
+
+    assert heal_report.embedded == 2
+    assert heal_report.cache_hits == 0
+    assert healed_tag == "qwen3-embedding:0.6b"
+    assert steady_report.embedded == 0
+    assert steady_report.cache_hits == 2
+    assert steady_embedder.call_count == 0
+
+
+# --- Phase 8 review correction: stranded concept on a partial model switch --
+
+
+def test_reindex_model_tag_mismatch_with_a_skipped_doc_does_not_persist_the_new_tag(
+    tmp_path: Path,
+) -> None:
+    """CRITICAL review finding: if a model-tag mismatch run cannot re-embed
+    EVERY discovered doc (one hits the transient skip path), the new tag
+    must NOT be persisted -- otherwise the skipped doc's stale old-model
+    vector would silently survive forever (the next run would see a
+    MATCHING tag and treat the doc as a content_hash cache-hit). Instead:
+    a partial (skipped > 0) model-change run keeps re-forcing the full
+    re-embed on every subsequent call until one run finally covers every
+    doc (skipped == 0), at which point the tag is finally persisted (spec:
+    reindex-command Embedding-Model Tag Persisted Only After A Complete
+    Re-Embed)."""
+    bundle_dir = tmp_path / "bundle"
+    a_path = bundle_dir / "concepts" / "a.md"
+    b_path = bundle_dir / "concepts" / "b.md"
+    _write_doc(a_path, title="A")
+    _write_doc(b_path, title="B")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), model_tag="old-model")
+        assert db.read_model_tag() == "old-model"
+
+        # b.md now hits the transient skip path (undecodable bytes) during
+        # the model-switch run.
+        b_path.write_bytes(b"\xff\xfe\x00\x01not-utf8")
+
+        first_embedder = _FakeEmbedder()
+        first_report = reindex.reindex(
+            bundle_dir, db, first_embedder, model_tag="new-model"
+        )
+        tag_after_first = db.read_model_tag()
+
+        # Tag still wasn't persisted -- b.md is STILL unreadable -- so a
+        # second call with the SAME new model_tag keeps forcing a.md's
+        # re-embed too (safe/expensive, not silently wrong).
+        second_embedder = _FakeEmbedder()
+        second_report = reindex.reindex(
+            bundle_dir, db, second_embedder, model_tag="new-model"
+        )
+        tag_after_second = db.read_model_tag()
+
+        # b.md becomes readable again -- this run finally covers every doc.
+        _write_doc(b_path, title="B")
+        third_embedder = _FakeEmbedder()
+        third_report = reindex.reindex(
+            bundle_dir, db, third_embedder, model_tag="new-model"
+        )
+        tag_after_third = db.read_model_tag()
+
+        # A normal incremental run: the tag now matches, both docs cache-hit.
+        fourth_embedder = _FakeEmbedder()
+        fourth_report = reindex.reindex(
+            bundle_dir, db, fourth_embedder, model_tag="new-model"
+        )
+
+    assert first_report.embedded == 1  # a.md only
+    assert first_report.skipped == 1  # b.md
+    assert first_report.model_reembedded is True
+    assert tag_after_first == "old-model"  # NOT persisted -- b.md was skipped
+
+    assert second_report.embedded == 1  # a.md re-forced again
+    assert second_report.skipped == 1  # b.md still unreadable
+    assert second_report.model_reembedded is True
+    assert tag_after_second == "old-model"  # still NOT persisted
+
+    assert third_report.embedded == 2  # a.md AND b.md, both covered this run
+    assert third_report.skipped == 0
+    assert third_report.model_reembedded is True
+    assert tag_after_third == "new-model"  # NOW persisted -- run was complete
+
+    assert fourth_report.embedded == 0
+    assert fourth_report.cache_hits == 2
+    assert fourth_report.model_reembedded is False
+    assert fourth_embedder.call_count == 0
+
+
+def test_reindex_model_reembedded_flag_reflects_the_tag_gate_only(
+    tmp_path: Path,
+) -> None:
+    """`ReindexReport.model_reembedded` is `True` exactly when a model-tag
+    mismatch forced this run's re-embed, and `False` for an ordinary
+    content-change run (even one that embeds every doc) -- it is NOT a
+    generic "something was embedded" flag (review WARNING finding:
+    observability for the model-tag force)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="v1")
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        ordinary_report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        assert ordinary_report.model_reembedded is False
+
+        _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="v2")
+        content_change_report = reindex.reindex(bundle_dir, db, _FakeEmbedder())
+        assert content_change_report.embedded == 1
+        assert content_change_report.model_reembedded is False
+
+        tag_mismatch_report = reindex.reindex(
+            bundle_dir, db, _FakeEmbedder(), model_tag="some-model"
+        )
+
+    assert tag_mismatch_report.model_reembedded is True

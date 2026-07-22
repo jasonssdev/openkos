@@ -24,6 +24,16 @@ plain `DELETE FROM vectors WHERE concept_id = ?` works directly against the
 metadata column (no rowid indirection needed), and
 `embedding MATCH ? AND k = ? ORDER BY distance` returns `(concept_id,
 distance)` rows ordered nearest-first.
+
+MVP-2 follow-up #5 adds a GENERIC `meta(key, value)` table -- distinct from
+`vector_meta` above, which is the per-concept content_hash cache -- storing
+one `('embedding_model', <tag>)` row via `read_model_tag`/`write_model_tag`.
+`state/reindex.py`'s model-tag gate reads this to detect an absent or
+changed embedding model and force a full re-embed of every concept (no vec0
+`DROP`, just the existing `upsert_many` DELETE-then-INSERT path), keeping a
+switched or freshly-adopted model from silently mixing incompatible vectors
+in `vectors.db`. This new table NEVER pollutes `meta_hashes()`/the
+content_hash cache -- the two tables are, and must stay, fully separate.
 """
 
 import hashlib
@@ -52,6 +62,31 @@ CREATE TABLE IF NOT EXISTS vector_meta (
     content_hash TEXT NOT NULL
 )
 """
+
+_CREATE_META_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)
+"""
+"""A GENERIC `(key, value)` table (MVP-2 follow-up #5), DISTINCT from
+`vector_meta` above -- mirrors `state/derived.py`'s identically-shaped
+`meta` table for `fts.db`/`graph.db`. `vector_meta` is the per-concept
+content_hash cache `meta_hashes()`/`reindex`'s incremental gate reads;
+`meta` is for whole-store, singleton settings (e.g. the embedding-model
+tag) that must NEVER appear as a fake `concept_id` row in `vector_meta`
+(which would pollute `meta_hashes()` and the content_hash cache gate)."""
+
+_SELECT_META_SQL = "SELECT value FROM meta WHERE key = ?"
+
+_UPSERT_META_SQL = "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)"
+
+EMBEDDING_MODEL_KEY = "embedding_model"
+"""The `meta.key` `reindex`'s model-tag gate reads/writes (MVP-2 follow-up
+#5) -- the SAME generic `meta` table's `key` column `state/derived.py` uses
+for `manifest_hash`, just a different row, in this store's own `meta` table
+(the two derived stores each own a SEPARATE `meta` table -- no shared file,
+no cross-store key collision possible)."""
 
 # Confirmed against the real sqlite-vec 0.1.9 extension by the spike tests in
 # `tests/unit/state/test_vectorstore.py` (Phase 1): DELETE-by-`concept_id`
@@ -109,11 +144,16 @@ class VectorStore(Protocol):
     `commit` joined so `state/reindex.py` can batch an entire run's writes
     into ONE commit instead of one per document, without changing `upsert`/
     `prune`'s own existing per-call-commits contract for any other caller.
-    Each Protocol growth grows the SHAPE -- any concrete implementer
-    (`VectorStoreDB`, or a test fake assigned to this type) must now provide
-    every method here; a fake missing one no longer satisfies it, since
-    Python's structural Protocol typing requires ALL declared members, with
-    no partial/optional subset."""
+    Extended additively a THIRD time, MVP-2 follow-up #5: `read_model_tag`/
+    `write_model_tag` joined so `reindex`'s model-tag gate can detect an
+    absent/changed embedding model and force a full re-embed, without
+    touching the `Embedder` Protocol (`llm/base.py`) at all -- the tag lives
+    entirely in `vectors.db`'s own generic `meta` table. Each Protocol
+    growth grows the SHAPE -- any concrete implementer (`VectorStoreDB`, or
+    a test fake assigned to this type) must now provide every method here;
+    a fake missing one no longer satisfies it, since Python's structural
+    Protocol typing requires ALL declared members, with no partial/optional
+    subset."""
 
     def upsert(
         self, concept_id: str, embedding: Sequence[float], content_hash: str
@@ -151,6 +191,19 @@ class VectorStore(Protocol):
     def commit(self) -> None:
         """Commit the current transaction (Slice 5, follow-up #4) -- pairs
         with `upsert_many`/`prune_many`, which never commit on their own."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def read_model_tag(self) -> str | None:
+        """Return the stored `embedding_model` tag, or `None` if absent
+        (MVP-2 follow-up #5) -- a fresh store, or one that predates this
+        follow-up."""
+        ...  # pragma: no cover -- Protocol stub body, never executed
+
+    def write_model_tag(self, tag: str) -> None:
+        """Replace the stored `embedding_model` tag with `tag`, WITHOUT
+        committing -- the caller commits once via `commit()`, alongside the
+        run's other writes (MVP-2 follow-up #5; Slice 5 single-commit-per-run
+        contract)."""
         ...  # pragma: no cover -- Protocol stub body, never executed
 
     def close(self) -> None:
@@ -274,6 +327,7 @@ def open_vector_store(
         conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
         conn.execute(_CREATE_VECTORS_TABLE_SQL)
         conn.execute(_CREATE_VECTOR_META_TABLE_SQL)
+        conn.execute(_CREATE_META_TABLE_SQL)
         conn.commit()
     except BaseException:
         if conn is not None:
@@ -370,6 +424,21 @@ class VectorStoreDB:
         pairs with `upsert_many`/`prune_many`, which never commit on their
         own, so a caller can batch an entire run's writes into ONE commit."""
         self._conn.commit()
+
+    def read_model_tag(self) -> str | None:
+        """Return the stored `embedding_model` tag from the generic `meta`
+        table, or `None` if absent (MVP-2 follow-up #5) -- reads ONLY the
+        `meta` table, never `vector_meta` (the content_hash cache), so this
+        is completely independent of `meta_hashes()`."""
+        row = self._conn.execute(_SELECT_META_SQL, (EMBEDDING_MODEL_KEY,)).fetchone()
+        return None if row is None else str(row[0])
+
+    def write_model_tag(self, tag: str) -> None:
+        """Upsert `tag` as the stored `embedding_model` value in the generic
+        `meta` table (spec: Generic Meta Table -- write replaces prior tag,
+        one row survives). Does NOT commit -- callers commit once alongside
+        their own writes (Slice 5 single-commit-per-run contract)."""
+        self._conn.execute(_UPSERT_META_SQL, (EMBEDDING_MODEL_KEY, tag))
 
     def close(self) -> None:
         """Close the underlying connection.

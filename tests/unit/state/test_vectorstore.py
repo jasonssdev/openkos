@@ -168,6 +168,7 @@ def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
             self.upserts: list[tuple[str, list[float], str]] = []
             self.pruned: list[str] = []
             self.committed = False
+            self.model_tag: str | None = None
 
         def close(self) -> None:
             self.closed = True
@@ -197,6 +198,12 @@ def test_extended_fake_satisfies_vector_store_protocol_structurally() -> None:
 
         def commit(self) -> None:
             self.committed = True
+
+        def read_model_tag(self) -> str | None:
+            return self.model_tag
+
+        def write_model_tag(self, tag: str) -> None:
+            self.model_tag = tag
 
     fake: vectorstore.VectorStore = _FakeVectorStore()
     fake.upsert("concepts/a", [0.0] * EMBED_DIM, "hash")
@@ -1031,3 +1038,105 @@ def test_commit_persists_writes_to_a_separate_reader_connection(
     reader.close()
 
     assert rows == [("concepts/a",)]
+
+
+# --- Phase 8 (MVP-2 follow-up #5): generic meta table + embedding-model tag -
+
+
+def test_open_vector_store_creates_meta_table_idempotently_on_reopen(
+    tmp_path: Path,
+) -> None:
+    """`open_vector_store` creates a generic `meta(key, value)` table,
+    DISTINCT from `vector_meta` (the per-concept content_hash cache), and
+    reopening the SAME database is a no-op migration -- the table still
+    exists, no error (spec: vector-store Generic Meta Table -- idempotent
+    creation)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        table_names_first = {
+            str(row[0])
+            for row in db._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+
+    with vectorstore.open_vector_store(db_path) as db:
+        table_names_second = {
+            str(row[0])
+            for row in db._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+
+    assert "meta" in table_names_first
+    assert "vector_meta" in table_names_first
+    assert table_names_first == table_names_second
+
+
+def test_read_model_tag_returns_none_when_absent(tmp_path: Path) -> None:
+    """`read_model_tag()` returns `None` on a freshly opened store (or one
+    predating this follow-up) -- no `embedding_model` row exists yet (spec:
+    vector-store Generic Meta Table -- absent tag reads None)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        tag = db.read_model_tag()
+
+    assert tag is None
+
+
+def test_write_model_tag_persists_across_reopen(tmp_path: Path) -> None:
+    """`write_model_tag` commits and the tag round-trips through a brand-new
+    `open_vector_store` call against the same file (spec: vector-store
+    Generic Meta Table -- write persists across reopen)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.write_model_tag("qwen3-embedding:0.6b")
+        db.commit()
+
+    with vectorstore.open_vector_store(db_path) as db:
+        tag = db.read_model_tag()
+
+    assert tag == "qwen3-embedding:0.6b"
+
+
+def test_write_model_tag_replaces_prior_tag_leaving_one_row(tmp_path: Path) -> None:
+    """A second `write_model_tag` call REPLACES the prior tag -- exactly one
+    `embedding_model` row survives, not two (spec: vector-store Generic Meta
+    Table -- write replaces prior tag)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.write_model_tag("qwen3-embedding:0.6b")
+        db.commit()
+        db.write_model_tag("nomic-embed-text")
+        db.commit()
+        tag = db.read_model_tag()
+        rows = db._conn.execute(
+            "SELECT value FROM meta WHERE key = 'embedding_model'"
+        ).fetchall()
+
+    assert tag == "nomic-embed-text"
+    assert rows == [("nomic-embed-text",)]
+
+
+def test_meta_hashes_unaffected_by_the_new_meta_table(tmp_path: Path) -> None:
+    """`meta_hashes()` (the content_hash cache reindex reads) is completely
+    unaffected by the new generic `meta` table -- writing an
+    `embedding_model` tag never appears as a fake `concept_id` in
+    `meta_hashes()`'s result, proving the two tables stay genuinely separate
+    (spec: vector-store Generic Meta Table; design D1 -- rejected a sentinel
+    row inside `vector_meta` precisely to avoid this pollution)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+        db.write_model_tag("qwen3-embedding:0.6b")
+        db.commit()
+        hashes = db.meta_hashes()
+
+    assert hashes == {"concepts/a": "hash-a"}
+    assert "embedding_model" not in hashes
+    assert "qwen3-embedding:0.6b" not in hashes.values()

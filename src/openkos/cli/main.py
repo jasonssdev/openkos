@@ -2456,17 +2456,23 @@ def reindex(
     Thin wiring only (spec: CLI Verb Is Thin Wiring): `require_workspace` →
     `read_config` → `open_vector_store(vectors_db_path)` →
     `state.reindex.reindex(bundle_dir, db, embedder, force=force,
-    fts_db_path=...)` → `sqlite_graph.reindex_graph(bundle_dir,
-    graph_db_path, force=force)` → print a summary of
-    embedded/cache-hit/pruned/skipped counts and exit 0. The vector/FTS
-    orchestrator (`state/reindex.py`) owns the bundle walk, the
-    `content_hash` cache gate, the prune pass, and the FTS manifest gate;
-    the graph gate (`openkos.graph.sqlite_graph.reindex_graph`) is called
-    SEPARATELY rather than from inside `state/reindex.py`, because
-    `state/reindex.py` is canonical-layer code and must not import
-    `openkos.graph` (derived layer) -- this command is the entry-layer seam
-    that ties both together so a single invocation still writes all three
-    stores. This command owns none of the gate/rebuild logic itself.
+    fts_db_path=..., model_tag=cfg.embedding_model)` →
+    `sqlite_graph.reindex_graph(bundle_dir, graph_db_path, force=force)` →
+    print a summary of embedded/cache-hit/pruned/skipped counts and exit 0.
+    The vector/FTS orchestrator (`state/reindex.py`) owns the bundle walk,
+    the `content_hash` cache gate, the prune pass, the FTS manifest gate,
+    AND the embedding-model tag gate (MVP-2 follow-up #5: a stored tag
+    absent or different from `cfg.embedding_model` forces one full
+    re-embed, independent of `--force`; `ReindexReport.model_reembedded`
+    surfaces this as a dedicated summary line naming the old and new model,
+    plus a follow-up line when some docs could not be re-embedded this run
+    -- review correction, CRITICAL + WARNING findings); the graph gate
+    (`openkos.graph.sqlite_graph.reindex_graph`) is called SEPARATELY
+    rather than from inside `state/reindex.py`, because `state/reindex.py`
+    is canonical-layer code and must not import `openkos.graph` (derived
+    layer) -- this command is the entry-layer seam that ties both together
+    so a single invocation still writes all three stores. This command
+    owns none of the gate/rebuild logic itself.
 
     Embeds through a local Ollama server running the model configured as
     `embedding_model` in `openkos.yaml` (default `qwen3-embedding:0.6b`).
@@ -2497,12 +2503,18 @@ def reindex(
     embedder = OllamaClient(model=cfg.embedding_model)
     try:
         with open_vector_store(layout.vectors_db_path) as db:
+            # Captured BEFORE the call so the summary below can name the OLD
+            # tag even though `reindex()` may have already overwritten it in
+            # `vectors.db` by the time we get `report` back (review
+            # correction, WARNING finding: model-tag force observability).
+            previous_model_tag = db.read_model_tag()
             report = reindex_module.reindex(
                 layout.bundle_dir,
                 db,
                 embedder,
                 force=force,
                 fts_db_path=layout.fts_db_path,
+                model_tag=cfg.embedding_model,
             )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -2552,6 +2564,29 @@ def reindex(
             "directory-scan error made part of the bundle unreadable, so no "
             "concept was pruned even if some appeared absent (review "
             "carry-over, fold-in #3)."
+        )
+    # Model-tag force observability (review correction, WARNING finding):
+    # a model-tag mismatch triggers an operationally heavy full re-embed
+    # that is otherwise indistinguishable from an ordinary large content
+    # change -- name the old and new tag explicitly. The wording must stay
+    # ACCURATE to whether the re-embed actually covered every doc this run
+    # (round-2 review correction, WARNING finding): claiming "re-embedded
+    # all vectors" while ALSO reporting docs that could not be re-embedded
+    # is self-contradictory, so the complete (`skipped == 0`) and
+    # incomplete (`skipped > 0`) cases get distinct, non-overlapping
+    # wording instead of one unconditional line plus a caveat.
+    if report.model_reembedded and report.skipped == 0:
+        typer.echo(
+            "openkos reindex: re-embedded all vectors -- embedding model "
+            f"changed ({previous_model_tag or 'unset'} -> "
+            f"{cfg.embedding_model})."
+        )
+    elif report.model_reembedded:
+        typer.echo(
+            f"openkos reindex: embedding model changed ({previous_model_tag or 'unset'} "
+            f"-> {cfg.embedding_model}); re-embedding all vectors -- INCOMPLETE: "
+            f"{report.skipped} doc{_plural(report.skipped)} could not be "
+            "re-embedded, will retry next run."
         )
 
     # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`

@@ -19,12 +19,13 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos import config
 from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.state.fts import FtsUnavailable
 from openkos.state.reindex import ReindexReport
-from openkos.state.vectorstore import VecUnavailable
+from openkos.state.vectorstore import VecUnavailable, open_vector_store
 
 runner = CliRunner()
 
@@ -122,6 +123,106 @@ def test_reindex_summary_omits_prune_skip_note_when_prune_ran_normally(
     assert "prune pass" not in result.stdout.lower()
 
 
+def test_reindex_summary_notes_when_model_tag_forced_the_reembed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ReindexReport.model_reembedded=True` is surfaced in the printed
+    summary, naming the OLD (previously stored) and NEW (configured) model
+    tags -- distinguishing a heavy, embedding-model-driven full re-embed
+    from an ordinary large content change (review correction, WARNING
+    finding: model-tag force observability)."""
+    _init_workspace(tmp_path, monkeypatch)
+    layout = config.WorkspaceLayout(tmp_path)
+    with open_vector_store(layout.vectors_db_path) as db:
+        db.write_model_tag("old-model")
+        db.commit()
+    fake_report = ReindexReport(
+        embedded=2, cache_hits=0, pruned=0, skipped=0, model_reembedded=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "embedding model" in result.stdout.lower()
+    assert "old-model" in result.stdout
+    assert "qwen3-embedding:0.6b" in result.stdout  # DEFAULT_EMBEDDING_MODEL
+    # skipped == 0: the summary must read as a COMPLETE re-embed and must NOT
+    # borrow the skipped>0 branch's "incomplete" wording (symmetric guard to
+    # the unhealed-case tests, so a branch mix-up on the complete path fails).
+    assert "re-embedded all vectors" in result.stdout.lower()
+    assert "incomplete" not in result.stdout.lower()
+
+
+def test_reindex_summary_notes_when_model_reembed_left_docs_unhealed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model-tag-forced run that STILL has `skipped > 0` surfaces a
+    non-contradictory summary: it must NOT claim "re-embedded all vectors"
+    (unqualified) while ALSO saying some docs could not be re-embedded --
+    instead it says the re-embed is incomplete and will retry next run
+    (review correction round 2, WARNING finding: self-contradictory
+    wording)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=1, cache_hits=0, pruned=0, skipped=1, model_reembedded=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "not" in result.stdout.lower()
+    assert "next" in result.stdout.lower()
+    assert "re-embedded all vectors" not in result.stdout.lower()
+    assert "incomplete" in result.stdout.lower()
+
+
+def test_reindex_summary_notes_when_model_reembed_left_every_doc_unhealed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The most extreme unhealed case (the WHOLE bundle was transiently
+    unreadable this run: `embedded=0`, `skipped=` every discovered doc)
+    must still avoid claiming "re-embedded all vectors" -- the wording
+    stays accurate even when literally nothing was re-embedded (review
+    correction round 2, WARNING finding)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=0, cache_hits=0, pruned=0, skipped=3, model_reembedded=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "re-embedded all vectors" not in result.stdout.lower()
+    assert "incomplete" in result.stdout.lower()
+
+
+def test_reindex_summary_omits_model_tag_note_on_an_ordinary_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ordinary content-change run (`model_reembedded=False`, the
+    default) prints no model-tag note at all, even when every doc was
+    embedded."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=5, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "embedding model" not in result.stdout.lower()
+
+
 def test_reindex_builds_ollama_client_from_configured_embedding_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -189,6 +290,34 @@ def test_reindex_omitted_force_defaults_to_false(
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["force"] is False
+
+
+def test_reindex_passes_configured_embedding_model_as_model_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reindex` forwards the workspace's configured `embedding_model` as
+    `model_tag` into `state.reindex.reindex(...)` (MVP-2 follow-up #5;
+    spec: reindex-command `reindex()` Accepts An Explicit Model Tag
+    Parameter -- CLI wires `cfg.embedding_model` into `reindex`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_embedding_model = "custom-embed:test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"embedding_model: {configured_embedding_model}\n", encoding="utf-8"
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_reindex(*args: object, **kwargs: object) -> ReindexReport:
+        captured["kwargs"] = kwargs
+        return ReindexReport(embedded=0, cache_hits=0, pruned=0, skipped=0)
+
+    monkeypatch.setattr("openkos.cli.main.reindex_module.reindex", _recording_reindex)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["model_tag"] == configured_embedding_model
 
 
 def test_reindex_ollama_unavailable_maps_to_exit_one(

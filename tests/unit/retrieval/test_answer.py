@@ -120,8 +120,9 @@ class _FakeEmbedder:
 
 
 class _FakeVectorStore:
-    """A structural `VectorStore`: implements all 8 Protocol methods
-    (Slice 5, follow-up #4 added `upsert_many`/`prune_many`/`commit`).
+    """A structural `VectorStore`: implements all 10 Protocol methods
+    (Slice 5, follow-up #4 added `upsert_many`/`prune_many`/`commit`;
+    MVP-2 follow-up #5 added `read_model_tag`/`write_model_tag`).
     `query` returns fixed `hits`, or raises `raises` if set (never both)."""
 
     def __init__(
@@ -155,6 +156,12 @@ class _FakeVectorStore:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
     def commit(self) -> None:
+        raise NotImplementedError  # pragma: no cover -- unused by answer()
+
+    def read_model_tag(self) -> str | None:
+        raise NotImplementedError  # pragma: no cover -- unused by answer()
+
+    def write_model_tag(self, tag: str) -> None:
         raise NotImplementedError  # pragma: no cover -- unused by answer()
 
     def close(self) -> None:
