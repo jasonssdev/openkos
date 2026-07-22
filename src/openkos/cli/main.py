@@ -2638,12 +2638,19 @@ def reindex(
     # #1470: the graph reindex ladder gap -- a graph-write failure after
     # vectors.db/fts.db already succeeded used to crash with a raw traceback
     # instead of the documented clean exit 1). Deliberately narrow: catches
-    # ONLY this call's `sqlite3.Error`, not the separate, still-open,
-    # known-and-deferred follow-up of generic lock-contention errors from the
-    # vectors/FTS ladder above.
+    # ONLY this call's `sqlite3.Error`. A locked `graph.db` (lock contention,
+    # discriminated by `is_lock_contention`) gets the SAME uniform
+    # `_LOCK_CONTENTION_MSG` ladder 1 uses for vectors.db/fts.db, reusing
+    # this broad `except sqlite3.Error` rather than a separate narrower
+    # clause -- a non-lock `sqlite3.Error` keeps its existing, graph-specific
+    # message unchanged (reindex-lock-handling; this closes the gap this
+    # comment used to flag as deferred).
     try:
         sqlite_graph.reindex_graph(layout.bundle_dir, layout.graph_db_path, force=force)
     except sqlite3.Error as exc:
+        if isinstance(exc, sqlite3.OperationalError) and derived.is_lock_contention(exc):
+            typer.echo(_LOCK_CONTENTION_MSG, err=True)
+            raise typer.Exit(code=1) from exc
         typer.echo(
             f"openkos reindex: failed while writing the graph index -- {exc}.",
             err=True,

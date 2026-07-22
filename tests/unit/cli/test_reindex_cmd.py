@@ -680,6 +680,71 @@ def test_reindex_summary_and_prune_skipped_notice_still_surface_when_graph_write
     assert "Traceback" not in result.stderr
 
 
+# --- reindex-lock-handling: ladder 2 (graph) --------------------------------
+
+
+def test_reindex_locked_graph_db_exits_one_with_the_same_retry_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock-contention `OperationalError` raised by
+    `sqlite_graph.reindex_graph` -- a concurrent process holding `graph.db`'s
+    write lock past `busy_timeout`, e.g. at its own `BEGIN IMMEDIATE` -- is
+    caught and reports the SAME uniform lock-contention message ladder 1
+    uses for vectors.db/fts.db, exiting 1 with no raw traceback -- NOT the
+    graph-specific "failed while writing the graph index" message a
+    non-lock `sqlite3.Error` still gets (spec: Locked graph.db exits 1 with
+    the SAME uniform message; task 4.1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=1, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    def _raise_locked(*args: object, **kwargs: object) -> None:
+        raise make_locked_error()
+
+    monkeypatch.setattr("openkos.cli.main.sqlite_graph.reindex_graph", _raise_locked)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed -- ")
+    assert _LOCK_MESSAGE_FRAGMENT in result.stderr
+    assert "writing the graph index" not in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_reindex_non_lock_graph_error_keeps_the_existing_graph_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-lock `sqlite3.Error` from `sqlite_graph.reindex_graph` (e.g.
+    permission-denied, corrupt `graph.db`) keeps its EXISTING, graph-specific
+    "failed while writing the graph index" message -- NOT the uniform
+    lock-contention message -- proving the two are still discriminated
+    after the lock-contention branch was added (task 4.2 regression;
+    mirrors `test_reindex_graph_write_failure_after_vectors_and_fts_succeed_maps_to_exit_one`
+    but asserts the NEGATIVE: the lock message must NOT appear here)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=1, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    def _raise_non_lock(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr("openkos.cli.main.sqlite_graph.reindex_graph", _raise_non_lock)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "failed while writing the graph index" in result.stderr
+    assert _LOCK_MESSAGE_FRAGMENT not in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_reindex_malformed_config_maps_to_exit_one_before_calling_orchestrator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
