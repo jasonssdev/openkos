@@ -2484,7 +2484,7 @@ def reindex(
     owns none of the gate/rebuild logic itself.
 
     Embeds through a local Ollama server running the model configured as
-    `embedding_model` in `openkos.yaml` (default `qwen3-embedding:0.6b`).
+    `embedding_model` in `openkos.yaml` (default `bge-m3`, ADR-0006).
     An unreachable Ollama, a missing embedding model, or an unusable
     `sqlite-vec` extension is reported on stderr with no raw traceback and
     exits 1 -- the SAME ordered ladder `query` uses (`OllamaUnavailable` →

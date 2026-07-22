@@ -510,7 +510,7 @@ def test_read_config_falls_back_to_default_embedding_model_when_absent(
     result = config.read_config(tmp_path)
 
     assert result.embedding_model == config.DEFAULT_EMBEDDING_MODEL
-    assert config.DEFAULT_EMBEDDING_MODEL == "qwen3-embedding:0.6b"
+    assert config.DEFAULT_EMBEDDING_MODEL == "bge-m3"
 
 
 def test_read_config_falls_back_to_default_embedding_model_on_explicit_null(

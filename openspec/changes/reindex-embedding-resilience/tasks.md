@@ -24,11 +24,11 @@ Chain strategy: pending
 
 ## Phase 1: Robust Default Embedder (bge-m3)
 
-- [ ] 1.1 RED: `test_config.py:513` — assertion → `DEFAULT_EMBEDDING_MODEL == "bge-m3"`.
-- [ ] 1.2 RED: `test_reindex_cmd.py:152` — assertion → `"bge-m3" in result.stdout`.
-- [ ] 1.3 GREEN: `config.py:23` — `DEFAULT_EMBEDDING_MODEL = "bge-m3"` + docstring (ADR-0006).
-- [ ] 1.4 GREEN: `cli/main.py:2487` — `reindex` docstring default → `bge-m3`.
-- [ ] 1.5 Verify: `test_doctor.py` reads the constant (no hardcode) — still green, no edit.
+- [x] 1.1 RED: `test_config.py:513` — assertion → `DEFAULT_EMBEDDING_MODEL == "bge-m3"`.
+- [x] 1.2 RED: `test_reindex_cmd.py:152` — assertion → `"bge-m3" in result.stdout`.
+- [x] 1.3 GREEN: `config.py:23` — `DEFAULT_EMBEDDING_MODEL = "bge-m3"` + docstring (ADR-0006).
+- [x] 1.4 GREEN: `cli/main.py:2487` — `reindex` docstring default → `bge-m3`.
+- [x] 1.5 Verify: `test_doctor.py` reads the constant (no hardcode) — still green, no edit.
 
 ## Phase 2: Retry-With-Backoff in `OllamaClient.embed` (D1/D3)
 

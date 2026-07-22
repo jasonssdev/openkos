@@ -149,7 +149,7 @@ def test_reindex_summary_notes_when_model_tag_forced_the_reembed(
     assert result.exit_code == 0
     assert "embedding model" in result.stdout.lower()
     assert "old-model" in result.stdout
-    assert "qwen3-embedding:0.6b" in result.stdout  # DEFAULT_EMBEDDING_MODEL
+    assert "bge-m3" in result.stdout  # DEFAULT_EMBEDDING_MODEL
     # skipped == 0: the summary must read as a COMPLETE re-embed and must NOT
     # borrow the skipped>0 branch's "incomplete" wording (symmetric guard to
     # the unhealed-case tests, so a branch mix-up on the complete path fails).

@@ -20,11 +20,13 @@ from openkos import fsio
 DEFAULT_MODEL = "qwen3:8b"
 """The packaged default Ollama model tag, offered when no `--model` is given."""
 
-DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:0.6b"
-"""The packaged default Ollama embedding model tag. Default-only for this
-slice (hybrid-retrieval Slice 1): not written to `openkos.yaml.template`,
-resolved solely via `read_config`'s `is not None` fallback, distinct from
-the chat `DEFAULT_MODEL`."""
+DEFAULT_EMBEDDING_MODEL = "bge-m3"
+"""The packaged default Ollama embedding model tag (ADR-0006: reliability-
+first -- `bge-m3` proved measurably more resilient to transient embed
+failures than the previous `qwen3-embedding:0.6b` default). Default-only
+for this slice (hybrid-retrieval Slice 1): not written to
+`openkos.yaml.template`, resolved solely via `read_config`'s `is not None`
+fallback, distinct from the chat `DEFAULT_MODEL`."""
 
 DEFAULT_REVIEW = True
 """Packaged default for `review`: show a preview and confirm before saving."""
