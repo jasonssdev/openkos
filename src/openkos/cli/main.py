@@ -2590,7 +2590,7 @@ def reindex(
     typer.echo(
         f"openkos reindex: {report.embedded} embedded, {report.cache_hits} "
         f"cache-hit{_plural(report.cache_hits)}, {report.pruned} pruned, "
-        f"{report.skipped} skipped."
+        f"{report.skipped} skipped, {report.embed_failed} embed-failed."
     )
     if report.prune_skipped:
         typer.echo(
