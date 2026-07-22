@@ -2463,7 +2463,10 @@ def reindex(
     the `content_hash` cache gate, the prune pass, the FTS manifest gate,
     AND the embedding-model tag gate (MVP-2 follow-up #5: a stored tag
     absent or different from `cfg.embedding_model` forces one full
-    re-embed, independent of `--force`); the graph gate
+    re-embed, independent of `--force`; `ReindexReport.model_reembedded`
+    surfaces this as a dedicated summary line naming the old and new model,
+    plus a follow-up line when some docs could not be re-embedded this run
+    -- review correction, CRITICAL + WARNING findings); the graph gate
     (`openkos.graph.sqlite_graph.reindex_graph`) is called SEPARATELY
     rather than from inside `state/reindex.py`, because `state/reindex.py`
     is canonical-layer code and must not import `openkos.graph` (derived
@@ -2500,6 +2503,11 @@ def reindex(
     embedder = OllamaClient(model=cfg.embedding_model)
     try:
         with open_vector_store(layout.vectors_db_path) as db:
+            # Captured BEFORE the call so the summary below can name the OLD
+            # tag even though `reindex()` may have already overwritten it in
+            # `vectors.db` by the time we get `report` back (review
+            # correction, WARNING finding: model-tag force observability).
+            previous_model_tag = db.read_model_tag()
             report = reindex_module.reindex(
                 layout.bundle_dir,
                 db,
@@ -2557,6 +2565,27 @@ def reindex(
             "concept was pruned even if some appeared absent (review "
             "carry-over, fold-in #3)."
         )
+    # Model-tag force observability (review correction, WARNING finding):
+    # a model-tag mismatch triggers an operationally heavy full re-embed
+    # that is otherwise indistinguishable from an ordinary large content
+    # change -- name the old and new tag explicitly. When `skipped > 0` on
+    # such a run, the tag was deliberately NOT persisted (CRITICAL finding
+    # fix, `state/reindex.py::reindex`), so also say so: the NEXT run will
+    # force the same full re-embed again until one run finally covers
+    # every doc.
+    if report.model_reembedded:
+        typer.echo(
+            "openkos reindex: re-embedded all vectors -- embedding model "
+            f"changed ({previous_model_tag or 'unset'} -> "
+            f"{cfg.embedding_model})."
+        )
+        if report.skipped:
+            typer.echo(
+                "openkos reindex: the embedding-model tag was NOT updated "
+                f"-- {report.skipped} doc{_plural(report.skipped)} could "
+                "not be re-embedded this run, so the next reindex will "
+                "force the same full re-embed again."
+            )
 
     # graph.db is written by a SEPARATE call, not by `state.reindex.reindex`
     # itself: `state/reindex.py` is canonical-layer code and must not import

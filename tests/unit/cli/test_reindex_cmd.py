@@ -19,12 +19,13 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos import config
 from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.state.fts import FtsUnavailable
 from openkos.state.reindex import ReindexReport
-from openkos.state.vectorstore import VecUnavailable
+from openkos.state.vectorstore import VecUnavailable, open_vector_store
 
 runner = CliRunner()
 
@@ -120,6 +121,75 @@ def test_reindex_summary_omits_prune_skip_note_when_prune_ran_normally(
 
     assert result.exit_code == 0
     assert "prune pass" not in result.stdout.lower()
+
+
+def test_reindex_summary_notes_when_model_tag_forced_the_reembed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ReindexReport.model_reembedded=True` is surfaced in the printed
+    summary, naming the OLD (previously stored) and NEW (configured) model
+    tags -- distinguishing a heavy, embedding-model-driven full re-embed
+    from an ordinary large content change (review correction, WARNING
+    finding: model-tag force observability)."""
+    _init_workspace(tmp_path, monkeypatch)
+    layout = config.WorkspaceLayout(tmp_path)
+    with open_vector_store(layout.vectors_db_path) as db:
+        db.write_model_tag("old-model")
+        db.commit()
+    fake_report = ReindexReport(
+        embedded=2, cache_hits=0, pruned=0, skipped=0, model_reembedded=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "embedding model" in result.stdout.lower()
+    assert "old-model" in result.stdout
+    assert "qwen3-embedding:0.6b" in result.stdout  # DEFAULT_EMBEDDING_MODEL
+
+
+def test_reindex_summary_notes_when_model_reembed_left_docs_unhealed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model-tag-forced run that STILL has `skipped > 0` surfaces a
+    second line making the CRITICAL-fix's repeated-forcing case visible:
+    the tag was deliberately not persisted, so the next run will force the
+    same full re-embed again (review correction, CRITICAL + WARNING
+    findings)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(
+        embedded=1, cache_hits=0, pruned=0, skipped=1, model_reembedded=True
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "not" in result.stdout.lower()
+    assert "next" in result.stdout.lower()
+
+
+def test_reindex_summary_omits_model_tag_note_on_an_ordinary_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ordinary content-change run (`model_reembedded=False`, the
+    default) prints no model-tag note at all, even when every doc was
+    embedded."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_report = ReindexReport(embedded=5, cache_hits=0, pruned=0, skipped=0)
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", lambda *a, **k: fake_report
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "embedding model" not in result.stdout.lower()
 
 
 def test_reindex_builds_ollama_client_from_configured_embedding_model(
