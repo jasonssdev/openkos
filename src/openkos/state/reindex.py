@@ -36,6 +36,14 @@ nothing to prune calls `commit()` zero times ("at most once per run").
 `vectors.db`'s connection also now sets `PRAGMA journal_mode=WAL` and a
 `busy_timeout` at open (`state/vectorstore.py::open_vector_store`), matching
 `fts.db`/`graph.db`'s posture (`state/derived.py::open_derived_connection`).
+
+MVP-2 follow-up #5 adds an optional `model_tag` gate: `reindex()` compares
+`db.read_model_tag()` (the previously stored embedding-model tag) against
+the caller-supplied `model_tag`, and an absent-or-mismatched tag forces a
+full re-embed of every discovered doc for this run only, bypassing the
+per-doc content_hash gate above -- independent of `force` and of the
+FTS/graph `bundle_manifest_hash` gate. The new tag, when written, shares
+this same single end-of-run commit.
 """
 
 from dataclasses import dataclass
@@ -100,6 +108,7 @@ def reindex(
     *,
     force: bool = False,
     fts_db_path: Path | None = None,
+    model_tag: str | None = None,
 ) -> ReindexReport:
     """Walk `bundle_dir`, embed changed/new/forced docs through `embedder`,
     upsert into `db`, then prune any `db` row whose source file vanished.
@@ -124,8 +133,30 @@ def reindex(
     no-op, preserving every pre-Slice-5 caller's behavior unchanged. When
     given, `_reindex_fts` decides independently whether to rebuild -- it
     never affects the vector-store passes above, and vice versa.
+
+    `model_tag` (MVP-2 follow-up #5) defaults to `None`: omitting it makes
+    the tag gate a pure no-op -- no forced re-embed, no tag ever written,
+    preserving every pre-follow-up-#5 caller's behavior unchanged (D2). When
+    given, it is compared against `db.read_model_tag()` -- the PREVIOUSLY
+    stored tag (`None` for a fresh store, or one predating this follow-up).
+    A mismatch (including the absent-tag case) sets `model_changed=True` for
+    the ENTIRE run, which bypasses the per-doc content_hash comparison
+    below -- every discovered, readable doc is queued for re-embedding
+    regardless of its cache state (D3; no vec0 DROP, reuses the existing
+    `upsert_many` DELETE-then-INSERT machinery). This gate is completely
+    INDEPENDENT of `force` (a mismatch forces re-embed even with
+    `force=False`; a matching tag never re-adds work `force` didn't already
+    request) and of `fts_db_path`'s `bundle_manifest_hash` gate (D5, PINNED
+    -- `model_tag` never reaches `_reindex_fts`; a model switch alone never
+    triggers an FTS/graph rebuild). On a mismatch, the new tag is persisted
+    via `db.write_model_tag` in the SAME single commit this run already uses
+    for the vector writes (D4; the commit condition is broadened to include
+    a tag write alone, so an empty bundle with an absent/changed tag still
+    persists it).
     """
     cached_hashes = db.meta_hashes()
+    stored_model_tag = db.read_model_tag()
+    model_changed = model_tag is not None and stored_model_tag != model_tag
     seen: set[str] = set()
     cache_hits = 0
     skipped = 0
@@ -149,7 +180,7 @@ def reindex(
             continue
 
         digest = content_hash(raw_bytes)
-        if not force and cached_hashes.get(concept_id) == digest:
+        if not force and not model_changed and cached_hashes.get(concept_id) == digest:
             cache_hits += 1
             continue
 
@@ -184,7 +215,11 @@ def reindex(
             db.prune_many(to_prune)
             pruned = len(to_prune)
 
-    if to_embed or to_prune:
+    tag_written = model_changed
+    if model_tag is not None and model_changed:
+        db.write_model_tag(model_tag)
+
+    if to_embed or to_prune or tag_written:
         db.commit()
 
     if fts_db_path is not None:
