@@ -67,8 +67,8 @@ Chain strategy: pending
 
 ## Phase 6: Integration, Docs Verify, Full Gate
 
-- [ ] 6.1 Integration RED→GREEN: real `reindex()` over a temp bundle, one doc transiently fails, others succeed — exit 0, survivors queryable, `embed_failed` reflected.
-- [ ] 6.2 Verify: `docs/adr/0006-default-embedding-model.md` and `docs/tech_stack.md` already reflect bge-m3 — confirm only.
-- [ ] 6.3 `uv run pytest -q` full suite green.
-- [ ] 6.4 `uv run mypy .` repo-wide, zero new errors.
-- [ ] 6.5 `uv run ruff check .` clean.
+- [x] 6.1 Integration RED→GREEN: real `reindex()` over a temp bundle, one doc transiently fails, others succeed — exit 0, survivors queryable, `embed_failed` reflected. (Also fixed one more pre-existing pinned-default assertion discovered by the full gate: `tests/unit/cli/test_query.py:365`, out of the tasks-phase's precision list but a direct consequence of the Phase 1 default change.)
+- [x] 6.2 Verify: `docs/adr/0006-default-embedding-model.md` and `docs/tech_stack.md` already reflect bge-m3 — confirm only.
+- [x] 6.3 `uv run pytest -q` full suite green — 1281 passed.
+- [x] 6.4 `uv run mypy .` repo-wide, zero new errors — Success: no issues found in 102 source files.
+- [x] 6.5 `uv run ruff check .` clean — All checks passed!

@@ -362,7 +362,7 @@ def test_query_builds_and_injects_embedder_and_vector_store(
     assert isinstance(kwargs, dict)
     embedder = kwargs["embedder"]
     assert isinstance(embedder, OllamaClient)
-    assert embedder._model == "qwen3-embedding:0.6b"
+    assert embedder._model == "bge-m3"  # DEFAULT_EMBEDDING_MODEL
     assert kwargs["vector_store"] is not None
 
 

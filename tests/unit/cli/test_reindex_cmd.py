@@ -676,6 +676,67 @@ def test_reindex_persists_graph_db_end_to_end(
     assert graph_db_path.exists()
 
 
+class _PartiallyFaultyEmbedder:
+    """A hermetic stand-in for `OllamaClient` that raises the generic
+    transient `OllamaError` for any text containing `poison_marker`,
+    embedding everything else normally -- drives a REAL (unmocked)
+    `reindex` run through the CLI, `open_vector_store`, and
+    `state.reindex.reindex`'s per-doc embed loop end-to-end (integration:
+    real `reindex()` over a temp bundle, one doc transiently fails, others
+    survive)."""
+
+    def __init__(self, *, model: str = "fake", poison_marker: str = "") -> None:
+        self._model = model
+        self._poison_marker = poison_marker
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        text = texts[0]
+        if self._poison_marker and self._poison_marker in text:
+            raise OllamaError("EOF after retries")
+        return [[float(i)] * EMBED_DIM for i, _ in enumerate(texts)]
+
+
+def test_reindex_one_transient_embed_failure_survives_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A REAL (unmocked) `reindex` run -- through the CLI, `open_vector_store`,
+    and `state.reindex.reindex`'s per-doc embed loop -- where one doc's embed
+    transiently fails: the survivor is committed to `vectors.db`, exit code
+    is `0`, and stderr carries the actionable re-run notice naming the
+    failure count (spec: reindex-command Per-Doc Embed Failure Is Isolated,
+    Not Fatal -- integration)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\ndescription: ''\n---\ndichotomyzz\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "poison.md").write_text(
+        "---\ntype: Concept\ntitle: Poison\ndescription: ''\n---\npoison-marker-text\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        lambda **kwargs: _PartiallyFaultyEmbedder(
+            poison_marker="poison-marker-text", **kwargs
+        ),
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "1 embedded" in result.stdout
+    assert "0 skipped" in result.stdout
+    assert "1" in result.stderr
+    assert "incomplete" in result.stderr.lower()
+
+    layout = config.WorkspaceLayout(tmp_path)
+    with open_vector_store(layout.vectors_db_path) as db:
+        hashes = db.meta_hashes()
+    assert set(hashes) == {"concepts/stoicism"}  # survivor committed
+    assert "concepts/poison" not in hashes  # poison doc never upserted
+
+
 def test_reindex_graph_write_failure_after_vectors_and_fts_succeed_maps_to_exit_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
