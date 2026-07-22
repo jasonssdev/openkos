@@ -39,6 +39,7 @@ from openkos.resolution import find_candidates
 from openkos.resolution.adjudication import Verdict, adjudicate_candidates
 from openkos.resolution.candidates import Tier
 from openkos.resolution.edge_typing import suggest_relations
+from openkos.resolution.volatility_typing import suggest_volatility
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
 from openkos.state import derived, fts
 from openkos.state import reindex as reindex_module
@@ -2170,6 +2171,104 @@ def suggest_relations_cmd() -> None:
         typer.echo()
 
     typer.echo("Next: openkos relate <source> <type> <target>")
+
+
+@app.command("suggest-volatility")
+def suggest_volatility_cmd() -> None:
+    """LLM-suggest a volatility `tier` for every concept TYPE present in the
+    bundle: read-only, like `suggest-relations`.
+
+    A SIXTH read command, mirroring `suggest-relations`'s wiring exactly:
+    the shared `config.require_workspace` gate (D1), then a Phase-A
+    `read_config` guard (`except (OSError, ValueError)`, lint parity), then
+    a real `OllamaClient(model=cfg.model)` is built and injected -- as the
+    `LLMBackend` -- into `resolution.volatility_typing.suggest_volatility`,
+    the config-free leaf that owns the internal bundle read (via
+    `lint.collect_docs`).
+
+    `suggest-volatility` never writes, merges, or decides -- it only prints
+    a suggested `tier` + rationale per concept type present for human
+    review, plus a closing hint pointing at hand-editing `type_tiers:` in
+    `openkos.yaml` -- there is no dedicated write-path verb for this one
+    (unlike `suggest-relations` -> `relate`). No `--auto`, no confirmation
+    gate, no `--json` or other structured mode.
+
+    A degraded suggestion (`suggested_tier=None` -- a malformed LLM reply,
+    or a suggested tier that is not a member of `types.VOLATILITY_TIERS`)
+    renders as `[?]` plus a `note: no valid tier suggested` line, never as
+    if it were a valid suggestion (spec: Fail-Closed Per-Type Suggestion
+    Parsing). One other type's degraded reply never stops the run -- every
+    other type present is still reported.
+
+    A no-model/no-Ollama run degrades via the SAME 3-tier ORDERED handler
+    `suggest-relations`/`adjudicate`/`query` use -- `OllamaUnavailable`,
+    then `OllamaModelNotFound`, then the generic `OllamaError` fallback --
+    each with its own actionable stderr message, exit 1, and zero writes.
+
+    No file under the workspace is ever created, modified, or deleted
+    (spec: Verb performs zero writes).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(
+            f"openkos suggest-volatility: refusing to run -- {reason}.", err=True
+        )
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos suggest-volatility: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    llm = OllamaClient(model=cfg.model)
+    try:
+        results = suggest_volatility(layout.bundle_dir, llm=llm)
+    except OllamaUnavailable as exc:
+        typer.echo(
+            f"openkos suggest-volatility: failed -- {exc}. Start it with "
+            f"`ollama serve`, then try again.{_DOCTOR_HINT}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    except OllamaModelNotFound as exc:
+        typer.echo(
+            f"openkos suggest-volatility: failed -- model '{cfg.model}' is "
+            f"not installed. Pull it with `ollama pull {cfg.model}`, then "
+            "try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    # The two specific handlers above MUST precede this generic handler:
+    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
+    # `OllamaError`, so reordering would silently funnel them into this
+    # fallback and lose their actionable remediation messages (mirrors
+    # `suggest-relations`'s ordering).
+    except OllamaError as exc:
+        typer.echo(f"openkos suggest-volatility: failed -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"openkos suggest-volatility: workspace at {root}")
+    typer.echo()
+    if not results:
+        typer.echo("No concept types found.")
+        return
+
+    for result in results:
+        if result.suggested_tier is None:
+            typer.echo(f"[?] {result.type_name}")
+            typer.echo("  note: no valid tier suggested")
+        else:
+            typer.echo(f"[{result.suggested_tier}] {result.type_name}")
+            typer.echo(f"  rationale: {result.rationale}")
+        typer.echo()
+
+    typer.echo("Next: edit type_tiers in openkos.yaml")
 
 
 def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
