@@ -43,12 +43,13 @@ Chain strategy: pending
 
 ## Phase 3: Resolution Filters (PR 3)
 
-- [ ] 3.1 RED: `tests/unit/resolution/test_contradiction.py` — superseded concept never in a candidate pair by default; flag restores; all-live identical
-- [ ] 3.2 RED: `tests/unit/resolution/test_candidates.py` — deprecated excluded from HIGH/LOW groups by default; flag restores; all-live identical
-- [ ] 3.3 GREEN: add `include_deprecated: bool = False` to `find_contradictions`; filter `_candidate_pairs(store)` output against `lifecycle.deprecated_concept_ids(bundle_dir)`
-- [ ] 3.4 GREEN: add `include_deprecated: bool = False` to `find_candidates`; filter `_iter_eligible(bundle_dir)` output before HIGH/LOW pairing
-- [ ] 3.5 REFACTOR: short-circuit the walk on `include_deprecated=True` in both functions
-- [ ] 3.6 Verify: `pytest tests/unit/resolution/test_contradiction.py tests/unit/resolution/test_candidates.py -v`
+- [x] 3.1 RED: `tests/unit/resolution/test_contradiction.py` — superseded concept never in a candidate pair by default; flag restores; all-live identical
+- [x] 3.2 RED: `tests/unit/resolution/test_candidates.py` — deprecated excluded from HIGH/LOW groups by default; flag restores; all-live identical
+- [x] 3.3 GREEN: add `include_deprecated: bool = False` to `find_contradictions`; filter `_candidate_pairs(store)` output against `lifecycle.deprecated_concept_ids(bundle_dir)`
+- [x] 3.4 GREEN: add `include_deprecated: bool = False` to `find_candidates`; filter `_iter_eligible(bundle_dir)` output before HIGH/LOW pairing
+- [x] 3.5 REFACTOR: short-circuit the walk on `include_deprecated=True` in both functions
+- [x] 3.6 Verify: `pytest tests/unit/resolution/test_contradiction.py tests/unit/resolution/test_candidates.py -v` (also pinned the `duplicates` CLI default-exclude ripple in `tests/unit/cli/test_duplicates.py`, see apply-progress)
+- [x] 3.7 CORRECTION (post-review, CONFIRMED HIGH starvation defect): `_candidate_pairs` filtered `_MAX_PAIRS`-capped `pairs` AFTER the cap, so >200 deduped pairs dominated by deprecated-touching entries could consume every cap slot and starve live pairs sorting past index 200 of judgment. Moved deprecation filtering INSIDE `_candidate_pairs`, BEFORE the cap slice; `total_pair_count` now reflects live-pairs-only. Added 2 tests: starvation regression (`test_live_pair_beyond_cap_index_is_not_starved_by_deprecated_pairs_in_cap`) and both-sides pair[0] coverage (`test_pair_with_deprecated_concept_as_the_alphabetically_first_element_is_excluded`)
 
 ## Phase 4: CLI Wiring (PR 4)
 

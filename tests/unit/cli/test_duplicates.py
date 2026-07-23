@@ -166,6 +166,30 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GOOD_LIFE_ROOT = _REPO_ROOT / "examples" / "good-life-demo"
 
 
+def test_duplicates_default_excludes_a_deprecated_group_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`duplicates` calls `find_candidates(layout.bundle_dir)` with no flag
+    (status-aware-retrieval Phase 3 CLI ripple: `find_candidates`'s new
+    `include_deprecated: bool = False` default means `duplicates` now
+    excludes deprecated/superseded concepts from its report too, even though
+    the `--include-deprecated` CLI flag itself is not wired until Phase 4 --
+    pinning the intended default-exclude side effect so it is not a silent
+    surprise (tasks.md 4.3))."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="STOICISM")
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: STOICISM\nstatus: deprecated\n---\n# STOICISM\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    assert "No candidates found." in result.stdout
+
+
 def test_duplicates_over_good_life_demo_is_read_only_and_exits_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

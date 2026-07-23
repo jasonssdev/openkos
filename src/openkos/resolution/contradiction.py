@@ -23,6 +23,27 @@ Layering: this module is DERIVED, not canonical -- it MAY import
 `openkos.graph` (derived -> derived, allowed). `cli/main.py` MUST NOT import
 `openkos.graph` directly; it imports only this module (design D2/D6, "No CLI
 Surface").
+
+status-aware-retrieval (MVP-3 gap #8 · S1, Phase 3): unless the caller
+passes `include_deprecated=True`, `find_contradictions` computes the shared
+`openkos.lifecycle.deprecated_concept_ids(bundle_dir)` predicate ONCE per
+call and drops any candidate pair touching a deprecated/superseded concept
+id (either side) BEFORE judging -- a superseded concept never appears in a
+candidate pair (spec: Superseded concept absent from contradiction
+candidates). `include_deprecated=True` skips the predicate walk entirely (no
+`_iter_docs` pass), restoring today's status-blind behavior byte-for-byte
+(design R1's zero-cost escape path).
+
+Post-review HIGH correction: deprecation filtering happens INSIDE
+`_candidate_pairs`, BEFORE the `_MAX_PAIRS` cap slice, not after it. The
+original implementation filtered the already-capped `pairs` list, which let
+deprecated-touching pairs consume cap slots ahead of live pairs sorting
+past `_MAX_PAIRS` -- starving those live pairs of judgment even when the
+200-pair budget had unused capacity once deprecation filtering was applied.
+`total_pair_count` now reflects `_candidate_pairs`'s deduped,
+deprecation-filtered ("live") count BEFORE the cap, so the existing
+`total_pair_count > len(verdicts)` cap-reached signal fires only when live
+pairs genuinely exceed the cap.
 """
 
 import json
@@ -33,6 +54,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from openkos import lifecycle
 from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.llm.base import LLMBackend, Message
@@ -126,20 +148,43 @@ def _pair_key(source_id: str, target_id: str) -> tuple[str, str]:
     return first, second
 
 
-def _candidate_pairs(store: GraphStore) -> tuple[list[tuple[str, str]], int]:
+def _candidate_pairs(
+    store: GraphStore, deprecated: frozenset[str] = frozenset()
+) -> tuple[list[tuple[str, str]], int]:
     """Derive candidate pairs from `store`'s TYPED edges only
     (`relation_type is not None`), deduped by `frozenset({source_id,
     target_id})` so symmetric, duplicate, and multi-edge pairs collapse to
     exactly one candidate (spec: Symmetric and multi-edge pairs judged
-    once). Returns `(pairs, total_count)`: `pairs` is the deduped set sorted
-    by `tuple(sorted(pair))` and truncated to `_MAX_PAIRS`; `total_count` is
-    the FULL deduped count before truncation, so the caller can detect and
-    report a cap-reached truncation (spec: Cap truncation is reported) --
-    truncation is never silent."""
+    once).
+
+    `deprecated` (status-aware-retrieval Phase 3, post-review correction) is
+    applied to the deduped, sorted set BEFORE the `_MAX_PAIRS` cap slice --
+    any pair where either id is in `deprecated` is dropped first, so the cap
+    only ever consumes LIVE pairs. Filtering AFTER the cap starves live
+    pairs that sort past `_MAX_PAIRS`: if the alphabetically-first cap
+    slots happen to be dominated by deprecated-touching pairs, a post-cap
+    filter would drop them from an already-truncated list and never give a
+    later, live pair a chance to be judged, even though the pair budget was
+    not actually exhausted by live pairs. The default empty frozenset makes
+    this a total no-op, preserving byte-identical behavior for callers that
+    never pass a deprecated set.
+
+    Returns `(pairs, total_count)`: `pairs` is the deduped, deprecation-
+    filtered set sorted by `tuple(sorted(pair))` and truncated to
+    `_MAX_PAIRS`; `total_count` is the FULL deduped, deprecation-filtered
+    count BEFORE truncation, so the caller can detect and report a
+    cap-reached truncation (spec: Cap truncation is reported) -- truncation
+    is never silent, and the cap-reached signal now only fires when LIVE
+    pairs genuinely exceed the cap."""
     typed_edges = [edge for edge in store.edges() if edge.relation_type is not None]
     pair_keys = {_pair_key(edge.source_id, edge.target_id) for edge in typed_edges}
     ordered = sorted(pair_keys)
-    return ordered[:_MAX_PAIRS], len(ordered)
+    live = [
+        pair
+        for pair in ordered
+        if pair[0] not in deprecated and pair[1] not in deprecated
+    ]
+    return live[:_MAX_PAIRS], len(live)
 
 
 def _pair_relation_types(store: GraphStore) -> dict[tuple[str, str], str]:
@@ -320,7 +365,7 @@ def is_high_confidence_contradiction(verdict: ContradictionVerdict) -> bool:
 
 
 def find_contradictions(
-    bundle_dir: Path, *, llm: LLMBackend
+    bundle_dir: Path, *, llm: LLMBackend, include_deprecated: bool = False
 ) -> tuple[list[ContradictionVerdict], int]:
     """Orchestrate the whole read-only contradiction-detection flow: open
     `build_graph` over `bundle_dir` internally, derive candidate pairs
@@ -328,20 +373,44 @@ def find_contradictions(
     `_MAX_PAIRS`), then judge each pair with one `llm.chat` call.
 
     Returns `(verdicts, total_pair_count)`: `verdicts` has exactly one
-    `ContradictionVerdict` per candidate pair (after the cap), in the same
-    deterministic order; `total_pair_count` is the full deduped pair count
-    BEFORE the cap, so the caller can detect a cap-reached truncation via
-    `total_pair_count > len(verdicts)` (spec: Cap truncation is reported).
+    `ContradictionVerdict` per candidate pair (after dropping, unless
+    `include_deprecated`, any pair touching a deprecated concept -- BEFORE
+    the `_MAX_PAIRS` cap, status-aware-retrieval Phase 3 -- and after the
+    cap itself), in the same deterministic order; `total_pair_count` is
+    `_candidate_pairs`'s deduped, deprecation-filtered pair count BEFORE the
+    cap (post-review correction: filtering now happens upstream of the cap
+    inside `_candidate_pairs`, so this count reflects LIVE pairs only), so
+    the caller can detect a cap-reached truncation via `total_pair_count >
+    len(verdicts)` (spec: Cap truncation is reported) -- and that signal now
+    only fires when live pairs genuinely exceed the cap, never as a side
+    effect of deprecation filtering alone.
 
-    A pair with zero candidate pairs (e.g. no typed edges at all) returns
-    `([], 0)` WITHOUT calling `llm.chat` -- there is nothing to judge. Any
+    Unless `include_deprecated=True`, the shared
+    `lifecycle.deprecated_concept_ids(bundle_dir)` predicate is computed
+    ONCE and passed into `_candidate_pairs`, which drops any pair where
+    either id is deprecated/superseded BEFORE slicing to `_MAX_PAIRS` -- a
+    superseded concept never appears in a candidate pair (spec), and a live
+    pair sorting past the first `_MAX_PAIRS` entries is never starved by
+    deprecated-touching pairs consuming cap slots ahead of it (post-review
+    HIGH correction; see `_candidate_pairs`'s docstring for the full
+    rationale). `include_deprecated=True` skips the predicate walk entirely
+    and passes an empty set, restoring today's status-blind behavior
+    byte-for-byte.
+
+    A pair with zero candidate pairs (e.g. no typed edges at all, or every
+    typed-edge pair touches a deprecated concept) returns `([], total)`
+    WITHOUT calling `llm.chat` -- there is nothing to judge. Any
     `OllamaError`-family exception raised by `llm.chat` propagates
     unswallowed (module docstring) -- this function catches only
     reply-parsing/validation failures for a single pair, never transport or
     model-availability errors, and a malformed reply for one pair never
     affects any other pair's result."""
+    deprecated: frozenset[str] = frozenset()
+    if not include_deprecated:
+        deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+
     with build_graph(bundle_dir) as store:
-        pairs, total_count = _candidate_pairs(store)
+        pairs, total_count = _candidate_pairs(store, deprecated)
         relation_types = _pair_relation_types(store)
 
     verdicts: list[ContradictionVerdict] = []
