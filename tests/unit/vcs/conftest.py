@@ -89,6 +89,9 @@ class MultiCommitRepo(NamedTuple):
     sibling_body_rel_path: str
     prose_log_line: str
     tombstone_anchor: str
+    anchor_survivor_id: str
+    anchor_survivor_title: str
+    anchor_survivor_bullet: str
     earlier_commit: str
     later_commit: str
 
@@ -109,6 +112,17 @@ def tmp_git_repo_with_history_residual(
     sibling_title = "Sibling Concept"
     prose_log_line = f"Reviewed provenance touching {purge_id} during an audit."
     tombstone_anchor = purge_id
+    anchor_survivor_id = "concepts/anchor-survivor"
+    anchor_survivor_title = "Anchor Survivor"
+    # A SURVIVING concept's own catalog bullet, whose FIRST link is its OWN
+    # identity (never the purge target's), but whose free-text description
+    # happens to contain a `(id: <purge-id>)`-shaped anchor -- proving the
+    # `(id:)` anchor matcher must NOT be applied to `index.md` bullets (only
+    # to `log.md` tombstones), or this SURVIVOR would be over-scrubbed.
+    anchor_survivor_bullet = (
+        f"* [{anchor_survivor_title}](/{anchor_survivor_id}.md) - "
+        f"Mentions (id: {purge_id}) in its free-text description.\n"
+    )
 
     bundle_dir = tmp_path / "bundle"
     (bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
@@ -128,11 +142,20 @@ def tmp_git_repo_with_history_residual(
         encoding="utf-8",
     )
 
+    (bundle_dir / f"{anchor_survivor_id}.md").write_text(
+        "---\ntype: Concept\ntitle: Anchor Survivor\n---\n\n"
+        f"# {anchor_survivor_title}\n\n"
+        "A surviving concept whose catalog bullet's description text "
+        "happens to contain an `(id: ...)`-shaped anchor.\n",
+        encoding="utf-8",
+    )
+
     index_path = bundle_dir / "index.md"
     index_path.write_text(
         index_path.read_text(encoding="utf-8") + "\n# Concepts\n\n"
         f"* [{purge_title}](/{purge_id}.md) - The purge target.\n"
-        f"* [{sibling_title}](/{sibling_id}.md) - A surviving sibling.\n",
+        f"* [{sibling_title}](/{sibling_id}.md) - A surviving sibling.\n"
+        f"{anchor_survivor_bullet}",
         encoding="utf-8",
     )
 
@@ -190,6 +213,9 @@ def tmp_git_repo_with_history_residual(
         sibling_body_rel_path=f"bundle/{sibling_id}.md",
         prose_log_line=prose_log_line,
         tombstone_anchor=tombstone_anchor,
+        anchor_survivor_id=anchor_survivor_id,
+        anchor_survivor_title=anchor_survivor_title,
+        anchor_survivor_bullet=anchor_survivor_bullet,
         earlier_commit=earlier_commit,
         later_commit=later_commit,
     )

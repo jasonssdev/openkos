@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import IO
 
 import pytest
 
@@ -714,6 +715,92 @@ def test_expunge_paths_scrub_cleans_up_both_temp_files_on_failure(
     assert after_sidecars - before_sidecars == set()
 
 
+def _failing_write_temp_file_factory(
+    fail_at_call: int,
+) -> Callable[..., IO[str]]:
+    """A `tempfile.NamedTemporaryFile` replacement whose `fail_at_call`-th
+    invocation returns a handle whose `write()` raises `OSError` on first
+    use -- simulating e.g. `ENOSPC`/`EIO`/quota mid-write. The temp file
+    itself still exists on disk (created by `NamedTemporaryFile` before any
+    `write()` call), so this proves whether the caller unlinks a
+    partially-written (here: zero-byte) temp file it never got to finish
+    writing."""
+    real_ntf: Callable[..., IO[str]] = tempfile.NamedTemporaryFile
+    call_count = {"n": 0}
+
+    def _factory(*args: object, **kwargs: object) -> IO[str]:
+        call_count["n"] += 1
+        handle = real_ntf(*args, **kwargs)
+        if call_count["n"] == fail_at_call:
+
+            def _raising_write(data: str) -> int:
+                raise OSError("simulated disk-full mid-write")
+
+            handle.write = _raising_write  # type: ignore[method-assign]
+        return handle
+
+    return _factory
+
+
+# Call order inside `expunge_paths` when `scrub_identities` is non-empty:
+# 1st `NamedTemporaryFile` call -> `paths_file` (purge targets: sensitive)
+# 2nd `NamedTemporaryFile` call -> `snippet_file` (static source: NOT sensitive)
+# 3rd `NamedTemporaryFile` call -> `sidecar_file` (purge-set identities: the
+#   MOST sensitive of the three -- the plaintext ids being erased).
+@pytest.mark.parametrize(
+    ("fail_at_call", "label"),
+    [(1, "paths_file"), (2, "snippet_file"), (3, "sidecar_file")],
+)
+def test_expunge_paths_cleans_up_temp_file_when_its_own_write_raises(
+    tmp_git_repo: TmpGitRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_at_call: int,
+    label: str,
+) -> None:
+    """CRITICAL (Resilience): if a temp file's OWN write loop raises
+    (e.g. `OSError: ENOSPC`), the temp file must NOT be left on disk --
+    even though its path was never assigned to the tracking variable AFTER
+    a completed write loop in the pre-fix implementation. This is most
+    load-bearing for `sidecar_file`, which holds the PLAINTEXT purge-set
+    identities (the sensitive data being erased) -- a leaked sidecar would
+    be a permanent on-disk leak of exactly what `purge` exists to erase."""
+    before_py = set(Path(tempfile.gettempdir()).glob("*.py"))
+    before_txt = set(Path(tempfile.gettempdir()).glob("*.txt"))
+
+    monkeypatch.setattr(
+        tempfile, "NamedTemporaryFile", _failing_write_temp_file_factory(fail_at_call)
+    )
+
+    with pytest.raises(git.GitError):
+        git.expunge_paths(
+            tmp_git_repo.root,
+            [f"bundle/{tmp_git_repo.source_id}.md"],
+            scrub_identities=["concepts/target"],
+        )
+
+    after_py = set(Path(tempfile.gettempdir()).glob("*.py"))
+    after_txt = set(Path(tempfile.gettempdir()).glob("*.txt"))
+    assert after_py - before_py == set(), f"leaked .py temp file ({label})"
+    assert after_txt - before_txt == set(), f"leaked .txt temp file ({label})"
+
+
+def test_expunge_paths_temp_file_setup_oserror_maps_to_git_error(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WARNING (Resilience): an `OSError` raised while writing a temp file
+    (pre-subprocess) must be mapped to `GitError`, NOT propagate as a raw
+    `OSError` -- this is the safe "the rewrite did NOT happen" case, so it
+    must be indistinguishable, to callers, from any other pre-rewrite
+    `GitError`."""
+    monkeypatch.setattr(
+        tempfile, "NamedTemporaryFile", _failing_write_temp_file_factory(1)
+    )
+
+    with pytest.raises(git.GitError) as exc_info:
+        git.expunge_paths(tmp_git_repo.root, [f"bundle/{tmp_git_repo.source_id}.md"])
+    assert not isinstance(exc_info.value, OSError)
+
+
 # --- expunge_paths scrub end-to-end: removes residual from ALL history ----
 
 
@@ -793,12 +880,18 @@ def test_expunge_paths_scrub_collision_safety_sibling_and_prose_untouched(
 ) -> None:
     """(b) the surviving sibling's `index.md` bullet AND the `log.md` line
     that only MENTIONS the purge id in prose are BYTE-IDENTICAL, in every
-    historical commit, to their pre-purge content."""
+    historical commit, to their pre-purge content -- proven via a FULL,
+    per-commit blob byte diff (tasks.md 1.13(b)), not merely a
+    substring-count parity check: each commit's `after` blob must equal
+    that SAME commit's `before` blob with ONLY the known purge-target
+    bullet/tombstone line(s) removed, byte-for-byte, everywhere else."""
     fixture = tmp_git_repo_with_history_residual
     sibling_bullet = (
         f"* [{fixture.sibling_title}](/{fixture.sibling_id}.md) - "
         "A surviving sibling.\n"
     )
+    target_bullet = _purge_target_bullet(fixture)
+    tombstone_line = _purge_tombstone_line(fixture)
 
     index_texts_before = historical_blob_texts(fixture.root, "bundle/index.md")
     log_texts_before = historical_blob_texts(fixture.root, "bundle/log.md")
@@ -814,13 +907,27 @@ def test_expunge_paths_scrub_collision_safety_sibling_and_prose_untouched(
     index_texts_after = historical_blob_texts(fixture.root, "bundle/index.md")
     log_texts_after = historical_blob_texts(fixture.root, "bundle/log.md")
 
-    # Every commit that carried the sibling bullet/prose line before the
-    # scrub must still carry it, BYTE-IDENTICAL, after the scrub.
-    assert sum(sibling_bullet in text for text in index_texts_before) == sum(
-        sibling_bullet in text for text in index_texts_after
+    # Reconstruct each commit's EXPECTED full blob: the `before` text with
+    # ONLY the known purge-target line(s) removed -- everything else,
+    # including the sibling bullet and the prose-mention line, must be
+    # byte-for-byte untouched.
+    expected_index_texts = [
+        text.replace(target_bullet, "") for text in index_texts_before
+    ]
+    expected_log_texts = [text.replace(tombstone_line, "") for text in log_texts_before]
+
+    assert index_texts_after == expected_index_texts
+    assert log_texts_after == expected_log_texts
+    # Sanity: the removal actually happened somewhere (the fixture's not
+    # accidentally a no-op) -- these full-blob equalities alone would also
+    # pass if `.replace` found nothing to remove.
+    assert any(
+        before != after
+        for before, after in zip(index_texts_before, index_texts_after, strict=True)
     )
-    assert sum(fixture.prose_log_line in text for text in log_texts_before) == sum(
-        fixture.prose_log_line in text for text in log_texts_after
+    assert any(
+        before != after
+        for before, after in zip(log_texts_before, log_texts_after, strict=True)
     )
 
 
@@ -851,3 +958,38 @@ def test_expunge_paths_scrub_collision_safety_survivor_body_untouched(
     assert shas_after == shas_before
     assert texts_after == texts_before
     assert any(fixture.purge_id in text for text in texts_after)
+
+
+def test_expunge_paths_scrub_index_anchor_asymmetry_survivor_kept(
+    tmp_git_repo_with_history_residual: MultiCommitRepo,
+) -> None:
+    """WARNING (Risk): the `(id: <x>)` structured-anchor matcher must be
+    applied ONLY to `bundle/log.md` (where `forget` tombstones carry it),
+    NEVER to `bundle/index.md` -- mirroring `remove_index_entry`'s
+    link-identity-ONLY matching (`bundle/index.py`'s live-cleanup twin,
+    which has no anchor matcher at all). A SURVIVING concept whose
+    `index.md` bullet's FIRST link is its OWN identity, but whose free-text
+    description happens to contain `(id: <purged-id>)`, must be KEPT --
+    byte-identical -- in every historical commit. The `log.md` tombstone
+    carrying that SAME anchor must still be dropped."""
+    fixture = tmp_git_repo_with_history_residual
+    tombstone_line = _purge_tombstone_line(fixture)
+
+    index_texts_before = historical_blob_texts(fixture.root, "bundle/index.md")
+    assert any(fixture.anchor_survivor_bullet in text for text in index_texts_before)
+
+    git.expunge_paths(
+        fixture.root,
+        [f"bundle/{fixture.purge_id}.md"],
+        scrub_identities=[fixture.purge_id],
+    )
+
+    index_texts_after = historical_blob_texts(fixture.root, "bundle/index.md")
+    log_texts_after = historical_blob_texts(fixture.root, "bundle/log.md")
+
+    # The survivor's bullet must round-trip UNCHANGED everywhere it appeared.
+    assert sum(
+        fixture.anchor_survivor_bullet in text for text in index_texts_before
+    ) == sum(fixture.anchor_survivor_bullet in text for text in index_texts_after)
+    # The log.md tombstone -- carrying the SAME anchor -- is still removed.
+    assert not any(tombstone_line in text for text in log_texts_after)

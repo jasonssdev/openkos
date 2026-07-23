@@ -314,8 +314,7 @@ def _identity(target):
         target.decode("utf-8")
     except UnicodeDecodeError:
         return None
-    if target.startswith(b"/"):
-        target = target[1:]
+    target = target.lstrip(b"/")
     parts = []
     for part in target.split(b"/"):
         if part in (b"", b"."):
@@ -336,6 +335,7 @@ contents = value.get_contents_by_identifier(blob_id)
 lines = contents.splitlines(keepends=True)
 kept_lines = []
 changed = False
+is_log = filename == b"bundle/log.md"
 for line in lines:
     stripped = line.lstrip()
     dropped = False
@@ -343,7 +343,7 @@ for line in lines:
         link_match = _link_re.search(stripped)
         if link_match is not None and _identity(link_match.group(1)) in scrub_ids:
             dropped = True
-        if not dropped:
+        if not dropped and is_log:
             anchor_match = _anchor_re.search(stripped)
             if anchor_match is not None and anchor_match.group(1) in scrub_ids:
                 dropped = True
@@ -405,39 +405,63 @@ def expunge_paths(
     if scrub_identities:
         _validate_scrub_identities(scrub_identities)
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as handle:
-        for rel_path in rel_paths:
-            handle.write(f"literal:{rel_path}\n")
-        paths_file = Path(handle.name)
-
+    # Every temp file's `Path` is assigned to its tracking variable
+    # IMMEDIATELY after `NamedTemporaryFile` creates it -- BEFORE its write
+    # loop runs -- so the `finally` below can always unlink it, even if that
+    # very write loop raises (e.g. `OSError: ENOSPC`/`EIO`/quota) partway
+    # through. Assigning only AFTER a completed write loop (the pre-fix
+    # shape) would leave a file created-but-unassigned, and therefore
+    # un-unlinked, exactly when its write fails -- a permanent on-disk leak
+    # of its content. This matters most for `sidecar_file`, which holds the
+    # PLAINTEXT purge-set identities (the sensitive data being erased), but
+    # applies identically to `paths_file` (purged paths) and `snippet_file`
+    # (non-sensitive, kept symmetric for the same guarantee).
+    paths_file: Path | None = None
     snippet_file: Path | None = None
     sidecar_file: Path | None = None
     try:
-        argv = [
-            "git",
-            "filter-repo",
-            "--force",
-            "--invert-paths",
-            "--paths-from-file",
-            str(paths_file),
-        ]
-        env: Mapping[str, str] | None = None
-        if scrub_identities:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".py", delete=False, encoding="utf-8"
-            ) as snippet_handle:
-                snippet_handle.write(_FILE_INFO_CALLBACK_SNIPPET)
-                snippet_file = Path(snippet_handle.name)
+        try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".txt", delete=False, encoding="utf-8"
-            ) as sidecar_handle:
-                for identity in scrub_identities:
-                    sidecar_handle.write(f"{identity}\n")
-                sidecar_file = Path(sidecar_handle.name)
-            env = {**os.environ, "OPENKOS_SCRUB_IDS_FILE": str(sidecar_file)}
-            argv = [*argv, "--file-info-callback", str(snippet_file)]
+            ) as handle:
+                paths_file = Path(handle.name)
+                for rel_path in rel_paths:
+                    handle.write(f"literal:{rel_path}\n")
+
+            argv = [
+                "git",
+                "filter-repo",
+                "--force",
+                "--invert-paths",
+                "--paths-from-file",
+                str(paths_file),
+            ]
+            env: Mapping[str, str] | None = None
+            if scrub_identities:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".py", delete=False, encoding="utf-8"
+                ) as snippet_handle:
+                    snippet_file = Path(snippet_handle.name)
+                    snippet_handle.write(_FILE_INFO_CALLBACK_SNIPPET)
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".txt", delete=False, encoding="utf-8"
+                ) as sidecar_handle:
+                    sidecar_file = Path(sidecar_handle.name)
+                    for identity in scrub_identities:
+                        sidecar_handle.write(f"{identity}\n")
+                env = {**os.environ, "OPENKOS_SCRUB_IDS_FILE": str(sidecar_file)}
+                argv = [*argv, "--file-info-callback", str(snippet_file)]
+        except OSError as exc:
+            # Setup only -- no subprocess has run yet, so this is the safe
+            # "the rewrite did NOT happen" case: a plain `GitError`, never
+            # `GitFinalizeError` (which implies the rewrite already
+            # succeeded). Without this mapping, a raw `OSError` would
+            # propagate past the CLI's `GitError`/`GitFinalizeError` handling
+            # and lose the "history not rewritten" messaging.
+            raise GitError(
+                f"expunge_paths: failed to prepare a temp file for git "
+                f"filter-repo (history NOT rewritten): {exc}"
+            ) from exc
 
         result = _run(argv, cwd=cwd, env=env)
         if result.returncode != 0:
@@ -446,7 +470,8 @@ def expunge_paths(
                 f"{result.stderr.strip()[-2000:]}"
             )
     finally:
-        paths_file.unlink(missing_ok=True)
+        if paths_file is not None:
+            paths_file.unlink(missing_ok=True)
         if snippet_file is not None:
             snippet_file.unlink(missing_ok=True)
         if sidecar_file is not None:
