@@ -36,9 +36,20 @@ class _HasConceptId(Protocol):
     """Structural type for anything `filter_hits` can filter: `FtsHit`,
     `VecHit`, and `GraphHit` all expose `.concept_id`, but this module never
     imports them directly (that would pull `retrieval`/`state` into a
-    canonical-layer leaf)."""
+    canonical-layer leaf).
 
-    concept_id: str
+    Declared as a READ-ONLY `@property`, not a plain `concept_id: str`
+    attribute (Phase 2 correction): every real hit type is a frozen
+    dataclass, so mypy `--strict` treats their `concept_id` field as
+    read-only. A plain attribute in a `Protocol` requires BOTH a getter and
+    a setter to be structurally satisfied, which a frozen dataclass field
+    never provides -- `mypy --strict` rejected `FtsHit`/`VecHit`/`GraphHit`
+    as `H` until this was narrowed to a read-only property (caught wiring
+    `retrieval/answer.py`, PR1's own single-file `mypy` check never
+    exercised this against a real concrete hit type)."""
+
+    @property
+    def concept_id(self) -> str: ...
 
 
 def deprecated_concept_ids(bundle_dir: Path) -> frozenset[str]:

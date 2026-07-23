@@ -44,6 +44,19 @@ no seeds (both initial retrievers empty) -> PPR skipped entirely,
 edges) -> `[]`, `graph_degraded=False` (the handle itself opened fine --
 query performs no freshness comparison of its own). Graph never affects
 FTS/dense outcomes, and FTS stays mandatory.
+
+status-aware-retrieval (MVP-3 gap #8 · S1, Phase 2): unless the caller
+passes `include_deprecated=True`, `answer()` computes the single shared
+`openkos.lifecycle.deprecated_concept_ids(bundle_dir)` predicate ONCE per
+call and filters `hits`/`vec_hits` via `lifecycle.filter_hits` BEFORE the
+initial fuse (so graph seeds are already live-only), and filters
+`graph_hits` again AFTER PPR (so a deprecated/superseded node PPR happens to
+surface is dropped too, while a live concept reachable only through it
+still surfaces on its own PPR-propagated merits). Every count on
+`AnswerResult` (`fts_hit_count`, `dense_hit_count`, `graph_hit_count`,
+`fused_count`) is therefore a POST-filter count. `include_deprecated=True`
+skips the predicate walk entirely -- no `_iter_docs` pass, no filtering --
+restoring today's status-blind behavior byte-for-byte at zero added cost.
 """
 
 import sqlite3
@@ -51,6 +64,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from openkos import lifecycle
 from openkos.graph.base import GraphStore
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
@@ -104,9 +118,11 @@ class AnswerResult:
     citations: list[Citation]
     """One `Citation` per concept placed in context, in fused-rank order."""
     fts_hit_count: int
-    """Raw FTS hit count for this call, BEFORE guarded re-read filtering --
-    always `len(hits)`, so it stays `> 0` even when every hit is later
-    skipped as unreadable."""
+    """FTS hit count for this call, BEFORE guarded re-read filtering but
+    AFTER the lifecycle status filter (status-aware-retrieval, Phase 2):
+    always `len(hits)` where `hits` has already had deprecated/superseded
+    concept ids removed (unless `include_deprecated=True`), so it stays `>
+    0` even when every surviving hit is later skipped as unreadable."""
     llm_invoked: bool
     """Whether `llm.chat` was called for this answer."""
     no_match_cause: NoMatchCause
@@ -119,18 +135,21 @@ class AnswerResult:
     when `fts_index` is absent, or when it is a read-only-opened persisted
     handle (which carries no reindex-time skip notices forward)."""
     dense_hit_count: int = 0
-    """Raw `vector_store.query` hit count for this call (additive)."""
+    """`vector_store.query` hit count for this call, AFTER the lifecycle
+    status filter (additive; status-aware-retrieval, Phase 2)."""
     fused_count: int = 0
     """Number of distinct `concept_id`s in the fused, limit-truncated list
-    (additive)."""
+    (additive). Already reflects the lifecycle status filter, since `hits`/
+    `vec_hits`/`graph_hits` are all filtered before this fuse."""
     dense_degraded: bool = False
     """`True` when dense retrieval could not proceed this call (absent
     `vector_store`, `VecUnavailable`, or a read-path `sqlite3.Error`) and
     FTS-only fusion was used instead; `False` when dense retrieval ran
     normally (additive)."""
     graph_hit_count: int = 0
-    """Raw personalized-PageRank pool size returned by `graph_rank` for
-    this call, BEFORE the final fusion's truncation to `limit` (additive)."""
+    """Personalized-PageRank pool size returned by `graph_rank` for this
+    call, BEFORE the final fusion's truncation to `limit` but AFTER the
+    lifecycle status filter (additive; status-aware-retrieval, Phase 2)."""
     graph_degraded: bool = False
     """`True` when graph retrieval could not proceed this call (absent
     `graph_index`, no seeds from the initial fuse, or `graph_rank` raised)
@@ -286,6 +305,7 @@ def answer(
     fts_index: fts.FtsSearchHandle | None = None,
     graph_index: GraphStore | None = None,
     limit: int = 5,
+    include_deprecated: bool = False,
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
@@ -296,15 +316,28 @@ def answer(
     retrieval -- `fts_index.search`, `embedder.embed`, `vector_store.query`,
     and any query surface of `graph_index` are never called (follow-up #1:
     provable via spies on all four). Otherwise, both retrievers are queried
-    with `pool_limit = pool.pool_limit(limit)` and fused via
-    `retrieval.fusion.fuse` into an INITIAL fused list; the top
-    `min(limit, 5)` `concept_id`s of that initial list become the graph
-    stage's `seeds`. WHEN seeds exist, `_graph_search` reads the injected
-    `graph_index` handle and runs personalized PageRank for up to
-    `pool.pool_limit(limit)` related concepts; WHEN no seeds exist (both
+    with `pool_limit = pool.pool_limit(limit)`. Unless `include_deprecated`
+    is `True`, the shared `lifecycle.deprecated_concept_ids(bundle_dir)`
+    predicate is computed ONCE and both `hits` and `vec_hits` are filtered
+    against it via `lifecycle.filter_hits` BEFORE the initial fuse
+    (status-aware-retrieval, Phase 2) -- so graph seeds are already
+    live-only. `hits`/`vec_hits` are fused via `retrieval.fusion.fuse` into
+    an INITIAL fused list; the top `min(limit, 5)` `concept_id`s of that
+    initial list become the graph stage's `seeds`. WHEN seeds exist,
+    `_graph_search` reads the injected `graph_index` handle and runs
+    personalized PageRank for up to `pool.pool_limit(limit)` related
+    concepts, and `graph_hits` is likewise filtered against the SAME
+    `deprecated` set (unless `include_deprecated`) -- the graph structure
+    itself is never rebuilt, so a live concept reachable only through a
+    deprecated/superseded neighbor still surfaces via PPR, while the
+    neighbor itself is dropped from the output. WHEN no seeds exist (both
     retrievers found nothing), the graph read is skipped entirely and
     `graph_degraded=True`. A FINAL `fusion.fuse(hits, vec_hits, graph_hits)`
-    folds all three lists, truncated to `limit`, before context assembly.
+    folds all three ALREADY-FILTERED lists, truncated to `limit`, before
+    context assembly -- every `AnswerResult` count is therefore a
+    POST-filter count. `include_deprecated=True` skips the predicate walk
+    entirely (zero added cost) and restores today's status-blind behavior
+    byte-for-byte.
 
     `answer` NEVER computes or compares a bundle manifest hash (D2 binding
     contract) -- neither this module nor any of its imports references
@@ -329,12 +362,23 @@ def answer(
         question, embedder=embedder, vector_store=vector_store, pool_limit=limit_pool
     )
 
+    # status-aware-retrieval (Phase 2): compute the shared predicate ONCE,
+    # only when filtering is actually needed -- `include_deprecated=True`
+    # skips the walk entirely (design R1, zero-cost escape path).
+    deprecated: frozenset[str] = frozenset()
+    if not include_deprecated:
+        deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+        hits = lifecycle.filter_hits(hits, deprecated)
+        vec_hits = lifecycle.filter_hits(vec_hits, deprecated)
+
     initial_fused = fusion.fuse(hits, vec_hits)
     seeds = initial_fused[: min(limit, 5)]
     if seeds:
         graph_hits, graph_degraded = _graph_search(
             graph_index, seeds, limit=pool.pool_limit(limit)
         )
+        if not include_deprecated:
+            graph_hits = lifecycle.filter_hits(graph_hits, deprecated)
     else:
         graph_hits, graph_degraded = [], True
 

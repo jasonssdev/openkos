@@ -35,10 +35,11 @@ Chain strategy: pending
 
 ## Phase 2: `answer()` Query Path (PR 2)
 
-- [ ] 2.1 RED: `tests/unit/retrieval/test_answer.py` — deprecated absent from `hits`/`vec_hits`/`graph_hits`/fused/citations by default; only-deprecated-match → `zero_hits` NO_MATCH; D→C neighbor (C surfaces on own merits, D never a hit); `include_deprecated=True` restores it AND skips the walk (spy); all-live bundle identical to pre-change; R3 pin — `fts_hit_count`/`dense_hit_count`/`graph_hit_count`/`fused_count` and the `retrieval:` line report POST-filter values
-- [ ] 2.2 GREEN: add `include_deprecated: bool = False` to `answer()`; filter `hits`/`vec_hits` pre-initial-fuse, `graph_hits` post-PPR via `lifecycle.filter_hits`
-- [ ] 2.3 REFACTOR: short-circuit the walk entirely when `include_deprecated=True`; update module docstring
-- [ ] 2.4 Verify: `pytest tests/unit/retrieval/test_answer.py -v`
+- [x] 2.1 RED: `tests/unit/retrieval/test_answer.py` — deprecated absent from `hits`/`vec_hits`/`graph_hits`/fused/citations by default; only-deprecated-match → `zero_hits` NO_MATCH; D→C neighbor (C surfaces on own merits, D never a hit); `include_deprecated=True` restores it AND skips the walk (spy); all-live bundle identical to pre-change; R3 pin — `fts_hit_count`/`dense_hit_count`/`graph_hit_count`/`fused_count` and the `retrieval:` line report POST-filter values
+- [x] 2.2 GREEN: add `include_deprecated: bool = False` to `answer()`; filter `hits`/`vec_hits` pre-initial-fuse, `graph_hits` post-PPR via `lifecycle.filter_hits`. CORRECTION (caught by `mypy --strict` on `answer.py`, not by PR1's single-file check): `lifecycle.py`'s `_HasConceptId` Protocol declared `concept_id: str` as a plain (settable) attribute, but every real hit type (`FtsHit`/`VecHit`/`GraphHit`) is a frozen dataclass — read-only. mypy rejected all three as `H` until the Protocol member was narrowed to a read-only `@property`.
+- [x] 2.3 REFACTOR: short-circuit the walk entirely when `include_deprecated=True`; update module docstring
+- [x] 2.4 Verify: `pytest tests/unit/retrieval/test_answer.py -v`
+- [x] 2.5 CORRECTION (post-review, reliability WARNING — coverage gap): added `test_deprecated_concept_never_becomes_a_graph_seed` closing a gap where no test proved a deprecated concept is withheld from the graph-stage SEED list specifically (all prior tests only asserted absence from the final output). Fixture: deprecated `D` is the sole FTS hit and would otherwise seed PPR; live `N` is `D`'s only graph neighbor, reachable no other way. Default: `N` absent (D stripped before `seeds = initial_fused[...]`, so PPR never runs). Contrast with `include_deprecated=True`: `D` seeds, PPR expands to `N`, `N` surfaces — proving the fixture is genuinely seed-reachable-only-through-`D`, not vacuous. Confirmed non-vacuous via a throwaway reorder of the filter to run after seed derivation (reverted): only this new test failed, all 54 prior tests stayed green.
 
 ## Phase 3: Resolution Filters (PR 3)
 

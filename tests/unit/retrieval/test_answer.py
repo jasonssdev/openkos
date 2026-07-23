@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos import lifecycle
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge, GraphStore
@@ -43,12 +44,30 @@ def _write_doc(
     title: str = "Stub",
     description: str = "",
     body: str = "",
+    status: str | None = None,
+    relations: list[tuple[str, str]] | None = None,
 ) -> None:
+    """Write a minimal concept `.md` file. `status`/`relations` are optional
+    lifecycle frontmatter (status-aware-retrieval, Phase 2): `relations` is a
+    list of `(target, type)` pairs, mirroring `test_lifecycle.py`'s helper so
+    both test modules build fixtures the same way."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\ntype: {doc_type}\ntitle: {title}\ndescription: {description}\n---\n{body}",
-        encoding="utf-8",
-    )
+    lines = [
+        "---",
+        f"type: {doc_type}",
+        f"title: {title}",
+        f"description: {description}",
+    ]
+    if status is not None:
+        lines.append(f"status: {status}")
+    if relations is not None:
+        lines.append("relations:")
+        for target, rel_type in relations:
+            lines.append(f"  - target: {target}")
+            lines.append(f"    type: {rel_type}")
+    lines.append("---")
+    frontmatter = "\n".join(lines) + "\n"
+    path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
 
 class _FakeLLM:
@@ -1529,3 +1548,431 @@ def test_answer_module_never_computes_or_imports_bundle_manifest_hash() -> None:
         f"{module_path} imports state.derived: {imported}"
     )
     assert "bundle_manifest_hash" not in source
+
+
+# --- status-aware-retrieval, Phase 2/PR2: query-path lifecycle filtering --
+
+
+def test_deprecated_concept_excluded_from_fts_hits_by_default(tmp_path: Path) -> None:
+    """A concept with `status: deprecated` matching lexically is absent from
+    the fused/cited result by default, while a live match still surfaces;
+    `fts_hit_count` reports the POST-filter count, not the raw 2 (spec:
+    Deprecated concept absent from a matching query)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "old.md",
+        title="Old",
+        body="deprecated dichotomyzz note",
+        status="deprecated",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "live.md",
+        title="Live",
+        body="live dichotomyzz note",
+    )
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/old", score=1.0),
+            fts.FtsHit(concept_id="concepts/live", score=0.5),
+        ]
+    )
+    llm = _FakeLLM(reply="live answer only")
+
+    result = answer_mod.answer(
+        "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=recording_index
+    )
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/old" not in cited_ids
+    assert "concepts/live" in cited_ids
+    assert result.fts_hit_count == 1
+
+
+def test_deprecated_concept_excluded_from_vector_hits_by_default(
+    tmp_path: Path,
+) -> None:
+    """A concept with `status: deprecated` matching only via dense retrieval
+    is absent from the fused/cited result by default; `dense_hit_count`
+    reports the POST-filter count, not the raw 2 (spec: No leak via any
+    single input)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "old.md", title="Old", status="deprecated")
+    _write_doc(bundle_dir / "concepts" / "live.md", title="Live")
+    recording_index = _RecordingIndex(hits=[])
+    embedder = _FakeEmbedder()
+    vector_store = _FakeVectorStore(
+        hits=[
+            VecHit(concept_id="concepts/old", distance=0.0),
+            VecHit(concept_id="concepts/live", distance=0.1),
+        ]
+    )
+    llm = _FakeLLM(reply="live via dense only")
+
+    result = answer_mod.answer(
+        "q",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        embedder=embedder,
+        vector_store=vector_store,
+        fts_index=recording_index,
+    )
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/old" not in cited_ids
+    assert "concepts/live" in cited_ids
+    assert result.dense_hit_count == 1
+
+
+def test_deprecated_concept_excluded_from_graph_hits_by_default(
+    tmp_path: Path,
+) -> None:
+    """A deprecated concept directly graph-adjacent to a live seed never
+    appears as a graph hit; `graph_hit_count` reports the POST-filter count
+    (0), not the raw pool size returned by `graph_rank` (spec: No leak via
+    any single input)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "seed.md", title="Seed", body="dichotomyzz seed"
+    )
+    _write_doc(bundle_dir / "concepts" / "old.md", title="Old", status="deprecated")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/seed", score=0.0)]
+    )
+    fake_store = _FakeGraphStore(
+        nodes=["concepts/seed", "concepts/old"],
+        edges=[Edge(source_id="concepts/seed", target_id="concepts/old")],
+    )
+    llm = _FakeLLM(reply="seed only")
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        graph_index=fake_store,
+    )
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/old" not in cited_ids
+    assert result.graph_hit_count == 0
+
+
+def test_superseded_concept_excluded_end_to_end(tmp_path: Path) -> None:
+    """A concept that is the TARGET of another concept's `supersedes` edge is
+    excluded through `answer()`, even though its own `status` frontmatter is
+    untouched (spec: superseded concept is deprecated regardless of its own
+    status)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "superseder.md",
+        title="Superseder",
+        relations=[("concepts/old", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "old.md", title="Old")
+    _write_doc(bundle_dir / "concepts" / "live.md", title="Live")
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/old", score=1.0),
+            fts.FtsHit(concept_id="concepts/live", score=0.5),
+        ]
+    )
+    llm = _FakeLLM(reply="live only")
+
+    result = answer_mod.answer(
+        "q", bundle_dir=bundle_dir, llm=llm, fts_index=recording_index
+    )
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/old" not in cited_ids
+    assert "concepts/live" in cited_ids
+
+
+def test_live_concept_surfaces_through_a_superseded_neighbor(tmp_path: Path) -> None:
+    """A live concept reachable ONLY via a superseded graph neighbor still
+    surfaces on its own merits (PPR mass propagates through the neighbor's
+    still-intact graph edge), while the superseded neighbor itself never
+    appears as a hit (spec: Live concept reachable only through a deprecated
+    neighbor)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "seed.md", title="Seed", body="dichotomyzz seed"
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "superseder.md",
+        title="Superseder",
+        relations=[("concepts/old-neighbor", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "old-neighbor.md", title="Old Neighbor")
+    _write_doc(bundle_dir / "concepts" / "live-child.md", title="Live Child")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/seed", score=0.0)]
+    )
+    fake_store = _FakeGraphStore(
+        nodes=["concepts/seed", "concepts/old-neighbor", "concepts/live-child"],
+        edges=[
+            Edge(source_id="concepts/seed", target_id="concepts/old-neighbor"),
+            Edge(source_id="concepts/old-neighbor", target_id="concepts/live-child"),
+        ],
+    )
+    llm = _FakeLLM(reply="reaches live-child through the superseded neighbor")
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        graph_index=fake_store,
+    )
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/old-neighbor" not in cited_ids
+    assert "concepts/live-child" in cited_ids
+
+
+def test_only_deprecated_match_yields_zero_hits_no_match_by_default(
+    tmp_path: Path,
+) -> None:
+    """When the ONLY concept matching the question anywhere is deprecated,
+    the default run degrades to the standard zero-hit no-match outcome, not
+    an error (spec: Only match is deprecated yields the standard no-match
+    result)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "old.md", title="Old", status="deprecated")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/old", score=1.0)]
+    )
+    llm = _FakeLLM()
+
+    result = answer_mod.answer(
+        "q", bundle_dir=bundle_dir, llm=llm, fts_index=recording_index
+    )
+
+    assert llm.calls == []
+    assert result.citations == []
+    assert result.answer == answer_mod.NO_MATCH
+    assert result.no_match_cause == "zero_hits"
+    assert result.fts_hit_count == 0
+
+
+def test_include_deprecated_true_restores_the_only_match_and_skips_the_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_deprecated=True` restores the deprecated-only match to full
+    participation AND never calls `lifecycle.deprecated_concept_ids` at all
+    (spy) -- the escape flag skips the predicate walk entirely, at zero
+    added cost (spec: Flag restores a deprecated concept; design R1)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "old.md", title="Old", status="deprecated")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/old", score=1.0)]
+    )
+    llm = _FakeLLM(reply="restored")
+    walk_calls: list[Path] = []
+    original_predicate = lifecycle.deprecated_concept_ids
+
+    def _spy_predicate(bundle_dir: Path) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir)
+
+    monkeypatch.setattr(lifecycle, "deprecated_concept_ids", _spy_predicate)
+
+    result = answer_mod.answer(
+        "q",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        include_deprecated=True,
+    )
+
+    assert walk_calls == []
+    assert result.answer == "restored"
+    assert result.citations == [
+        answer_mod.Citation(concept_id="concepts/old", title="Old")
+    ]
+    assert result.fts_hit_count == 1
+
+
+def test_default_include_deprecated_false_calls_the_predicate_walk_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default `include_deprecated=False` DOES call
+    `lifecycle.deprecated_concept_ids` exactly once per `answer()` call
+    (design R1: the walk is reintroduced deliberately, paid only when
+    filtering is actually needed)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "live.md", title="Live", body="dichotomyzz")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/live", score=1.0)]
+    )
+    walk_calls: list[Path] = []
+    original_predicate = lifecycle.deprecated_concept_ids
+
+    def _spy_predicate(bundle_dir: Path) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir)
+
+    monkeypatch.setattr(lifecycle, "deprecated_concept_ids", _spy_predicate)
+
+    answer_mod.answer(
+        "q", bundle_dir=bundle_dir, llm=_FakeLLM(reply="ok"), fts_index=recording_index
+    )
+
+    assert walk_calls == [bundle_dir]
+
+
+def test_all_live_bundle_is_identical_with_and_without_include_deprecated(
+    tmp_path: Path,
+) -> None:
+    """A bundle where every concept's effective status is live produces the
+    identical fused/cited result whether `include_deprecated` is `False`
+    (the default) or `True` -- filtering against an empty `deprecated` set
+    is a no-op (spec: All-live bundle is unaffected)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        status="active",
+        body="dichotomyzz a",
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B", body="dichotomyzz b")
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/a", score=1.0),
+            fts.FtsHit(concept_id="concepts/b", score=0.5),
+        ]
+    )
+    llm = _FakeLLM(reply="both live")
+
+    default_result = answer_mod.answer(
+        "q", bundle_dir=bundle_dir, llm=llm, fts_index=recording_index
+    )
+    include_result = answer_mod.answer(
+        "q",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        include_deprecated=True,
+    )
+
+    assert default_result.fts_hit_count == include_result.fts_hit_count == 2
+    assert (
+        [c.concept_id for c in default_result.citations]
+        == [c.concept_id for c in include_result.citations]
+        == ["concepts/a", "concepts/b"]
+    )
+
+
+def test_r3_counts_and_fused_count_report_post_filter_values(tmp_path: Path) -> None:
+    """`fts_hit_count`, `dense_hit_count`, `graph_hit_count`, and
+    `fused_count` all report POST-filter values -- filtering happens BEFORE
+    these counts are captured, not after (design R3, pinned). Every input
+    channel (fts, dense, graph) contributes one deprecated concept that must
+    not leak into the count or the citations."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "fts-old.md", title="FTS Old", status="deprecated"
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "fts-live.md",
+        title="FTS Live",
+        body="dichotomyzz",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "vec-old.md", title="Vec Old", status="deprecated"
+    )
+    _write_doc(bundle_dir / "concepts" / "vec-live.md", title="Vec Live")
+    _write_doc(
+        bundle_dir / "concepts" / "graph-old.md",
+        title="Graph Old",
+        status="deprecated",
+    )
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/fts-old", score=1.0),
+            fts.FtsHit(concept_id="concepts/fts-live", score=0.5),
+        ]
+    )
+    embedder = _FakeEmbedder()
+    vector_store = _FakeVectorStore(
+        hits=[
+            VecHit(concept_id="concepts/vec-old", distance=0.0),
+            VecHit(concept_id="concepts/vec-live", distance=0.1),
+        ]
+    )
+    fake_store = _FakeGraphStore(
+        nodes=["concepts/fts-live", "concepts/graph-old"],
+        edges=[Edge(source_id="concepts/fts-live", target_id="concepts/graph-old")],
+    )
+    llm = _FakeLLM(reply="post-filter counts")
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        embedder=embedder,
+        vector_store=vector_store,
+        fts_index=recording_index,
+        graph_index=fake_store,
+    )
+
+    assert result.fts_hit_count == 1  # 2 raw FTS hits, 1 deprecated filtered out
+    assert result.dense_hit_count == 1  # 2 raw dense hits, 1 deprecated filtered out
+    assert result.graph_hit_count == 0  # sole raw graph hit is deprecated
+    assert result.fused_count == 2  # fts-live + vec-live only
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/fts-old" not in cited_ids
+    assert "concepts/vec-old" not in cited_ids
+    assert "concepts/graph-old" not in cited_ids
+
+
+def test_deprecated_concept_never_becomes_a_graph_seed(tmp_path: Path) -> None:
+    """A deprecated concept `D` that is the sole FTS hit -- and would
+    otherwise be the graph stage's seed -- is stripped from `hits` BEFORE
+    `seeds = initial_fused[...]` is computed, so it never becomes a seed and
+    PPR never runs to expand it. A live concept `N` that is a graph neighbor
+    of `D`, reachable ONLY through `D` (no independent FTS/vector hit of its
+    own), therefore never surfaces by default. The contrast assertion with
+    `include_deprecated=True` proves the fixture genuinely wires `N` as
+    reachable-only-through-`D`: there, `D` restores to the initial fuse,
+    becomes the seed, and PPR expansion surfaces `N` on its own graph merits
+    -- so the default-case absence is not vacuous (design R1/R3: filtering
+    happens BEFORE seed derivation, not merely on the final graph_hits)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "d.md",
+        title="D",
+        body="dichotomyzz deprecated seed",
+        status="deprecated",
+    )
+    _write_doc(bundle_dir / "concepts" / "n.md", title="N")
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/d", score=1.0)]
+    )
+    fake_store = _FakeGraphStore(
+        nodes=["concepts/d", "concepts/n"],
+        edges=[Edge(source_id="concepts/d", target_id="concepts/n")],
+    )
+    llm = _FakeLLM(reply="reached only via the deprecated seed's graph edge")
+
+    default_result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        graph_index=fake_store,
+    )
+    include_result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        graph_index=fake_store,
+        include_deprecated=True,
+    )
+
+    default_cited_ids = {citation.concept_id for citation in default_result.citations}
+    assert "concepts/n" not in default_cited_ids
+    assert "concepts/d" not in default_cited_ids
+
+    include_cited_ids = {citation.concept_id for citation in include_result.citations}
+    assert "concepts/n" in include_cited_ids
