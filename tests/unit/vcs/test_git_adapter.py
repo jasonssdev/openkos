@@ -13,7 +13,13 @@ from pathlib import Path
 import pytest
 
 from openkos.vcs import git
-from tests.unit.vcs.conftest import TmpGitRepo, _git
+from tests.unit.vcs.conftest import (
+    MultiCommitRepo,
+    TmpGitRepo,
+    _git,
+    historical_blob_shas,
+    historical_blob_texts,
+)
 
 # --- availability probes ----------------------------------------------------
 
@@ -558,3 +564,290 @@ def test_expunge_paths_removes_blobs_from_all_refs(
         ["git", "rev-list", "--objects", "--all"], cwd=tmp_git_repo.root
     )
     assert concept_rel_path not in all_branches_after.stdout
+
+
+# --- _validate_scrub_identities (Slice 2: fail-closed, before any subprocess)
+
+
+@pytest.mark.parametrize(
+    "bad_identity",
+    ["", "   ", "concepts/target\nglob:**", "concepts/target\r", "concepts/\x00target"],
+)
+def test_validate_scrub_identities_rejects_invalid(bad_identity: str) -> None:
+    with pytest.raises(ValueError, match=r".+"):
+        git._validate_scrub_identities([bad_identity])
+
+
+def test_expunge_paths_rejects_invalid_scrub_identity_before_subprocess(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An invalid `scrub_identities` entry is rejected BEFORE any subprocess
+    is invoked -- injection test."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(git, "_run", _spy_run_that_succeeds(calls))
+
+    with pytest.raises(ValueError, match="newline"):
+        git.expunge_paths(
+            tmp_git_repo.root,
+            ["bundle/target.md"],
+            scrub_identities=["concepts/target\nglob:**"],
+        )
+
+    assert calls == []
+
+
+# --- expunge_paths back-compat: scrub_identities=None/empty is Slice 1 -----
+
+
+def test_expunge_paths_no_scrub_identities_argv_unchanged(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `scrub_identities` is `None`/empty, `--file-info-callback` is
+    NEVER added to argv -- byte-identical to Slice 1 behavior."""
+    captured: dict[str, object] = {}
+    real_run = git._run
+
+    def _spy_run(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[:2] == ["git", "filter-repo"]:
+            captured["argv"] = list(argv)
+        return real_run(argv, cwd, env)
+
+    monkeypatch.setattr(git, "_run", _spy_run)
+
+    concept_rel_path = f"bundle/{tmp_git_repo.source_id}.md"
+    git.expunge_paths(tmp_git_repo.root, [concept_rel_path], scrub_identities=None)
+    argv = captured["argv"]
+    assert isinstance(argv, list)
+    assert "--file-info-callback" not in argv
+
+    captured.clear()
+    git.expunge_paths(tmp_git_repo.root, [concept_rel_path], scrub_identities=[])
+    argv = captured["argv"]
+    assert isinstance(argv, list)
+    assert "--file-info-callback" not in argv
+
+
+# --- expunge_paths scrub argv/env/temp-file plumbing (one-pass, no leak) ---
+
+
+def test_expunge_paths_scrub_argv_env_and_snippet_have_no_interpolation(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `scrub_identities` is non-empty: `--file-info-callback <file>` is
+    appended AFTER `--invert-paths --paths-from-file <paths>` (ONE-PASS),
+    the snippet FILE's content is the static `_FILE_INFO_CALLBACK_SNIPPET`
+    constant VERBATIM (no id ever interpolated into it), the sidecar ids
+    file contains exactly the given identities, and `OPENKOS_SCRUB_IDS_FILE`
+    in `env` points at that sidecar -- never at argv."""
+    captured: dict[str, object] = {}
+    real_run = git._run
+
+    def _spy_run(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[:2] == ["git", "filter-repo"]:
+            captured["argv"] = list(argv)
+            captured["env"] = dict(env) if env is not None else None
+            snippet_path = Path(argv[argv.index("--file-info-callback") + 1])
+            captured["snippet_contents"] = snippet_path.read_text(encoding="utf-8")
+            sidecar_path = Path(env["OPENKOS_SCRUB_IDS_FILE"])  # type: ignore[index]
+            captured["sidecar_contents"] = sidecar_path.read_text(encoding="utf-8")
+        return real_run(argv, cwd, env)
+
+    monkeypatch.setattr(git, "_run", _spy_run)
+
+    concept_rel_path = f"bundle/{tmp_git_repo.source_id}.md"
+    identity = "concepts/some-target"
+    git.expunge_paths(
+        tmp_git_repo.root, [concept_rel_path], scrub_identities=[identity]
+    )
+
+    argv = captured["argv"]
+    assert isinstance(argv, list)
+    assert argv[:6] == [
+        "git",
+        "filter-repo",
+        "--force",
+        "--invert-paths",
+        "--paths-from-file",
+        argv[5],
+    ]
+    assert argv[6] == "--file-info-callback"
+    assert identity not in argv
+    assert captured["snippet_contents"] == git._FILE_INFO_CALLBACK_SNIPPET
+    assert identity not in git._FILE_INFO_CALLBACK_SNIPPET
+    assert captured["sidecar_contents"] == f"{identity}\n"
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert "OPENKOS_SCRUB_IDS_FILE" in env
+
+
+def test_expunge_paths_scrub_cleans_up_both_temp_files_on_failure(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both the snippet AND the sidecar temp files are unlinked in a
+    `finally` block, even when `_run` raises/returns a failure."""
+    before = set(Path(tempfile.gettempdir()).glob("*.py"))
+    before_sidecars = set(Path(tempfile.gettempdir()).glob("*.txt"))
+
+    def _fake_run(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            argv, returncode=1, stdout="", stderr="filter-repo exploded"
+        )
+
+    monkeypatch.setattr(git, "_run", _fake_run)
+
+    with pytest.raises(git.GitError):
+        git.expunge_paths(
+            tmp_git_repo.root,
+            [f"bundle/{tmp_git_repo.source_id}.md"],
+            scrub_identities=["concepts/target"],
+        )
+
+    after = set(Path(tempfile.gettempdir()).glob("*.py"))
+    after_sidecars = set(Path(tempfile.gettempdir()).glob("*.txt"))
+    assert after - before == set()
+    assert after_sidecars - before_sidecars == set()
+
+
+# --- expunge_paths scrub end-to-end: removes residual from ALL history ----
+
+
+def _purge_target_bullet(fixture: MultiCommitRepo) -> str:
+    return f"* [{fixture.purge_title}](/{fixture.purge_id}.md) - The purge target.\n"
+
+
+def _purge_tombstone_line(fixture: MultiCommitRepo) -> str:
+    return f"* **Forgot**: removed concept (id: {fixture.tombstone_anchor})\n"
+
+
+def test_expunge_paths_scrub_removes_residual_from_all_history(
+    tmp_git_repo_with_history_residual: MultiCommitRepo,
+) -> None:
+    """A single `expunge_paths(root, expunge_targets,
+    scrub_identities=[purge_id])` call removes the purge target's catalog
+    bullet AND its tombstone from EVERY historical blob of `index.md` and
+    `log.md` -- while leaving the DELIBERATE prose mention of the purge id
+    (an unrelated log line that is never itself a link/anchor) untouched,
+    per spec's own "prose mention round-trip unchanged" scenario."""
+    fixture = tmp_git_repo_with_history_residual
+    target_bullet = _purge_target_bullet(fixture)
+    tombstone_line = _purge_tombstone_line(fixture)
+
+    index_texts_before = historical_blob_texts(fixture.root, "bundle/index.md")
+    assert any(target_bullet in text for text in index_texts_before)
+    log_texts_before = historical_blob_texts(fixture.root, "bundle/log.md")
+    assert any(tombstone_line in text for text in log_texts_before)
+
+    git.expunge_paths(
+        fixture.root,
+        [f"bundle/{fixture.purge_id}.md"],
+        scrub_identities=[fixture.purge_id],
+    )
+
+    index_texts_after = historical_blob_texts(fixture.root, "bundle/index.md")
+    log_texts_after = historical_blob_texts(fixture.root, "bundle/log.md")
+    assert index_texts_after, "index.md must still exist in history"
+    assert log_texts_after, "log.md must still exist in history"
+    assert not any(target_bullet in text for text in index_texts_after)
+    assert not any(tombstone_line in text for text in log_texts_after)
+    # The prose-only mention (never the purge id's own link/anchor) survives.
+    assert any(fixture.prose_log_line in text for text in log_texts_after)
+
+
+# --- COLLISION-SAFETY (load-bearing): residual in an EARLIER commit -------
+
+
+def test_expunge_paths_scrub_collision_safety_purge_id_absent_everywhere(
+    tmp_git_repo_with_history_residual: MultiCommitRepo,
+) -> None:
+    """(a) the purge target's catalog bullet AND tombstone are absent from
+    EVERY historical commit's `index.md`/`log.md` blob, proving the scrub
+    reaches commits BEFORE the last rewrite (the residual lives in the
+    EARLIER commit, not the tip)."""
+    fixture = tmp_git_repo_with_history_residual
+    assert fixture.earlier_commit != fixture.later_commit
+    target_bullet = _purge_target_bullet(fixture)
+    tombstone_line = _purge_tombstone_line(fixture)
+
+    git.expunge_paths(
+        fixture.root,
+        [f"bundle/{fixture.purge_id}.md"],
+        scrub_identities=[fixture.purge_id],
+    )
+
+    index_texts = historical_blob_texts(fixture.root, "bundle/index.md")
+    log_texts = historical_blob_texts(fixture.root, "bundle/log.md")
+    assert index_texts, "index.md must still exist in history"
+    assert log_texts, "log.md must still exist in history"
+    assert not any(target_bullet in text for text in index_texts)
+    assert not any(tombstone_line in text for text in log_texts)
+
+
+def test_expunge_paths_scrub_collision_safety_sibling_and_prose_untouched(
+    tmp_git_repo_with_history_residual: MultiCommitRepo,
+) -> None:
+    """(b) the surviving sibling's `index.md` bullet AND the `log.md` line
+    that only MENTIONS the purge id in prose are BYTE-IDENTICAL, in every
+    historical commit, to their pre-purge content."""
+    fixture = tmp_git_repo_with_history_residual
+    sibling_bullet = (
+        f"* [{fixture.sibling_title}](/{fixture.sibling_id}.md) - "
+        "A surviving sibling.\n"
+    )
+
+    index_texts_before = historical_blob_texts(fixture.root, "bundle/index.md")
+    log_texts_before = historical_blob_texts(fixture.root, "bundle/log.md")
+    assert any(sibling_bullet in text for text in index_texts_before)
+    assert any(fixture.prose_log_line in text for text in log_texts_before)
+
+    git.expunge_paths(
+        fixture.root,
+        [f"bundle/{fixture.purge_id}.md"],
+        scrub_identities=[fixture.purge_id],
+    )
+
+    index_texts_after = historical_blob_texts(fixture.root, "bundle/index.md")
+    log_texts_after = historical_blob_texts(fixture.root, "bundle/log.md")
+
+    # Every commit that carried the sibling bullet/prose line before the
+    # scrub must still carry it, BYTE-IDENTICAL, after the scrub.
+    assert sum(sibling_bullet in text for text in index_texts_before) == sum(
+        sibling_bullet in text for text in index_texts_after
+    )
+    assert sum(fixture.prose_log_line in text for text in log_texts_before) == sum(
+        fixture.prose_log_line in text for text in log_texts_after
+    )
+
+
+def test_expunge_paths_scrub_collision_safety_survivor_body_untouched(
+    tmp_git_repo_with_history_residual: MultiCommitRepo,
+) -> None:
+    """(c) a surviving concept's bundle BODY file that legitimately contains
+    the purge id/title in its own text is UNTOUCHED -- same blob hash before
+    and after, in every commit -- proving the filename gate scopes the
+    scrub to ONLY `index.md`/`log.md`."""
+    fixture = tmp_git_repo_with_history_residual
+    body_rel_path = fixture.sibling_body_rel_path
+
+    shas_before = historical_blob_shas(fixture.root, body_rel_path)
+    assert shas_before
+    texts_before = historical_blob_texts(fixture.root, body_rel_path)
+    assert any(fixture.purge_id in text for text in texts_before)
+
+    git.expunge_paths(
+        fixture.root,
+        [f"bundle/{fixture.purge_id}.md"],
+        scrub_identities=[fixture.purge_id],
+    )
+
+    shas_after = historical_blob_shas(fixture.root, body_rel_path)
+    texts_after = historical_blob_texts(fixture.root, body_rel_path)
+
+    assert shas_after == shas_before
+    assert texts_after == texts_before
+    assert any(fixture.purge_id in text for text in texts_after)

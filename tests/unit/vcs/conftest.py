@@ -68,3 +68,158 @@ def tmp_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TmpGitRepo:
     _git(["commit", "-m", "Initial workspace + one Source"], cwd=tmp_path)
 
     return TmpGitRepo(root=tmp_path, source_id=source_id)
+
+
+class MultiCommitRepo(NamedTuple):
+    """A multi-commit `openkos` workspace built for the Slice 2
+    history-content-scrub COLLISION-SAFETY tests: an EARLIER commit writes
+    the purge target's catalog bullet, a `forget`-style tombstone, a
+    surviving sibling's catalog bullet, and a `log.md` line that mentions
+    the purge target's id only in PROSE (never as its own link) -- then a
+    LATER commit rewrites `index.md`/`log.md` again (adding an unrelated
+    concept), so the residual to scrub lives in a NON-tip historical blob,
+    not merely the current `HEAD`."""
+
+    root: Path
+    purge_id: str
+    purge_title: str
+    purge_body_rel_path: str
+    sibling_id: str
+    sibling_title: str
+    sibling_body_rel_path: str
+    prose_log_line: str
+    tombstone_anchor: str
+    earlier_commit: str
+    later_commit: str
+
+
+@pytest.fixture
+def tmp_git_repo_with_history_residual(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> MultiCommitRepo:
+    _git(["init"], cwd=tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+
+    purge_id = "concepts/target"
+    purge_title = "Target Concept"
+    sibling_id = "concepts/sibling"
+    sibling_title = "Sibling Concept"
+    prose_log_line = f"Reviewed provenance touching {purge_id} during an audit."
+    tombstone_anchor = purge_id
+
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (bundle_dir / f"{purge_id}.md").write_text(
+        "---\ntype: Concept\ntitle: Target Concept\n---\n\n"
+        f"# {purge_title}\n\n"
+        f"Body that legitimately mentions its own id {purge_id} and title "
+        f'"{purge_title}" in its own text.\n',
+        encoding="utf-8",
+    )
+    (bundle_dir / f"{sibling_id}.md").write_text(
+        "---\ntype: Concept\ntitle: Sibling Concept\n---\n\n"
+        f"# {sibling_title}\n\n"
+        f'Sibling body that legitimately discusses {purge_id} ("{purge_title}") '
+        "in its own analysis text -- must survive untouched, proving the "
+        "scrub's filename gate never reaches bundle bodies.\n",
+        encoding="utf-8",
+    )
+
+    index_path = bundle_dir / "index.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8") + "\n# Concepts\n\n"
+        f"* [{purge_title}](/{purge_id}.md) - The purge target.\n"
+        f"* [{sibling_title}](/{sibling_id}.md) - A surviving sibling.\n",
+        encoding="utf-8",
+    )
+
+    log_path = bundle_dir / "log.md"
+    log_path.write_text(
+        log_path.read_text(encoding="utf-8").replace(
+            "* **Initialization**",
+            f"* **Forgot**: removed concept (id: {tombstone_anchor})\n"
+            f"* {prose_log_line}\n"
+            "* **Initialization**",
+        ),
+        encoding="utf-8",
+    )
+
+    _git(["add", "-A"], cwd=tmp_path)
+    _git(
+        ["commit", "-m", "Earlier: target+sibling+tombstone+prose mention"],
+        cwd=tmp_path,
+    )
+    earlier_commit = vcs_git._run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path
+    ).stdout.strip()
+
+    later_id = "concepts/later"
+    (bundle_dir / f"{later_id}.md").write_text(
+        "---\ntype: Concept\ntitle: Later Concept\n---\n\n"
+        "# Later Concept\n\nA later, unrelated concept.\n",
+        encoding="utf-8",
+    )
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8")
+        + "* [Later Concept](/concepts/later.md) - Added later.\n",
+        encoding="utf-8",
+    )
+    log_path.write_text(
+        log_path.read_text(encoding="utf-8").replace(
+            "* **Initialization**",
+            "* **Later entry**: added a follow-up concept.\n* **Initialization**",
+        ),
+        encoding="utf-8",
+    )
+    _git(["add", "-A"], cwd=tmp_path)
+    _git(["commit", "-m", "Later: rewrite index.md/log.md again"], cwd=tmp_path)
+    later_commit = vcs_git._run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path
+    ).stdout.strip()
+
+    return MultiCommitRepo(
+        root=tmp_path,
+        purge_id=purge_id,
+        purge_title=purge_title,
+        purge_body_rel_path=f"bundle/{purge_id}.md",
+        sibling_id=sibling_id,
+        sibling_title=sibling_title,
+        sibling_body_rel_path=f"bundle/{sibling_id}.md",
+        prose_log_line=prose_log_line,
+        tombstone_anchor=tombstone_anchor,
+        earlier_commit=earlier_commit,
+        later_commit=later_commit,
+    )
+
+
+def historical_blob_shas(root: Path, rel_path: str) -> list[str]:
+    """Every commit's blob SHA for `rel_path`, oldest-first, across ALL
+    refs -- `None`-filtered for commits where the path did not exist yet.
+    Used by the COLLISION-SAFETY tests to prove byte-exact identity (same
+    blob hash) rather than merely textual equality."""
+    commits = vcs_git._run(
+        ["git", "rev-list", "--all", "--reverse"], cwd=root
+    ).stdout.split()
+    shas: list[str] = []
+    for sha in commits:
+        result = vcs_git._run(["git", "rev-parse", f"{sha}:{rel_path}"], cwd=root)
+        if result.returncode == 0:
+            shas.append(result.stdout.strip())
+    return shas
+
+
+def historical_blob_texts(root: Path, rel_path: str) -> list[str]:
+    """Every commit's blob TEXT content for `rel_path`, oldest-first,
+    across ALL refs. Used to assert absence/presence of specific text."""
+    commits = vcs_git._run(
+        ["git", "rev-list", "--all", "--reverse"], cwd=root
+    ).stdout.split()
+    texts: list[str] = []
+    for sha in commits:
+        result = vcs_git._run(["git", "show", f"{sha}:{rel_path}"], cwd=root)
+        if result.returncode == 0:
+            texts.append(result.stdout)
+    return texts

@@ -4,10 +4,12 @@ from datetime import date
 
 import pytest
 
+from openkos.bundle import index as bundle_index
 from openkos.bundle.log import (
     LogEntry,
     insert_log_entry,
     read_recent_entries,
+    remove_log_entry,
     render_log,
 )
 
@@ -246,3 +248,115 @@ def test_insert_log_entry_rejects_newline_in_entry(newline: str) -> None:
             date(2026, 7, 16),
             f"evil{newline}## 2099-01-01",
         )
+
+
+# --- remove_log_entry (Slice 2: live log.md tombstone cleanup) -------------
+
+
+def test_remove_log_entry_drops_bullet_matching_first_link() -> None:
+    """`remove_log_entry` drops a bullet whose FIRST markdown link resolves
+    to `concept_id`."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* [Reading notes](/sources/reading-notes.md) - Ingested.\n"
+        "* [Sibling](/sources/sibling.md) - A surviving sibling.\n"
+    )
+
+    result, removed = remove_log_entry(log_text, "sources/reading-notes")
+
+    assert removed == 1
+    assert "[Reading notes]" not in result
+    assert "[Sibling]" in result
+
+
+def test_remove_log_entry_drops_tombstone_matching_anchor() -> None:
+    """`remove_log_entry` drops a `forget`-style tombstone line whose
+    `(id: <x>)` anchor equals `concept_id`, matching the real tombstone
+    format `**Tombstone** (HH:MM:SSZ): Removed [<title>](/<id>.md)
+    (id: <id>).`."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* **Tombstone** (12:00:00Z): Removed [Reading notes]"
+        "(/sources/reading-notes.md) (id: sources/reading-notes).\n"
+    )
+
+    result, removed = remove_log_entry(log_text, "sources/reading-notes")
+
+    assert removed == 1
+    assert "Tombstone" not in result
+
+
+def test_remove_log_entry_zero_matches_returns_unchanged() -> None:
+    """A `concept_id` with no matching bullet returns `(log_text, 0)`
+    UNCHANGED -- not an error."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* [Reading notes](/sources/reading-notes.md) - Ingested.\n"
+    )
+
+    result, removed = remove_log_entry(log_text, "sources/nonexistent")
+
+    assert removed == 0
+    assert result == log_text
+
+
+def test_remove_log_entry_prose_mention_and_sibling_survive_untouched() -> None:
+    """A surviving sibling's bullet AND a log line that merely MENTIONS the
+    target id in prose (not as its own first link) are left byte-identical
+    when `remove_log_entry` is called for an unrelated concept id (mirrors
+    the collision-safety guarantee at the pure-function level)."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* [Sibling](/concepts/sibling.md) - A surviving sibling.\n"
+        "* Reviewed provenance touching concepts/target during an audit.\n"
+    )
+
+    result, removed = remove_log_entry(log_text, "concepts/target")
+
+    assert removed == 0
+    assert result == log_text
+
+
+def test_remove_log_entry_does_not_match_non_first_link_on_the_line() -> None:
+    """Only the FIRST markdown link on a bullet line is the match
+    candidate -- a bullet whose description mentions another concept must
+    not be dropped when that OTHER concept is the target."""
+    log_text = (
+        "# Directory Update Log\n"
+        "\n"
+        "## 2026-07-16\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - See also "
+        "[Epictetus](/people/epictetus.md).\n"
+    )
+
+    result, removed = remove_log_entry(log_text, "people/epictetus")
+
+    assert removed == 0
+    assert result == log_text
+
+
+def test_remove_log_entry_reuses_bundle_index_matcher_not_a_fork() -> None:
+    """`remove_log_entry` REUSES (imports, never re-implements)
+    `bundle.index`'s `_LINK_RE`, `_BULLET_MARKERS`, and `_link_identity` --
+    proven by object IDENTITY (`is`), since `from ... import name` binds a
+    separate reference in `log.py`'s namespace that a same-named
+    re-implementation could otherwise satisfy by coincidence; `is` proves
+    it is the EXACT SAME object, i.e. one matcher, never a diverging fork."""
+    from openkos.bundle import log as bundle_log
+
+    assert getattr(bundle_log, "_link_identity") is bundle_index._link_identity  # noqa: B009
+    assert getattr(bundle_log, "_LINK_RE") is bundle_index._LINK_RE  # noqa: B009
+    assert getattr(bundle_log, "_BULLET_MARKERS") is bundle_index._BULLET_MARKERS  # noqa: B009
