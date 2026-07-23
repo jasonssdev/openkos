@@ -44,27 +44,27 @@ delete) — PR 2 alone likely exceeds 400 lines.
 
 ## Phase 4: Forget Cascade — RED (`tests/unit/cli/test_forget.py`)
 
-- [ ] 4.1 Threat: path traversal on root id — `..`/absolute/reserved refuses BEFORE descendant resolution, `--scope source`.
-- [ ] 4.2 Threat: destructive over-delete — multi-source child untouched by a `source` purge (full-CLI orphan-guard regression).
-- [ ] 4.3 Threat: partial write corruption — index+log written before any unlink; unlinks `sorted(purge_ids)`; interrupted run leaves git-recoverable, catalog-consistent state.
-- [ ] 4.4 Threat: path traversal via descendant ids — every member path stays inside `bundle_dir`; members disk-discovered only.
-- [ ] 4.5 `--scope self` default byte-identical to S2a (no cascade, verbatim prompt/refusal text).
-- [ ] 4.6 `--scope source` Source + 2 single-source children → 3 deletes, 3 tombstones, `index.md` updated for all 3.
-- [ ] 4.7 Intra-set `## Related` backlink excluded from gate-1; external inbound ref refuses unless `--force`; external `unverifiable` referrer naming a non-root member refuses unless `--force`.
-- [ ] 4.8 Preview states count; `--force` alone doesn't auto-confirm gate 2; non-TTY without `--auto` refuses even with `--force`.
-- [ ] 4.9 Per-member resurrection: a member's outbound `supersedes` to an out-of-set concept is disclosed.
+- [x] 4.1 Threat: path traversal on root id — `..`/absolute/reserved refuses BEFORE descendant resolution, `--scope source`.
+- [x] 4.2 Threat: destructive over-delete — multi-source child untouched by a `source` purge (full-CLI orphan-guard regression).
+- [x] 4.3 Threat: partial write corruption — index+log written before any unlink; unlinks `sorted(purge_ids)`; interrupted run leaves git-recoverable, catalog-consistent state.
+- [x] 4.4 Threat: path traversal via descendant ids — every member path stays inside `bundle_dir`; members disk-discovered only.
+- [x] 4.5 `--scope self` default byte-identical to S2a (no cascade, verbatim prompt/refusal text).
+- [x] 4.6 `--scope source` Source + 2 single-source children → 3 deletes, 3 tombstones, `index.md` updated for all 3.
+- [x] 4.7 Intra-set `## Related` backlink excluded from gate-1; external inbound ref refuses unless `--force`; external `unverifiable` referrer naming a non-root member refuses unless `--force`.
+- [x] 4.8 Preview states count; `--force` alone doesn't auto-confirm gate 2; non-TTY without `--auto` refuses even with `--force`.
+- [x] 4.9 Per-member resurrection: a member's outbound `supersedes` to an out-of-set concept is disclosed.
 
 ## Phase 5: Forget Cascade — GREEN (`src/openkos/cli/main.py`)
 
-- [ ] 5.1 Add `--scope {self,source}` option, default `self`; invalid value → `ValueError` (reuse `except (OSError, ValueError)`).
-- [ ] 5.2 After path-safety/existence: `source` → `find_provenance_descendants(other_files, root_ids={canonical_id})`; else `purge_ids = {canonical_id}`.
-- [ ] 5.3 Per-member `find_inbound_references(other_files, target_id=member)`; merge; drop refs with `referrer_id ∈ purge_ids`; dedup `unverifiable` by `referrer_id`.
-- [ ] 5.4 Per-member resurrection + index/log removal; preview lists every member id, per-member `!`/`?`/`~` lines, count line for `source`.
-- [ ] 5.5 Scope-conditional text: `self` keeps S2a's verbatim strings; `source` states delete count in gate-1/gate-2 prompts.
-- [ ] 5.6 Phase B: write `index.md` then `log.md` (N tombstones), then `for id in sorted(purge_ids): fsio.remove_file(id)` LAST.
-- [ ] 5.7 Run `test_forget.py`; all new + existing S2a cases green, zero regression.
+- [x] 5.1 Add `--scope {self,source}` option, default `self`; invalid value → `ValueError` (reuse `except (OSError, ValueError)`).
+- [x] 5.2 After path-safety/existence: `source` → `find_provenance_descendants(other_files, root_ids={canonical_id})`; else `purge_ids = {canonical_id}`.
+- [x] 5.3 Per-member `find_inbound_references(other_files, target_id=member)`; merge; drop refs with `referrer_id ∈ purge_ids`; dedup `unverifiable` by `referrer_id`.
+- [x] 5.4 Per-member resurrection + index/log removal; preview lists every member id, per-member `!`/`?`/`~` lines, count line for `source`.
+- [x] 5.5 Scope-conditional text: `self` keeps S2a's verbatim strings; `source` states delete count in gate-1/gate-2 prompts.
+- [x] 5.6 Phase B: write `index.md` then `log.md` (N tombstones), then `for id in sorted(purge_ids): fsio.remove_file(id)` LAST.
+- [x] 5.7 Run `test_forget.py`; all new + existing S2a cases green, zero regression.
 
 ## Phase 6: Forget Cascade — REFACTOR + Verify
 
-- [ ] 6.1 Extend `forget`'s docstring for `--scope`, cascade resolution, per-member gates.
-- [ ] 6.2 `pytest tests/unit/bundle/test_provenance.py tests/unit/cli/test_forget.py -q`; confirm no `openkos.graph` import in `provenance.py`.
+- [x] 6.1 Extend `forget`'s docstring for `--scope`, cascade resolution, per-member gates.
+- [x] 6.2 `pytest tests/unit/bundle/test_provenance.py tests/unit/cli/test_forget.py -q`; confirm no `openkos.graph` import in `provenance.py`.

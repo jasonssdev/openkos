@@ -215,7 +215,10 @@ file, so the catalog never references a file that does not exist. The N
 concept-file deletions (`fsio.remove_file`) MUST run LAST, in deterministic
 sorted order by concept-id. Phase B is NOT required to be transactional; a
 failure partway through the N unlinks MAY leave a partial, git-recoverable
-result with the catalog already consistent-forward.
+result with the catalog already consistent-forward. On such a partial failure
+of a cascade (N > 1), the error MUST report how many of the N members were
+removed before failing and how many remain, and point to recovery (git or
+`openkos lint`), so the operator is not left to reconstruct partial state.
 (Previously: a single index/log update followed by a single file deletion.)
 
 #### Scenario: Catalog updated before any cascade file deletion
@@ -228,4 +231,5 @@ result with the catalog already consistent-forward.
 - GIVEN a Phase B run interrupted after 2 of 3 unlinks
 - WHEN the bundle is inspected afterward
 - THEN `index.md`/`log.md` reflect all 3 removals, one file may remain as a
-  benign orphan, and recovery is via `git status`/`git checkout`
+  benign orphan, the error states how many of the 3 were removed and how many
+  remain, and recovery is via `git status`/`git checkout`
