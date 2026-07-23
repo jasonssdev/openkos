@@ -1008,8 +1008,7 @@ def forget(
         messages: list[str] = []
         if verified_refs:
             messages.append(
-                f"{len(verified_refs)} inbound reference(s) to "
-                f"'{canonical_id}' found"
+                f"{len(verified_refs)} inbound reference(s) to '{canonical_id}' found"
             )
         if unverifiable_refs:
             messages.append(

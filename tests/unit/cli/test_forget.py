@@ -878,9 +878,7 @@ def test_path_safety_runs_before_any_bundle_scan(
     def _boom(*args: object, **kwargs: object) -> None:
         raise AssertionError("find_inbound_references must not run before path-safety")
 
-    monkeypatch.setattr(
-        cli_main.bundle_references, "find_inbound_references", _boom
-    )
+    monkeypatch.setattr(cli_main.bundle_references, "find_inbound_references", _boom)
 
     result = runner.invoke(app, ["forget", "../../evil", "--auto"])
 
