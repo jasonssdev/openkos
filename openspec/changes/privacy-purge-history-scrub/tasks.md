@@ -277,3 +277,97 @@ Design source: `openspec/changes/privacy-purge-history-scrub/design.md`
   orchestrator/reviewer to decide on: accept as `size:exception`, or split
   the already-complete diff along the documented fallback boundary before
   review.
+- **size:exception accepted (test-dense safety coverage)**: the orchestrator
+  accepted the >800-line diff as `size:exception` for Slice 2 as originally
+  applied AND for this correction batch — the overage is test-dense
+  collision/parity safety coverage (COLLISION-SAFETY 1.13, PARITY 1.3), not
+  review-dense production logic (~356 production / 769 test lines
+  pre-correction). No split was performed.
+
+## Correction batch (4R findings on the irreversible history content-scrub)
+
+Bounded correction batch addressing 4R findings (Resilience/Risk/
+Reliability/Readability) found on the Slice 2 implementation above. RED
+tests were written first for every CRITICAL/WARNING defect fix, per Strict
+TDD.
+
+- [x] **CRITICAL (Resilience)** — sidecar/paths/snippet temp-file leak of
+      the sensitive purge-set identities on write failure. `expunge_paths`
+      now assigns each temp file's `Path` to its tracking variable
+      IMMEDIATELY after `NamedTemporaryFile` creates it (before its write
+      loop runs), so the `finally` block always unlinks it even if that
+      file's own write raises mid-loop (e.g. `OSError: ENOSPC`/`EIO`/
+      quota). Also moved `paths_file` creation INSIDE the try/finally (it
+      was previously created outside it entirely).
+      — RED: `test_expunge_paths_cleans_up_temp_file_when_its_own_write_raises`
+      (parametrized over all three temp files, proving the sidecar case —
+      the sensitive purge-set ids — specifically).
+      — Where: `src/openkos/vcs/git.py::expunge_paths`.
+- [x] **WARNING (Resilience)** — `OSError` from temp-file setup not mapped
+      to `GitError`. Setup (all three temp-file creations) is now wrapped
+      in `try/except OSError` that re-raises as a plain `GitError` (never
+      `GitFinalizeError`, since no subprocess has run yet — the safe
+      "rewrite did NOT happen" case), preserving the CLI's existing
+      `GitError`/`GitFinalizeError` handling and "history not rewritten"
+      messaging with no CLI changes needed.
+      — RED: `test_expunge_paths_temp_file_setup_oserror_maps_to_git_error`.
+      — Where: `src/openkos/vcs/git.py::expunge_paths`.
+- [x] **WARNING (Risk)** — over-scrub: `index.md` anchor-matching
+      asymmetry. The snippet now applies the `(id: <x>)` anchor matcher
+      ONLY when `filename == b"bundle/log.md"` (via a new `is_log` gate);
+      `bundle/index.md` is matched by link-identity ONLY, mirroring
+      `remove_index_entry`'s live-cleanup behavior (which has no anchor
+      matcher at all).
+      — RED: `test_expunge_paths_scrub_index_anchor_asymmetry_survivor_kept`
+      (new `anchor_survivor_bullet` fixture field in
+      `tests/unit/vcs/conftest.py`'s `MultiCommitRepo`: a surviving
+      concept's own catalog bullet whose free-text description contains
+      `(id: <purged-id>)`).
+      — Where: `src/openkos/vcs/git.py::_FILE_INFO_CALLBACK_SNIPPET`.
+- [x] **WARNING (Reliability)** — bytes/Python `_identity` divergence on
+      `//`-prefixed (and other multi-leading-slash) link targets.
+      Reconciled both sides to strip ALL leading slashes
+      (`target.lstrip("/")` / `target.lstrip(b"/")`) before further
+      normalization — the cleaner canonicalization, applied identically on
+      both sides; confirmed no change to `remove_index_entry`/
+      `remove_log_entry` behavior for normal (single-slash) links (existing
+      tests stayed green).
+      — RED: 3 new cases added to
+      `tests/unit/vcs/test_scrub_snippet_parity.py`'s parametrized parity
+      test (`//concepts/foo.md`, `///concepts/foo.md`,
+      `//concepts//foo.md`), all resolving to `concepts/foo`.
+      — Where: `src/openkos/bundle/index.py::_link_identity`,
+      `src/openkos/vcs/git.py::_FILE_INFO_CALLBACK_SNIPPET`.
+- [x] **WARNING (Readability)** — missing reciprocal cross-reference.
+      Added a `NOTE:` to `bundle/index.py::_link_identity`'s docstring
+      pointing at its bytes twin (`_FILE_INFO_CALLBACK_SNIPPET` in
+      `vcs/git.py`) and the parity test
+      (`tests/unit/vcs/test_scrub_snippet_parity.py`), matching the
+      codebase's existing bidirectional-duplication cross-ref convention
+      (`bundle/links.py`). Docs-only, no test.
+      — Where: `src/openkos/bundle/index.py`.
+- [x] **WARNING (Readability)** — `docs/cli.md` stale. Updated the
+      `purge` section: removed the mandatory residual-leak warning and its
+      "NOT complete right-to-be-forgotten"/"until Slice 2 closes this
+      residual" text; documented complete RTBF (history content-scrub of
+      `index.md`/`log.md` in the same pass, live log.md tombstone cleanup);
+      retitled the section heading (dropped "Slice 1"); updated the two
+      other stale "Slice 1"/"Slice 2 (content-scrub)" references
+      (`doctor` check 8, the MVP-1-orientation paragraph). Kept the
+      irreversibility + safety-rail description. Docs-only, no test.
+      — Where: `docs/cli.md`.
+- [x] **SUGGESTION** — tightened collision-safety test (b). Replaced the
+      substring-count-parity assertion with a full, per-commit blob byte
+      diff: each commit's `after` text must equal that SAME commit's
+      `before` text with ONLY the known purge-target bullet/tombstone line
+      removed (`.replace(...)`), byte-for-byte, everywhere else — matching
+      tasks.md 1.13(b)'s original intent ("compare full blob bytes
+      commit-by-commit, not just presence/absence").
+      — Where:
+      `tests/unit/vcs/test_git_adapter.py::test_expunge_paths_scrub_collision_safety_sibling_and_prose_untouched`.
+
+**Correction verification**: whole-tree `uv run pytest` (1808 passed, +8
+net new tests over the pre-correction 1800), `uv run mypy .`, `uv run ruff
+check .`, `uv run ruff format --check .`, `uv sync --locked` all green.
+`forget`, Slice-1 purge, and `bundle/index.py`/`bundle/log.py` tests
+unchanged-passing throughout.
