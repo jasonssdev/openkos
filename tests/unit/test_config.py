@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from openkos import config
 
@@ -425,6 +426,38 @@ def test_read_config_raises_valueerror_on_malformed_yaml(tmp_path: Path) -> None
 def test_read_config_raises_valueerror_on_non_mapping_root(tmp_path: Path) -> None:
     """A YAML root that parses but is not a mapping (e.g. a list) raises `ValueError`."""
     (tmp_path / "openkos.yaml").write_text("- a\n- b\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"openkos\.yaml"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_wraps_typeerror_from_yaml_parsing_as_valueerror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `TypeError` raised while parsing YAML must surface as `ValueError`,
+    matching every other malformed-YAML case, instead of escaping raw.
+
+    PyYAML's constructor can raise a bare `TypeError` for a mapping with an
+    unhashable complex key on some constructor code paths -- a case that is
+    NOT a `yaml.YAMLError` subclass and would otherwise escape uncaught past
+    callers that only guard `(OSError, ValueError)`.
+
+    NOTE: with the PyYAML version pinned in this project (verified: 6.0.3,
+    pure-Python `SafeLoader`), `BaseConstructor.construct_mapping` already
+    guards unhashable keys with an `isinstance(key, Hashable)` check and
+    raises `yaml.constructor.ConstructorError` (a `YAMLError` subclass) for
+    every complex-key shape tried (e.g. `"? - a\\n  - b\\n: c\\n"`) -- so this
+    exact escape is not currently reproducible via real YAML content in this
+    environment. This test forces the scenario via monkeypatching
+    `yaml.safe_load` so the defensive `except (yaml.YAMLError, TypeError)`
+    widening stays covered regardless of the installed PyYAML version's
+    internal behavior."""
+    (tmp_path / "openkos.yaml").write_text("model: gpt\n", encoding="utf-8")
+
+    def _raise_type_error(_text: str) -> Any:
+        raise TypeError("unhashable type: 'list'")
+
+    monkeypatch.setattr(yaml, "safe_load", _raise_type_error)
 
     with pytest.raises(ValueError, match=r"openkos\.yaml"):
         config.read_config(tmp_path)

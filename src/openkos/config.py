@@ -357,9 +357,11 @@ def read_config(root: Path) -> Config:
     field the file omits OR sets to an explicit YAML null (D3).
 
     Uses `yaml.safe_load` -- never a loader that can construct arbitrary
-    Python objects from untrusted YAML. A `yaml.YAMLError` (malformed YAML)
-    or a root that parses but is not a mapping both raise `ValueError`, so
-    callers can catch alongside `OSError` (a missing or unreadable file)
+    Python objects from untrusted YAML. A `yaml.YAMLError` (malformed YAML),
+    a `TypeError` (some PyYAML constructor code paths raise this directly
+    rather than a `YAMLError`, e.g. for a mapping with an unhashable complex
+    key), or a root that parses but is not a mapping all raise `ValueError`,
+    so callers can catch alongside `OSError` (a missing or unreadable file)
     with a single `except (OSError, ValueError)`, matching `init`'s
     convention. `raw.get(key, DEFAULT)` alone only falls back when `key` is
     ABSENT -- a key present with an explicit `key: null` (or bare `key:`)
@@ -372,7 +374,7 @@ def read_config(root: Path) -> Config:
     text = layout.config_path.read_text(encoding="utf-8")
     try:
         raw = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
+    except (yaml.YAMLError, TypeError) as exc:
         raise ValueError(f"{layout.config_path.name}: invalid YAML -- {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError(
