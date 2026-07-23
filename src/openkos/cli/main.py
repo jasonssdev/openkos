@@ -1762,6 +1762,460 @@ def unmerge(
     )
 
 
+_RECONCILE_ANCHOR_TEMPLATE = "<!-- okos:reconcile target={target} role={role} -->"
+"""Hidden HTML-comment anchor keyed on the counterpart concept-id (design:
+Interfaces / Contracts). `reconcile`'s idempotency check
+(`_reconcile_anchor_present`) matches on `target=<id>` alone, ignoring
+`role` and the note's heading level, so ANY prior anchor for that
+counterpart -- however it got there -- suppresses a re-append."""
+
+_RECONCILE_ANCHOR_RE = re.compile(r"<!-- okos:reconcile target=(\S+) role=(\w+) -->")
+
+
+def _reconcile_anchor_present(body: str, counterpart_id: str) -> bool:
+    """Return whether `body` already carries a `## Reconciliation` anchor
+    referencing `counterpart_id` (any role) -- `reconcile`'s idempotency
+    gate: a repeated call for the same pair never re-appends a duplicate
+    note (spec: Idempotent Re-run)."""
+    return any(
+        match.group(1) == counterpart_id
+        for match in _RECONCILE_ANCHOR_RE.finditer(body)
+    )
+
+
+_ReconcileRole = Literal["reconciled", "supersedes", "superseded"]
+
+
+def _reconcile_sentence(
+    role: _ReconcileRole, counterpart_id: str, date_str: str
+) -> str:
+    """One human-readable sentence for a `## Reconciliation` note, per
+    `role` (design: Interfaces / Contracts) -- `reconciled` (symmetric,
+    both coexist), `supersedes` (this concept wins), or `superseded`
+    (label-only, no status change). `role` is a closed `Literal`, and any
+    other value raises defensively (rather than silently falling through to
+    the "superseded" sentence) so a typo can never mislabel a note."""
+    link = f"[{counterpart_id}](/{counterpart_id}.md)"
+    if role == "reconciled":
+        return f"Reconciled with {link} on {date_str} (both coexist)."
+    if role == "supersedes":
+        return f"Supersedes {link} as of {date_str} (this concept wins)."
+    if role == "superseded":
+        return f"Superseded by {link} as of {date_str} (label-only, no status change)."
+    raise ValueError(f"unexpected reconciliation role {role!r}")
+
+
+def _reconciliation_note(
+    *, counterpart_id: str, role: _ReconcileRole, date_str: str
+) -> str:
+    """Build one full `## Reconciliation` body note: an h2 heading (chosen
+    over `#` to avoid a second top-level heading alongside the concept's own
+    title, design note), the hidden anchor keyed on `counterpart_id`, and
+    one sentence linking to the counterpart."""
+    anchor = _RECONCILE_ANCHOR_TEMPLATE.format(target=counterpart_id, role=role)
+    sentence = _reconcile_sentence(role, counterpart_id, date_str)
+    return f"## Reconciliation\n{anchor}\n{sentence}\n"
+
+
+def _append_reconciliation_note(body: str, note: str) -> str:
+    """Append `note` to `body` as a new trailing section, additive-only --
+    never overwrites existing content (mirrors
+    `okf.build_merged_document`'s body-append separator math)."""
+    new_body = body.rstrip("\n") + "\n\n" + note
+    if not new_body.endswith("\n"):
+        new_body += "\n"
+    return new_body
+
+
+def _add_relation_if_absent(
+    relations: list[okf.Relation], new_relation: okf.Relation
+) -> tuple[list[okf.Relation], bool]:
+    """Append `new_relation` to `relations` unless an identical
+    `(target, type)` pair is already present, mirroring `relate`'s
+    idempotent dedup (task 2.3). Returns the possibly-extended list and
+    whether an entry was actually added."""
+    already_present = any(
+        relation.target == new_relation.target and relation.type == new_relation.type
+        for relation in relations
+    )
+    if already_present:
+        return relations, False
+    return [*relations, new_relation], True
+
+
+def _existing_reconciliation_state(
+    *,
+    relations_a: list[okf.Relation],
+    relations_b: list[okf.Relation],
+    canonical_a: str,
+    canonical_b: str,
+) -> tuple[Literal["none", "symmetric", "directional"], str | None]:
+    """Classify the pair's EXISTING reconciliation state from
+    already-loaded (pre-mutation) relations, gathering both `supersedes`
+    directions and the symmetric `reconciled_with` edge between `{a, b}` --
+    the CRITICAL refuse-on-conflict gate (fix: a mode-switch re-run must
+    never add a second, contradictory reconciliation resolution). Returns
+    `("none", None)` when the pair carries no prior reconciliation,
+    `("symmetric", None)` when a `reconciled_with` edge already links them,
+    or `("directional", winner)` when a `supersedes` edge already points
+    winner -> loser."""
+    a_supersedes_b = any(
+        relation.target == canonical_b and relation.type == "supersedes"
+        for relation in relations_a
+    )
+    b_supersedes_a = any(
+        relation.target == canonical_a and relation.type == "supersedes"
+        for relation in relations_b
+    )
+    if a_supersedes_b:
+        return "directional", canonical_a
+    if b_supersedes_a:
+        return "directional", canonical_b
+
+    symmetric = any(
+        relation.target == canonical_b and relation.type == "reconciled_with"
+        for relation in relations_a
+    ) or any(
+        relation.target == canonical_a and relation.type == "reconciled_with"
+        for relation in relations_b
+    )
+    if symmetric:
+        return "symmetric", None
+    return "none", None
+
+
+def _reconciliation_state_description(
+    mode: Literal["none", "symmetric", "directional"], winner: str | None
+) -> str:
+    """Human-readable description of an existing reconciliation state, for
+    the refuse-on-conflict error message."""
+    if mode == "directional":
+        return f"a directional reconciliation ({winner!r} supersedes its counterpart)"
+    return "a symmetric reconciliation ('reconciled_with')"
+
+
+@app.command()
+def reconcile(
+    id_a: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') of one concept in the pair.",
+    ),
+    id_b: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') of the other concept in the pair.",
+    ),
+    winner: str | None = typer.Option(
+        None,
+        "--winner",
+        help=(
+            "Concept id (must resolve to id_a or id_b) that supersedes its "
+            "counterpart. Omit for a symmetric 'reconciled_with' reconciliation."
+        ),
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Record a human's resolution of a contradiction between two concepts:
+    the first WRITE verb of the freshness-lint-v1 arc (spec: Reconcile
+    Command Specification). No LLM in the write path -- `id_a`/`id_b`/
+    `--winner` are plain concept-id arguments; this never invokes
+    contradiction detection.
+
+    Phase A (pure, no writes) mirrors `relate`'s gate shape: the current
+    directory must already be a workspace (the same `config.require_workspace`
+    gate every other write verb shares), or this refuses; `id_a` and `id_b`
+    are EACH resolved via the same `_resolve_concept_path` `forget`/`relate`/
+    `merge` use -- rejecting an absolute id, any `..` segment, a reserved
+    basename, or a nonexistent concept file, all as `ValueError`, all before
+    any read. The two ids MUST resolve to DISTINCT concept files, else this
+    refuses too (self-pair rejected). If `--winner <id>` is given, it is
+    ALSO resolved via `_resolve_concept_path` and its canonical id MUST
+    equal EXACTLY one of the two pair members -- else this refuses (no
+    write, spec: "--winner gamma (not in pair {alpha,beta})"); the other
+    pair member becomes the loser.
+
+    Before building any new edge, `_existing_reconciliation_state` gathers
+    the pair's EXISTING reconciliation edges (any `reconciled_with` or
+    `supersedes` already linking `id_a`/`id_b`, in either direction) and
+    classifies them as `"none"`, `"symmetric"`, or `"directional"` (with a
+    winner). This is compared to what THIS invocation requests: if the pair
+    carries NO prior reconciliation, this proceeds as a fresh write; if the
+    prior state matches the request EXACTLY (same mode, same winner for
+    `--winner`), this proceeds to the ordinary idempotent no-op path below;
+    if the prior state DIFFERS (a mode switch, e.g. symmetric then
+    `--winner`, or an opposite `--winner`), this REFUSES here (`ValueError`,
+    exit 1, ZERO writes) rather than adding a second, contradictory
+    resolution -- a pair can carry AT MOST ONE reconciliation resolution
+    written by `reconcile` (CRITICAL fix: a mode-switch re-run used to dedup
+    the new edge only on `(target, type)`, so a DIFFERENT edge type was
+    added alongside the stale one, while the anchor-gated note below matches
+    on `target` alone and is blind to `role`, so it silently kept describing
+    the earlier resolution -- frontmatter and body note went out of sync
+    with no way to repair it on a later run).
+
+    The rest of Phase A builds the entire result in memory. With no
+    `--winner`, a SYMMETRIC `reconciled_with` edge is added to BOTH
+    concepts (each targeting the other, design: "Symmetric edge = one
+    outbound edge per side"); with `--winner`, a single DIRECTIONAL
+    `supersedes` edge is added on the winner's document only, pointing at
+    the loser -- no `superseded_by` back-edge; `supersedes` is LABEL-ONLY,
+    this verb never writes `status` or any deprecation field (spec:
+    Additive-Only, No Status/Lifecycle Write). Either edge shape dedups on
+    `(target, type)` (`_add_relation_if_absent`), mirroring `relate`'s
+    idempotency -- safe now that the refuse-on-conflict gate above has
+    already ruled out a mode switch reaching this point. Each side then gets
+    a `## Reconciliation` body note appended -- unless a hidden `<!--
+    okos:reconcile target=<counterpart> ... -->` anchor for that counterpart
+    is already present (`_reconcile_anchor_present`), in which case the note
+    is skipped (idempotent re-run, spec: Idempotent Re-run). All writes are
+    additive: existing body content and relations are preserved verbatim,
+    never overwritten. A `log.md` entry is built via
+    `bundle_log.insert_log_entry`, in one of three shapes: symmetric-new,
+    winner-new, or no-change (when nothing on either side actually changed
+    -- a clean re-run).
+
+    Confirm gate, identical precedence and mechanism to `relate`/`merge`/
+    `forget`: `--auto` skips the prompt outright; otherwise config
+    `review: false` skips it the same way; otherwise, on a TTY,
+    `typer.confirm` asks and aborts (exit 1) on decline; otherwise
+    (non-TTY, no `--auto`) this refuses to write (exit 1), telling the user
+    to re-run with `--auto`. Declining or refusing leaves the bundle
+    completely untouched -- Phase A never writes anything.
+
+    Phase B (after confirm) writes, in order: `id_a`'s document, then
+    `id_b`'s document (both `fsio.write_atomic`, since both already exist),
+    then `log.md` -- content before the audit trail, mirroring every other
+    write verb's ordering. Not transactional as a whole, matching every
+    other write verb's documented limitation: a failure partway through is
+    a benign, git-recoverable partial result -- and, since every write here
+    is additive, a re-run safely completes whatever landed without
+    duplicating it (idempotency above). Any failure, Phase A or Phase B, is
+    caught and reported on stderr (exit 1), not a raw traceback.
+
+    Reversibility is git-undo only: no ledger, no `unreconcile` (design:
+    "Reversibility = git-undo only -- NO ledger, NO unreconcile"), unlike
+    `merge`/`unmerge`'s `merged_from` ledger, which exists only because
+    `merge` is lossy; `reconcile` never deletes or overwrites content, so a
+    ledger here would be over-engineering.
+
+    Threat matrix: N/A -- no routing, shell, subprocess, VCS/PR automation,
+    or process-integration boundary. Write safety is the confirm-gate +
+    atomic writes + additive/git-undo, same as every prior write verb.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos reconcile: refusing to reconcile -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        path_a, canonical_a = _resolve_concept_path(layout.bundle_dir, id_a)
+        path_b, canonical_b = _resolve_concept_path(layout.bundle_dir, id_b)
+        if canonical_a == canonical_b:
+            raise ValueError(
+                f"id_a and id_b must be distinct, both resolved to {canonical_a!r}"
+            )
+
+        winner_canonical: str | None = None
+        loser_canonical: str | None = None
+        if winner is not None:
+            _, winner_resolved = _resolve_concept_path(layout.bundle_dir, winner)
+            if winner_resolved == canonical_a:
+                winner_canonical, loser_canonical = canonical_a, canonical_b
+            elif winner_resolved == canonical_b:
+                winner_canonical, loser_canonical = canonical_b, canonical_a
+            else:
+                raise ValueError(
+                    f"--winner {winner!r} must resolve to one of the pair "
+                    f"({canonical_a!r}, {canonical_b!r}), got {winner_resolved!r}"
+                )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos reconcile: refusing to reconcile -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    now = datetime.now(UTC)
+    today = now.astimezone().date()
+    date_str = today.isoformat()
+
+    try:
+        cfg = config.read_config(root)
+        text_a = path_a.read_text(encoding="utf-8")
+        text_b = path_b.read_text(encoding="utf-8")
+        log_text = log_path.read_text(encoding="utf-8")
+
+        metadata_a, body_a = okf.load_frontmatter(text_a)
+        metadata_b, body_b = okf.load_frontmatter(text_b)
+        relations_a = okf.decode_relations(metadata_a)
+        relations_b = okf.decode_relations(metadata_b)
+
+        # CRITICAL refuse-on-conflict gate (before ANY edge is computed or
+        # written): a pair may carry AT MOST ONE reconciliation resolution
+        # written by `reconcile`. Compare the pair's EXISTING state to the
+        # one requested by THIS invocation -- an unrelated (`"none"`) prior
+        # state proceeds as a fresh write, an IDENTICAL prior state falls
+        # through to the ordinary idempotent no-op path below, but a
+        # DIFFERENT prior state (mode switch, or opposite `--winner`) is
+        # refused here, with zero writes -- this is what prevents a 2nd
+        # `supersedes` edge from coexisting with a stale `reconciled_with`
+        # edge (or a 2nd, opposite-direction `supersedes` edge), and
+        # prevents the `## Reconciliation` note from going stale relative
+        # to frontmatter (the note-append gate below is anchor-keyed on
+        # `target` alone and blind to `role`, so it cannot itself repair a
+        # mismatched note on a later run).
+        existing_mode, existing_winner = _existing_reconciliation_state(
+            relations_a=relations_a,
+            relations_b=relations_b,
+            canonical_a=canonical_a,
+            canonical_b=canonical_b,
+        )
+        requested_mode: Literal["symmetric", "directional"] = (
+            "directional" if winner_canonical is not None else "symmetric"
+        )
+        if existing_mode != "none" and (
+            existing_mode != requested_mode or existing_winner != winner_canonical
+        ):
+            description = _reconciliation_state_description(
+                existing_mode, existing_winner
+            )
+            raise ValueError(
+                f"concepts {canonical_a!r} and {canonical_b!r} are already "
+                f"reconciled as {description}; reconcile will not overwrite "
+                "an existing resolution. To change it, edit the concepts "
+                "manually or revert with git, then re-run"
+            )
+
+        edge_added_a = False
+        edge_added_b = False
+        role_a: _ReconcileRole
+        role_b: _ReconcileRole
+        if winner_canonical is None:
+            relations_a, edge_added_a = _add_relation_if_absent(
+                relations_a, okf.Relation(target=canonical_b, type="reconciled_with")
+            )
+            relations_b, edge_added_b = _add_relation_if_absent(
+                relations_b, okf.Relation(target=canonical_a, type="reconciled_with")
+            )
+            role_a, role_b = "reconciled", "reconciled"
+        elif winner_canonical == canonical_a:
+            relations_a, edge_added_a = _add_relation_if_absent(
+                relations_a, okf.Relation(target=canonical_b, type="supersedes")
+            )
+            role_a, role_b = "supersedes", "superseded"
+        else:
+            relations_b, edge_added_b = _add_relation_if_absent(
+                relations_b, okf.Relation(target=canonical_a, type="supersedes")
+            )
+            role_a, role_b = "superseded", "supersedes"
+
+        note_added_a = False
+        if not _reconcile_anchor_present(body_a, canonical_b):
+            body_a = _append_reconciliation_note(
+                body_a,
+                _reconciliation_note(
+                    counterpart_id=canonical_b, role=role_a, date_str=date_str
+                ),
+            )
+            note_added_a = True
+
+        note_added_b = False
+        if not _reconcile_anchor_present(body_b, canonical_a):
+            body_b = _append_reconciliation_note(
+                body_b,
+                _reconciliation_note(
+                    counterpart_id=canonical_a, role=role_b, date_str=date_str
+                ),
+            )
+            note_added_b = True
+
+        metadata_a[okf.RELATIONS_KEY] = okf.encode_relations(relations_a)
+        metadata_b[okf.RELATIONS_KEY] = okf.encode_relations(relations_b)
+        new_text_a = okf.dump_frontmatter(metadata_a, body_a)
+        new_text_b = okf.dump_frontmatter(metadata_b, body_b)
+
+        changed = edge_added_a or edge_added_b or note_added_a or note_added_b
+        if not changed:
+            log_line = (
+                f"**Reconcile**: [{canonical_a}](/{canonical_a}.md) and "
+                f"[{canonical_b}](/{canonical_b}.md) are already reconciled; "
+                "no change."
+            )
+        elif winner_canonical is None:
+            log_line = (
+                "**Reconcile**: Recorded a symmetric 'reconciled_with' "
+                f"between [{canonical_a}](/{canonical_a}.md) and "
+                f"[{canonical_b}](/{canonical_b}.md)."
+            )
+        else:
+            log_line = (
+                f"**Reconcile**: [{winner_canonical}](/{winner_canonical}.md) "
+                f"supersedes [{loser_canonical}](/{loser_canonical}.md) "
+                "(recorded 'supersedes')."
+            )
+        new_log_text = bundle_log.insert_log_entry(log_text, today, log_line)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos reconcile: failed while preparing the reconcile -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos reconcile: proposed changes:")
+    typer.echo(
+        f"  ~ bundle/{canonical_a}.md (relation "
+        f"{'added' if edge_added_a else 'unchanged'}; note "
+        f"{'appended' if note_added_a else 'already present'})"
+    )
+    typer.echo(
+        f"  ~ bundle/{canonical_b}.md (relation "
+        f"{'added' if edge_added_b else 'unchanged'}; note "
+        f"{'appended' if note_added_b else 'already present'})"
+    )
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos reconcile: refusing to write without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        fsio.write_atomic(path_a, new_text_a)
+        fsio.write_atomic(path_b, new_text_b)
+        fsio.write_atomic(log_path, new_log_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos reconcile: failed while writing the reconcile -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    if winner_canonical is None:
+        typer.echo(
+            "openkos reconcile: recorded a symmetric reconciliation between "
+            f"'bundle/{canonical_a}.md' and 'bundle/{canonical_b}.md' "
+            f"({log_path.name} updated)."
+        )
+    else:
+        typer.echo(
+            f"openkos reconcile: recorded '{winner_canonical}' as superseding "
+            f"'{loser_canonical}' ({log_path.name} updated)."
+        )
+
+
 RECENT_ACTIVITY_LIMIT = 5
 """How many `log.md` bullets `status` shows under "Recent activity" (D4).
 
