@@ -171,5 +171,28 @@ Each PR is independently reviewable and under the 400-line reviewer budget.
 
 ## Open Questions
 
-- [ ] Exact `--confirm-phrase` string for cascade (`purge <root> (<N> concepts)`) — settle in tasks.
+- [x] Exact `--confirm-phrase` string for cascade (`purge <root> (<N> concepts)`) — settled: implemented as-is.
 - [ ] Whether the best-effort FTS/graph rebuild should also run `git gc` verification — deferred; delete is the erasure.
+
+## Known Follow-ups (deferred, not implemented in this correction batch)
+
+Recorded during the PR2 4R correction batch (git-history + live-index-cleanup
+fixes). Each requires its own review — not bundled into this irreversible-verb
+safety batch:
+
+- **Phase-A duplication with `forget`**: `purge`'s Phase-A resolution +
+  reference-aware gate (`_PurgeScope`) is copy-pasted from `forget`'s
+  `_ForgetScope`. Extract a shared helper in a FUTURE refactor with its own
+  review — this touches both `forget` and `purge`, a regression risk not
+  appropriate to bundle into a safety-fix batch on the irreversible verb.
+- **Index-rebuild test depth**: the current index-rebuild tests assert
+  file-existence (`.openkos/{fts,graph}.db` exist post-rebuild), not that the
+  rebuilt content is actually query-able. A future task should add a
+  content-level assertion (e.g. FTS query returns the surviving sibling,
+  never the purged concept).
+- **Live `log.md` tombstone scrub + full `index.md`/`log.md` HISTORY
+  content-scrub**: when a prior `forget` already wrote a tombstone for a
+  purge-set member, that tombstone text remains in the LIVE `log.md` (only
+  the live `index.md` catalog BULLET is cleaned by this correction batch —
+  `log.md` is append-only and out of scope here). All HISTORY (past-commit)
+  content-scrub of `index.md`/`log.md` remains Slice 2, as originally scoped.

@@ -245,3 +245,33 @@ implementation.
 - `uv run ruff check .` -> All checks passed! (no new `# noqa`/bandit-S suppression anywhere in `cli/main.py` — the sole `# noqa: S603` suppression remains confined to `src/openkos/vcs/git.py`'s `_run`, from PR1)
 - `uv run ruff format --check .` -> 128 files already formatted
 - `uv sync --locked` -> resolves cleanly
+
+## PR2 Correction Batch (4R bounded review — 2 CRITICAL + 5 WARNING findings)
+
+Addressed on branch `feat/privacy-purge-verb`, on top of commits 945b6ea/5e5df7e/9e1894a/0b86469. All fixes TDD'd (RED test first, then GREEN), strict TDD mode.
+
+- [x] C1 (CRITICAL, Risk): `has_published_commits` was fail-OPEN — `git branch --remotes --contains HEAD` is direction-dependent and goes stale after ANY further local commit past the last push (HEAD advances, the check flips back to "not published" even though an already-pushed ancestor commit/file is still on the remote). Fixed to direction-agnostic + fail-closed: `git for-each-ref --count=1 refs/remotes/` (any remote-tracking ref at all -> `True`, permanently, regardless of how far local `HEAD` advances afterward). RED: `test_has_published_commits_stays_true_after_a_further_local_commit` (push, then one more local commit, assert still `True`) in `tests/unit/vcs/test_git_adapter.py`. Existing `test_has_published_commits_false_with_no_remote`/`test_has_published_commits_true_after_push_to_bare_remote` cover (b)/(c) and still pass unchanged.
+- [x] C2 (Readability/correctness): the LIVE `bundle/index.md` was never touched by `purge`, leaving a dangling catalog bullet after history erasure, and the residual warning inaccurately claimed the id remained only in "historical blobs" — new `_purge_clean_live_index()` in `src/openkos/cli/main.py` removes the live index.md bullet for every purge-set member (reusing `forget`'s `bundle_index.remove_index_entry` + `fsio.write_atomic`), called right after `expunge_paths` succeeds (both the plain-success path and the `GitFinalizeError` path, since the rewrite itself already happened in both). Filter-repo-then-working-tree-edit ordering works cleanly: filter-repo checks out its own rewritten HEAD as a clean commit, so the index.md edit afterward is an ordinary post-rewrite working-tree write, not a new gated action — no dirty-tree conflict. `_PURGE_RESIDUAL_WARNING` corrected to state the live catalog bullet is now removed, and the purged id/title (+ any prior forget tombstone) REMAIN only in HISTORY of index.md/log.md, and in the LIVE log.md too if forget already tombstoned it. RED: `test_purge_removes_live_index_catalog_bullet` (sibling bullet survives, target bullet gone) + `test_purge_residual_warning_reflects_live_index_cleanup` in `tests/unit/cli/test_purge.py`.
+- [x] W1 (Resilience, point-of-no-return observability): added a "beginning the irreversible history rewrite now -- do not interrupt" stderr line immediately before the `expunge_paths` call, so a silent/long rewrite is never mistaken for a hang. RED/test: `test_purge_prints_point_of_no_return_message_before_rewrite`.
+- [x] W2 (Reliability, weak rail tests): `test_purge_non_git_root_refuses` and `test_purge_non_tty_without_confirm_phrase_refuses` now also assert no-mutation (concept/raw files still present, `.openkos/fts.db` never created), matching the sibling rail tests' pattern.
+- [x] W3 (Reliability, no-over-delete): new `test_purge_sibling_survives_no_over_delete` — ingests an unrelated sibling Source (with its own raw file), purges the target, asserts the sibling's raw+concept blobs/files survive AND its live index.md bullet remains, while the target's are gone. (Passed immediately — no over-delete bug existed; added as a permanent regression guard. Required a new `_tree_contains_path` test helper using `git ls-tree -r --name-only HEAD`, since `git rev-list --objects --all`-based `_blob_history_contains` dedupes by blob id and can under-report a retained path whose content happens to be byte-identical to another retained path, e.g. a raw copy sharing its source file's blob.)
+- [x] W4 (Reliability, tool-availability sub-case): new `test_purge_git_itself_missing_refuses` — monkeypatches `git_available()` to `False` (the `filter_repo_available()`-missing sub-case already existed); asserts refusal + no mutation.
+- [x] W5 (Readability, stream consistency): the malformed-`resource` preview warning was echoed with `err=True` while the rest of the preview (and the residual warning) went to stdout. Changed to plain `typer.echo` (stdout), matching the rest of the pre-confirmation preview block.
+
+### Spec staleness corrections (arc lesson)
+- [x] `specs/privacy-purge/spec.md` rail-order prose corrected: tool-availability moved from position 5 to position 2 (matching design.md + the shipped implementation + tests).
+- [x] `specs/privacy-purge/spec.md` Req4 corrected: no longer claims `vectors.db` is rebuilt — it is deleted and stays deleted (lazy re-embed via `openkos reindex`); only `fts.db`/`graph.db` are rebuilt.
+- [x] `specs/privacy-purge/spec.md` Req5 + `design.md` residual-leak-warning text updated to describe the new live-index-cleanup behavior (C2 above).
+
+### Deferred (documented in design.md "Known Follow-ups", NOT implemented this batch)
+- Shared Phase-A/reference-aware helper extraction (`_PurgeScope`/`_ForgetScope` duplication) — future refactor, own review, touches `forget`.
+- Index-rebuild tests asserting content-queryability, not just file-existence.
+- Live `log.md` tombstone scrub + full `index.md`/`log.md` HISTORY content-scrub — Slice 2, unchanged scope.
+
+### Whole-tree verification (correction batch, all green)
+- `uv run pytest` -> 1767 passed (was 1761 before this batch, +6 new tests: 1 in `test_git_adapter.py` [C1], 5 in `test_purge.py` [C2 x2, W1, W3, W4] — W2's no-mutation assertions were added inline to 2 EXISTING tests, not new test functions, so they add 0 to the count while still exercising the fix)
+- `uv run mypy .` -> Success: no issues found in 128 source files
+- `uv run ruff check .` -> All checks passed! (no new `# noqa`/bandit-S suppression anywhere outside `src/openkos/vcs/git.py`'s pre-existing sole `# noqa: S603`)
+- `uv run ruff format --check .` -> 128 files already formatted (ruff format applied once to normalize whitespace in the 3 touched files, then re-verified clean)
+- `uv sync --locked` -> resolves cleanly
+- Regression: `uv run pytest tests/unit/cli/test_forget.py` -> 60 passed, unchanged (forget untouched by this correction batch; only `bundle_index.remove_index_entry` was CALLED from `purge`, never modified)
