@@ -1,6 +1,6 @@
 [project]
 name = "openkos"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local-first engine that turns your scattered text into a living, portable knowledge base in the Open Knowledge Format (OKF)"
 readme = "README.md"
 license = "Apache-2.0"
