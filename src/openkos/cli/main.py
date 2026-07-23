@@ -19,6 +19,7 @@ from openkos.bundle import index as bundle_index
 from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
+from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.bundle import relations as bundle_relations
 from openkos.extraction.concept import extract_concept
@@ -792,10 +793,26 @@ def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]
     return concept_path, canonical_id
 
 
+_ForgetScope = Literal["self", "source"]
+
+
 @app.command()
 def forget(
     concept_id: str = typer.Argument(
         ..., help="Bundle-relative concept id (path minus '.md') to remove."
+    ),
+    scope: _ForgetScope = typer.Option(
+        "self",
+        "--scope",
+        help=(
+            "'self' (default) removes only <concept_id>, byte-identical to "
+            "a single-concept forget (S2a). 'source' expands the purge set "
+            "to <concept_id> plus every concept whose ENTIRE `provenance` "
+            "resolves back to it -- the orphan-after-delete closure "
+            "computed by `bundle.provenance.find_provenance_descendants`; "
+            "a concept with ANY surviving provenance entry outside the "
+            "purge set is preserved untouched."
+        ),
     ),
     auto: bool = typer.Option(
         False,
@@ -808,85 +825,104 @@ def forget(
         help=(
             "Proceed even when inbound references (markdown links or typed "
             "relations) -- or unverifiable referrers whose frontmatter "
-            "could not be parsed but that may reference this concept -- "
-            "were detected; they are left dangling, never retargeted. "
-            "Independent of --auto -- it never skips the confirmation "
-            "prompt."
+            "could not be parsed but that may reference a purge-set "
+            "member -- were detected; they are left dangling, never "
+            "retargeted. Independent of --auto -- it never skips the "
+            "confirmation prompt."
         ),
     ),
 ) -> None:
     """Delete a concept file and remove its `index.md` catalog entry: the
-    mirror-image of `ingest` (MVP-1 simplified delete, decision #717), now
-    reference-aware (MVP-3 gap #8 S2a).
+    mirror-image of `ingest` (MVP-1 simplified delete, decision #717),
+    reference-aware (MVP-3 gap #8 S2a) and, since `--scope source`,
+    cascade-aware over a concept's provenance descendants (MVP-3 gap #8
+    S2b).
 
     Phase A (pure, no writes) validates and builds the entire result in
     memory, in order: the current directory must already be a workspace
     (the same `config.require_workspace` gate `ingest`/`status`/`lint`
-    share), or this refuses; `concept_id` is resolved via
-    `_resolve_concept_path`, which rejects an absolute id, any `..`
-    segment, a reserved basename (`index`/`log`), or a nonexistent concept
-    file -- all as `ValueError`, all refusing before any read tied to
-    `concept_id` (threat matrix: path-traversal deletion).
+    share), or this refuses; `concept_id` (the ROOT of the purge set) is
+    resolved via `_resolve_concept_path`, which rejects an absolute id, any
+    `..` segment, a reserved basename (`index`/`log`), or a nonexistent
+    concept file -- all as `ValueError`, all refusing BEFORE any read tied
+    to `concept_id`, and BEFORE any descendant resolution (threat matrix:
+    path-traversal deletion; spec: "Path safety runs before descendant
+    resolution"). Descendant ids, by construction, are never user input --
+    they are drawn only from real `other_files` keys discovered under
+    `bundle_dir`.
 
-    Once path-safety clears, Phase A reads the concept's own text (for its
-    title and `relations:`) and takes ONE whole-bundle snapshot of every
-    other `*.md` file (mirroring `merge`'s `other_files` construction:
-    reserved filenames and the concept's own file excluded), feeding two
-    pure scans over that same snapshot: `bundle_references.
-    find_inbound_references` (every inbound markdown link/typed relation
-    targeting this concept, PLUS every referrer whose frontmatter could not
-    be parsed at all but whose raw text mentions this concept's canonical
-    id -- a `kind="unverifiable"` record, fail-CLOSED rather than silently
-    skipped like `find_inbound_relation_rewrites` alone would do; spec:
-    "Inbound Reference Detection") and this concept's own outbound
-    `supersedes` edges (excluding a defensive, not-normally-constructible
-    self-`supersedes` guard), each naming a concept `Y` that re-enters
-    retrieval once this concept's edge to it is gone (spec: "Resurrection
-    Interaction Disclosure"). `index.md` is searched, via `bundle_index.
-    remove_index_entry`, for a bullet in ANY section (Sources, Concepts,
-    People, Decisions) whose first markdown link resolves to `concept_id`
-    -- matching is generic across sections, never Sources-only (#922). A
-    `log.md` entry is built in memory via `bundle_log.insert_log_entry`: a
-    TOMBSTONE-marked line (`**Tombstone** (HH:MM:SSZ): Removed
-    [<title>](/<id>.md) (id: <id>).`), replacing the old plain `**Forget**`
-    bullet (spec: "Log Entry on Forget").
+    Once path-safety clears, Phase A reads the root's own text and takes
+    ONE whole-bundle snapshot of every other `*.md` file (mirroring
+    `merge`'s `other_files` construction: reserved filenames and the
+    root's own file excluded). This SAME snapshot feeds every step below,
+    for both scopes -- no extra bundle scan (design: Technical Approach).
 
-    The preview then prints: `~ index.md (remove entry)` only when at
-    least one bullet matched (zero matches is drift, not an error -- the
-    deletion still proceeds); `~ log.md (new dated entry)` and
-    `- bundle/<concept_id>.md` always appear; one `! bundle/<referrer_id>.md
-    (inbound link|relation: <type>)` line per detected verified inbound
-    reference; one `? bundle/<referrer_id>.md (unverifiable: could not
-    parse; may reference <id>)` line per unverifiable referrer; and one
-    `~ bundle/<target>.md (re-enters retrieval: ...)` line per resurrection
-    target.
+    The PURGE SET is then resolved (design decision 6, unified Phase-A
+    data path): `--scope self` (default) collapses it to `{concept_id}`,
+    reproducing S2a byte-for-byte; `--scope source` expands it via
+    `bundle_provenance.find_provenance_descendants` -- a concept C (C !=
+    root) joins iff its `provenance` is NON-EMPTY and a SUBSET of the
+    purge set, iterated to a fixed point (spec: "Provenance Descendant
+    Resolution"; the non-empty guard is the critical over-deletion
+    barrier).
+
+    For EVERY purge-set member, Phase A collects: (1) outbound
+    `supersedes` edges targeting a concept OUTSIDE the purge set --
+    resurrection disclosures, each naming the target AND the causing
+    member (spec: "Resurrection Interaction Disclosure"); (2) inbound
+    references via `bundle_references.find_inbound_references` (S2a's own
+    scanner, called once per member over the SAME snapshot), from which
+    any reference whose REFERRER is itself a purge-set member is dropped
+    -- the set-difference gate (design decision 2): an intra-set backlink
+    (e.g. a cascade child's `## Related` link back to its Source) is
+    expected and must never block, while an EXTERNAL reference or
+    unverifiable referrer still does. `unverifiable` referrers -- files
+    whose frontmatter could not be parsed at all but whose raw text
+    mentions a purge-set member's id, fail-CLOSED per S2a -- are deduped
+    by `referrer_id` across members, so one malformed file mentioning
+    several member ids surfaces once, not once per member.
+
+    `index.md` is rewritten via `bundle_index.remove_index_entry`, once
+    per purge-set member (a pure text transform; call order does not
+    affect the result). `log.md` gets one TOMBSTONE-marked entry per
+    member (`**Tombstone** (HH:MM:SSZ): Removed [<title>](/<id>.md)
+    (id: <id>).`), all sharing the same timestamp (spec: "Log Entry on
+    Forget" -- N lines for a cascade, exactly one for `self`).
+
+    The preview prints every purge-set id as `- bundle/<id>.md`, the
+    catalog/log edit lines, one `!`/`?` line per surviving EXTERNAL
+    reference, one `~` line per resurrection disclosure, and -- for
+    `--scope source` only -- a trailing count line (spec: "Full-Set
+    Preview and Count Confirmation"). `--scope self`'s preview and every
+    downstream string is UNCHANGED from S2a (byte-identity, design
+    decision 6): the member-suffix on reference lines and the count line
+    are both scope-conditional and never appear for `self`.
 
     TWO ORTHOGONAL gates follow, in order (spec: "`--force` Is Orthogonal
-    to the Confirm Gate"): gate 1 refuses (exit 1, no write) iff a verified
-    inbound reference OR an unverifiable referrer was detected AND
-    `--force` was not passed -- `--force` bypasses ONLY this refusal
-    (consistent across both cases: force = "I accept unverified/dangling
-    refs"), never retargeting/rewriting the dangling references it leaves
-    behind. Gate 2 is the UNCHANGED confirm gate, identical precedence and
-    mechanism to `ingest`: `--auto` skips the prompt outright; otherwise
-    config `review: false` skips it the same way; otherwise, on a TTY,
-    `typer.confirm` asks and aborts (exit 1) on decline; otherwise
-    (non-TTY, no `--auto`) this refuses to write (exit 1), telling the user
-    to re-run with `--auto`. `--force` and `--auto` are read independently
-    and never affect each other; gate 1 always runs BEFORE gate 2, so a
-    refused gate 1 never reaches the confirm prompt even on a real TTY.
+    to the Confirm Gate"): gate 1 refuses (exit 1, no write) iff a
+    surviving verified reference OR unverifiable referrer was detected AND
+    `--force` was not passed -- `--force` bypasses ONLY this refusal,
+    never retargeting/rewriting the dangling references it leaves behind.
+    Gate 2 is the confirm gate, identical precedence to `ingest`: `--auto`
+    skips the prompt outright; otherwise config `review: false` skips it
+    the same way; otherwise, on a TTY, `typer.confirm` asks (stating the
+    delete COUNT for `--scope source`; S2a's verbatim text for `self`) and
+    aborts (exit 1) on decline; otherwise (non-TTY, no `--auto`) this
+    refuses to write (exit 1). `--force` does NOT auto-confirm gate 2 --
+    the two gates stay fully orthogonal for both scopes.
 
     Phase B (after both gates) writes `index.md` then `log.md`
-    (`write_atomic`, catalog FIRST) and deletes the concept file
-    (`fsio.remove_file`) LAST -- the inverse of `ingest`'s content-then-
-    catalog ordering, preserving the same invariant either way: `index.md`
-    never references a file that does not exist. This is NOT transactional
-    as a whole: a failure partway through (e.g. the unlink itself) leaves a
-    benign, git-recoverable partial result -- the catalog already updated,
-    the concept file possibly still present as an orphan -- never silent
-    corruption. Any failure, Phase A or Phase B, is caught and reported on
-    stderr (exit 1), not a raw traceback; `except (OSError, ValueError)`,
-    matching `ingest`'s convention.
+    (`write_atomic`, catalog FIRST, covering every purge-set member) and
+    deletes each member's concept file (`fsio.remove_file`) LAST, in
+    deterministic `sorted(purge_ids)` order (design decision 5) -- so
+    `index.md`/`log.md` never reference a file that does not exist. This
+    is NOT transactional as a whole: a failure partway through the N
+    unlinks leaves a benign, git-recoverable partial result -- the catalog
+    already fully updated, one or more concept files possibly still
+    present as orphans -- never silent corruption. Any failure, Phase A or
+    Phase B, is caught and reported on stderr (exit 1), not a raw
+    traceback; `except (OSError, ValueError)`, matching `ingest`'s
+    convention.
     """
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
@@ -902,6 +938,10 @@ def forget(
             )
             raise typer.Exit(code=1)
 
+        # Path-safety on the ROOT id runs FIRST, before any descendant
+        # resolution (spec: "Path safety runs before descendant
+        # resolution") -- descendant ids are disk-discovered later, never
+        # user input.
         concept_path, canonical_id = _resolve_concept_path(
             layout.bundle_dir, concept_id
         )
@@ -917,30 +957,12 @@ def forget(
         log_text = log_path.read_text(encoding="utf-8")
         concept_text = concept_path.read_text(encoding="utf-8")
 
-        concept_metadata, _ = okf.load_frontmatter(concept_text)
-        raw_title = concept_metadata.get("title")
-        title = (
-            raw_title
-            if isinstance(raw_title, str) and raw_title.strip()
-            else canonical_id
-        )
-
-        # Outbound `supersedes` disclosure (spec: Resurrection Interaction
-        # Disclosure): a defensive self-exclusion guards a hand-edited
-        # self-`supersedes` edge even though no known CLI path (`relate`'s
-        # self-id refusal, `reconcile`'s distinct-id guard) can construct
-        # one.
-        resurrection_targets = sorted(
-            {
-                relation.target
-                for relation in okf.decode_relations(concept_metadata)
-                if relation.type == "supersedes" and relation.target != canonical_id
-            }
-        )
-
         # One whole-bundle snapshot, read ONCE, mirroring `merge`'s
         # `other_files` construction (~L1330-1337): every other `*.md`
-        # file, reserved filenames and this concept's own file excluded.
+        # file, reserved filenames and the ROOT's own file excluded. This
+        # single snapshot feeds descendant resolution, inbound detection,
+        # resurrection, and per-member titles/tombstones -- no extra
+        # bundle scan, for either scope (design: Technical Approach).
         other_files: dict[str, str] = {}
         for path in sorted(layout.bundle_dir.rglob("*.md")):
             if path.name in okf.RESERVED_FILENAMES:
@@ -950,20 +972,119 @@ def forget(
             rel = path.relative_to(layout.bundle_dir).as_posix()
             other_files[rel] = path.read_text(encoding="utf-8")
 
-        inbound_refs = bundle_references.find_inbound_references(
-            other_files, target_id=canonical_id
+        # Unified Phase-A data path (design decision 6): `--scope self`
+        # collapses to a single-member purge set and reproduces every
+        # downstream computation identically to S2a; `--scope source`
+        # expands it via the pure orphan-closure helper. Resolution runs
+        # strictly after path-safety/existence (above) and before
+        # detection/preview (spec: "Provenance Descendant Resolution").
+        purge_ids: list[str] = (
+            bundle_provenance.find_provenance_descendants(
+                other_files, root_ids={canonical_id}
+            )
+            if scope == "source"
+            else [canonical_id]
+        )
+        purge_ids_set = set(purge_ids)
+
+        # Per-member text + parsed frontmatter. Every non-root member id in
+        # `purge_ids` came out of `find_provenance_descendants`, itself
+        # derived only from real `other_files` keys (disk-discovered, never
+        # user input) -- so this dict lookup can never escape `bundle_dir`.
+        member_texts: dict[str, str] = {canonical_id: concept_text}
+        for member in purge_ids:
+            if member != canonical_id:
+                member_texts[member] = other_files[f"{member}.md"]
+        member_metadata: dict[str, dict[str, object]] = {
+            member: okf.load_frontmatter(text)[0]
+            for member, text in member_texts.items()
+        }
+
+        # Outbound `supersedes` disclosure (spec: "Resurrection Interaction
+        # Disclosure"), per PURGE-SET MEMBER: a target OUTSIDE the purge
+        # set re-enters retrieval once the whole set is gone. The
+        # `target not in purge_ids_set` guard also covers S2a's defensive
+        # self-`supersedes` exclusion for the `self` scope (no known CLI
+        # path can construct one).
+        #
+        # Tuple convention: the purge-set MEMBER (the "tag" identifying
+        # which purge-set concept caused the disclosure) is ALWAYS field 0,
+        # matching `all_refs` below (`(member, ref)`) -- a future edit
+        # copying one unpacking idiom onto the other stays safe. Sort order
+        # is preserved as "primarily by target" (the original tuple order)
+        # via an explicit key, so output is unchanged.
+        resurrection_pairs = sorted(
+            {
+                (member, relation.target)
+                for member in purge_ids
+                for relation in okf.decode_relations(member_metadata[member])
+                if relation.type == "supersedes"
+                and relation.target not in purge_ids_set
+            },
+            key=lambda pair: (pair[1], pair[0]),
         )
 
-        new_index_text, removed = bundle_index.remove_index_entry(
-            index_text, canonical_id
-        )
+        # Set-difference inbound-reference detection (design decision 2):
+        # `find_inbound_references` -- S2a's own scanner, unmodified -- is
+        # called once PER purge-set member over the SAME whole-bundle
+        # snapshot; any referrer whose id is ITSELF a purge-set member is
+        # dropped (an intra-set backlink, e.g. a cascade child's
+        # `## Related` link back to its Source, is expected and must never
+        # block). `unverifiable` referrers are deduped by `referrer_id`
+        # across members -- a single malformed file mentioning several
+        # member ids must surface once, not once per member.
+        #
+        # Tuple convention: the purge-set MEMBER is field 0, `ref` is
+        # field 1, matching `resurrection_pairs` above (member also field
+        # 0) -- keep both tuple shapes member-first so a future edit can
+        # never silently swap fields by copying one unpacking idiom onto
+        # the other.
+        all_refs: list[tuple[str, bundle_references.InboundReference]] = []
+        seen_unverifiable: set[str] = set()
+        for member in purge_ids:
+            for ref in bundle_references.find_inbound_references(
+                other_files, target_id=member
+            ):
+                if ref.referrer_id in purge_ids_set:
+                    continue
+                if ref.kind == "unverifiable":
+                    if ref.referrer_id in seen_unverifiable:
+                        continue
+                    seen_unverifiable.add(ref.referrer_id)
+                all_refs.append((member, ref))
+        verified_refs = [ref for _, ref in all_refs if ref.kind != "unverifiable"]
+        unverifiable_refs = [ref for _, ref in all_refs if ref.kind == "unverifiable"]
+
+        # `index.md` bullet removal for every purge-set member (a pure
+        # text transform -- call order has no effect on the final result).
+        new_index_text = index_text
+        total_removed = 0
+        for member in purge_ids:
+            new_index_text, removed_i = bundle_index.remove_index_entry(
+                new_index_text, member
+            )
+            total_removed += removed_i
+
+        # `log.md` tombstones, one per member, all sharing `tombstone_time`
+        # (a single `now`). Built in REVERSED sorted order so the LAST
+        # prepend (the smallest id) ends up at the very top -- a
+        # deterministic ascending top-to-bottom order matching the sorted
+        # delete order below.
         tombstone_time = now.strftime("%H:%M:%SZ")
-        new_log_text = bundle_log.insert_log_entry(
-            log_text,
-            now.astimezone().date(),
-            f"**Tombstone** ({tombstone_time}): Removed [{title}]"
-            f"(/{canonical_id}.md) (id: {canonical_id}).",
-        )
+        new_log_text = log_text
+        for member in reversed(purge_ids):
+            raw_title = member_metadata[member].get("title")
+            title = (
+                raw_title
+                if isinstance(raw_title, str) and raw_title.strip()
+                else member
+            )
+            new_log_text = bundle_log.insert_log_entry(
+                new_log_text,
+                now.astimezone().date(),
+                f"**Tombstone** ({tombstone_time}): Removed [{title}]"
+                f"(/{member}.md) (id: {member}).",
+            )
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos forget: failed while preparing the forget -- {exc}.", err=True
@@ -971,49 +1092,57 @@ def forget(
         raise typer.Exit(code=1) from exc
 
     typer.echo("openkos forget: proposed changes:")
-    if removed >= 1:
+    if total_removed >= 1:
         typer.echo(f"  ~ {index_path.name} (remove entry)")
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
-    typer.echo(f"  - bundle/{canonical_id}.md")
-    verified_refs = [ref for ref in inbound_refs if ref.kind != "unverifiable"]
-    unverifiable_refs = [ref for ref in inbound_refs if ref.kind == "unverifiable"]
-    for ref in inbound_refs:
+    for member in purge_ids:
+        typer.echo(f"  - bundle/{member}.md")
+    for member, ref in all_refs:
         if ref.kind == "link":
-            typer.echo(f"  ! bundle/{ref.referrer_id}.md (inbound link)")
+            line = f"  ! bundle/{ref.referrer_id}.md (inbound link)"
         elif ref.kind == "relation":
-            typer.echo(
+            line = (
                 f"  ! bundle/{ref.referrer_id}.md "
                 f"(inbound relation: {ref.relation_type})"
             )
         else:
-            typer.echo(
+            line = (
                 f"  ? bundle/{ref.referrer_id}.md "
-                f"(unverifiable: could not parse; may reference {canonical_id})"
+                f"(unverifiable: could not parse; may reference {member})"
             )
-    for target in resurrection_targets:
+        if scope == "source" and ref.kind != "unverifiable":
+            line += f" -> {member}"
+        typer.echo(line)
+    for member, target in resurrection_pairs:
         typer.echo(
             f"  ~ bundle/{target}.md (re-enters retrieval: no longer "
-            f"superseded by {canonical_id})"
+            f"superseded by {member})"
         )
+    if scope == "source":
+        typer.echo(f"  Total: {len(purge_ids)} concept(s) to delete.")
 
     # Gate 1 (spec: "Refuse Forget When Inbound References Exist, Unless
-    # --force"): refuses iff verified references OR unverifiable referrers
-    # were detected AND --force was not passed -- fully independent of gate
-    # 2 below (spec: "--force Is Orthogonal to the Confirm Gate"). A
-    # referrer whose frontmatter could not be parsed but whose raw text
-    # mentions this concept's id is fail-CLOSED here too, never silently
-    # dropped (CRITICAL fix, bounded correction: `find_inbound_relation_
-    # rewrites` alone silently `continue`s past such a file).
+    # --force"): refuses iff a surviving (external, set-difference-
+    # filtered) verified reference OR unverifiable referrer was detected
+    # AND --force was not passed -- fully independent of gate 2 below
+    # (spec: "--force Is Orthogonal to the Confirm Gate"). `target_desc`
+    # is scope-conditional ONLY in wording; for `self` it reproduces S2a's
+    # exact `'<canonical_id>'` phrasing byte-for-byte.
     if (verified_refs or unverifiable_refs) and not force:
         messages: list[str] = []
+        target_desc = (
+            f"the {len(purge_ids)}-concept purge set rooted at '{canonical_id}'"
+            if scope == "source"
+            else f"'{canonical_id}'"
+        )
         if verified_refs:
             messages.append(
-                f"{len(verified_refs)} inbound reference(s) to '{canonical_id}' found"
+                f"{len(verified_refs)} inbound reference(s) to {target_desc} found"
             )
         if unverifiable_refs:
             messages.append(
                 f"could not verify {len(unverifiable_refs)} referrer(s) "
-                f"that may reference '{canonical_id}'"
+                f"that may reference {target_desc}"
             )
         typer.echo(
             "openkos forget: refusing to forget -- "
@@ -1024,10 +1153,16 @@ def forget(
         )
         raise typer.Exit(code=1)
 
-    # Gate 2: the unchanged confirm gate, untouched by --force.
+    # Gate 2: the confirm gate, untouched by --force. `--scope source`
+    # names the delete COUNT in its own prompt text (spec: "`--force`
+    # does not auto-confirm the count"); `--scope self` keeps S2a's
+    # verbatim prompt (byte-identity, design decision 6).
     if not auto and cfg.review:
         if sys.stdin.isatty():
-            typer.confirm("Proceed with these changes?", abort=True)
+            if scope == "source":
+                typer.confirm(f"Delete {len(purge_ids)} concepts?", abort=True)
+            else:
+                typer.confirm("Proceed with these changes?", abort=True)
         else:
             typer.echo(
                 "openkos forget: refusing to write without confirmation -- "
@@ -1036,20 +1171,44 @@ def forget(
             )
             raise typer.Exit(code=1)
 
+    unlinked_count = 0
     try:
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
-        fsio.remove_file(concept_path)
+        # N-delete, LAST, in deterministic sorted order (design decision 5)
+        # -- the catalog already reflects every removal before any unlink,
+        # so a failure partway through leaves a benign, git-recoverable
+        # partial result, never a dangling catalog entry.
+        for member in sorted(purge_ids):
+            fsio.remove_file(layout.bundle_dir / f"{member}.md")
+            unlinked_count += 1
     except (OSError, ValueError) as exc:
-        typer.echo(
-            f"openkos forget: failed while writing the forget -- {exc}.", err=True
-        )
+        message = f"openkos forget: failed while writing the forget -- {exc}."
+        # K-of-N observability on a mid-cascade unlink failure (`--scope
+        # source`): only enrich when there is more than one purge-set
+        # member to report on, so the `self`/single-member message stays
+        # byte-identical to S2a.
+        if len(purge_ids) > 1:
+            remaining = len(purge_ids) - unlinked_count
+            message += (
+                f" removed {unlinked_count} of {len(purge_ids)} concept(s) "
+                f"before failing; {remaining} remain (recover with git or "
+                "'openkos lint')."
+            )
+        typer.echo(message, err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos forget: removed 'bundle/{canonical_id}.md' "
-        f"({index_path.name}, {log_path.name} updated)."
-    )
+    if scope == "source":
+        deleted_paths = ", ".join(f"bundle/{member}.md" for member in purge_ids)
+        typer.echo(
+            f"openkos forget: removed {len(purge_ids)} concept(s) "
+            f"({deleted_paths}) ({index_path.name}, {log_path.name} updated)."
+        )
+    else:
+        typer.echo(
+            f"openkos forget: removed 'bundle/{canonical_id}.md' "
+            f"({index_path.name}, {log_path.name} updated)."
+        )
 
 
 @app.command()
