@@ -38,6 +38,10 @@ from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates
 from openkos.resolution.adjudication import Verdict, adjudicate_candidates
 from openkos.resolution.candidates import Tier
+from openkos.resolution.contradiction import (
+    find_contradictions,
+    is_high_confidence_contradiction,
+)
 from openkos.resolution.edge_typing import suggest_relations
 from openkos.resolution.volatility_typing import suggest_volatility
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
@@ -2269,6 +2273,129 @@ def suggest_volatility_cmd() -> None:
         typer.echo()
 
     typer.echo("Next: edit type_tiers in openkos.yaml")
+
+
+@app.command()
+def contradictions(
+    show_all: bool = typer.Option(
+        False,
+        "--all",
+        help="Show every verdict (CONTRADICTS, CONSISTENT, UNCERTAIN) "
+        "regardless of confidence.",
+    ),
+) -> None:
+    """LLM-detect contradictions between already-related concepts: read-only,
+    like `adjudicate`/`suggest-relations`/`suggest-volatility`.
+
+    A SEVENTH read command, mirroring `suggest-relations`'s wiring exactly:
+    the shared `config.require_workspace` gate (D1), then a Phase-A
+    `read_config` guard (`except (OSError, ValueError)`, lint parity), then
+    a real `OllamaClient(model=cfg.model)` is built and injected -- as the
+    `LLMBackend` -- into `resolution.contradiction.find_contradictions`,
+    which OWNS the internal `openkos.graph` read (design D2/D6, "No CLI
+    Surface"): this module imports ONLY from `openkos.resolution.
+    contradiction`, never `openkos.graph` directly.
+
+    `contradictions` never writes, merges, or reconciles -- it only prints a
+    verdict, confidence, rationale, and cited conflicting claims per
+    candidate pair for human review. No `--auto`, no confirmation gate, no
+    `--json` or other structured mode.
+
+    By DEFAULT only high-confidence `CONTRADICTS` verdicts are shown
+    (`is_high_confidence_contradiction`); `CONSISTENT` and `UNCERTAIN`, and
+    low-confidence `CONTRADICTS`, are hidden (spec: Default view hides
+    CONSISTENT/UNCERTAIN). `--all` is a DISPLAY-only filter: it reveals
+    every verdict regardless of type or confidence, but
+    `find_contradictions` always judges every candidate pair either way
+    (spec: `--all` Reveals Every Verdict).
+
+    A candidate set truncated by the engine leaf's pair cap is reported as
+    an explicit "N of M pairs shown (cap reached)" line -- never silent
+    (spec: Pair Cap With Explicit Truncation Notice). A bundle with zero
+    candidate pairs prints a clear "No candidate pairs found." line and
+    exits 0 without ever calling `llm.chat` (spec: Empty Graph Yields Clear
+    Message, No Crash).
+
+    A no-model/no-Ollama run degrades via the SAME 3-tier ORDERED handler
+    `suggest-relations`/`adjudicate`/`query` use -- `OllamaUnavailable`,
+    then `OllamaModelNotFound`, then the generic `OllamaError` fallback --
+    each with its own actionable stderr message, exit 1, and zero writes.
+
+    No file under the workspace is ever created, modified, or deleted
+    (spec: Read-Only `contradictions` CLI Verb).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos contradictions: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos contradictions: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    llm = OllamaClient(model=cfg.model)
+    try:
+        verdicts, total_pairs = find_contradictions(layout.bundle_dir, llm=llm)
+    except OllamaUnavailable as exc:
+        typer.echo(
+            f"openkos contradictions: failed -- {exc}. Start it with "
+            f"`ollama serve`, then try again.{_DOCTOR_HINT}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    except OllamaModelNotFound as exc:
+        typer.echo(
+            f"openkos contradictions: failed -- model '{cfg.model}' is not "
+            f"installed. Pull it with `ollama pull {cfg.model}`, then try "
+            "again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    # The two specific handlers above MUST precede this generic handler:
+    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
+    # `OllamaError`, so reordering would silently funnel them into this
+    # fallback and lose their actionable remediation messages (mirrors
+    # `suggest-relations`'s ordering).
+    except OllamaError as exc:
+        typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"openkos contradictions: workspace at {root}")
+    typer.echo()
+    if not verdicts:
+        typer.echo("No candidate pairs found.")
+        return
+
+    if total_pairs > len(verdicts):
+        typer.echo(f"{len(verdicts)} of {total_pairs} pairs shown (cap reached)")
+        typer.echo()
+
+    displayed = (
+        verdicts
+        if show_all
+        else [v for v in verdicts if is_high_confidence_contradiction(v)]
+    )
+    if not displayed:
+        typer.echo("No high-confidence contradictions found.")
+        return
+
+    for result in displayed:
+        source_id, target_id = result.pair_ids
+        typer.echo(
+            f"[{result.verdict.value.upper()}] {source_id} <-> {target_id} "
+            f"(confidence: {result.confidence:.2f})"
+        )
+        for claim in result.conflicting_claims:
+            typer.echo(f"  - {claim}")
+        typer.echo(f"  rationale: {result.rationale}")
+        typer.echo()
 
 
 def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:
