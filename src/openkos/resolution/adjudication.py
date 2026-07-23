@@ -88,13 +88,23 @@ class AdjudicatedCandidate:
 
 
 def _load_members(
-    bundle_dir: Path, member_ids: Sequence[str]
+    bundle_dir: Path, member_ids: Sequence[str], *, include_confidential: bool = False
 ) -> list[tuple[str, str, str]]:
     """Read-only guarded per-member re-read (mirrors
     `retrieval/answer.py:_assemble_context`): returns `(concept_id, title,
     body)` for every member whose document is readable and parseable,
     skipping the rest without raising. A member's document is looked up at
     `bundle_dir / f"{concept_id}.md"`.
+
+    sensitivity-fail-closed-filter (directory-walk-observability follow-up,
+    defense-in-depth): after re-reading each member's OWN frontmatter, also
+    independently re-checks it against `sensitivity.blocks_llm_send` --
+    walk-independent, so a member the `sensitive_concept_ids` walk silently
+    missed (an unlistable subtree, `okf.py`'s documented `_walk_errors`
+    case) is still skipped here, never entering the `llm.chat` payload.
+    `include_confidential=True` skips this re-check identically to how it
+    skips the upstream member-drop filter, mirroring `retrieval/answer.py`'s
+    `_assemble_context` (answer.py:211-214).
     """
     members: list[tuple[str, str, str]] = []
     for concept_id in member_ids:
@@ -105,6 +115,10 @@ def _load_members(
         try:
             metadata, body = okf.load_frontmatter(text)
         except Exception:  # noqa: S112 -- broad: any parse failure skips this member
+            continue
+        if not include_confidential and sensitivity.blocks_llm_send(
+            metadata.get("sensitivity")
+        ):
             continue
         title = str(metadata.get("title") or "") or concept_id
         members.append((concept_id, title, body))
@@ -220,7 +234,9 @@ def adjudicate_candidates(
         member_ids = [
             member_id for member_id in candidate.member_ids if member_id not in blocked
         ]
-        members = _load_members(bundle_dir, member_ids)
+        members = _load_members(
+            bundle_dir, member_ids, include_confidential=include_confidential
+        )
         if not members:
             results.append(
                 AdjudicatedCandidate(

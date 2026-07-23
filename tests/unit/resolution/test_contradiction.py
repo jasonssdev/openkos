@@ -1207,3 +1207,93 @@ def test_default_include_confidential_false_calls_the_sensitivity_predicate_walk
     contradiction_mod.find_contradictions(bundle_dir, llm=llm)
 
     assert walk_calls == [bundle_dir]
+
+
+# ---------------------------------------------------------------------------
+# directory-walk-observability follow-up: `_load_doc` leak-closure re-check
+# ---------------------------------------------------------------------------
+
+
+def test_load_doc_independently_excludes_a_confidential_doc_the_walk_never_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_load_doc` re-checks EACH doc's own frontmatter at re-read time,
+    independent of the precomputed confidential-id set built during the
+    walk -- a confidential concept the walk silently missed (e.g. an
+    unlistable subtree, `okf.py`'s documented `_walk_errors` case) but still
+    directly readable by path MUST still be excluded from the `llm.chat`
+    prompt (mirrors `retrieval/answer.py`'s `_assemble_context` re-check,
+    correction batch FIX 2)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "b.md",
+        title="B",
+        body="dichotomyzz private note",
+    )
+    fake_store: GraphStore = _FakeGraphStore(
+        [Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel")]
+    )
+    monkeypatch.setattr(
+        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(fake_store)
+    )
+    # Simulate the walk missing "concepts/a"'s subtree entirely: the
+    # precomputed confidential-id set is empty, so the pair is NOT filtered
+    # upstream in `_candidate_pairs` -- the independent per-doc re-check in
+    # `_load_doc` is the ONLY thing standing between "concepts/a"'s content
+    # and `llm.chat`.
+    monkeypatch.setattr(
+        sensitivity, "sensitive_concept_ids", lambda *a, **k: frozenset()
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+
+    contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert len(llm.calls) == 1
+    sent_content = " ".join(str(message["content"]) for message in llm.calls[0])
+    assert "confidential note" not in sent_content
+    assert "private note" in sent_content
+
+
+def test_include_confidential_true_bypasses_the_load_doc_recheck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_confidential=True` bypasses the independent `_load_doc`
+    re-check too, restoring byte-identical pre-filter behavior (not just at
+    the upstream `_candidate_pairs` filter)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "b.md",
+        title="B",
+        body="dichotomyzz private note",
+    )
+    fake_store: GraphStore = _FakeGraphStore(
+        [Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel")]
+    )
+    monkeypatch.setattr(
+        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(fake_store)
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+
+    contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, include_confidential=True
+    )
+
+    assert len(llm.calls) == 1
+    sent_content = " ".join(str(message["content"]) for message in llm.calls[0])
+    assert "confidential note" in sent_content

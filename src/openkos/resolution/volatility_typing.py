@@ -23,7 +23,7 @@ from pathlib import Path
 from openkos import lint, sensitivity
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
-from openkos.model import types
+from openkos.model import okf, types
 
 N_SAMPLE_CONCEPTS = 5
 """Per type, the number of concepts (ordered by sorted `identity`) whose
@@ -84,6 +84,36 @@ class TierSuggestion:
     rationale: str
     """Free-text explanation; may be blank on a well-formed reply that
     omitted one, but is never blank on the fail-closed degrade paths."""
+
+
+def _reread_sensitivity_blocked(doc: lint.LintDoc) -> bool:
+    """Re-read `doc.path`'s frontmatter fresh and check its OWN
+    `sensitivity` value against `sensitivity.blocks_llm_send` -- `LintDoc`
+    itself carries no `sensitivity` field (only `freshness`/`type`/
+    `volatility`), so this is a genuine re-read, mirroring query's fresh
+    re-read (`retrieval/answer.py:211-214`) rather than a cheap re-check of
+    already-parsed metadata (directory-walk-observability follow-up,
+    defense-in-depth).
+
+    An unreadable/unparseable re-read degrades to `True` (exclude): if this
+    doc's current sensitivity cannot be verified, the fail-closed default is
+    to keep it out of the prompt, matching `sensitivity.sensitive_concept_ids`'s
+    own unreadable/unparseable -> blocked branch.
+
+    Note (design): this verb's leak surface is narrower than the other
+    three -- ids come from a live `lint.collect_docs` walk (not
+    `graph.db`), so a subtree that lost its `r` bit is already absent from
+    `docs`. This guard ships for uniform defense-in-depth per locked scope
+    and future-proofs a possible index-sourced refactor."""
+    try:
+        text = doc.path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return True
+    try:
+        metadata, _body = okf.load_frontmatter(text)
+    except Exception:  # broad: any parse failure fails closed (return, not continue)
+        return True
+    return sensitivity.blocks_llm_send(metadata.get("sensitivity"))
 
 
 def _sample_bodies_by_type(docs: list[lint.LintDoc]) -> dict[str, list[str]]:
@@ -185,6 +215,8 @@ def suggest_volatility(
 
     docs, _skip_notices = lint.collect_docs(bundle_dir)
     docs = [doc for doc in docs if doc.identity not in blocked]
+    if not include_confidential:
+        docs = [doc for doc in docs if not _reread_sensitivity_blocked(doc)]
     sampled = _sample_bodies_by_type(docs)
     results: list[TierSuggestion] = []
     for type_name in sorted(sampled):

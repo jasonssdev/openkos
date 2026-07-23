@@ -22,6 +22,7 @@ from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.bundle import relations as bundle_relations
+from openkos.cli import observability
 from openkos.extraction.concept import extract_concept
 from openkos.graph import sqlite_graph
 from openkos.graph.base import GraphStore
@@ -2846,6 +2847,9 @@ def adjudicate(
         layout.bundle_dir, include_deprecated=include_deprecated
     )
     llm = OllamaClient(model=cfg.model)
+    observability.warn_if_walk_incomplete(
+        layout.bundle_dir, include_confidential=include_confidential
+    )
     try:
         results = adjudicate_candidates(
             candidates,
@@ -2969,6 +2973,9 @@ def suggest_relations_cmd(
         raise typer.Exit(code=1) from exc
 
     llm = OllamaClient(model=cfg.model)
+    observability.warn_if_walk_incomplete(
+        layout.bundle_dir, include_confidential=include_confidential
+    )
     try:
         results = suggest_relations(
             layout.bundle_dir, llm=llm, include_confidential=include_confidential
@@ -3084,6 +3091,9 @@ def suggest_volatility_cmd(
         raise typer.Exit(code=1) from exc
 
     llm = OllamaClient(model=cfg.model)
+    observability.warn_if_walk_incomplete(
+        layout.bundle_dir, include_confidential=include_confidential
+    )
     try:
         results = suggest_volatility(
             layout.bundle_dir, llm=llm, include_confidential=include_confidential
@@ -3215,6 +3225,9 @@ def contradictions(
         raise typer.Exit(code=1) from exc
 
     llm = OllamaClient(model=cfg.model)
+    observability.warn_if_walk_incomplete(
+        layout.bundle_dir, include_confidential=include_confidential
+    )
     try:
         verdicts, total_pairs = find_contradictions(
             layout.bundle_dir,
@@ -3480,6 +3493,9 @@ def query(
 
     llm = OllamaClient(model=cfg.model)
     embedder = OllamaClient(model=cfg.embedding_model)
+    observability.warn_if_walk_incomplete(
+        layout.bundle_dir, include_confidential=include_confidential
+    )
     vector_store_cm, store_was_unavailable = _open_vector_store_or_degrade(
         layout.vectors_db_path
     )

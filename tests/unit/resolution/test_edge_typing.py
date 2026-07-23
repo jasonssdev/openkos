@@ -641,3 +641,79 @@ def test_default_include_confidential_false_calls_the_predicate_walk_once(
     edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
 
     assert walk_calls == [bundle_dir]
+
+
+# ---------------------------------------------------------------------------
+# directory-walk-observability follow-up: `_load_doc` leak-closure re-check
+# ---------------------------------------------------------------------------
+
+
+def test_load_doc_independently_excludes_a_confidential_doc_the_walk_never_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_load_doc` re-checks EACH doc's own frontmatter at re-read time,
+    independent of the precomputed confidential-id set built during the
+    walk -- a confidential concept the walk silently missed (e.g. an
+    unlistable subtree, `okf.py`'s documented `_walk_errors` case) but still
+    directly readable by path MUST still be excluded from the `llm.chat`
+    prompt (mirrors `retrieval/answer.py`'s `_assemble_context` re-check,
+    correction batch FIX 2)."""
+    from openkos import sensitivity
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: confidential\n---\n"
+        "dichotomyzz confidential note. See [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\n"
+        "dichotomyzz private note.\n",
+        encoding="utf-8",
+    )
+    # Simulate the walk missing "concepts/a"'s subtree entirely: the
+    # precomputed confidential-id set is empty, so the edge is NOT filtered
+    # upstream in `suggest_relations` -- the independent per-doc re-check in
+    # `_load_doc` is the ONLY thing standing between "concepts/a"'s content
+    # and `llm.chat`.
+    monkeypatch.setattr(
+        sensitivity, "sensitive_concept_ids", lambda *a, **k: frozenset()
+    )
+    llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions B")])
+
+    edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+
+    assert len(llm.calls) == 1
+    sent_content = " ".join(str(m["content"]) for m in llm.calls[0])
+    assert "confidential note" not in sent_content
+    assert "private note" in sent_content
+
+
+def test_include_confidential_true_bypasses_the_load_doc_recheck(
+    tmp_path: Path,
+) -> None:
+    """`include_confidential=True` bypasses the independent `_load_doc`
+    re-check too, restoring byte-identical pre-filter behavior (not just at
+    the upstream predicate-walk filter)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: confidential\n---\n"
+        "dichotomyzz confidential note. See [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\n"
+        "dichotomyzz private note.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions B")])
+
+    edge_typing_mod.suggest_relations(bundle_dir, llm=llm, include_confidential=True)
+
+    assert len(llm.calls) == 1
+    sent_content = " ".join(str(m["content"]) for m in llm.calls[0])
+    assert "confidential note" in sent_content

@@ -127,13 +127,25 @@ def _candidate_edges(store: GraphStore) -> list[Edge]:
     ]
 
 
-def _load_doc(bundle_dir: Path, concept_id: str) -> tuple[str, str]:
+def _load_doc(
+    bundle_dir: Path, concept_id: str, *, include_confidential: bool = False
+) -> tuple[str, str]:
     """Guarded single-doc re-read (mirrors `adjudication._load_members`,
     narrowed to exactly one document): returns `(title, body)` for
     `concept_id`'s document under `bundle_dir`. An unreadable or
     unparseable document -- including a dangling edge endpoint with no
     document at all -- degrades to `(concept_id, "")` rather than raising or
-    skipping the edge; the caller always gets something to prompt with."""
+    skipping the edge; the caller always gets something to prompt with.
+
+    sensitivity-fail-closed-filter (directory-walk-observability follow-up,
+    defense-in-depth): after re-reading this doc's OWN frontmatter, also
+    independently re-checks it against `sensitivity.blocks_llm_send` --
+    walk-independent, so a doc the `sensitive_concept_ids` walk silently
+    missed (an unlistable subtree, `okf.py`'s documented `_walk_errors`
+    case) is still degraded to `(concept_id, "")` here, never entering the
+    `llm.chat` payload. `include_confidential=True` skips this re-check
+    identically to how it skips the upstream candidate filter, mirroring
+    `retrieval/answer.py`'s `_assemble_context` (answer.py:211-214)."""
     try:
         text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -141,6 +153,10 @@ def _load_doc(bundle_dir: Path, concept_id: str) -> tuple[str, str]:
     try:
         metadata, body = okf.load_frontmatter(text)
     except Exception:  # broad: any parse failure degrades this doc, never raises
+        return concept_id, ""
+    if not include_confidential and sensitivity.blocks_llm_send(
+        metadata.get("sensitivity")
+    ):
         return concept_id, ""
     title = str(metadata.get("title") or "") or concept_id
     return title, body
@@ -196,7 +212,11 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
 
 
 def suggest_edge_types(
-    edges: Sequence[Edge], *, bundle_dir: Path, llm: LLMBackend
+    edges: Sequence[Edge],
+    *,
+    bundle_dir: Path,
+    llm: LLMBackend,
+    include_confidential: bool = False,
 ) -> list[EdgeSuggestion]:
     """Suggest a relation type + rationale for every edge in `edges`
     against `bundle_dir` using `llm`, read-only.
@@ -205,11 +225,20 @@ def suggest_edge_types(
     -- one `llm.chat` call per edge (module docstring). Any `OllamaError`-
     family exception raised by `llm.chat` propagates unswallowed (module
     docstring) -- this function catches only reply-parsing/validation
-    failures, never transport or model-availability errors."""
+    failures, never transport or model-availability errors.
+
+    `include_confidential` is threaded into `_load_doc`'s independent
+    per-doc re-check (directory-walk-observability follow-up); it defaults
+    to `False`, so a caller that never passes it keeps today's fail-closed
+    behavior unchanged."""
     results: list[EdgeSuggestion] = []
     for edge in edges:
-        src_doc = _load_doc(bundle_dir, edge.source_id)
-        tgt_doc = _load_doc(bundle_dir, edge.target_id)
+        src_doc = _load_doc(
+            bundle_dir, edge.source_id, include_confidential=include_confidential
+        )
+        tgt_doc = _load_doc(
+            bundle_dir, edge.target_id, include_confidential=include_confidential
+        )
         messages = _build_messages(edge, src_doc, tgt_doc)
         reply = llm.chat(messages)
         suggested_type, rationale = _parse_reply(reply)
@@ -249,4 +278,9 @@ def suggest_relations(
         for edge in edges
         if edge.source_id not in blocked and edge.target_id not in blocked
     ]
-    return suggest_edge_types(edges, bundle_dir=bundle_dir, llm=llm)
+    return suggest_edge_types(
+        edges,
+        bundle_dir=bundle_dir,
+        llm=llm,
+        include_confidential=include_confidential,
+    )

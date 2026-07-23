@@ -19,6 +19,8 @@ never depends on whether the real example bundle happens to contain
 candidates.
 """
 
+import os
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -36,6 +38,26 @@ from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
 
 runner = CliRunner()
+
+
+def _break_os_walk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force `okf._walk_errors` to report exactly one directory-scan error,
+    deterministically -- mirrors `tests/unit/model/test_okf.py`'s onerror
+    monkeypatch pattern, without relying on real `chmod` bits."""
+    original_walk = os.walk
+    walk_error = OSError(13, "Permission denied", "locked")
+
+    def fake_walk(
+        top: str | os.PathLike[str],
+        topdown: bool = True,
+        onerror: Callable[[OSError], object] | None = None,
+        followlinks: bool = False,
+    ) -> Iterator[tuple[str, list[str], list[str]]]:
+        if onerror is not None:
+            onerror(walk_error)
+        yield from original_walk(top, topdown, onerror, followlinks)
+
+    monkeypatch.setattr(os, "walk", fake_walk)
 
 
 def _snapshot_entry(path: Path) -> tuple[bytes, int] | None:
@@ -692,3 +714,54 @@ def test_adjudicate_over_good_life_demo_is_read_only_and_exits_zero(
     assert result.exit_code == 0
     assert "openkos adjudicate: workspace at" in result.stdout
     assert _snapshot(bundle_dir) == before
+
+
+# ---------------------------------------------------------------------------
+# directory-walk-observability follow-up: walk-incompleteness signal
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_warns_stderr_on_incomplete_walk_and_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An incomplete directory walk (`okf._walk_errors` non-empty) prints a
+    self-explaining warning to STDERR and the command still exits 0 -- WARN,
+    not refuse (spec: Incomplete walk warns and still exits 0). A freshly
+    initialized, empty bundle has zero candidates, so the real
+    `adjudicate_candidates` never calls `llm.chat` -- a real `OllamaClient`
+    is safe to construct here."""
+    _init_workspace(tmp_path, monkeypatch)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "bundle scan was incomplete" in result.stderr
+
+
+def test_adjudicate_no_warning_on_clean_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fully readable bundle produces no incomplete-walk warning (spec:
+    Clean bundle produces no warning)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "bundle scan was incomplete" not in result.stderr
+
+
+def test_adjudicate_include_confidential_suppresses_the_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential` suppresses the incomplete-walk warning too --
+    the filter is deliberately off (spec: `--include-confidential`
+    suppresses the warning)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate", "--include-confidential"])
+
+    assert result.exit_code == 0
+    assert "bundle scan was incomplete" not in result.stderr

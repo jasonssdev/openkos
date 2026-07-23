@@ -519,3 +519,76 @@ def test_default_include_confidential_false_calls_the_predicate_walk_once(
     volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
 
     assert walk_calls == [tmp_path]
+
+
+# ---------------------------------------------------------------------------
+# directory-walk-observability follow-up: per-doc leak-closure re-check
+# ---------------------------------------------------------------------------
+
+
+def test_reread_independently_excludes_a_confidential_doc_the_walk_never_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A per-doc fresh frontmatter re-read (`LintDoc` itself carries no
+    `sensitivity` field) independently excludes a confidential doc from
+    sampling, regardless of the precomputed confidential-id set built during
+    the walk -- a confidential doc the walk silently missed (e.g. an
+    unlistable subtree, `okf.py`'s documented `_walk_errors` case) but still
+    directly readable by path MUST still be excluded (mirrors
+    `retrieval/answer.py`'s `_assemble_context` re-check, correction batch
+    FIX 2). Narrower leverage than the other 3 verbs (design note: ids come
+    from a live `lint.collect_docs` walk, not `graph.db`), but shipped for
+    uniform defense-in-depth."""
+    from openkos import sensitivity
+
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        body="Alpha secret body.",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        tmp_path / "b.md",
+        doc_type="Person",
+        title="B",
+        body="Beta private body.",
+        sensitivity_value="private",
+    )
+    # Simulate the walk missing "a"'s subtree entirely: the precomputed
+    # confidential-id set is empty, so "a" is NOT dropped upstream -- the
+    # independent per-doc re-read guard is the ONLY thing standing between
+    # "a"'s content and `llm.chat`.
+    monkeypatch.setattr(
+        sensitivity, "sensitive_concept_ids", lambda *a, **k: frozenset()
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert len(llm.calls) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Alpha secret body." not in message["content"]
+    assert "Beta private body." in message["content"]
+
+
+def test_include_confidential_true_bypasses_the_reread_guard(tmp_path: Path) -> None:
+    """`include_confidential=True` bypasses the independent per-doc re-read
+    guard too, restoring byte-identical pre-filter behavior (not just at the
+    upstream predicate-walk filter)."""
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        body="Alpha secret body.",
+        sensitivity_value="confidential",
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=llm, include_confidential=True
+    )
+
+    assert len(llm.calls) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Alpha secret body." in message["content"]
