@@ -1,5 +1,11 @@
 # Tasks: Directory-Walk Observability Hardening (S3 follow-up)
 
+**Original apply**: 25/25 tasks complete (4/4 phases) — 27 new tests added
+(4 observability unit + 15 CLI signal + 8 resolution leak-closure). Cosmetic
+correction (verify SUGGESTION): prior status headers below/in the linked
+apply-progress said "27/27 tasks complete", conflating the 25-task-item
+count with the 27-new-test count; corrected here.
+
 ## Review Workload Forecast
 
 | Field | Value |
@@ -66,4 +72,81 @@ Both units ship in the same PR (single cohesive fail-closed invariant per design
 - `uv run pytest`: 1699 passed
 - `uv run mypy .`: Success: no issues found in 121 source files
 - `uv run ruff check .`: All checks passed
+
+## Correction batch (post-4R-review)
+
+Bounded follow-up addressing 3 confirmed 4R findings (risk + reliability
+reviews were CLEAN — leak closure verified complete, tests strong). All 3
+are readability/resilience footguns on the fail-closed predicate, not
+correctness bugs in the shipped behavior.
+
+- [x] C.1 RED: `tests/unit/test_sensitivity.py` — add `should_block` unit
+  tests (confidential→blocked, private/public→allowed, missing/blank→blocked
+  fail-closed, `include_confidential=True`→never blocked). Confirmed failing
+  (`AttributeError: no attribute 'should_block'`) before the function
+  existed.
+- [x] C.2 GREEN: `src/openkos/sensitivity.py` — add pure
+  `should_block(metadata: Mapping[str, object], *, include_confidential: bool = False) -> bool`,
+  returning `not include_confidential and blocks_llm_send(metadata.get("sensitivity"))`.
+  No I/O added — `sensitivity.py` stays a pure leaf. Single documented
+  authority for the previously 5-way-duplicated inline predicate.
+- [x] C.3 REFACTOR: adopt `should_block` at all 5 sites — `retrieval/answer.py`
+  `_assemble_context`, `resolution/contradiction.py` `_load_doc`,
+  `resolution/edge_typing.py` `_load_doc`, `resolution/adjudication.py`
+  `_load_members`, `resolution/volatility_typing.py`
+  `_reread_sensitivity_blocked` (via C.4). Behavior-preserving — all
+  pre-existing leak-closure + query tests stayed green throughout.
+- [x] C.4 GREEN (FIX 2): `resolution/volatility_typing.py` —
+  `_reread_sensitivity_blocked` now takes `include_confidential` directly
+  (matching the sibling `_load_doc`/`_load_members` contract), removing the
+  asymmetric bare-return form that relied on an external `if not
+  include_confidential:` wrapper at the call site. `include_confidential=True`
+  short-circuits to `False` before any read (preserves the original
+  zero-I/O bypass cost). New RED test
+  `test_reread_guard_takes_include_confidential_directly` confirmed failing
+  (`TypeError: unexpected keyword argument`) before the signature changed.
+- [x] C.5 RED→GREEN (FIX 3): `resolution/volatility_typing.py` — the
+  walk-independent per-doc re-check now runs AFTER sampling (renamed
+  `_sample_bodies_by_type` → `_sample_docs_by_type`, returns `LintDoc`
+  objects; `suggest_volatility` filters + truncates the sampled subset),
+  not against the full bundle beforehand. New RED test
+  `test_reread_guard_applies_only_to_sampled_docs_not_full_bundle` (spy
+  counting guard calls: 6 docs, only 5 sampled) confirmed failing
+  (`6 == 5`) before the reorder; GREEN after. New test
+  `test_reread_excludes_a_confidential_doc_that_would_be_sampled` confirms
+  fail-closed is preserved on the sampled subset (a confidential doc within
+  the top-`N_SAMPLE_CONCEPTS` is still excluded; a private one is still
+  sent). Upstream `sensitive_concept_ids` walk-based `blocked` filter is
+  unchanged (still applied to the full bundle — cheap id-membership check,
+  no I/O).
+- [x] C.6 Cosmetic (verify SUGGESTION): corrected the "27/27 tasks" wording
+  at the top of this file and in Engram `sdd/directory-walk-observability/
+  tasks` + `apply-progress` — the correct task-item count is 25/25 (4/4
+  phases); 27 was the NEW-TEST count (4 observability + 15 CLI + 8
+  resolution), not the task count. No behavior change.
+- [x] C.7 `docs(design)`: added a "Known Follow-ups" section to `design.md`
+  documenting the DEFERRED query-hot-path multi-walk cost (3 full-tree
+  walks per `query` call: `warn_if_walk_incomplete`, `lifecycle.
+  deprecated_concept_ids`, `sensitivity.sensitive_concept_ids`) — real fix
+  is sharing one walk (design option 3c), reserved for a future slice, NOT
+  implemented in this correction batch.
+
+### Spec check
+
+No spec changes required. Both requirements ("Walk-Incompleteness
+Observability", "Defense-in-Depth Sensitivity Re-Check at Load") remain
+satisfied unchanged: FIX 1/2 are a pure internal refactor of the same
+decision, and FIX 3 preserves the exact same exclusion guarantee on every
+doc that is actually SENT to the LLM (it changes only which pre-egress
+documents get I/O-re-checked, never which sent documents get excluded).
+
+### Correction batch verification (whole-tree)
+- `uv run pytest`: 1706 passed (1699 baseline + 7 new: 4 `should_block` +
+  3 volatility guard/sampling tests)
+- `uv run mypy .`: Success: no issues found in 121 source files
+- `uv run ruff check .`: All checks passed
+- `uv run ruff format --check .`: 121 files already formatted (2 files —
+  `resolution/adjudication.py`, `retrieval/answer.py` — were reformatted
+  by `ruff format` for the shortened `should_block` call, then re-verified
+  clean)
 - `uv run ruff format --check .`: 121 files already formatted

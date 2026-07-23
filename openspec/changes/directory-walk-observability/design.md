@@ -117,3 +117,23 @@ budget is enforced.
 ## Open Questions
 
 - None blocking. Single vs. stacked-PR delivery resolves at tasks/apply per delivery strategy.
+
+## Known Follow-ups (post-apply, deferred)
+
+Recorded by the correction batch (post-4R-review) that hardened the shipped
+implementation. Documented here rather than implemented — out of scope for
+this change's locked boundary.
+
+- **Query hot-path multi-walk cost.** `query` currently pays for up to 3
+  independent full-tree walks per invocation: `warn_if_walk_incomplete`'s
+  `okf._walk_errors` walk (this change, Layer 1), `lifecycle.deprecated_concept_ids`'s
+  walk, and `sensitivity.sensitive_concept_ids`'s walk — each a separate
+  `okf._iter_docs`/`os.walk` pass over the same bundle tree for the same CLI
+  call. Decision 2 (this design) already accepted the walk this change adds
+  in isolation; the REAL fix is sharing one walk across all 3 predicates
+  (design option 3c: a single `okf._iter_docs` pass that derives
+  deprecated/sensitive/walk-error signals together), not accepting three
+  separate acceptances. Reserved for a future slice — it touches
+  `lifecycle.py`, `sensitivity.py`, and `cli/observability.py` simultaneously
+  and is a larger, independently-reviewable change than this correction
+  batch's 3-item scope.
