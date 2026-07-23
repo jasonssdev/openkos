@@ -1,18 +1,27 @@
-"""Unit tests for the `forget` CLI command: mirror-image delete of `ingest`.
+"""Unit tests for the `forget` CLI command: mirror-image delete of `ingest`,
+now reference-aware (MVP-3 gap #8 S2a).
 
 Phase A (validate + in-memory build) checks path safety, workspace
-presence, and concept existence before any write; Phase B (after confirm)
-updates `index.md`/`log.md` FIRST and deletes the concept file LAST, so the
-catalog never references a missing file. Not transactional as a whole --
-recovery is via git, mirroring `ingest`'s D5 retreat."""
+presence, and concept existence before any write; then scans the whole
+bundle snapshot for inbound markdown links/typed relations targeting the
+concept AND for its own outbound `supersedes` edges (resurrection
+disclosure), refusing (unless `--force`) when inbound references exist.
+Phase B (after confirm) updates `index.md`/`log.md` FIRST -- the new
+`log.md` entry is a tombstone-marked line, not a plain `**Forget**` bullet
+-- and deletes the concept file LAST, so the catalog never references a
+missing file. Not transactional as a whole -- recovery is via git,
+mirroring `ingest`'s D5 retreat."""
 
+import re
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.cli import main as cli_main
 from openkos.cli.main import app
+from openkos.model import okf
 
 runner = CliRunner()
 
@@ -64,6 +73,41 @@ def _write_hand_authored_concept(
     index_text = index_path.read_text(encoding="utf-8")
     bullet = f"* [Test]({link_form}) - A hand-authored entry.\n"
     index_path.write_text(index_text + f"\n# {section}\n\n{bullet}", encoding="utf-8")
+
+
+def _write_plain_concept(
+    tmp_path: Path, concept_id: str, *, title: str = "Referrer", body: str = "Body.\n"
+) -> None:
+    """Write a concept file directly to the bundle -- no `index.md` bullet,
+    since the inbound-reference/resurrection fixtures below only need the
+    file itself to exist in `bundle/` for the whole-bundle Phase A scan."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    concept_path.write_text(
+        f"---\ntype: Concept\ntitle: {title}\n---\n\n# {title}\n\n{body}",
+        encoding="utf-8",
+    )
+
+
+def _write_concept_with_relations(
+    tmp_path: Path,
+    concept_id: str,
+    relations: list[dict[str, object]],
+    *,
+    title: str = "Test",
+) -> None:
+    """Write a concept file whose `relations:` frontmatter is hand-crafted
+    directly (bypassing `relate`'s own guards, e.g. its self-id refusal) --
+    used to exercise defensive filtering that a normal CLI flow cannot
+    otherwise construct."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": title,
+        "relations": relations,
+    }
+    concept_path.write_text(okf.dump_frontmatter(metadata, "Body.\n"), encoding="utf-8")
 
 
 def test_traversal_concept_id_refuses(
@@ -184,8 +228,8 @@ def test_successful_forget_of_sources_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Forgetting a Sources-section entry removes the index bullet, appends
-    a `**Forget**` log line (no tombstone marker), and deletes the concept
-    file."""
+    a tombstone-marked log line (spec: "Log Entry on Forget"), and deletes
+    the concept file."""
     _init_workspace(tmp_path, monkeypatch)
     concept_id = _ingest_source(tmp_path)
 
@@ -197,8 +241,8 @@ def test_successful_forget_of_sources_entry(
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert f"{concept_id}.md" not in index_text
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
-    assert "**Forget**" in log_text
-    assert "tombstone" not in log_text.lower()
+    assert "**Tombstone**" in log_text
+    assert "**Forget**" not in log_text
 
 
 @pytest.mark.parametrize(
@@ -321,7 +365,7 @@ def test_phase_b_ordering_catalog_before_file_delete(
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert f"{concept_id}.md" not in index_text
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
-    assert "**Forget**" in log_text
+    assert "**Tombstone**" in log_text
 
 
 def test_malformed_index_refuses(
@@ -342,3 +386,503 @@ def test_malformed_index_refuses(
     assert isinstance(result.exception, SystemExit)
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
+
+
+# -- Phase 2: whole-bundle scan, tombstone, resurrection disclosure --------
+
+
+def test_no_refs_no_supersedes_succeeds_with_no_extra_preview_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept with no inbound references and no outbound `supersedes`
+    edge forgets cleanly, with no inbound-reference or resurrection lines
+    in the preview (spec: "No inbound references found", "No outbound
+    `supersedes` edge, no disclosure")."""
+    _init_workspace(tmp_path, monkeypatch)
+    concept_id = _ingest_source(tmp_path)
+
+    result = runner.invoke(app, ["forget", concept_id, "--auto"])
+
+    assert result.exit_code == 0
+    assert "inbound" not in result.output.lower()
+    assert "re-enters retrieval" not in result.output
+
+
+def test_tombstone_log_line_exact_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tombstone line matches
+    `**Tombstone** (HH:MM:SSZ): Removed [<title>](/<id>.md) (id: <id>).`,
+    with the title read from frontmatter BEFORE deletion (spec: "Log Entry
+    on Forget" -- "Tombstone log line recorded")."""
+    _init_workspace(tmp_path, monkeypatch)
+    concept_id = _ingest_source(tmp_path)
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    title = metadata["title"]
+    assert isinstance(title, str)
+
+    result = runner.invoke(app, ["forget", concept_id, "--auto"])
+
+    assert result.exit_code == 0
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    pattern = (
+        r"\*\*Tombstone\*\* \(\d{2}:\d{2}:\d{2}Z\): Removed "
+        rf"\[{re.escape(title)}\]\(/{re.escape(concept_id)}\.md\) "
+        rf"\(id: {re.escape(concept_id)}\)\."
+    )
+    assert re.search(pattern, log_text) is not None
+
+
+def test_idempotent_rerun_does_not_duplicate_tombstone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-running `forget` on an already-forgotten concept-id refuses (the
+    concept file no longer exists) and leaves the prior tombstone line
+    intact -- never duplicated or overwritten (spec: "Tombstone survives an
+    idempotent re-run")."""
+    _init_workspace(tmp_path, monkeypatch)
+    concept_id = _ingest_source(tmp_path)
+
+    first = runner.invoke(app, ["forget", concept_id, "--auto"])
+    assert first.exit_code == 0
+    log_after_first = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_after_first.count("**Tombstone**") == 1
+
+    second = runner.invoke(app, ["forget", concept_id, "--auto"])
+
+    assert second.exit_code == 1
+    log_after_second = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_after_second == log_after_first
+    assert log_after_second.count("**Tombstone**") == 1
+
+
+def test_resurrection_disclosure_names_superseded_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forgetting X, which outbound-`supersedes` Y, discloses Y by name in
+    the preview (spec: "Forgetting a superseding concept discloses
+    resurrection")."""
+    _init_workspace(tmp_path, monkeypatch)
+    x_id = _ingest_source(tmp_path, "x.txt")
+    y_id = _ingest_source(tmp_path, "y.txt")
+    relate_result = runner.invoke(app, ["relate", x_id, "supersedes", y_id, "--auto"])
+    assert relate_result.exit_code == 0
+
+    result = runner.invoke(app, ["forget", x_id, "--auto"])
+
+    assert result.exit_code == 0
+    assert y_id in result.output
+    assert "re-enters retrieval" in result.output
+
+
+def test_self_supersedes_excluded_from_resurrection_disclosure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand-crafted self-`supersedes` edge (not constructible through
+    `relate`'s own self-id refusal, or through `reconcile`'s distinct-id
+    guard) is defensively excluded from the resurrection disclosure --
+    guarded even though no known CLI path can construct it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/x",
+        [{"target": "concepts/x", "type": "supersedes"}],
+    )
+
+    result = runner.invoke(app, ["forget", "concepts/x", "--auto"])
+
+    assert result.exit_code == 0
+    assert "re-enters retrieval" not in result.output
+
+
+def test_non_supersedes_relation_gives_no_resurrection_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An outbound relation of a DIFFERENT type (not `supersedes`) produces
+    no resurrection-disclosure line."""
+    _init_workspace(tmp_path, monkeypatch)
+    x_id = _ingest_source(tmp_path, "x.txt")
+    y_id = _ingest_source(tmp_path, "y.txt")
+    relate_result = runner.invoke(app, ["relate", x_id, "depends_on", y_id, "--auto"])
+    assert relate_result.exit_code == 0
+
+    result = runner.invoke(app, ["forget", x_id, "--auto"])
+
+    assert result.exit_code == 0
+    assert "re-enters retrieval" not in result.output
+
+
+# -- Phase 3: `--force` gate ------------------------------------------------
+
+
+def test_inbound_link_refuses_without_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inbound markdown link refuses by default (exit 1, no writes;
+    spec: "Inbound markdown link refuses by default")."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(
+        tmp_path, "concepts/referrer", body=f"See [Target](/{target_id}.md).\n"
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--force" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_inbound_relation_refuses_without_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inbound typed relation refuses by default (exit 1, no writes;
+    spec: "Inbound typed relation refuses by default")."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(tmp_path, "concepts/referrer")
+    relate_result = runner.invoke(
+        app, ["relate", "concepts/referrer", "depends_on", target_id, "--auto"]
+    )
+    assert relate_result.exit_code == 0
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--force" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_inbound_link_force_proceeds_leaving_dangling_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force` proceeds despite an inbound link; the referrer's link is
+    left intact but now dangling (spec: "`--force` overrides the
+    refusal")."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    referrer_path = tmp_path / "bundle" / "concepts" / "referrer.md"
+    _write_plain_concept(
+        tmp_path, "concepts/referrer", body=f"See [Target](/{target_id}.md).\n"
+    )
+    referrer_before = referrer_path.read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["forget", target_id, "--force", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{target_id}.md").exists()
+    assert referrer_path.read_text(encoding="utf-8") == referrer_before
+
+
+def test_inbound_relation_force_proceeds_leaving_dangling_relation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force` proceeds despite an inbound relation; the referrer's
+    `relations:` entry is left intact but now dangling."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(tmp_path, "concepts/referrer")
+    relate_result = runner.invoke(
+        app, ["relate", "concepts/referrer", "depends_on", target_id, "--auto"]
+    )
+    assert relate_result.exit_code == 0
+    referrer_path = tmp_path / "bundle" / "concepts" / "referrer.md"
+    referrer_before = referrer_path.read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["forget", target_id, "--force", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{target_id}.md").exists()
+    assert referrer_path.read_text(encoding="utf-8") == referrer_before
+
+
+# -- Phase 4: `--force` orthogonal to the confirm gate ----------------------
+
+
+def test_force_alone_still_prompts_on_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force` bypasses ONLY the inbound-reference refusal: on a TTY with
+    `review: true`, `typer.confirm` still prompts before Phase B writes
+    (spec: "`--force` alone still prompts on a TTY")."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(
+        tmp_path, "concepts/referrer", body=f"See [Target](/{target_id}.md).\n"
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["forget", target_id, "--force"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Proceed" in result.output
+    assert not (tmp_path / "bundle" / f"{target_id}.md").exists()
+
+
+def test_force_and_auto_combined_skip_both_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force --auto` skips both the inbound-reference refusal and the
+    confirmation prompt (spec: "`--force` and `--auto` combined skip both
+    gates")."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(
+        tmp_path, "concepts/referrer", body=f"See [Target](/{target_id}.md).\n"
+    )
+
+    result = runner.invoke(app, ["forget", target_id, "--force", "--auto"])
+
+    assert result.exit_code == 0
+    assert "Proceed" not in result.output
+    assert not (tmp_path / "bundle" / f"{target_id}.md").exists()
+
+
+def test_force_without_auto_non_tty_refuses_at_confirm_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force`, no inbound references, non-TTY, no `--auto`: refuses via
+    the UNCHANGED confirm gate, not the inbound-reference gate (spec:
+    "`--force` without `--auto` on non-TTY still refuses at the confirm
+    gate")."""
+    _init_workspace(tmp_path, monkeypatch)
+    concept_id = _ingest_source(tmp_path)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", concept_id, "--force"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--auto" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+# -- Correction batch: CRITICAL fail-open fix + reliability gaps -----------
+
+
+def test_unverifiable_referrer_mentioning_target_refuses_without_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CRITICAL fix (resilience review, bounded correction): a referrer file
+    with malformed/unparseable frontmatter, whose RAW text mentions the
+    target's canonical id (in what would be a `relations:` entry if it
+    parsed), refuses `forget` by default -- the concept file is NOT deleted
+    and nothing is written. `find_inbound_relation_rewrites` alone silently
+    `continue`s past this file (fail-open); the wrapper's independent
+    unverifiable-referrer detection closes it."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    referrer_path = tmp_path / "bundle" / "concepts" / "referrer.md"
+    referrer_path.parent.mkdir(parents=True, exist_ok=True)
+    referrer_path.write_text(
+        "---\n"
+        "type: Concept\n"
+        "title: Bad\n"
+        f"relations: [target: {target_id}, type: depends_on\n"
+        "---\n\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--force" in result.stderr
+    assert "could not verify" in result.stderr
+    assert "unverifiable" in result.output
+    assert (tmp_path / "bundle" / f"{target_id}.md").is_file()
+    assert _snapshot(tmp_path) == before
+
+
+def test_unverifiable_referrer_not_mentioning_target_does_not_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proportionate rule: an unrelated malformed file elsewhere in the
+    bundle -- one that never even mentions the target's canonical id --
+    must NOT block an otherwise-unrelated forget."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    referrer_path = tmp_path / "bundle" / "concepts" / "referrer.md"
+    referrer_path.parent.mkdir(parents=True, exist_ok=True)
+    referrer_path.write_text(
+        "---\n"
+        "type: Concept\n"
+        "title: Bad\n"
+        "relations: [target: concepts/unrelated, type: depends_on\n"
+        "---\n\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{target_id}.md").exists()
+
+
+def test_unverifiable_referrer_force_proceeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force` bypasses the unverifiable-referrer refusal too (consistent
+    with the verified-reference case): "force = I accept unverified/
+    dangling refs"."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    referrer_path = tmp_path / "bundle" / "concepts" / "referrer.md"
+    referrer_path.parent.mkdir(parents=True, exist_ok=True)
+    referrer_path.write_text(
+        "---\n"
+        "type: Concept\n"
+        "title: Bad\n"
+        f"relations: [target: {target_id}, type: depends_on\n"
+        "---\n\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["forget", target_id, "--force", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{target_id}.md").exists()
+
+
+def test_tty_gate1_refuses_before_confirm_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reliability gap 1 (TTY gate ordering): on a real TTY, with an inbound
+    reference and no `--force`/`--auto`, gate 1 refuses BEFORE gate 2 ever
+    runs -- `typer.confirm` is never invoked/printed. Proven by
+    monkeypatching `typer.confirm` to fail the test if called at all."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(
+        tmp_path, "concepts/referrer", body=f"See [Target](/{target_id}.md).\n"
+    )
+    _simulate_tty(monkeypatch)
+
+    def _fail_confirm(*args: object, **kwargs: object) -> bool:
+        raise AssertionError(
+            "typer.confirm must not be called when gate 1 already refused"
+        )
+
+    monkeypatch.setattr(cli_main.typer, "confirm", _fail_confirm)
+
+    result = runner.invoke(app, ["forget", target_id])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Proceed" not in result.output
+    assert "--force" in result.stderr
+    assert (tmp_path / "bundle" / f"{target_id}.md").is_file()
+
+
+@pytest.mark.parametrize("raw_title", [None, "   "])
+def test_tombstone_title_falls_back_to_canonical_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_title: str | None
+) -> None:
+    """Reliability gap 2 (title fallback): a concept whose frontmatter title
+    is missing or blank falls back to `canonical_id` in the tombstone line,
+    in the exact same format as a normal title would."""
+    _init_workspace(tmp_path, monkeypatch)
+    concept_id = "concepts/no-title"
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    title_line = "" if raw_title is None else f"title: '{raw_title}'\n"
+    concept_path.write_text(
+        f"---\ntype: Concept\n{title_line}---\n\nBody.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["forget", concept_id, "--auto"])
+
+    assert result.exit_code == 0
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    pattern = (
+        r"\*\*Tombstone\*\* \(\d{2}:\d{2}:\d{2}Z\): Removed "
+        rf"\[{re.escape(concept_id)}\]\(/{re.escape(concept_id)}\.md\) "
+        rf"\(id: {re.escape(concept_id)}\)\."
+    )
+    assert re.search(pattern, log_text) is not None
+
+
+def test_two_distinct_referrers_both_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reliability gap 3a (multi-referrer): two DISTINCT referrer files each
+    referencing the target are BOTH reported -- no referrer is dropped."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(tmp_path, "concepts/referrer-a", title="Referrer A")
+    _write_plain_concept(tmp_path, "concepts/referrer-b", title="Referrer B")
+    relate_a = runner.invoke(
+        app, ["relate", "concepts/referrer-a", "depends_on", target_id, "--auto"]
+    )
+    assert relate_a.exit_code == 0
+    relate_b = runner.invoke(
+        app, ["relate", "concepts/referrer-b", "depends_on", target_id, "--auto"]
+    )
+    assert relate_b.exit_code == 0
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "concepts/referrer-a" in result.output
+    assert "concepts/referrer-b" in result.output
+
+
+def test_one_referrer_two_relation_types_both_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reliability gap 3b (multi-relation): one referrer with two distinct
+    typed-relation entries targeting the SAME id, with DIFFERENT `type`
+    values, produces both records -- no accidental dedup by target alone."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(tmp_path, "concepts/referrer")
+    relate_1 = runner.invoke(
+        app, ["relate", "concepts/referrer", "depends_on", target_id, "--auto"]
+    )
+    assert relate_1.exit_code == 0
+    relate_2 = runner.invoke(
+        app, ["relate", "concepts/referrer", "related_to", target_id, "--auto"]
+    )
+    assert relate_2.exit_code == 0
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.output.count("concepts/referrer.md") == 2
+    assert "depends_on" in result.output
+    assert "related_to" in result.output
+
+
+# -- Phase 5: path-safety-first + full regression ---------------------------
+
+
+def test_path_safety_runs_before_any_bundle_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_resolve_concept_path`'s path-safety/existence checks refuse an
+    invalid `concept_id` BEFORE the inbound-reference scan ever runs --
+    proven by monkeypatching `find_inbound_references` to raise if called."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("find_inbound_references must not run before path-safety")
+
+    monkeypatch.setattr(
+        cli_main.bundle_references, "find_inbound_references", _boom
+    )
+
+    result = runner.invoke(app, ["forget", "../../evil", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)

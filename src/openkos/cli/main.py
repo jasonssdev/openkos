@@ -19,6 +19,7 @@ from openkos.bundle import index as bundle_index
 from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
+from openkos.bundle import references as bundle_references
 from openkos.bundle import relations as bundle_relations
 from openkos.extraction.concept import extract_concept
 from openkos.graph import sqlite_graph
@@ -801,9 +802,22 @@ def forget(
         "--auto",
         help="Skip the confirmation prompt and write immediately (unattended).",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Proceed even when inbound references (markdown links or typed "
+            "relations) -- or unverifiable referrers whose frontmatter "
+            "could not be parsed but that may reference this concept -- "
+            "were detected; they are left dangling, never retargeted. "
+            "Independent of --auto -- it never skips the confirmation "
+            "prompt."
+        ),
+    ),
 ) -> None:
     """Delete a concept file and remove its `index.md` catalog entry: the
-    mirror-image of `ingest` (MVP-1 simplified delete, decision #717).
+    mirror-image of `ingest` (MVP-1 simplified delete, decision #717), now
+    reference-aware (MVP-3 gap #8 S2a).
 
     Phase A (pure, no writes) validates and builds the entire result in
     memory, in order: the current directory must already be a workspace
@@ -811,25 +825,58 @@ def forget(
     share), or this refuses; `concept_id` is resolved via
     `_resolve_concept_path`, which rejects an absolute id, any `..`
     segment, a reserved basename (`index`/`log`), or a nonexistent concept
-    file -- all as `ValueError`, all refusing before any write. `index.md`
-    is then searched, via `bundle_index.remove_index_entry`, for a bullet
-    in ANY section (Sources, Concepts, People, Decisions) whose first
-    markdown link resolves to `concept_id` -- matching is generic across
-    sections, never Sources-only (#922). A `log.md` entry is built in
-    memory via `bundle_log.insert_log_entry` (a plain `**Forget**` line,
-    never a tombstone marker). A preview of the proposed changes is then
-    printed: `~ index.md (remove entry)` only appears when at least one
-    bullet matched (zero matches is drift, not an error -- the deletion
-    still proceeds); `~ log.md (new dated entry)` and `- bundle/<concept_id>.md`
-    always appear.
+    file -- all as `ValueError`, all refusing before any read tied to
+    `concept_id` (threat matrix: path-traversal deletion).
 
-    Confirm gate, identical precedence and mechanism to `ingest`: `--auto`
-    skips the prompt outright; otherwise config `review: false` skips it
-    the same way; otherwise, on a TTY, `typer.confirm` asks and aborts
-    (exit 1) on decline; otherwise (non-TTY, no `--auto`) this refuses to
-    write (exit 1), telling the user to re-run with `--auto`.
+    Once path-safety clears, Phase A reads the concept's own text (for its
+    title and `relations:`) and takes ONE whole-bundle snapshot of every
+    other `*.md` file (mirroring `merge`'s `other_files` construction:
+    reserved filenames and the concept's own file excluded), feeding two
+    pure scans over that same snapshot: `bundle_references.
+    find_inbound_references` (every inbound markdown link/typed relation
+    targeting this concept, PLUS every referrer whose frontmatter could not
+    be parsed at all but whose raw text mentions this concept's canonical
+    id -- a `kind="unverifiable"` record, fail-CLOSED rather than silently
+    skipped like `find_inbound_relation_rewrites` alone would do; spec:
+    "Inbound Reference Detection") and this concept's own outbound
+    `supersedes` edges (excluding a defensive, not-normally-constructible
+    self-`supersedes` guard), each naming a concept `Y` that re-enters
+    retrieval once this concept's edge to it is gone (spec: "Resurrection
+    Interaction Disclosure"). `index.md` is searched, via `bundle_index.
+    remove_index_entry`, for a bullet in ANY section (Sources, Concepts,
+    People, Decisions) whose first markdown link resolves to `concept_id`
+    -- matching is generic across sections, never Sources-only (#922). A
+    `log.md` entry is built in memory via `bundle_log.insert_log_entry`: a
+    TOMBSTONE-marked line (`**Tombstone** (HH:MM:SSZ): Removed
+    [<title>](/<id>.md) (id: <id>).`), replacing the old plain `**Forget**`
+    bullet (spec: "Log Entry on Forget").
 
-    Phase B (after confirm) writes `index.md` then `log.md`
+    The preview then prints: `~ index.md (remove entry)` only when at
+    least one bullet matched (zero matches is drift, not an error -- the
+    deletion still proceeds); `~ log.md (new dated entry)` and
+    `- bundle/<concept_id>.md` always appear; one `! bundle/<referrer_id>.md
+    (inbound link|relation: <type>)` line per detected verified inbound
+    reference; one `? bundle/<referrer_id>.md (unverifiable: could not
+    parse; may reference <id>)` line per unverifiable referrer; and one
+    `~ bundle/<target>.md (re-enters retrieval: ...)` line per resurrection
+    target.
+
+    TWO ORTHOGONAL gates follow, in order (spec: "`--force` Is Orthogonal
+    to the Confirm Gate"): gate 1 refuses (exit 1, no write) iff a verified
+    inbound reference OR an unverifiable referrer was detected AND
+    `--force` was not passed -- `--force` bypasses ONLY this refusal
+    (consistent across both cases: force = "I accept unverified/dangling
+    refs"), never retargeting/rewriting the dangling references it leaves
+    behind. Gate 2 is the UNCHANGED confirm gate, identical precedence and
+    mechanism to `ingest`: `--auto` skips the prompt outright; otherwise
+    config `review: false` skips it the same way; otherwise, on a TTY,
+    `typer.confirm` asks and aborts (exit 1) on decline; otherwise
+    (non-TTY, no `--auto`) this refuses to write (exit 1), telling the user
+    to re-run with `--auto`. `--force` and `--auto` are read independently
+    and never affect each other; gate 1 always runs BEFORE gate 2, so a
+    refused gate 1 never reaches the confirm prompt even on a real TTY.
+
+    Phase B (after both gates) writes `index.md` then `log.md`
     (`write_atomic`, catalog FIRST) and deletes the concept file
     (`fsio.remove_file`) LAST -- the inverse of `ingest`'s content-then-
     catalog ordering, preserving the same invariant either way: `index.md`
@@ -840,11 +887,6 @@ def forget(
     corruption. Any failure, Phase A or Phase B, is caught and reported on
     stderr (exit 1), not a raw traceback; `except (OSError, ValueError)`,
     matching `ingest`'s convention.
-
-    Known limitation (deferred to MVP-2, per the proposal's non-goals):
-    other concepts that still link to the forgotten one are left with a
-    dangling inbound reference -- this is neither detected nor rewritten
-    here.
     """
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
@@ -873,13 +915,54 @@ def forget(
         cfg = config.read_config(root)
         index_text = index_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
+        concept_text = concept_path.read_text(encoding="utf-8")
+
+        concept_metadata, _ = okf.load_frontmatter(concept_text)
+        raw_title = concept_metadata.get("title")
+        title = (
+            raw_title
+            if isinstance(raw_title, str) and raw_title.strip()
+            else canonical_id
+        )
+
+        # Outbound `supersedes` disclosure (spec: Resurrection Interaction
+        # Disclosure): a defensive self-exclusion guards a hand-edited
+        # self-`supersedes` edge even though no known CLI path (`relate`'s
+        # self-id refusal, `reconcile`'s distinct-id guard) can construct
+        # one.
+        resurrection_targets = sorted(
+            {
+                relation.target
+                for relation in okf.decode_relations(concept_metadata)
+                if relation.type == "supersedes" and relation.target != canonical_id
+            }
+        )
+
+        # One whole-bundle snapshot, read ONCE, mirroring `merge`'s
+        # `other_files` construction (~L1330-1337): every other `*.md`
+        # file, reserved filenames and this concept's own file excluded.
+        other_files: dict[str, str] = {}
+        for path in sorted(layout.bundle_dir.rglob("*.md")):
+            if path.name in okf.RESERVED_FILENAMES:
+                continue
+            if path == concept_path:
+                continue
+            rel = path.relative_to(layout.bundle_dir).as_posix()
+            other_files[rel] = path.read_text(encoding="utf-8")
+
+        inbound_refs = bundle_references.find_inbound_references(
+            other_files, target_id=canonical_id
+        )
+
         new_index_text, removed = bundle_index.remove_index_entry(
             index_text, canonical_id
         )
+        tombstone_time = now.strftime("%H:%M:%SZ")
         new_log_text = bundle_log.insert_log_entry(
             log_text,
             now.astimezone().date(),
-            f"**Forget**: Removed [{canonical_id}](/{canonical_id}.md).",
+            f"**Tombstone** ({tombstone_time}): Removed [{title}]"
+            f"(/{canonical_id}.md) (id: {canonical_id}).",
         )
     except (OSError, ValueError) as exc:
         typer.echo(
@@ -892,7 +975,57 @@ def forget(
         typer.echo(f"  ~ {index_path.name} (remove entry)")
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
     typer.echo(f"  - bundle/{canonical_id}.md")
+    verified_refs = [ref for ref in inbound_refs if ref.kind != "unverifiable"]
+    unverifiable_refs = [ref for ref in inbound_refs if ref.kind == "unverifiable"]
+    for ref in inbound_refs:
+        if ref.kind == "link":
+            typer.echo(f"  ! bundle/{ref.referrer_id}.md (inbound link)")
+        elif ref.kind == "relation":
+            typer.echo(
+                f"  ! bundle/{ref.referrer_id}.md "
+                f"(inbound relation: {ref.relation_type})"
+            )
+        else:
+            typer.echo(
+                f"  ? bundle/{ref.referrer_id}.md "
+                f"(unverifiable: could not parse; may reference {canonical_id})"
+            )
+    for target in resurrection_targets:
+        typer.echo(
+            f"  ~ bundle/{target}.md (re-enters retrieval: no longer "
+            f"superseded by {canonical_id})"
+        )
 
+    # Gate 1 (spec: "Refuse Forget When Inbound References Exist, Unless
+    # --force"): refuses iff verified references OR unverifiable referrers
+    # were detected AND --force was not passed -- fully independent of gate
+    # 2 below (spec: "--force Is Orthogonal to the Confirm Gate"). A
+    # referrer whose frontmatter could not be parsed but whose raw text
+    # mentions this concept's id is fail-CLOSED here too, never silently
+    # dropped (CRITICAL fix, bounded correction: `find_inbound_relation_
+    # rewrites` alone silently `continue`s past such a file).
+    if (verified_refs or unverifiable_refs) and not force:
+        messages: list[str] = []
+        if verified_refs:
+            messages.append(
+                f"{len(verified_refs)} inbound reference(s) to "
+                f"'{canonical_id}' found"
+            )
+        if unverifiable_refs:
+            messages.append(
+                f"could not verify {len(unverifiable_refs)} referrer(s) "
+                f"that may reference '{canonical_id}'"
+            )
+        typer.echo(
+            "openkos forget: refusing to forget -- "
+            + "; ".join(messages)
+            + "; re-run with --force to proceed (references will be left "
+            "dangling).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Gate 2: the unchanged confirm gate, untouched by --force.
     if not auto and cfg.review:
         if sys.stdin.isatty():
             typer.confirm("Proceed with these changes?", abort=True)
