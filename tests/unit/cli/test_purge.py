@@ -79,6 +79,19 @@ def _reflog_is_empty(root: Path) -> bool:
     return result.stdout.strip() == ""
 
 
+def _tree_contains_path(root: Path, rel_path: str) -> bool:
+    """`True` iff `rel_path` is a live path in `HEAD`'s tree. Unlike
+    `_blob_history_contains` (which lists each BLOB OBJECT once, by
+    whichever path `git rev-list --objects` happens to visit it through
+    first), this is the right tool to prove a specific path SURVIVES when
+    its content happens to be byte-identical to another retained path
+    (e.g. a raw copy sharing its source file's blob) -- `git ls-tree`
+    enumerates every tree entry, not deduplicated by blob id."""
+    result = vcs_git._run(["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=root)
+    assert result.returncode == 0
+    return rel_path in result.stdout.splitlines()
+
+
 # --- Phase A reuse (spec req 1) ---------------------------------------------
 
 
@@ -159,6 +172,26 @@ def test_purge_tool_missing_refuses(
     )
 
 
+def test_purge_git_itself_missing_refuses(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`git` itself unavailable (monkeypatched `git_available`) refuses at
+    rail 2, same as the `git-filter-repo`-missing sub-case above -- must
+    not fall through to a later rail or attempt any write."""
+    monkeypatch.setattr(vcs_git, "git_available", lambda: False)
+
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", "irrelevant"]
+    )
+
+    assert result.exit_code == 1
+    assert "git is not available" in result.output.lower()
+    assert _blob_history_contains(
+        tmp_git_repo.root, f"bundle/{tmp_git_repo.source_id}.md"
+    )
+    assert (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").is_file()
+
+
 # --- Rail 3: workspace root == git repo root --------------------------------
 
 
@@ -180,10 +213,20 @@ def test_purge_non_git_root_refuses(
     ingest_result = runner.invoke(app, ["ingest", source_name, "--auto"])
     assert ingest_result.exit_code == 0
 
+    concept_path = workspace / "bundle" / "sources" / "notes.md"
+    raw_path = workspace / "raw" / source_name
+    assert concept_path.is_file()
+    assert raw_path.is_file()
+
     result = runner.invoke(app, ["purge", "sources/notes"])
 
     assert result.exit_code == 1
     assert "git repository root" in result.output.lower()
+    # No-mutation: refusal at rail 3 must leave every file untouched, and
+    # must never attempt to delete/rebuild the derived indexes.
+    assert concept_path.is_file()
+    assert raw_path.is_file()
+    assert not (workspace / ".openkos" / "fts.db").exists()
 
 
 # --- Rail 4: dirty working tree ----------------------------------------------
@@ -250,6 +293,14 @@ def test_purge_non_tty_without_confirm_phrase_refuses(
 
     assert result.exit_code == 1
     assert "confirm-phrase" in result.output.lower()
+    # No-mutation: refusal at the final rail must leave every file and blob
+    # untouched, and never delete/rebuild the derived indexes.
+    assert _blob_history_contains(
+        tmp_git_repo.root, f"bundle/{tmp_git_repo.source_id}.md"
+    )
+    assert (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").is_file()
+    assert (tmp_git_repo.root / "raw" / "notes.txt").is_file()
+    assert not (tmp_git_repo.root / ".openkos" / "fts.db").exists()
 
 
 def test_purge_bare_yes_does_not_satisfy_confirmation(
@@ -291,6 +342,23 @@ def test_purge_all_rails_pass_rewrite_proceeds(
     assert called["rel_paths"] is not None
 
 
+def test_purge_prints_point_of_no_return_message_before_rewrite(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """Between the confirmation match and the (potentially long, silent,
+    buffered) irreversible `expunge_paths` call, `purge` must print a clear
+    "beginning the irreversible rewrite -- do not interrupt" message --
+    otherwise an operator who Ctrl-C's believing the process hung lands in
+    the catastrophic mid-rewrite state."""
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "do not interrupt" in result.output.lower()
+
+
 def test_purge_self_scope_removes_blobs_from_history(
     tmp_git_repo: TmpGitRepo,
 ) -> None:
@@ -319,6 +387,39 @@ def test_purge_self_scope_removes_blobs_from_history(
     assert (tmp_git_repo.root / ".openkos" / "fts.db").exists()
     assert (tmp_git_repo.root / ".openkos" / "graph.db").exists()
     assert not (tmp_git_repo.root / ".openkos" / "vectors.db").exists()
+
+
+def test_purge_sibling_survives_no_over_delete(tmp_git_repo: TmpGitRepo) -> None:
+    """`purge` must not over-delete: an unrelated sibling Source (with its
+    OWN raw file, outside the purge set) must survive in git history AND
+    on disk, with its live `index.md` bullet intact, while the target's raw
+    + concept files are gone."""
+    sibling_name = "other.txt"
+    (tmp_git_repo.root / sibling_name).write_text("other content", encoding="utf-8")
+    ingest_result = runner.invoke(app, ["ingest", sibling_name, "--auto"])
+    assert ingest_result.exit_code == 0
+    sibling_id = "sources/other"
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add sibling source"], cwd=tmp_git_repo.root)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not _blob_history_contains(
+        tmp_git_repo.root, f"bundle/{tmp_git_repo.source_id}.md"
+    )
+    assert not _blob_history_contains(tmp_git_repo.root, "raw/notes.txt")
+
+    assert _blob_history_contains(tmp_git_repo.root, f"bundle/{sibling_id}.md")
+    assert _tree_contains_path(tmp_git_repo.root, "raw/other.txt")
+    assert (tmp_git_repo.root / "bundle" / f"{sibling_id}.md").exists()
+    assert (tmp_git_repo.root / "raw" / "other.txt").exists()
+
+    index_text = (tmp_git_repo.root / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert sibling_id in index_text
 
 
 def test_purge_source_scope_cascade_removes_all_blobs(
@@ -398,6 +499,63 @@ def test_purge_rebuild_failure_does_not_fail_purge(
     assert not _blob_history_contains(
         tmp_git_repo.root, f"bundle/{tmp_git_repo.source_id}.md"
     )
+
+
+# --- Live index.md catalog cleanup (correction batch: CRITICAL 2) ----------
+
+
+def test_purge_removes_live_index_catalog_bullet(tmp_git_repo: TmpGitRepo) -> None:
+    """After a successful standalone purge (no prior forget), the LIVE
+    `index.md` must no longer contain a catalog bullet for the purged
+    concept -- otherwise the live catalog would keep pointing at a file
+    that no longer exists in ANY commit, a broken bullet. A sibling
+    concept's bullet must survive untouched."""
+    _write_child_concept(
+        tmp_git_repo.root,
+        "concepts/sibling",
+        provenance=[],
+        title="Sibling Concept",
+    )
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add unrelated sibling concept"], cwd=tmp_git_repo.root)
+
+    index_before = (tmp_git_repo.root / "bundle" / "index.md").read_text(
+        encoding="utf-8"
+    )
+    assert tmp_git_repo.source_id in index_before
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    index_after = (tmp_git_repo.root / "bundle" / "index.md").read_text(
+        encoding="utf-8"
+    )
+    assert tmp_git_repo.source_id not in index_after
+    assert "concepts/sibling" in index_after
+    assert "Sibling Concept" in index_after
+
+
+def test_purge_residual_warning_reflects_live_index_cleanup(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The residual-leak warning must accurately reflect what purge does:
+    it must NOT claim the purged id/title remain only in "historical blobs
+    of index.md/log.md" -- the live index.md bullet is now removed by this
+    correction, and only the HISTORY (past commits) of index.md/log.md
+    (plus any prior forget tombstone still present in the LIVE log.md)
+    remains a residual."""
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "NOT complete right-to-be-forgotten" in result.output
+    assert "history" in result.output.lower()
+    assert "historical blobs of index.md and log.md" not in result.output
 
 
 # --- GitFinalizeError path (rewrite done, finalize failed) ------------------

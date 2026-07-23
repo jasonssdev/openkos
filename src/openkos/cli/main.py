@@ -1266,12 +1266,14 @@ _PURGE_RESIDUAL_WARNING = (
     "WARNING: purge is IRREVERSIBLE. It rewrites ALL git history in place -- "
     "there is no git-undo, no reflog, no backup. The raw source file(s) and "
     "concept file(s) listed above will be permanently expunged from every "
-    "commit.\n\n"
+    "commit, and the live index.md catalog bullet(s) for the purge-set "
+    "member(s) will be removed.\n\n"
     "This is NOT complete right-to-be-forgotten yet. The purged concept's "
-    "id, title, and catalog bullet -- and any prior forget tombstone -- "
-    "REMAIN in the historical blobs of index.md and log.md (shared files "
-    "that must survive). Those identifiers stay recoverable from git "
-    "history until Slice 2 (content-scrub) closes this residual."
+    "id and title -- and any prior forget tombstone -- REMAIN only in the "
+    "HISTORY (past commits) of index.md and log.md, and, if a prior forget "
+    "already wrote a tombstone for it, in the LIVE log.md too. Those "
+    "identifiers stay recoverable from git history until Slice 2 "
+    "(content-scrub) closes this residual."
 )
 
 
@@ -1286,6 +1288,48 @@ def _purge_confirm_phrase(
     if scope == "source":
         return f"purge {canonical_id} ({len(purge_ids)} concepts)"
     return f"purge {canonical_id}"
+
+
+def _purge_clean_live_index(
+    layout: config.WorkspaceLayout, purge_ids: list[str]
+) -> None:
+    """After the (already irreversible) history rewrite has succeeded,
+    remove the LIVE `index.md` catalog bullet for EVERY purge-set member --
+    reusing `forget`'s own `bundle_index.remove_index_entry` +
+    `fsio.write_atomic` write path.
+
+    Without this, the live catalog would keep a bullet pointing at a
+    concept whose file no longer exists in ANY commit -- a broken catalog
+    entry, and the purged id/title staying visible in the LIVE workspace
+    (not merely history), which the residual-leak warning must not
+    understate.
+
+    This runs as an ordinary working-tree edit AFTER `git filter-repo` has
+    already committed the rewritten history and checked out the new HEAD --
+    there is no dirty-tree rail left to satisfy at this point (Phase B has
+    already begun; spec: Irreversibility -- No Rollback After Rewrite
+    Begins), so this is simply the next write in the same irreversible
+    operation, not a new gated action.
+
+    A failure here is reported but does NOT fail the (already-succeeded)
+    purge -- the erasure already happened; a stale catalog bullet left
+    behind by a failed write is a correctness issue to fix with
+    `openkos lint`, not a data-leak one."""
+    index_path = layout.bundle_dir / "index.md"
+    try:
+        index_text = index_path.read_text(encoding="utf-8")
+        new_index_text = index_text
+        for member in purge_ids:
+            new_index_text, _ = bundle_index.remove_index_entry(new_index_text, member)
+        if new_index_text != index_text:
+            fsio.write_atomic(index_path, new_index_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos purge: warning -- failed to clean the live index.md "
+            f"catalog: {exc}. Run 'openkos lint' to detect/fix a dangling "
+            "bullet.",
+            err=True,
+        )
 
 
 def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
@@ -1532,7 +1576,10 @@ def purge(
     for target in expunge_targets:
         typer.echo(f"  - {target}")
     for warning in resource_warnings:
-        typer.echo(f"  ! {warning}", err=True)
+        # Stream-consistent with the rest of the pre-confirmation preview
+        # (stdout, not stderr) -- an operator capturing only stdout must
+        # not silently lose a malformed-resource warning printed here.
+        typer.echo(f"  ! {warning}")
     if scope == "source":
         typer.echo(f"  Total: {len(purge_ids)} concept(s) to purge.")
     typer.echo()
@@ -1661,7 +1708,15 @@ def purge(
 
     # Phase B: the point of no return. No rail evaluation, no abort path,
     # from here on (spec: Irreversibility -- No Rollback After Rewrite
-    # Begins).
+    # Begins). `expunge_paths` itself is silent and can run for a while on
+    # a large history -- print an explicit "do not interrupt" line FIRST,
+    # so an operator who sees no output does not mistake it for a hang and
+    # Ctrl-C into the catastrophic mid-rewrite state.
+    typer.echo(
+        "openkos purge: beginning the irreversible history rewrite now -- "
+        "do not interrupt.",
+        err=True,
+    )
     try:
         vcs_git.expunge_paths(root, expunge_targets)
     except vcs_git.GitFinalizeError as exc:
@@ -1670,6 +1725,7 @@ def purge(
             f"failed -- {exc}",
             err=True,
         )
+        _purge_clean_live_index(layout, purge_ids)
         _purge_rebuild_indexes(layout)
         typer.echo(_PURGE_RESIDUAL_WARNING)
         raise typer.Exit(code=1) from exc
@@ -1680,6 +1736,7 @@ def purge(
         )
         raise typer.Exit(code=1) from exc
 
+    _purge_clean_live_index(layout, purge_ids)
     _purge_rebuild_indexes(layout)
 
     if scope == "source":
