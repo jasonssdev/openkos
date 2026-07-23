@@ -137,6 +137,41 @@ def test_has_published_commits_true_after_push_to_bare_remote(
     assert git.has_published_commits(tmp_git_repo.root) is True
 
 
+def test_has_published_commits_stays_true_after_a_further_local_commit(
+    tmp_git_repo: TmpGitRepo, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """CRITICAL (fail-open regression guard): `has_published_commits` must be
+    DIRECTION-AGNOSTIC. A naive `git branch --remotes --contains HEAD` check
+    is True only while the exact current `HEAD` is reachable FROM a remote
+    branch -- the moment a caller makes ONE more local commit, `HEAD` moves
+    past the pushed commit and `--contains HEAD` goes False again, even
+    though the ALREADY-PUSHED ancestor commit (and the file(s) in it) is
+    still sitting on the remote. `purge` would then wrongly conclude "not
+    published" and rewrite history that a remote already has. The correct
+    check is "has ANY history ever been published to ANY remote" --
+    permanently True once a single push has happened, regardless of how far
+    local `HEAD` advances afterward."""
+    bare_dir = tmp_path_factory.mktemp("bare-remote-2")
+    bare_result = git._run(["git", "init", "--bare"], cwd=bare_dir)
+    assert bare_result.returncode == 0
+
+    _git(["remote", "add", "origin", str(bare_dir)], cwd=tmp_git_repo.root)
+    push_result = git._run(
+        ["git", "push", "origin", "HEAD:refs/heads/main"], cwd=tmp_git_repo.root
+    )
+    assert push_result.returncode == 0
+
+    # A further LOCAL-ONLY commit, never pushed -- HEAD now points past the
+    # already-published commit.
+    (tmp_git_repo.root / "notes.txt").write_text(
+        "local-only follow-up change", encoding="utf-8"
+    )
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Local-only follow-up commit"], cwd=tmp_git_repo.root)
+
+    assert git.has_published_commits(tmp_git_repo.root) is True
+
+
 # --- expunge_paths removes blobs from ALL history (spec req 3, req 6) ------
 
 
