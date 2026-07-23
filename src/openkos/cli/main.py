@@ -58,6 +58,7 @@ from openkos.state.vectorstore import (
     open_vector_store,
     probe_vec_loadable,
 )
+from openkos.vcs import git as vcs_git
 
 app = typer.Typer()
 
@@ -3866,7 +3867,7 @@ def doctor() -> None:
     with actionable remediation, usable even before `openkos init`.
 
     Deliberately NEW control-flow shape versus `status`/`lint`/`query`:
-    instead of exiting on the first failure, this runs ALL seven checks,
+    instead of exiting on the first failure, this runs ALL nine checks,
     appends each to a `list[CheckResult]`, renders every line
     unconditionally, then exits ONCE (`code=1`) if any CRITICAL check
     failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
@@ -3889,10 +3890,16 @@ def doctor() -> None:
     connection; UNLIKE (5), this check has NO `[SKIP]` branch -- it depends
     on neither workspace state nor Ollama reachability, so it shares no root
     cause with any other check (embedding-vector-store, Slice 2a; the
-    scaffolding this checks has no consumed feature yet either). Outside a
-    workspace, checks (3)/(4)/(5)/(7) still run against `config.DEFAULT_MODEL`/
-    `config.DEFAULT_EMBEDDING_MODEL` and (3)/(4) still determine the exit
-    code (spec: Doctor Works Outside An Initialized Workspace).
+    scaffolding this checks has no consumed feature yet either); (8)
+    git-available -- informational, always, via `vcs.git.git_available()`;
+    (9) git-filter-repo-available -- informational, always, via
+    `vcs.git.filter_repo_available()`. Checks (8)/(9) exist for the
+    not-yet-wired `purge` verb (privacy-purge Slice 1, PR2): like (7), they
+    have no `[SKIP]` branch -- they depend on neither workspace state nor
+    Ollama. Outside a workspace, checks (3)/(4)/(5)/(7)/(8)/(9) still run
+    against `config.DEFAULT_MODEL`/`config.DEFAULT_EMBEDDING_MODEL` and
+    (3)/(4) still determine the exit code (spec: Doctor Works Outside An
+    Initialized Workspace).
 
     Never creates, modifies, or deletes any file, and never runs a
     remediation command itself (spec: Doctor Is Read-Only).
@@ -4063,6 +4070,40 @@ def doctor() -> None:
                     "run openkos with an extension-capable Python interpreter "
                     "(e.g. a uv-managed interpreter) that supports SQLite "
                     "extension loading"
+                ),
+            )
+        )
+
+    # 8. git-available (informational, always; NO SKIP branch -- shares no
+    # root cause with any other check; exists for the not-yet-wired `purge`
+    # verb, privacy-purge Slice 1 PR2)
+    if vcs_git.git_available():
+        results.append(CheckResult("git available", "pass", critical=False))
+    else:
+        results.append(
+            CheckResult(
+                "git available",
+                "fail",
+                critical=False,
+                remediation=(
+                    "install git (e.g. https://git-scm.com/downloads, or "
+                    "`brew install git`)"
+                ),
+            )
+        )
+
+    # 9. git-filter-repo-available (informational, always; NO SKIP branch)
+    if vcs_git.filter_repo_available():
+        results.append(CheckResult("git-filter-repo available", "pass", critical=False))
+    else:
+        results.append(
+            CheckResult(
+                "git-filter-repo available",
+                "fail",
+                critical=False,
+                remediation=(
+                    "install git-filter-repo (e.g. `pip install git-filter-repo`, "
+                    "or `brew install git-filter-repo`)"
                 ),
             )
         )
