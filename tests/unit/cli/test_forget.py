@@ -20,6 +20,8 @@ import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.bundle import index as bundle_index
+from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.cli.main import app
 from openkos.model import okf
@@ -868,6 +870,448 @@ def test_one_referrer_two_relation_types_both_reported(
 # -- Phase 5: path-safety-first + full regression ---------------------------
 
 
+def _write_child_concept(
+    tmp_path: Path,
+    concept_id: str,
+    *,
+    provenance: list[str],
+    title: str = "Child",
+    section: str = "Concepts",
+    link_dir: str = "concepts",
+    relations: list[dict[str, object]] | None = None,
+) -> None:
+    """Write a hand-crafted concept file with an explicit `provenance:`
+    frontmatter list (and optional `relations:`), plus a matching
+    `index.md` bullet -- used to build `--scope source` cascade fixtures
+    without an LLM-backed `ingest` extraction round trip."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": title,
+        "provenance": provenance,
+    }
+    if relations is not None:
+        metadata["relations"] = relations
+    concept_path.write_text(okf.dump_frontmatter(metadata, "Body.\n"), encoding="utf-8")
+
+    index_path = tmp_path / "bundle" / "index.md"
+    index_text = index_path.read_text(encoding="utf-8")
+    slug = concept_id.split("/", 1)[1]
+    new_index_text = bundle_index.insert_index_entry(
+        index_text,
+        section=section,
+        link_dir=link_dir,
+        title=title,
+        slug=slug,
+        description="Test fixture.",
+    )
+    index_path.write_text(new_index_text, encoding="utf-8")
+
+
+# -- PR2: `--scope {self,source}` cascade wiring -----------------------------
+
+
+def test_invalid_scope_value_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `--scope` value outside `{self, source}` refuses and writes
+    nothing (framework-level `Literal` choice validation)."""
+    _init_workspace(tmp_path, monkeypatch)
+    concept_id = _ingest_source(tmp_path)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", concept_id, "--scope", "bogus", "--auto"])
+
+    assert result.exit_code != 0
+    assert _snapshot(tmp_path) == before
+
+
+def test_scope_self_default_byte_identical_to_no_scope_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--scope self` and the implicit default (no `--scope` flag at all)
+    produce byte-identical stdout/stderr and filesystem effects -- the
+    unified Phase-A data path collapses to the same single-member purge set
+    either way (spec: "Default scope is self"; design decision 6)."""
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+
+    _init_workspace(ws_a, monkeypatch)
+    concept_id = _ingest_source(ws_a)
+    result_a = runner.invoke(app, ["forget", concept_id, "--auto"])
+    assert result_a.exit_code == 0
+
+    _init_workspace(ws_b, monkeypatch)
+    concept_id_b = _ingest_source(ws_b)
+    assert concept_id_b == concept_id
+    result_b = runner.invoke(app, ["forget", concept_id, "--scope", "self", "--auto"])
+    assert result_b.exit_code == 0
+
+    assert result_a.output == result_b.output
+    assert not (ws_a / "bundle" / f"{concept_id}.md").exists()
+    assert not (ws_b / "bundle" / f"{concept_id}.md").exists()
+
+
+def test_scope_source_path_traversal_refuses_before_descendant_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_resolve_concept_path`'s path-safety checks on the ROOT id run
+    BEFORE any descendant resolution -- proven by monkeypatching
+    `find_provenance_descendants` to raise if called (spec: "Path safety
+    runs before descendant resolution")."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _boom(*args: object, **kwargs: object) -> list[str]:
+        raise AssertionError(
+            "find_provenance_descendants must not run before path-safety"
+        )
+
+    monkeypatch.setattr(bundle_provenance, "find_provenance_descendants", _boom)
+
+    result = runner.invoke(app, ["forget", "../../evil", "--scope", "source", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_scope_source_cascade_deletes_source_and_single_source_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Source + two single-source children: all 3 are deleted, 3 tombstone
+    lines are appended, and `index.md` is updated for all 3 (spec: "Single-
+    source children are cascade members")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(
+        tmp_path, "concepts/child-a", provenance=[source_id], title="Child A"
+    )
+    _write_child_concept(
+        tmp_path, "concepts/child-b", provenance=[source_id], title="Child B"
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+    assert not (tmp_path / "bundle" / "concepts" / "child-a.md").exists()
+    assert not (tmp_path / "bundle" / "concepts" / "child-b.md").exists()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert source_id not in index_text
+    assert "child-a" not in index_text
+    assert "child-b" not in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("**Tombstone**") == 3
+    assert f"id: {source_id}" in log_text
+    assert "id: concepts/child-a" in log_text
+    assert "id: concepts/child-b" in log_text
+
+
+def test_scope_source_preserves_multi_source_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child with TWO provenance entries, only one of which is being
+    forgotten, is NOT added to the purge set and is left untouched (spec:
+    "Multi-source child is preserved")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "x.txt")
+    other_source_id = _ingest_source(tmp_path, "y.txt")
+    _write_child_concept(
+        tmp_path,
+        "concepts/multi",
+        provenance=[source_id, other_source_id],
+        title="Multi",
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "multi.md").is_file()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "multi" in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("**Tombstone**") == 1
+
+
+def test_scope_source_intra_set_backlink_does_not_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cascade child's `## Related` backlink to its own Source (both in
+    the purge set) is excluded from the refusal count by the set-difference
+    gate and does NOT block (spec: "Intra-set backlink does not block")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(
+        tmp_path, "concepts/child", provenance=[source_id], title="Child"
+    )
+    child_path = tmp_path / "bundle" / "concepts" / "child.md"
+    child_path.write_text(
+        child_path.read_text(encoding="utf-8")
+        + f"\n## Related\n\n- [Source](/{source_id}.md)\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+    assert not (tmp_path / "bundle" / "concepts" / "child.md").exists()
+
+
+def test_scope_source_external_inbound_ref_to_member_refuses_without_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept OUTSIDE the purge set holding a link to a purge-set member
+    refuses by default, and `--force` overrides it (spec: "External inbound
+    reference still refuses by default", "`--force` overrides an external
+    refusal")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(
+        tmp_path, "concepts/child", provenance=[source_id], title="Child"
+    )
+    _write_plain_concept(
+        tmp_path, "concepts/outsider", body="See [Child](/concepts/child.md).\n"
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--force" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+    force_result = runner.invoke(
+        app, ["forget", source_id, "--scope", "source", "--force", "--auto"]
+    )
+    assert force_result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+    assert not (tmp_path / "bundle" / "concepts" / "child.md").exists()
+
+
+def test_scope_source_unverifiable_referrer_mentions_non_root_member_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unparseable external referrer whose raw text mentions a NON-ROOT
+    purge-set member's id refuses by default -- the fail-closed substring
+    check runs over EVERY member id, not just the root (spec: "Unverifiable
+    referrer mentioning a set member is surfaced")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(
+        tmp_path, "concepts/child", provenance=[source_id], title="Child"
+    )
+    referrer_path = tmp_path / "bundle" / "concepts" / "referrer.md"
+    referrer_path.parent.mkdir(parents=True, exist_ok=True)
+    referrer_path.write_text(
+        "---\n"
+        "type: Concept\n"
+        "title: Bad\n"
+        "relations: [target: concepts/child, type: depends_on\n"
+        "---\n\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--force" in result.stderr
+    assert "could not verify" in result.stderr
+    assert (tmp_path / "bundle" / f"{source_id}.md").is_file()
+    assert (tmp_path / "bundle" / "concepts" / "child.md").is_file()
+
+    force_result = runner.invoke(
+        app, ["forget", source_id, "--scope", "source", "--force", "--auto"]
+    )
+    assert force_result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+
+
+def test_scope_source_preview_states_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Phase A preview states the EXACT total delete count for `--scope
+    source` (spec: "Preview names every id and the count"), and the number
+    of concepts actually removed from disk matches that count -- a loose
+    `"3" in output` substring check would also pass on an unrelated
+    coincidental digit, so this asserts the full preview line verbatim."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(tmp_path, "concepts/child-a", provenance=[source_id])
+    _write_child_concept(tmp_path, "concepts/child-b", provenance=[source_id])
+    concept_paths = [
+        tmp_path / "bundle" / f"{source_id}.md",
+        tmp_path / "bundle" / "concepts" / "child-a.md",
+        tmp_path / "bundle" / "concepts" / "child-b.md",
+    ]
+    assert all(path.is_file() for path in concept_paths)
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    assert "Total: 3 concept(s) to delete." in result.output
+    deleted_count = sum(1 for path in concept_paths if not path.exists())
+    assert deleted_count == 3
+
+
+def test_scope_source_force_does_not_auto_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force` bypasses ONLY gate 1 (the external-reference refusal): on a
+    TTY, `typer.confirm` still prompts, stating the count, before Phase B
+    writes (spec: "`--force` does not auto-confirm the count")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(tmp_path, "concepts/child", provenance=[source_id])
+    _simulate_tty(monkeypatch)
+
+    called: list[str] = []
+    real_confirm = typer.confirm
+
+    def _tracking_confirm(text: str, **kwargs: object) -> bool:
+        called.append(text)
+        return real_confirm(text, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(typer, "confirm", _tracking_confirm)
+
+    result = runner.invoke(
+        app, ["forget", source_id, "--scope", "source", "--force"], input="y\n"
+    )
+
+    assert result.exit_code == 0
+    assert len(called) == 1
+    assert "2" in called[0]
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+
+
+def test_scope_source_non_tty_without_auto_refuses_even_with_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force`, no external references, non-TTY, no `--auto`: refuses via
+    the UNCHANGED confirm gate, same as `--scope self` (spec: "Non-TTY
+    without `--auto` still refuses on the cascade path")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(tmp_path, "concepts/child", provenance=[source_id])
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--force"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--auto" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_scope_source_per_member_resurrection_disclosure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A NON-ROOT purge-set member's outbound `supersedes` edge to a
+    concept OUTSIDE the set is disclosed, naming both the target and the
+    member whose edge caused it (spec: "A cascade member's supersedes edge
+    discloses resurrection")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    outside_id = _ingest_source(tmp_path, "outside.txt")
+    _write_child_concept(
+        tmp_path,
+        "concepts/child",
+        provenance=[source_id],
+        title="Child",
+        relations=[{"target": outside_id, "type": "supersedes"}],
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    assert outside_id in result.output
+    assert "re-enters retrieval" in result.output
+    assert "concepts/child" in result.output
+
+
+def test_scope_source_phase_b_writes_catalog_before_any_unlink_sorted_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`index.md`/`log.md` are fully updated for ALL purge-set members
+    BEFORE any unlink; unlinks happen in `sorted(purge_ids)` order; a
+    failure partway through leaves a benign, git-recoverable partial result
+    (spec: "Catalog updated before any cascade file deletion", "Partial
+    cascade deletion is git-recoverable")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(tmp_path, "concepts/child-a", provenance=[source_id])
+    _write_child_concept(tmp_path, "concepts/child-z", provenance=[source_id])
+
+    unlinked: list[Path] = []
+    real_remove_file = fsio.remove_file
+
+    def _tracking_remove_file(path: Path) -> None:
+        unlinked.append(path)
+        if len(unlinked) == 2:
+            raise OSError("simulated delete failure on 2nd unlink")
+        real_remove_file(path)
+
+    monkeypatch.setattr(fsio, "remove_file", _tracking_remove_file)
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    # K-of-N failure summary (observability on a partial mass-delete):
+    # 1 of 3 members were actually unlinked before the simulated failure
+    # on the 2nd unlink, so 2 remain.
+    assert "removed 1 of 3 concept(s) before failing; 2 remain" in result.stderr
+    assert "recover with git or 'openkos lint'" in result.stderr
+
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert source_id not in index_text
+    assert "child-a" not in index_text
+    assert "child-z" not in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert log_text.count("**Tombstone**") == 3
+
+    unlinked_ids = [p.relative_to(tmp_path / "bundle").as_posix() for p in unlinked]
+    assert unlinked_ids == sorted(unlinked_ids)
+    assert len(unlinked) == 2
+    assert not (tmp_path / "bundle" / unlinked_ids[0]).exists()
+    assert (tmp_path / "bundle" / unlinked_ids[1]).exists()
+    assert (tmp_path / "bundle" / f"{source_id}.md").exists()
+
+
+def test_scope_source_descendant_ids_are_disk_discovered_never_user_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Descendant ids are drawn ONLY from real `other_files` keys inside
+    `bundle/` -- a hand-crafted provenance entry shaped like a traversal
+    segment can never cause a delete outside `bundle_dir`, because no real
+    file can ever be discovered at such a path (threat matrix: "Path
+    traversal via descendant ids")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    decoy = tmp_path / "evil.md"
+    decoy.write_text("decoy", encoding="utf-8")
+    _write_child_concept(
+        tmp_path,
+        "concepts/child",
+        provenance=[source_id, "../evil"],
+        title="Child",
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "child.md").is_file()
+    assert decoy.read_text(encoding="utf-8") == "decoy"
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+
+
 def test_path_safety_runs_before_any_bundle_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -885,3 +1329,96 @@ def test_path_safety_runs_before_any_bundle_scan(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
+
+
+def test_scope_source_intra_set_member_to_member_resurrection_suppressed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A purge-set MEMBER's outbound `supersedes` edge to ANOTHER
+    purge-set member (both being deleted) is NOT disclosed as a
+    resurrection -- the `relation.target not in purge_ids_set` filter, not
+    a narrower `relation.target != member` self-loop guard, is what
+    excludes it (spec: "Resurrection Interaction Disclosure" applies only
+    to targets OUTSIDE the purge set; if the filter were narrowed to
+    `!= member` this cross-member case would wrongly disclose)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(
+        tmp_path,
+        "concepts/child-a",
+        provenance=[source_id],
+        title="Child A",
+        relations=[{"target": "concepts/child-b", "type": "supersedes"}],
+    )
+    _write_child_concept(
+        tmp_path, "concepts/child-b", provenance=[source_id], title="Child B"
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    assert "re-enters retrieval" not in result.output
+
+
+def test_scope_source_intra_set_backlink_and_external_ref_to_same_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A purge-set member referenced by BOTH an intra-set concept (its own
+    Source, via `## Related`) AND an external concept still REFUSES
+    without `--force` -- the intra-set drop must only suppress the
+    intra-set referrer, never the external one that happens to target the
+    SAME member (spec: "Intra-set backlink does not block" combined with
+    "External inbound reference still refuses by default")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(
+        tmp_path, "concepts/child", provenance=[source_id], title="Child"
+    )
+    child_path = tmp_path / "bundle" / "concepts" / "child.md"
+    child_path.write_text(
+        child_path.read_text(encoding="utf-8")
+        + f"\n## Related\n\n- [Source](/{source_id}.md)\n",
+        encoding="utf-8",
+    )
+    _write_plain_concept(
+        tmp_path, "concepts/outsider", body="See [Child](/concepts/child.md).\n"
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--force" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+    force_result = runner.invoke(
+        app, ["forget", source_id, "--scope", "source", "--force", "--auto"]
+    )
+    assert force_result.exit_code == 0
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+    assert not child_path.exists()
+
+
+def test_scope_source_tombstones_appear_in_ascending_id_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a `--scope source` cascade, the N tombstone lines appear in
+    `log.md` in deterministic ASCENDING purge-set-id order, top to bottom
+    -- not just present in the right count (spec: "N tombstone lines for a
+    cascade"). This must fail if the `reversed()` in the prepend loop were
+    dropped, since `insert_log_entry` PREPENDS: a forward-order loop would
+    render the tombstones in descending order instead."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path)
+    _write_child_concept(tmp_path, "concepts/child-a", provenance=[source_id])
+    _write_child_concept(tmp_path, "concepts/child-z", provenance=[source_id])
+    purge_ids = sorted([source_id, "concepts/child-a", "concepts/child-z"])
+    assert purge_ids == ["concepts/child-a", "concepts/child-z", source_id]
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    positions = [log_text.index(f"(id: {member})") for member in purge_ids]
+    assert positions == sorted(positions)
