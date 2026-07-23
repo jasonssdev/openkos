@@ -32,6 +32,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "git-filter-repo>=2.47.0",
     "mypy>=2.3.0",
     "pre-commit>=4.6.0",
     "pydantic>=2.13.4",
