@@ -59,6 +59,9 @@ _IDENTITY_FN = _extract_identity_fn()
         ('/concepts/foo.md "Foo Title"', "concepts/foo"),
         ("/concepts/foo.md#section", "concepts/foo"),
         ("", None),
+        ("//concepts/foo.md", "concepts/foo"),
+        ("///concepts/foo.md", "concepts/foo"),
+        ("//concepts//foo.md", "concepts/foo"),
     ],
 )
 def test_snippet_identity_matches_link_identity(

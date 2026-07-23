@@ -154,11 +154,18 @@ def _link_identity(target: str) -> str | None:
     (NOT imported from `lint`, per #922 -- `lint` imports `config` and
     `okf` and is the higher "health" layer; importing it here would invert
     layering). `index.md` always lives at the bundle root, so there is no
-    `source_rel_dir` parameter to thread through: a leading `/` and a bare
-    relative link both resolve identically. A trailing `#fragment` or a
-    quoted ` "title"` suffix is stripped first; an external `scheme:` URL
+    `source_rel_dir` parameter to thread through: a leading `/` (or
+    multiple leading `/`s, e.g. `//concepts/foo.md`) and a bare relative
+    link all resolve identically. A trailing `#fragment` or a quoted
+    ` "title"` suffix is stripped first; an external `scheme:` URL
     (`http:`, `mailto:`, ...), an empty target, or one that escapes the
     bundle root via `..` all normalize to `None` (never a match).
+
+    NOTE: this normalization must stay in lockstep with the BYTES
+    re-implementation in `openkos.vcs.git`'s `_FILE_INFO_CALLBACK_SNIPPET`
+    (that snippet runs inside `git filter-repo`'s own subprocess, which
+    cannot import `openkos`, hence the duplication) -- proven by the parity
+    test in `tests/unit/vcs/test_scrub_snippet_parity.py`.
     """
     target = target.split("#", 1)[0].strip()
     if target.endswith('"') and ' "' in target:
@@ -167,7 +174,7 @@ def _link_identity(target: str) -> str | None:
         return None
     if _SCHEME_RE.match(target):
         return None
-    candidate = PurePosixPath(target.removeprefix("/"))
+    candidate = PurePosixPath(target.lstrip("/"))
     parts: list[str] = []
     for part in candidate.parts:
         if part == "..":
