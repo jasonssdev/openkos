@@ -2737,6 +2737,11 @@ def adjudicate(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
 
@@ -2768,6 +2773,12 @@ def adjudicate(
     threads the flag into `find_candidates`, not into `adjudicate_candidates`
     itself.
 
+    Unless `--include-confidential` is passed, confidential concepts
+    (sensitivity-fail-closed-filter) are excluded at the MEMBER level, inside
+    `adjudicate_candidates` itself -- distinct from the deprecated axis above,
+    a confidential member is dropped from a group's `member_ids` before its
+    content is ever read, rather than dropping the whole group upstream.
+
     No file under the workspace is ever created, modified, or deleted (spec:
     Verb renders verdicts with zero writes).
     """
@@ -2793,7 +2804,10 @@ def adjudicate(
     llm = OllamaClient(model=cfg.model)
     try:
         results = adjudicate_candidates(
-            candidates, bundle_dir=layout.bundle_dir, llm=llm
+            candidates,
+            bundle_dir=layout.bundle_dir,
+            llm=llm,
+            include_confidential=include_confidential,
         )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -2847,7 +2861,13 @@ def adjudicate(
 
 
 @app.command("suggest-relations")
-def suggest_relations_cmd() -> None:
+def suggest_relations_cmd(
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
+) -> None:
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
     edge: read-only, like `adjudicate`.
 
@@ -2880,6 +2900,11 @@ def suggest_relations_cmd() -> None:
     `OllamaModelNotFound`, then the generic `OllamaError` fallback -- each
     with its own actionable stderr message, exit 1, and zero writes.
 
+    Unless `--include-confidential` is passed, an untyped edge with a
+    confidential endpoint (sensitivity-fail-closed-filter) is excluded from
+    candidates -- dropped by `suggest_relations` before `llm.chat` is ever
+    called for it.
+
     No file under the workspace is ever created, modified, or deleted
     (spec: Verb performs zero writes).
     """
@@ -2901,7 +2926,9 @@ def suggest_relations_cmd() -> None:
 
     llm = OllamaClient(model=cfg.model)
     try:
-        results = suggest_relations(layout.bundle_dir, llm=llm)
+        results = suggest_relations(
+            layout.bundle_dir, llm=llm, include_confidential=include_confidential
+        )
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos suggest-relations: failed -- {exc}. Start it with "
@@ -3058,6 +3085,11 @@ def contradictions(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
 ) -> None:
     """LLM-detect contradictions between already-related concepts: read-only,
     like `adjudicate`/`suggest-relations`/`suggest-volatility`.
@@ -3101,6 +3133,10 @@ def contradictions(
     `find_contradictions` before any pair is judged, so the LLM is never
     invoked on them.
 
+    Unless `--include-confidential` is passed, confidential concepts
+    (sensitivity-fail-closed-filter) likewise never appear in a candidate
+    pair, dropped by `find_contradictions` the same way.
+
     No file under the workspace is ever created, modified, or deleted
     (spec: Read-Only `contradictions` CLI Verb).
     """
@@ -3123,7 +3159,10 @@ def contradictions(
     llm = OllamaClient(model=cfg.model)
     try:
         verdicts, total_pairs = find_contradictions(
-            layout.bundle_dir, llm=llm, include_deprecated=include_deprecated
+            layout.bundle_dir,
+            llm=llm,
+            include_deprecated=include_deprecated,
+            include_confidential=include_confidential,
         )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -3302,6 +3341,11 @@ def query(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
 ) -> None:
     """Answer a natural-language question from the compiled bundle, with citations.
 
@@ -3356,6 +3400,10 @@ def query(
     and every count in it (FTS/dense/graph/fused/cited) already report the
     POST-filter values, since filtering happens inside `answer()` before
     those counts are captured.
+
+    Unless `--include-confidential` is passed, confidential concepts
+    (sensitivity-fail-closed-filter) are likewise excluded from every
+    retrieval channel before fusion, exactly like a deprecated concept.
     """
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -3395,6 +3443,7 @@ def query(
                 graph_index=graph_index,
                 limit=limit,
                 include_deprecated=include_deprecated,
+                include_confidential=include_confidential,
             )
         except OllamaUnavailable as exc:
             typer.echo(

@@ -64,7 +64,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from openkos import lifecycle
+from openkos import lifecycle, sensitivity
 from openkos.graph.base import GraphStore
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
@@ -306,6 +306,7 @@ def answer(
     graph_index: GraphStore | None = None,
     limit: int = 5,
     include_deprecated: bool = False,
+    include_confidential: bool = False,
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
@@ -343,6 +344,14 @@ def answer(
     contract) -- neither this module nor any of its imports references
     `state/derived.py` at all; a properly-`reindex`ed handle is always
     treated as fresh here.
+
+    sensitivity-fail-closed-filter (S3a): unless `include_confidential` is
+    `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
+    predicate is likewise computed ONCE and unioned with the `deprecated` set
+    before filtering `hits`/`vec_hits`/`graph_hits` -- a confidential concept
+    is excluded from every retrieval channel exactly like a deprecated one,
+    and `include_confidential=True` independently skips its own predicate
+    walk at zero added cost.
     """
     if not question.split():
         return AnswerResult(
@@ -362,14 +371,22 @@ def answer(
         question, embedder=embedder, vector_store=vector_store, pool_limit=limit_pool
     )
 
-    # status-aware-retrieval (Phase 2): compute the shared predicate ONCE,
-    # only when filtering is actually needed -- `include_deprecated=True`
-    # skips the walk entirely (design R1, zero-cost escape path).
+    # status-aware-retrieval (Phase 2) + sensitivity-fail-closed-filter (S3a):
+    # compute each shared predicate ONCE, only when its own filtering is
+    # actually needed -- `include_deprecated=True`/`include_confidential=True`
+    # each independently skip their own walk entirely (design R1, zero-cost
+    # escape path). The two excluded-id sets are unioned before filtering, so
+    # `lifecycle.filter_hits` (axis-agnostic) is still called exactly once per
+    # hit list.
     deprecated: frozenset[str] = frozenset()
     if not include_deprecated:
         deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
-        hits = lifecycle.filter_hits(hits, deprecated)
-        vec_hits = lifecycle.filter_hits(vec_hits, deprecated)
+    confidential: frozenset[str] = frozenset()
+    if not include_confidential:
+        confidential = sensitivity.sensitive_concept_ids(bundle_dir)
+    excluded = deprecated | confidential
+    hits = lifecycle.filter_hits(hits, excluded)
+    vec_hits = lifecycle.filter_hits(vec_hits, excluded)
 
     initial_fused = fusion.fuse(hits, vec_hits)
     seeds = initial_fused[: min(limit, 5)]
@@ -377,8 +394,7 @@ def answer(
         graph_hits, graph_degraded = _graph_search(
             graph_index, seeds, limit=pool.pool_limit(limit)
         )
-        if not include_deprecated:
-            graph_hits = lifecycle.filter_hits(graph_hits, deprecated)
+        graph_hits = lifecycle.filter_hits(graph_hits, excluded)
     else:
         graph_hits, graph_degraded = [], True
 

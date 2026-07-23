@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from openkos import lifecycle
+from openkos import lifecycle, sensitivity
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge, GraphStore
@@ -46,11 +46,17 @@ def _write_doc(
     body: str = "",
     status: str | None = None,
     relations: list[tuple[str, str]] | None = None,
+    sensitivity_value: str | None = "private",
 ) -> None:
     """Write a minimal concept `.md` file. `status`/`relations` are optional
     lifecycle frontmatter (status-aware-retrieval, Phase 2): `relations` is a
     list of `(target, type)` pairs, mirroring `test_lifecycle.py`'s helper so
-    both test modules build fixtures the same way."""
+    both test modules build fixtures the same way. `sensitivity_value`
+    defaults to `"private"` (`config.DEFAULT_SENSITIVITY`, matching what a
+    real `ingest` always writes) so fixtures unrelated to the
+    sensitivity-fail-closed-filter feature are never collaterally blocked by
+    the fail-closed default; pass `None` explicitly for the absent-field
+    case."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "---",
@@ -60,6 +66,8 @@ def _write_doc(
     ]
     if status is not None:
         lines.append(f"status: {status}")
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
     if relations is not None:
         lines.append("relations:")
         for target, rel_type in relations:
@@ -1429,7 +1437,8 @@ def test_missing_title_falls_back_to_concept_id(tmp_path: Path) -> None:
     bundle_dir = tmp_path / "bundle"
     (bundle_dir / "concepts").mkdir(parents=True)
     (bundle_dir / "concepts" / "untitled.md").write_text(
-        "---\ntype: Concept\ndescription: ''\n---\ndichotomyzz of control",
+        "---\ntype: Concept\ndescription: ''\nsensitivity: private\n---\n"
+        "dichotomyzz of control",
         encoding="utf-8",
     )
     llm = _FakeLLM()
@@ -1976,3 +1985,117 @@ def test_deprecated_concept_never_becomes_a_graph_seed(tmp_path: Path) -> None:
 
     include_cited_ids = {citation.concept_id for citation in include_result.citations}
     assert "concepts/n" in include_cited_ids
+
+
+# --- sensitivity-fail-closed-filter, S3a/PR1: query-path sensitivity filtering --
+
+
+def test_confidential_concept_excluded_from_fts_hits_by_default(
+    tmp_path: Path,
+) -> None:
+    """A concept with `sensitivity: confidential` matching lexically is
+    absent from the fused/cited result by default, while a private match
+    still surfaces (spec: Confidential excluded from query/answer)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "open.md",
+        title="Open",
+        body="dichotomyzz private note",
+        sensitivity_value="private",
+    )
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/secret", score=1.0),
+            fts.FtsHit(concept_id="concepts/open", score=0.5),
+        ]
+    )
+    llm = _FakeLLM(reply="private answer only")
+
+    result = answer_mod.answer(
+        "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=recording_index
+    )
+
+    cited_ids = {citation.concept_id for citation in result.citations}
+    assert "concepts/secret" not in cited_ids
+    assert "concepts/open" in cited_ids
+    assert result.fts_hit_count == 1
+    for message in llm.calls[0]:
+        assert "confidential note" not in message["content"]
+
+
+def test_include_confidential_true_restores_the_only_match_and_skips_the_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_confidential=True` restores a confidential-only match to full
+    participation AND never calls `sensitivity.sensitive_concept_ids` at all
+    (spy) -- the escape flag skips the predicate walk entirely, at zero added
+    cost (spec: `--include-confidential` Escape Flag)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        sensitivity_value="confidential",
+    )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/secret", score=1.0)]
+    )
+    llm = _FakeLLM(reply="restored")
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    result = answer_mod.answer(
+        "q",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        include_confidential=True,
+    )
+
+    assert walk_calls == []
+    assert result.answer == "restored"
+    assert result.citations == [
+        answer_mod.Citation(concept_id="concepts/secret", title="Secret")
+    ]
+
+
+def test_default_include_confidential_false_calls_the_predicate_walk_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default `include_confidential=False` DOES call
+    `sensitivity.sensitive_concept_ids` exactly once per `answer()` call."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "live.md",
+        title="Live",
+        body="dichotomyzz",
+        sensitivity_value="private",
+    )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/live", score=1.0)]
+    )
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    answer_mod.answer(
+        "q", bundle_dir=bundle_dir, llm=_FakeLLM(reply="ok"), fts_index=recording_index
+    )
+
+    assert walk_calls == [bundle_dir]

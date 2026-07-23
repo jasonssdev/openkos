@@ -39,12 +39,25 @@ class _FakeLLM:
 
 
 def _write_doc(
-    path: Path, *, doc_type: str = "Concept", title: str = "Stub", body: str = "Body."
+    path: Path,
+    *,
+    doc_type: str = "Concept",
+    title: str = "Stub",
+    body: str = "Body.",
+    sensitivity_value: str | None = "private",
 ) -> None:
+    """`sensitivity_value` defaults to `"private"` (`config.DEFAULT_SENSITIVITY`,
+    matching what a real `ingest` always writes) so fixtures unrelated to the
+    sensitivity-fail-closed-filter feature are never collaterally blocked by
+    the fail-closed default; pass `None` explicitly for the absent-field
+    case."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\ntype: {doc_type}\ntitle: {title}\n---\n{body}", encoding="utf-8"
-    )
+    lines = ["---", f"type: {doc_type}", f"title: {title}"]
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
+    lines.append("---")
+    frontmatter = "\n".join(lines) + "\n"
+    path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
 
 def _group(
@@ -504,3 +517,122 @@ def test_repeated_runs_with_fake_backend_are_deterministic(tmp_path: Path) -> No
     )
 
     assert result_one == result_two
+
+
+# ---------------------------------------------------------------------------
+# sensitivity-fail-closed-filter, S3a/PR1: confidential members excluded
+# before adjudication
+# ---------------------------------------------------------------------------
+
+
+def test_confidential_member_excluded_before_load_members_by_default(
+    tmp_path: Path,
+) -> None:
+    """A `sensitivity: confidential` member is dropped from `member_ids`
+    BEFORE `_load_members`, so the LLM prompt only ever sees the private
+    member's content (spec: Confidential excluded from adjudicate/
+    contradictions/suggest-relations)."""
+    _write_doc(tmp_path / "a.md", title="A", sensitivity_value="confidential")
+    _write_doc(tmp_path / "b.md", title="B", sensitivity_value="private")
+    group = _group("a", "b")
+    llm = _FakeLLM(replies=[_valid_reply("same", 0.9, "match")])
+
+    result = adjudication_mod.adjudicate_candidates(
+        [group], bundle_dir=tmp_path, llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "[a — A]" not in message["content"]
+    assert "[b — B]" in message["content"]
+    assert result[0].candidate == group
+
+
+def test_all_members_confidential_short_circuits_to_uncertain(tmp_path: Path) -> None:
+    """A group whose members are ALL confidential degrades to `UNCERTAIN`
+    without calling `llm.chat` -- the same short-circuit as all-unreadable
+    members (spec: Exclusion, not redaction)."""
+    _write_doc(tmp_path / "a.md", title="A", sensitivity_value="confidential")
+    _write_doc(tmp_path / "b.md", title="B", sensitivity_value="confidential")
+    group = _group("a", "b")
+    llm = _FakeLLM()
+
+    result = adjudication_mod.adjudicate_candidates(
+        [group], bundle_dir=tmp_path, llm=llm
+    )
+
+    assert result[0].verdict is adjudication_mod.Verdict.UNCERTAIN
+    assert result[0].confidence == 0.0
+    assert len(llm.calls) == 0
+
+
+def test_include_confidential_true_restores_the_confidential_member(
+    tmp_path: Path,
+) -> None:
+    """`include_confidential=True` restores a confidential member to the
+    prompt, unchanged (spec: `--include-confidential` Escape Flag)."""
+    _write_doc(tmp_path / "a.md", title="A", sensitivity_value="confidential")
+    _write_doc(tmp_path / "b.md", title="B", sensitivity_value="private")
+    group = _group("a", "b")
+    llm = _FakeLLM(replies=[_valid_reply("same", 0.9, "match")])
+
+    adjudication_mod.adjudicate_candidates(
+        [group], bundle_dir=tmp_path, llm=llm, include_confidential=True
+    )
+
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "[a — A]" in message["content"]
+    assert "[b — B]" in message["content"]
+
+
+def test_include_confidential_true_never_calls_the_predicate_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_confidential=True` skips `sensitivity.sensitive_concept_ids`
+    entirely (spy) -- the escape flag is the zero-cost path (design R1)."""
+    from openkos import sensitivity
+
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    group = _group("a", "b")
+    llm = _FakeLLM(replies=[_valid_reply("same", 0.9, "match")])
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    adjudication_mod.adjudicate_candidates(
+        [group], bundle_dir=tmp_path, llm=llm, include_confidential=True
+    )
+
+    assert walk_calls == []
+
+
+def test_default_include_confidential_false_calls_the_predicate_walk_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default `include_confidential=False` DOES call
+    `sensitivity.sensitive_concept_ids` exactly once per
+    `adjudicate_candidates` call."""
+    from openkos import sensitivity
+
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    group = _group("a", "b")
+    llm = _FakeLLM(replies=[_valid_reply("same", 0.9, "match")])
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
+
+    assert walk_calls == [tmp_path]

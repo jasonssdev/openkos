@@ -575,6 +575,65 @@ def test_adjudicate_include_deprecated_restores_the_group(
     assert len(candidates) == 1
 
 
+# ---------------------------------------------------------------------------
+# `--include-confidential` (sensitivity-fail-closed-filter S3a)
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_include_confidential_flag_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential` is forwarded unchanged as
+    `adjudicate_candidates(..., include_confidential=True)` -- `adjudicate`
+    threads the flag into `adjudicate_candidates` (member-level filtering),
+    not `find_candidates` (spec: `--include-confidential` Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="STOICISM")
+    captured: dict[str, object] = {}
+
+    def _recording_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        captured["kwargs"] = kwargs
+        return [_adjudicated(group) for group in candidates]
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--include-confidential"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_confidential"] is True
+
+
+def test_adjudicate_omitted_include_confidential_defaults_to_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `--include-confidential` forwards the safe default
+    `include_confidential=False` (spec: Confidential Excluded By Default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="STOICISM")
+    captured: dict[str, object] = {}
+
+    def _recording_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        captured["kwargs"] = kwargs
+        return [_adjudicated(group) for group in candidates]
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_confidential"] is False
+
+
 def test_adjudicate_command_name_is_not_resolve() -> None:
     """`adjudicate` is registered under its own name -- `resolve` remains
     unimplemented (spec: distinct from the reserved `resolve` verb).

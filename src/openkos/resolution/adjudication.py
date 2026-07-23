@@ -28,6 +28,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from openkos import sensitivity
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import okf
 
@@ -218,24 +219,45 @@ def _parse_reply(raw: object) -> tuple[Verdict, float, str]:
 
 
 def adjudicate_candidates(
-    candidates: list[CandidateGroup], *, bundle_dir: Path, llm: LLMBackend
+    candidates: list[CandidateGroup],
+    *,
+    bundle_dir: Path,
+    llm: LLMBackend,
+    include_confidential: bool = False,
 ) -> list[AdjudicatedCandidate]:
     """Adjudicate every `CandidateGroup` in `candidates` against `bundle_dir`
     using `llm`, read-only.
 
     Returns exactly one `AdjudicatedCandidate` per input group, in the same
     order -- every verdict (`SAME`, `DIFFERENT`, `UNCERTAIN`) is kept; this
-    function never filters. Normally one `llm.chat` call is issued per group
-    (module docstring); a group whose members are ALL unreadable
+    function never filters GROUPS. Normally one `llm.chat` call is issued per
+    group (module docstring); a group whose members are ALL unreadable (or,
+    per `sensitivity-fail-closed-filter` S3a below, all confidential)
     short-circuits to `UNCERTAIN`/`0.0`/`"no readable member content"`
     without calling `llm.chat`. Any `OllamaError`-family exception raised by
     `llm.chat` propagates unswallowed (module docstring) -- this function
     catches only reply-parsing/validation failures, never transport or
     model-availability errors.
+
+    sensitivity-fail-closed-filter (S3a): unless `include_confidential` is
+    `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
+    predicate is computed ONCE per call, and each candidate's `member_ids`
+    has any blocked id dropped BEFORE `_load_members` ever reads it -- a
+    confidential member's content is never read into the prompt, exactly
+    like a deprecated concept is dropped upstream of `find_candidates`.
+    `include_confidential=True` skips the predicate walk entirely, at zero
+    added cost.
     """
+    blocked: frozenset[str] = frozenset()
+    if not include_confidential:
+        blocked = sensitivity.sensitive_concept_ids(bundle_dir)
+
     results: list[AdjudicatedCandidate] = []
     for candidate in candidates:
-        members = _load_members(bundle_dir, candidate.member_ids)
+        member_ids = [
+            member_id for member_id in candidate.member_ids if member_id not in blocked
+        ]
+        members = _load_members(bundle_dir, member_ids)
         if not members:
             results.append(
                 AdjudicatedCandidate(

@@ -28,25 +28,25 @@ Chain strategy: feature-branch-chain
 
 ## Phase 1: S3a — Predicate Spine (PR1, base: feature/tracker)
 
-- [ ] 1.1 RED: create `tests/unit/test_sensitivity.py` mirroring `tests/unit/test_lifecycle.py::_write_doc` fixture helper; write failing tests for `sensitive_concept_ids(bundle_dir, threshold="confidential")`: explicit `confidential` -> blocked; missing `sensitivity` key -> blocked; blank/whitespace-only `sensitivity` -> blocked; malformed/unparseable frontmatter -> blocked; unreadable file (read error) -> blocked; unknown value (e.g. `top-secret`) -> blocked; `private` -> sent (not in returned set); `public` -> sent (not in returned set)
-- [ ] 1.2 GREEN: create `src/openkos/sensitivity.py` with `sensitive_concept_ids(bundle_dir, *, threshold="confidential")` per design — explicit `read_error`/`parse_error` -> block, explicit absent/blank `raw` -> block, else delegate to `okf._rank(raw) >= floor` (do NOT delegate absent/blank to `_rank`, since `_rank(None)`/`_rank("")` return private, not confidential — spec: Fail-Closed Sensitivity Resolution)
-- [ ] 1.3 REFACTOR: align module docstring/style with `lifecycle.py` (fail-CLOSED framing vs lifecycle's fail-SAFE framing); confirm `uv run pytest tests/unit/test_sensitivity.py -q` green
+- [x] 1.1 RED: create `tests/unit/test_sensitivity.py` mirroring `tests/unit/test_lifecycle.py::_write_doc` fixture helper; write failing tests for `sensitive_concept_ids(bundle_dir, threshold="confidential")`: explicit `confidential` -> blocked; missing `sensitivity` key -> blocked; blank/whitespace-only `sensitivity` -> blocked; malformed/unparseable frontmatter -> blocked; unreadable file (read error) -> blocked; unknown value (e.g. `top-secret`) -> blocked; `private` -> sent (not in returned set); `public` -> sent (not in returned set)
+- [x] 1.2 GREEN: create `src/openkos/sensitivity.py` with `sensitive_concept_ids(bundle_dir, *, threshold="confidential")` per design — explicit `read_error`/`parse_error` -> block, explicit absent/blank `raw` -> block, else delegate to `okf._rank(raw) >= floor` (do NOT delegate absent/blank to `_rank`, since `_rank(None)`/`_rank("")` return private, not confidential — spec: Fail-Closed Sensitivity Resolution)
+- [x] 1.3 REFACTOR: align module docstring/style with `lifecycle.py` (fail-CLOSED framing vs lifecycle's fail-SAFE framing); confirm `uv run pytest tests/unit/test_sensitivity.py -q` green
 
-- [ ] 1.4 RED: extend `tests/unit/retrieval/test_answer.py` with a spy-`LLMBackend` case — confidential-fixture hit excluded from fused hits before `llm.chat`; private/public hits still sent (spec: Confidential excluded from query/answer)
-- [ ] 1.5 GREEN: wire `retrieval/answer.py` hit seam (:368-381) to call `sensitivity.sensitive_concept_ids` and pass through `lifecycle.filter_hits` beside the existing `deprecated` filter (fts/vec/graph)
+- [x] 1.4 RED: extend `tests/unit/retrieval/test_answer.py` with a spy-`LLMBackend` case — confidential-fixture hit excluded from fused hits before `llm.chat`; private/public hits still sent (spec: Confidential excluded from query/answer)
+- [x] 1.5 GREEN: wire `retrieval/answer.py` hit seam (:368-381) to call `sensitivity.sensitive_concept_ids` and pass through `lifecycle.filter_hits` beside the existing `deprecated` filter (fts/vec/graph)
 
-- [ ] 1.6 RED: extend `tests/unit/resolution/test_contradiction.py` — confidential concept dropped from `_candidate_pairs` before `llm.chat`; private/public pair still sent (spec: Confidential excluded from adjudicate/contradictions/suggest-relations)
-- [ ] 1.7 GREEN: wire `resolution/contradiction.py` (:408-413) to compute the predicate once per run and drop pairs touching a blocked id before the `llm.chat` call
+- [x] 1.6 RED: extend `tests/unit/resolution/test_contradiction.py` — confidential concept dropped from `_candidate_pairs` before `llm.chat`; private/public pair still sent (spec: Confidential excluded from adjudicate/contradictions/suggest-relations)
+- [x] 1.7 GREEN: wire `resolution/contradiction.py` (:408-413) to compute the predicate once per run and drop pairs touching a blocked id before the `llm.chat` call
 
-- [ ] 1.8 RED: extend `tests/unit/resolution/test_adjudication.py` — blocked `member_ids` excluded before `_load_members`/candidate assembly; private/public members still included
-- [ ] 1.9 GREEN: wire `resolution/adjudication.py::run` (:236) to drop blocked `member_ids` before `_load_members` (:91-112)/:251
+- [x] 1.8 RED: extend `tests/unit/resolution/test_adjudication.py` — blocked `member_ids` excluded before `_load_members`/candidate assembly; private/public members still included
+- [x] 1.9 GREEN: wire `resolution/adjudication.py::run` (:236) to drop blocked `member_ids` before `_load_members` (:91-112)/:251
 
-- [ ] 1.10 RED: extend `tests/unit/resolution/test_edge_typing.py` — edges with a blocked endpoint excluded from `suggest_relations` before `llm.chat`; private/public edges still sent
-- [ ] 1.11 GREEN: wire `resolution/edge_typing.py::suggest_relations` (:267) to drop edges whose endpoint is blocked before `suggest_edge_types` (:250)/`_load_doc` (:131-147)
+- [x] 1.10 RED: extend `tests/unit/resolution/test_edge_typing.py` — edges with a blocked endpoint excluded from `suggest_relations` before `llm.chat`; private/public edges still sent
+- [x] 1.11 GREEN: wire `resolution/edge_typing.py::suggest_relations` (:267) to drop edges whose endpoint is blocked before `suggest_edge_types` (:250)/`_load_doc` (:131-147)
 
-- [ ] 1.12 RED: add `--include-confidential` cases to `tests/unit/cli/test_query.py`, `test_contradictions.py`, `test_adjudicate.py`, `test_suggest_relations.py` — flag present -> confidential concept participates exactly as private/public would; flag absent -> excluded (spec: `--include-confidential` Escape Flag)
-- [ ] 1.13 GREEN: add `--include-confidential` flag to `query`/`contradictions`/`adjudicate`/`suggest-relations` CLI commands in `cli/main.py`, mirroring `--include-deprecated` (skip the predicate walk entirely when `True`)
-- [ ] 1.14 REFACTOR: confirm `uv run pytest tests/unit/test_sensitivity.py tests/unit/retrieval/test_answer.py tests/unit/resolution/test_contradiction.py tests/unit/resolution/test_adjudication.py tests/unit/resolution/test_edge_typing.py tests/unit/cli/test_query.py tests/unit/cli/test_contradictions.py tests/unit/cli/test_adjudicate.py tests/unit/cli/test_suggest_relations.py -q` all green; verify no cross-import of `_`-prefixed symbols introduced
+- [x] 1.12 RED: add `--include-confidential` cases to `tests/unit/cli/test_query.py`, `test_contradictions.py`, `test_adjudicate.py`, `test_suggest_relations.py` — flag present -> confidential concept participates exactly as private/public would; flag absent -> excluded (spec: `--include-confidential` Escape Flag)
+- [x] 1.13 GREEN: add `--include-confidential` flag to `query`/`contradictions`/`adjudicate`/`suggest-relations` CLI commands in `cli/main.py`, mirroring `--include-deprecated` (skip the predicate walk entirely when `True`)
+- [x] 1.14 REFACTOR: confirm `uv run pytest tests/unit/test_sensitivity.py tests/unit/retrieval/test_answer.py tests/unit/resolution/test_contradiction.py tests/unit/resolution/test_adjudication.py tests/unit/resolution/test_edge_typing.py tests/unit/cli/test_query.py tests/unit/cli/test_contradictions.py tests/unit/cli/test_adjudicate.py tests/unit/cli/test_suggest_relations.py -q` all green; verify no cross-import of `_`-prefixed symbols introduced
 
 ## Phase 2: S3b — Divergent Seams (PR2, base: PR1 branch)
 
