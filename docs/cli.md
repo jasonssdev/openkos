@@ -92,6 +92,7 @@ Writes are **not transactional**: each individual write is create-only or atomic
 | Flag | Meaning |
 | --- | --- |
 | `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. Extraction still runs either way — only the prompt is skipped. |
+| `--include-confidential` | Bypass the workspace `default_sensitivity` floor gate on concept extraction. By default, when the floor is `confidential` (or absent/blank), `ingest` skips extraction entirely — `llm.chat` is never called — and keeps the Source only. |
 
 `review: true` in config plus a non-TTY stdin (and no `--auto`) refuses to write rather than defaulting silently — re-run with `--auto` for unattended use.
 
@@ -107,6 +108,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | --- | --- |
 | `--limit <n>` | Max concepts to retrieve as context. Defaults to `5`. Each retriever is queried with a pool of `max(limit, 10)` before fusion truncates to `limit`. |
 | `--include-deprecated` | Include deprecated and superseded concepts in retrieval. Excluded by default from every channel (lexical, dense, graph) — the `retrieval:` stderr summary already reports the POST-filter counts. |
+| `--include-confidential` | Include confidential concepts in retrieval. Excluded by default from every channel (lexical, dense, graph) — a confidential concept is never sent to the LLM unless this flag is set. |
 
 Output is answer-first and banner-free: the answer text, then (only when at least one citation exists) a blank line, `Citations:`, and one `  → <concept_id> (<title>)` line per citation, in fused-rank order. On every completed run — successful answer or no-match — a one-line `retrieval: <n> FTS + <n> dense + <n> graph → <n> fused → LLM invoked|skipped → <n> cited` summary prints to **stderr**, so a silent short-circuit (e.g. zero hits from all three retrievers, so the LLM never ran) is always visible even though stdout stays pipe-clean. When any of the three derived indexes is absent or unavailable/corrupt this run, an additional stderr hint recommends running `openkos reindex` to enable full retrieval. When graph retrieval degraded this run specifically (absent/unopenable graph index, no seeds from the initial fusion, or the PageRank step itself failed), a separate stderr note says so — graph retrieval never affects the FTS/dense outcome. When the persisted FTS index (built at the last `reindex` run) skipped any unreadable/unparseable files, an `index:` skip-notice block follows the summary on stderr, worded as a whole-bundle build diagnostic — never implying the skipped files were candidates for the current question.
 
@@ -138,6 +140,42 @@ Output is grouped by OKF type, then HIGH before LOW, and renders each group's ty
 | `--include-deprecated` | Include deprecated and superseded concepts in candidate groups. Excluded by default — `duplicates` shares `adjudicate`'s `find_candidates` call and gets the same flag for consistency. |
 
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status`/`lint` use. Every successful read exits 0, whether or not any candidates are found. No file under the workspace is ever created, modified, or deleted, and no `--json` or other structured output mode is offered.
+
+### `openkos adjudicate` (MVP 3)
+
+**Read-only.** LLM-adjudicates the candidate groups `duplicates` reports, printing a `SAME`/`DIFFERENT`/`UNCERTAIN` verdict, confidence, and rationale per group for human review. It never merges, writes, or decides — an accepted `SAME` verdict still needs an explicit `openkos merge` call. Degrades the same way `query` does on an unreachable Ollama server or a missing model, with the same actionable stderr guidance.
+
+| Flag | Meaning |
+| --- | --- |
+| `--same-only` | Display-only filter: print only groups with a `SAME` verdict. `adjudicate_candidates` still judges every candidate group either way. |
+| `--include-deprecated` | Include deprecated and superseded concepts in candidate groups. Excluded by default — shares `duplicates`'s `find_candidates` call. |
+| `--include-confidential` | Include confidential concepts. Excluded by default — a confidential member is dropped from a group before its content is ever read, and never sent to the LLM. |
+
+### `openkos contradictions` (MVP 3)
+
+**Read-only.** LLM-detects contradictions between already-related concepts (candidate pairs drawn from the bundle's typed relation graph), printing a verdict (`CONTRADICTS`/`CONSISTENT`/`UNCERTAIN`), confidence, rationale, and the cited conflicting claims per pair. By default only high-confidence `CONTRADICTS` verdicts are shown. Degrades the same way `adjudicate`/`query` do on an unreachable Ollama server or a missing model.
+
+| Flag | Meaning |
+| --- | --- |
+| `--all` | Display-only filter: reveal every verdict regardless of type or confidence. `find_contradictions` still judges every candidate pair either way. |
+| `--include-deprecated` | Include deprecated and superseded concepts. Excluded by default — a candidate pair with either endpoint deprecated/superseded is never judged. |
+| `--include-confidential` | Include confidential concepts. Excluded by default — a candidate pair with either endpoint confidential is never judged, and never sent to the LLM. |
+
+### `openkos suggest-relations` (MVP 3)
+
+**Read-only.** LLM-suggests a relation `type` for every untyped body-link edge in the bundle, printing a suggested type and rationale per edge (or `[?]` when the suggestion is invalid) for human review. It never writes — applying a suggestion is still a separate, explicit `openkos relate <source> <type> <target>` call. Degrades the same way `adjudicate`/`query` do.
+
+| Flag | Meaning |
+| --- | --- |
+| `--include-confidential` | Include confidential concepts. Excluded by default — an untyped edge with a confidential endpoint is dropped before `llm.chat` is ever called for it. |
+
+### `openkos suggest-volatility` (MVP 3)
+
+**Read-only.** LLM-suggests a volatility `tier` for every concept `type` present in the bundle, printing a suggested tier and rationale per type (or `[?]` when the suggestion is invalid) for human review. There is no dedicated write path for this one — accepting a suggestion means hand-editing `type_tiers:` in `openkos.yaml`. Degrades the same way `suggest-relations`/`adjudicate`/`query` do.
+
+| Flag | Meaning |
+| --- | --- |
+| `--include-confidential` | Include confidential concepts. Excluded by default — a confidential concept is dropped from its type's sampled bodies before any content is shown to the LLM; a type whose docs are all confidential yields no suggestion at all. |
 
 ### `openkos merge <survivor-id> <absorbed-id>`
 

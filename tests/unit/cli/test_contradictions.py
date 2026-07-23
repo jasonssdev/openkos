@@ -46,12 +46,20 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
 
 
-def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") -> None:
+def _write_doc(
+    path: Path,
+    *,
+    doc_type: str = "Concept",
+    title: str = "Stub",
+    sensitivity_value: str | None = "private",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\ntype: {doc_type}\ntitle: {title}\n---\n# {title}\n",
-        encoding="utf-8",
-    )
+    lines = ["---", f"type: {doc_type}", f"title: {title}"]
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
+    lines.append("---")
+    lines.append(f"# {title}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_relation_doc(
@@ -60,14 +68,21 @@ def _write_relation_doc(
     title: str,
     status: str | None = None,
     relations: list[tuple[str, str]] | None = None,
+    sensitivity_value: str | None = "private",
 ) -> None:
     """Write a minimal concept `.md` file with optional lifecycle `status`
     and typed `relations` (mirrors `test_contradiction.py`'s
-    `_write_lifecycle_doc` helper, status-aware-retrieval Phase 4)."""
+    `_write_lifecycle_doc` helper, status-aware-retrieval Phase 4).
+    `sensitivity_value` defaults to `"private"` (`config.DEFAULT_SENSITIVITY`)
+    so fixtures unrelated to the sensitivity-fail-closed-filter feature are
+    never collaterally blocked by the fail-closed default; pass `None`
+    explicitly for the absent-field case."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", "type: Concept", f"title: {title}"]
     if status is not None:
         lines.append(f"status: {status}")
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
     if relations is not None:
         lines.append("relations:")
         for target, rel_type in relations:
@@ -732,6 +747,89 @@ def test_contradictions_include_deprecated_restores_the_superseded_pair(
     assert "concepts/a" in result.stdout
     assert "concepts/b" in result.stdout
     assert "fake reply" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# `--include-confidential` (sensitivity-fail-closed-filter S3a)
+# ---------------------------------------------------------------------------
+
+
+def test_contradictions_include_confidential_flag_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential` is forwarded unchanged as
+    `find_contradictions(..., include_confidential=True)` (spec:
+    `--include-confidential` Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[list[ContradictionVerdict], int]:
+        captured["kwargs"] = kwargs
+        return [], 0
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
+
+    result = runner.invoke(app, ["contradictions", "--include-confidential"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_confidential"] is True
+
+
+def test_contradictions_omitted_include_confidential_defaults_to_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `--include-confidential` forwards the safe default
+    `include_confidential=False` (spec: Confidential Excluded By Default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[list[ContradictionVerdict], int]:
+        captured["kwargs"] = kwargs
+        return [], 0
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_confidential"] is False
+
+
+def test_contradictions_include_confidential_restores_the_confidential_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real bundle with a confidential concept: by default the pair is
+    excluded (`No candidate pairs found.`), and `--include-confidential`
+    restores it, judging normally (spec: `--include-confidential` Escape
+    Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    _write_relation_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "references")],
+        sensitivity_value="confidential",
+    )
+    _write_relation_doc(bundle_dir / "concepts" / "b.md", title="B")
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeOllamaClient)
+
+    default_result = runner.invoke(app, ["contradictions"])
+    assert default_result.exit_code == 0
+    assert "No candidate pairs found." in default_result.stdout
+
+    included_result = runner.invoke(app, ["contradictions", "--include-confidential"])
+    assert included_result.exit_code == 0
+    assert "concepts/a" in included_result.stdout
+    assert "concepts/b" in included_result.stdout
+    assert "fake reply" in included_result.stdout
 
 
 # --- integration proof (real bundle: examples/good-life-demo) ---------------

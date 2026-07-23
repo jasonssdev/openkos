@@ -47,6 +47,7 @@ from openkos.resolution.contradiction import (
 from openkos.resolution.edge_typing import suggest_relations
 from openkos.resolution.volatility_typing import suggest_volatility
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
+from openkos.sensitivity import blocks_llm_send
 from openkos.state import derived, fts
 from openkos.state import reindex as reindex_module
 from openkos.state.fts import FtsUnavailable
@@ -263,6 +264,7 @@ def _stage_derived_objects(
     timestamp: str,
     bundle_dir: Path,
     llm: LLMBackend,
+    include_confidential: bool = False,
 ) -> list[_DerivedPlan]:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
@@ -312,10 +314,35 @@ def _stage_derived_objects(
     exists, build failure) is reported to stderr, per candidate (design D4
     drop transparency); a candidate dropped inside `extract_concept`'s own
     validation stays silent there, unchanged from today.
+
+    sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
+    `True`, `extract` gates on the WORKSPACE floor rather than a per-doc
+    value (a raw source has no per-doc `sensitivity` yet, unlike the other
+    five `llm.chat` seams): when `sensitivity.blocks_llm_send(sensitivity)`
+    -- i.e. the workspace's `default_sensitivity` floor is confidential (or
+    absent/blank, correction batch post-4R-review FIX 1) -- this returns `[]`
+    WITHOUT calling `extract_concept` at all, so `llm.chat` is never invoked,
+    and emits the same Source-only degrade message shape as the
+    blank-content case above. `include_confidential=True` bypasses this gate
+    entirely. This delegates to the SAME shared `blocks_llm_send` authority
+    `sensitivity.sensitive_concept_ids` uses per-doc, rather than calling
+    `okf._rank` directly on `sensitivity` -- a bare `okf._rank` call would
+    wrongly resolve a blank/whitespace `default_sensitivity: ""` to
+    `"private"` (never tripping this gate), because `okf._rank(None)`/
+    `okf._rank("")` both fall back to `"private"` for the unrelated
+    `combine_sensitivity` merge-floor use case, not this fail-closed one.
     """
     if raw_content is None or not raw_content.strip():
         typer.echo(
             "openkos ingest: source has no extractable text; keeping the Source only.",
+            err=True,
+        )
+        return []
+
+    if not include_confidential and blocks_llm_send(sensitivity):
+        typer.echo(
+            "openkos ingest: workspace default_sensitivity floor is confidential; "
+            "skipping concept extraction, keeping the Source only.",
             err=True,
         )
         return []
@@ -418,6 +445,14 @@ def ingest(
         "--auto",
         help="Skip the confirmation prompt and write immediately (unattended).",
     ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help=(
+            "Bypass the workspace default_sensitivity floor gate on concept "
+            "extraction (excluded by default)."
+        ),
+    ),
 ) -> None:
     """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
     LLM extraction of zero or more distinct derived objects, up to
@@ -468,6 +503,14 @@ def ingest(
     computed to cover the Source and every staged derived object, and a
     preview of the proposed changes -- listing the Source and every staged
     derived object -- is printed.
+
+    Unless `--include-confidential` is passed, extraction gates on the
+    WORKSPACE `default_sensitivity` floor (sensitivity-fail-closed-filter,
+    S3b): when the floor is `confidential`, `_stage_derived_objects` returns
+    `[]` WITHOUT calling `extract_concept`/`llm.chat` at all, and this
+    ingest degrades to a Source-only result -- a raw source has no per-doc
+    `sensitivity` value of its own yet, so this is the one `llm.chat` seam
+    gated on the workspace floor rather than a per-concept predicate.
 
     Confirm gate, checked in order: `--auto` skips the prompt outright;
     otherwise config `review: false` skips the prompt the same way;
@@ -622,6 +665,7 @@ def ingest(
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             bundle_dir=layout.bundle_dir,
             llm=OllamaClient(model=cfg.model),
+            include_confidential=include_confidential,
         )
         index_text = index_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
@@ -2737,6 +2781,11 @@ def adjudicate(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
 
@@ -2768,6 +2817,12 @@ def adjudicate(
     threads the flag into `find_candidates`, not into `adjudicate_candidates`
     itself.
 
+    Unless `--include-confidential` is passed, confidential concepts
+    (sensitivity-fail-closed-filter) are excluded at the MEMBER level, inside
+    `adjudicate_candidates` itself -- distinct from the deprecated axis above,
+    a confidential member is dropped from a group's `member_ids` before its
+    content is ever read, rather than dropping the whole group upstream.
+
     No file under the workspace is ever created, modified, or deleted (spec:
     Verb renders verdicts with zero writes).
     """
@@ -2793,7 +2848,10 @@ def adjudicate(
     llm = OllamaClient(model=cfg.model)
     try:
         results = adjudicate_candidates(
-            candidates, bundle_dir=layout.bundle_dir, llm=llm
+            candidates,
+            bundle_dir=layout.bundle_dir,
+            llm=llm,
+            include_confidential=include_confidential,
         )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -2847,7 +2905,13 @@ def adjudicate(
 
 
 @app.command("suggest-relations")
-def suggest_relations_cmd() -> None:
+def suggest_relations_cmd(
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
+) -> None:
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
     edge: read-only, like `adjudicate`.
 
@@ -2880,6 +2944,11 @@ def suggest_relations_cmd() -> None:
     `OllamaModelNotFound`, then the generic `OllamaError` fallback -- each
     with its own actionable stderr message, exit 1, and zero writes.
 
+    Unless `--include-confidential` is passed, an untyped edge with a
+    confidential endpoint (sensitivity-fail-closed-filter) is excluded from
+    candidates -- dropped by `suggest_relations` before `llm.chat` is ever
+    called for it.
+
     No file under the workspace is ever created, modified, or deleted
     (spec: Verb performs zero writes).
     """
@@ -2901,7 +2970,9 @@ def suggest_relations_cmd() -> None:
 
     llm = OllamaClient(model=cfg.model)
     try:
-        results = suggest_relations(layout.bundle_dir, llm=llm)
+        results = suggest_relations(
+            layout.bundle_dir, llm=llm, include_confidential=include_confidential
+        )
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos suggest-relations: failed -- {exc}. Start it with "
@@ -2948,7 +3019,13 @@ def suggest_relations_cmd() -> None:
 
 
 @app.command("suggest-volatility")
-def suggest_volatility_cmd() -> None:
+def suggest_volatility_cmd(
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
+) -> None:
     """LLM-suggest a volatility `tier` for every concept TYPE present in the
     bundle: read-only, like `suggest-relations`.
 
@@ -2979,6 +3056,12 @@ def suggest_volatility_cmd() -> None:
     then `OllamaModelNotFound`, then the generic `OllamaError` fallback --
     each with its own actionable stderr message, exit 1, and zero writes.
 
+    Unless `--include-confidential` is passed, a confidential concept
+    (sensitivity-fail-closed-filter) is excluded from sampling for its type
+    -- dropped by `suggest_volatility` before its body is ever shown to the
+    LLM. A type whose docs are all confidential yields no suggestion for
+    that type at all.
+
     No file under the workspace is ever created, modified, or deleted
     (spec: Verb performs zero writes).
     """
@@ -3002,7 +3085,9 @@ def suggest_volatility_cmd() -> None:
 
     llm = OllamaClient(model=cfg.model)
     try:
-        results = suggest_volatility(layout.bundle_dir, llm=llm)
+        results = suggest_volatility(
+            layout.bundle_dir, llm=llm, include_confidential=include_confidential
+        )
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos suggest-volatility: failed -- {exc}. Start it with "
@@ -3058,6 +3143,11 @@ def contradictions(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
 ) -> None:
     """LLM-detect contradictions between already-related concepts: read-only,
     like `adjudicate`/`suggest-relations`/`suggest-volatility`.
@@ -3101,6 +3191,10 @@ def contradictions(
     `find_contradictions` before any pair is judged, so the LLM is never
     invoked on them.
 
+    Unless `--include-confidential` is passed, confidential concepts
+    (sensitivity-fail-closed-filter) likewise never appear in a candidate
+    pair, dropped by `find_contradictions` the same way.
+
     No file under the workspace is ever created, modified, or deleted
     (spec: Read-Only `contradictions` CLI Verb).
     """
@@ -3123,7 +3217,10 @@ def contradictions(
     llm = OllamaClient(model=cfg.model)
     try:
         verdicts, total_pairs = find_contradictions(
-            layout.bundle_dir, llm=llm, include_deprecated=include_deprecated
+            layout.bundle_dir,
+            llm=llm,
+            include_deprecated=include_deprecated,
+            include_confidential=include_confidential,
         )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -3302,6 +3399,11 @@ def query(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
 ) -> None:
     """Answer a natural-language question from the compiled bundle, with citations.
 
@@ -3356,6 +3458,10 @@ def query(
     and every count in it (FTS/dense/graph/fused/cited) already report the
     POST-filter values, since filtering happens inside `answer()` before
     those counts are captured.
+
+    Unless `--include-confidential` is passed, confidential concepts
+    (sensitivity-fail-closed-filter) are likewise excluded from every
+    retrieval channel before fusion, exactly like a deprecated concept.
     """
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -3395,6 +3501,7 @@ def query(
                 graph_index=graph_index,
                 limit=limit,
                 include_deprecated=include_deprecated,
+                include_confidential=include_confidential,
             )
         except OllamaUnavailable as exc:
             typer.echo(

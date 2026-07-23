@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from openkos import lifecycle
+from openkos import lifecycle, sensitivity
 from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
@@ -61,11 +61,25 @@ class _FakeGraphStore:
         raise NotImplementedError("not exercised by _candidate_pairs")
 
 
-def _write_doc(path: Path, *, title: str = "Stub", body: str = "Body.") -> None:
+def _write_doc(
+    path: Path,
+    *,
+    title: str = "Stub",
+    body: str = "Body.",
+    sensitivity_value: str | None = "private",
+) -> None:
+    """`sensitivity_value` defaults to `"private"` (`config.DEFAULT_SENSITIVITY`,
+    matching what a real `ingest` always writes) so fixtures unrelated to the
+    sensitivity-fail-closed-filter feature are never collaterally blocked by
+    the fail-closed default; pass `None` explicitly for the absent-field
+    case."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\ntype: Concept\ntitle: {title}\n---\n{body}", encoding="utf-8"
-    )
+    lines = ["---", "type: Concept", f"title: {title}"]
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
+    lines.append("---")
+    frontmatter = "\n".join(lines) + "\n"
+    path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
 
 def _write_lifecycle_doc(
@@ -75,15 +89,20 @@ def _write_lifecycle_doc(
     body: str = "Body.",
     status: str | None = None,
     relations: list[tuple[str, str]] | None = None,
+    sensitivity_value: str | None = "private",
 ) -> None:
     """`_write_doc` plus optional `status`/`relations` frontmatter
     (status-aware-retrieval, Phase 3) -- `relations` is a list of `(target,
     type)` pairs, mirroring `test_answer.py`'s/`test_lifecycle.py`'s helper
-    so every lifecycle-fixture-building test module shares the same shape."""
+    so every lifecycle-fixture-building test module shares the same shape.
+    `sensitivity_value` defaults to `"private"` for the same collateral-safety
+    reason as `_write_doc`."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", "type: Concept", f"title: {title}"]
     if status is not None:
         lines.append(f"status: {status}")
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
     if relations is not None:
         lines.append("relations:")
         for target, rel_type in relations:
@@ -508,13 +527,14 @@ def test_find_contradictions_reads_graph_and_judges_one_typed_pair(
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: A\n"
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: references\n"
         "---\nA claims the meeting is on Tuesday.\n",
         encoding="utf-8",
     )
     (bundle_dir / "concepts" / "b.md").write_text(
-        "---\ntype: Concept\ntitle: B\n---\nB claims the meeting is on Wednesday.\n",
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\n"
+        "B claims the meeting is on Wednesday.\n",
         encoding="utf-8",
     )
     llm = _FakeLLM(replies=[_valid_reply()])
@@ -538,13 +558,13 @@ def test_find_contradictions_symmetric_edges_judged_exactly_once(
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: A\n"
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: references\n"
         "---\nBody A.\n",
         encoding="utf-8",
     )
     (bundle_dir / "concepts" / "b.md").write_text(
-        "---\ntype: Concept\ntitle: B\n"
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n"
         "relations:\n  - target: concepts/a\n    type: related_to\n"
         "---\nBody B.\n",
         encoding="utf-8",
@@ -569,11 +589,12 @@ def test_find_contradictions_malformed_reply_degrades_only_that_pair(
     (bundle_dir / "concepts").mkdir()
     for name in ("a", "b", "c", "d"):
         (bundle_dir / "concepts" / f"{name}.md").write_text(
-            f"---\ntype: Concept\ntitle: {name.upper()}\n---\nBody {name}.\n",
+            f"---\ntype: Concept\ntitle: {name.upper()}\nsensitivity: private\n---\n"
+            f"Body {name}.\n",
             encoding="utf-8",
         )
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: A\n"
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: references\n"
         "  - target: concepts/c\n    type: references\n"
         "---\nBody A.\n",
@@ -605,13 +626,14 @@ def test_find_contradictions_ollama_error_propagates_unswallowed(
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: A\n"
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: references\n"
         "---\nBody A.\n",
         encoding="utf-8",
     )
     (bundle_dir / "concepts" / "b.md").write_text(
-        "---\ntype: Concept\ntitle: B\n---\nBody B.\n", encoding="utf-8"
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody B.\n",
+        encoding="utf-8",
     )
     llm = _FakeLLM(error=OllamaUnavailable("not reachable"))
 
@@ -656,13 +678,14 @@ def test_find_contradictions_calls_llm_once_per_capped_candidate_pair(
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: A\n"
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: references\n"
         "---\nBody A.\n",
         encoding="utf-8",
     )
     (bundle_dir / "concepts" / "b.md").write_text(
-        "---\ntype: Concept\ntitle: B\n---\nBody B.\n", encoding="utf-8"
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody B.\n",
+        encoding="utf-8",
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="uncertain")])
 
@@ -679,13 +702,14 @@ def test_find_contradictions_builds_a_two_message_json_only_prompt(
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: Alpha\n"
+        "---\ntype: Concept\ntitle: Alpha\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: references\n"
         "---\nAlpha body text.\n",
         encoding="utf-8",
     )
     (bundle_dir / "concepts" / "b.md").write_text(
-        "---\ntype: Concept\ntitle: Beta\n---\nBeta body text.\n", encoding="utf-8"
+        "---\ntype: Concept\ntitle: Beta\nsensitivity: private\n---\nBeta body text.\n",
+        encoding="utf-8",
     )
     llm = _FakeLLM(replies=[_valid_reply()])
 
@@ -1052,3 +1076,127 @@ def test_all_live_bundle_is_identical_with_and_without_include_deprecated(
     )
 
     assert default_result == included_result
+
+
+# ---------------------------------------------------------------------------
+# sensitivity-fail-closed-filter, S3a/PR1: confidential concepts excluded
+# from contradiction candidates
+# ---------------------------------------------------------------------------
+
+
+def test_pair_touching_a_confidential_concept_is_excluded_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pair where either side is `sensitivity: confidential` never reaches
+    `llm.chat` (spec: Confidential excluded from adjudicate/contradictions/
+    suggest-relations)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        sensitivity_value="confidential",
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    _write_doc(bundle_dir / "concepts" / "c.md", title="C")
+    fake_store: GraphStore = _FakeGraphStore(
+        [
+            Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel"),
+            Edge(source_id="concepts/b", target_id="concepts/c", relation_type="rel"),
+        ]
+    )
+    monkeypatch.setattr(
+        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(fake_store)
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+
+    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert len(verdicts) == 1
+    assert verdicts[0].pair_ids == ("concepts/b", "concepts/c")
+    assert len(llm.calls) == 1
+
+
+def test_include_confidential_true_restores_the_confidential_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential`'s library seam, `include_confidential=True`,
+    restores a pair touching a confidential concept, judging it normally
+    (spec: `--include-confidential` Escape Flag)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        sensitivity_value="confidential",
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    fake_store: GraphStore = _FakeGraphStore(
+        [Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel")]
+    )
+    monkeypatch.setattr(
+        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(fake_store)
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+
+    verdicts, _total = contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, include_confidential=True
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].pair_ids == ("concepts/a", "concepts/b")
+
+
+def test_include_confidential_true_never_calls_the_sensitivity_predicate_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_confidential=True` skips `sensitivity.sensitive_concept_ids`
+    entirely (spy) -- the escape flag is the zero-cost path (design R1)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, include_confidential=True
+    )
+
+    assert walk_calls == []
+
+
+def test_default_include_confidential_false_calls_the_sensitivity_predicate_walk_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default `include_confidential=False` DOES call
+    `sensitivity.sensitive_concept_ids` exactly once per `find_contradictions`
+    call."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    llm = _FakeLLM(replies=[])
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert walk_calls == [bundle_dir]

@@ -64,7 +64,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from openkos import lifecycle
+from openkos import lifecycle, sensitivity
 from openkos.graph.base import GraphStore
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
@@ -159,16 +159,47 @@ class AnswerResult:
 
 
 def _assemble_context(
-    bundle_dir: Path, concept_ids: list[str]
+    bundle_dir: Path,
+    concept_ids: list[str],
+    blocked: frozenset[str] = frozenset(),
+    *,
+    include_confidential: bool = False,
 ) -> tuple[list[str], list[Citation]]:
     """Guarded per-hit re-read (D2): re-read + re-parse each fused
     `concept_id`'s doc, skipping anything unreadable or unparseable rather
     than raising. Returns one labeled context block and one `Citation` per
     successfully read concept, both in fused-rank order.
+
+    sensitivity-fail-closed-filter (S3b, defense-in-depth): any `concept_id`
+    present in `blocked` is ALSO skipped here, even though it is normally
+    already excluded upstream at the hit-seam filter -- this is a redundant
+    post-filter safety net (spec: Exclusion, Not Redaction), never the
+    primary enforcement point. Defaults to an empty frozenset, a total
+    no-op, preserving byte-identical behavior for every caller that never
+    passes one.
+
+    Correction batch (post-4R-review, FIX 2 -- R4 walk-bypass leak, CRITICAL):
+    the `blocked` set above is itself derived from ONE `okf._iter_docs` walk
+    (`sensitivity.sensitive_concept_ids`), which can silently drop a subtree
+    it cannot list (`okf.py`'s documented `_walk_errors` case) -- a doc
+    invisible to that walk is never in `blocked`, yet is still directly
+    readable by path here (a known path needs only the directory's x-bit,
+    not r-bit, to open). Unless `include_confidential` is `True`, THIS
+    function therefore also re-checks each doc's OWN freshly re-read
+    frontmatter against `sensitivity.blocks_llm_send` -- walk-independent
+    defense-in-depth at the actual `llm.chat` send point, never dependent on
+    whether the walk happened to see this doc at all. `include_confidential`
+    mirrors `answer()`'s own flag exactly (skips this re-check entirely,
+    restoring byte-identical opt-in behavior), so a caller that passes
+    neither `blocked` nor `include_confidential` still gets today's
+    unfiltered behavior for every OTHER concern, but is NEVER silently
+    exposed to a confidential doc the walk missed.
     """
     context_blocks: list[str] = []
     citations: list[Citation] = []
     for concept_id in concept_ids:
+        if concept_id in blocked:
+            continue
         try:
             text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -176,6 +207,10 @@ def _assemble_context(
         try:
             metadata, body = okf.load_frontmatter(text)
         except Exception:  # noqa: S112 -- broad: any parse failure skips this hit (D2)
+            continue
+        if not include_confidential and sensitivity.blocks_llm_send(
+            metadata.get("sensitivity")
+        ):
             continue
         title = str(metadata.get("title") or "") or concept_id
         context_blocks.append(f"[concept_id: {concept_id} — {title}]\n{body}")
@@ -306,6 +341,7 @@ def answer(
     graph_index: GraphStore | None = None,
     limit: int = 5,
     include_deprecated: bool = False,
+    include_confidential: bool = False,
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
@@ -343,6 +379,19 @@ def answer(
     contract) -- neither this module nor any of its imports references
     `state/derived.py` at all; a properly-`reindex`ed handle is always
     treated as fresh here.
+
+    sensitivity-fail-closed-filter (S3a): unless `include_confidential` is
+    `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
+    predicate is likewise computed ONCE and unioned with the `deprecated` set
+    before filtering `hits`/`vec_hits`/`graph_hits` -- a confidential concept
+    is excluded from every retrieval channel exactly like a deprecated one,
+    and `include_confidential=True` independently skips its own predicate
+    walk at zero added cost. Correction batch (post-4R-review, FIX 2): that
+    predicate is a SINGLE `okf._iter_docs` walk and can silently miss a doc
+    under a subtree it cannot list, so `_assemble_context` ALSO
+    independently re-checks each doc's own freshly re-read frontmatter at
+    the actual send point -- see its own docstring for the walk-independent
+    defense-in-depth this adds.
     """
     if not question.split():
         return AnswerResult(
@@ -362,14 +411,22 @@ def answer(
         question, embedder=embedder, vector_store=vector_store, pool_limit=limit_pool
     )
 
-    # status-aware-retrieval (Phase 2): compute the shared predicate ONCE,
-    # only when filtering is actually needed -- `include_deprecated=True`
-    # skips the walk entirely (design R1, zero-cost escape path).
+    # status-aware-retrieval (Phase 2) + sensitivity-fail-closed-filter (S3a):
+    # compute each shared predicate ONCE, only when its own filtering is
+    # actually needed -- `include_deprecated=True`/`include_confidential=True`
+    # each independently skip their own walk entirely (design R1, zero-cost
+    # escape path). The two excluded-id sets are unioned before filtering, so
+    # `lifecycle.filter_hits` (axis-agnostic) is still called exactly once per
+    # hit list.
     deprecated: frozenset[str] = frozenset()
     if not include_deprecated:
         deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
-        hits = lifecycle.filter_hits(hits, deprecated)
-        vec_hits = lifecycle.filter_hits(vec_hits, deprecated)
+    confidential: frozenset[str] = frozenset()
+    if not include_confidential:
+        confidential = sensitivity.sensitive_concept_ids(bundle_dir)
+    excluded = deprecated | confidential
+    hits = lifecycle.filter_hits(hits, excluded)
+    vec_hits = lifecycle.filter_hits(vec_hits, excluded)
 
     initial_fused = fusion.fuse(hits, vec_hits)
     seeds = initial_fused[: min(limit, 5)]
@@ -377,13 +434,17 @@ def answer(
         graph_hits, graph_degraded = _graph_search(
             graph_index, seeds, limit=pool.pool_limit(limit)
         )
-        if not include_deprecated:
-            graph_hits = lifecycle.filter_hits(graph_hits, deprecated)
+        graph_hits = lifecycle.filter_hits(graph_hits, excluded)
     else:
         graph_hits, graph_degraded = [], True
 
     fused_ids = fusion.fuse(hits, vec_hits, graph_hits)[:limit]
-    context_blocks, citations = _assemble_context(bundle_dir, fused_ids)
+    context_blocks, citations = _assemble_context(
+        bundle_dir,
+        fused_ids,
+        confidential,
+        include_confidential=include_confidential,
+    )
 
     if not context_blocks:
         return AnswerResult(

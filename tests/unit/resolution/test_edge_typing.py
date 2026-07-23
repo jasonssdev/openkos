@@ -56,11 +56,25 @@ class _FakeGraphStore:
         raise NotImplementedError("not exercised by untyped_edges")
 
 
-def _write_doc(path: Path, *, title: str = "Stub", body: str = "Body.") -> None:
+def _write_doc(
+    path: Path,
+    *,
+    title: str = "Stub",
+    body: str = "Body.",
+    sensitivity_value: str | None = "private",
+) -> None:
+    """`sensitivity_value` defaults to `"private"` (`config.DEFAULT_SENSITIVITY`,
+    matching what a real `ingest` always writes) so fixtures unrelated to the
+    sensitivity-fail-closed-filter feature are never collaterally blocked by
+    the fail-closed default; pass `None` explicitly for the absent-field
+    case."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\ntype: Concept\ntitle: {title}\n---\n{body}", encoding="utf-8"
-    )
+    lines = ["---", "type: Concept", f"title: {title}"]
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
+    lines.append("---")
+    frontmatter = "\n".join(lines) + "\n"
+    path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
 
 def _valid_reply(rel_type: str = "references", rationale: str = "mentions it") -> str:
@@ -438,16 +452,18 @@ def test_suggest_relations_reads_graph_filters_untyped_and_delegates(
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: A\n"
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: references\n"
         "---\nSee [C](/concepts/c.md) for more.\n",
         encoding="utf-8",
     )
     (bundle_dir / "concepts" / "b.md").write_text(
-        "---\ntype: Concept\ntitle: B\n---\nBody.\n", encoding="utf-8"
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
     )
     (bundle_dir / "concepts" / "c.md").write_text(
-        "---\ntype: Concept\ntitle: C\n---\nBody.\n", encoding="utf-8"
+        "---\ntype: Concept\ntitle: C\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
     )
     llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions C")])
 
@@ -473,16 +489,18 @@ def test_suggest_relations_excludes_untyped_edge_when_pair_already_typed(
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: A\n"
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
         "relations:\n  - target: concepts/b\n    type: references\n"
         "---\nAlso see [B](/concepts/b.md) again, and [C](/concepts/c.md).\n",
         encoding="utf-8",
     )
     (bundle_dir / "concepts" / "b.md").write_text(
-        "---\ntype: Concept\ntitle: B\n---\nBody.\n", encoding="utf-8"
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
     )
     (bundle_dir / "concepts" / "c.md").write_text(
-        "---\ntype: Concept\ntitle: C\n---\nBody.\n", encoding="utf-8"
+        "---\ntype: Concept\ntitle: C\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
     )
     llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions C")])
 
@@ -502,7 +520,8 @@ def test_suggest_relations_on_bundle_with_no_untyped_edges_returns_empty(
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     (bundle_dir / "concepts" / "a.md").write_text(
-        "---\ntype: Concept\ntitle: A\n---\nNo links here.\n", encoding="utf-8"
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n---\nNo links here.\n",
+        encoding="utf-8",
     )
     llm = _FakeLLM()
 
@@ -510,3 +529,115 @@ def test_suggest_relations_on_bundle_with_no_untyped_edges_returns_empty(
 
     assert result == []
     assert llm.calls == []
+
+
+# ---------------------------------------------------------------------------
+# sensitivity-fail-closed-filter, S3a/PR1: confidential endpoints excluded
+# from suggest-relations
+# ---------------------------------------------------------------------------
+
+
+def test_edge_with_confidential_endpoint_excluded_by_default(tmp_path: Path) -> None:
+    """An untyped edge whose SOURCE is `sensitivity: confidential` never
+    reaches `llm.chat` (spec: Confidential excluded from adjudicate/
+    contradictions/suggest-relations)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: confidential\n---\n"
+        "See [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM()
+
+    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+
+    assert result == []
+    assert llm.calls == []
+
+
+def test_include_confidential_true_restores_the_confidential_edge(
+    tmp_path: Path,
+) -> None:
+    """`include_confidential=True` restores an edge with a confidential
+    endpoint, suggesting it normally (spec: `--include-confidential` Escape
+    Flag)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: confidential\n---\n"
+        "See [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions B")])
+
+    result = edge_typing_mod.suggest_relations(
+        bundle_dir, llm=llm, include_confidential=True
+    )
+
+    assert len(result) == 1
+    assert result[0].edge.source_id == "concepts/a"
+    assert result[0].edge.target_id == "concepts/b"
+
+
+def test_include_confidential_true_never_calls_the_predicate_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_confidential=True` skips `sensitivity.sensitive_concept_ids`
+    entirely (spy) -- the escape flag is the zero-cost path (design R1)."""
+    from openkos import sensitivity
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    llm = _FakeLLM()
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    edge_typing_mod.suggest_relations(bundle_dir, llm=llm, include_confidential=True)
+
+    assert walk_calls == []
+
+
+def test_default_include_confidential_false_calls_the_predicate_walk_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default `include_confidential=False` DOES call
+    `sensitivity.sensitive_concept_ids` exactly once per `suggest_relations`
+    call."""
+    from openkos import sensitivity
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+    llm = _FakeLLM()
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+
+    assert walk_calls == [bundle_dir]

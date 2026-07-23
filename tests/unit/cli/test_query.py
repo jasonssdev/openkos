@@ -47,14 +47,26 @@ class _FakeOllamaClient:
         return "a fake answer"
 
 
-def _write_query_doc(path: Path, *, title: str, status: str | None = None) -> None:
+def _write_query_doc(
+    path: Path,
+    *,
+    title: str,
+    status: str | None = None,
+    sensitivity_value: str | None = "private",
+) -> None:
     """Write a minimal concept `.md` file whose body is indexable by the real
     FTS index, with an optional lifecycle `status` (status-aware-retrieval
-    Phase 4)."""
+    Phase 4). `sensitivity_value` defaults to `"private"`
+    (`config.DEFAULT_SENSITIVITY`) so fixtures unrelated to the
+    sensitivity-fail-closed-filter feature are never collaterally blocked by
+    the fail-closed default; pass `None` explicitly for the absent-field
+    case."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", "type: Concept", f"title: {title}", "description: ''"]
     if status is not None:
         lines.append(f"status: {status}")
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
     lines.append("---")
     lines.append("dichotomyzz")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1226,6 +1238,72 @@ def test_query_retrieval_stderr_include_deprecated_reports_post_filter_fts_count
     assert result.stderr.startswith(
         "retrieval: 2 FTS + 0 dense + 0 graph → 2 fused → LLM invoked → 2 cited\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# `--include-confidential` (sensitivity-fail-closed-filter S3a)
+# ---------------------------------------------------------------------------
+
+
+def test_query_include_confidential_flag_forwarded_as_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential` is forwarded unchanged as
+    `answer(..., include_confidential=True)` (spec: `--include-confidential`
+    Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(
+        app, ["query", "what is stoicism?", "--include-confidential"]
+    )
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_confidential"] is True
+
+
+def test_query_omitted_include_confidential_defaults_to_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `--include-confidential` forwards the safe default
+    `include_confidential=False` (spec: Confidential Excluded By Default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_confidential"] is False
 
 
 def test_query_docstring_no_longer_claims_no_persisted_state() -> None:

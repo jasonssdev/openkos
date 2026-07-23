@@ -904,6 +904,106 @@ def test_sensitivity_matches_config_default(
     assert metadata["sensitivity"] == "confidential"
 
 
+# --- sensitivity-fail-closed-filter, S3b: extract floor gate --------------
+
+
+def test_confidential_default_sensitivity_floor_skips_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`default_sensitivity: confidential` short-circuits BEFORE
+    `extract_concept`/`llm.chat` is ever called, returns a Source-only
+    result, and emits the existing "keeping the Source only" degrade message
+    (spec: Confidential floor skips extract's llm.chat call)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "keeping the Source only" in result.stderr
+    assert fake.calls == []
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert not concept_path.exists()
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert source_path.is_file()
+
+
+def test_private_default_sensitivity_floor_calls_llm_chat_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`default_sensitivity: private` (the packaged default) proceeds to
+    call `extract_concept`/`llm.chat` exactly as before this change (spec:
+    Private floor proceeds unchanged)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 1
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+
+
+def test_blank_default_sensitivity_still_trips_the_confidential_floor_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank/whitespace `default_sensitivity: ""` MUST still be treated as
+    confidential-or-more-restrictive and skip extraction -- `okf._rank("")`
+    alone resolves to `"private"` (the merge-floor default), which would
+    wrongly leave the gate untripped and send raw source text to `llm.chat`
+    (correction batch, post-4R-review FIX 1: extract floor-gate fail-open)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", 'default_sensitivity: ""'
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "keeping the Source only" in result.stderr
+    assert fake.calls == []
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert not concept_path.exists()
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert source_path.is_file()
+
+
+def test_include_confidential_bypasses_the_confidential_floor_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential` bypasses the `default_sensitivity:
+    confidential` floor gate: `extract_concept`/`llm.chat` IS called, and the
+    derived object is written, even at a confidential floor (spec:
+    `--include-confidential` Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["ingest", "notes.txt", "--auto", "--include-confidential"]
+    )
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 1
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+
+
 # --- Extraction (WU4, Phase 5-6): LLM Concept/Entity extraction ------------
 
 
@@ -1690,11 +1790,15 @@ def test_derived_object_inherits_source_sensitivity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The derived object's `sensitivity` equals the Source's configured
-    `default_sensitivity` (scenario: provenance and sensitivity
-    inherited)."""
+    `default_sensitivity` (scenario: provenance and sensitivity inherited).
+    Uses `public`, not `confidential` -- since sensitivity-fail-closed-filter
+    S3b, a `confidential` floor short-circuits extraction entirely (see
+    `test_confidential_default_sensitivity_floor_skips_extraction`), so
+    `public` is the non-default value that still proves genuine inheritance
+    rather than merely matching the packaged default."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
-        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
     )
     _patch_llm(monkeypatch, _concept_reply())
     source = tmp_path / "notes.txt"
@@ -1705,7 +1809,7 @@ def test_derived_object_inherits_source_sensitivity(
     assert result.exit_code == 0
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
-    assert metadata["sensitivity"] == "confidential"
+    assert metadata["sensitivity"] == "public"
 
 
 def test_symbol_only_title_slugifies_empty_degrades_to_source_only(

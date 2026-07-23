@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from openkos import sensitivity
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.llm.base import LLMBackend, Message
@@ -257,13 +258,32 @@ def suggest_edge_types(
     return results
 
 
-def suggest_relations(bundle_dir: Path, *, llm: LLMBackend) -> list[EdgeSuggestion]:
+def suggest_relations(
+    bundle_dir: Path, *, llm: LLMBackend, include_confidential: bool = False
+) -> list[EdgeSuggestion]:
     """Orchestrate the whole read-only suggestion flow: open `build_graph`
     over `bundle_dir` internally, narrow down to the candidate set
     (`_candidate_edges`: untyped edges whose pair is not already typed
     elsewhere), and delegate to `suggest_edge_types` -- the only entry point
     the CLI verb calls (design D2: the `graph` read is encapsulated here so
-    `cli/main.py` never imports `openkos.graph` directly)."""
+    `cli/main.py` never imports `openkos.graph` directly).
+
+    sensitivity-fail-closed-filter (S3a): unless `include_confidential` is
+    `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
+    predicate is computed ONCE and any candidate edge whose source OR target
+    is blocked is dropped BEFORE `suggest_edge_types`/`_load_doc` ever reads
+    it -- a confidential endpoint's content never reaches the prompt.
+    `include_confidential=True` skips the predicate walk entirely, at zero
+    added cost."""
+    blocked: frozenset[str] = frozenset()
+    if not include_confidential:
+        blocked = sensitivity.sensitive_concept_ids(bundle_dir)
+
     with build_graph(bundle_dir) as store:
         edges = _candidate_edges(store)
+    edges = [
+        edge
+        for edge in edges
+        if edge.source_id not in blocked and edge.target_id not in blocked
+    ]
     return suggest_edge_types(edges, bundle_dir=bundle_dir, llm=llm)

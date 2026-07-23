@@ -54,7 +54,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from openkos import lifecycle
+from openkos import lifecycle, sensitivity
 from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.llm.base import LLMBackend, Message
@@ -365,7 +365,11 @@ def is_high_confidence_contradiction(verdict: ContradictionVerdict) -> bool:
 
 
 def find_contradictions(
-    bundle_dir: Path, *, llm: LLMBackend, include_deprecated: bool = False
+    bundle_dir: Path,
+    *,
+    llm: LLMBackend,
+    include_deprecated: bool = False,
+    include_confidential: bool = False,
 ) -> tuple[list[ContradictionVerdict], int]:
     """Orchestrate the whole read-only contradiction-detection flow: open
     `build_graph` over `bundle_dir` internally, derive candidate pairs
@@ -397,10 +401,18 @@ def find_contradictions(
     and passes an empty set, restoring today's status-blind behavior
     byte-for-byte.
 
+    sensitivity-fail-closed-filter (S3a): unless `include_confidential=True`,
+    the shared `sensitivity.sensitive_concept_ids(bundle_dir)` predicate is
+    likewise computed ONCE and unioned with the deprecated set BEFORE it is
+    passed into `_candidate_pairs` -- a confidential concept is excluded from
+    a candidate pair exactly like a deprecated one, and
+    `include_confidential=True` independently skips its own predicate walk at
+    zero added cost.
+
     A pair with zero candidate pairs (e.g. no typed edges at all, or every
-    typed-edge pair touches a deprecated concept) returns `([], total)`
-    WITHOUT calling `llm.chat` -- there is nothing to judge. Any
-    `OllamaError`-family exception raised by `llm.chat` propagates
+    typed-edge pair touches a deprecated/confidential concept) returns
+    `([], total)` WITHOUT calling `llm.chat` -- there is nothing to judge.
+    Any `OllamaError`-family exception raised by `llm.chat` propagates
     unswallowed (module docstring) -- this function catches only
     reply-parsing/validation failures for a single pair, never transport or
     model-availability errors, and a malformed reply for one pair never
@@ -408,9 +420,13 @@ def find_contradictions(
     deprecated: frozenset[str] = frozenset()
     if not include_deprecated:
         deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+    confidential: frozenset[str] = frozenset()
+    if not include_confidential:
+        confidential = sensitivity.sensitive_concept_ids(bundle_dir)
+    excluded = deprecated | confidential
 
     with build_graph(bundle_dir) as store:
-        pairs, total_count = _candidate_pairs(store, deprecated)
+        pairs, total_count = _candidate_pairs(store, excluded)
         relation_types = _pair_relation_types(store)
 
     verdicts: list[ContradictionVerdict] = []

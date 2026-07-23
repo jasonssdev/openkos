@@ -26,11 +26,14 @@ def _write_doc(
     doc_type: str = "Concept",
     body: str = "",
     volatility: str | None = None,
+    sensitivity_value: str | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frontmatter = f"---\ntype: {doc_type}\ntitle: Stub\n"
     if volatility is not None:
         frontmatter += f"volatility: {volatility}\n"
+    if sensitivity_value is not None:
+        frontmatter += f"sensitivity: {sensitivity_value}\n"
     frontmatter += "---\n"
     path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
