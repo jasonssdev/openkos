@@ -636,3 +636,61 @@ def test_default_include_confidential_false_calls_the_predicate_walk_once(
     adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
 
     assert walk_calls == [tmp_path]
+
+
+# ---------------------------------------------------------------------------
+# directory-walk-observability follow-up: `_load_members` leak-closure
+# re-check
+# ---------------------------------------------------------------------------
+
+
+def test_load_members_independently_excludes_a_confidential_member_the_walk_never_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_load_members` re-checks EACH member's own frontmatter at re-read
+    time, independent of the precomputed confidential-id set built during
+    the walk -- a confidential member the walk silently missed (e.g. an
+    unlistable subtree, `okf.py`'s documented `_walk_errors` case) but still
+    directly readable by path MUST still be excluded from the `llm.chat`
+    prompt (mirrors `retrieval/answer.py`'s `_assemble_context` re-check,
+    correction batch FIX 2)."""
+    from openkos import sensitivity
+
+    _write_doc(tmp_path / "a.md", title="A", sensitivity_value="confidential")
+    _write_doc(tmp_path / "b.md", title="B", sensitivity_value="private")
+    group = _group("a", "b")
+    # Simulate the walk missing "a"'s subtree entirely: the precomputed
+    # confidential-id set is empty, so "a" is NOT dropped from `member_ids`
+    # upstream -- the independent per-member re-check in `_load_members` is
+    # the ONLY thing standing between "a"'s content and `llm.chat`.
+    monkeypatch.setattr(
+        sensitivity, "sensitive_concept_ids", lambda *a, **k: frozenset()
+    )
+    llm = _FakeLLM(replies=[_valid_reply("same", 0.9, "match")])
+
+    adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
+
+    assert len(llm.calls) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "[a — A]" not in message["content"]
+    assert "[b — B]" in message["content"]
+
+
+def test_include_confidential_true_bypasses_the_load_members_recheck(
+    tmp_path: Path,
+) -> None:
+    """`include_confidential=True` bypasses the independent `_load_members`
+    re-check too, restoring byte-identical pre-filter behavior (not just at
+    the upstream predicate-walk filter)."""
+    _write_doc(tmp_path / "a.md", title="A", sensitivity_value="confidential")
+    _write_doc(tmp_path / "b.md", title="B", sensitivity_value="private")
+    group = _group("a", "b")
+    llm = _FakeLLM(replies=[_valid_reply("same", 0.9, "match")])
+
+    adjudication_mod.adjudicate_candidates(
+        [group], bundle_dir=tmp_path, llm=llm, include_confidential=True
+    )
+
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "[a — A]" in message["content"]
+    assert "[b — B]" in message["content"]

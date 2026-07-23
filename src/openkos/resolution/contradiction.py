@@ -200,14 +200,34 @@ def _pair_relation_types(store: GraphStore) -> dict[tuple[str, str], str]:
     return mapping
 
 
-def _load_doc(bundle_dir: Path, concept_id: str) -> tuple[str, str]:
+def _load_doc(
+    bundle_dir: Path, concept_id: str, *, include_confidential: bool = False
+) -> tuple[str, str]:
     """Guarded single-doc re-read (module-local copy of
     `edge_typing._load_doc` -- no cross-import of its `_`-prefixed symbols,
     design D4): returns `(title, body)` for `concept_id`'s document under
     `bundle_dir`. An unreadable or unparseable document -- including a
     dangling edge endpoint with no document at all -- degrades to
     `(concept_id, "")` rather than raising or skipping the pair; the caller
-    always gets something to prompt with."""
+    always gets something to prompt with.
+
+    sensitivity-fail-closed-filter (directory-walk-observability follow-up,
+    defense-in-depth): after re-reading this doc's OWN frontmatter, also
+    independently re-checks it via `sensitivity.should_block` --
+    walk-independent, so a doc the `sensitive_concept_ids` walk silently
+    missed (an unlistable subtree, `okf.py`'s documented `_walk_errors`
+    case) is still degraded to `(concept_id, "")` here, never entering the
+    `llm.chat` payload. `include_confidential=True` skips this re-check
+    identically to how it skips the upstream `_candidate_pairs` filter,
+    mirroring `retrieval/answer.py`'s `_assemble_context` (answer.py:
+    211-214).
+
+    Correction batch (post-4R-review readability FIX 1): the re-check now
+    calls the centralized `sensitivity.should_block(metadata,
+    include_confidential=...)` predicate instead of inlining `not
+    include_confidential and sensitivity.blocks_llm_send(...)` directly --
+    behavior-preserving; see `sensitivity.py`'s module docstring for the
+    5-way duplication this replaces."""
     try:
         text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -215,6 +235,8 @@ def _load_doc(bundle_dir: Path, concept_id: str) -> tuple[str, str]:
     try:
         metadata, body = okf.load_frontmatter(text)
     except Exception:  # broad: any parse failure degrades this doc, never raises
+        return concept_id, ""
+    if sensitivity.should_block(metadata, include_confidential=include_confidential):
         return concept_id, ""
     title = str(metadata.get("title") or "") or concept_id
     return title, body
@@ -394,8 +416,12 @@ def find_contradictions(
     verdicts: list[ContradictionVerdict] = []
     for pair in pairs:
         source_id, target_id = pair
-        src_doc = _load_doc(bundle_dir, source_id)
-        tgt_doc = _load_doc(bundle_dir, target_id)
+        src_doc = _load_doc(
+            bundle_dir, source_id, include_confidential=include_confidential
+        )
+        tgt_doc = _load_doc(
+            bundle_dir, target_id, include_confidential=include_confidential
+        )
         relation_type = relation_types.get(pair)
         messages = _build_messages(pair, src_doc, tgt_doc, relation_type)
         reply = llm.chat(messages)

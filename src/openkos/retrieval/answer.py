@@ -186,7 +186,7 @@ def _assemble_context(
     readable by path here (a known path needs only the directory's x-bit,
     not r-bit, to open). Unless `include_confidential` is `True`, THIS
     function therefore also re-checks each doc's OWN freshly re-read
-    frontmatter against `sensitivity.blocks_llm_send` -- walk-independent
+    frontmatter via `sensitivity.should_block` -- walk-independent
     defense-in-depth at the actual `llm.chat` send point, never dependent on
     whether the walk happened to see this doc at all. `include_confidential`
     mirrors `answer()`'s own flag exactly (skips this re-check entirely,
@@ -194,7 +194,15 @@ def _assemble_context(
     neither `blocked` nor `include_confidential` still gets today's
     unfiltered behavior for every OTHER concern, but is NEVER silently
     exposed to a confidential doc the walk missed.
-    """
+
+    Directory-walk-observability follow-up (correction batch, post-4R-review
+    readability FIX 1): this re-check now calls the centralized
+    `sensitivity.should_block(metadata, include_confidential=...)` predicate
+    instead of inlining `not include_confidential and
+    sensitivity.blocks_llm_send(...)` directly -- behavior-preserving; the
+    same 5-way-duplicated expression is now a single source of truth shared
+    by every send-time re-check in the codebase (see `sensitivity.py`'s
+    module docstring)."""
     context_blocks: list[str] = []
     citations: list[Citation] = []
     for concept_id in concept_ids:
@@ -208,8 +216,8 @@ def _assemble_context(
             metadata, body = okf.load_frontmatter(text)
         except Exception:  # noqa: S112 -- broad: any parse failure skips this hit (D2)
             continue
-        if not include_confidential and sensitivity.blocks_llm_send(
-            metadata.get("sensitivity")
+        if sensitivity.should_block(
+            metadata, include_confidential=include_confidential
         ):
             continue
         title = str(metadata.get("title") or "") or concept_id

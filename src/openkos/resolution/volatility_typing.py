@@ -23,7 +23,7 @@ from pathlib import Path
 from openkos import lint, sensitivity
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
-from openkos.model import types
+from openkos.model import okf, types
 
 N_SAMPLE_CONCEPTS = 5
 """Per type, the number of concepts (ordered by sorted `identity`) whose
@@ -86,27 +86,87 @@ class TierSuggestion:
     omitted one, but is never blank on the fail-closed degrade paths."""
 
 
-def _sample_bodies_by_type(docs: list[lint.LintDoc]) -> dict[str, list[str]]:
+def _reread_sensitivity_blocked(
+    doc: lint.LintDoc, *, include_confidential: bool = False
+) -> bool:
+    """Re-read `doc.path`'s frontmatter fresh and check its OWN
+    `sensitivity` value via `sensitivity.should_block` -- `LintDoc` itself
+    carries no `sensitivity` field (only `freshness`/`type`/`volatility`),
+    so this is a genuine re-read, mirroring query's fresh re-read
+    (`retrieval/answer.py:211-214`) rather than a cheap re-check of
+    already-parsed metadata (directory-walk-observability follow-up,
+    defense-in-depth).
+
+    `include_confidential` is taken directly by this guard (correction
+    batch, post-4R-review FIX 2), matching the sibling `_load_doc`/
+    `_load_members` contract in `contradiction.py`/`edge_typing.py`/
+    `adjudication.py` exactly -- the earlier bare `(doc) -> bool` signature
+    relied on the caller wrapping every invocation in its own `if not
+    include_confidential:` check, which a maintainer calling this guard
+    directly (by analogy with its 3 siblings, which all take the flag) could
+    easily omit, silently reintroducing a fail-open bypass. `True` short-
+    circuits to `False` (never blocked) BEFORE reading anything, preserving
+    the original zero-I/O cost of the bypass path.
+
+    An unreadable/unparseable re-read degrades to `True` (exclude): if this
+    doc's current sensitivity cannot be verified, the fail-closed default is
+    to keep it out of the prompt, matching `sensitivity.sensitive_concept_ids`'s
+    own unreadable/unparseable -> blocked branch. This applies regardless of
+    `include_confidential` -- a read/parse failure is a stronger "cannot
+    verify at all" signal, orthogonal to the deliberate escape hatch, which
+    only ever bypasses a SUCCESSFULLY re-read sensitivity value.
+
+    Note (design): this verb's leak surface is narrower than the other
+    three -- ids come from a live `lint.collect_docs` walk (not
+    `graph.db`), so a subtree that lost its `r` bit is already absent from
+    `docs`. This guard ships for uniform defense-in-depth per locked scope
+    and future-proofs a possible index-sourced refactor. Correction batch
+    FIX 3: callers now apply this guard only to the SAMPLED subset (at most
+    `N_SAMPLE_CONCEPTS` docs per type, via `_sample_docs_by_type`), not the
+    full bundle -- see `suggest_volatility`'s docstring."""
+    if include_confidential:
+        return False
+    try:
+        text = doc.path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return True
+    try:
+        metadata, _body = okf.load_frontmatter(text)
+    except Exception:  # broad: any parse failure fails closed (return, not continue)
+        return True
+    return sensitivity.should_block(metadata, include_confidential=include_confidential)
+
+
+def _sample_docs_by_type(docs: list[lint.LintDoc]) -> dict[str, list[lint.LintDoc]]:
     """Group `docs` by `type` (blank-type docs excluded -- a doc with no
     `type` frontmatter key is not a real concept type), then deterministically
-    sample each type's bodies: the first `N_SAMPLE_CONCEPTS` docs of that
-    type ordered by sorted `identity`, each body truncated to
-    `M_TRUNCATE_CHARS` characters (design's Deterministic Sampling Rule).
+    sample each type's docs: the first `N_SAMPLE_CONCEPTS` docs of that type
+    ordered by sorted `identity` (design's Deterministic Sampling Rule).
 
     Sorting by `identity` -- not bundle-walk order -- is what makes the
     INPUT selection reproducible regardless of filesystem walk order; the
-    LLM's OUTPUT need not be deterministic, only what it is shown."""
+    LLM's OUTPUT need not be deterministic, only what it is shown.
+
+    Correction batch (post-4R-review resilience FIX 3): returns `LintDoc`
+    objects, not truncated body strings (renamed from
+    `_sample_bodies_by_type`) -- so the caller can apply
+    `_reread_sensitivity_blocked` to ONLY this small per-type sampled set
+    instead of re-reading every doc's frontmatter across the FULL bundle
+    before sampling. The previous full-bundle re-read was needless I/O for
+    this verb's weakest-leverage guard (design note: ids come from a live
+    `lint.collect_docs` walk, so the walk-miss leak this guard defends
+    against cannot fire here in the first place) -- a bundle with thousands
+    of docs paid for a frontmatter re-read on every one of them just to
+    sample `N_SAMPLE_CONCEPTS=5` per type."""
     by_type: dict[str, list[lint.LintDoc]] = {}
     for doc in docs:
         if not doc.type:
             continue
         by_type.setdefault(doc.type, []).append(doc)
-    sampled: dict[str, list[str]] = {}
+    sampled: dict[str, list[lint.LintDoc]] = {}
     for type_name, type_docs in by_type.items():
         ordered = sorted(type_docs, key=lambda d: d.identity)
-        sampled[type_name] = [
-            doc.body[:M_TRUNCATE_CHARS] for doc in ordered[:N_SAMPLE_CONCEPTS]
-        ]
+        sampled[type_name] = ordered[:N_SAMPLE_CONCEPTS]
     return sampled
 
 
@@ -173,22 +233,39 @@ def suggest_volatility(
     sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
     `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
     predicate is computed ONCE and any doc whose `identity` is blocked is
-    dropped BEFORE `_sample_bodies_by_type` ever samples it -- a confidential
-    concept's body never reaches the prompt. A type whose docs are ALL
-    confidential yields no suggestion for that type at all (it never
-    survives into `_sample_bodies_by_type`'s per-type grouping).
-    `include_confidential=True` skips the predicate walk entirely, at zero
-    added cost."""
+    dropped BEFORE `_sample_docs_by_type` ever samples it -- a confidential
+    concept's body never reaches the prompt. `include_confidential=True`
+    skips the predicate walk entirely, at zero added cost. This walk-based
+    `blocked` filter always applies to the FULL bundle (cheap: an id
+    membership check, no I/O) and is unaffected by the FIX-3 change below.
+
+    directory-walk-observability follow-up (correction batch, post-4R-review
+    resilience FIX 3): the walk-INDEPENDENT per-doc re-check
+    (`_reread_sensitivity_blocked`) now runs AFTER `_sample_docs_by_type`,
+    against only the sampled subset (at most `N_SAMPLE_CONCEPTS` docs per
+    type) -- not against the full bundle beforehand. A type whose sampled
+    docs are ALL excluded by either filter yields no suggestion for that
+    type at all (it never reaches an `llm.chat` call with an empty body
+    list)."""
     blocked: frozenset[str] = frozenset()
     if not include_confidential:
         blocked = sensitivity.sensitive_concept_ids(bundle_dir)
 
     docs, _skip_notices = lint.collect_docs(bundle_dir)
     docs = [doc for doc in docs if doc.identity not in blocked]
-    sampled = _sample_bodies_by_type(docs)
+    sampled_docs = _sample_docs_by_type(docs)
     results: list[TierSuggestion] = []
-    for type_name in sorted(sampled):
-        bodies = sampled[type_name]
+    for type_name in sorted(sampled_docs):
+        type_docs = [
+            doc
+            for doc in sampled_docs[type_name]
+            if not _reread_sensitivity_blocked(
+                doc, include_confidential=include_confidential
+            )
+        ]
+        if not type_docs:
+            continue
+        bodies = [doc.body[:M_TRUNCATE_CHARS] for doc in type_docs]
         current_default = types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, "")
         messages = _build_messages(type_name, current_default, bodies)
         reply = llm.chat(messages)
