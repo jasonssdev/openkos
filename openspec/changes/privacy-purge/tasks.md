@@ -66,6 +66,81 @@ Feature-branch-chain bases: PR1 base = `feature/privacy-purge` tracker branch; P
 - [x] 4.2 CI install step — DEVIATION: no `.github/workflows/ci.yml` edit was made. Instead, `git-filter-repo` was added to the `dev` dependency group and `uv.lock` regenerated (`uv lock`) + verified (`uv sync --locked`); CI's existing `uv sync --locked` step already installs it automatically, so no separate CI install step is needed. Flagging this as an explicit deviation from the literal task wording, per apply-phase instruction to note deviations rather than silently follow/skip.
 - [x] 4.3 Full run: `uv run pytest tests/unit/vcs/ tests/unit/cli/test_doctor.py` green (43 tests); whole-tree `uv run pytest` (1726 passed), `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy .`, `uv sync --locked` all green.
 
+## Correction batch (post-4R-review, PR1)
+
+Bounded correction batch on `src/openkos/vcs/git.py` addressing 4R review findings
+on the irreversible history-rewrite machinery (2 CRITICAL, 4 WARNING). Branch
+`feat/privacy-purge-vcs`, commits `647ca5c` (fix) and `d53b577` (test).
+
+- [x] C1 CRITICAL: newline/control-char injection in `--paths-from-file` — a
+  `rel_path` containing `\n` re-dispatches a second git-filter-repo directive
+  (e.g. `glob:**`), which combined with the always-passed `--invert-paths`
+  escalates a single-path purge into a mass deletion (proof: vendored
+  `git_filter_repo.py::get_paths_from_file`, ~:2358-2404). Fixed via
+  `_validate_rel_paths`: rejects newline, carriage-return, control
+  characters, empty/whitespace, absolute paths, and `..` segments —
+  fail-closed, no paths file written, no subprocess invoked. RED tests:
+  `test_expunge_paths_rejects_newline_in_rel_path`,
+  `_rejects_carriage_return_in_rel_path`,
+  `_rejects_control_character_in_rel_path`, `_rejects_absolute_rel_path`,
+  `_rejects_dotdot_segment_in_rel_path`,
+  `_rejects_empty_or_whitespace_rel_path` (all assert `_run` never called
+  via a spy, and no stray temp file is left).
+- [x] C2 CRITICAL: partial-failure window in finalize (reflog-expire/gc)
+  after a successful rewrite was silent and indistinguishable from a clean
+  failure — purged blobs remain recoverable via the un-expired reflog if
+  finalize fails post-rewrite. Fixed via new `GitFinalizeError(GitError)`,
+  raised ONLY when filter-repo already succeeded but reflog-expire or gc
+  failed, with the exact remediation command
+  (`git reflog expire --expire=now --all && git gc --prune=now`) in the
+  message. Pre-rewrite filter-repo failures stay plain `GitError`. RED
+  tests: `test_expunge_paths_reflog_expire_failure_raises_git_finalize_error`,
+  `_gc_failure_raises_git_finalize_error`,
+  `_pre_rewrite_failure_is_plain_git_error_not_finalize_error` (regression
+  guard).
+- [x] W1 WARNING: empty `rel_paths` is a destructive no-op-filter —
+  git-filter-repo's `sanity_check_args` sets `inclusive=False` with no
+  filter paths, rewriting all of history while purging nothing (proof:
+  `git_filter_repo.py::sanity_check_args`, ~:2263-2273). Fixed: guarded in
+  `_validate_rel_paths`, raises before any subprocess call. RED test:
+  `test_expunge_paths_rejects_empty_rel_paths_list`.
+- [x] W2 WARNING: `_run` only caught `FileNotFoundError`, letting a
+  present-but-broken binary (e.g. `PermissionError` from a TOCTOU race after
+  `shutil.which`) escape as a raw `OSError`. Fixed: `_run` now catches
+  `OSError` broadly, mapping to `GitError` (FileNotFoundError still maps to
+  `GitUnavailable`). RED test: `test_run_maps_permission_error_to_git_error`.
+- [x] W3 WARNING: `repo_root` swallowed ANY non-zero exit as `None`,
+  conflating "not a git repo" with a broken-git error and surfacing no
+  stderr. Fixed: `None` only for the genuine "not a git repository" stderr
+  match; any other non-zero exit raises `GitError` with stderr. RED test:
+  `test_repo_root_raises_git_error_on_unexpected_failure` +
+  `_still_returns_none_for_genuine_not_a_repo` (regression guard).
+- [x] W4 WARNING (test-only): added
+  `test_expunge_paths_removes_blobs_from_all_refs` (second branch, real
+  multi-ref proof via `git rev-list --objects --all`) and pinned
+  `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` in the `tmp_git_repo` fixture's git
+  env for reproducible commit SHAs (`tests/unit/vcs/conftest.py`).
+
+Deliberate non-fix: no `subprocess.run(timeout=...)` was added to `_run` — a
+mis-calibrated timeout could kill an in-flight `git filter-repo` rewrite
+mid-write, which is the exact partial-failure catastrophe `GitFinalizeError`
+exists to detect and report. Documented as a code comment in `_run`'s
+docstring.
+
+Spec check: these changes strengthen the adapter toward the existing
+fail-closed + irreversibility-safety contract in
+`openspec/changes/privacy-purge/specs/privacy-purge/spec.md` (req 3, req 6).
+No spec requirement needed to change — the residual-warning UX and rail
+ordering (referenced by these requirements) live in PR2 (`purge` verb, not
+yet built); this batch only hardens the PR1 adapter primitive the verb will
+call.
+
+Whole-tree verification (all green): `uv run pytest` -> 1740 passed (was
+1726 before this batch, +14 new tests); `uv run mypy .` -> no issues;
+`uv run ruff check .` -> all checks passed (sole `# noqa: S603` suppression
+confirmed, in `_run`); `uv run ruff format --check .` -> 127 files already
+formatted; `uv sync --locked` -> resolves cleanly.
+
 ## PR2: `purge` Verb
 
 ### Phase 5: Phase-A Reuse + Rail Tests (RED)
