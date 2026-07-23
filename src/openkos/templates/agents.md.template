@@ -20,11 +20,14 @@ Everything else at this level (`openkos.yaml`, this file, `.openkos/`) belongs t
     ├── index.md       # catalog; read it first
     ├── log.md         # append-only history
     ├── sources/       # one Source concept per raw original
-    ├── concepts/
+    ├── concepts/      # the nine classifiable type folders, created on demand
     ├── entities/
     ├── places/
     ├── people/
     ├── organizations/
+    ├── events/
+    ├── procedures/
+    ├── projects/
     └── decisions/
 ```
 

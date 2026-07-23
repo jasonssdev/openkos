@@ -59,7 +59,7 @@ No. That is the point of building on OKF. Your knowledge is a bundle of plain ma
 
 ## Can I use it today?
 
-Not yet. OpenKOS is **pre-alpha** and being designed in the open. The vision, architecture, and roadmap are published; MVP 1 (the core compile-query-lint loop) is in progress. Early feedback and contributors are welcome — see [CONTRIBUTING.md](../CONTRIBUTING.md).
+Yes — it runs, though it is **alpha**: the API may still change and there is no published package yet. The MVP 1 (compile-query-lint) and MVP 2 (typed graph, hybrid retrieval, entity resolution and reversible merge, the forget/purge lifecycle) arcs are complete — 18 CLI verbs in all. OpenKOS is not yet on PyPI, so for now install from a source checkout; a published release will follow. Early feedback and contributors are welcome — see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## What does "the human curates; the engine maintains" mean?
 
@@ -71,4 +71,4 @@ OpenKOS is licensed under the [Apache License 2.0](../LICENSE) and is free and o
 
 ## How can I contribute?
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for how to get involved and [GOVERNANCE.md](../GOVERNANCE.md) for how decisions are made. Even before there is code, feedback on the design docs is a valuable contribution.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for how to get involved and [GOVERNANCE.md](../GOVERNANCE.md) for how decisions are made. Feedback on the design docs and on the shipped commands is a valuable contribution.

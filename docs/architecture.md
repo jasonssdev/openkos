@@ -201,7 +201,7 @@ The one thing outside the local-first spirit is a **cloud-hosted, multi-tenant**
 The structure above is the mature contract; it is populated incrementally.
 
 - **MVP 1 (The Compiler)** needs `model`, `bundle`, `state` (with `fts`), `llm/ollama`, `producers/text` and `markdown`, `compiler/ingest`, `retrieval/lexical` and `context`, `lint/freshness`, a basic `lifecycle`, `config`, and `cli`. The workspace has `raw/` (text), `bundle/` with the concept folders plus `index.md` and `log.md`, `openkos.yaml`, and `AGENTS.md`.
-- **MVP 2 (The Graph and Memory)** adds `embeddings`, `retrieval/vector`, `graph`, `compiler/extract` and `reconcile`, richer `lint`, additional `producers` (PDF, web) with the binary raw-store policy, and the reference-aware `lifecycle`.
-- **MVP 3 (The Runtime and Interoperability)** adds `api`, `mcp`, `memory`, full OKF import/export in `consumers`, and sensitivity enforcement at the new boundaries.
+- **MVP 2 (The Graph and Memory)** — **delivered** — added `embeddings`, `retrieval/vector` and hybrid/graph retrieval, `graph`, extraction and entity resolution/merge, richer `lint` (volatility, contradictions), the reference-aware `lifecycle` (`forget`, plus the irreversible `purge` backed by a `vcs/` git-history layer), and sensitivity enforcement at the retrieval boundary (confidential concepts are filtered before the LLM). Additional format producers such as PDF and web remain optional and ongoing.
+- **MVP 3 (The Runtime and Interoperability)** adds `api`, `mcp`, `memory`, full OKF import/export in `consumers`, and sensitivity enforcement at the remaining boundaries (export, cloud models, agents).
 
-The folders exist from the start as a contract; the code arrives MVP by MVP.
+The folders exist from the start as a contract; the code arrives MVP by MVP. (As shipped, the actual module names differ from this forward-looking tree — for example the `retrieval`, `graph`, `extraction`, `resolution`, and `vcs` packages under `src/openkos/`.)

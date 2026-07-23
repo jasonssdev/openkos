@@ -6,13 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html),
 and commit history follows [Conventional Commits](https://www.conventionalcommits.org/).
 
-> OpenKOS is **pre-alpha and in its design phase** — there is no released version
-> yet. This changelog begins tracking changes with the first development work
-> toward MVP 1. The project's current vision, architecture, and design live in the
-> documents under [`docs/`](docs/).
+> OpenKOS is **alpha** — it runs, the API may still change, and there is no
+> published release yet (no PyPI package, no tagged version). The MVP 1 (Compiler)
+> and MVP 2 (Graph and Memory) arcs are complete. The project's vision,
+> architecture, and design live in the documents under [`docs/`](docs/).
 
 ## [Unreleased]
 
-_Nothing released yet. The log begins with the first changes toward MVP 1._
+The complete MVP 1 (The Compiler) and MVP 2 (The Graph and Memory) work, not yet
+cut as a versioned release.
+
+### Added
+
+- **18-verb command-line interface**: `init`, `ingest`, `forget`, `purge`,
+  `relate`, `merge`, `unmerge`, `reconcile`, `status`, `lint`, `duplicates`,
+  `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions`,
+  `query`, `reindex`, and `doctor`.
+- **Compiler (MVP 1)**: text/markdown ingestion into an OKF-conformant bundle
+  with immutable `raw/` sources, single-source extraction of up to five typed
+  derived concepts, provenance chains, and automatic `index.md`/`log.md`.
+- **Cited query**: natural-language `query` with citations back to concepts and
+  sources, read-only by default.
+- **Freshness lint v1**: mechanical stale-stamp and orphan-page checks, plus
+  volatility classification with volatility-aware windows.
+- **Entity resolution (MVP 2)**: `duplicates`, LLM `adjudicate`, and reversible
+  `merge`/`unmerge` with a `merged_from` ledger.
+- **Typed knowledge graph**: an OpenKOS layer over OKF's untyped links, written
+  by `relate`, with `suggest-relations`, `suggest-volatility`, `contradictions`,
+  and `reconcile`.
+- **Hybrid retrieval (MVP 2)**: lexical FTS5 + local `sqlite-vec` vectors +
+  graph traversal, fused via reciprocal rank fusion (RRF) with NetworkX
+  PageRank, all served from persisted `.openkos/` indexes maintained by
+  `reindex`.
+- **Fail-closed sensitivity filter**: confidential concepts are excluded from
+  retrieval and never sent to the LLM, with an explicit `--include-confidential`
+  escape.
+- **Forget/purge lifecycle**: reference-aware `forget` with tombstones and
+  `--scope self|source` cascade, and an irreversible `purge` (right-to-be-
+  forgotten) that expunges files and scrubs history via `git-filter-repo`.
+- **Two-output rule**: `query --save` files a good answer back into the bundle
+  as a new concept.
+- **Status-aware retrieval**: deprecated and superseded concepts are excluded
+  from retrieval by default.
+
+### Changed
+
+- Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
+  `qwen3-embedding:0.6b` default.
 
 [Unreleased]: https://github.com/jasonssdev/openkos/commits/main
