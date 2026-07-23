@@ -229,13 +229,40 @@ Writes are, like `ingest`'s, **not transactional** — but ordered in reverse: `
 
 Undo is **plain git** (`git revert`, `git checkout <file>`) — there is no wrapper command for it in MVP 1. Every change is already a commit, so the safety net exists without new surface.
 
-MVP 1 does **not** check inbound references before deleting. Removing a concept others link to leaves those inbound links dangling. MVP 1 `lint` does **not** detect this — its orphan check flags concepts that nothing links *to*, not links whose *target* is missing — so a dangling inbound link is neither reported nor rewritten in this slice. OKF tolerates broken links by design (§5.3), so this is a quality signal, not corruption. Broken-link detection, archiving (`status: deprecated`), tombstones in `log.md`, the reference-aware scope/depth flow, and the privacy **purge** (git-history rewrite + index cleanup) all arrive in **MVP 2**, alongside the rest of the lifecycle.
+MVP 1 does **not** check inbound references before deleting. Removing a concept others link to leaves those inbound links dangling. MVP 1 `lint` does **not** detect this — its orphan check flags concepts that nothing links *to*, not links whose *target* is missing — so a dangling inbound link is neither reported nor rewritten in this slice. OKF tolerates broken links by design (§5.3), so this is a quality signal, not corruption. Since MVP 3 gap #8, `forget` is reference-aware (a surviving inbound link/relation refuses unless `--force`) and supports `--scope source` (a provenance-orphan cascade); the git-history rewrite + index cleanup counterpart is `purge`, below.
 
 You can also just delete the file by hand — the bundle is your files. `forget` is the ergonomic version that cleans up the index and log in one step.
 
+### `openkos purge <concept-id>` (MVP 2, right-to-be-forgotten Slice 1)
+
+The **irreversible, true-erasure** counterpart to `forget`: whole-file-expunges a concept's source `raw/<name>` and bundle file from **ALL git history** (not just the working tree) via `git-filter-repo`. This is the most destructive verb in `openkos` — there is no undo, no reflog, no backup once the rewrite begins. Slice 1 is honest whole-file erasure with a **named residual** — it does not yet claim complete right-to-be-forgotten (see the residual-leak warning below).
+
+`purge` reuses `forget`'s Phase A **unchanged**: the same `--scope {self,source}` (default `self`; `source` cascades to every concept whose entire `provenance` resolves back to the target, via the same orphan-after-delete closure) and the same reference-aware detection. On top of that, it resolves each purge-set member's raw source path from a Source's `resource: raw/<name>` frontmatter (a derived concept, with no `resource`, contributes only its own bundle file; a Source whose `resource` is absent or malformed is **warned about, not refused**, and simply contributes no raw path).
+
+Six fail-closed safety rails run, **in this exact order, all before any write**, and the first failing rail refuses immediately (exit 1, nothing written, no rewrite):
+
+1. **Reference-aware refusal** — a surviving inbound reference or unverifiable referrer outside the purge set refuses unless `--force` (identical to `forget`'s own gate).
+2. **`git`/`git-filter-repo` availability** — refuses with an install remediation if either is missing.
+3. **Workspace root == git repository root** — refuses if the workspace is not a git repo, or is nested inside one whose root differs.
+4. **Clean working tree** — refuses on any uncommitted change.
+5. **No commits published on any remote** — refuses if the local branch already has commits on a configured remote (rewriting published history is unsafe).
+6. **Typed confirmation phrase** — prints the preview and the mandatory residual-leak warning, then requires typing the **exact** phrase (`purge <concept-id>` for `--scope self`; `purge <concept-id> (<N> concepts)` for `--scope source`) — a bare `y`/`yes` does not satisfy it. `--confirm-phrase <phrase>` supplies it non-interactively; on a TTY without it, `purge` prompts interactively. There is **no `--auto` bypass** for this phrase.
+
+Once all six rails pass, `purge` invokes `git-filter-repo` to remove every purge-set member's `raw/<name>` and `bundle/<id>.md` from every commit and the working tree, then finalizes (`git reflog expire` + `git gc --prune=now`) so purged blobs are unreachable **and pruned**. If the rewrite itself fails, nothing changed. If the rewrite succeeds but finalize fails, `purge` reports this distinctly (the data may still be recoverable via the reflog until finalize is completed manually) — this is the one case a purge can end in a state needing manual git-level follow-up.
+
+Index cleanup **deletes** (not row-`DELETE`, which SQLite's freelist can retain) `.openkos/{fts,vectors,graph}.db`, then best-effort rebuilds the FTS and graph indexes only (never through the Ollama-dependent `reindex`, which `purge` must never require) — `vectors.db` stays deleted for the next `openkos reindex` to lazily re-embed. A rebuild failure is reported but does **not** fail the purge — the irreversible act already succeeded. No `log.md` tombstone is ever written.
+
+**Mandatory residual-leak warning**, printed at preview and echoed again on success:
+
+> WARNING: purge is IRREVERSIBLE. It rewrites ALL git history in place -- there is no git-undo, no reflog, no backup. The raw source file(s) and concept file(s) listed above will be permanently expunged from every commit.
+>
+> This is NOT complete right-to-be-forgotten yet. The purged concept's id, title, and catalog bullet -- and any prior forget tombstone -- REMAIN in the historical blobs of index.md and log.md (shared files that must survive). Those identifiers stay recoverable from git history until Slice 2 (content-scrub) closes this residual.
+
+`git-filter-repo` is a **system tool**, not a runtime dependency — installed separately (`pip install git-filter-repo` or your package manager), verified the same PATH-probe way `doctor` verifies Ollama. Run `openkos doctor` to check both `git` and `git-filter-repo` availability before purging.
+
 ### `openkos doctor`
 
-**Read-only.** A fixed environment health scan: seven checks against the local workspace, the local Ollama server, and the local Python/SQLite build, each printed as one `[PASS]`, `[FAIL]`, or `[SKIP]` line. Every `[FAIL]` line is immediately followed by an indented `  -> <fix command>` line naming the user's own next command (`ollama serve`, `ollama pull <model>`, `openkos init`) — `doctor` never runs these commands itself.
+**Read-only.** A fixed environment health scan: nine checks against the local workspace, the local Ollama server, the local Python/SQLite build, and `git`/`git-filter-repo` availability, each printed as one `[PASS]`, `[FAIL]`, or `[SKIP]` line. Every `[FAIL]` line is immediately followed by an indented `  -> <fix command>` line naming the user's own next command (`ollama serve`, `ollama pull <model>`, `openkos init`, or an install command) — `doctor` never runs these commands itself.
 
 Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it runs and prints **all** applicable checks, then exits once. The checks, in order:
 
@@ -246,6 +273,8 @@ Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it ru
 5. **Embedding model `<tag>` installed** — informational, always runs, reusing the same installed-tag list and `[SKIP]`-when-unreachable behavior as the model-installed check (one root cause, never double-reported). Slice 1 does not yet wire embeddings into any consumed feature, so a failure here never affects the exit code.
 6. **Bundle readable** — informational, workspace-only (`[SKIP]` outside a workspace).
 7. **Vector extension loadable** — informational, always runs, independent of workspace state and Ollama reachability (no `[SKIP]` branch — unlike check 5, it shares no root cause with any other check). Probes whether the `sqlite-vec` extension loads into a throwaway `:memory:` connection; on failure, the remediation names an extension-capable Python interpreter (e.g. a uv-managed interpreter) rather than the system/Homebrew Python that some platforms build without SQLite extension-loading support. The on-disk vector store this checks has no consumer yet (embedding-vector-store, Slice 2a).
+8. **`git` available** — informational, always runs, independent of workspace state and Ollama reachability. Required by `purge` (right-to-be-forgotten Slice 1).
+9. **`git-filter-repo` available** — informational, always runs. Required by `purge`; remediation names an install command (`pip install git-filter-repo` or your package manager).
 
 Exit code reflects **critical** failures only: `doctor` exits `1` if config-valid, Ollama-reachable, or model-installed failed, and `0` otherwise — the informational checks (workspace-initialized, embedding-model-installed, bundle-readable, vector-extension-loadable) never affect the exit code on their own.
 
@@ -288,4 +317,4 @@ bundle: bundle/           # the OKF bundle root
 
 ## Not in MVP 1
 
-For orientation, these land later and are **not** part of the MVP 1 CLI: semantic/graph query (MVP 2), volatility-aware freshness windows (MVP 2), archive, tombstones, the reference-aware `forget` and purge (MVP 2), the MCP server and local REST API (MVP 3), and OKF import/export (MVP 3).
+For orientation, these land later and are **not** part of the MVP 1 CLI: semantic/graph query (MVP 2), volatility-aware freshness windows (MVP 2), archive (MVP 2), content-scrub of `index.md`/`log.md` history blobs (right-to-be-forgotten Slice 2), the MCP server and local REST API (MVP 3), and OKF import/export (MVP 3). Reference-aware/cascade `forget` and the `purge` verb (git-history rewrite + index cleanup) shipped in MVP 3 gap #8 and MVP 2 right-to-be-forgotten Slice 1, respectively — see their sections above.
