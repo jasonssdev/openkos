@@ -26,8 +26,11 @@ its own `status` field and (2) whether it is the TARGET of an inbound
 `supersedes` edge authored by a DIFFERENT concept. A concept MUST be treated
 as deprecated WHEN its `status` equals `"deprecated"` OR it is targeted by
 such an edge. A self-referencing `supersedes` edge (source == target) MUST
-NOT mark a concept deprecated. WHEN two concepts mutually supersede each
-other, both MUST be treated as live.
+NOT mark a concept deprecated. Supersession that forms a cycle is
+contradictory and unresolved, so the system fails safe: EVERY concept
+targeted by a non-self `supersedes` edge is deprecated — including both
+members of a mutual (2-node) cycle and every member of a longer supersedes
+cycle of any length.
 
 #### Scenario: status field alone marks deprecated
 - GIVEN a concept with `status: deprecated` and no supersedes edges
@@ -40,13 +43,16 @@ other, both MUST be treated as live.
 - WHEN B's effective status is resolved
 - THEN B is deprecated; A remains live
 
-#### Scenario: self-reference and cycles are guarded to live
+#### Scenario: self-reference stays live, but supersedes cycles fail safe to deprecated
 - GIVEN a concept whose `supersedes` edge targets itself
 - WHEN its effective status is resolved
 - THEN it remains live
-- GIVEN concept A supersedes B and B supersedes A (mutual cycle)
+- GIVEN concept A supersedes B and B supersedes A (mutual 2-node cycle)
 - WHEN their effective status is resolved
-- THEN both remain live
+- THEN both A and B are deprecated
+- GIVEN a longer cycle A supersedes B, B supersedes C, C supersedes A
+- WHEN their effective status is resolved
+- THEN A, B, and C are all deprecated
 
 ### Requirement: Deprecated Concepts Excluded By Default
 
