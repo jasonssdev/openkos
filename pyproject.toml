@@ -7,7 +7,35 @@ license = "Apache-2.0"
 authors = [
     { name = "Jason", email = "jasonssdev@gmail.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.12"
+keywords = [
+    "okf",
+    "open-knowledge-format",
+    "knowledge-base",
+    "knowledge-graph",
+    "local-first",
+    "rag",
+    "llm",
+    "second-brain",
+    "cli",
+]
+# The `License ::` trove classifier is deliberately omitted: `license` above is
+# an SPDX expression (PEP 639), and declaring the license twice makes modern
+# build backends warn or fail. The SPDX string is the single source of truth.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
+]
 dependencies = [
     "networkx>=3.4",
     "python-frontmatter>=1.3.0",
@@ -61,7 +89,7 @@ branch = true
 fail_under = 90
 show_missing = true
 
-# Ruff infers `target-version` from `project.requires-python` (3.13) and
+# Ruff infers `target-version` from `project.requires-python` (3.12) and
 # defaults `line-length` to 88; neither is restated here. The formatter runs on
 # defaults, so there is no [tool.ruff.format] section.
 
@@ -70,7 +98,7 @@ select = [
     "E",   # pycodestyle errors
     "F",   # Pyflakes: undefined names, unused imports
     "I",   # isort: deterministic import order, keeps the layering rule auditable
-    "UP",  # pyupgrade: the 3.13 floor means no back-compat idioms are needed
+    "UP",  # pyupgrade: the 3.12 floor means no back-compat idioms are needed
     "B",   # bugbear: mutable defaults, `raise ... from`, unstrict `zip`
     "SIM", # flake8-simplify
     "S",   # bandit: untrusted user text, YAML frontmatter, git subprocess
@@ -100,8 +128,8 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 [tool.mypy]
 # Pin the analysis target to the declared floor so a contributor on a newer
-# interpreter cannot merge code that is broken on 3.13.
-python_version = "3.13"
+# interpreter cannot merge code that is broken on 3.12.
+python_version = "3.12"
 files = ["src", "tests"]
 strict = true
 # Not implied by `strict`: dead code left by a wrong narrowing is a real bug,

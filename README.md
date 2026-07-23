@@ -4,7 +4,7 @@
 
 OpenKOS turns your scattered text into a living, portable knowledge base your AI agents can actually use — compiled once, kept current, and stored as plain [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) files so it is never locked to any app, model, or vendor.
 
-> **Project status: alpha.** OpenKOS runs: the Compiler and the Graph-and-Memory arcs (MVP 1 and MVP 2) are complete — 18 CLI verbs, hybrid retrieval, and the full forget/purge lifecycle all ship today. The API may still change, and there is no published release yet (no PyPI package, no tagged version). Early contributors and feedback are welcome — see [Contributing](#contributing).
+> **Project status: alpha.** OpenKOS runs: the Compiler and the Graph-and-Memory arcs (MVP 1 and MVP 2) are complete — 18 CLI verbs, hybrid retrieval, and the full forget/purge lifecycle all ship today. The API may still change, and there is no published release yet (no PyPI package, no tagged version) — but you can install straight from this repository today, see [Getting started](#getting-started). Early contributors and feedback are welcome — see [Contributing](#contributing).
 
 ---
 
@@ -50,17 +50,25 @@ openkos lint
 
 ## Getting started
 
-> Alpha: the commands below run today. OpenKOS is **not yet published to PyPI**, so for now install from a source checkout (`uv tool install .` in a clone); a published package will follow.
+> Alpha: the commands below run today. OpenKOS is **not yet published to PyPI**, so for now install straight from the GitHub repository — no clone required. A published `pip install openkos` will follow once the API stabilizes.
 
 OpenKOS is a local-first command-line tool. You install the engine once, then create a knowledge bundle per knowledge base — much like installing git once and running `git init` in many repositories.
 
-**Prerequisites:** Python 3.13+; [git](https://git-scm.com); [git-filter-repo](https://github.com/newren/git-filter-repo) (only needed for `purge`); and a local model runtime — [Ollama](https://ollama.com) with the chat model (`ollama pull qwen3:8b`) and the embedding model (`ollama pull bge-m3`) pulled. No accounts, no API keys: nothing leaves your machine.
+**Prerequisites:** Python 3.12+; [git](https://git-scm.com); [git-filter-repo](https://github.com/newren/git-filter-repo) (only needed for `purge`); and a local model runtime — [Ollama](https://ollama.com) with the chat model (`ollama pull qwen3:8b`) and the embedding model (`ollama pull bge-m3`) pulled. No accounts, no API keys: nothing leaves your machine.
 
-**Install the engine** (once, after the first PyPI release):
+**Install the engine** (once, from the repository):
 
 ```bash
-uv tool install openkos   # or: pipx install openkos — or: pip install openkos
+uv tool install git+https://github.com/jasonssdev/openkos   # or: pipx install git+https://github.com/jasonssdev/openkos
 ```
+
+This installs the `openkos` command on your PATH. To try it once without a persistent install, run it ephemerally instead:
+
+```bash
+uvx --from git+https://github.com/jasonssdev/openkos openkos --help
+```
+
+To upgrade later, re-run the install command (uv reinstalls from the latest `main`). Once OpenKOS reaches PyPI, this becomes `uv tool install openkos` — no git URL needed.
 
 **Create a bundle** (per knowledge base):
 
