@@ -151,6 +151,17 @@ def _validate_rel_paths(rel_paths: Sequence[str]) -> None:
     `sanity_check_args` sets `inclusive=False` when there are no filter path
     changes, which performs a full `--force` history rewrite (reflog expire
     + gc) that filters NOTHING -- a destructive no-op purge.
+
+    A `rel_path` containing the byte sequence `==>` is ALSO rejected.
+    `get_paths_from_file` splits each line on `==>` ANYWHERE it occurs,
+    BEFORE dispatching on the `literal:`/`glob:`/`regex:` prefix -- so a
+    `rel_path` like `"target.md==>x"`, written as `literal:target.md==>x`,
+    is parsed as a RENAME directive (`match="target.md"`, `repl="x"`), never
+    as a filter/delete entry. With no other filter path present,
+    `sanity_check_args` sets `inclusive=False`, which keeps EVERY file --
+    the purge target is silently NEVER removed from history, while
+    `git filter-repo` still exits 0. This is worse than a no-op: it reports
+    success while doing nothing, for an operation that is irreversible.
     """
     if not rel_paths:
         raise ValueError(
@@ -189,6 +200,13 @@ def _validate_rel_paths(rel_paths: Sequence[str]) -> None:
         if ".." in as_posix.parts:
             raise ValueError(
                 f"expunge_paths: rel_path must not contain '..' segments: {rel_path!r}"
+            )
+        if "==>" in rel_path:
+            raise ValueError(
+                "expunge_paths: rel_path must not contain '==>' -- "
+                "git-filter-repo's --paths-from-file treats it as a rename "
+                "directive (match ==> repl), which would silently keep "
+                f"the file instead of purging it: {rel_path!r}"
             )
 
 
