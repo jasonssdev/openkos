@@ -159,7 +159,11 @@ class AnswerResult:
 
 
 def _assemble_context(
-    bundle_dir: Path, concept_ids: list[str], blocked: frozenset[str] = frozenset()
+    bundle_dir: Path,
+    concept_ids: list[str],
+    blocked: frozenset[str] = frozenset(),
+    *,
+    include_confidential: bool = False,
 ) -> tuple[list[str], list[Citation]]:
     """Guarded per-hit re-read (D2): re-read + re-parse each fused
     `concept_id`'s doc, skipping anything unreadable or unparseable rather
@@ -173,6 +177,23 @@ def _assemble_context(
     primary enforcement point. Defaults to an empty frozenset, a total
     no-op, preserving byte-identical behavior for every caller that never
     passes one.
+
+    Correction batch (post-4R-review, FIX 2 -- R4 walk-bypass leak, CRITICAL):
+    the `blocked` set above is itself derived from ONE `okf._iter_docs` walk
+    (`sensitivity.sensitive_concept_ids`), which can silently drop a subtree
+    it cannot list (`okf.py`'s documented `_walk_errors` case) -- a doc
+    invisible to that walk is never in `blocked`, yet is still directly
+    readable by path here (a known path needs only the directory's x-bit,
+    not r-bit, to open). Unless `include_confidential` is `True`, THIS
+    function therefore also re-checks each doc's OWN freshly re-read
+    frontmatter against `sensitivity.blocks_llm_send` -- walk-independent
+    defense-in-depth at the actual `llm.chat` send point, never dependent on
+    whether the walk happened to see this doc at all. `include_confidential`
+    mirrors `answer()`'s own flag exactly (skips this re-check entirely,
+    restoring byte-identical opt-in behavior), so a caller that passes
+    neither `blocked` nor `include_confidential` still gets today's
+    unfiltered behavior for every OTHER concern, but is NEVER silently
+    exposed to a confidential doc the walk missed.
     """
     context_blocks: list[str] = []
     citations: list[Citation] = []
@@ -186,6 +207,10 @@ def _assemble_context(
         try:
             metadata, body = okf.load_frontmatter(text)
         except Exception:  # noqa: S112 -- broad: any parse failure skips this hit (D2)
+            continue
+        if not include_confidential and sensitivity.blocks_llm_send(
+            metadata.get("sensitivity")
+        ):
             continue
         title = str(metadata.get("title") or "") or concept_id
         context_blocks.append(f"[concept_id: {concept_id} — {title}]\n{body}")
@@ -361,7 +386,12 @@ def answer(
     before filtering `hits`/`vec_hits`/`graph_hits` -- a confidential concept
     is excluded from every retrieval channel exactly like a deprecated one,
     and `include_confidential=True` independently skips its own predicate
-    walk at zero added cost.
+    walk at zero added cost. Correction batch (post-4R-review, FIX 2): that
+    predicate is a SINGLE `okf._iter_docs` walk and can silently miss a doc
+    under a subtree it cannot list, so `_assemble_context` ALSO
+    independently re-checks each doc's own freshly re-read frontmatter at
+    the actual send point -- see its own docstring for the walk-independent
+    defense-in-depth this adds.
     """
     if not question.split():
         return AnswerResult(
@@ -409,7 +439,12 @@ def answer(
         graph_hits, graph_degraded = [], True
 
     fused_ids = fusion.fuse(hits, vec_hits, graph_hits)[:limit]
-    context_blocks, citations = _assemble_context(bundle_dir, fused_ids, confidential)
+    context_blocks, citations = _assemble_context(
+        bundle_dir,
+        fused_ids,
+        confidential,
+        include_confidential=include_confidential,
+    )
 
     if not context_blocks:
         return AnswerResult(

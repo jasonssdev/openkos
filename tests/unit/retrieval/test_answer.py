@@ -2149,6 +2149,108 @@ def test_assemble_context_default_blocked_is_empty_and_skips_nothing(
     assert len(context_blocks) == 1
 
 
+# --- correction batch (post-4R-review), FIX 2: walk-bypass leak -----------
+
+
+def test_assemble_context_independently_excludes_a_doc_the_walk_never_saw(
+    tmp_path: Path,
+) -> None:
+    """`_assemble_context` re-checks EACH doc's own frontmatter at re-read
+    time, independent of the precomputed `blocked` set -- a confidential
+    concept that the `okf._iter_docs` walk silently missed (e.g. an
+    unlistable subtree, `okf.py`'s documented `_walk_errors` case) but that
+    is still directly readable by path MUST still be excluded, never reach
+    the assembled context (correction batch, post-4R-review FIX 2: R4
+    walk-bypass leak, defense-in-depth)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "open.md",
+        title="Open",
+        body="dichotomyzz private note",
+        sensitivity_value="private",
+    )
+
+    # `blocked` is EMPTY -- simulating the walk-based predicate never having
+    # seen "concepts/secret" at all (not merely a no-op filter upstream, as
+    # the existing walk-bypass test above already covers).
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir, ["concepts/secret", "concepts/open"], blocked=frozenset()
+    )
+
+    cited_ids = {citation.concept_id for citation in citations}
+    assert "concepts/secret" not in cited_ids
+    assert "concepts/open" in cited_ids
+    assert not any("confidential note" in block for block in context_blocks)
+    assert any("private note" in block for block in context_blocks)
+
+
+def test_assemble_context_include_confidential_skips_the_independent_recheck(
+    tmp_path: Path,
+) -> None:
+    """`include_confidential=True` skips the independent per-doc re-check
+    too -- the escape flag restores full participation byte-for-byte, not
+    just at the upstream hit-seam filter."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir,
+        ["concepts/secret"],
+        blocked=frozenset(),
+        include_confidential=True,
+    )
+
+    assert citations == [
+        answer_mod.Citation(concept_id="concepts/secret", title="Secret")
+    ]
+    assert any("confidential note" in block for block in context_blocks)
+
+
+def test_confidential_doc_invisible_to_the_walk_is_still_excluded_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: even if `sensitivity.sensitive_concept_ids` itself missed
+    a confidential doc entirely (simulating an unlistable subtree the walk
+    silently dropped), `answer()` still never sends its content to the LLM,
+    because `_assemble_context`'s independent per-doc re-check catches it at
+    the actual send point (correction batch, post-4R-review FIX 2)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/secret", score=1.0)]
+    )
+    llm = _FakeLLM(reply="should never be reached")
+
+    def _blind_predicate(_bundle_dir: Path, **_kwargs: object) -> frozenset[str]:
+        return frozenset()  # the walk saw nothing -- simulates a dropped subtree
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _blind_predicate)
+
+    result = answer_mod.answer(
+        "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=recording_index
+    )
+
+    assert result.citations == []
+    assert result.answer == answer_mod.NO_MATCH
+    assert llm.calls == []
+
+
 def test_confidential_cid_that_slips_past_the_hit_seam_filter_is_still_excluded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
