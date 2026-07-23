@@ -1,6 +1,6 @@
 # Contributing to OpenKOS
 
-Thanks for your interest in OpenKOS. This project is **alpha** and developed in the open — it runs (MVP 1 and MVP 2 complete), the API may still change, and there is no published release yet — which makes it a great moment to shape it. Contributions of all kinds are welcome — not just code, but ideas, critiques, documentation, and example knowledge bundles.
+Thanks for your interest in OpenKOS. This project is **alpha** and developed in the open — it runs (MVP 1 and MVP 2 complete), it is published on PyPI as an alpha release, and the API may still change between releases — which makes it a great moment to shape it. Contributions of all kinds are welcome — not just code, but ideas, critiques, documentation, and example knowledge bundles.
 
 By participating, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 

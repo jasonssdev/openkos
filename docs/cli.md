@@ -26,7 +26,7 @@ This is the single source of truth for the OpenKOS command line. It covers the c
 
 **Prerequisites:** Python 3.12+; `git`; `git-filter-repo` (only for `purge`); and [Ollama](https://ollama.com) with the chat model (`ollama pull qwen3:8b`, `openkos init`'s packaged default) and the embedding model (`ollama pull bge-m3`, the default used by `reindex`/`query`) pulled. No accounts or API keys.
 
-Install the engine once (after the first release):
+Install the engine once (from PyPI):
 
 ```bash
 uv tool install openkos   # or: pipx install openkos — or: pip install openkos
