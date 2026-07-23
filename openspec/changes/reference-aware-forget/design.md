@@ -32,9 +32,16 @@ Return shape:
 @dataclass(frozen=True)
 class InboundReference:
     referrer_id: str            # file minus ".md" — the concept holding the ref
-    kind: str                   # "link" | "relation"
+    kind: str                   # "link" | "relation" | "unverifiable"
     relation_type: str | None   # the typed edge's type when kind=="relation"
 ```
+`kind == "unverifiable"` (added by the post-review CRITICAL fix) marks a file
+whose frontmatter/`relations:` could not be parsed but whose text mentions the
+target id: `find_inbound_references` runs its own fail-closed parse pass and
+surfaces such a file (with `relation_type=None`) so `forget` refuses rather than
+silently deleting a concept a malformed referrer may still point at. A malformed
+file not mentioning the id is ignored, so unrelated corruption never blocks an
+unrelated forget.
 Internals: call `find_inbound_link_rewrites(files, absorbed_id=target_id,
 survivor_id=target_id)` — `survivor_id=target_id` is a harmless placeholder (no
 rewrite is ever applied; `new_link` is discarded) — emitting one `link` record

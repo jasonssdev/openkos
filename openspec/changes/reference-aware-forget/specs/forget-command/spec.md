@@ -59,13 +59,39 @@ preview.
 - WHEN `openkos forget <concept-id>` runs
 - THEN the preview lists the referencing concept and the relation type
 
+### Requirement: Unverifiable Referrer Detection (Fail-Closed)
+
+Because the reused inbound-relation scanner silently skips any file whose
+frontmatter or `relations:` cannot be parsed, `openkos forget` MUST run an
+independent fail-closed check so a malformed referrer cannot cause a
+concept to be silently deleted while an inbound edge to it still exists. A
+file whose frontmatter/`relations:` fails to parse MUST be surfaced as an
+`unverifiable` reference WHEN the target concept's id appears as a raw
+substring of that file's text (the parser cannot confirm or rule out a
+real inbound edge, so the safe assumption is that one may exist). A
+malformed file that does NOT mention the target's id cannot reference it
+and MUST be ignored, so unrelated bundle corruption never blocks an
+unrelated forget.
+
+#### Scenario: Unverifiable referrer mentioning the target is surfaced
+- GIVEN a referrer file whose frontmatter cannot be parsed but whose text
+  contains `<concept-id>`
+- WHEN `openkos forget <concept-id>` runs
+- THEN it is surfaced as an unverifiable reference in the Phase A preview
+
+#### Scenario: Unverifiable referrer not mentioning the target is ignored
+- GIVEN a malformed file that does not mention `<concept-id>`
+- WHEN `openkos forget <concept-id>` runs
+- THEN it is not surfaced and does not block the forget
+
 ### Requirement: Refuse Forget When Inbound References Exist, Unless `--force`
 
 `openkos forget` MUST refuse to proceed (Phase A refusal, exits non-zero,
-writes nothing) when one or more inbound references were detected, UNLESS
-`--force` is passed. When `--force` is passed and inbound references
-exist, the forget proceeds; those inbound references are NOT retargeted or
-rewritten and are left dangling as an accepted `--force` tradeoff.
+writes nothing) when one or more inbound references OR unverifiable
+referrers were detected, UNLESS `--force` is passed. When `--force` is
+passed and such references exist, the forget proceeds; those inbound
+references are NOT retargeted or rewritten and are left dangling as an
+accepted `--force` tradeoff.
 
 #### Scenario: Inbound markdown link refuses by default
 - GIVEN an inbound markdown link was detected for `<concept-id>`
@@ -74,6 +100,12 @@ rewritten and are left dangling as an accepted `--force` tradeoff.
 
 #### Scenario: Inbound typed relation refuses by default
 - GIVEN an inbound typed relation was detected for `<concept-id>`
+- WHEN `openkos forget <concept-id>` runs without `--force`
+- THEN it refuses in Phase A, exits non-zero, and writes nothing
+
+#### Scenario: Unverifiable referrer refuses by default
+- GIVEN an unverifiable referrer (unparseable file mentioning
+  `<concept-id>`) was detected
 - WHEN `openkos forget <concept-id>` runs without `--force`
 - THEN it refuses in Phase A, exits non-zero, and writes nothing
 
