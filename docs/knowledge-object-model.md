@@ -219,7 +219,7 @@ On top of that baseline, OpenKOS **layers** a recommended relation vocabulary th
 - member_of
 - produced_by
 
-This vocabulary is an **OpenKOS extension, not an OKF feature**. It is carried in frontmatter as an additional key — legal under §4.1, and something conformant consumers are asked to preserve when round-tripping — so it degrades gracefully: a plain OKF consumer reading an OpenKOS bundle sees exactly the untyped directed edges the spec promises it, loses no structure, and renders the graph correctly. The typing is a bonus for tools that understand it, never a precondition for reading the bundle. The typed graph itself arrives in MVP 2; MVP 1 ships the links and the prose.
+This vocabulary is an **OpenKOS extension, not an OKF feature**. It is carried in frontmatter as an additional key — legal under §4.1, and something conformant consumers are asked to preserve when round-tripping — so it degrades gracefully: a plain OKF consumer reading an OpenKOS bundle sees exactly the untyped directed edges the spec promises it, loses no structure, and renders the graph correctly. The typing is a bonus for tools that understand it, never a precondition for reading the bundle. The typed graph shipped in MVP 2: `openkos relate` writes typed edges into frontmatter, and hybrid retrieval traverses them. MVP 1 shipped the untyped links and the prose; the typed layer builds on top of them.
 
 ---
 
@@ -246,7 +246,7 @@ The most common way a knowledge base rots is a present-tense claim about a fast-
 - **Snapshot** — a dated observation; it never goes stale because it claims what was true *on a date*.
 - **Pointer** — for facts whose current value matters, store where the truth lives (a `resource`), optionally with the last observed value and an `as of` stamp.
 
-A freshness lint enforces this: volatile claims must be stamped or expressed as pointers, and aged stamps are surfaced for re-observation rather than silently trusted. Freshness is a property of the system, not a habit the writer has to remember. The lint arrives in stages: in MVP 1 it is purely mechanical, flagging any `as of` stamp older than the configured freshness window; volatility classification and volatility-aware windows (per-type, LLM-suggested) arrive in MVP 2.
+A freshness lint enforces this: volatile claims must be stamped or expressed as pointers, and aged stamps are surfaced for re-observation rather than silently trusted. Freshness is a property of the system, not a habit the writer has to remember. The lint arrived in stages: in MVP 1 it was purely mechanical, flagging any `as of` stamp older than the configured freshness window; volatility classification and volatility-aware windows (per-type, LLM-suggested) shipped in MVP 2.
 
 These three forms were chosen over the main alternatives: a per-object TTL (guesswork, and a binary cutoff that cannot tell timeless from volatile); a decaying-confidence score (opaque and falsely precise, and at odds with explainability); full bi-temporal modeling (rigorous but heavy for personal markdown); re-verification on read (that is RAG's re-derive-everything model, which breaks local-first and offline use); and pure event-sourcing (clean, since everything becomes a snapshot, but it needs a reduction layer to answer "what is true now"). The three-forms lint is lightweight, explainable, and separates a fact's temporal nature from its content — and as a bonus it yields a lightweight bi-temporal record for free: a `snapshot` approximates valid-time, and git history provides transaction-time.
 
@@ -269,7 +269,7 @@ Two rules make the label meaningful:
 1. **Enforcement lives in the engine, not the label.** The `sensitivity` field only declares intent. The engine enforces it at every boundary — most importantly at context assembly, so a confidential object cannot be pulled into a prompt destined for a cloud model. A label without enforcement is only documentation.
 2. **Sensitivity propagates along provenance.** A derived object is at least as sensitive as the most sensitive source it was compiled from — a high-water-mark rule. A synthesis that merges a confidential source with a public one becomes confidential. This propagation travels along the [provenance](#provenance) chain.
 
-Enforcement becomes relevant once there are boundaries to cross — cloud model options, agents (MCP), and export/import — which arrive in MVP 3. The field is defined early so knowledge can be labeled from the start; the engine enforces it when those boundaries appear.
+Enforcement is **live at the retrieval boundary today** (shipped in MVP 2): a `confidential` concept is filtered out of context assembly before anything reaches the LLM — it is never pulled into a prompt — with an explicit `--include-confidential` escape for the local user who deliberately wants it in. The remaining boundaries — cloud-model options, agents (MCP), and export/import — arrive in MVP 3, and the same field governs them when they land. The field was defined early so knowledge could be labeled from the start.
 
 ---
 
@@ -322,10 +322,12 @@ Because OpenKOS accumulates knowledge and preserves history, removal is delibera
 - **Archive** — set `status: deprecated`; the object fades from retrieval and the index but stays in history. Non-destructive.
 - **Merge** — fold a duplicate or mis-extracted object into another, preserving provenance. Implemented as `openkos merge <survivor-id> <absorbed-id>`: sensitivity is recomputed (never copied) to the more restrictive of the two, inbound links are repointed at the survivor, and the survivor gains an embedded `merged_from` ledger entry recording everything needed to reverse the merge. `openkos unmerge <survivor-id> <absorbed-id>` reverses the most recent merge (LIFO), restoring both objects and every rewritten link to byte parity with their pre-merge state — see `docs/cli.md`.
 - **Retire a fact** — move a stale claim into a dated snapshot (the freshness path).
-- **Delete an object** — remove a concept document and its references from `index.md`; recoverable via normal git history. From MVP 2, deletion also leaves a tombstone in `log.md`.
-- **Purge a source** — the right to be forgotten: remove the raw source and everything derived from it, rewrite git history, and clear derived indexes. Destructive and irreversible.
+- **Delete an object** — `openkos forget` removes a concept document and its references from `index.md`; recoverable via normal git history. Since MVP 2 `forget` is reference-aware (it refuses to orphan an inbound link unless `--force`) and leaves a tombstone in `log.md`.
+- **Purge a source** — the right to be forgotten, shipped in MVP 2 as `openkos purge`: remove the raw source and everything derived from it, rewrite git history, scrub the catalog and log across all history, and clear derived indexes. Destructive and irreversible.
 
-A `forget` flow presents scope and depth, shows inbound references and derived descendants before acting, defaults to the least destructive option, and requires explicit confirmation for a purge.
+The `forget`/`purge` flow shows inbound references and (with `--scope source`) derived descendants before acting, defaults to the least destructive scope, and requires explicit confirmation — a typed phrase for a purge.
+
+Note that "deleted", "forgotten", and "purged" are lifecycle *events*, recorded as tombstones in `log.md` and in git history — **not** values of the `status` field, which stays `draft | active | deprecated`. Retrieval keys deprecation off `status: deprecated` (plus `supersedes` edges from `reconcile`); a `forget`/`purge`, by contrast, removes the document outright rather than changing its status.
 
 ---
 

@@ -29,6 +29,8 @@ The horizon section at the end lists directions we find promising but deliberate
 
 *Goal: the Karpathy LLM Wiki loop, done locally and correctly, over plain text — useful in an afternoon.*
 
+**Status: complete and shipped.**
+
 This is the smallest slice that delivers real value: point OpenKOS at a folder of text, get back a structured, cited, OKF-conformant knowledge base you can query.
 
 Deliverables:
@@ -56,6 +58,8 @@ Where the community can contribute: new **producers** (ingesters for additional 
 
 *Goal: the knowledge base gets structure and its retrieval gets smart.*
 
+**Status: complete and shipped.**
+
 MVP 2 turns a flat set of documents into a connected, semantically searchable graph, and closes the loop so that good answers compound back into the base.
 
 Deliverables:
@@ -63,7 +67,7 @@ Deliverables:
 - Entity, concept, and relationship extraction (LLM-assisted, human-in-the-loop) — whose hard core is **cross-source entity resolution, deduplication, and reversible merge** (the "boundary problem" MVP 1 deliberately sidesteps by doing single-source extraction only). The stance, lifted from the [Knowledge Object model](knowledge-object-model.md): prefer fewer, richer objects over fragmented ones, make every merge reversible, and keep entity-resolution decisions reviewable rather than silently automatic
 - A typed knowledge graph over the bundle (markdown links plus a SQLite node-edge projection; NetworkX for analysis). The typing is an OpenKOS layer over OKF's untyped links: a bundle stays readable by any OKF consumer, which simply sees untyped edges.
 - Hybrid retrieval: lexical (the FTS5 foundation shipped in MVP 1) + local vectors (`sqlite-vec`) + graph traversal, with context assembly
-- Local embeddings served through Ollama (default `qwen3-embedding:0.6b`, multilingual), behind a configurable `Embedder` interface — **Slice 1 delivered**: the `Embedder` protocol, `OllamaClient.embed()`, and the `embedding_model` config default are shipped. **Slice 2a delivered**: `sqlite-vec` on-disk scaffolding — the guarded extension loader, the injectable `VectorStore` protocol seam, the idempotent `vectors.db` schema, and a non-fatal `doctor` extension-loadable check — is shipped, with no data flow yet; vec0 upsert/query, hybrid fusion, and graph traversal remain pending
+- Local embeddings served through Ollama (default `bge-m3`, multilingual; see [ADR-0006](adr/0006-default-embedding-model.md)), behind a configurable `Embedder` interface — **delivered and fully wired**: the `Embedder` protocol, `OllamaClient.embed()`, the `sqlite-vec` on-disk `vectors.db` store, and dense retrieval are all shipped. vec0 upsert/query, RRF hybrid fusion, and PageRank graph traversal all ship and feed `query`
 - The two-output rule: a good answer can be filed back as a new OKF concept
 - Incremental compilation and change tracking
 - Freshness lint v1 — volatility classification with volatility-aware windows (per-type, LLM-suggested), contradiction and staleness detection, and a guided reconcile workflow

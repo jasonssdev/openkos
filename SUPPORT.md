@@ -2,7 +2,7 @@
 
 Thanks for using OpenKOS. This page explains where to go depending on what you need. Please pick the right channel — it helps us keep things organized and respond well.
 
-> **Note:** OpenKOS is **pre-alpha**. There is no released version yet and no formal support commitments or response-time guarantees. The channels below are best-effort and community-driven.
+> **Note:** OpenKOS is **alpha**. There is no published release yet and no formal support commitments or response-time guarantees. The channels below are best-effort and community-driven.
 
 ## I have a question or want to discuss an idea
 

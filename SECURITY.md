@@ -4,7 +4,7 @@ OpenKOS is a **local-first** project: it runs on your machine and, by design, do
 
 ## Project status
 
-OpenKOS is **pre-alpha**. There is no released version yet, so there is no supported-version matrix to publish. Security fixes are applied to the `main` branch. This document will be updated with a supported-versions table once the first release ships.
+OpenKOS is **alpha**. There is no published release yet, so there is no supported-version matrix to publish. Security fixes are applied to the `main` branch. This document will be updated with a supported-versions table once the first release ships.
 
 ## Reporting a vulnerability
 

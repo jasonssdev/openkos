@@ -49,11 +49,11 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **High-water-mark (sensitivity)** — The rule that a derived object is at least as sensitive as the most sensitive source it was compiled from; sensitivity propagates upward along the provenance chain.
 
-**Ingest** — The operation of compiling a raw source into the bundle: reading it, writing a summary concept, updating related concepts (MVP 2), and recording provenance and log entries.
+**Ingest** — The operation of compiling a raw source into the bundle: reading it, writing a Source concept and up to five derived concepts, and recording provenance and log entries. (Automatically revising *related, existing* concepts during ingest remains a later capability.)
 
 **index.md** — A catalog file that lists the bundle's concepts with short summaries, used for navigation and index-first retrieval. Defined by OKF as an optional, reserved filename.
 
-**Knowledge graph** — The network formed by concepts and the markdown links between them. Richer than the folder hierarchy; traversed during retrieval. The links themselves are untyped, as OKF defines them — the kind of relationship lives in the prose beside each link. See [Typed relationship](#typed-relationship) for the OpenKOS layer that adds meaning on top, from MVP 2.
+**Knowledge graph** — The network formed by concepts and the markdown links between them. Richer than the folder hierarchy; traversed during retrieval. The links themselves are untyped, as OKF defines them — the kind of relationship lives in the prose beside each link. See [Typed relationship](#typed-relationship) for the OpenKOS layer that adds meaning on top, shipped in MVP 2.
 
 **Knowledge Object (KO)** — The fundamental unit of knowledge in OpenKOS: an OKF concept document plus a thin OpenKOS layer (provenance chain, freshness class, recommended type vocabulary). See [`knowledge-object-model.md`](knowledge-object-model.md).
 
@@ -101,12 +101,12 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Timeless** — A freshness class for facts that do not decay and need no date. One of the three legal forms of a fact.
 
-**Tombstone** — A log entry left behind when an object is deleted, recording that it existed and was removed (except in a privacy purge), so deletion stays auditable. Arrives with the MVP 2 lifecycle; in MVP 1, deletion relies on normal git history for recovery.
+**Tombstone** — A log entry left behind when an object is deleted, recording that it existed and was removed (except in a privacy purge), so deletion stays auditable. Shipped with the MVP 2 lifecycle: `forget` writes a tombstone into `log.md`, and git history still provides recovery.
 
 **Two-output rule** — The practice that a good answer to a query can be filed back into the bundle as a new concept, so that exploration compounds just like ingested sources do.
 
 **Workspace** — The directory a user opens and versions with git. It holds `raw/` (immutable sources, any extension), `bundle/` (the OKF [Bundle](#bundle-okf-bundle)), `openkos.yaml`, `AGENTS.md`, and the git-ignored `.openkos/`. Sources live *beside* the bundle rather than inside it because they are input material, not concepts — which keeps the bundle conformant by construction and lets sources keep their own filenames. One engine installation, many workspaces (as with `git init`).
 
-**Typed relationship** — A link between Knowledge Objects with a declared meaning (for example `depends_on`, `derived_from`, `part_of`). Typed relationships are what the OpenKOS graph and retrieval layers traverse, and they arrive with the MVP 2 graph. They are an **OpenKOS extension, not an OKF feature**: OKF links are untyped, and the kind of relationship is carried by the prose next to the link. The typing is layered on as an extra frontmatter key, so a plain OKF consumer still sees the untyped directed edges the spec promises it and loses nothing structural.
+**Typed relationship** — A link between Knowledge Objects with a declared meaning (for example `depends_on`, `derived_from`, `part_of`). Typed relationships are what the OpenKOS graph and retrieval layers traverse, and they ship with the MVP 2 graph (written by `openkos relate`). They are an **OpenKOS extension, not an OKF feature**: OKF links are untyped, and the kind of relationship is carried by the prose next to the link. The typing is layered on as an extra frontmatter key, so a plain OKF consumer still sees the untyped directed edges the spec promises it and loses nothing structural.
 
 **okf_version** — A frontmatter field declaring the OKF version a bundle targets (OpenKOS writes `"0.1"`). It lives in the bundle-root `index.md` — the one place OKF permits frontmatter in a reserved file — and exists so a future consumer knows exactly which revision of the spec the bundle was written against.

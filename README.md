@@ -4,7 +4,7 @@
 
 OpenKOS turns your scattered text into a living, portable knowledge base your AI agents can actually use — compiled once, kept current, and stored as plain [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) files so it is never locked to any app, model, or vendor.
 
-> **Project status: pre-alpha.** OpenKOS is being designed in the open. The vision, architecture, and roadmap are here; MVP 1 is in progress. There is no installable release yet. Early contributors and feedback are welcome — see [Contributing](#contributing).
+> **Project status: alpha.** OpenKOS runs: the Compiler and the Graph-and-Memory arcs (MVP 1 and MVP 2) are complete — 18 CLI verbs, hybrid retrieval, and the full forget/purge lifecycle all ship today. The API may still change, and there is no published release yet (no PyPI package, no tagged version). Early contributors and feedback are welcome — see [Contributing](#contributing).
 
 ---
 
@@ -33,7 +33,7 @@ In June 2026 Google Cloud published a vendor-neutral specification for that patt
 | Portability | Trapped in one app | Plain OKF files — open in Obsidian, VS Code, GitHub, anything |
 | Privacy | Your knowledge leaves your machine | Local-first, offline-capable, local models |
 
-## What it will feel like (planned CLI)
+## What it feels like
 
 ```bash
 # point OpenKOS at a folder of text and compile it into an OKF bundle
@@ -46,15 +46,15 @@ openkos query "what did I conclude about how to live well?"
 openkos lint
 ```
 
-*(Illustrative of the intended MVP 1 experience. The full command set is `init`, `ingest`, `query`, `lint`, `status`, a basic `forget`, and `doctor` — see [`docs/cli.md`](docs/cli.md). Nothing runs yet.)*
+*(The full command set — 18 verbs spanning ingest, cited query, the typed graph, entity resolution, and the forget/purge lifecycle — is in [`docs/cli.md`](docs/cli.md).)*
 
 ## Getting started
 
-> Pre-alpha: the steps below describe the intended flow and do not run yet.
+> Alpha: the commands below run today. OpenKOS is **not yet published to PyPI**, so for now install from a source checkout (`uv tool install .` in a clone); a published package will follow.
 
 OpenKOS is a local-first command-line tool. You install the engine once, then create a knowledge bundle per knowledge base — much like installing git once and running `git init` in many repositories.
 
-**Prerequisites:** Python 3.13+, and a local model runtime — [Ollama](https://ollama.com) with a model pulled (for example `ollama pull qwen3`). No accounts, no API keys: nothing leaves your machine.
+**Prerequisites:** Python 3.13+; [git](https://git-scm.com); [git-filter-repo](https://github.com/newren/git-filter-repo) (only needed for `purge`); and a local model runtime — [Ollama](https://ollama.com) with the chat model (`ollama pull qwen3:8b`) and the embedding model (`ollama pull bge-m3`) pulled. No accounts, no API keys: nothing leaves your machine.
 
 **Install the engine** (once, after the first PyPI release):
 
@@ -102,8 +102,8 @@ The wedge, in one line: **the local-first, personal producer-consumer-runtime fo
 
 OpenKOS ships in three MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](docs/roadmap.md).
 
-- **MVP 1 — The Compiler.** The Karpathy loop, locally, over text: ingest → OKF concepts with provenance → cited query → freshness lint. Useful in an afternoon.
-- **MVP 2 — The Graph and Memory.** Entity/relationship extraction, a typed knowledge graph (an OpenKOS layer over OKF's untyped links — other tools still read the bundle fine), hybrid retrieval (lexical + vector + graph), answers that file back into the base.
+- **MVP 1 — The Compiler. (Complete.)** The Karpathy loop, locally, over text: ingest → OKF concepts with provenance → cited query → freshness lint. Useful in an afternoon.
+- **MVP 2 — The Graph and Memory. (Complete.)** Entity/relationship extraction and reversible merge, a typed knowledge graph (an OpenKOS layer over OKF's untyped links — other tools still read the bundle fine), hybrid retrieval (lexical FTS5 + local vectors + graph, fused via RRF with PageRank), a fail-closed sensitivity filter (confidential concepts never reach the LLM), reference-aware `forget` plus an irreversible `purge` (right-to-be-forgotten), and answers that file back into the base (`query --save`, the two-output rule).
 - **MVP 3 — The Runtime and Interoperability.** An MCP server and APIs so agents use OpenKOS as durable memory; full OKF import/export with the wider ecosystem.
 
 Beyond that: a desktop app, graph visualization, richer memory, and federation — explored only after the MVPs prove out with real users.
@@ -120,7 +120,7 @@ Beyond that: a desktop app, graph visualization, richer memory, and federation �
 - [`docs/glossary.md`](docs/glossary.md) — definitions of the core vocabulary
 - [`docs/faq.md`](docs/faq.md) — frequently asked questions
 - [`docs/user-journey.md`](docs/user-journey.md) — the end-to-end user experience
-- [`docs/cli.md`](docs/cli.md) — the MVP 1 command-line reference
+- [`docs/cli.md`](docs/cli.md) — the command-line reference
 - [`docs/brand.md`](docs/brand.md) — visual identity: isotype, wordmark, palette, typography
 - [`docs/adr/`](docs/adr/) — architecture decision records (the log begins with the first code-time decision)
 

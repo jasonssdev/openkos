@@ -1,20 +1,20 @@
 ---
 type: Reference
-title: OpenKOS CLI Reference (MVP 1)
-description: The authoritative command surface for the OpenKOS command-line interface in MVP 1.
+title: OpenKOS CLI Reference
+description: The authoritative command surface for the OpenKOS command-line interface.
 tags:
   - openkos
   - cli
   - reference
-  - mvp1
+  - mvp
 resource: https://github.com/jasonssdev/openkos
 timestamp: 2026-07-14T23:00:00Z
 sensitivity: public
 ---
 
-# CLI Reference (MVP 1)
+# CLI Reference
 
-This is the single source of truth for the OpenKOS command line as scoped for **MVP 1**. It is a design reference — **nothing runs yet** (the project is pre-alpha). Later MVPs extend this surface; anything beyond MVP 1 is marked as such.
+This is the single source of truth for the OpenKOS command line. It covers the complete MVP 1 (Compiler) and MVP 2 (Graph and Memory) surface, which ship today (the project is **alpha**). Anything still deferred to MVP 3 is marked as such.
 
 ## Conventions
 
@@ -24,7 +24,7 @@ This is the single source of truth for the OpenKOS command line as scoped for **
 
 ## Install and first run
 
-**Prerequisites:** Python 3.13+, and [Ollama](https://ollama.com) with a model pulled (for example `ollama pull qwen3:8b`, `openkos init`'s packaged default). No accounts or API keys.
+**Prerequisites:** Python 3.13+; `git`; `git-filter-repo` (only for `purge`); and [Ollama](https://ollama.com) with the chat model (`ollama pull qwen3:8b`, `openkos init`'s packaged default) and the embedding model (`ollama pull bge-m3`, the default used by `reindex`/`query`) pulled. No accounts or API keys.
 
 Install the engine once (after the first release):
 
@@ -100,7 +100,7 @@ Writes are **not transactional**: each individual write is create-only or atomic
 
 ### `openkos query "<question>"`
 
-**Read-only.** Answers a natural-language question from the compiled bundle, with citations back to the concepts and their sources. It shares the same shape as `status`/`lint`: no writes, no confirmation, no `--auto`. Requires a local Ollama server running the chat model configured in `openkos.yaml` (see `openkos init`'s `--model`) — `query` never calls Ollama outside a workspace.
+**Read-only by default.** Answers a natural-language question from the compiled bundle, with citations back to the concepts and their sources. Without `--save` it shares the same shape as `status`/`lint`: no writes, no confirmation. With `--save` the two-output rule is automated — the cited answer is filed back into the bundle as a new derived concept, so `query` can write, gated by the same confirm/`--auto` precedence the other write verbs use (see below). Requires a local Ollama server running the chat model configured in `openkos.yaml` (see `openkos init`'s `--model`) — `query` never calls Ollama outside a workspace.
 
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `ingest`/`status`/`lint` use, before any LLM or index work happens. Retrieval fuses **three** ranked lists, ALL THREE now read from **persisted, read-only on-disk indexes** that `reindex` maintains under `.openkos/` — `vectors.db`, `fts.db`, and `graph.db` (performance-caching, MVP 2 Slice 5): lexical FTS5 hits, dense hits (via the embedding model configured as `embedding_model`), and a second-stage seeded graph pool — a personalized PageRank walk over the persisted node/edge projection, seeded from the top concepts of the initial FTS+dense fusion — all combined by reciprocal rank fusion (RRF) into one ranked concept list, which then drives context assembly. `query` is strictly read-only over all three derived stores — it never creates or writes `.openkos/vectors.db`, `.openkos/fts.db`, or `.openkos/graph.db`; run `openkos reindex` first to populate them. Each of the three retrievers degrades independently: a workspace that has never run `reindex`, or whose store is unavailable/corrupt, falls back to whichever of the remaining lists are healthy rather than failing — an empty or unreachable dense/graph list never blocks an answer, and FTS alone is enough to answer. `query` NEVER recomputes or compares the bundle's manifest hash to make this decision: staleness detection is exclusively `reindex`'s job, so an edit made after the last `reindex` run stays invisible to `query` until the NEXT `reindex` run, mirroring how the dense store already behaved before this slice.
 
@@ -109,12 +109,17 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | `--limit <n>` | Max concepts to retrieve as context. Defaults to `5`. Each retriever is queried with a pool of `max(limit, 10)` before fusion truncates to `limit`. |
 | `--include-deprecated` | Include deprecated and superseded concepts in retrieval. Excluded by default from every channel (lexical, dense, graph) — the `retrieval:` stderr summary already reports the POST-filter counts. |
 | `--include-confidential` | Include confidential concepts in retrieval. Excluded by default from every channel (lexical, dense, graph) — a confidential concept is never sent to the LLM unless this flag is set. |
+| `--save` | File the cited answer back into the bundle as a new derived concept (the two-output rule). Opt-in; off by default, keeping `query` read-only. Refuses when the answer cited no concepts (nothing to record provenance from). |
+| `--title <text>` | With `--save`, the title of the filed concept. Defaults to the question. Its slug is the new concept's id; a collision with an existing file refuses. |
+| `--description <text>` | With `--save`, the description of the filed concept. Defaults to the question. |
+| `--type <type>` | With `--save`, the type of the filed concept. Defaults to `Concept`. |
+| `--auto` | With `--save`, skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. Has no effect without `--save`. |
 
 Output is answer-first and banner-free: the answer text, then (only when at least one citation exists) a blank line, `Citations:`, and one `  → <concept_id> (<title>)` line per citation, in fused-rank order. On every completed run — successful answer or no-match — a one-line `retrieval: <n> FTS + <n> dense + <n> graph → <n> fused → LLM invoked|skipped → <n> cited` summary prints to **stderr**, so a silent short-circuit (e.g. zero hits from all three retrievers, so the LLM never ran) is always visible even though stdout stays pipe-clean. When any of the three derived indexes is absent or unavailable/corrupt this run, an additional stderr hint recommends running `openkos reindex` to enable full retrieval. When graph retrieval degraded this run specifically (absent/unopenable graph index, no seeds from the initial fusion, or the PageRank step itself failed), a separate stderr note says so — graph retrieval never affects the FTS/dense outcome. When the persisted FTS index (built at the last `reindex` run) skipped any unreadable/unparseable files, an `index:` skip-notice block follows the summary on stderr, worded as a whole-bundle build diagnostic — never implying the skipped files were candidates for the current question.
 
 When nothing in the bundle matches (zero hits from BOTH retrievers), `query` prints a cause-specific stdout message instead of the answer, and still exits `0` — a valid "no answer found" response is not an error: zero hits states nothing matched and suggests trying different wording or `openkos status`; hits found but all unreadable points at possible bundle corruption and suggests `openkos lint`; an empty or whitespace-only question prompts the user to provide one. A malformed or unreadable `openkos.yaml` (caught the same way `lint` handles an unreadable workspace), a failure to reach Ollama, or a missing/unusable FTS5 index is caught and reported on stderr (exit 1), never a raw traceback — an unreachable Ollama and a not-installed model (chat or embedding, named from the actual failure) print actionable guidance (`ollama serve` / `ollama pull <model>`); an unreachable Ollama also points at `openkos doctor` to diagnose further. `adjudicate` and `suggest-relations` degrade the same way on an unreachable/missing-model Ollama.
 
-A good answer can be filed back as a new concept (the two-output rule) — that re-filing step is not automated in this slice.
+A good answer can be filed back as a new concept (the two-output rule): pass `--save` and `query` writes it into the bundle as a new derived concept — with `provenance` pointing at the concepts the answer cited — showing a preview and confirming first (or `--auto` to write unattended). `query` stays read-only unless you ask for `--save`.
 
 ### `openkos lint`
 
@@ -141,7 +146,7 @@ Output is grouped by OKF type, then HIGH before LOW, and renders each group's ty
 
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status`/`lint` use. Every successful read exits 0, whether or not any candidates are found. No file under the workspace is ever created, modified, or deleted, and no `--json` or other structured output mode is offered.
 
-### `openkos adjudicate` (MVP 3)
+### `openkos adjudicate`
 
 **Read-only.** LLM-adjudicates the candidate groups `duplicates` reports, printing a `SAME`/`DIFFERENT`/`UNCERTAIN` verdict, confidence, and rationale per group for human review. It never merges, writes, or decides — an accepted `SAME` verdict still needs an explicit `openkos merge` call. Degrades the same way `query` does on an unreachable Ollama server or a missing model, with the same actionable stderr guidance.
 
@@ -151,7 +156,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | `--include-deprecated` | Include deprecated and superseded concepts in candidate groups. Excluded by default — shares `duplicates`'s `find_candidates` call. |
 | `--include-confidential` | Include confidential concepts. Excluded by default — a confidential member is dropped from a group before its content is ever read, and never sent to the LLM. |
 
-### `openkos contradictions` (MVP 3)
+### `openkos contradictions`
 
 **Read-only.** LLM-detects contradictions between already-related concepts (candidate pairs drawn from the bundle's typed relation graph), printing a verdict (`CONTRADICTS`/`CONSISTENT`/`UNCERTAIN`), confidence, rationale, and the cited conflicting claims per pair. By default only high-confidence `CONTRADICTS` verdicts are shown. Degrades the same way `adjudicate`/`query` do on an unreachable Ollama server or a missing model.
 
@@ -161,7 +166,23 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | `--include-deprecated` | Include deprecated and superseded concepts. Excluded by default — a candidate pair with either endpoint deprecated/superseded is never judged. |
 | `--include-confidential` | Include confidential concepts. Excluded by default — a candidate pair with either endpoint confidential is never judged, and never sent to the LLM. |
 
-### `openkos suggest-relations` (MVP 3)
+### `openkos reconcile <id-a> <id-b>`
+
+Records a human's resolution of a contradiction between two concepts — the write counterpart to `contradictions`, which only reports. **No LLM in the write path**: `<id-a>`, `<id-b>`, and `--winner` are plain concept-id arguments; `reconcile` never invokes contradiction detection. Both ids resolve exactly as `relate`'s do, and must be two distinct existing concepts.
+
+There are two shapes, chosen by `--winner`:
+
+- **Omit `--winner`** — a **symmetric** reconciliation: a `reconciled_with` edge is added to **both** concepts' `relations:`, recording that a human judged them reconciled.
+- **`--winner <id>`** (must resolve to `id-a` or `id-b`) — a **directional supersede**: a single `supersedes` edge is written on the winner's document, pointing at its counterpart. A `--winner` that resolves to neither id refuses (exit 1).
+
+Reconciliation is idempotent per pair: re-running the exact same request (same mode, same winner) is a no-op; requesting a **different** resolution for a pair already reconciled (a mode switch, or an opposite `--winner`) refuses rather than silently flipping it. Same Phase A / confirm gate / Phase B shape and `--auto` precedence as `relate`.
+
+| Flag | Meaning |
+| --- | --- |
+| `--winner <id>` | The concept (must resolve to `id-a` or `id-b`) that supersedes its counterpart — writes a directional `supersedes` edge. Omit for a symmetric `reconciled_with` reconciliation. |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+
+### `openkos suggest-relations`
 
 **Read-only.** LLM-suggests a relation `type` for every untyped body-link edge in the bundle, printing a suggested type and rationale per edge (or `[?]` when the suggestion is invalid) for human review. It never writes — applying a suggestion is still a separate, explicit `openkos relate <source> <type> <target>` call. Degrades the same way `adjudicate`/`query` do.
 
@@ -169,7 +190,17 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | --- | --- |
 | `--include-confidential` | Include confidential concepts. Excluded by default — an untyped edge with a confidential endpoint is dropped before `llm.chat` is ever called for it. |
 
-### `openkos suggest-volatility` (MVP 3)
+### `openkos relate <source-id> <type> <target-id>`
+
+Writes one deterministic typed edge — `{target: <target-id>, type: <type>}` — into `<source-id>`'s `relations:` frontmatter. **No LLM**: the relation type is supplied by you, not inferred, so this is the explicit write path `suggest-relations` forward-references. Both ids are bundle-relative concept ids (the path minus `.md`), resolved exactly as `forget`/`merge` resolve their targets — an absolute id, a `..` segment, a reserved basename, or a nonexistent file refuses (exit 1) before any read, on **both** ends. The two ids must be distinct. `<type>` is validated: empty or whitespace-only refuses; a type outside the seeded relation vocabulary is accepted with an advisory stderr note (the vocabulary is seeded-but-extensible).
+
+The edge is **idempotent**: an identical `(target, type)` pair already present is left as-is, so a repeated `relate` is a no-op. It shares `forget`/`ingest`/`merge`'s Phase A (validate + preview) / confirm gate / Phase B (write) shape — the preview shows the source file, the edge being added, and the `relations:` count before and after; `log.md` gains a `**Relate**` line. There is **no** `index.md` change: a relation edits an existing catalog entry, it does not add one.
+
+| Flag | Meaning |
+| --- | --- |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+
+### `openkos suggest-volatility`
 
 **Read-only.** LLM-suggests a volatility `tier` for every concept `type` present in the bundle, printing a suggested tier and rationale per type (or `[?]` when the suggestion is invalid) for human review. There is no dedicated write path for this one — accepting a suggestion means hand-editing `type_tiers:` in `openkos.yaml`. Degrades the same way `suggest-relations`/`adjudicate`/`query` do.
 
@@ -221,15 +252,21 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 ### `openkos forget <concept-id>`
 
-Removes knowledge. In **MVP 1** this is deliberately one thing: **a simple delete.** It removes the concept document, drops its entry from `index.md`, and records the removal as a dated line in `log.md`. The target is named by its concept ID — the path with `.md` removed, which is what OKF already defines identity to be (`openkos forget people/maria-salazar`).
+Removes knowledge. It removes the concept document, drops its entry from `index.md`, and records the removal as a dated tombstone line in `log.md`. The target is named by its concept ID — the path with `.md` removed, which is what OKF already defines identity to be (`openkos forget people/maria-salazar`). `forget` is **reference-aware**: a surviving inbound link or typed relation to the target refuses (exit 1) unless you pass `--force`, and `--scope source` cascades the delete to the target plus every concept whose *entire* provenance resolves back to it (the orphan-after-delete closure). It is recoverable through plain git; the irreversible, history-scrubbing counterpart is `purge`, below.
+
+| Flag | Meaning |
+| --- | --- |
+| `--scope {self,source}` | `self` (default) removes only `<concept-id>`. `source` expands the set to `<concept-id>` plus every concept whose ENTIRE `provenance` resolves back to it — the orphan-after-delete closure; a concept with any surviving provenance entry outside the set is preserved untouched. |
+| `--force` | Proceed even when inbound references (markdown links or typed relations) — or unverifiable referrers whose frontmatter could not be parsed — were detected; they are left dangling, never retargeted. Independent of `--auto`: it never skips the confirmation prompt. |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
 
 `forget` is the mirror-image of `ingest`, sharing the same Phase A (validate + preview) / confirm gate / Phase B (write) shape. Index removal is **generic across every section** — Sources, Concepts, People, Decisions — not just Sources: whichever section's bullet links to the concept ID is the one dropped. A concept ID with no matching `index.md` entry is not an error; the file is still deleted. `forget` computes the proposed changes in memory and shows a preview (`~ index.md`, `~ log.md`, `- bundle/<concept-id>.md`) before writing, using the same confirm-gate precedence as `ingest` (`--auto` > config `review: false` > TTY prompt > non-TTY refusal).
 
 Writes are, like `ingest`'s, **not transactional** — but ordered in reverse: `index.md` and `log.md` are updated FIRST, and the concept file is deleted LAST, so the catalog never references a file that no longer exists. A failure partway through (for example, the file delete itself failing) can leave the concept file present as a benign, git-recoverable orphan while the catalog has already moved on — never the other way around.
 
-Undo is **plain git** (`git revert`, `git checkout <file>`) — there is no wrapper command for it in MVP 1. Every change is already a commit, so the safety net exists without new surface.
+Undo is **plain git** (`git revert`, `git checkout <file>`) — there is no wrapper command for it. Every change is already a commit, so the safety net exists without new surface.
 
-MVP 1 does **not** check inbound references before deleting. Removing a concept others link to leaves those inbound links dangling. MVP 1 `lint` does **not** detect this — its orphan check flags concepts that nothing links *to*, not links whose *target* is missing — so a dangling inbound link is neither reported nor rewritten in this slice. OKF tolerates broken links by design (§5.3), so this is a quality signal, not corruption. Since MVP 3 gap #8, `forget` is reference-aware (a surviving inbound link/relation refuses unless `--force`) and supports `--scope source` (a provenance-orphan cascade); the git-history rewrite + index cleanup counterpart is `purge`, below.
+By default `forget` refuses to orphan an inbound link: a surviving markdown link or typed relation whose *target* is the concept being removed refuses (exit 1) unless `--force` is passed, in which case those links are left dangling (never retargeted). OKF tolerates broken links by design (§5.3), so a forced dangle is a quality signal, not corruption. `forget` deletes from the working tree only, leaving content recoverable in git history; the git-history rewrite + history content-scrub counterpart, which completes right-to-be-forgotten, is `purge`, below.
 
 You can also just delete the file by hand — the bundle is your files. `forget` is the ergonomic version that cleans up the index and log in one step.
 
@@ -272,9 +309,9 @@ Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it ru
 2. **Config valid** — critical, workspace-only (`[SKIP]` outside a workspace).
 3. **Ollama reachable** — critical, always runs. If unreachable, the remediation is binary-aware: when `ollama` is found on `PATH`, it stays exactly `ollama serve`; when no `ollama` binary is found at all, it names that ("no `ollama` binary found on PATH — install from https://ollama.com") rather than the over-claim "not installed", since a missing `PATH` entry does not prove Ollama was never installed (e.g. the macOS app).
 4. **Model `<tag>` installed** — critical, always runs; `[SKIP]` (not `[FAIL]`) when Ollama is unreachable, since the two share one root cause. A configured tag counts as installed if it matches an installed tag exactly, or matches that tag's `<name>:latest` form.
-5. **Embedding model `<tag>` installed** — informational, always runs, reusing the same installed-tag list and `[SKIP]`-when-unreachable behavior as the model-installed check (one root cause, never double-reported). Slice 1 does not yet wire embeddings into any consumed feature, so a failure here never affects the exit code.
+5. **Embedding model `<tag>` installed** — informational, always runs, reusing the same installed-tag list and `[SKIP]`-when-unreachable behavior as the model-installed check (one root cause, never double-reported). Embeddings ARE consumed — `reindex` and `query`'s dense retrieval both need this model — but this check stays informational, so a failure here never affects the exit code (dense retrieval degrades to the other channels rather than blocking an answer).
 6. **Bundle readable** — informational, workspace-only (`[SKIP]` outside a workspace).
-7. **Vector extension loadable** — informational, always runs, independent of workspace state and Ollama reachability (no `[SKIP]` branch — unlike check 5, it shares no root cause with any other check). Probes whether the `sqlite-vec` extension loads into a throwaway `:memory:` connection; on failure, the remediation names an extension-capable Python interpreter (e.g. a uv-managed interpreter) rather than the system/Homebrew Python that some platforms build without SQLite extension-loading support. The on-disk vector store this checks has no consumer yet (embedding-vector-store, Slice 2a).
+7. **Vector extension loadable** — informational, always runs, independent of workspace state and Ollama reachability (no `[SKIP]` branch — unlike check 5, it shares no root cause with any other check). Probes whether the `sqlite-vec` extension loads into a throwaway `:memory:` connection; on failure, the remediation names an extension-capable Python interpreter (e.g. a uv-managed interpreter) rather than the system/Homebrew Python that some platforms build without SQLite extension-loading support. The on-disk vector store this checks backs `query`'s dense retrieval, populated by `reindex`.
 8. **`git` available** — informational, always runs, independent of workspace state and Ollama reachability. Required by `purge` (right-to-be-forgotten).
 9. **`git-filter-repo` available** — informational, always runs. Required by `purge`; remediation names an install command (`pip install git-filter-repo` or your package manager).
 
@@ -288,7 +325,7 @@ Exit code reflects **critical** failures only: `doctor` exits `1` if config-vali
 
 **The sole writer of all three on-disk derived stores** — `.openkos/vectors.db`, `.openkos/fts.db`, and `.openkos/graph.db` (embedding-vector-store Slice 2b; performance-caching Slice 5 extended this to FTS and the graph). `query`/`answer()` only ever READ these three stores, read-only; `reindex` is the only command that writes to any of them. Mirrors `query`'s read-only-over-the-bundle shape: no confirmation prompt, no `--auto`. Refuses (exit 1) outside an initialized workspace, using the same shared `require_workspace` check `query`/`ingest` use.
 
-Walks the compiled bundle once (the same walk `query`'s lexical index uses), keys each document by `concept_id` (bundle-relative path minus `.md` — identical to `forget`'s identity), and embeds its raw decoded text through a local Ollama server running the model configured as `embedding_model` in `openkos.yaml` (default `qwen3-embedding:0.6b`). Re-embedding is gated by a `content_hash` cache: an unchanged document costs zero Ollama calls. Any stored vector whose source document no longer exists on disk is pruned — unless this run's bundle walk hit a directory-scan error (e.g. a permission-denied subdirectory), in which case the ENTIRE prune pass is skipped for that run (an unreadable subtree could make a still-existing document look absent, and pruning on that false signal would destroy a valid vector); the embed and cache-hit passes still complete normally regardless. `vectors.db` batches its embed/prune writes into ONE commit for the whole run (not once per document), and its connection sets `PRAGMA journal_mode=WAL` plus a `busy_timeout`, matching `fts.db`/`graph.db`'s posture.
+Walks the compiled bundle once (the same walk `query`'s lexical index uses), keys each document by `concept_id` (bundle-relative path minus `.md` — identical to `forget`'s identity), and embeds its raw decoded text through a local Ollama server running the model configured as `embedding_model` in `openkos.yaml` (default `bge-m3`, ADR-0006). Re-embedding is gated by a `content_hash` cache: an unchanged document costs zero Ollama calls. Any stored vector whose source document no longer exists on disk is pruned — unless this run's bundle walk hit a directory-scan error (e.g. a permission-denied subdirectory), in which case the ENTIRE prune pass is skipped for that run (an unreadable subtree could make a still-existing document look absent, and pruning on that false signal would destroy a valid vector); the embed and cache-hit passes still complete normally regardless. `vectors.db` batches its embed/prune writes into ONE commit for the whole run (not once per document), and its connection sets `PRAGMA journal_mode=WAL` plus a `busy_timeout`, matching `fts.db`/`graph.db`'s posture.
 
 The FTS and graph indexes are gated separately, by a **bundle-manifest-hash cache key**: a sha256 digest over the sorted set of every discovered document's `(concept_id, content_hash)` pair, stored in each derived store's own `meta` table. When a run's freshly computed digest matches the PREVIOUSLY stored one, the WHOLE FTS/graph rebuild is skipped for that store; any added, edited, or removed document changes the digest and triggers a full rebuild (no partial/per-document patch — cross-document graph edges make incremental updates unsafe). This manifest comparison happens **only here, in `reindex`** — `query`/`answer()` never compute or compare it, so an edit made after the last `reindex` run stays invisible to `query` until the next `reindex` run, exactly like the dense store already behaved before this slice. Each rebuild is atomic (wrapped in one explicit transaction): a crash mid-rebuild leaves the PRIOR index and PRIOR manifest hash intact rather than a half-written store.
 
@@ -317,6 +354,6 @@ bundle: bundle/           # the OKF bundle root
 # type_registry is maintained by the engine (canonical + emergent types)
 ```
 
-## Not in MVP 1
+## Still deferred (MVP 3)
 
-For orientation, these land later and are **not** part of the MVP 1 CLI: semantic/graph query (MVP 2), volatility-aware freshness windows (MVP 2), archive (MVP 2), the MCP server and local REST API (MVP 3), and OKF import/export (MVP 3). Reference-aware/cascade `forget` and the `purge` verb (git-history rewrite, index/log cleanup, and history content-scrub, completing right-to-be-forgotten) shipped in MVP 3 gap #8 and MVP 2, respectively — see their sections above.
+For orientation, these are **not** yet part of the CLI: the MCP server, the local REST API, and full OKF import/export, together with sensitivity enforcement at those new export/agent boundaries. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today (MVP 1 and MVP 2 complete).

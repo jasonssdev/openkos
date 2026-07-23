@@ -4,7 +4,7 @@ This document describes how decisions are made in OpenKOS and how the project is
 
 ## Current stage
 
-OpenKOS is **pre-alpha** and led by its founder and lead maintainer, **Jason ([@jasonssdev](https://github.com/jasonssdev))**. At this stage the lead maintainer is the final decision-maker, so that the project can establish a coherent vision and architecture before opening up broader shared ownership. This is a starting point, not a permanent structure — see [Evolving this model](#evolving-this-model).
+OpenKOS is **alpha** and led by its founder and lead maintainer, **Jason ([@jasonssdev](https://github.com/jasonssdev))**. At this stage the lead maintainer is the final decision-maker, so that the project can establish a coherent vision and architecture before opening up broader shared ownership. This is a starting point, not a permanent structure — see [Evolving this model](#evolving-this-model).
 
 ## Roles
 
@@ -12,7 +12,7 @@ OpenKOS is **pre-alpha** and led by its founder and lead maintainer, **Jason ([@
 
 **Contributors** — anyone who opens an issue or a pull request. You do not need to be added to any list; contributing is open to everyone who follows the [Code of Conduct](CODE_OF_CONDUCT.md) and [Contributing guide](CONTRIBUTING.md).
 
-**Maintainers** — contributors trusted with review and merge rights. Maintainers review pull requests, triage issues, guide design discussions, and keep the project consistent with its principles. During pre-alpha the lead maintainer is the sole maintainer.
+**Maintainers** — contributors trusted with review and merge rights. Maintainers review pull requests, triage issues, guide design discussions, and keep the project consistent with its principles. During this alpha stage the lead maintainer is the sole maintainer.
 
 **Lead maintainer** — sets overall direction, has final say on decisions that cannot reach consensus, and is responsible for the project's long-term coherence.
 

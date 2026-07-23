@@ -2,7 +2,7 @@
 
 Operating manual for AI coding agents (and humans) working **on the OpenKOS codebase**. This is the canon: read it first and keep every change consistent with it. (It is distinct from the `AGENTS.md` *inside* a knowledge bundle, which tells an agent how to operate that bundle.)
 
-OpenKOS is an open-source, **local-first engine** that compiles a person's text into a living, portable knowledge base, built on the **Open Knowledge Format (OKF)**. It is pre-alpha; **MVP 1** is the first target.
+OpenKOS is an open-source, **local-first engine** that compiles a person's text into a living, portable knowledge base, built on the **Open Knowledge Format (OKF)**. It is alpha; **MVP 1 (The Compiler)** and **MVP 2 (The Graph and Memory)** are complete, and **MVP 3 (The Runtime and Interoperability)** is next.
 
 ## Read these first
 

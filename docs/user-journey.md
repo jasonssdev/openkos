@@ -14,7 +14,7 @@ sensitivity: public
 
 # User Journey
 
-This document describes the experience of using OpenKOS, so that the product is designed around the person, not the pipeline. It centers on the MVP 1 experience and notes where later-MVP capabilities extend the journey.
+This document describes the experience of using OpenKOS, so that the product is designed around the person, not the pipeline. It centers on the everyday capture-and-query loop and notes where later-MVP (MVP 3) capabilities extend the journey.
 
 ## The core idea: the journey is a loop, not a line
 
@@ -156,7 +156,7 @@ A good answer can be filed back as a new concept, so exploration compounds — f
 ## Secondary journeys
 
 - **Ask:** `openkos query "…"` — cited answers assembled from the bundle.
-- **Keep it honest:** `openkos lint` — in MVP 1, flags stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts no markdown link reaches from `index.md` or another concept); volatility-aware and contradiction checks arrive in MVP 2. The lint is OpenKOS's opinion about knowledge health, not a verdict on OKF validity — a bundle it complains about is still a perfectly conformant bundle.
+- **Keep it honest:** `openkos lint` — flags stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts no markdown link reaches from `index.md` or another concept); volatility-aware windows and contradiction detection shipped in MVP 2 (`openkos contradictions`, `openkos suggest-volatility`). The lint is OpenKOS's opinion about knowledge health, not a verdict on OKF validity — a bundle it complains about is still a perfectly conformant bundle.
 - **Orient:** `openkos status` — what the base contains, recent activity, anything needing attention.
 - **Check the setup:** `openkos doctor` — an environment health preflight that reports whether the workspace is initialized, `openkos.yaml` is valid, the local Ollama server is reachable, and the configured model is installed, each as a `[PASS]`/`[FAIL]`/`[SKIP]` line with a fix command. It also runs outside a workspace as a pure Ollama preflight.
 - **Browse:** open the folder in any editor — the bundle is just markdown.
@@ -191,7 +191,7 @@ The target is named by its concept ID — the path with `.md` removed, which is 
 
 It defaults to the least destructive choice, surfaces what links to the target so nothing is silently orphaned, requires explicit confirmation for a **purge** (the right-to-be-forgotten path that also rewrites git history and clears derived indexes), and stays human-in-the-loop even under `--auto`. Everything except a privacy purge is logged.
 
-That is the mature shape. **In MVP 1, `forget` is only the simple delete** — remove the concept, its index entry, and its state; undo is plain git. The scope/depth panel above, archiving, tombstones, and the purge arrive in MVP 2 with the rest of the lifecycle. The thin version is enough to keep a first knowledge base tidy while the model is still producing rough drafts, which is the job MVP 1 actually has.
+That is the mature shape, and most of it now ships. `forget` is **reference-aware** — it refuses to orphan an inbound link unless you pass `--force` — and `--scope source` cascades a delete to a source plus everything derived from it; each deletion leaves a tombstone in `log.md`, and undo is plain git. The **purge** path (right-to-be-forgotten) is a distinct verb, `openkos purge`: it rewrites git history, scrubs the catalog and log across all history, and clears the derived indexes, behind a typed-phrase confirmation. What is still deferred to MVP 3 is the single unified interactive scope/depth prompt that would present archive, delete, and purge as one guided panel — today they are separate, explicit commands.
 
 ## Two ways to work
 
