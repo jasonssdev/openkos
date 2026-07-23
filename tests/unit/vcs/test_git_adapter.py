@@ -296,6 +296,38 @@ def test_expunge_paths_rejects_empty_or_whitespace_rel_path(
     assert calls == []
 
 
+def test_expunge_paths_rejects_rename_delimiter_in_rel_path(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rel_path containing `==>` would be parsed by git-filter-repo's
+    `get_paths_from_file` as a RENAME directive (`match ==> repl`), not a
+    filter/delete, on the same `literal:`-prefixed line -- with no other
+    filter entry present, `sanity_check_args` sets `inclusive=False`, which
+    keeps EVERY file and silently purges nothing while `filter-repo` still
+    exits 0. Must reject BEFORE any subprocess call."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(git, "_run", _spy_run_that_succeeds(calls))
+
+    with pytest.raises(ValueError, match="==>"):
+        git.expunge_paths(tmp_git_repo.root, ["bundle/target.md==>x"])
+
+    assert calls == []
+
+
+def test_expunge_paths_allows_lone_equals_and_gt_in_rel_path(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single `=` or a single `>` (but never the `==>` sequence) is a
+    legitimate filename character per git-filter-repo's parser -- must not be
+    over-rejected."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(git, "_run", _spy_run_that_succeeds(calls))
+
+    git.expunge_paths(tmp_git_repo.root, ["bundle/a=b>c.md"])
+
+    assert calls != []
+
+
 # --- FIX 3 (WARNING): empty rel_paths is a destructive no-op-filter --------
 
 
