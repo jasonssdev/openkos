@@ -9,9 +9,10 @@ zero real Ollama process. Mirrors `_FakeLLM` in
 `tests/unit/resolution/test_adjudication.py`.
 """
 
+import contextlib
 import dataclasses
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -419,6 +420,37 @@ def test_is_high_confidence_contradiction_public_helper() -> None:
     assert contradiction_mod.is_high_confidence_contradiction(consistent) is False
 
 
+def test_is_high_confidence_contradiction_at_exact_threshold_boundary() -> None:
+    """Boundary-coverage regression (reliability review): confidence EXACTLY
+    at `_CONFIDENCE_DISPLAY_THRESHOLD` (0.7) IS high-confidence (shown) --
+    pins the `>=` operator in `is_high_confidence_contradiction` so a silent
+    flip to `>` is caught. `0.6999...` (just below) is NOT high-confidence
+    (hidden). Also asserts the constant itself equals 0.7, so a change to
+    the constant's value cannot silently pass this test unnoticed."""
+    assert contradiction_mod._CONFIDENCE_DISPLAY_THRESHOLD == 0.7
+
+    at_threshold = contradiction_mod.ContradictionVerdict(
+        pair_ids=("a", "b"),
+        verdict=contradiction_mod.Verdict.CONTRADICTS,
+        confidence=contradiction_mod._CONFIDENCE_DISPLAY_THRESHOLD,
+        rationale="",
+        conflicting_claims=("x",),
+    )
+    just_below_threshold = contradiction_mod.ContradictionVerdict(
+        pair_ids=("a", "b"),
+        verdict=contradiction_mod.Verdict.CONTRADICTS,
+        confidence=0.6999,
+        rationale="",
+        conflicting_claims=("x",),
+    )
+
+    assert contradiction_mod.is_high_confidence_contradiction(at_threshold) is True
+    assert (
+        contradiction_mod.is_high_confidence_contradiction(just_below_threshold)
+        is False
+    )
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: `find_contradictions` orchestration (Req: propagation, empty graph)
 # ---------------------------------------------------------------------------
@@ -643,3 +675,76 @@ def test_find_contradictions_builds_a_two_message_json_only_prompt(
     assert "Beta body text." in messages[1]["content"]
     assert "references" in messages[1]["content"]
     assert "JSON" in messages[0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Boundary-coverage regression (reliability review): `_MAX_PAIRS` exact edge
+# at the `find_contradictions` orchestration level. A fake `build_graph` is
+# injected so exactly `_MAX_PAIRS`/`_MAX_PAIRS + 1` distinct typed-edge pairs
+# can be constructed programmatically without writing hundreds of real
+# bundle documents on disk -- `_load_doc` degrades missing docs to
+# `(concept_id, "")` gracefully, so no doc files are needed for this test.
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _store_context(store: GraphStore) -> Iterator[GraphStore]:
+    yield store
+
+
+def _chain_edges(pair_count: int) -> list[Edge]:
+    """`pair_count` typed edges c0000->c0001->...->c{pair_count-1}->c{pair_count},
+    each connecting a fresh pair of concepts -- exactly `pair_count` distinct
+    deduped candidate pairs, already in sorted order."""
+    return [
+        Edge(
+            source_id=f"c{i:04d}",
+            target_id=f"c{i + 1:04d}",
+            relation_type="references",
+        )
+        for i in range(pair_count)
+    ]
+
+
+def test_find_contradictions_at_exact_cap_boundary_all_pairs_judged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EXACTLY `_MAX_PAIRS` (200) distinct candidate pairs: every pair is
+    judged and NO cap-reached truncation occurs --
+    `total_pair_count == len(verdicts)` (pins the exact boundary itself,
+    distinct from the existing `_MAX_PAIRS + 10` over-cap coverage)."""
+    max_pairs = contradiction_mod._MAX_PAIRS
+    store: GraphStore = _FakeGraphStore(_chain_edges(max_pairs))
+    monkeypatch.setattr(
+        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(store)
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * max_pairs)
+
+    verdicts, total = contradiction_mod.find_contradictions(tmp_path, llm=llm)
+
+    assert total == max_pairs
+    assert len(verdicts) == max_pairs
+    assert total == len(verdicts)
+
+
+def test_find_contradictions_one_over_cap_boundary_truncates_and_signals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EXACTLY `_MAX_PAIRS + 1` (201) distinct candidate pairs: the result
+    truncates to `_MAX_PAIRS` verdicts and the cap-reached signal is
+    detectable via `total_pair_count > len(verdicts)` (pins the off-by-one
+    edge at 201, distinct from the existing `_MAX_PAIRS + 10` coverage)."""
+    max_pairs = contradiction_mod._MAX_PAIRS
+    store: GraphStore = _FakeGraphStore(_chain_edges(max_pairs + 1))
+    monkeypatch.setattr(
+        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(store)
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * max_pairs)
+
+    verdicts, total = contradiction_mod.find_contradictions(tmp_path, llm=llm)
+
+    assert total == max_pairs + 1
+    assert len(verdicts) == max_pairs
+    assert total > len(verdicts)
