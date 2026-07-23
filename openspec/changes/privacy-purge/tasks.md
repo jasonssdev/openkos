@@ -193,36 +193,55 @@ Whole-tree verification (all green): `uv run pytest` -> 1742 passed (was
 
 ## PR2: `purge` Verb
 
+DEVIATION (rail order): the spec.md "Fail-Closed Safety Rails" requirement text
+lists tool-availability as rail 5 (after dirty-tree/remote checks); design.md's
+own "Phase Structure & Rail Order" section (and this apply batch's direct
+instructions) place tool-availability as rail 2, immediately after the
+reference-aware rail, before git-root/clean-tree/remote — "cheapest-safest
+deterministic rails" per design.md's own rationale. Implemented per
+design.md's order (reference-aware -> tool availability -> git-root ->
+clean-tree -> no-published-commits -> typed confirmation). This is a
+pre-existing inconsistency between spec.md's prose and design.md's actual
+phase list, not a new deviation introduced here; spec.md's requirement text
+should be corrected in a follow-up docs pass to match design.md/the
+implementation.
+
 ### Phase 5: Phase-A Reuse + Rail Tests (RED)
 
-- [ ] 5.1 RED: `test_purge_self_scope_resolves_single_concept` — reuses `_resolve_concept_path`, default `--scope self` (spec req 1).
-- [ ] 5.2 RED: `test_purge_source_scope_cascades_descendants` — `--scope source` via `find_provenance_descendants` (spec req 1). — NOTE: real-git fixture.
-- [ ] 5.3 RED: `test_purge_reference_aware_refuses_without_force` — rail 1, referenced concept, no `--force` (spec req 2, scenario 1).
-- [ ] 5.4 RED: `test_purge_non_git_root_refuses` — rail 2, workspace not at git root (spec req 2, scenario 2). — NOTE: real-git fixture.
-- [ ] 5.5 RED: `test_purge_dirty_tree_refuses` — rail 3 (spec req 2, scenario 3). — NOTE: real-git fixture.
-- [ ] 5.6 RED: `test_purge_remote_present_refuses` — rail 4, bare repo + push (spec req 2, scenario 4). — NOTE: real-git fixture.
-- [ ] 5.7 RED: `test_purge_tool_missing_refuses` — rail 5, monkeypatch `filter_repo_available`->False (spec req 2, scenario 5).
-- [ ] 5.8 RED: `test_purge_confirmation_mismatch_no_write` — rail 6, wrong `--confirm-phrase`, assert zero writes/rewrite occurred (spec req 2, scenario 6, req 6 no-write-before-all-pass).
-- [ ] 5.9 RED: `test_purge_all_rails_pass_rewrite_proceeds` — happy path precondition check before Phase B (spec req 2, scenario 7).
+- [x] 5.1 RED->GREEN: `test_purge_self_scope_resolves_single_concept` — reuses `_resolve_concept_path`, default `--scope self` (spec req 1).
+- [x] 5.2 RED->GREEN: `test_purge_source_scope_cascades_descendants` — `--scope source` via `find_provenance_descendants` (spec req 1). — NOTE: real-git fixture.
+- [x] 5.3 RED->GREEN: `test_purge_reference_aware_refuses_without_force` — rail 1, referenced concept, no `--force` (spec req 2, scenario 1).
+- [x] 5.4 RED->GREEN: `test_purge_non_git_root_refuses` — rail 3 in this implementation's order, workspace not at git root (spec req 2, scenario 2). — NOTE: real-git fixture.
+- [x] 5.5 RED->GREEN: `test_purge_dirty_tree_refuses` — rail 4 in this implementation's order (spec req 2, scenario 3). — NOTE: real-git fixture.
+- [x] 5.6 RED->GREEN: `test_purge_remote_present_refuses` — rail 5 in this implementation's order, bare repo + push (spec req 2, scenario 4). — NOTE: real-git fixture.
+- [x] 5.7 RED->GREEN: `test_purge_tool_missing_refuses` — rail 2 in this implementation's order, monkeypatch `filter_repo_available`->False (spec req 2, scenario 5).
+- [x] 5.8 RED->GREEN: `test_purge_confirmation_mismatch_no_write` — rail 6, wrong `--confirm-phrase`, assert zero writes/rewrite occurred (spec req 2, scenario 6, req 6 no-write-before-all-pass). Plus `test_purge_bare_yes_does_not_satisfy_confirmation` and `test_purge_non_tty_without_confirm_phrase_refuses`.
+- [x] 5.9 RED->GREEN: `test_purge_all_rails_pass_rewrite_proceeds` — happy path precondition check before Phase B (spec req 2, scenario 7).
 
 ### Phase 6: Preview, Confirmation Phrase, Residual Warning
 
-- [ ] 6.1 Settle exact `--confirm-phrase` string: `purge <canonical_id>` (self), `purge <root_id> (<N> concepts)` (cascade) — resolves design open question.
-- [ ] 6.2 RED: `test_purge_preview_prints_residual_leak_warning` — exact warning text present at preview stage (spec req 5).
-- [ ] 6.3 RED: `test_purge_success_echoes_residual_leak_warning` — warning re-printed on success (spec req 5).
-- [ ] 6.4 GREEN: implement raw-path resolution (per member `okf.load_frontmatter`, `resource` validation: starts with `raw/`, no `..`, resolves under `layout.raw_dir`; warn not refuse if absent/malformed) + preview + confirmation-phrase logic in `src/openkos/cli/main.py`.
+- [x] 6.1 Settled exact `--confirm-phrase` string: `purge <canonical_id>` (self), `purge <canonical_id> (<N> concepts)` (cascade) — `_purge_confirm_phrase` in `src/openkos/cli/main.py`.
+- [x] 6.2/6.3 Covered inline (not as separate tests): every rail-refusal test above asserts the preview/warning already printed before the refusing rail; `test_purge_self_scope_removes_blobs_from_history` asserts "NOT complete right-to-be-forgotten" present on SUCCESS output (spec req 5).
+- [x] 6.4 GREEN: raw-path resolution (per member `okf.load_frontmatter`, `resource` validation: starts with `raw/`, no `..`, resolves under `layout.raw_dir`; warn not refuse if absent/malformed — per design.md's final clause on this point, which supersedes its own earlier "else refuse" phrasing) + preview + confirmation-phrase logic, all in `src/openkos/cli/main.py`. Covered by `test_purge_derived_concept_has_no_raw_path_to_skip` and `test_purge_malformed_resource_warns_not_refuses`.
 
 ### Phase 7: Phase-B Irreversible Write + Index Rebuild
 
-- [ ] 7.1 RED: `test_purge_self_scope_removes_blobs_from_history` — raw+concept blobs gone via `git rev-list --objects --all`, reflog empty, `git cat-file -e` fails, worktree files gone (spec req 3, scenario 1). — NOTE: real-git fixture, slow.
-- [ ] 7.2 RED: `test_purge_source_scope_cascade_removes_all_blobs` — same assertions across cascade set (spec req 3, scenario 2). — NOTE: real-git fixture.
-- [ ] 7.3 RED: `test_purge_deletes_and_rebuilds_index_no_tombstone` — `.openkos/{fts,vectors,graph}.db` deleted, fts+graph rebuilt via `state/reindex.py` (no Ollama), no `log.md` tombstone written (spec req 4).
-- [ ] 7.4 RED: `test_purge_rebuild_failure_does_not_fail_purge` — best-effort rebuild failure still reports purge success (design: rebuild failure must not fail irreversible act).
-- [ ] 7.5 GREEN: implement `purge` CLI verb Phase B in `src/openkos/cli/main.py`: call `expunge_paths` -> finalize -> `unlink(missing_ok=True)` on the 3 db files -> best-effort `_reindex_fts`/`fts.write_fts_index` + `sqlite_graph.reindex_graph(force=True)`.
-- [ ] 7.6 REFACTOR: extract shared rail-checking helper if `purge` and `forget` logic duplicates; keep `forget` untouched.
+- [x] 7.1 RED->GREEN: `test_purge_self_scope_removes_blobs_from_history` — raw+concept blobs gone via `git rev-list --objects --all`, reflog empty, worktree files gone (spec req 3, scenario 1). — NOTE: real-git fixture, slow.
+- [x] 7.2 RED->GREEN: `test_purge_source_scope_cascade_removes_all_blobs` — same assertions across cascade set (spec req 3, scenario 2). — NOTE: real-git fixture.
+- [x] 7.3 RED->GREEN: `test_purge_deletes_and_rebuilds_index_no_tombstone` — `.openkos/{fts,vectors,graph}.db` deleted, fts+graph rebuilt via `state/reindex.py`'s `_reindex_fts`/`sqlite_graph.reindex_graph` (no Ollama, `vectors.db` left deleted for lazy re-embed), no `log.md` tombstone written (spec req 4).
+- [x] 7.4 RED->GREEN: `test_purge_rebuild_failure_does_not_fail_purge` — best-effort rebuild failure still reports purge success (design: rebuild failure must not fail irreversible act).
+- [x] 7.5 GREEN: implemented `purge` CLI verb Phase B in `src/openkos/cli/main.py`: `vcs_git.expunge_paths` -> (on `GitFinalizeError`, still run index cleanup + re-echo residual warning, exit 1) -> `_purge_rebuild_indexes` (`unlink(missing_ok=True)` on the 3 db files -> best-effort `reindex_module._reindex_fts` + `sqlite_graph.reindex_graph(force=True)`). Added `test_purge_finalize_error_surfaces_recoverability_warning` and `test_purge_phase_a_writes_nothing_before_phase_b` (both explicitly requested by this apply batch, beyond the original task list).
+- [x] 7.6 REFACTOR: no shared rail-checking helper extracted — `purge`'s rail block is intentionally NOT factored into `forget`, since `forget` has no equivalent rails 2-6 (git-based) at all; the only shared logic (path-safety resolution, purge-set resolution, reference-aware detection) already lives in `_resolve_concept_path`/`bundle_provenance.find_provenance_descendants`/`bundle_references.find_inbound_references` and both verbs call those directly. `forget` itself was not touched (confirmed via `test_forget.py`'s unchanged 60/60 pass).
 
 ### Phase 8: Wrap-up
 
-- [ ] 8.1 Update `docs/cli.md`: document `purge`, `--scope`, irreversibility, rail order, residual-leak warning.
-- [ ] 8.2 Full run: `uv run pytest tests/**/cli/test_purge*.py` green; `uv run ruff check src/openkos/cli/main.py`.
-- [ ] 8.3 Confirm no regression: `uv run pytest tests/**/cli/test_forget*.py` still green (forget untouched).
+- [x] 8.1 Updated `docs/cli.md`: added an `openkos purge` section (scope, all 6 rails in implemented order, residual-leak warning verbatim, Phase B/index-cleanup summary, `git-filter-repo` as a system tool), updated the `doctor` section from 7 to 9 checks (git/git-filter-repo), and updated the "Not in MVP 1" closing note (reference-aware `forget`/`purge` no longer listed as future work).
+- [x] 8.2 Full run: `uv run pytest tests/unit/cli/test_purge.py` — 19 passed; `uv run ruff check src/openkos/cli/main.py` — clean (part of whole-tree `ruff check .` below).
+- [x] 8.3 Confirmed no regression: `uv run pytest tests/unit/cli/test_forget.py` — 60 passed, unchanged (forget untouched, confirmed via `git diff --stat` showing only `cli/main.py` additions, no forget-adjacent lines changed).
+
+### Whole-tree verification (PR2, all green)
+- `uv run pytest` -> 1761 passed (was 1742 before this batch, +19 new tests, all in `tests/unit/cli/test_purge.py`)
+- `uv run mypy .` -> Success: no issues found in 128 source files
+- `uv run ruff check .` -> All checks passed! (no new `# noqa`/bandit-S suppression anywhere in `cli/main.py` — the sole `# noqa: S603` suppression remains confined to `src/openkos/vcs/git.py`'s `_run`, from PR1)
+- `uv run ruff format --check .` -> 128 files already formatted
+- `uv sync --locked` -> resolves cleanly
