@@ -48,7 +48,7 @@ AI coding agents: [`AGENTS.md`](AGENTS.md) is the project canon — principles, 
 
 > The codebase is being bootstrapped. This section describes the intended toolchain so you can prepare; commands will be finalized as MVP 1 lands.
 
-OpenKOS targets **Python 3.13+** and uses [`uv`](https://github.com/astral-sh/uv) for environment and dependency management.
+OpenKOS targets **Python 3.12+** and uses [`uv`](https://github.com/astral-sh/uv) for environment and dependency management.
 
 ```bash
 git clone https://github.com/jasonssdev/openkos.git

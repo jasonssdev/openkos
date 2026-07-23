@@ -59,7 +59,7 @@ Introduced in MVP 2. Each engine has a simple default and a documented scale pat
 
 | Role | Technology | License |
 | --- | --- | --- |
-| Language / runtime | Python 3.13+ | PSF |
+| Language / runtime | Python 3.12+ | PSF |
 | CLI | Typer | MIT |
 | Schemas / validation | Pydantic v2 | MIT |
 | Knowledge format | Markdown + YAML frontmatter (OKF) | — |
@@ -85,7 +85,7 @@ The runtime and interoperability layer (FastAPI local API, MCP server, OKF impor
 
 ## Core framework
 
-- **Python 3.13+**
+- **Python 3.12+**
 - **Typer** for the command-line interface (Click, MIT, is the mature fallback if we ever want fewer abstractions)
 - **Pydantic v2** for schemas and validation
 - **FastAPI** for the local API layer (introduced in MVP 3)

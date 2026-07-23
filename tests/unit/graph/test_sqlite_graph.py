@@ -207,15 +207,12 @@ def test_build_graph_skips_doc_whose_second_read_fails(
         self: Path,
         encoding: str | None = None,
         errors: str | None = None,
-        newline: str | None = None,
     ) -> str:
         if self == flaky_path:
             read_counts[self] = read_counts.get(self, 0) + 1
             if read_counts[self] > 1:
                 raise FileNotFoundError("simulated concurrent delete between reads")
-        return original_read_text(
-            self, encoding=encoding, errors=errors, newline=newline
-        )
+        return original_read_text(self, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", flaky_read_text)
 
@@ -447,15 +444,12 @@ def test_link_to_a_skipped_doc_produces_no_edge_and_does_not_raise(
         self: Path,
         encoding: str | None = None,
         errors: str | None = None,
-        newline: str | None = None,
     ) -> str:
         if self == flaky_path:
             read_counts[self] = read_counts.get(self, 0) + 1
             if read_counts[self] > 1:
                 raise FileNotFoundError("simulated concurrent delete between reads")
-        return original_read_text(
-            self, encoding=encoding, errors=errors, newline=newline
-        )
+        return original_read_text(self, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", flaky_read_text)
 

@@ -32,7 +32,7 @@ concurrency:
 # tag for its v8 series, so an exact reference is required there regardless.
 jobs:
   # Ruff reads its target version from `project.requires-python` and MyPy pins
-  # `python_version = "3.13"`, so both analyse for 3.13 whatever interpreter they
+  # `python_version = "3.12"`, so both analyse for 3.12 whatever interpreter they
   # run on. Running them across the matrix would repeat identical work; they run
   # once, on the declared floor.
   quality:
@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
-          python-version: "3.13"
+          python-version: "3.12"
           enable-cache: true
 
       # `--locked` installs exactly what uv.lock pins and fails if the lock has
@@ -63,18 +63,18 @@ jobs:
         run: uv run mypy .
 
   # Only the test run genuinely varies by interpreter, so only it gets a matrix:
-  # 3.13 is the declared floor, 3.14 is the current release. Ubuntu only for now.
+  # 3.12 is the declared floor, 3.14 is the current release. Ubuntu only for now.
   test:
     name: test (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
-      # Report both interpreters even when one fails. The difference between
-      # "3.14 alone is red" and "both are red" is the whole reason the matrix
-      # exists, and cancelling the sibling job hides it.
+      # Report every interpreter even when one fails. The difference between
+      # "3.14 alone is red" and "all are red" is the whole reason the matrix
+      # exists, and cancelling a sibling job hides it.
       fail-fast: false
       matrix:
-        python-version: ["3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
@@ -104,7 +104,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
-          python-version: "3.13"
+          python-version: "3.12"
           enable-cache: true
 
       - name: Build sdist and wheel
