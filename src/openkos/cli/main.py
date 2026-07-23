@@ -1259,23 +1259,6 @@ def forget(
 
 _PurgeScope = Literal["self", "source"]
 
-# Exact copy, per design.md "Residual-leak warning" -- printed at preview
-# (before the typed confirmation phrase) AND echoed again on success, so a
-# purge operator sees it both before and after the irreversible act.
-_PURGE_RESIDUAL_WARNING = (
-    "WARNING: purge is IRREVERSIBLE. It rewrites ALL git history in place -- "
-    "there is no git-undo, no reflog, no backup. The raw source file(s) and "
-    "concept file(s) listed above will be permanently expunged from every "
-    "commit, and the live index.md catalog bullet(s) for the purge-set "
-    "member(s) will be removed.\n\n"
-    "This is NOT complete right-to-be-forgotten yet. The purged concept's "
-    "id and title -- and any prior forget tombstone -- REMAIN only in the "
-    "HISTORY (past commits) of index.md and log.md, and, if a prior forget "
-    "already wrote a tombstone for it, in the LIVE log.md too. Those "
-    "identifiers stay recoverable from git history until Slice 2 "
-    "(content-scrub) closes this residual."
-)
-
 
 def _purge_confirm_phrase(
     canonical_id: str, purge_ids: list[str], scope: _PurgeScope
@@ -1301,8 +1284,7 @@ def _purge_clean_live_index(
     Without this, the live catalog would keep a bullet pointing at a
     concept whose file no longer exists in ANY commit -- a broken catalog
     entry, and the purged id/title staying visible in the LIVE workspace
-    (not merely history), which the residual-leak warning must not
-    understate.
+    (not merely history).
 
     This runs as an ordinary working-tree edit AFTER `git filter-repo` has
     already committed the rewritten history and checked out the new HEAD --
@@ -1328,6 +1310,36 @@ def _purge_clean_live_index(
             f"openkos purge: warning -- failed to clean the live index.md "
             f"catalog: {exc}. Run 'openkos lint' to detect/fix a dangling "
             "bullet.",
+            err=True,
+        )
+
+
+def _purge_clean_live_log(layout: config.WorkspaceLayout, purge_ids: list[str]) -> None:
+    """After the (already irreversible) history rewrite has succeeded,
+    remove any LIVE `log.md` `forget` tombstone entry for EVERY purge-set
+    member -- mirroring `_purge_clean_live_index` exactly, but via
+    `bundle_log.remove_log_entry`.
+
+    Without this, a concept that was `forget`-ed before being `purge`-d
+    would leave its tombstone visible in the LIVE `log.md` even though the
+    concept itself, and now (Slice 2) every HISTORICAL mention of it in
+    `index.md`/`log.md`, is gone.
+
+    A failure here is reported but does NOT fail the (already-succeeded)
+    purge, matching `_purge_clean_live_index`'s same non-fatal contract."""
+    log_path = layout.bundle_dir / "log.md"
+    try:
+        log_text = log_path.read_text(encoding="utf-8")
+        new_log_text = log_text
+        for member in purge_ids:
+            new_log_text, _ = bundle_log.remove_log_entry(new_log_text, member)
+        if new_log_text != log_text:
+            fsio.write_atomic(log_path, new_log_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos purge: warning -- failed to clean the live log.md "
+            f"tombstone(s): {exc}. Run 'openkos lint' to detect/fix a "
+            "dangling entry.",
             err=True,
         )
 
@@ -1418,8 +1430,11 @@ def purge(
     ),
 ) -> None:
     """Irreversibly whole-file-expunge a concept's source `raw/<name>` and
-    bundle file from ALL git history via `git-filter-repo` -- the true-
-    erasure counterpart to `forget` (MVP-2 right-to-be-forgotten, Slice 1).
+    bundle file from ALL git history via `git-filter-repo`, ALSO content-
+    scrubbing every historical `bundle/index.md`/`bundle/log.md` blob of the
+    purge-set member(s) -- the true-erasure counterpart to `forget`,
+    completing right-to-be-forgotten (Slice 1 whole-file expunge + Slice 2
+    history content-scrub).
 
     Phase A (pure, no writes) is IDENTICAL to `forget`'s: `require_workspace`
     gate, `_resolve_concept_path` path-safety on the root id, the purge-set
@@ -1440,24 +1455,27 @@ def purge(
     working tree must be clean (`vcs.is_clean`); (5) the local repo must
     have NO commits already published on any remote (`vcs.has_published_commits`
     -- history rewriting cannot retroactively change what a remote already
-    has); (6) a TYPED CONFIRMATION PHRASE, printed alongside the preview and
-    the mandatory residual-leak warning, must match EXACTLY (never a bare
-    `y`/`yes`) -- there is no `--auto` bypass for this rail, since purge is
-    irreversible. The first failing rail refuses immediately (exit 1,
-    nothing written); no later rail is evaluated.
+    has); (6) a TYPED CONFIRMATION PHRASE, printed alongside the preview,
+    must match EXACTLY (never a bare `y`/`yes`) -- there is no `--auto`
+    bypass for this rail, since purge is irreversible. The first failing
+    rail refuses immediately (exit 1, nothing written); no later rail is
+    evaluated.
 
     Phase B (the point of no return, reached only once all six rails pass):
     `vcs.expunge_paths` rewrites every purge-set member's `raw/<name>` and
-    `bundle/<id>.md` out of ALL git history and the working tree, then
-    finalizes (reflog expire + gc). A `GitFinalizeError` (the rewrite
-    SUCCEEDED but finalize failed) is surfaced distinctly, with its own
-    recoverability warning, and index cleanup still runs -- the rewrite
-    already happened and cannot be undone. Index cleanup then deletes
-    `.openkos/{fts,vectors,graph}.db` and best-effort rebuilds FTS + graph
-    (never `vectors.db`, and never through the Ollama-dependent full
+    `bundle/<id>.md` out of ALL git history and the working tree, and, in
+    the SAME pass, content-scrubs every historical `index.md`/`log.md` blob
+    of the purge-set member(s)' catalog bullet, log entries, and any prior
+    `forget` tombstone (Slice 2), then finalizes (reflog expire + gc). A
+    `GitFinalizeError` (the rewrite SUCCEEDED but finalize failed) is
+    surfaced distinctly, and live-index/live-log cleanup still runs -- the
+    rewrite already happened and cannot be undone. Index cleanup then
+    deletes `.openkos/{fts,vectors,graph}.db` and best-effort rebuilds FTS +
+    graph (never `vectors.db`, and never through the Ollama-dependent full
     `reindex()`) -- a rebuild failure is reported but does NOT fail the
-    already-irreversible purge. No `log.md` tombstone is ever written. The
-    residual-leak warning is echoed again on success.
+    already-irreversible purge. After a successful purge, the purged id/
+    title no longer appears anywhere in `index.md` or `log.md`, live or
+    historical -- no residual warning is printed.
     """
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
@@ -1568,10 +1586,10 @@ def purge(
         raise typer.Exit(code=1) from exc
 
     # Preview: every path targeted for expunge, any raw-path resolution
-    # warnings, the cascade count (source scope only), then the MANDATORY
-    # residual-leak warning -- all printed before rail 1 (spec: Mandatory
-    # Residual-Leak Warning; design: printed at preview, before the typed
-    # phrase).
+    # warnings, and the cascade count (source scope only) -- all printed
+    # before rail 1. Slice 2 removes the (now-obsolete) mandatory
+    # residual-leak warning: the history content-scrub below means no
+    # residual is left to warn about.
     typer.echo("openkos purge: proposed IRREVERSIBLE history rewrite:")
     for target in expunge_targets:
         typer.echo(f"  - {target}")
@@ -1583,7 +1601,6 @@ def purge(
     if scope == "source":
         typer.echo(f"  Total: {len(purge_ids)} concept(s) to purge.")
     typer.echo()
-    typer.echo(_PURGE_RESIDUAL_WARNING)
 
     # Rail 1: reference-aware refusal, unless --force (spec req 2, rail 1).
     if (verified_refs or unverifiable_refs) and not force:
@@ -1718,7 +1735,7 @@ def purge(
         err=True,
     )
     try:
-        vcs_git.expunge_paths(root, expunge_targets)
+        vcs_git.expunge_paths(root, expunge_targets, scrub_identities=purge_ids)
     except vcs_git.GitFinalizeError as exc:
         typer.echo(
             f"openkos purge: the history rewrite SUCCEEDED, but finalize "
@@ -1726,8 +1743,8 @@ def purge(
             err=True,
         )
         _purge_clean_live_index(layout, purge_ids)
+        _purge_clean_live_log(layout, purge_ids)
         _purge_rebuild_indexes(layout)
-        typer.echo(_PURGE_RESIDUAL_WARNING)
         raise typer.Exit(code=1) from exc
     except vcs_git.GitError as exc:
         typer.echo(
@@ -1737,6 +1754,7 @@ def purge(
         raise typer.Exit(code=1) from exc
 
     _purge_clean_live_index(layout, purge_ids)
+    _purge_clean_live_log(layout, purge_ids)
     _purge_rebuild_indexes(layout)
 
     if scope == "source":
@@ -1749,7 +1767,6 @@ def purge(
             f"openkos purge: permanently expunged 'bundle/{canonical_id}.md' "
             "from ALL git history."
         )
-    typer.echo(_PURGE_RESIDUAL_WARNING)
 
 
 @app.command()

@@ -18,6 +18,7 @@ in the `purge` CLI verb (PR2), not here -- but the probes are shared with
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -227,7 +228,144 @@ def _validate_rel_paths(rel_paths: Sequence[str]) -> None:
             )
 
 
-def expunge_paths(cwd: Path, rel_paths: Sequence[str]) -> None:
+def _validate_scrub_identities(scrub_identities: Sequence[str]) -> None:
+    """Fail-closed validation of `expunge_paths`' `scrub_identities`, BEFORE
+    any file is written or subprocess invoked.
+
+    Each identity is written verbatim, one per line, to a sidecar temp file
+    that the `--file-info-callback` snippet reads back at runtime (via
+    `OPENKOS_SCRUB_IDS_FILE`). An identity containing a newline would split
+    into TWO lines in that sidecar -- silently injecting an extra,
+    caller-uncontrolled scrub target into the set the snippet drops lines
+    for. Rejecting control characters and empty identities up front, before
+    any subprocess or temp file is created, mirrors `_validate_rel_paths`'
+    discipline exactly.
+    """
+    for identity in scrub_identities:
+        if not identity or not identity.strip():
+            raise ValueError(
+                f"expunge_paths: scrub identity must not be empty/whitespace: "
+                f"{identity!r}"
+            )
+        if "\n" in identity:
+            raise ValueError(
+                "expunge_paths: scrub identity must not contain a newline "
+                f"character -- it would inject an extra scrub-set entry via "
+                f"the sidecar identities file: {identity!r}"
+            )
+        if "\r" in identity:
+            raise ValueError(
+                "expunge_paths: scrub identity must not contain a carriage-"
+                f"return character -- it would inject an extra scrub-set "
+                f"entry via the sidecar identities file: {identity!r}"
+            )
+        if any(ord(char) < 0x20 for char in identity):
+            raise ValueError(
+                f"expunge_paths: scrub identity must not contain control "
+                f"character(s): {identity!r}"
+            )
+
+
+# The BODY of a `def file_info_callback(filename, mode, blob_id, value):`
+# function, compiled and invoked by `git filter-repo --file-info-callback
+# <this-file>` once per (non-deletion) file change. Deliberately a STATIC
+# constant with ZERO subject-data interpolation: the purge-set identities to
+# scrub reach it ONLY via the `OPENKOS_SCRUB_IDS_FILE` env var, read at call
+# time from a sidecar temp file -- never written into this source string
+# itself, so no id/title can ever be (mis)interpreted as Python source.
+#
+# `re` and `os` are already present in git-filter-repo's callback globals
+# (see its `public_globals`), so no `import` statement is needed or allowed
+# here (an `import` line would still work, but the snippet avoids depending
+# on it to stay minimal).
+#
+# `_identity` below is a BYTES-only re-implementation of
+# `openkos.bundle.index._link_identity`'s normalization rules -- it MUST stay
+# in lockstep with that function (proven by the parity test in
+# `tests/unit/vcs/test_scrub_snippet_parity.py`); this is intentionally
+# duplicated code, not a shared import, because this snippet runs inside
+# `git-filter-repo`'s own subprocess, which cannot import `openkos`.
+_FILE_INFO_CALLBACK_SNIPPET = """\
+if filename not in (b"bundle/index.md", b"bundle/log.md"):
+    return (filename, mode, blob_id)
+ids_path = os.environ.get("OPENKOS_SCRUB_IDS_FILE")
+if not ids_path:
+    return (filename, mode, blob_id)
+with open(ids_path, "rb") as ids_handle:
+    raw_ids = ids_handle.read()
+scrub_ids = {line for line in raw_ids.split(b"\\n") if line}
+if not scrub_ids:
+    return (filename, mode, blob_id)
+
+_bullet_markers = (b"* ", b"- ")
+_link_re = re.compile(rb"\\[[^\\]]*\\]\\(([^)]+)\\)")
+_anchor_re = re.compile(rb"\\(id: ([^)]+)\\)")
+_scheme_re = re.compile(rb"\\A[A-Za-z][A-Za-z0-9+.-]*:")
+
+def _identity(target):
+    target = target.split(b"#", 1)[0].strip()
+    if target.endswith(b'"') and b' "' in target:
+        target = target.rsplit(b' "', 1)[0].strip()
+    if not target:
+        return None
+    if _scheme_re.match(target):
+        return None
+    try:
+        target.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if target.startswith(b"/"):
+        target = target[1:]
+    parts = []
+    for part in target.split(b"/"):
+        if part in (b"", b"."):
+            continue
+        if part == b"..":
+            if parts:
+                parts.pop()
+            else:
+                return None
+        else:
+            parts.append(part)
+    identity = b"/".join(parts)
+    if identity.endswith(b".md"):
+        identity = identity[: -len(b".md")]
+    return identity
+
+contents = value.get_contents_by_identifier(blob_id)
+lines = contents.splitlines(keepends=True)
+kept_lines = []
+changed = False
+for line in lines:
+    stripped = line.lstrip()
+    dropped = False
+    if stripped.startswith(_bullet_markers):
+        link_match = _link_re.search(stripped)
+        if link_match is not None and _identity(link_match.group(1)) in scrub_ids:
+            dropped = True
+        if not dropped:
+            anchor_match = _anchor_re.search(stripped)
+            if anchor_match is not None and anchor_match.group(1) in scrub_ids:
+                dropped = True
+    if dropped:
+        changed = True
+        continue
+    kept_lines.append(line)
+
+if not changed:
+    return (filename, mode, blob_id)
+new_contents = b"".join(kept_lines)
+new_blob_id = value.insert_file_with_contents(new_contents)
+return (filename, mode, new_blob_id)
+"""
+
+
+def expunge_paths(
+    cwd: Path,
+    rel_paths: Sequence[str],
+    *,
+    scrub_identities: Sequence[str] | None = None,
+) -> None:
     """Rewrite ALL git history under `cwd`, removing every path in
     `rel_paths` from every commit AND the working tree, via `git
     filter-repo`.
@@ -240,18 +378,32 @@ def expunge_paths(cwd: Path, rel_paths: Sequence[str]) -> None:
     --expire=now --all` + `git gc --prune=now`, so purged blobs are
     unreachable AND pruned, not merely unreferenced.
 
+    When `scrub_identities` is a non-empty sequence, this SAME single `git
+    filter-repo` pass ALSO content-scrubs `bundle/index.md` and
+    `bundle/log.md` across every historical commit: each identity is
+    validated (see `_validate_scrub_identities`, fail-closed, BEFORE any
+    subprocess), then written one-per-line to a sidecar temp file whose path
+    is passed via the `OPENKOS_SCRUB_IDS_FILE` env var to a `--file-info-
+    callback <snippet-file>` invocation of the STATIC
+    `_FILE_INFO_CALLBACK_SNIPPET` -- no id/title is ever interpolated into
+    the snippet source itself or into argv. When `scrub_identities` is
+    `None`/empty, no `--file-info-callback` argv is added at all: behavior is
+    byte-identical to calling this function without that parameter.
+
     IRREVERSIBLE: no backup is taken. Callers MUST have already confirmed
     every fail-closed safety rail (git-root match, clean tree, no published
     commits, typed confirmation) before calling this -- this function
     performs no such checks itself.
 
-    Raises `ValueError` for invalid `rel_paths` (no subprocess invoked,
-    fail-closed), `GitError` if the rewrite itself fails (history NOT
-    rewritten), or `GitFinalizeError` if the rewrite SUCCEEDED but the
-    post-rewrite finalize step failed (history rewritten, purged data may
-    still be recoverable -- see `GitFinalizeError`).
+    Raises `ValueError` for invalid `rel_paths`/`scrub_identities` (no
+    subprocess invoked, fail-closed), `GitError` if the rewrite itself fails
+    (history NOT rewritten), or `GitFinalizeError` if the rewrite SUCCEEDED
+    but the post-rewrite finalize step failed (history rewritten, purged
+    data may still be recoverable -- see `GitFinalizeError`).
     """
     _validate_rel_paths(rel_paths)
+    if scrub_identities:
+        _validate_scrub_identities(scrub_identities)
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
@@ -260,18 +412,34 @@ def expunge_paths(cwd: Path, rel_paths: Sequence[str]) -> None:
             handle.write(f"literal:{rel_path}\n")
         paths_file = Path(handle.name)
 
+    snippet_file: Path | None = None
+    sidecar_file: Path | None = None
     try:
-        result = _run(
-            [
-                "git",
-                "filter-repo",
-                "--force",
-                "--invert-paths",
-                "--paths-from-file",
-                str(paths_file),
-            ],
-            cwd=cwd,
-        )
+        argv = [
+            "git",
+            "filter-repo",
+            "--force",
+            "--invert-paths",
+            "--paths-from-file",
+            str(paths_file),
+        ]
+        env: Mapping[str, str] | None = None
+        if scrub_identities:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as snippet_handle:
+                snippet_handle.write(_FILE_INFO_CALLBACK_SNIPPET)
+                snippet_file = Path(snippet_handle.name)
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as sidecar_handle:
+                for identity in scrub_identities:
+                    sidecar_handle.write(f"{identity}\n")
+                sidecar_file = Path(sidecar_handle.name)
+            env = {**os.environ, "OPENKOS_SCRUB_IDS_FILE": str(sidecar_file)}
+            argv = [*argv, "--file-info-callback", str(snippet_file)]
+
+        result = _run(argv, cwd=cwd, env=env)
         if result.returncode != 0:
             raise GitError(
                 f"git filter-repo failed (exit {result.returncode}): "
@@ -279,6 +447,10 @@ def expunge_paths(cwd: Path, rel_paths: Sequence[str]) -> None:
             )
     finally:
         paths_file.unlink(missing_ok=True)
+        if snippet_file is not None:
+            snippet_file.unlink(missing_ok=True)
+        if sidecar_file is not None:
+            sidecar_file.unlink(missing_ok=True)
 
     _finalize(cwd)
 
