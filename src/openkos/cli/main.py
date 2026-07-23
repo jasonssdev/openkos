@@ -3960,9 +3960,15 @@ def _stage_filed_answer(
 
     Sensitivity is the high-water-mark (`okf.combine_sensitivity`) folded
     over each cited concept's RE-READ frontmatter, seeded at
-    `default_sensitivity`; an unreadable/unparseable cited concept is
-    skipped, leaving the running floor untouched (fail-safe, mirrors
-    `_stage_derived_objects`'s per-candidate drop policy).
+    `default_sensitivity`; an unreadable OR unparseable cited concept folds
+    the running floor to `"confidential"` -- the most-restrictive level,
+    NOT skipped (fail-closed: "cannot verify sensitivity -> confidential",
+    the same stance as `okf._rank` / `sensitivity.blocks_llm_send`).
+    Skipping would under-classify: a cited concept surfaced under
+    `--include-confidential` that becomes unreadable at save time could
+    otherwise leave a filed answer -- which may have synthesized
+    confidential content -- classified below `confidential`, a future-leak
+    vector.
     """
     if not citations:
         raise ValueError(
@@ -3999,7 +4005,11 @@ def _stage_filed_answer(
                 encoding="utf-8"
             )
             metadata, _ = okf.load_frontmatter(text)
-        except (OSError, ValueError):
+        except Exception:  # broad: any read/parse failure
+            # fails CLOSED to "confidential" (cannot verify -> most
+            # restrictive), mirroring `_assemble_context`'s broad
+            # `except Exception` in retrieval/answer.py.
+            sensitivity = okf.combine_sensitivity(sensitivity, "confidential")
             continue
         sensitivity = okf.combine_sensitivity(sensitivity, metadata.get("sensitivity"))
 

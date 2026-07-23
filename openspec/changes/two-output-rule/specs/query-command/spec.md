@@ -54,7 +54,10 @@ concepts' ids (`result.citations`).
 WHEN filing via `--save`, `query` MUST re-read each cited concept's
 frontmatter and set the filed concept's sensitivity to the high-water-mark
 (`okf.combine_sensitivity`) across them, seeded at `cfg.default_sensitivity`.
-An unreadable cited concept is skipped (the running floor holds). WHEN
+An unreadable OR unparseable cited concept MUST fold the running floor to
+`confidential` -- the most-restrictive level, NOT be skipped -- fail-closed,
+consistent with the project's pervasive "cannot verify sensitivity ->
+confidential" stance (`okf._rank`, `sensitivity.blocks_llm_send`). WHEN
 `--include-confidential` caused a confidential cited concept to be used, the
 filed concept's sensitivity MUST be confidential. WHEN there are zero
 citations, `query` MUST REFUSE to file, exit non-zero, and leave the bundle
@@ -67,6 +70,14 @@ unchanged -- `build_concept` requires non-empty provenance, and a sourceless
   confidential
 - WHEN `openkos query "<question>" --save` files the answer
 - THEN the filed concept's sensitivity is confidential
+
+#### Scenario: Unreadable or unparseable citation folds to confidential
+
+- GIVEN a cited concept's file is missing, or its frontmatter is
+  unparseable, at save time
+- WHEN `openkos query "<question>" --save` files the answer
+- THEN the filed concept's sensitivity is confidential, not the seeded
+  default
 
 #### Scenario: Zero citations refuse to file
 

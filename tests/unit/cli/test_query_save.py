@@ -41,6 +41,15 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sqlite_graph.write_graph_store(tmp_path / ".openkos" / "graph.db", bundle_dir)
 
 
+def _set_config_field(tmp_path: Path, old: str, new: str) -> None:
+    """Patch a single line in the generated `openkos.yaml` (mirrors
+    `test_ingest.py::_set_config_field`)."""
+    config_path = tmp_path / "openkos.yaml"
+    content = config_path.read_text(encoding="utf-8")
+    assert old in content
+    config_path.write_text(content.replace(old, new), encoding="utf-8")
+
+
 def _write_concept(
     bundle_dir: Path,
     link_dir: str,
@@ -242,12 +251,68 @@ def test_stage_filed_answer_collision_raises(tmp_path: Path) -> None:
         )
 
 
-def test_stage_filed_answer_sensitivity_floor_default(tmp_path: Path) -> None:
-    """An unreadable cited concept is skipped; the running floor (seeded at
-    `cfg.default_sensitivity`) holds (design: "unreadable -> skipped, floor
-    holds -- fail-safe")."""
+def test_stage_filed_answer_missing_citation_folds_confidential(
+    tmp_path: Path,
+) -> None:
+    """A cited concept whose file is MISSING at save time folds to
+    `confidential` -- the most-restrictive level, NOT skipped (fail-closed:
+    "cannot verify sensitivity -> confidential", mirroring `okf._rank` /
+    `blocks_llm_send`; skipping would under-classify a filed answer that may
+    have synthesized confidential content)."""
     bundle_dir = tmp_path / "bundle"
     citations = [Citation(concept_id="concepts/missing", title="Missing")]
+
+    plan = _stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="answer text",
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+    )
+
+    assert plan.sensitivity == "confidential"
+    assert "sensitivity: confidential" in plan.content
+
+
+def test_stage_filed_answer_malformed_frontmatter_folds_confidential(
+    tmp_path: Path,
+) -> None:
+    """A cited concept with MALFORMED frontmatter (unparseable YAML) does not
+    crash `_stage_filed_answer` -- it is treated the same as unreadable and
+    folds the running floor to `confidential` (fail-closed, mirrors
+    `_assemble_context`'s broad `except Exception` in
+    `retrieval/answer.py`)."""
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / "malformed.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\ntype: Concept\ntitle: [unterminated\n---\nbody\n", encoding="utf-8"
+    )
+    citations = [Citation(concept_id="concepts/malformed", title="Malformed")]
+
+    plan = _stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="answer text",
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+    )
+
+    assert plan.sensitivity == "confidential"
+    assert "sensitivity: confidential" in plan.content
+
+
+def test_stage_filed_answer_all_readable_private_stays_private(
+    tmp_path: Path,
+) -> None:
+    """When every cited concept is readable/parseable and `private`, the
+    floor stays `private` -- fail-closed only applies to unreadable/
+    unparseable citations, not to legitimately lower sensitivities."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "stoicism", sensitivity="private")
+    citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
 
     plan = _stage_filed_answer(
         question="what is stoicism?",
@@ -532,6 +597,56 @@ def test_query_save_slug_collision_refuses_no_write(
     assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").read_text(
         encoding="utf-8"
     ) == before
+
+
+def test_query_save_malformed_citation_does_not_crash_and_files_confidential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cited concept with malformed frontmatter no longer crashes `query
+    --save` with a raw `yaml.YAMLError` traceback -- it exits cleanly and
+    the filed concept is folded to `confidential` (fail-closed reliability
+    fix; the on-disk citation may have drifted to malformed since the last
+    reindex, and `query` reads a possibly-stale index)."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / "malformed.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\ntype: Concept\ntitle: [unterminated\n---\nbody\n", encoding="utf-8"
+    )
+    citation = Citation(concept_id="concepts/malformed", title="Malformed")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = bundle_dir / "concepts" / "what-is-stoicism.md"
+    assert concept_path.is_file()
+    assert "sensitivity: confidential" in concept_path.read_text(encoding="utf-8")
+
+
+def test_query_save_review_false_skips_the_prompt_like_auto(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config `review: false` skips the confirmation prompt the same as
+    `--auto`, without passing `--auto` (mirrors
+    `test_ingest.py::test_review_false_skips_the_prompt_like_auto`; the
+    docstring already claims `--auto` OR `review: false` bypasses the
+    prompt, but only `--auto` was previously exercised for `query --save`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "review: true", "review: false")
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"])
+
+    assert result.exit_code == 0
+    assert "Proceed" not in result.output
+    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
 
 
 def test_query_save_prints_reindex_hint(
