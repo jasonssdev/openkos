@@ -46,17 +46,15 @@ deprecation-filtered ("live") count BEFORE the cap, so the existing
 pairs genuinely exceed the cap.
 """
 
-import json
 import math
-import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 from openkos import lifecycle, sensitivity
 from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import build_graph
+from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import okf
 
@@ -246,42 +244,6 @@ def _build_messages(
     ]
 
 
-def _strip_code_fence(raw: str) -> str | None:
-    """Parse step: strip a surrounding ``` or ```json fence, if present."""
-    match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
-    return match.group(1).strip() if match else None
-
-
-def _first_brace_block(raw: str) -> str | None:
-    """Parse step: return the first `{...}` block found anywhere in `raw`,
-    if any (recovers a JSON object embedded in surrounding prose)."""
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    return match.group(0) if match else None
-
-
-def _extract_json_object(raw: object) -> dict[str, Any] | None:
-    """3-step fail-closed JSON extraction (module-local copy of
-    `adjudication._extract_json_object`/`edge_typing._extract_json_object`
-    -- no cross-import of their `_`-prefixed symbols, design D4): raw
-    `json.loads`, then a fenced code block stripped, then the first
-    `{...}` block. The first candidate that parses to a `dict` is used.
-    `None` if none of the three steps yields a dict, or if `raw` is not a
-    string (fail-closed: a backend that violates the `-> str` contract must
-    not crash the parser)."""
-    if not isinstance(raw, str):
-        return None
-    for candidate in (raw, _strip_code_fence(raw), _first_brace_block(raw)):
-        if candidate is None:
-            continue
-        try:
-            parsed = json.loads(candidate)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
-
-
 def _map_verdict(raw_verdict: object) -> Verdict | None:
     """Case-insensitive mapping of the reply's `verdict` field to `Verdict`.
     `None` (not `Verdict.UNCERTAIN`) signals "unrecognized" so the caller can
@@ -334,7 +296,7 @@ def _parse_reply(raw: object) -> tuple[Verdict, float, str, tuple[str, ...]]:
     `CONTRADICTS` verdict with empty/missing `conflicting_claims` is
     coerced to `UNCERTAIN` (spec: Citation-Gated Precision) -- this gate
     does NOT apply to `CONSISTENT`/`UNCERTAIN`."""
-    data = _extract_json_object(raw)
+    data = parsing.extract_json_object(raw)
     if data is None:
         return Verdict.UNCERTAIN, 0.0, _MALFORMED_REPLY_RATIONALE, ()
 

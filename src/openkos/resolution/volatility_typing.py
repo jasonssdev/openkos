@@ -17,13 +17,11 @@ of that type's concept bodies (design's "Deterministic Sampling Rule") to
 show the LLM -- one `llm.chat` call per type, never per concept.
 """
 
-import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from openkos import lint, sensitivity
+from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import types
 
@@ -128,41 +126,6 @@ def _build_messages(
     ]
 
 
-def _strip_code_fence(raw: str) -> str | None:
-    """Parse step: strip a surrounding ``` or ```json fence, if present."""
-    match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
-    return match.group(1).strip() if match else None
-
-
-def _first_brace_block(raw: str) -> str | None:
-    """Parse step: return the first `{...}` block found anywhere in `raw`,
-    if any (recovers a JSON object embedded in surrounding prose)."""
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    return match.group(0) if match else None
-
-
-def _extract_json_object(raw: object) -> dict[str, Any] | None:
-    """3-step fail-closed JSON extraction (module-local copy of
-    `edge_typing._extract_json_object` -- no cross-import of its
-    `_`-prefixed symbols, design D4): raw `json.loads`, then a fenced code
-    block stripped, then the first `{...}` block. The first candidate that
-    parses to a `dict` is used. `None` if none of the three steps yields a
-    dict, or if `raw` is not a string (fail-closed: a backend that violates
-    the `-> str` contract must not crash the parser)."""
-    if not isinstance(raw, str):
-        return None
-    for candidate in (raw, _strip_code_fence(raw), _first_brace_block(raw)):
-        if candidate is None:
-            continue
-        try:
-            parsed = json.loads(candidate)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
-
-
 def _parse_reply(raw: object) -> tuple[str | None, str]:
     """Fail-closed parse + validate of one type's LLM reply: never raises.
     An unparseable or non-object reply degrades to `(None,
@@ -176,7 +139,7 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
     fail-closed degrade path (its own docstring's invariant). On the
     successful (non-degrade) path, `rationale` is kept as-is (including
     blank) since a well-formed reply is allowed to omit one."""
-    data = _extract_json_object(raw)
+    data = parsing.extract_json_object(raw)
     if data is None:
         return None, _MALFORMED_REPLY_RATIONALE
 

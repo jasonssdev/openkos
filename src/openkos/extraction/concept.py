@@ -15,11 +15,10 @@ wording, and catching `OllamaError` to keep the CLI's Source-only fallback
 UX, looping `openkos.model.okf.build_concept` once per validated object.
 """
 
-import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
+from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model.types import CLASSIFIABLE_TYPES as _VALID_TYPES
 
@@ -163,63 +162,6 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
     ]
 
 
-def _strip_code_fence(raw: str) -> str | None:
-    """Parse step 2: strip a surrounding ``` or ```json fence, if present."""
-    match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
-    return match.group(1).strip() if match else None
-
-
-def _first_bracket_block(raw: str) -> str | None:
-    """Parse step 3: return the first `[...]` block found anywhere in `raw`,
-    if any (recovers a JSON array embedded in surrounding prose)."""
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    return match.group(0) if match else None
-
-
-def _first_brace_block(raw: str) -> str | None:
-    """Parse step 4: return the first `{...}` block found anywhere in `raw`,
-    if any (D2 recovery path: a lone top-level object embedded in prose).
-    Multiple bare objects back-to-back without array wrapping are NOT
-    recovered by this greedy first-brace-to-last-brace span and degrade to
-    an empty list by design -- D2 recovers only a lone object."""
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    return match.group(0) if match else None
-
-
-def _extract_json_items(raw: object) -> list[dict[str, Any]]:
-    """4-step fail-closed JSON extraction, generalized to a list of candidate
-    objects (design D2): raw `json.loads`, then a fenced code block stripped,
-    then the first `[...]` block, then the first `{...}` block. The first
-    candidate that parses is used: a JSON array keeps only its dict elements
-    (non-dict elements, e.g. stray numbers, are dropped without failing the
-    whole reply); a lone top-level JSON object (wrong shape -- not
-    array-wrapped) is RECOVERED as a one-item list rather than failing
-    closed, since a local LLM routinely emits a lone object for a
-    single-object source and that is valid content on a shape technicality,
-    not invalid data. `[]` if none of the four steps yields a list or
-    object, or if `raw` is not a string (fail-closed: a backend that
-    violates the `-> str` contract must not crash the parser)."""
-    if not isinstance(raw, str):
-        return []
-    for candidate in (
-        raw,
-        _strip_code_fence(raw),
-        _first_bracket_block(raw),
-        _first_brace_block(raw),
-    ):
-        if candidate is None:
-            continue
-        try:
-            parsed = json.loads(candidate)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(parsed, list):
-            return [item for item in parsed if isinstance(item, dict)]
-        if isinstance(parsed, dict):
-            return [parsed]
-    return []
-
-
 def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     """Fail-closed validation of one parsed candidate item: `type` in the
     closed vocabulary; `title`/`description` non-empty after strip; `body`
@@ -280,7 +222,7 @@ def extract_concept(
     object.
     """
     reply = llm.chat(_build_messages(source_text, source_title))
-    items = _extract_json_items(reply)
+    items = parsing.extract_json_items(reply)
     results: list[ExtractionResult] = []
     for item in items:
         result = _validate(item)

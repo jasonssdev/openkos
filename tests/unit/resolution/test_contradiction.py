@@ -19,6 +19,7 @@ import pytest
 
 from openkos import lifecycle, sensitivity
 from openkos.graph.base import Edge, GraphStore
+from openkos.llm import parsing
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.resolution import contradiction as contradiction_mod
@@ -262,6 +263,12 @@ def test_candidate_pairs_on_empty_store_returns_empty_and_zero_total() -> None:
 
 # ---------------------------------------------------------------------------
 # Phase 3: fail-closed parse table tests (Req: Verdict Shape, Citation Gate, Parse)
+#
+# `contradiction.py`'s own JSON-extraction step now delegates to the shared
+# `openkos.llm.parsing.extract_json_object` (gap #8 · S3c hygiene, #1606) --
+# these tests exercise that shared helper the same way `_parse_reply` uses
+# it, rather than a module-local clone. Full coverage of the helper itself
+# lives in `tests/unit/llm/test_parsing.py`.
 # ---------------------------------------------------------------------------
 
 
@@ -269,17 +276,17 @@ def test_extract_json_object_recovers_from_code_fence_and_prose() -> None:
     fenced = '```json\n{"verdict": "consistent"}\n```'
     prose = 'Sure, here you go: {"verdict": "consistent"} thanks!'
 
-    assert contradiction_mod._extract_json_object(fenced) == {"verdict": "consistent"}
-    assert contradiction_mod._extract_json_object(prose) == {"verdict": "consistent"}
+    assert parsing.extract_json_object(fenced) == {"verdict": "consistent"}
+    assert parsing.extract_json_object(prose) == {"verdict": "consistent"}
 
 
 def test_extract_json_object_non_string_input_returns_none() -> None:
-    assert contradiction_mod._extract_json_object(None) is None
-    assert contradiction_mod._extract_json_object(42) is None
+    assert parsing.extract_json_object(None) is None
+    assert parsing.extract_json_object(42) is None
 
 
 def test_extract_json_object_non_dict_json_returns_none() -> None:
-    assert contradiction_mod._extract_json_object("[1, 2, 3]") is None
+    assert parsing.extract_json_object("[1, 2, 3]") is None
 
 
 @pytest.mark.parametrize(
