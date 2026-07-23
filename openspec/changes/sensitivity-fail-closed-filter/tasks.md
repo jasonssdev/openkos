@@ -66,16 +66,16 @@ Chain strategy: feature-branch-chain
 
 ## Phase 3: S3c — Hygiene (PR3, base: PR2 branch)
 
-- [ ] 3.1 RED: create `tests/unit/llm/test_parsing.py` — `extract_json_object`/`extract_json_items` cases: plain object/list, fenced-code recovery, brace/bracket recovery, non-str input fails closed (returns `None`/`[]`, no exception)
-- [ ] 3.2 GREEN: create `src/openkos/llm/parsing.py` exposing public `extract_json_object` + `extract_json_items`, consolidating the 5 existing local clones
-- [ ] 3.3 REFACTOR: migrate `resolution/adjudication.py:131-163` to import and call `llm.parsing.extract_json_object`, delete local clone
-- [ ] 3.4 REFACTOR: migrate `resolution/edge_typing.py:169-201` to import and call `llm.parsing.extract_json_object`, delete local clone
-- [ ] 3.5 REFACTOR: migrate `resolution/volatility_typing.py:132-164` to import and call `llm.parsing.extract_json_object`, delete local clone
-- [ ] 3.6 REFACTOR: migrate `resolution/contradiction.py:250-290` to import and call `llm.parsing.extract_json_object`, delete local clone
-- [ ] 3.7 REFACTOR: migrate `extraction/concept.py:166-220` (list variant) to import and call `llm.parsing.extract_json_items`, delete local clone
-- [ ] 3.8 RED: extend `tests/unit/test_config.py` — YAML mapping with an unhashable complex key raises `ValueError`, not uncaught `TypeError`
-- [ ] 3.9 GREEN: `config.py`:375 change `except yaml.YAMLError` to `except (yaml.YAMLError, TypeError)`
-- [ ] 3.10 Verify: confirm `uv run pytest tests/unit/llm/test_parsing.py tests/unit/resolution/test_adjudication.py tests/unit/resolution/test_edge_typing.py tests/unit/resolution/test_volatility_typing.py tests/unit/resolution/test_contradiction.py tests/unit/extraction/test_concept.py tests/unit/test_config.py -q` all green; full suite `uv run pytest -q` green; confirm `ollama.py` json guards left untouched (transport-level, unrelated)
+- [x] 3.1 RED: create `tests/unit/llm/test_parsing.py` — `extract_json_object`/`extract_json_items` cases: plain object/list, fenced-code recovery, brace/bracket recovery, non-str input fails closed (returns `None`/`[]`, no exception)
+- [x] 3.2 GREEN: create `src/openkos/llm/parsing.py` exposing public `extract_json_object` + `extract_json_items`, consolidating the 5 existing local clones
+- [x] 3.3 REFACTOR: migrate `resolution/adjudication.py:131-163` to import and call `llm.parsing.extract_json_object`, delete local clone
+- [x] 3.4 REFACTOR: migrate `resolution/edge_typing.py:169-201` to import and call `llm.parsing.extract_json_object`, delete local clone
+- [x] 3.5 REFACTOR: migrate `resolution/volatility_typing.py:132-164` to import and call `llm.parsing.extract_json_object`, delete local clone
+- [x] 3.6 REFACTOR: migrate `resolution/contradiction.py:250-290` to import and call `llm.parsing.extract_json_object`, delete local clone (also updated `tests/unit/resolution/test_contradiction.py`'s 3 direct calls to the removed private clone to call `openkos.llm.parsing.extract_json_object` instead, since the module-local symbol no longer exists)
+- [x] 3.7 REFACTOR: migrate `extraction/concept.py:166-220` (list variant) to import and call `llm.parsing.extract_json_items`, delete local clone
+- [x] 3.8 RED: extend `tests/unit/test_config.py` — YAML mapping with an unhashable complex key raises `ValueError`, not uncaught `TypeError` (deviation: verified empirically that with this project's pinned PyYAML 6.0.3 pure-Python `SafeLoader`, `BaseConstructor.construct_mapping`'s `isinstance(key, Hashable)` guard already wraps every unhashable-complex-key shape tried, e.g. `"? - a\n  - b\n: c\n"`, as `yaml.constructor.ConstructorError` -- a `YAMLError` subclass -- so it does NOT escape as a raw `TypeError` in this environment today; the RED test instead forces the scenario via `monkeypatch.setattr(yaml, "safe_load", ...)` so the defensive fix stays covered regardless of PyYAML version internals)
+- [x] 3.9 GREEN: `config.py`:375 change `except yaml.YAMLError` to `except (yaml.YAMLError, TypeError)`
+- [x] 3.10 Verify: confirm `uv run pytest tests/unit/llm/test_parsing.py tests/unit/resolution/test_adjudication.py tests/unit/resolution/test_edge_typing.py tests/unit/resolution/test_volatility_typing.py tests/unit/resolution/test_contradiction.py tests/unit/extraction/test_concept.py tests/unit/test_config.py -q` all green (306 passed); full suite `uv run pytest -q` green (1672 passed, +15 vs. 1657 baseline: +14 new `test_parsing.py` cases, +1 `test_config.py` TypeError case); `uv run mypy .`/`uv run ruff check .`/`uv run ruff format --check .` all clean; confirmed `ollama.py` json guards left untouched (transport-level, unrelated)
 
 ## Correction batch (post-4R-review)
 
