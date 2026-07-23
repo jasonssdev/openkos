@@ -146,6 +146,7 @@ def build_concept(
     provenance: list[str],
     sensitivity: str,
     timestamp: str,
+    related_note: str = "source this was extracted from",
 ) -> str:
     """Build a conformant OKF derived-object document from LLM-extracted,
     UNTRUSTED fields (design: "Builder validation").
@@ -165,9 +166,12 @@ def build_concept(
     `description` is a one-line lede; `body` follows it only when non-blank,
     so a blank body does not duplicate the description paragraph. A `## Related`
     section then backlinks every `provenance` entry -- each a Source concept-id
-    path such as `sources/<slug>` -- as the source this object was extracted
-    from, bundle-relative per docs/knowledge-object-model.md's link shape.
-    `tags` is always `[]`: this slice has no tagging step.
+    path such as `sources/<slug>` -- using `related_note` as the trailing
+    phrase (default: "source this was extracted from", today's ingest
+    literal -- ingest never passes this kwarg, so its output stays
+    byte-identical). A filed `query --save` answer passes a concept-to-concept
+    phrasing instead (design: "Parameterize `## Related` wording (byte-identical
+    ingest)"). `tags` is always `[]`: this slice has no tagging step.
     """
     if type not in _CONCEPT_TYPES:
         raise ValueError(f"type must be one of {sorted(_CONCEPT_TYPES)}, got {type!r}")
@@ -194,9 +198,7 @@ def build_concept(
         "sensitivity": sensitivity,
         "provenance": provenance,
     }
-    related = "\n".join(
-        f"- [{ref}](/{ref}.md) — source this was extracted from" for ref in provenance
-    )
+    related = "\n".join(f"- [{ref}](/{ref}.md) — {related_note}" for ref in provenance)
     # `description` is a one-line lede; append `body` only when it adds content,
     # so a blank-body fallback does not render the description paragraph twice.
     lede = description if not body.strip() else f"{description}\n\n{body}"

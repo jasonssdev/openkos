@@ -652,6 +652,23 @@ def test_build_concept_output_byte_identical_regression() -> None:
     assert "relations" not in text
 
 
+def test_build_concept_custom_related_note_renders() -> None:
+    """A caller-supplied `related_note` replaces the default "source this was
+    extracted from" phrase in the `## Related` section -- the seam
+    `query --save` uses to phrase a concept-to-concept citation instead of
+    ingest's source-to-concept one (design: "Parameterize `## Related`
+    wording (byte-identical ingest)")."""
+    text = _build_call_concept(related_note="concept cited to produce this answer")
+
+    _, body = okf.load_frontmatter(text)
+
+    assert (
+        "- [sources/call-with-maria-salazar](/sources/call-with-maria-salazar.md) "
+        "— concept cited to produce this answer" in body
+    )
+    assert "source this was extracted from" not in body
+
+
 def test_build_concept_emits_no_volatility_key() -> None:
     """`build_concept` never emits a `volatility` key (freshness-lint-v1,
     design: "INGEST UNCHANGED"), mirroring

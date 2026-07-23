@@ -36,6 +36,7 @@ from openkos.llm.ollama import (
 )
 from openkos.model import okf
 from openkos.model.relations import validate_relation_type
+from openkos.model.types import CLASSIFIABLE_TYPES as _CLASSIFIABLE_TYPES
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates
@@ -47,7 +48,7 @@ from openkos.resolution.contradiction import (
 )
 from openkos.resolution.edge_typing import suggest_relations
 from openkos.resolution.volatility_typing import suggest_volatility
-from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
+from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
 from openkos.sensitivity import blocks_llm_send
 from openkos.state import derived, fts
 from openkos.state import reindex as reindex_module
@@ -3912,6 +3913,129 @@ def _open_graph_or_degrade(
     return handle, False
 
 
+@dataclass(frozen=True)
+class _FiledAnswerPlan:
+    """One validated `query --save` filing staged for Phase B write --
+    mirrors `_DerivedPlan`'s shape (design: "`_stage_filed_answer` helper
+    (not inline)")."""
+
+    link_dir: str
+    section: str
+    slug: str
+    title: str
+    description: str
+    path: Path
+    content: str
+    sensitivity: str
+
+
+def _stage_filed_answer(
+    *,
+    question: str,
+    answer_text: str,
+    citations: list[Citation],
+    bundle_dir: Path,
+    default_sensitivity: str,
+    timestamp: str,
+    title: str | None = None,
+    description: str | None = None,
+    doc_type: str = "Concept",
+) -> _FiledAnswerPlan:
+    """Stage a `query --save` filing of `answer_text` as a new derived OKF
+    concept -- a pure, in-memory Phase A step mirroring
+    `_stage_derived_objects`'s staging shape: every refusal below raises
+    `ValueError`, caught once at the `query` call site; nothing is written
+    here -- Phase B (in `query`) does the actual `mkdir` + `write_exclusive`.
+
+    Refuses when `citations` is empty (design: "Refuse `--save` when zero
+    citations") -- `build_concept` requires non-empty provenance, and a
+    sourceless "derived" concept is not a real derived node. `title`/
+    `description` default to `question` when not overridden; `doc_type`
+    defaults to `"Concept"`. `doc_type` MUST be a member of the classifiable
+    vocabulary, else `ValueError` (same gate `build_concept` enforces,
+    checked here first so the bundle subdirectory can be resolved safely).
+    `slug = _slugify(title)`; an empty slug, or a slug that collides with an
+    existing file at the target path, both refuse (design: "Slug collision
+    handling (mirror ingest)").
+
+    Sensitivity is the high-water-mark (`okf.combine_sensitivity`) folded
+    over each cited concept's RE-READ frontmatter, seeded at
+    `default_sensitivity`; an unreadable OR unparseable cited concept folds
+    the running floor to `"confidential"` -- the most-restrictive level,
+    NOT skipped (fail-closed: "cannot verify sensitivity -> confidential",
+    the same stance as `okf._rank` / `sensitivity.blocks_llm_send`).
+    Skipping would under-classify: a cited concept surfaced under
+    `--include-confidential` that becomes unreadable at save time could
+    otherwise leave a filed answer -- which may have synthesized
+    confidential content -- classified below `confidential`, a future-leak
+    vector.
+    """
+    if not citations:
+        raise ValueError(
+            "nothing to file -- the answer cited no concepts; --save records "
+            "provenance from citations"
+        )
+    if doc_type not in _CLASSIFIABLE_TYPES:
+        raise ValueError(
+            f"type must be one of {sorted(_CLASSIFIABLE_TYPES)}, got {doc_type!r}"
+        )
+
+    resolved_title = question if title is None else title
+    resolved_description = question if description is None else description
+
+    slug = _slugify(resolved_title)
+    if not slug:
+        raise ValueError(
+            f"cannot derive a filename from title {resolved_title!r}; pass --title"
+        )
+
+    link_dir = _TYPE_TO_LINK_DIR[doc_type]
+    section = _TYPE_TO_SECTION[doc_type]
+    path = bundle_dir / link_dir / f"{slug}.md"
+    if path.exists():
+        raise ValueError(
+            f"a concept already exists at bundle/{link_dir}/{slug}.md; use "
+            "--title to file under a different name, or forget the existing one"
+        )
+
+    sensitivity = default_sensitivity
+    for citation in citations:
+        try:
+            text = (bundle_dir / f"{citation.concept_id}.md").read_text(
+                encoding="utf-8"
+            )
+            metadata, _ = okf.load_frontmatter(text)
+        except Exception:  # broad: any read/parse failure
+            # fails CLOSED to "confidential" (cannot verify -> most
+            # restrictive), mirroring `_assemble_context`'s broad
+            # `except Exception` in retrieval/answer.py.
+            sensitivity = okf.combine_sensitivity(sensitivity, "confidential")
+            continue
+        sensitivity = okf.combine_sensitivity(sensitivity, metadata.get("sensitivity"))
+
+    content = okf.build_concept(
+        type=doc_type,
+        title=resolved_title,
+        description=resolved_description,
+        body=answer_text,
+        provenance=[citation.concept_id for citation in citations],
+        sensitivity=sensitivity,
+        timestamp=timestamp,
+        related_note="concept cited to produce this answer",
+    )
+
+    return _FiledAnswerPlan(
+        link_dir=link_dir,
+        section=section,
+        slug=slug,
+        title=resolved_title,
+        description=resolved_description,
+        path=path,
+        content=content,
+        sensitivity=sensitivity,
+    )
+
+
 @app.command()
 def query(
     question: str = typer.Argument(
@@ -3929,6 +4053,30 @@ def query(
         False,
         "--include-confidential",
         help="Include confidential concepts (excluded by default).",
+    ),
+    save: bool = typer.Option(
+        False,
+        "--save",
+        help=(
+            "File the cited answer back as a new derived concept (opt-in; "
+            "off by default keeps query read-only)."
+        ),
+    ),
+    title: str | None = typer.Option(
+        None, "--title", help="Title for the filed concept (default: the question)."
+    ),
+    description: str | None = typer.Option(
+        None,
+        "--description",
+        help="Description for the filed concept (default: the question).",
+    ),
+    save_type: str = typer.Option(
+        "Concept", "--type", help="Type for the filed concept (default: Concept)."
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="With --save, skip the confirmation prompt and write immediately.",
     ),
 ) -> None:
     """Answer a natural-language question from the compiled bundle, with citations.
@@ -4103,6 +4251,82 @@ def query(
         typer.echo("Citations:")
         for citation in result.citations:
             typer.echo(f"  → {citation.concept_id} ({citation.title})")
+
+    if not save:
+        return
+
+    try:
+        plan = _stage_filed_answer(
+            question=question,
+            answer_text=result.answer,
+            citations=result.citations,
+            bundle_dir=layout.bundle_dir,
+            default_sensitivity=cfg.default_sensitivity,
+            timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            title=title,
+            description=description,
+            doc_type=save_type,
+        )
+    except ValueError as exc:
+        typer.echo(f"openkos query: refusing to save -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    save_index_path = layout.bundle_dir / "index.md"
+    save_log_path = layout.bundle_dir / "log.md"
+    now = datetime.now(UTC)
+    try:
+        index_text = save_index_path.read_text(encoding="utf-8")
+        log_text = save_log_path.read_text(encoding="utf-8")
+        new_index_text = bundle_index.insert_index_entry(
+            index_text,
+            section=plan.section,
+            link_dir=plan.link_dir,
+            title=plan.title,
+            slug=plan.slug,
+            description=plan.description,
+        )
+        new_log_text = bundle_log.insert_log_entry(
+            log_text,
+            now.astimezone().date(),
+            f"**Filed answer**: [{plan.title}](/{plan.link_dir}/{plan.slug}.md) "
+            "from query.",
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos query: failed while preparing the save -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos query: proposed changes (--save):")
+    typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+    typer.echo(f"  ~ {save_index_path.name} (new entry)")
+    typer.echo(f"  ~ {save_log_path.name} (new dated entry)")
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos query: refusing to write without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        plan.path.parent.mkdir(parents=True, exist_ok=True)
+        fsio.write_exclusive(plan.path, plan.content)
+        fsio.write_atomic(save_index_path, new_index_text)
+        fsio.write_atomic(save_log_path, new_log_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos query: failed while saving the answer -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
+        f"({save_index_path.name}, {save_log_path.name} updated). Run "
+        "`openkos reindex` to make it searchable."
+    )
 
 
 @app.command()
