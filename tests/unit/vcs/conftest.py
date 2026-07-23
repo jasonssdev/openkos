@@ -21,14 +21,17 @@ from openkos.vcs import git as vcs_git
 
 runner = CliRunner()
 
-# Pinned author/committer identity so fixture commits never depend on the
-# host's global git config (CI has none configured).
+# Pinned author/committer identity AND dates so fixture commits never depend
+# on the host's global git config (CI has none configured) NOR on wall-clock
+# time -- both are needed for reproducible commit SHAs across runs/machines.
 _GIT_ENV = {
     **os.environ,
     "GIT_AUTHOR_NAME": "OpenKOS Test",
     "GIT_AUTHOR_EMAIL": "test@openkos.invalid",
+    "GIT_AUTHOR_DATE": "2024-01-01T00:00:00+00:00",
     "GIT_COMMITTER_NAME": "OpenKOS Test",
     "GIT_COMMITTER_EMAIL": "test@openkos.invalid",
+    "GIT_COMMITTER_DATE": "2024-01-01T00:00:00+00:00",
 }
 
 
