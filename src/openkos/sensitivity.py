@@ -1,6 +1,21 @@
 """Canonical-layer fail-closed sensitivity predicate
 (sensitivity-fail-closed-filter, MVP-3 gap #8 · S3).
 
+`should_block` (directory-walk-observability follow-up, correction batch
+post-4R-review readability FIX 1 -- distinct from the unrelated
+`blocks_llm_send` FIX 1 described below, which belongs to an earlier
+sensitivity-fail-closed-filter correction) is the ONE shared fail-closed
+AUTHORITY every send-time re-check delegates its DECISION to. Before this,
+the identical inline expression `not include_confidential and
+sensitivity.blocks_llm_send(metadata.get("sensitivity"))` was independently
+copy-pasted at 5 call sites (`retrieval/answer.py`, `resolution/
+{contradiction,edge_typing,adjudication,volatility_typing}.py`) -- a future
+edit to the semantic (e.g. a new escape hatch, a different metadata key) had
+to land identically in all 5 places, and a partial edit would silently
+fail open at whichever site was missed. Centralizing the DECISION here
+means each site still owns its own ACTION on block (skip/degrade/continue/
+filter), but the boolean predicate itself has exactly one source of truth.
+
 `sensitive_concept_ids` is the ONE shared predicate every `llm.chat`-calling
 seam (`query`, `contradictions`, `adjudicate`, `suggest-relations`,
 `suggest-volatility`) filters against before sending concept content to an
@@ -36,6 +51,7 @@ which itself already fails closed on an unrecognized string or a non-string
 value by ranking it as `"confidential"`.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from openkos.model import okf
@@ -57,6 +73,30 @@ def blocks_llm_send(value: object, *, threshold: str = "confidential") -> bool:
     if value is None or (isinstance(value, str) and not value.strip()):
         return True
     return okf._rank(value) >= okf._rank(threshold)
+
+
+def should_block(
+    metadata: Mapping[str, object], *, include_confidential: bool = False
+) -> bool:
+    """Return `True` when a send-time re-check of `metadata` (a parsed
+    document's frontmatter) must block that document from an `llm.chat`
+    payload -- the single fail-closed authority every per-doc re-check in
+    this codebase shares (directory-walk-observability follow-up, correction
+    batch post-4R-review readability FIX 1; see the module docstring for the
+    5-way duplication this replaces).
+
+    `include_confidential` is the caller's own opt-in escape hatch (e.g. the
+    CLI's `--include-confidential` flag): it is OPT-IN, never the default,
+    because the whole point of this predicate is that a doc's sensitivity
+    is verified independently of whatever a directory walk may have missed
+    -- an escape hatch that defaulted to bypassing would defeat that
+    guarantee for every caller that forgot to pass it explicitly. When
+    `True`, this always returns `False` (never blocked), restoring
+    byte-identical pre-filter behavior. Otherwise, delegates to
+    `blocks_llm_send` against `metadata.get("sensitivity")` -- fail-closed
+    on a missing/blank/unrecognized value, exactly as before
+    centralization."""
+    return not include_confidential and blocks_llm_send(metadata.get("sensitivity"))
 
 
 def sensitive_concept_ids(

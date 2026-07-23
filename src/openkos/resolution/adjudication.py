@@ -98,13 +98,20 @@ def _load_members(
 
     sensitivity-fail-closed-filter (directory-walk-observability follow-up,
     defense-in-depth): after re-reading each member's OWN frontmatter, also
-    independently re-checks it against `sensitivity.blocks_llm_send` --
+    independently re-checks it via `sensitivity.should_block` --
     walk-independent, so a member the `sensitive_concept_ids` walk silently
     missed (an unlistable subtree, `okf.py`'s documented `_walk_errors`
     case) is still skipped here, never entering the `llm.chat` payload.
     `include_confidential=True` skips this re-check identically to how it
     skips the upstream member-drop filter, mirroring `retrieval/answer.py`'s
     `_assemble_context` (answer.py:211-214).
+
+    Correction batch (post-4R-review readability FIX 1): the re-check now
+    calls the centralized `sensitivity.should_block(metadata,
+    include_confidential=...)` predicate instead of inlining `not
+    include_confidential and sensitivity.blocks_llm_send(...)` directly --
+    behavior-preserving; see `sensitivity.py`'s module docstring for the
+    5-way duplication this replaces.
     """
     members: list[tuple[str, str, str]] = []
     for concept_id in member_ids:
@@ -116,8 +123,8 @@ def _load_members(
             metadata, body = okf.load_frontmatter(text)
         except Exception:  # noqa: S112 -- broad: any parse failure skips this member
             continue
-        if not include_confidential and sensitivity.blocks_llm_send(
-            metadata.get("sensitivity")
+        if sensitivity.should_block(
+            metadata, include_confidential=include_confidential
         ):
             continue
         title = str(metadata.get("title") or "") or concept_id

@@ -139,13 +139,20 @@ def _load_doc(
 
     sensitivity-fail-closed-filter (directory-walk-observability follow-up,
     defense-in-depth): after re-reading this doc's OWN frontmatter, also
-    independently re-checks it against `sensitivity.blocks_llm_send` --
+    independently re-checks it via `sensitivity.should_block` --
     walk-independent, so a doc the `sensitive_concept_ids` walk silently
     missed (an unlistable subtree, `okf.py`'s documented `_walk_errors`
     case) is still degraded to `(concept_id, "")` here, never entering the
     `llm.chat` payload. `include_confidential=True` skips this re-check
     identically to how it skips the upstream candidate filter, mirroring
-    `retrieval/answer.py`'s `_assemble_context` (answer.py:211-214)."""
+    `retrieval/answer.py`'s `_assemble_context` (answer.py:211-214).
+
+    Correction batch (post-4R-review readability FIX 1): the re-check now
+    calls the centralized `sensitivity.should_block(metadata,
+    include_confidential=...)` predicate instead of inlining `not
+    include_confidential and sensitivity.blocks_llm_send(...)` directly --
+    behavior-preserving; see `sensitivity.py`'s module docstring for the
+    5-way duplication this replaces."""
     try:
         text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -154,9 +161,7 @@ def _load_doc(
         metadata, body = okf.load_frontmatter(text)
     except Exception:  # broad: any parse failure degrades this doc, never raises
         return concept_id, ""
-    if not include_confidential and sensitivity.blocks_llm_send(
-        metadata.get("sensitivity")
-    ):
+    if sensitivity.should_block(metadata, include_confidential=include_confidential):
         return concept_id, ""
     title = str(metadata.get("title") or "") or concept_id
     return title, body

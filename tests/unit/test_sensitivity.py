@@ -223,3 +223,43 @@ def test_blocks_llm_send_respects_custom_threshold() -> None:
     `"confidential"`."""
     assert sensitivity.blocks_llm_send("private", threshold="private") is True
     assert sensitivity.blocks_llm_send("public", threshold="private") is False
+
+
+# --- correction batch (post-4R-review, directory-walk-observability),
+# FIX 1: centralized `should_block` metadata predicate --------------------
+
+
+def test_should_block_blocks_confidential_metadata() -> None:
+    """`should_block` blocks a `{"sensitivity": "confidential"}` mapping --
+    the same decision every one of the 5 duplicated inline call sites made
+    before centralization (query, contradictions, adjudicate,
+    suggest-relations, suggest-volatility)."""
+    assert sensitivity.should_block({"sensitivity": "confidential"}) is True
+
+
+def test_should_block_allows_private_and_public_metadata() -> None:
+    """`should_block` does NOT block `private`/`public` metadata."""
+    assert sensitivity.should_block({"sensitivity": "private"}) is False
+    assert sensitivity.should_block({"sensitivity": "public"}) is False
+
+
+def test_should_block_blocks_missing_or_blank_metadata_fail_closed() -> None:
+    """A metadata mapping missing the `sensitivity` key, or carrying a
+    blank/whitespace value, fails closed to blocked -- `should_block`
+    delegates to `blocks_llm_send`, which never lets an absent/blank signal
+    through."""
+    assert sensitivity.should_block({}) is True
+    assert sensitivity.should_block({"sensitivity": "   "}) is True
+
+
+def test_should_block_include_confidential_true_never_blocks() -> None:
+    """`include_confidential=True` is the opt-in bypass every call site
+    thread from its own CLI flag -- it short-circuits `should_block` to
+    `False` regardless of the metadata's sensitivity value, restoring
+    byte-identical pre-filter behavior."""
+    assert (
+        sensitivity.should_block(
+            {"sensitivity": "confidential"}, include_confidential=True
+        )
+        is False
+    )
