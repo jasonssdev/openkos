@@ -1,14 +1,15 @@
 """Unit tests for the `doctor` CLI command: read-only environment health scan.
 
-`doctor` runs ALL seven checks (workspace-initialized, config-valid,
+`doctor` runs ALL nine checks (workspace-initialized, config-valid,
 Ollama-reachable, model-installed, embedding-model-installed,
-bundle-readable, vector-extension-loadable), renders every result
-unconditionally (accumulate-then-exit-once, D5), and exits 1 iff any
-CRITICAL check failed. `embedding-model-installed` and
-`vector-extension-loadable` are both informational (non-critical): neither
-is wired into any consumed feature yet, so a failing check must not flip
-the exit code. Every test patches `openkos.cli.main.OllamaClient` with a
-fake stub (D-seam) -- zero network, zero real Ollama process.
+bundle-readable, vector-extension-loadable, git-available,
+git-filter-repo-available), renders every result unconditionally
+(accumulate-then-exit-once, D5), and exits 1 iff any CRITICAL check failed.
+`embedding-model-installed`, `vector-extension-loadable`, and the two git
+checks are all informational (non-critical): the git checks exist for the
+(not-yet-wired, PR2) `purge` verb, so a failing check must not flip the
+exit code. Every test patches `openkos.cli.main.OllamaClient` with a fake
+stub (D-seam) -- zero network, zero real Ollama process.
 """
 
 import shutil
@@ -81,11 +82,13 @@ def test_doctor_all_healthy_exits_zero(
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
     monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 7
+    assert result.stdout.count("[PASS]") == 9
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
@@ -95,6 +98,8 @@ def test_doctor_all_healthy_exits_zero(
         result.stdout
     )
     assert "[PASS] Vector extension loadable" in result.stdout
+    assert "[PASS] git available" in result.stdout
+    assert "[PASS] git-filter-repo available" in result.stdout
 
 
 def test_doctor_ollama_down_shows_start_server_remediation(
@@ -512,12 +517,14 @@ def test_doctor_vector_extension_loadable_shows_pass(
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
     monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
     assert "[PASS] Vector extension loadable" in result.stdout
-    assert result.stdout.count("[PASS]") == 7
+    assert result.stdout.count("[PASS]") == 9
 
 
 def test_doctor_vector_extension_not_loadable_fails_but_exit_stays_zero(
@@ -579,3 +586,97 @@ def test_doctor_vector_extension_check_runs_outside_workspace(
 
     assert result.exit_code == 0
     assert "[PASS] Vector extension loadable" in result.stdout
+
+
+# --- git-available / git-filter-repo-available checks (non-fatal) ----------
+# (privacy-purge Slice 1, PR1: probes for the not-yet-wired `purge` verb)
+
+
+def test_doctor_git_and_filter_repo_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both `git` and `git-filter-repo` available prints `[PASS] git
+    available` + `[PASS] git-filter-repo available`, and does not affect the
+    exit code (ADDED requirement scenario: both available)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] git available" in result.stdout
+    assert "[PASS] git-filter-repo available" in result.stdout
+
+
+def test_doctor_git_filter_repo_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`git-filter-repo` absent prints `[FAIL] git-filter-repo available`
+    with an install remediation, but stays informational (no effect on exit
+    code) -- ADDED requirement scenario: git-filter-repo missing."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: False)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[FAIL] git-filter-repo available" in result.stdout
+    fail_line_and_after = result.stdout.split("[FAIL] git-filter-repo available", 1)[1]
+    assert "  -> " in fail_line_and_after
+    assert "git-filter-repo" in fail_line_and_after
+
+
+def test_doctor_git_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`git` itself absent prints `[FAIL] git available` with an install
+    remediation, but stays informational -- ADDED requirement scenario: git
+    itself missing."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: False)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: False)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[FAIL] git available" in result.stdout
+    fail_line_and_after = result.stdout.split("[FAIL] git available", 1)[1]
+    assert "  -> " in fail_line_and_after
+
+
+def test_doctor_git_checks_run_pre_init_independent_of_ollama(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The git checks run BEFORE `openkos init` and regardless of Ollama
+    reachability -- they share no root cause with the workspace or Ollama
+    checks (ADDED requirement scenario: runs pre-init and independent of
+    Ollama unreachability)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1  # Ollama unreachable still fails critically
+    assert "[FAIL] Workspace initialized" in result.stdout
+    assert "[PASS] git available" in result.stdout
+    assert "[PASS] git-filter-repo available" in result.stdout
