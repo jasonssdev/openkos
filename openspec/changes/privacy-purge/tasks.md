@@ -141,6 +141,56 @@ Whole-tree verification (all green): `uv run pytest` -> 1740 passed (was
 confirmed, in `_run`); `uv run ruff format --check .` -> 127 files already
 formatted; `uv sync --locked` -> resolves cleanly.
 
+## Correction batch 2 (post-re-validation, PR1)
+
+Second bounded correction on `src/openkos/vcs/git.py`, closing one residual
+CRITICAL injection vector found by re-validating the first correction batch
+against the vendored git-filter-repo parser. Scope: `src/openkos/vcs/git.py`
++ `tests/unit/vcs/**` only.
+
+- [x] C3 CRITICAL: `==>` rename-delimiter injection in `--paths-from-file` —
+  `_validate_rel_paths` rejected `\n`/`\r`/control chars/absolute/`..`/empty
+  but NOT the byte sequence `==>`. `get_paths_from_file` (vendored
+  `git_filter_repo.py` ~:2373-2374) splits each line on `==>` ANYWHERE it
+  occurs, BEFORE dispatching on the `literal:`/`glob:`/`regex:` prefix. A
+  `rel_path` like `"bundle/target.md==>x"` therefore wrote
+  `literal:bundle/target.md==>x`, which filter-repo parsed as a RENAME
+  directive (`match="bundle/target.md"`, `repl="x"`), not a filter/delete.
+  With no other filter entry present, `sanity_check_args` sets
+  `inclusive=False` (~:2263-2273), which keeps EVERY file
+  (`newname()`, ~:3856-3874) — the purge target was silently NEVER removed
+  from history, while `git filter-repo` still exited 0 and `expunge_paths`
+  reported success. Catastrophic for an irreversible privacy operation: it
+  confirms success while doing nothing. FIX: `_validate_rel_paths` now also
+  rejects any `rel_path` containing `==>`, fail-closed, before any temp-file
+  write or subprocess call, raising the same `ValueError` type as the other
+  rejections. RED test: `test_expunge_paths_rejects_rename_delimiter_in_rel_path`
+  (spy `_run` asserted never called). Companion test confirming lone `=`/`>`
+  (never the full `==>` sequence) remain allowed as legitimate filename
+  characters: `test_expunge_paths_allows_lone_equals_and_gt_in_rel_path`.
+
+Audit conclusion: re-read `get_paths_from_file` end-to-end
+(vendored `git_filter_repo.py` ~:2358-2405). Confirmed the ONLY line-level
+special handling beyond what was already covered is: (a) `line.rstrip(b'\r\n')`
+— only strips a TRAILING `\r`/`\n`, already rejected as embedded control
+chars by C1; (b) skip fully-blank lines — unreachable since our code always
+writes a non-empty `literal:<path>` line and empty/whitespace `rel_path` is
+already rejected; (c) skip lines starting with `#` — unreachable because
+every line is hardcoded to start with the literal prefix `literal:`, which
+never starts with `#`; (d) the `literal:`/`glob:`/`regex:` prefix dispatch —
+already neutralized by our hardcoded `literal:` prefix; (e) the `==>` rename
+split — the vector fixed by C3. No quote/backslash interpretation, no other
+delimiter, and no additional special token exists in the parser. `==>` was
+the LAST vector: with it rejected, the `literal:<rel_path>` line can now only
+ever be parsed as a single filter/delete entry — the literal-match contract
+is complete.
+
+Whole-tree verification (all green): `uv run pytest` -> 1742 passed (was
+1740 before this batch, +2 new tests); `uv run mypy .` -> no issues found in
+127 source files; `uv run ruff check .` -> all checks passed (sole
+`# noqa: S603` suppression unchanged, in `_run`); `uv run ruff format --check .`
+-> 127 files already formatted; `uv sync --locked` -> resolves cleanly.
+
 ## PR2: `purge` Verb
 
 ### Phase 5: Phase-A Reuse + Rail Tests (RED)
