@@ -54,6 +54,46 @@ def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") ->
     )
 
 
+def _write_relation_doc(
+    path: Path,
+    *,
+    title: str,
+    status: str | None = None,
+    relations: list[tuple[str, str]] | None = None,
+) -> None:
+    """Write a minimal concept `.md` file with optional lifecycle `status`
+    and typed `relations` (mirrors `test_contradiction.py`'s
+    `_write_lifecycle_doc` helper, status-aware-retrieval Phase 4)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "type: Concept", f"title: {title}"]
+    if status is not None:
+        lines.append(f"status: {status}")
+    if relations is not None:
+        lines.append("relations:")
+        for target, rel_type in relations:
+            lines.append(f"  - target: {target}")
+            lines.append(f"    type: {rel_type}")
+    lines.append("---")
+    lines.append(f"# {title}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class _FakeOllamaClient:
+    """Structural `LLMBackend` stand-in substituted for the real
+    `OllamaClient` -- so the default-exclude/`--include-deprecated` behavior
+    tests run the REAL (unmocked) `find_contradictions` with zero network,
+    zero real Ollama process (status-aware-retrieval Phase 4)."""
+
+    def __init__(self, *, model: str, **kwargs: object) -> None:
+        self.model = model
+
+    def chat(self, messages: list[object]) -> str:
+        return (
+            '{"verdict": "contradicts", "confidence": 0.9, '
+            '"rationale": "fake reply", "conflicting_claims": ["x"]}'
+        )
+
+
 def _verdict(
     *,
     source: str = "concepts/a",
@@ -588,6 +628,110 @@ def test_contradictions_no_auto_flag_offered(
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
+
+
+# ---------------------------------------------------------------------------
+# `--include-deprecated` (status-aware-retrieval Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def test_contradictions_include_deprecated_flag_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-deprecated` is forwarded unchanged as
+    `find_contradictions(..., include_deprecated=True)` (spec:
+    `--include-deprecated` Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[list[ContradictionVerdict], int]:
+        captured["kwargs"] = kwargs
+        return [], 0
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
+
+    result = runner.invoke(app, ["contradictions", "--include-deprecated"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_deprecated"] is True
+
+
+def test_contradictions_omitted_include_deprecated_defaults_to_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `--include-deprecated` forwards the safe default
+    `include_deprecated=False` (spec: Deprecated Concepts Excluded By
+    Default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[list[ContradictionVerdict], int]:
+        captured["kwargs"] = kwargs
+        return [], 0
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_deprecated"] is False
+
+
+def test_contradictions_default_excludes_a_pair_touching_a_superseded_concept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real (unmocked) `find_contradictions`, with a real `OllamaClient`
+    substituted for a fake `LLMBackend`: a supersedes edge alone forms a
+    candidate pair whose target is deprecated -- by default it is dropped
+    before judgment, so `contradictions` renders "No candidate pairs
+    found." (spec: Deprecated Concepts Excluded By Default -- contradiction
+    candidates)."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    _write_relation_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_relation_doc(bundle_dir / "concepts" / "b.md", title="B")
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeOllamaClient)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "No candidate pairs found." in result.stdout
+
+
+def test_contradictions_include_deprecated_restores_the_superseded_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same real bundle with `--include-deprecated` restores the pair,
+    so `find_contradictions` actually judges it and `contradictions` renders
+    the resulting verdict (spec: `--include-deprecated` Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    _write_relation_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_relation_doc(bundle_dir / "concepts" / "b.md", title="B")
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeOllamaClient)
+
+    result = runner.invoke(app, ["contradictions", "--include-deprecated"])
+
+    assert result.exit_code == 0
+    assert "concepts/a" in result.stdout
+    assert "concepts/b" in result.stdout
+    assert "fake reply" in result.stdout
 
 
 # --- integration proof (real bundle: examples/good-life-demo) ---------------

@@ -160,6 +160,79 @@ def test_duplicates_no_auto_flag_offered(
     assert isinstance(result.exception, SystemExit)
 
 
+# ---------------------------------------------------------------------------
+# `--include-deprecated` (status-aware-retrieval Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def test_duplicates_include_deprecated_flag_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-deprecated` is forwarded unchanged as
+    `find_candidates(..., include_deprecated=True)` (LOCKED decision:
+    `duplicates` gets the SAME flag as `adjudicate`, both call
+    `find_candidates`; spec: `--include-deprecated` Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_find_candidates(bundle_dir: Path, **kwargs: object) -> list[object]:
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _recording_find_candidates)
+
+    result = runner.invoke(app, ["duplicates", "--include-deprecated"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_deprecated"] is True
+
+
+def test_duplicates_omitted_include_deprecated_defaults_to_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `--include-deprecated` forwards the safe default
+    `include_deprecated=False` (spec: Deprecated Concepts Excluded By
+    Default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_find_candidates(bundle_dir: Path, **kwargs: object) -> list[object]:
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _recording_find_candidates)
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_deprecated"] is False
+
+
+def test_duplicates_include_deprecated_restores_a_deprecated_group_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-deprecated` restores the deprecated group member into
+    `duplicates`'s report -- the counterpart to
+    `test_duplicates_default_excludes_a_deprecated_group_member` above."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: STOICISM\nstatus: deprecated\n---\n# STOICISM\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["duplicates", "--include-deprecated"])
+
+    assert result.exit_code == 0
+    assert "HIGH" in result.stdout
+    assert "concepts/a" in result.stdout
+    assert "concepts/b" in result.stdout
+
+
 # --- integration proof (real bundle: examples/good-life-demo) ---------------
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

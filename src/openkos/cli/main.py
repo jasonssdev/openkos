@@ -2372,7 +2372,13 @@ def lint() -> None:
 
 
 @app.command()
-def duplicates() -> None:
+def duplicates(
+    include_deprecated: bool = typer.Option(
+        False,
+        "--include-deprecated",
+        help="Include deprecated and superseded concepts (excluded by default).",
+    ),
+) -> None:
     """Report cross-source candidate duplicates: read-only, Phase-A only.
 
     A THIRD read command, mirroring `status`/`lint`'s shape exactly: no
@@ -2398,6 +2404,12 @@ def duplicates() -> None:
     No candidates still exits 0). No file under the workspace is ever
     created, modified, or deleted, and no `--json` or other structured
     output mode is offered (spec: Read-Only and Human-Readable Only).
+
+    Unless `--include-deprecated` is passed, deprecated/superseded concepts
+    (status-aware-retrieval) are excluded from every candidate group --
+    `duplicates` shares `adjudicate`'s `find_candidates` call and, per the
+    locked scope decision, gets the SAME `--include-deprecated` flag for
+    consistency.
     """
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -2406,7 +2418,7 @@ def duplicates() -> None:
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
-    groups = find_candidates(layout.bundle_dir)
+    groups = find_candidates(layout.bundle_dir, include_deprecated=include_deprecated)
 
     typer.echo(f"openkos duplicates: workspace at {root}")
     typer.echo()
@@ -2428,6 +2440,11 @@ def adjudicate(
         False,
         "--same-only",
         help="Only show SAME-verdict groups in the printed report.",
+    ),
+    include_deprecated: bool = typer.Option(
+        False,
+        "--include-deprecated",
+        help="Include deprecated and superseded concepts (excluded by default).",
     ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
@@ -2454,6 +2471,12 @@ def adjudicate(
     generic `OllamaError` fallback -- each with its own actionable stderr
     message, exit 1, and zero writes.
 
+    Unless `--include-deprecated` is passed, deprecated/superseded concepts
+    (status-aware-retrieval) are excluded from the `find_candidates` call
+    that feeds `adjudicate_candidates` -- `adjudicate` uses candidates, so it
+    threads the flag into `find_candidates`, not into `adjudicate_candidates`
+    itself.
+
     No file under the workspace is ever created, modified, or deleted (spec:
     Verb renders verdicts with zero writes).
     """
@@ -2473,7 +2496,9 @@ def adjudicate(
         )
         raise typer.Exit(code=1) from exc
 
-    candidates = find_candidates(layout.bundle_dir)
+    candidates = find_candidates(
+        layout.bundle_dir, include_deprecated=include_deprecated
+    )
     llm = OllamaClient(model=cfg.model)
     try:
         results = adjudicate_candidates(
@@ -2737,6 +2762,11 @@ def contradictions(
         help="Show every verdict (CONTRADICTS, CONSISTENT, UNCERTAIN) "
         "regardless of confidence.",
     ),
+    include_deprecated: bool = typer.Option(
+        False,
+        "--include-deprecated",
+        help="Include deprecated and superseded concepts (excluded by default).",
+    ),
 ) -> None:
     """LLM-detect contradictions between already-related concepts: read-only,
     like `adjudicate`/`suggest-relations`/`suggest-volatility`.
@@ -2775,6 +2805,11 @@ def contradictions(
     then `OllamaModelNotFound`, then the generic `OllamaError` fallback --
     each with its own actionable stderr message, exit 1, and zero writes.
 
+    Unless `--include-deprecated` is passed, deprecated/superseded concepts
+    (status-aware-retrieval) never appear in a candidate pair -- dropped by
+    `find_contradictions` before any pair is judged, so the LLM is never
+    invoked on them.
+
     No file under the workspace is ever created, modified, or deleted
     (spec: Read-Only `contradictions` CLI Verb).
     """
@@ -2796,7 +2831,9 @@ def contradictions(
 
     llm = OllamaClient(model=cfg.model)
     try:
-        verdicts, total_pairs = find_contradictions(layout.bundle_dir, llm=llm)
+        verdicts, total_pairs = find_contradictions(
+            layout.bundle_dir, llm=llm, include_deprecated=include_deprecated
+        )
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos contradictions: failed -- {exc}. Start it with "
@@ -2969,6 +3006,11 @@ def query(
     limit: int = typer.Option(
         5, "--limit", help="Max concepts to retrieve as context."
     ),
+    include_deprecated: bool = typer.Option(
+        False,
+        "--include-deprecated",
+        help="Include deprecated and superseded concepts (excluded by default).",
+    ),
 ) -> None:
     """Answer a natural-language question from the compiled bundle, with citations.
 
@@ -3016,6 +3058,13 @@ def query(
     configured in `openkos.yaml`. A workspace/config problem, an unreachable
     Ollama, or an unusable search index is reported on stderr with no
     traceback and exits 1.
+
+    Unless `--include-deprecated` is passed, deprecated/superseded concepts
+    (status-aware-retrieval) are excluded from every retrieval channel
+    (lexical, dense, graph) BEFORE fusion -- the `retrieval:` stderr summary
+    and every count in it (FTS/dense/graph/fused/cited) already report the
+    POST-filter values, since filtering happens inside `answer()` before
+    those counts are captured.
     """
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -3054,6 +3103,7 @@ def query(
                 fts_index=fts_index,
                 graph_index=graph_index,
                 limit=limit,
+                include_deprecated=include_deprecated,
             )
         except OllamaUnavailable as exc:
             typer.echo(

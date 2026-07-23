@@ -53,7 +53,7 @@ Chain strategy: pending
 
 ## Phase 4: CLI Wiring (PR 4)
 
-- [ ] 4.1 RED: `tests/unit/cli/test_query.py`, `test_contradictions.py`, `test_adjudicate.py` — `--include-deprecated` threads through and restores results; default excludes
-- [ ] 4.2 GREEN: add `--include-deprecated` Typer option to `query`/`contradictions`/`adjudicate` in `cli/main.py`; pass through to `answer`/`find_contradictions`/`find_candidates`
-- [ ] 4.3 Verify: `duplicates` still calls `find_candidates(layout.bundle_dir)` with no flag (default `False`, behavior now excludes deprecated); run `pytest tests/unit/cli/test_duplicates.py -v` to confirm/accept this side effect
-- [ ] 4.4 Verify: `pytest tests/unit/cli/ -v` full CLI suite green
+- [x] 4.1 RED: `tests/unit/cli/test_query.py`, `test_contradictions.py`, `test_adjudicate.py` — `--include-deprecated` threads through and restores results; default excludes
+- [x] 4.2 GREEN: add `--include-deprecated` Typer option to `query`/`contradictions`/`adjudicate` in `cli/main.py`; pass through to `answer`/`find_contradictions`/`find_candidates`
+- [x] 4.3 Verify: `duplicates` also gets `--include-deprecated` (LOCKED decision, superseding the original "no flag" note above: `duplicates` and `adjudicate` both call `find_candidates`, so `duplicates` gets the SAME flag for consistency, not just the inherited unflagged default); `tests/unit/cli/test_duplicates.py -v` confirms
+- [x] 4.4 Verify: `pytest tests/unit/cli/ -v` full CLI suite green

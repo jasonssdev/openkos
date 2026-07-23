@@ -34,6 +34,32 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 runner = CliRunner()
 
 
+class _FakeOllamaClient:
+    """Structural `LLMBackend`/`Embedder` stand-in substituted for the real
+    `OllamaClient` -- so the R3-pin end-to-end test below runs the REAL
+    `answer()` (not mocked) through the CLI with zero network, zero real
+    Ollama process (status-aware-retrieval Phase 4)."""
+
+    def __init__(self, *, model: str, **kwargs: object) -> None:
+        self.model = model
+
+    def chat(self, messages: list[object]) -> str:
+        return "a fake answer"
+
+
+def _write_query_doc(path: Path, *, title: str, status: str | None = None) -> None:
+    """Write a minimal concept `.md` file whose body is indexable by the real
+    FTS index, with an optional lifecycle `status` (status-aware-retrieval
+    Phase 4)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "type: Concept", f"title: {title}", "description: ''"]
+    if status is not None:
+        lines.append(f"status: {status}")
+    lines.append("---")
+    lines.append("dichotomyzz")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Initialize a workspace AND backfill an (empty) `vectors.db`, `fts.db`,
     and `graph.db`, so `query`'s three derived-index seams are ALL healthy
@@ -1081,6 +1107,125 @@ def test_query_malformed_config_maps_to_exit_one_before_calling_answer(
     )
     assert "Traceback" not in result.stderr
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# `--include-deprecated` (status-aware-retrieval Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def test_query_include_deprecated_flag_forwarded_as_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-deprecated` is forwarded unchanged as
+    `answer(..., include_deprecated=True)` (spec: `--include-deprecated`
+    Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--include-deprecated"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_deprecated"] is True
+
+
+def test_query_omitted_include_deprecated_defaults_to_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `--include-deprecated` forwards the safe default
+    `include_deprecated=False` (spec: Deprecated Concepts Excluded By
+    Default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_answer(question: str, **kwargs: object) -> AnswerResult:
+        captured["kwargs"] = kwargs
+        return AnswerResult(
+            answer=NO_MATCH,
+            citations=[],
+            fts_hit_count=0,
+            llm_invoked=False,
+            no_match_cause="zero_hits",
+            skip_notices=[],
+        )
+
+    monkeypatch.setattr("openkos.cli.main.answer", _recording_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_deprecated"] is False
+
+
+def test_query_retrieval_stderr_default_reports_post_filter_fts_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3 CLI pin, deferred from PR2: the `retrieval:` stderr summary reports
+    POST-filter counts end-to-end through the REAL (unmocked) `answer()` --
+    a deprecated concept sharing the matched term is excluded from the FTS
+    hit count and the fused count by default (design R3; status-aware-
+    retrieval Phase 4 closes the PR2 deferral now that `--include-deprecated`
+    is wired all the way through the CLI)."""
+    monkeypatch.chdir(tmp_path)
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+    bundle_dir = tmp_path / "bundle"
+    _write_query_doc(bundle_dir / "concepts" / "live.md", title="Live")
+    _write_query_doc(
+        bundle_dir / "concepts" / "old.md", title="Old", status="deprecated"
+    )
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeOllamaClient)
+
+    result = runner.invoke(app, ["query", "dichotomyzz"])
+
+    assert result.exit_code == 0
+    assert result.stderr.startswith(
+        "retrieval: 1 FTS + 0 dense + 0 graph → 1 fused → LLM invoked → 1 cited\n"
+    )
+
+
+def test_query_retrieval_stderr_include_deprecated_reports_post_filter_fts_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same end-to-end run with `--include-deprecated` restores the
+    deprecated concept into the FTS hit count, fused count, and citation
+    count reported on the `retrieval:` stderr line (design R3; spec:
+    `--include-deprecated` Escape Flag)."""
+    monkeypatch.chdir(tmp_path)
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+    bundle_dir = tmp_path / "bundle"
+    _write_query_doc(bundle_dir / "concepts" / "live.md", title="Live")
+    _write_query_doc(
+        bundle_dir / "concepts" / "old.md", title="Old", status="deprecated"
+    )
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeOllamaClient)
+
+    result = runner.invoke(app, ["query", "dichotomyzz", "--include-deprecated"])
+
+    assert result.exit_code == 0
+    assert result.stderr.startswith(
+        "retrieval: 2 FTS + 0 dense + 0 graph → 2 fused → LLM invoked → 2 cited\n"
+    )
 
 
 def test_query_docstring_no_longer_claims_no_persisted_state() -> None:
