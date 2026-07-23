@@ -225,7 +225,9 @@ def test_adjudicate_same_only_hides_non_same_verdicts_from_output_only(
     fake_groups = [same_group, different_group, uncertain_group]
     captured: dict[str, object] = {}
 
-    def _fake_find_candidates(bundle_dir: object) -> list[CandidateGroup]:
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
         return fake_groups
 
     def _fake_adjudicate(
@@ -269,7 +271,9 @@ def test_adjudicate_same_only_with_no_same_verdicts_prints_empty_notice(
         okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
     )
 
-    def _fake_find_candidates(bundle_dir: object) -> list[CandidateGroup]:
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
         return [different_group]
 
     def _fake_adjudicate(
@@ -457,6 +461,118 @@ def test_adjudicate_no_auto_flag_offered(
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
+
+
+# ---------------------------------------------------------------------------
+# `--include-deprecated` (status-aware-retrieval Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_include_deprecated_flag_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-deprecated` is forwarded unchanged as
+    `find_candidates(..., include_deprecated=True)` (`adjudicate` uses
+    candidates, per the locked scope decision; spec: `--include-deprecated`
+    Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_find_candidates(
+        bundle_dir: Path, **kwargs: object
+    ) -> list[CandidateGroup]:
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _recording_find_candidates)
+
+    result = runner.invoke(app, ["adjudicate", "--include-deprecated"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_deprecated"] is True
+
+
+def test_adjudicate_omitted_include_deprecated_defaults_to_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `--include-deprecated` forwards the safe default
+    `include_deprecated=False` (spec: Deprecated Concepts Excluded By
+    Default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_find_candidates(
+        bundle_dir: Path, **kwargs: object
+    ) -> list[CandidateGroup]:
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _recording_find_candidates)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_deprecated"] is False
+
+
+def test_adjudicate_default_excludes_a_deprecated_candidate_group_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real (unmocked) `find_candidates` excludes a deprecated group member
+    by default, so the only candidate group is dropped before
+    `adjudicate_candidates` ever sees it -- `adjudicate` renders "No
+    candidates found." (mirrors
+    `test_duplicates_default_excludes_a_deprecated_group_member`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: STOICISM\nstatus: deprecated\n---\n# STOICISM\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "No candidates found." in result.stdout
+
+
+def test_adjudicate_include_deprecated_restores_the_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-deprecated` restores the deprecated group member, so real
+    (unmocked) `find_candidates` returns the HIGH group and `adjudicate`
+    renders it -- `adjudicate_candidates` is mocked here ONLY to avoid a
+    real Ollama call, mirroring how other tests in this file mock it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: STOICISM\nstatus: deprecated\n---\n# STOICISM\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        captured["candidates"] = candidates
+        return [
+            _adjudicated(group, verdict=Verdict.SAME, rationale="restored group")
+            for group in candidates
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--include-deprecated"])
+
+    assert result.exit_code == 0
+    assert "restored group" in result.stdout
+    candidates = captured["candidates"]
+    assert isinstance(candidates, list)
+    assert len(candidates) == 1
 
 
 def test_adjudicate_command_name_is_not_resolve() -> None:

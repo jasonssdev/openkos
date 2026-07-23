@@ -106,6 +106,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | Flag | Meaning |
 | --- | --- |
 | `--limit <n>` | Max concepts to retrieve as context. Defaults to `5`. Each retriever is queried with a pool of `max(limit, 10)` before fusion truncates to `limit`. |
+| `--include-deprecated` | Include deprecated and superseded concepts in retrieval. Excluded by default from every channel (lexical, dense, graph) — the `retrieval:` stderr summary already reports the POST-filter counts. |
 
 Output is answer-first and banner-free: the answer text, then (only when at least one citation exists) a blank line, `Citations:`, and one `  → <concept_id> (<title>)` line per citation, in fused-rank order. On every completed run — successful answer or no-match — a one-line `retrieval: <n> FTS + <n> dense + <n> graph → <n> fused → LLM invoked|skipped → <n> cited` summary prints to **stderr**, so a silent short-circuit (e.g. zero hits from all three retrievers, so the LLM never ran) is always visible even though stdout stays pipe-clean. When any of the three derived indexes is absent or unavailable/corrupt this run, an additional stderr hint recommends running `openkos reindex` to enable full retrieval. When graph retrieval degraded this run specifically (absent/unopenable graph index, no seeds from the initial fusion, or the PageRank step itself failed), a separate stderr note says so — graph retrieval never affects the FTS/dense outcome. When the persisted FTS index (built at the last `reindex` run) skipped any unreadable/unparseable files, an `index:` skip-notice block follows the summary on stderr, worded as a whole-bundle build diagnostic — never implying the skipped files were candidates for the current question.
 
@@ -131,6 +132,10 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 One read-only, whole-bundle pass compares titles only within the same declared OKF `type` (a `Concept` is never compared against an `Entity`, even with an identical title) and proposes two deterministic, stdlib-only confidence tiers: **HIGH** — titles that normalize to an identical key (case-folded, punctuation-stripped, diacritics-removed, whitespace-collapsed); and **LOW** — titles that clear a fixed near-match threshold (`difflib`-based token-subset similarity) without being normalized-identical. Neither tier uses an LLM or embeddings in this slice.
 
 Output is grouped by OKF type, then HIGH before LOW, and renders each group's type, tier, member concept_ids, and the trigger (the shared normalized key for HIGH, the similarity score for LOW). An empty result prints a clear "No candidates found." line instead of an empty section.
+
+| Flag | Meaning |
+| --- | --- |
+| `--include-deprecated` | Include deprecated and superseded concepts in candidate groups. Excluded by default — `duplicates` shares `adjudicate`'s `find_candidates` call and gets the same flag for consistency. |
 
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status`/`lint` use. Every successful read exits 0, whether or not any candidates are found. No file under the workspace is ever created, modified, or deleted, and no `--json` or other structured output mode is offered.
 

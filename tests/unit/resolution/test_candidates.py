@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from openkos import lifecycle
 from openkos.resolution.candidates import CandidateGroup, Tier, find_candidates
 
 
@@ -24,12 +25,25 @@ def _write_doc(
     *,
     doc_type: str = "Concept",
     title: str = "Stub",
+    status: str | None = None,
+    relations: list[tuple[str, str]] | None = None,
 ) -> None:
+    """Write a minimal `doc_type` document. Optional `status`/`relations`
+    lifecycle frontmatter (status-aware-retrieval, Phase 3) -- `relations`
+    is a list of `(target, type)` pairs, mirroring
+    `test_answer.py`/`test_contradiction.py`'s equivalent helper."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\ntype: {doc_type}\ntitle: {title}\n---\n# {title}\n",
-        encoding="utf-8",
-    )
+    lines = ["---", f"type: {doc_type}", f"title: {title}"]
+    if status is not None:
+        lines.append(f"status: {status}")
+    if relations is not None:
+        lines.append("relations:")
+        for target, rel_type in relations:
+            lines.append(f"  - target: {target}")
+            lines.append(f"    type: {rel_type}")
+    lines.append("---")
+    frontmatter = "\n".join(lines) + "\n"
+    path.write_text(f"{frontmatter}# {title}\n", encoding="utf-8")
 
 
 # --- scaffold ---------------------------------------------------------------
@@ -406,3 +420,145 @@ def test_real_bundle_readonly() -> None:
         assert len(set(group.member_ids)) == len(group.member_ids)
         assert group.member_ids == tuple(sorted(group.member_ids))
         assert group.trigger
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (status-aware-retrieval, PR3): `include_deprecated` on
+# `find_candidates` -- deprecated/superseded concepts are excluded BEFORE
+# HIGH/LOW pairing by default (design: "exclude deprecated ids from
+# `find_candidates` before pairing"), `include_deprecated=True` restores
+# them and skips the predicate walk, and an all-live bundle is unaffected.
+# ---------------------------------------------------------------------------
+
+
+def test_deprecated_own_status_excluded_from_high_group(tmp_path: Path) -> None:
+    """A concept deprecated via its own `status` field never joins a HIGH
+    exact-key group -- with only one live member left for that key, no group
+    forms at all."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="STOICISM", status="deprecated")
+
+    assert find_candidates(bundle_dir) == []
+
+
+def test_concept_superseded_by_another_excluded_from_low_group(
+    tmp_path: Path,
+) -> None:
+    """A concept that is the TARGET of another concept's `supersedes` edge
+    is deprecated regardless of its own status, and is excluded from a LOW
+    near-match group the same way."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="Stoicism",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="Stoic Philosophy")
+
+    assert find_candidates(bundle_dir) == []
+
+
+def test_live_ids_paired_normally_excluding_a_deprecated_group_member(
+    tmp_path: Path,
+) -> None:
+    """GIVEN three same-key concepts, one deprecated, WHEN `find_candidates`
+    runs, THEN the HIGH group contains only the two live members -- the
+    deprecated member is dropped, not the whole group."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="STOICISM")
+    _write_doc(bundle_dir / "concepts" / "c.md", title="stoicism", status="deprecated")
+
+    groups = find_candidates(bundle_dir)
+
+    assert len(groups) == 1
+    assert groups[0].tier is Tier.HIGH
+    assert groups[0].member_ids == ("concepts/a", "concepts/b")
+
+
+def test_include_deprecated_true_restores_the_excluded_member(
+    tmp_path: Path,
+) -> None:
+    """`include_deprecated=True` restores a deprecated/superseded concept to
+    full participation in candidate grouping."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="Stoicism",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="Stoic Philosophy")
+
+    groups = find_candidates(bundle_dir, include_deprecated=True)
+
+    assert len(groups) == 1
+    assert groups[0].tier is Tier.LOW
+    assert groups[0].member_ids == ("concepts/a", "concepts/b")
+
+
+def test_include_deprecated_true_never_calls_the_predicate_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_deprecated=True` skips `lifecycle.deprecated_concept_ids`
+    entirely (spy) -- the escape flag is the zero-cost / status-blind path
+    (design R1)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="Stoicism",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="Stoic Philosophy")
+    walk_calls: list[Path] = []
+    original_predicate = lifecycle.deprecated_concept_ids
+
+    def _spy_predicate(bundle_dir: Path) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir)
+
+    monkeypatch.setattr(lifecycle, "deprecated_concept_ids", _spy_predicate)
+
+    find_candidates(bundle_dir, include_deprecated=True)
+
+    assert walk_calls == []
+
+
+def test_default_include_deprecated_false_calls_the_predicate_walk_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default `include_deprecated=False` DOES call
+    `lifecycle.deprecated_concept_ids` exactly once per `find_candidates`
+    call (mirrors `answer()`/`find_contradictions`'s equivalent contract)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="STOICISM")
+    walk_calls: list[Path] = []
+    original_predicate = lifecycle.deprecated_concept_ids
+
+    def _spy_predicate(bundle_dir: Path) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir)
+
+    monkeypatch.setattr(lifecycle, "deprecated_concept_ids", _spy_predicate)
+
+    find_candidates(bundle_dir)
+
+    assert walk_calls == [bundle_dir]
+
+
+def test_all_live_bundle_is_identical_with_and_without_include_deprecated(
+    tmp_path: Path,
+) -> None:
+    """A bundle where every concept's effective status is live produces the
+    identical candidate-group result whether `include_deprecated` is `False`
+    (the default) or `True` (spec: All-live bundle is unaffected)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="Stoic Philosophy")
+
+    default_groups = find_candidates(bundle_dir)
+    included_groups = find_candidates(bundle_dir, include_deprecated=True)
+
+    assert default_groups == included_groups
+    assert len(default_groups) == 1

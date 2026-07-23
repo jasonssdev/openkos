@@ -9,6 +9,15 @@ deterministic, stdlib-only tiers: HIGH (an exact shared
 excluding any pair already HIGH). Output is ephemeral -- frozen
 dataclasses only, never a persisted OKF type or `bundle`/`state` file --
 and this module never writes a byte of the bundle.
+
+status-aware-retrieval (MVP-3 gap #8 · S1, Phase 3): unless the caller
+passes `include_deprecated=True`, `find_candidates` computes the shared
+`openkos.lifecycle.deprecated_concept_ids(bundle_dir)` predicate ONCE per
+call and excludes any deprecated/superseded concept id from
+`_iter_eligible`'s output BEFORE HIGH/LOW pairing, so no candidate group
+ever contains a deprecated concept. `include_deprecated=True` skips the
+predicate walk entirely (no `_iter_docs` pass), restoring today's
+status-blind behavior byte-for-byte (design R1's zero-cost escape path).
 """
 
 from collections import defaultdict
@@ -17,6 +26,7 @@ from enum import Enum
 from itertools import combinations
 from pathlib import Path
 
+from openkos import lifecycle
 from openkos.model import okf
 
 from .normalize import normalize_key
@@ -114,7 +124,9 @@ def _high_groups_for_type(
     return high_groups, high_pairs
 
 
-def find_candidates(bundle_dir: Path) -> list[CandidateGroup]:
+def find_candidates(
+    bundle_dir: Path, *, include_deprecated: bool = False
+) -> list[CandidateGroup]:
     """Scan `bundle_dir` and return every candidate group, read-only.
 
     Never writes a byte of the bundle and creates no persisted state.
@@ -123,9 +135,27 @@ def find_candidates(bundle_dir: Path) -> list[CandidateGroup]:
     groups before LOW within each type, ties broken by ascending
     `member_ids` (i.e. by concept_id). An empty or single-document bundle
     (per type) yields no candidates and never raises.
+
+    Unless `include_deprecated=True`, the shared
+    `lifecycle.deprecated_concept_ids(bundle_dir)` predicate is computed
+    ONCE and any deprecated/superseded concept id is excluded from
+    `_iter_eligible`'s output BEFORE HIGH/LOW pairing (status-aware-
+    retrieval, Phase 3) -- a deprecated concept never joins a candidate
+    group, but its live groupmates still pair normally with each other.
+    `include_deprecated=True` skips the predicate walk entirely, restoring
+    today's status-blind behavior byte-for-byte.
     """
+    eligible = _iter_eligible(bundle_dir)
+    if not include_deprecated:
+        deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+        eligible = [
+            (concept_id, okf_type, title)
+            for concept_id, okf_type, title in eligible
+            if concept_id not in deprecated
+        ]
+
     by_type: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for concept_id, okf_type, title in _iter_eligible(bundle_dir):
+    for concept_id, okf_type, title in eligible:
         by_type[okf_type].append((concept_id, title))
 
     groups: list[CandidateGroup] = []

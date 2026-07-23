@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from openkos import lifecycle
 from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
@@ -65,6 +66,32 @@ def _write_doc(path: Path, *, title: str = "Stub", body: str = "Body.") -> None:
     path.write_text(
         f"---\ntype: Concept\ntitle: {title}\n---\n{body}", encoding="utf-8"
     )
+
+
+def _write_lifecycle_doc(
+    path: Path,
+    *,
+    title: str = "Stub",
+    body: str = "Body.",
+    status: str | None = None,
+    relations: list[tuple[str, str]] | None = None,
+) -> None:
+    """`_write_doc` plus optional `status`/`relations` frontmatter
+    (status-aware-retrieval, Phase 3) -- `relations` is a list of `(target,
+    type)` pairs, mirroring `test_answer.py`'s/`test_lifecycle.py`'s helper
+    so every lifecycle-fixture-building test module shares the same shape."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "type: Concept", f"title: {title}"]
+    if status is not None:
+        lines.append(f"status: {status}")
+    if relations is not None:
+        lines.append("relations:")
+        for target, rel_type in relations:
+            lines.append(f"  - target: {target}")
+            lines.append(f"    type: {rel_type}")
+    lines.append("---")
+    frontmatter = "\n".join(lines) + "\n"
+    path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
 
 def _valid_reply(
@@ -748,3 +775,280 @@ def test_find_contradictions_one_over_cap_boundary_truncates_and_signals(
     assert total == max_pairs + 1
     assert len(verdicts) == max_pairs
     assert total > len(verdicts)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (status-aware-retrieval, PR3): `include_deprecated` on
+# `find_contradictions` -- deprecated/superseded concepts never in a
+# candidate pair by default (spec: Superseded concept absent from
+# contradiction candidates), `include_deprecated=True` restores them and
+# skips the predicate walk (design R1's zero-cost escape), and an all-live
+# bundle is unaffected either way.
+# ---------------------------------------------------------------------------
+
+
+def test_pair_touching_a_concept_superseded_by_another_is_excluded_by_default(
+    tmp_path: Path,
+) -> None:
+    """A supersedes edge itself forms a typed-edge candidate pair (a, b);
+    since `b` is the TARGET, it is deprecated regardless of its own status,
+    so the pair must be dropped and never judged (spec: Superseded concept
+    absent from contradiction candidates)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
+    llm = _FakeLLM()
+
+    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert verdicts == []
+    assert llm.calls == []
+
+
+def test_pair_touching_a_concept_with_its_own_deprecated_status_is_excluded(
+    tmp_path: Path,
+) -> None:
+    """A concept deprecated via its OWN `status` field (not a supersedes
+    edge) is excluded from candidate pairs the same way."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "references")],
+    )
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "b.md", title="B", status="deprecated"
+    )
+    llm = _FakeLLM()
+
+    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert verdicts == []
+    assert llm.calls == []
+
+
+def test_pair_with_deprecated_concept_as_the_alphabetically_first_element_is_excluded(
+    tmp_path: Path,
+) -> None:
+    """Regression (WARNING, both-sides coverage): the deprecated id may land
+    in EITHER `pair[0]` or `pair[1]` after `_pair_key`'s sort. Every other
+    exclusion test above happens to put the deprecated concept in `pair[1]`
+    (its id sorts after the live side); this fixture pins the deprecated
+    concept as the alphabetically FIRST element (`pair[0]`) instead, so a
+    regression that only checks `pair[1] in deprecated` is caught."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        status="deprecated",
+        relations=[("concepts/z", "references")],
+    )
+    _write_lifecycle_doc(bundle_dir / "concepts" / "z.md", title="Z")
+    llm = _FakeLLM()
+
+    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert verdicts == []
+    assert llm.calls == []
+
+
+def test_live_pair_beyond_cap_index_is_not_starved_by_deprecated_pairs_in_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CONFIRMED HIGH regression: deprecation filtering MUST happen BEFORE
+    the `_MAX_PAIRS` cap slice, not after. Construct more than `_MAX_PAIRS`
+    deduped pairs where the alphabetically-first `_MAX_PAIRS + 5` pairs all
+    touch ONE deprecated concept (so, under a buggy filter-after-cap
+    ordering, they would consume every single cap slot) plus exactly one
+    LIVE pair sorting well beyond index `_MAX_PAIRS`. The live pair MUST
+    still be judged -- the 200-pair budget had ample unused capacity once
+    the deprecated-touching pairs are dropped -- and `total_pair_count`
+    must reflect the live-only count (1), not the raw pre-filter deduped
+    count, so the cap-reached signal (`total_pair_count > len(verdicts)`)
+    is never misleadingly triggered by deprecation filtering alone."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "target_dep.md", title="Target", status="deprecated"
+    )
+    max_pairs = contradiction_mod._MAX_PAIRS
+    dep_pair_count = max_pairs + 5  # > cap, every one touches the deprecated concept
+    edges = [
+        Edge(
+            source_id=f"a{i:04d}",
+            target_id="target_dep",
+            relation_type="references",
+        )
+        for i in range(dep_pair_count)
+    ]
+    edges.append(
+        Edge(
+            source_id="zzz_live",
+            target_id="zzz_live-tgt",
+            relation_type="references",
+        )
+    )
+    store: GraphStore = _FakeGraphStore(edges)
+    monkeypatch.setattr(
+        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(store)
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+
+    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert len(verdicts) == 1
+    assert verdicts[0].pair_ids == ("zzz_live", "zzz_live-tgt")
+    assert total == 1
+    assert len(llm.calls) == 1
+
+
+def test_pair_with_both_sides_live_is_still_judged_alongside_a_dropped_pair(
+    tmp_path: Path,
+) -> None:
+    """GIVEN one pair touching a deprecated concept and one pair between two
+    live concepts, WHEN `find_contradictions` runs, THEN only the live pair
+    is judged -- proving the filter drops selectively, not wholesale."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[
+            ("concepts/b", "supersedes"),
+            ("concepts/c", "references"),
+        ],
+    )
+    _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
+    _write_lifecycle_doc(bundle_dir / "concepts" / "c.md", title="C")
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+
+    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert len(verdicts) == 1
+    assert verdicts[0].pair_ids == ("concepts/a", "concepts/c")
+    assert len(llm.calls) == 1
+
+
+def test_include_deprecated_true_restores_a_pair_touching_a_superseded_concept(
+    tmp_path: Path,
+) -> None:
+    """`include_deprecated=True` restores a pair that would otherwise be
+    dropped, judging it normally (spec: Flag restores a deprecated
+    concept)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+
+    verdicts, _total = contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, include_deprecated=True
+    )
+
+    assert len(verdicts) == 1
+    assert verdicts[0].pair_ids == ("concepts/a", "concepts/b")
+    assert len(llm.calls) == 1
+
+
+def test_include_deprecated_true_never_calls_the_predicate_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_deprecated=True` skips `lifecycle.deprecated_concept_ids`
+    entirely (spy) -- the escape flag is the zero-cost / status-blind path
+    (design R1)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "supersedes")],
+    )
+    _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+    walk_calls: list[Path] = []
+    original_predicate = lifecycle.deprecated_concept_ids
+
+    def _spy_predicate(bundle_dir: Path) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir)
+
+    monkeypatch.setattr(lifecycle, "deprecated_concept_ids", _spy_predicate)
+
+    contradiction_mod.find_contradictions(bundle_dir, llm=llm, include_deprecated=True)
+
+    assert walk_calls == []
+
+
+def test_default_include_deprecated_false_calls_the_predicate_walk_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default `include_deprecated=False` DOES call
+    `lifecycle.deprecated_concept_ids` exactly once per `find_contradictions`
+    call (mirrors `answer()`'s equivalent contract)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "references")],
+    )
+    _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+    walk_calls: list[Path] = []
+    original_predicate = lifecycle.deprecated_concept_ids
+
+    def _spy_predicate(bundle_dir: Path) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir)
+
+    monkeypatch.setattr(lifecycle, "deprecated_concept_ids", _spy_predicate)
+
+    contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert walk_calls == [bundle_dir]
+
+
+def test_all_live_bundle_is_identical_with_and_without_include_deprecated(
+    tmp_path: Path,
+) -> None:
+    """A bundle where every concept's effective status is live produces the
+    identical verdict/total result whether `include_deprecated` is `False`
+    (the default) or `True` (spec: All-live bundle is unaffected)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_lifecycle_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        relations=[("concepts/b", "references")],
+    )
+    _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
+
+    llm_default = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+    default_result = contradiction_mod.find_contradictions(bundle_dir, llm=llm_default)
+
+    llm_included = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+    included_result = contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm_included, include_deprecated=True
+    )
+
+    assert default_result == included_result
