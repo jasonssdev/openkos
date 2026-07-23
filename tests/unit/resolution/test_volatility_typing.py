@@ -592,3 +592,106 @@ def test_include_confidential_true_bypasses_the_reread_guard(tmp_path: Path) -> 
     assert len(llm.calls) == 1
     (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
     assert "Alpha secret body." in message["content"]
+
+
+# ---------------------------------------------------------------------------
+# Correction batch (post-4R-review): FIX 2 (guard signature symmetry) +
+# FIX 3 (re-check sampled docs only, not the full bundle)
+# ---------------------------------------------------------------------------
+
+
+def test_reread_guard_takes_include_confidential_directly() -> None:
+    """FIX 2: `_reread_sensitivity_blocked` takes `include_confidential`
+    itself (matching the sibling `_load_doc`/`_load_members` contract), so a
+    maintainer calling it directly never reintroduces a fail-open bypass by
+    relying on an external `if not include_confidential:` wrapper at the
+    call site. `include_confidential=True` short-circuits to `False`
+    (never blocked) without needing to read a doc that does not exist."""
+    from openkos import lint
+
+    fake_doc = lint.LintDoc(
+        path=Path("/nonexistent/should-not-be-read.md"),
+        identity="nonexistent",
+        rel_dir="",
+        body="unused",
+        freshness="",
+        type="Person",
+        volatility="",
+    )
+
+    assert (
+        volatility_typing_mod._reread_sensitivity_blocked(
+            fake_doc, include_confidential=True
+        )
+        is False
+    )
+
+
+def test_reread_guard_applies_only_to_sampled_docs_not_full_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FIX 3: the walk-independent re-check re-reads frontmatter for the
+    SAMPLED docs only (at most `N_SAMPLE_CONCEPTS` per type), never the full
+    bundle -- a full-bundle re-read for a guard the design admits is
+    weakest-leverage (this verb's ids come from a live `lint.collect_docs`
+    walk, so the walk-miss leak this guard defends against cannot even fire
+    here) was needless I/O. Confirmed by counting guard calls: exactly 5,
+    never 6, for 6 `Person` docs where only the first 5 by sorted `identity`
+    are ever sampled."""
+    for name in ("f", "d", "a", "c", "b", "e"):
+        _write_doc(tmp_path / f"{name}.md", doc_type="Person", title=name)
+    llm = _FakeLLM(replies=[_valid_reply()])
+    original_guard = volatility_typing_mod._reread_sensitivity_blocked
+    checked_paths: list[Path] = []
+
+    def _spy_guard(doc: object, **kwargs: object) -> bool:
+        checked_paths.append(doc.path)  # type: ignore[attr-defined]
+        return original_guard(doc, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        volatility_typing_mod, "_reread_sensitivity_blocked", _spy_guard
+    )
+
+    volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert len(checked_paths) == 5
+    assert tmp_path / "f.md" not in checked_paths
+
+
+def test_reread_excludes_a_confidential_doc_that_would_be_sampled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A confidential doc that WOULD be sampled (within the first
+    `N_SAMPLE_CONCEPTS` by sorted `identity`) is still excluded by the
+    post-sampling re-check -- fail-closed is preserved even though the
+    guard now runs on the sampled subset instead of the full bundle."""
+    from openkos import sensitivity
+
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        body="Alpha secret body.",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        tmp_path / "b.md",
+        doc_type="Person",
+        title="B",
+        body="Beta private body.",
+        sensitivity_value="private",
+    )
+    # Simulate the walk missing "a"'s subtree entirely -- the precomputed
+    # confidential-id set is empty, so only the sampled-subset re-check
+    # guards it.
+    monkeypatch.setattr(
+        sensitivity, "sensitive_concept_ids", lambda *a, **k: frozenset()
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert len(llm.calls) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Alpha secret body." not in message["content"]
+    assert "Beta private body." in message["content"]
