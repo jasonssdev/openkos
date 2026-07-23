@@ -53,10 +53,13 @@ concepts' ids (`result.citations`).
 
 WHEN filing via `--save`, `query` MUST re-read each cited concept's
 frontmatter and set the filed concept's sensitivity to the high-water-mark
-(`okf.combine_sensitivity`) across them. WHEN there are zero citations or
-none are readable, sensitivity MUST fall back to `cfg.default_sensitivity`.
-WHEN `--include-confidential` caused a confidential cited concept to be
-used, the filed concept's sensitivity MUST be confidential.
+(`okf.combine_sensitivity`) across them, seeded at `cfg.default_sensitivity`.
+An unreadable cited concept is skipped (the running floor holds). WHEN
+`--include-confidential` caused a confidential cited concept to be used, the
+filed concept's sensitivity MUST be confidential. WHEN there are zero
+citations, `query` MUST REFUSE to file, exit non-zero, and leave the bundle
+unchanged -- `build_concept` requires non-empty provenance, and a sourceless
+"derived" concept is not a real derived node.
 
 #### Scenario: Confidential citation propagates confidentiality
 
@@ -65,12 +68,11 @@ used, the filed concept's sensitivity MUST be confidential.
 - WHEN `openkos query "<question>" --save` files the answer
 - THEN the filed concept's sensitivity is confidential
 
-#### Scenario: Zero citations fall back to the configured default
+#### Scenario: Zero citations refuse to file
 
-- GIVEN the matched answer has zero readable citations
-- WHEN `openkos query "<question>" --save` files the answer
-- THEN sensitivity is `cfg.default_sensitivity` and provenance is an empty
-  list, and filing still proceeds
+- GIVEN zero readable citations
+- WHEN `openkos query "<question>" --save` is run
+- THEN `query` refuses, exits non-zero, and the bundle is unchanged
 
 ### Requirement: Preview, Confirm, And Non-TTY Gate For `--save`
 
