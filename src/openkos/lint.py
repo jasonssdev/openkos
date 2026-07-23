@@ -55,14 +55,6 @@ class LintDoc:
     Distinct from `freshness`, which stays a binary snapshot/non-snapshot
     skip flag, never a volatility signal."""
 
-    sensitivity: str
-    """The doc's raw frontmatter `sensitivity` field, or `""` if absent
-    (sensitivity-fail-closed-filter, S3b). This is the RAW string, never
-    itself rank-resolved here -- `resolution/volatility_typing.py` filters
-    against the shared `sensitivity.sensitive_concept_ids` predicate before
-    sampling, mirroring how `type`/`volatility` are plain data carried by
-    `LintDoc` while resolution logic lives in each consumer."""
-
 
 @dataclass(frozen=True)
 class LintFinding:
@@ -127,7 +119,6 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
                 freshness=str(metadata.get("freshness", "")),
                 type=str(metadata.get("type", "")),
                 volatility=str(metadata.get("volatility", "")),
-                sensitivity=str(metadata.get("sensitivity", "")),
             )
         )
     return docs, skip_notices
