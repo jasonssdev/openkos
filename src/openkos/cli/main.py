@@ -47,6 +47,7 @@ from openkos.resolution.contradiction import (
 from openkos.resolution.edge_typing import suggest_relations
 from openkos.resolution.volatility_typing import suggest_volatility
 from openkos.retrieval.answer import NO_MATCH, NoMatchCause, answer
+from openkos.sensitivity import blocks_llm_send
 from openkos.state import derived, fts
 from openkos.state import reindex as reindex_module
 from openkos.state.fts import FtsUnavailable
@@ -317,12 +318,19 @@ def _stage_derived_objects(
     sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
     `True`, `extract` gates on the WORKSPACE floor rather than a per-doc
     value (a raw source has no per-doc `sensitivity` yet, unlike the other
-    five `llm.chat` seams): when `okf._rank(sensitivity) >= okf._rank
-    ("confidential")` -- i.e. the workspace's `default_sensitivity` floor is
-    confidential -- this returns `[]` WITHOUT calling `extract_concept` at
-    all, so `llm.chat` is never invoked, and emits the same Source-only
-    degrade message shape as the blank-content case above.
-    `include_confidential=True` bypasses this gate entirely.
+    five `llm.chat` seams): when `sensitivity.blocks_llm_send(sensitivity)`
+    -- i.e. the workspace's `default_sensitivity` floor is confidential (or
+    absent/blank, correction batch post-4R-review FIX 1) -- this returns `[]`
+    WITHOUT calling `extract_concept` at all, so `llm.chat` is never invoked,
+    and emits the same Source-only degrade message shape as the
+    blank-content case above. `include_confidential=True` bypasses this gate
+    entirely. This delegates to the SAME shared `blocks_llm_send` authority
+    `sensitivity.sensitive_concept_ids` uses per-doc, rather than calling
+    `okf._rank` directly on `sensitivity` -- a bare `okf._rank` call would
+    wrongly resolve a blank/whitespace `default_sensitivity: ""` to
+    `"private"` (never tripping this gate), because `okf._rank(None)`/
+    `okf._rank("")` both fall back to `"private"` for the unrelated
+    `combine_sensitivity` merge-floor use case, not this fail-closed one.
     """
     if raw_content is None or not raw_content.strip():
         typer.echo(
@@ -331,7 +339,7 @@ def _stage_derived_objects(
         )
         return []
 
-    if not include_confidential and okf._rank(sensitivity) >= okf._rank("confidential"):
+    if not include_confidential and blocks_llm_send(sensitivity):
         typer.echo(
             "openkos ingest: workspace default_sensitivity floor is confidential; "
             "skipping concept extraction, keeping the Source only.",

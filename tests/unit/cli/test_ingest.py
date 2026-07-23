@@ -952,6 +952,33 @@ def test_private_default_sensitivity_floor_calls_llm_chat_unchanged(
     assert concept_path.is_file()
 
 
+def test_blank_default_sensitivity_still_trips_the_confidential_floor_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank/whitespace `default_sensitivity: ""` MUST still be treated as
+    confidential-or-more-restrictive and skip extraction -- `okf._rank("")`
+    alone resolves to `"private"` (the merge-floor default), which would
+    wrongly leave the gate untripped and send raw source text to `llm.chat`
+    (correction batch, post-4R-review FIX 1: extract floor-gate fail-open)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", 'default_sensitivity: ""'
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "keeping the Source only" in result.stderr
+    assert fake.calls == []
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert not concept_path.exists()
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert source_path.is_file()
+
+
 def test_include_confidential_bypasses_the_confidential_floor_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

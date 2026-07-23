@@ -178,3 +178,48 @@ def test_all_public_private_bundle_returns_empty_frozenset(tmp_path: Path) -> No
     blocked = sensitivity.sensitive_concept_ids(bundle_dir)
 
     assert blocked == frozenset()
+
+
+# --- correction batch (post-4R-review), FIX 1: shared `blocks_llm_send` ----
+
+
+def test_blocks_llm_send_blocks_none() -> None:
+    """`blocks_llm_send(None)` is blocked -- an absent value MUST NOT be
+    delegated to `okf._rank` alone (`okf._rank(None)` resolves to
+    `"private"`, which would wrongly let it through)."""
+    assert sensitivity.blocks_llm_send(None) is True
+
+
+def test_blocks_llm_send_blocks_blank_and_whitespace() -> None:
+    """`blocks_llm_send` blocks an empty string and a whitespace-only string
+    -- same fail-closed reasoning as the `None` case."""
+    assert sensitivity.blocks_llm_send("") is True
+    assert sensitivity.blocks_llm_send("   ") is True
+
+
+def test_blocks_llm_send_blocks_confidential_and_above() -> None:
+    """`blocks_llm_send` blocks a present value that ranks at or above the
+    threshold (default `"confidential"`)."""
+    assert sensitivity.blocks_llm_send("confidential") is True
+
+
+def test_blocks_llm_send_blocks_unknown_value() -> None:
+    """`blocks_llm_send` blocks an unrecognized string -- `okf._rank` itself
+    fails closed toward `"confidential"` on anything it does not
+    recognize."""
+    assert sensitivity.blocks_llm_send("top-secret") is True
+
+
+def test_blocks_llm_send_allows_private_and_public() -> None:
+    """`blocks_llm_send` does NOT block a present, non-blank value that ranks
+    below the threshold."""
+    assert sensitivity.blocks_llm_send("private") is False
+    assert sensitivity.blocks_llm_send("public") is False
+
+
+def test_blocks_llm_send_respects_custom_threshold() -> None:
+    """A caller-supplied `threshold` changes the rank floor -- e.g. a
+    `"private"` threshold blocks `"private"` itself too, not just
+    `"confidential"`."""
+    assert sensitivity.blocks_llm_send("private", threshold="private") is True
+    assert sensitivity.blocks_llm_send("public", threshold="private") is False
