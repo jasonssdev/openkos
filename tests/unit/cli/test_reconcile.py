@@ -170,6 +170,76 @@ def test_traversal_id_a_refuses(
     assert _snapshot(tmp_path) == before
 
 
+def test_traversal_id_b_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A traversal-shaped `id_b` is refused (exit 1), no write (threat
+    matrix: path traversal)."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["reconcile", a_id, "../../evil", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert _snapshot(tmp_path) == before
+
+
+def test_traversal_winner_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A traversal-shaped `--winner` is refused (exit 1), no write (threat
+    matrix: path traversal)."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["reconcile", a_id, b_id, "--winner", "../../evil", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert _snapshot(tmp_path) == before
+
+
+def test_reserved_basename_id_a_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept-id resolving to the reserved `index`/`log` basename refuses
+    (exit 1) and writes nothing (mirrors `forget`'s reserved-basename
+    gate)."""
+    _init_workspace(tmp_path, monkeypatch)
+    b_id = _ingest_source(tmp_path, "b.txt")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["reconcile", "index", b_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "reserved" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_reserved_basename_id_b_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reserved `log` basename as `id_b` refuses (exit 1) and writes
+    nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["reconcile", a_id, "log", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "reserved" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
 # -- 1.3: confirm-gate -------------------------------------------------------
 
 
@@ -377,6 +447,97 @@ def test_winner_reconcile_idempotent_rerun(
 
     log_text = _log_text(tmp_path)
     assert "already reconciled; no change." in log_text
+
+
+# -- 1.6b: mode-switch refuses (CRITICAL fix -- no contradictory state) ------
+
+
+def test_symmetric_then_winner_mode_switch_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symmetric reconcile followed by a `--winner` re-run on the SAME
+    pair REFUSES (exit 1) instead of adding a contradictory `supersedes`
+    edge alongside the stale `reconciled_with` edge -- the workspace is
+    byte-unchanged after the refused 2nd call."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+
+    first = runner.invoke(app, ["reconcile", a_id, b_id, "--auto"])
+    assert first.exit_code == 0
+
+    before = _snapshot(tmp_path)
+
+    second = runner.invoke(app, ["reconcile", a_id, b_id, "--winner", a_id, "--auto"])
+
+    assert second.exit_code == 1
+    assert isinstance(second.exception, SystemExit)
+    assert "already reconciled" in second.stderr
+    assert _snapshot(tmp_path) == before
+
+    # frontmatter must NOT carry both edge types -- only the original
+    # symmetric edge survives
+    assert _relations_of(tmp_path, a_id) == [
+        okf.Relation(target=b_id, type="reconciled_with")
+    ]
+    assert _relations_of(tmp_path, b_id) == [
+        okf.Relation(target=a_id, type="reconciled_with")
+    ]
+
+
+def test_winner_a_then_winner_b_mode_switch_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--winner a` followed by `--winner b` (opposite winner) on the SAME
+    pair REFUSES (exit 1) instead of adding a 2nd `supersedes` edge
+    alongside the first, workspace byte-unchanged."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+
+    first = runner.invoke(app, ["reconcile", a_id, b_id, "--winner", a_id, "--auto"])
+    assert first.exit_code == 0
+
+    before = _snapshot(tmp_path)
+
+    second = runner.invoke(app, ["reconcile", a_id, b_id, "--winner", b_id, "--auto"])
+
+    assert second.exit_code == 1
+    assert isinstance(second.exception, SystemExit)
+    assert "already reconciled" in second.stderr
+    assert _snapshot(tmp_path) == before
+
+    assert _relations_of(tmp_path, a_id) == [
+        okf.Relation(target=b_id, type="supersedes")
+    ]
+    assert _relations_of(tmp_path, b_id) == []
+
+
+def test_winner_then_symmetric_mode_switch_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--winner a` followed by a symmetric re-run on the SAME pair REFUSES
+    (exit 1), workspace byte-unchanged, note not silently mislabeled."""
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    b_id = _ingest_source(tmp_path, "b.txt")
+
+    first = runner.invoke(app, ["reconcile", a_id, b_id, "--winner", a_id, "--auto"])
+    assert first.exit_code == 0
+
+    before = _snapshot(tmp_path)
+
+    second = runner.invoke(app, ["reconcile", a_id, b_id, "--auto"])
+
+    assert second.exit_code == 1
+    assert isinstance(second.exception, SystemExit)
+    assert "already reconciled" in second.stderr
+    assert _snapshot(tmp_path) == before
+
+    assert _relations_of(tmp_path, a_id) == [
+        okf.Relation(target=b_id, type="supersedes")
+    ]
+    assert _relations_of(tmp_path, b_id) == []
 
 
 # -- 1.7: additive-only -------------------------------------------------------

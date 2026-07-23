@@ -62,3 +62,40 @@ Rationale: reconcile clones relate/merge's Phase-A/confirm-gate/Phase-B template
 ## Apply Result
 
 All 21 tasks complete. Actual changed lines: `main.py` +333/-0, `test_reconcile.py` +429 (new file) — 762 total, within the granted 800-line budget.
+
+## Correction: CRITICAL mode-switch data-integrity fix (post-4R-review)
+
+A 4R review (risk+resilience+reliability converged) found `reconcile` produced
+self-contradictory state on a mode-switch re-run of the same pair (e.g.
+symmetric then `--winner`, or opposite `--winner`s): a new, DIFFERENT-typed
+edge was added alongside the stale one (`_add_relation_if_absent` dedups only
+on `(target, type)`), while the anchor-gated note (`_reconcile_anchor_present`,
+matches on `target` alone, ignores `role`) was never updated — frontmatter and
+note went permanently out of sync.
+
+- [x] C.1 RED: added 3 mode-switch tests to `test_reconcile.py`
+      (`test_symmetric_then_winner_mode_switch_refuses`,
+      `test_winner_a_then_winner_b_mode_switch_refuses`,
+      `test_winner_then_symmetric_mode_switch_refuses`) — confirmed FAILING
+      (2nd call exited 0, silently wrote contradictory state) before the fix.
+- [x] C.2 GREEN: added `_existing_reconciliation_state` +
+      `_reconciliation_state_description` helpers to `main.py`; `reconcile`
+      now classifies the pair's existing reconciliation state (none /
+      symmetric / directional+winner) BEFORE computing any new edge, and
+      REFUSES (`ValueError`, exit 1, zero writes) when the existing state
+      differs from the requested one — a pair can carry at most one
+      reconciliation resolution written by `reconcile`.
+- [x] C.3 Also fixed the readability WARNING: `_reconcile_sentence`'s `role`
+      is now `Literal["reconciled","supersedes","superseded"]` and raises
+      `ValueError` on any unexpected value instead of silently falling
+      through to the "superseded" sentence.
+- [x] C.4 Closed the coverage-gap WARNING: added `test_traversal_id_b_refuses`,
+      `test_traversal_winner_refuses`, `test_reserved_basename_id_a_refuses`,
+      `test_reserved_basename_id_b_refuses` (all passed unchanged —
+      `_resolve_concept_path` already handled these correctly; only test
+      coverage was missing).
+- [x] C.5 Verify gate: `uv run pytest` — 1483 passed (was 1476; +7 net new
+      tests); `uv run ruff format .` (1 file reformatted, whitespace-only);
+      `uv run ruff check .` — all checks passed; `uv run ruff format --check .`
+      — 109 files already formatted; `uv run mypy .` — success, no issues in
+      109 source files.

@@ -1783,20 +1783,31 @@ def _reconcile_anchor_present(body: str, counterpart_id: str) -> bool:
     )
 
 
-def _reconcile_sentence(role: str, counterpart_id: str, date_str: str) -> str:
+_ReconcileRole = Literal["reconciled", "supersedes", "superseded"]
+
+
+def _reconcile_sentence(
+    role: _ReconcileRole, counterpart_id: str, date_str: str
+) -> str:
     """One human-readable sentence for a `## Reconciliation` note, per
     `role` (design: Interfaces / Contracts) -- `reconciled` (symmetric,
     both coexist), `supersedes` (this concept wins), or `superseded`
-    (label-only, no status change)."""
+    (label-only, no status change). `role` is a closed `Literal`, and any
+    other value raises defensively (rather than silently falling through to
+    the "superseded" sentence) so a typo can never mislabel a note."""
     link = f"[{counterpart_id}](/{counterpart_id}.md)"
     if role == "reconciled":
         return f"Reconciled with {link} on {date_str} (both coexist)."
     if role == "supersedes":
         return f"Supersedes {link} as of {date_str} (this concept wins)."
-    return f"Superseded by {link} as of {date_str} (label-only, no status change)."
+    if role == "superseded":
+        return f"Superseded by {link} as of {date_str} (label-only, no status change)."
+    raise ValueError(f"unexpected reconciliation role {role!r}")
 
 
-def _reconciliation_note(*, counterpart_id: str, role: str, date_str: str) -> str:
+def _reconciliation_note(
+    *, counterpart_id: str, role: _ReconcileRole, date_str: str
+) -> str:
     """Build one full `## Reconciliation` body note: an h2 heading (chosen
     over `#` to avoid a second top-level heading alongside the concept's own
     title, design note), the hidden anchor keyed on `counterpart_id`, and
@@ -1830,6 +1841,57 @@ def _add_relation_if_absent(
     if already_present:
         return relations, False
     return [*relations, new_relation], True
+
+
+def _existing_reconciliation_state(
+    *,
+    relations_a: list[okf.Relation],
+    relations_b: list[okf.Relation],
+    canonical_a: str,
+    canonical_b: str,
+) -> tuple[Literal["none", "symmetric", "directional"], str | None]:
+    """Classify the pair's EXISTING reconciliation state from
+    already-loaded (pre-mutation) relations, gathering both `supersedes`
+    directions and the symmetric `reconciled_with` edge between `{a, b}` --
+    the CRITICAL refuse-on-conflict gate (fix: a mode-switch re-run must
+    never add a second, contradictory reconciliation resolution). Returns
+    `("none", None)` when the pair carries no prior reconciliation,
+    `("symmetric", None)` when a `reconciled_with` edge already links them,
+    or `("directional", winner)` when a `supersedes` edge already points
+    winner -> loser."""
+    a_supersedes_b = any(
+        relation.target == canonical_b and relation.type == "supersedes"
+        for relation in relations_a
+    )
+    b_supersedes_a = any(
+        relation.target == canonical_a and relation.type == "supersedes"
+        for relation in relations_b
+    )
+    if a_supersedes_b:
+        return "directional", canonical_a
+    if b_supersedes_a:
+        return "directional", canonical_b
+
+    symmetric = any(
+        relation.target == canonical_b and relation.type == "reconciled_with"
+        for relation in relations_a
+    ) or any(
+        relation.target == canonical_a and relation.type == "reconciled_with"
+        for relation in relations_b
+    )
+    if symmetric:
+        return "symmetric", None
+    return "none", None
+
+
+def _reconciliation_state_description(
+    mode: Literal["none", "symmetric", "directional"], winner: str | None
+) -> str:
+    """Human-readable description of an existing reconciliation state, for
+    the refuse-on-conflict error message."""
+    if mode == "directional":
+        return f"a directional reconciliation ({winner!r} supersedes its counterpart)"
+    return "a symmetric reconciliation ('reconciled_with')"
 
 
 @app.command()
@@ -1875,6 +1937,25 @@ def reconcile(
     write, spec: "--winner gamma (not in pair {alpha,beta})"); the other
     pair member becomes the loser.
 
+    Before building any new edge, `_existing_reconciliation_state` gathers
+    the pair's EXISTING reconciliation edges (any `reconciled_with` or
+    `supersedes` already linking `id_a`/`id_b`, in either direction) and
+    classifies them as `"none"`, `"symmetric"`, or `"directional"` (with a
+    winner). This is compared to what THIS invocation requests: if the pair
+    carries NO prior reconciliation, this proceeds as a fresh write; if the
+    prior state matches the request EXACTLY (same mode, same winner for
+    `--winner`), this proceeds to the ordinary idempotent no-op path below;
+    if the prior state DIFFERS (a mode switch, e.g. symmetric then
+    `--winner`, or an opposite `--winner`), this REFUSES here (`ValueError`,
+    exit 1, ZERO writes) rather than adding a second, contradictory
+    resolution -- a pair can carry AT MOST ONE reconciliation resolution
+    written by `reconcile` (CRITICAL fix: a mode-switch re-run used to dedup
+    the new edge only on `(target, type)`, so a DIFFERENT edge type was
+    added alongside the stale one, while the anchor-gated note below matches
+    on `target` alone and is blind to `role`, so it silently kept describing
+    the earlier resolution -- frontmatter and body note went out of sync
+    with no way to repair it on a later run).
+
     The rest of Phase A builds the entire result in memory. With no
     `--winner`, a SYMMETRIC `reconciled_with` edge is added to BOTH
     concepts (each targeting the other, design: "Symmetric edge = one
@@ -1884,15 +1965,17 @@ def reconcile(
     this verb never writes `status` or any deprecation field (spec:
     Additive-Only, No Status/Lifecycle Write). Either edge shape dedups on
     `(target, type)` (`_add_relation_if_absent`), mirroring `relate`'s
-    idempotency. Each side then gets a `## Reconciliation` body note
-    appended -- unless a hidden `<!-- okos:reconcile target=<counterpart>
-    ... -->` anchor for that counterpart is already present
-    (`_reconcile_anchor_present`), in which case the note is skipped
-    (idempotent re-run, spec: Idempotent Re-run). All writes are additive:
-    existing body content and relations are preserved verbatim, never
-    overwritten. A `log.md` entry is built via `bundle_log.insert_log_entry`,
-    in one of three shapes: symmetric-new, winner-new, or no-change (when
-    nothing on either side actually changed -- a clean re-run).
+    idempotency -- safe now that the refuse-on-conflict gate above has
+    already ruled out a mode switch reaching this point. Each side then gets
+    a `## Reconciliation` body note appended -- unless a hidden `<!--
+    okos:reconcile target=<counterpart> ... -->` anchor for that counterpart
+    is already present (`_reconcile_anchor_present`), in which case the note
+    is skipped (idempotent re-run, spec: Idempotent Re-run). All writes are
+    additive: existing body content and relations are preserved verbatim,
+    never overwritten. A `log.md` entry is built via
+    `bundle_log.insert_log_entry`, in one of three shapes: symmetric-new,
+    winner-new, or no-change (when nothing on either side actually changed
+    -- a clean re-run).
 
     Confirm gate, identical precedence and mechanism to `relate`/`merge`/
     `forget`: `--auto` skips the prompt outright; otherwise config
@@ -1974,8 +2057,46 @@ def reconcile(
         relations_a = okf.decode_relations(metadata_a)
         relations_b = okf.decode_relations(metadata_b)
 
+        # CRITICAL refuse-on-conflict gate (before ANY edge is computed or
+        # written): a pair may carry AT MOST ONE reconciliation resolution
+        # written by `reconcile`. Compare the pair's EXISTING state to the
+        # one requested by THIS invocation -- an unrelated (`"none"`) prior
+        # state proceeds as a fresh write, an IDENTICAL prior state falls
+        # through to the ordinary idempotent no-op path below, but a
+        # DIFFERENT prior state (mode switch, or opposite `--winner`) is
+        # refused here, with zero writes -- this is what prevents a 2nd
+        # `supersedes` edge from coexisting with a stale `reconciled_with`
+        # edge (or a 2nd, opposite-direction `supersedes` edge), and
+        # prevents the `## Reconciliation` note from going stale relative
+        # to frontmatter (the note-append gate below is anchor-keyed on
+        # `target` alone and blind to `role`, so it cannot itself repair a
+        # mismatched note on a later run).
+        existing_mode, existing_winner = _existing_reconciliation_state(
+            relations_a=relations_a,
+            relations_b=relations_b,
+            canonical_a=canonical_a,
+            canonical_b=canonical_b,
+        )
+        requested_mode: Literal["symmetric", "directional"] = (
+            "directional" if winner_canonical is not None else "symmetric"
+        )
+        if existing_mode != "none" and (
+            existing_mode != requested_mode or existing_winner != winner_canonical
+        ):
+            description = _reconciliation_state_description(
+                existing_mode, existing_winner
+            )
+            raise ValueError(
+                f"concepts {canonical_a!r} and {canonical_b!r} are already "
+                f"reconciled as {description}; reconcile will not overwrite "
+                "an existing resolution. To change it, edit the concepts "
+                "manually or revert with git, then re-run"
+            )
+
         edge_added_a = False
         edge_added_b = False
+        role_a: _ReconcileRole
+        role_b: _ReconcileRole
         if winner_canonical is None:
             relations_a, edge_added_a = _add_relation_if_absent(
                 relations_a, okf.Relation(target=canonical_b, type="reconciled_with")
