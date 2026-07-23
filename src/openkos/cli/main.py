@@ -1257,6 +1257,501 @@ def forget(
         )
 
 
+_PurgeScope = Literal["self", "source"]
+
+# Exact copy, per design.md "Residual-leak warning" -- printed at preview
+# (before the typed confirmation phrase) AND echoed again on success, so a
+# purge operator sees it both before and after the irreversible act.
+_PURGE_RESIDUAL_WARNING = (
+    "WARNING: purge is IRREVERSIBLE. It rewrites ALL git history in place -- "
+    "there is no git-undo, no reflog, no backup. The raw source file(s) and "
+    "concept file(s) listed above will be permanently expunged from every "
+    "commit, and the live index.md catalog bullet(s) for the purge-set "
+    "member(s) will be removed.\n\n"
+    "This is NOT complete right-to-be-forgotten yet. The purged concept's "
+    "id and title -- and any prior forget tombstone -- REMAIN only in the "
+    "HISTORY (past commits) of index.md and log.md, and, if a prior forget "
+    "already wrote a tombstone for it, in the LIVE log.md too. Those "
+    "identifiers stay recoverable from git history until Slice 2 "
+    "(content-scrub) closes this residual."
+)
+
+
+def _purge_confirm_phrase(
+    canonical_id: str, purge_ids: list[str], scope: _PurgeScope
+) -> str:
+    """The exact typed confirmation phrase `purge` requires before Phase B:
+    `purge <canonical_id>` for `--scope self`, `purge <canonical_id> (<N>
+    concepts)` for `--scope source` -- names the delete COUNT so an operator
+    cannot type the self-scope phrase by habit and unknowingly confirm a
+    larger cascade (design: Typed Confirmation)."""
+    if scope == "source":
+        return f"purge {canonical_id} ({len(purge_ids)} concepts)"
+    return f"purge {canonical_id}"
+
+
+def _purge_clean_live_index(
+    layout: config.WorkspaceLayout, purge_ids: list[str]
+) -> None:
+    """After the (already irreversible) history rewrite has succeeded,
+    remove the LIVE `index.md` catalog bullet for EVERY purge-set member --
+    reusing `forget`'s own `bundle_index.remove_index_entry` +
+    `fsio.write_atomic` write path.
+
+    Without this, the live catalog would keep a bullet pointing at a
+    concept whose file no longer exists in ANY commit -- a broken catalog
+    entry, and the purged id/title staying visible in the LIVE workspace
+    (not merely history), which the residual-leak warning must not
+    understate.
+
+    This runs as an ordinary working-tree edit AFTER `git filter-repo` has
+    already committed the rewritten history and checked out the new HEAD --
+    there is no dirty-tree rail left to satisfy at this point (Phase B has
+    already begun; spec: Irreversibility -- No Rollback After Rewrite
+    Begins), so this is simply the next write in the same irreversible
+    operation, not a new gated action.
+
+    A failure here is reported but does NOT fail the (already-succeeded)
+    purge -- the erasure already happened; a stale catalog bullet left
+    behind by a failed write is a correctness issue to fix with
+    `openkos lint`, not a data-leak one."""
+    index_path = layout.bundle_dir / "index.md"
+    try:
+        index_text = index_path.read_text(encoding="utf-8")
+        new_index_text = index_text
+        for member in purge_ids:
+            new_index_text, _ = bundle_index.remove_index_entry(new_index_text, member)
+        if new_index_text != index_text:
+            fsio.write_atomic(index_path, new_index_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos purge: warning -- failed to clean the live index.md "
+            f"catalog: {exc}. Run 'openkos lint' to detect/fix a dangling "
+            "bullet.",
+            err=True,
+        )
+
+
+def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
+    """Phase B's index cleanup (spec: Index Cleanup Is Delete-And-Rebuild, No
+    Tombstone): physically DELETE `.openkos/{fts,vectors,graph}.db` --
+    row-level `DELETE` would leave SQLite freelist-recoverable pages, which
+    defeats the point of an erasure -- then best-effort rebuild FTS + graph
+    ONLY (never the full `state.reindex.reindex`, which hard-depends on a
+    running Ollama embedder `purge` must never require). `vectors.db` is
+    deliberately left deleted for the next `openkos reindex` to lazily
+    re-embed.
+
+    A rebuild failure here is reported but MUST NOT fail the (already
+    irreversible, already-succeeded) purge -- the DELETE above is the
+    security-critical erasure; the rebuild is a best-effort convenience over
+    the survivors (design: Index cleanup decision)."""
+    for db_path in (
+        layout.fts_db_path,
+        layout.vectors_db_path,
+        layout.graph_db_path,
+    ):
+        try:
+            db_path.unlink(missing_ok=True)
+        except OSError as exc:
+            typer.echo(
+                f"openkos purge: warning -- failed to delete '{db_path.name}': "
+                f"{exc}. Run `openkos reindex` to rebuild derived indexes.",
+                err=True,
+            )
+
+    try:
+        reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=True)
+    except (OSError, sqlite3.Error, FtsUnavailable) as exc:
+        typer.echo(
+            f"openkos purge: warning -- failed to rebuild fts.db: {exc}. "
+            "Run `openkos reindex` to restore search.",
+            err=True,
+        )
+
+    try:
+        sqlite_graph.reindex_graph(layout.bundle_dir, layout.graph_db_path, force=True)
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            f"openkos purge: warning -- failed to rebuild graph.db: {exc}. "
+            "Run `openkos reindex` to restore search.",
+            err=True,
+        )
+
+
+@app.command()
+def purge(
+    concept_id: str = typer.Argument(
+        ..., help="Bundle-relative concept id (path minus '.md') to purge."
+    ),
+    scope: _PurgeScope = typer.Option(
+        "self",
+        "--scope",
+        help=(
+            "'self' (default) purges only <concept_id>. 'source' expands the "
+            "purge set to <concept_id> plus every concept whose ENTIRE "
+            "`provenance` resolves back to it -- the SAME orphan-after-delete "
+            "closure `forget --scope source` uses "
+            "(`bundle.provenance.find_provenance_descendants`)."
+        ),
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Proceed even when inbound references (markdown links or typed "
+            "relations) -- or unverifiable referrers -- to a purge-set "
+            "member were detected; they are left dangling. Bypasses ONLY "
+            "the reference-aware rail -- every other rail (git-root, clean "
+            "tree, no published commits, typed confirmation) still runs."
+        ),
+    ),
+    confirm_phrase: str | None = typer.Option(
+        None,
+        "--confirm-phrase",
+        help=(
+            "The exact typed confirmation phrase (see the printed preview), "
+            "for non-interactive/test use. On a TTY, omitting this prompts "
+            "interactively instead. There is NO --auto bypass for this "
+            "phrase -- purge is irreversible."
+        ),
+    ),
+) -> None:
+    """Irreversibly whole-file-expunge a concept's source `raw/<name>` and
+    bundle file from ALL git history via `git-filter-repo` -- the true-
+    erasure counterpart to `forget` (MVP-2 right-to-be-forgotten, Slice 1).
+
+    Phase A (pure, no writes) is IDENTICAL to `forget`'s: `require_workspace`
+    gate, `_resolve_concept_path` path-safety on the root id, the purge-set
+    resolution (`--scope self|source` via
+    `bundle_provenance.find_provenance_descendants`), and the SAME reference-
+    aware inbound-reference detection. On top of that, for every purge-set
+    member this also resolves its raw source path from a Source's
+    `resource: raw/<name>` frontmatter (a derived concept, with no
+    `resource`, contributes only its own `bundle/<id>.md`; a Source whose
+    `resource` is absent or fails validation -- must start with `raw/`, no
+    `..` segment, resolve under `raw/` -- is WARNED about, not refused, and
+    simply contributes no raw path).
+
+    Six fail-closed safety rails run, in this EXACT order, ALL before any
+    write: (1) reference-aware refusal (unless `--force`) -- reused from
+    `forget`'s own gate; (2) `git`/`git-filter-repo` availability; (3) the
+    workspace root must BE a git repository root (`vcs.repo_root`); (4) the
+    working tree must be clean (`vcs.is_clean`); (5) the local repo must
+    have NO commits already published on any remote (`vcs.has_published_commits`
+    -- history rewriting cannot retroactively change what a remote already
+    has); (6) a TYPED CONFIRMATION PHRASE, printed alongside the preview and
+    the mandatory residual-leak warning, must match EXACTLY (never a bare
+    `y`/`yes`) -- there is no `--auto` bypass for this rail, since purge is
+    irreversible. The first failing rail refuses immediately (exit 1,
+    nothing written); no later rail is evaluated.
+
+    Phase B (the point of no return, reached only once all six rails pass):
+    `vcs.expunge_paths` rewrites every purge-set member's `raw/<name>` and
+    `bundle/<id>.md` out of ALL git history and the working tree, then
+    finalizes (reflog expire + gc). A `GitFinalizeError` (the rewrite
+    SUCCEEDED but finalize failed) is surfaced distinctly, with its own
+    recoverability warning, and index cleanup still runs -- the rewrite
+    already happened and cannot be undone. Index cleanup then deletes
+    `.openkos/{fts,vectors,graph}.db` and best-effort rebuilds FTS + graph
+    (never `vectors.db`, and never through the Ollama-dependent full
+    `reindex()`) -- a rebuild failure is reported but does NOT fail the
+    already-irreversible purge. No `log.md` tombstone is ever written. The
+    residual-leak warning is echoed again on success.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos purge: refusing to purge -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        # Path-safety on the ROOT id runs FIRST, before any descendant
+        # resolution -- identical to `forget` (threat matrix: path-traversal
+        # deletion).
+        concept_path, canonical_id = _resolve_concept_path(
+            layout.bundle_dir, concept_id
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos purge: refusing to purge -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        concept_text = concept_path.read_text(encoding="utf-8")
+
+        # Same whole-bundle snapshot construction as `forget` (~L1006-1019).
+        other_files: dict[str, str] = {}
+        for path in sorted(layout.bundle_dir.rglob("*.md")):
+            if path.name in okf.RESERVED_FILENAMES:
+                continue
+            if path == concept_path:
+                continue
+            rel = path.relative_to(layout.bundle_dir).as_posix()
+            other_files[rel] = path.read_text(encoding="utf-8")
+
+        purge_ids: list[str] = (
+            bundle_provenance.find_provenance_descendants(
+                other_files, root_ids={canonical_id}
+            )
+            if scope == "source"
+            else [canonical_id]
+        )
+        purge_ids_set = set(purge_ids)
+
+        member_texts: dict[str, str] = {canonical_id: concept_text}
+        for member in purge_ids:
+            if member != canonical_id:
+                member_texts[member] = other_files[f"{member}.md"]
+        member_metadata: dict[str, dict[str, object]] = {
+            member: okf.load_frontmatter(text)[0]
+            for member, text in member_texts.items()
+        }
+
+        # Reference-aware detection (rail 1's data), identical set-difference
+        # gate to `forget`'s.
+        all_refs: list[tuple[str, bundle_references.InboundReference]] = []
+        seen_unverifiable: set[str] = set()
+        for member in purge_ids:
+            for ref in bundle_references.find_inbound_references(
+                other_files, target_id=member
+            ):
+                if ref.referrer_id in purge_ids_set:
+                    continue
+                if ref.kind == "unverifiable":
+                    if ref.referrer_id in seen_unverifiable:
+                        continue
+                    seen_unverifiable.add(ref.referrer_id)
+                all_refs.append((member, ref))
+        verified_refs = [ref for _, ref in all_refs if ref.kind != "unverifiable"]
+        unverifiable_refs = [ref for _, ref in all_refs if ref.kind == "unverifiable"]
+
+        # Raw-path resolution (design: "Raw-path resolution"): a Source's
+        # `resource` is validated (must start with `raw/`, no `..`, resolve
+        # under `layout.raw_dir`) -- an absent or malformed `resource` is
+        # WARNED about, never refused, and simply contributes no raw path
+        # (this Source's own `bundle/<id>.md` is still targeted).
+        expunge_targets: list[str] = []
+        resource_warnings: list[str] = []
+        raw_dir_resolved = layout.raw_dir.resolve()
+        for member in sorted(purge_ids):
+            resource = member_metadata[member].get("resource")
+            if isinstance(resource, str) and resource:
+                posix_resource = PurePosixPath(resource)
+                valid = (
+                    resource.startswith("raw/")
+                    and not resource.startswith("/")
+                    and ".." not in posix_resource.parts
+                )
+                if valid:
+                    try:
+                        (root / resource).resolve().relative_to(raw_dir_resolved)
+                    except ValueError:
+                        valid = False
+                if valid:
+                    expunge_targets.append(resource)
+                else:
+                    resource_warnings.append(
+                        f"'{member}': resource frontmatter {resource!r} is "
+                        "absent/malformed -- skipping its raw-path expunge "
+                        "(its bundle file is still targeted)"
+                    )
+            expunge_targets.append(f"bundle/{member}.md")
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos purge: failed while preparing the purge -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    # Preview: every path targeted for expunge, any raw-path resolution
+    # warnings, the cascade count (source scope only), then the MANDATORY
+    # residual-leak warning -- all printed before rail 1 (spec: Mandatory
+    # Residual-Leak Warning; design: printed at preview, before the typed
+    # phrase).
+    typer.echo("openkos purge: proposed IRREVERSIBLE history rewrite:")
+    for target in expunge_targets:
+        typer.echo(f"  - {target}")
+    for warning in resource_warnings:
+        # Stream-consistent with the rest of the pre-confirmation preview
+        # (stdout, not stderr) -- an operator capturing only stdout must
+        # not silently lose a malformed-resource warning printed here.
+        typer.echo(f"  ! {warning}")
+    if scope == "source":
+        typer.echo(f"  Total: {len(purge_ids)} concept(s) to purge.")
+    typer.echo()
+    typer.echo(_PURGE_RESIDUAL_WARNING)
+
+    # Rail 1: reference-aware refusal, unless --force (spec req 2, rail 1).
+    if (verified_refs or unverifiable_refs) and not force:
+        messages: list[str] = []
+        target_desc = (
+            f"the {len(purge_ids)}-concept purge set rooted at '{canonical_id}'"
+            if scope == "source"
+            else f"'{canonical_id}'"
+        )
+        if verified_refs:
+            messages.append(
+                f"{len(verified_refs)} inbound reference(s) to {target_desc} found"
+            )
+        if unverifiable_refs:
+            messages.append(
+                f"could not verify {len(unverifiable_refs)} referrer(s) "
+                f"that may reference {target_desc}"
+            )
+        typer.echo(
+            "openkos purge: refusing to purge -- "
+            + "; ".join(messages)
+            + "; re-run with --force to proceed (references will be left "
+            "dangling).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Rail 2: git/git-filter-repo availability (spec req 2, rail 2 in this
+    # implementation's ordering -- cheap, deterministic, no repo assumption).
+    if not vcs_git.git_available():
+        typer.echo(
+            "openkos purge: refusing to purge -- git is not available on "
+            "PATH. Install git (e.g. https://git-scm.com/downloads, or "
+            "`brew install git`), then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if not vcs_git.filter_repo_available():
+        typer.echo(
+            "openkos purge: refusing to purge -- git-filter-repo is not "
+            "available. Install it (e.g. `pip install git-filter-repo`, or "
+            "`brew install git-filter-repo`), then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Rail 3: the workspace root MUST be a git repository root (threat
+    # matrix: git repository selection) -- always run in cwd, never
+    # `git -C <userpath>`.
+    try:
+        found_root = vcs_git.repo_root(root)
+    except vcs_git.GitError as exc:
+        typer.echo(f"openkos purge: refusing to purge -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+    if found_root is None:
+        typer.echo(
+            "openkos purge: refusing to purge -- the workspace is not "
+            "inside a git repository.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if found_root != root.resolve():
+        typer.echo(
+            "openkos purge: refusing to purge -- the workspace root is not "
+            "the git repository root (a nested or ancestor repo cannot be "
+            "safely rewritten).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Rail 4: the working tree must be clean.
+    try:
+        clean = vcs_git.is_clean(root)
+    except vcs_git.GitError as exc:
+        typer.echo(f"openkos purge: refusing to purge -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+    if not clean:
+        typer.echo(
+            "openkos purge: refusing to purge -- the working tree has "
+            "uncommitted changes; commit or stash them, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Rail 5: no commits already published on any remote -- history
+    # rewriting cannot retroactively change what a remote already has.
+    try:
+        published = vcs_git.has_published_commits(root)
+    except vcs_git.GitError as exc:
+        typer.echo(f"openkos purge: refusing to purge -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+    if published:
+        typer.echo(
+            "openkos purge: refusing to purge -- commits are already "
+            "present on a remote; purge cannot rewrite published history.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Rail 6: the typed confirmation phrase, EXACT match only -- no --auto
+    # bypass (irreversible). `--confirm-phrase` serves both non-interactive
+    # use and tests; on a TTY without it, `typer.prompt` asks interactively.
+    expected_phrase = _purge_confirm_phrase(canonical_id, purge_ids, scope)
+    if confirm_phrase is not None:
+        typed_phrase = confirm_phrase
+    elif sys.stdin.isatty():
+        typed_phrase = typer.prompt(f"Type '{expected_phrase}' to proceed")
+    else:
+        typer.echo(
+            "openkos purge: refusing to purge -- stdin is not a TTY; "
+            "re-run with --confirm-phrase.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if typed_phrase != expected_phrase:
+        typer.echo(
+            "openkos purge: aborted -- confirmation phrase did not match "
+            "exactly; nothing was written.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Phase B: the point of no return. No rail evaluation, no abort path,
+    # from here on (spec: Irreversibility -- No Rollback After Rewrite
+    # Begins). `expunge_paths` itself is silent and can run for a while on
+    # a large history -- print an explicit "do not interrupt" line FIRST,
+    # so an operator who sees no output does not mistake it for a hang and
+    # Ctrl-C into the catastrophic mid-rewrite state.
+    typer.echo(
+        "openkos purge: beginning the irreversible history rewrite now -- "
+        "do not interrupt.",
+        err=True,
+    )
+    try:
+        vcs_git.expunge_paths(root, expunge_targets)
+    except vcs_git.GitFinalizeError as exc:
+        typer.echo(
+            f"openkos purge: the history rewrite SUCCEEDED, but finalize "
+            f"failed -- {exc}",
+            err=True,
+        )
+        _purge_clean_live_index(layout, purge_ids)
+        _purge_rebuild_indexes(layout)
+        typer.echo(_PURGE_RESIDUAL_WARNING)
+        raise typer.Exit(code=1) from exc
+    except vcs_git.GitError as exc:
+        typer.echo(
+            f"openkos purge: failed -- the history rewrite did not complete -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    _purge_clean_live_index(layout, purge_ids)
+    _purge_rebuild_indexes(layout)
+
+    if scope == "source":
+        typer.echo(
+            f"openkos purge: permanently expunged {len(purge_ids)} "
+            "concept(s) from ALL git history."
+        )
+    else:
+        typer.echo(
+            f"openkos purge: permanently expunged 'bundle/{canonical_id}.md' "
+            "from ALL git history."
+        )
+    typer.echo(_PURGE_RESIDUAL_WARNING)
+
+
 @app.command()
 def relate(
     source_id: str = typer.Argument(

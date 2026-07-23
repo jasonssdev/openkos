@@ -121,13 +121,30 @@ def is_clean(cwd: Path) -> bool:
 
 
 def has_published_commits(cwd: Path) -> bool:
-    """`True` iff `HEAD` is reachable from any `refs/remotes/*` ref --
-    fail-closed: ANY remote-tracking ref containing `HEAD` counts as
-    published, regardless of the current branch's own configured upstream."""
-    result = _run(["git", "branch", "--remotes", "--contains", "HEAD"], cwd=cwd)
+    """`True` iff the repository has EVER published anything to ANY remote
+    -- direction-agnostic and fail-closed.
+
+    This deliberately does NOT check whether the CURRENT `HEAD` is
+    reachable from a remote branch (e.g. `git branch --remotes --contains
+    HEAD`): that check is direction-dependent and goes stale the moment a
+    caller makes ONE more local commit past the last push -- `HEAD` then
+    points to a commit no remote has, so `--contains HEAD` flips back to
+    "not published" even though an already-pushed ANCESTOR commit (and
+    every file inside it) is still sitting on the remote, fully
+    recoverable from there. `purge` rewriting history in that state would
+    silently leave the caller's "erased" data intact on origin while
+    reporting success.
+
+    Instead: `True` iff the local repository has ANY `refs/remotes/*` ref
+    at all. Once a single push has ever happened, this stays permanently
+    `True` regardless of how far local `HEAD` advances afterward -- fail-
+    closed by design, since `purge` cannot know (without a network round-
+    trip this adapter deliberately does not perform) which SPECIFIC
+    commits/blobs a remote still holds, only that at least one exists."""
+    result = _run(["git", "for-each-ref", "--count=1", "refs/remotes/"], cwd=cwd)
     if result.returncode != 0:
         raise GitError(
-            f"git branch --remotes --contains HEAD failed: {result.stderr.strip()}"
+            f"git for-each-ref --count=1 refs/remotes/ failed: {result.stderr.strip()}"
         )
     return result.stdout.strip() != ""
 

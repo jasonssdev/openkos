@@ -39,13 +39,16 @@ path-safety/resolution, `--scope source` Provenance Descendant Resolution
 `purge` MUST evaluate the following rails in this exact order and refuse
 (exit non-zero, write nothing, no partial rewrite) at the FIRST rail that
 fails: (1) reference-aware refusal — any surviving inbound reference or
-unverifiable referrer outside the purge set, unless `--force`; (2) workspace
-is not a git repository, or the workspace root is not the git repository
-root; (3) the working tree is dirty (uncommitted changes); (4) the local repo
-has commits present on ANY configured remote; (5) `git` or `git-filter-repo`
-is not available; (6) the typed confirmation phrase does not match exactly.
+unverifiable referrer outside the purge set, unless `--force`; (2) `git` or
+`git-filter-repo` is not available; (3) workspace is not a git repository, or
+the workspace root is not the git repository root; (4) the working tree is
+dirty (uncommitted changes); (5) the local repo has commits present on ANY
+configured remote; (6) the typed confirmation phrase does not match exactly.
 No rail after the first failing one MUST be evaluated, and no history rewrite
-or index deletion MUST begin until ALL six rails pass.
+or index deletion MUST begin until ALL six rails pass. (Tool availability is
+checked at rail 2 — immediately after the reference-aware gate — because it
+is the cheapest, most deterministic remaining check and carries no repo-state
+assumption; the git-root/dirty-tree/remote-state rails run after it.)
 
 #### Scenario: Reference-aware refusal blocks first
 - GIVEN a concept outside the purge set holds a reference to a purge-set
@@ -53,27 +56,27 @@ or index deletion MUST begin until ALL six rails pass.
 - WHEN `openkos purge <concept-id>` runs without `--force`
 - THEN it refuses at rail 1, exits non-zero, and writes nothing
 
+#### Scenario: Missing git-filter-repo refuses with an install message
+- GIVEN `git-filter-repo` is not installed (or `git` is unavailable)
+- WHEN `openkos purge <concept-id>` runs
+- THEN it refuses at rail 2, exits non-zero, and prints a clear install
+  remediation, writing nothing
+
 #### Scenario: Not a git repository refuses
 - GIVEN the workspace root is not itself a git repository root
 - WHEN `openkos purge <concept-id>` runs
-- THEN it refuses at rail 2, exits non-zero, and writes nothing
+- THEN it refuses at rail 3, exits non-zero, and writes nothing
 
 #### Scenario: Dirty working tree refuses
 - GIVEN the git working tree has uncommitted changes
 - WHEN `openkos purge <concept-id>` runs
-- THEN it refuses at rail 3, exits non-zero, and writes nothing
+- THEN it refuses at rail 4, exits non-zero, and writes nothing
 
 #### Scenario: Commits present on a remote refuse
 - GIVEN the local branch has commits already present on a configured remote
 - WHEN `openkos purge <concept-id>` runs
-- THEN it refuses at rail 4, exits non-zero, and writes nothing, citing
+- THEN it refuses at rail 5, exits non-zero, and writes nothing, citing
   published history as the reason
-
-#### Scenario: Missing git-filter-repo refuses with an install message
-- GIVEN `git-filter-repo` is not installed (or `git` is unavailable)
-- WHEN `openkos purge <concept-id>` runs
-- THEN it refuses at rail 5, exits non-zero, and prints a clear install
-  remediation, writing nothing
 
 #### Scenario: Typed confirmation mismatch aborts with no write
 - GIVEN all prior rails pass and the user is prompted for a typed
@@ -114,15 +117,20 @@ and every purge-set member's `bundle/<id>.md`.
 ### Requirement: Index Cleanup Is Delete-And-Rebuild, No Tombstone
 
 After a successful rewrite, `purge` MUST delete
-`.openkos/{fts,vectors,graph}.db` and rebuild them from the post-rewrite
-bundle state (not row-level `DELETE`, since SQLite's freelist can retain
-deleted content). `purge` MUST NOT write any `log.md` tombstone entry.
+`.openkos/{fts,vectors,graph}.db` (not row-level `DELETE`, since SQLite's
+freelist can retain deleted content) and MUST rebuild `fts.db` and `graph.db`
+from the post-rewrite bundle state. `purge` MUST NOT rebuild `vectors.db` —
+re-embedding requires a running Ollama embedder, a dependency `purge` must
+never require; `vectors.db` stays deleted for the next `openkos reindex` to
+lazily re-embed. `purge` MUST NOT write any `log.md` tombstone entry.
 
-#### Scenario: Index files are deleted and rebuilt
+#### Scenario: Index files are deleted; fts.db and graph.db are rebuilt
 - GIVEN a successful purge
 - WHEN index cleanup runs
 - THEN `.openkos/fts.db`, `.openkos/vectors.db`, and `.openkos/graph.db` are
-  each deleted and replaced with freshly rebuilt files
+  each deleted, `.openkos/fts.db` and `.openkos/graph.db` are replaced with
+  freshly rebuilt files, and `.openkos/vectors.db` stays deleted (no Ollama
+  dependency introduced)
 
 #### Scenario: No tombstone is written
 - GIVEN a successful purge of any scope
@@ -131,11 +139,15 @@ deleted content). `purge` MUST NOT write any `log.md` tombstone entry.
 
 ### Requirement: Mandatory Residual-Leak Warning
 
-On every successful purge, `purge` MUST print a warning stating that the
-purged concept's id and title, and any prior `forget` tombstone referencing
-it, REMAIN in `index.md`/`log.md` HISTORY (past commits) until the Slice 2
-content-scrub, and that Slice 1 does NOT provide complete right-to-be-
-forgotten.
+After a successful rewrite, `purge` MUST also remove the LIVE `index.md`
+catalog bullet for every purge-set member (reusing `forget`'s own
+`remove_index_entry`/write path), so the live catalog never keeps a bullet
+pointing at a concept absent from every commit. `purge` MUST print a warning
+stating that the purged concept's id and title, and any prior `forget`
+tombstone referencing it, REMAIN only in `index.md`/`log.md` HISTORY (past
+commits) — and, if a prior `forget` already wrote a tombstone, in the LIVE
+`log.md` too — until the Slice 2 content-scrub, and that Slice 1 does NOT
+provide complete right-to-be-forgotten.
 
 #### Scenario: Successful purge prints the residual warning
 - GIVEN a successful purge of any scope
