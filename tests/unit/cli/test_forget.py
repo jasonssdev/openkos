@@ -16,10 +16,11 @@ import re
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
-from openkos.cli import main as cli_main
+from openkos.bundle import references as bundle_references
 from openkos.cli.main import app
 from openkos.model import okf
 
@@ -772,7 +773,7 @@ def test_tty_gate1_refuses_before_confirm_prompt(
             "typer.confirm must not be called when gate 1 already refused"
         )
 
-    monkeypatch.setattr(cli_main.typer, "confirm", _fail_confirm)
+    monkeypatch.setattr(typer, "confirm", _fail_confirm)
 
     result = runner.invoke(app, ["forget", target_id])
 
@@ -878,7 +879,7 @@ def test_path_safety_runs_before_any_bundle_scan(
     def _boom(*args: object, **kwargs: object) -> None:
         raise AssertionError("find_inbound_references must not run before path-safety")
 
-    monkeypatch.setattr(cli_main.bundle_references, "find_inbound_references", _boom)
+    monkeypatch.setattr(bundle_references, "find_inbound_references", _boom)
 
     result = runner.invoke(app, ["forget", "../../evil", "--auto"])
 
