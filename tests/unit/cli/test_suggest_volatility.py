@@ -331,6 +331,56 @@ def test_suggest_volatility_no_auto_flag_offered(
     assert isinstance(result.exception, SystemExit)
 
 
+# ---------------------------------------------------------------------------
+# `--include-confidential` (sensitivity-fail-closed-filter S3b)
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_volatility_include_confidential_flag_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential` is forwarded unchanged as
+    `suggest_volatility(..., include_confidential=True)` (spec:
+    `--include-confidential` Escape Flag)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _recording_suggest)
+
+    result = runner.invoke(app, ["suggest-volatility", "--include-confidential"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_confidential"] is True
+
+
+def test_suggest_volatility_omitted_include_confidential_defaults_to_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `--include-confidential` forwards the safe default
+    `include_confidential=False` (spec: Confidential Excluded By Default)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _recording_suggest)
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["include_confidential"] is False
+
+
 # --- integration proof (real bundle: examples/good-life-demo) ---------------
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

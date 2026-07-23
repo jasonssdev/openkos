@@ -263,6 +263,7 @@ def _stage_derived_objects(
     timestamp: str,
     bundle_dir: Path,
     llm: LLMBackend,
+    include_confidential: bool = False,
 ) -> list[_DerivedPlan]:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
@@ -312,10 +313,28 @@ def _stage_derived_objects(
     exists, build failure) is reported to stderr, per candidate (design D4
     drop transparency); a candidate dropped inside `extract_concept`'s own
     validation stays silent there, unchanged from today.
+
+    sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
+    `True`, `extract` gates on the WORKSPACE floor rather than a per-doc
+    value (a raw source has no per-doc `sensitivity` yet, unlike the other
+    five `llm.chat` seams): when `okf._rank(sensitivity) >= okf._rank
+    ("confidential")` -- i.e. the workspace's `default_sensitivity` floor is
+    confidential -- this returns `[]` WITHOUT calling `extract_concept` at
+    all, so `llm.chat` is never invoked, and emits the same Source-only
+    degrade message shape as the blank-content case above.
+    `include_confidential=True` bypasses this gate entirely.
     """
     if raw_content is None or not raw_content.strip():
         typer.echo(
             "openkos ingest: source has no extractable text; keeping the Source only.",
+            err=True,
+        )
+        return []
+
+    if not include_confidential and okf._rank(sensitivity) >= okf._rank("confidential"):
+        typer.echo(
+            "openkos ingest: workspace default_sensitivity floor is confidential; "
+            "skipping concept extraction, keeping the Source only.",
             err=True,
         )
         return []
@@ -418,6 +437,14 @@ def ingest(
         "--auto",
         help="Skip the confirmation prompt and write immediately (unattended).",
     ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help=(
+            "Bypass the workspace default_sensitivity floor gate on concept "
+            "extraction (excluded by default)."
+        ),
+    ),
 ) -> None:
     """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
     LLM extraction of zero or more distinct derived objects, up to
@@ -468,6 +495,14 @@ def ingest(
     computed to cover the Source and every staged derived object, and a
     preview of the proposed changes -- listing the Source and every staged
     derived object -- is printed.
+
+    Unless `--include-confidential` is passed, extraction gates on the
+    WORKSPACE `default_sensitivity` floor (sensitivity-fail-closed-filter,
+    S3b): when the floor is `confidential`, `_stage_derived_objects` returns
+    `[]` WITHOUT calling `extract_concept`/`llm.chat` at all, and this
+    ingest degrades to a Source-only result -- a raw source has no per-doc
+    `sensitivity` value of its own yet, so this is the one `llm.chat` seam
+    gated on the workspace floor rather than a per-concept predicate.
 
     Confirm gate, checked in order: `--auto` skips the prompt outright;
     otherwise config `review: false` skips the prompt the same way;
@@ -622,6 +657,7 @@ def ingest(
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             bundle_dir=layout.bundle_dir,
             llm=OllamaClient(model=cfg.model),
+            include_confidential=include_confidential,
         )
         index_text = index_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
@@ -2975,7 +3011,13 @@ def suggest_relations_cmd(
 
 
 @app.command("suggest-volatility")
-def suggest_volatility_cmd() -> None:
+def suggest_volatility_cmd(
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
+) -> None:
     """LLM-suggest a volatility `tier` for every concept TYPE present in the
     bundle: read-only, like `suggest-relations`.
 
@@ -3006,6 +3048,12 @@ def suggest_volatility_cmd() -> None:
     then `OllamaModelNotFound`, then the generic `OllamaError` fallback --
     each with its own actionable stderr message, exit 1, and zero writes.
 
+    Unless `--include-confidential` is passed, a confidential concept
+    (sensitivity-fail-closed-filter) is excluded from sampling for its type
+    -- dropped by `suggest_volatility` before its body is ever shown to the
+    LLM. A type whose docs are all confidential yields no suggestion for
+    that type at all.
+
     No file under the workspace is ever created, modified, or deleted
     (spec: Verb performs zero writes).
     """
@@ -3029,7 +3077,9 @@ def suggest_volatility_cmd() -> None:
 
     llm = OllamaClient(model=cfg.model)
     try:
-        results = suggest_volatility(layout.bundle_dir, llm=llm)
+        results = suggest_volatility(
+            layout.bundle_dir, llm=llm, include_confidential=include_confidential
+        )
     except OllamaUnavailable as exc:
         typer.echo(
             f"openkos suggest-volatility: failed -- {exc}. Start it with "

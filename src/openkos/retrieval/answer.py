@@ -159,16 +159,26 @@ class AnswerResult:
 
 
 def _assemble_context(
-    bundle_dir: Path, concept_ids: list[str]
+    bundle_dir: Path, concept_ids: list[str], blocked: frozenset[str] = frozenset()
 ) -> tuple[list[str], list[Citation]]:
     """Guarded per-hit re-read (D2): re-read + re-parse each fused
     `concept_id`'s doc, skipping anything unreadable or unparseable rather
     than raising. Returns one labeled context block and one `Citation` per
     successfully read concept, both in fused-rank order.
+
+    sensitivity-fail-closed-filter (S3b, defense-in-depth): any `concept_id`
+    present in `blocked` is ALSO skipped here, even though it is normally
+    already excluded upstream at the hit-seam filter -- this is a redundant
+    post-filter safety net (spec: Exclusion, Not Redaction), never the
+    primary enforcement point. Defaults to an empty frozenset, a total
+    no-op, preserving byte-identical behavior for every caller that never
+    passes one.
     """
     context_blocks: list[str] = []
     citations: list[Citation] = []
     for concept_id in concept_ids:
+        if concept_id in blocked:
+            continue
         try:
             text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -399,7 +409,7 @@ def answer(
         graph_hits, graph_degraded = [], True
 
     fused_ids = fusion.fuse(hits, vec_hits, graph_hits)[:limit]
-    context_blocks, citations = _assemble_context(bundle_dir, fused_ids)
+    context_blocks, citations = _assemble_context(bundle_dir, fused_ids, confidential)
 
     if not context_blocks:
         return AnswerResult(

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openkos import lint
+from openkos import lint, sensitivity
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import types
 
@@ -193,7 +193,9 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
     return tier, rationale
 
 
-def suggest_volatility(bundle_dir: Path, *, llm: LLMBackend) -> list[TierSuggestion]:
+def suggest_volatility(
+    bundle_dir: Path, *, llm: LLMBackend, include_confidential: bool = False
+) -> list[TierSuggestion]:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
     present under `bundle_dir`, read-only.
 
@@ -203,8 +205,23 @@ def suggest_volatility(bundle_dir: Path, *, llm: LLMBackend) -> list[TierSuggest
     `OllamaError`-family exception raised by `llm.chat` propagates
     unswallowed (module docstring) -- this function catches only
     reply-parsing/validation failures, never transport or
-    model-availability errors."""
+    model-availability errors.
+
+    sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
+    `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
+    predicate is computed ONCE and any doc whose `identity` is blocked is
+    dropped BEFORE `_sample_bodies_by_type` ever samples it -- a confidential
+    concept's body never reaches the prompt. A type whose docs are ALL
+    confidential yields no suggestion for that type at all (it never
+    survives into `_sample_bodies_by_type`'s per-type grouping).
+    `include_confidential=True` skips the predicate walk entirely, at zero
+    added cost."""
+    blocked: frozenset[str] = frozenset()
+    if not include_confidential:
+        blocked = sensitivity.sensitive_concept_ids(bundle_dir)
+
     docs, _skip_notices = lint.collect_docs(bundle_dir)
+    docs = [doc for doc in docs if doc.identity not in blocked]
     sampled = _sample_bodies_by_type(docs)
     results: list[TierSuggestion] = []
     for type_name in sorted(sampled):

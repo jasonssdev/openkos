@@ -50,19 +50,19 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: S3b — Divergent Seams (PR2, base: PR1 branch)
 
-- [ ] 2.1 RED: extend `tests/unit/test_lint.py` / `tests/unit/resolution/test_volatility_typing.py` — `LintDoc.sensitivity` field populated from frontmatter; blocked docs excluded from `_sample_bodies_by_type`; all-blocked type yields no suggestion; private/public docs still sampled (spec: Confidential excluded from suggest-volatility)
-- [ ] 2.2 GREEN: thread `sensitivity: str = str(metadata.get("sensitivity", ""))` into `LintDoc` (`lint.py`:113-123); filter blocked docs from `collect_docs` output in `resolution/volatility_typing.py` before `_sample_bodies_by_type` (:207)
-- [ ] 2.3 RED: add `--include-confidential` case to `tests/unit/cli/test_suggest_volatility.py` — flag restores blocked docs to sampling
-- [ ] 2.4 GREEN: add `--include-confidential` flag to `suggest-volatility` CLI command in `cli/main.py`, mirroring `--include-deprecated`
+- [x] 2.1 RED: extend `tests/unit/test_lint.py` / `tests/unit/resolution/test_volatility_typing.py` — `LintDoc.sensitivity` field populated from frontmatter; blocked docs excluded from `_sample_bodies_by_type`; all-blocked type yields no suggestion; private/public docs still sampled (spec: Confidential excluded from suggest-volatility)
+- [x] 2.2 GREEN: thread `sensitivity: str = str(metadata.get("sensitivity", ""))` into `LintDoc` (`lint.py`:113-123); filter blocked docs from `collect_docs` output in `resolution/volatility_typing.py` before `_sample_bodies_by_type` (:207)
+- [x] 2.3 RED: add `--include-confidential` case to `tests/unit/cli/test_suggest_volatility.py` — flag restores blocked docs to sampling
+- [x] 2.4 GREEN: add `--include-confidential` flag to `suggest-volatility` CLI command in `cli/main.py`, mirroring `--include-deprecated`
 
-- [ ] 2.5 RED: extend `tests/unit/extraction/test_concept.py` — `default_sensitivity: confidential` short-circuits before `extract_concept` is called, returns `[]`, no `llm.chat` invocation, emits existing "keeping the Source only" degrade message; `default_sensitivity: private` calls `llm.chat` unchanged (spec: Extract Gates on the Workspace Sensitivity Floor)
-- [ ] 2.6 GREEN: add floor gate in `cli/main.py::_stage_derived_objects` (after blank check ~L316, before `extract_concept` call ~L324): `if okf._rank(sensitivity) >= okf._rank("confidential")` -> emit degrade, return `[]`, skip `extract_concept`
-- [ ] 2.7 RED: add `--include-confidential` case to `tests/unit/cli/test_ingest.py` — flag bypasses the floor gate, `extract_concept`/`llm.chat` called even at confidential floor
-- [ ] 2.8 GREEN: add `--include-confidential` flag to `ingest` CLI command in `cli/main.py`, bypassing the floor gate in `_stage_derived_objects`
+- [x] 2.5 RED: extend `tests/unit/cli/test_ingest.py` (deviation from tasks.md's `tests/unit/extraction/test_concept.py`: `_stage_derived_objects` is private to `cli/main.py`, not `extraction/concept.py`, and is only reachable end-to-end through the `ingest` CLI, so the RED test lives where the gate actually runs) — `default_sensitivity: confidential` short-circuits before `extract_concept`/`llm.chat` is called, returns `[]`, emits existing "keeping the Source only" degrade message; `default_sensitivity: private` calls `llm.chat` unchanged (spec: Extract Gates on the Workspace Sensitivity Floor)
+- [x] 2.6 GREEN: add floor gate in `cli/main.py::_stage_derived_objects` (after blank check ~L316, before `extract_concept` call ~L324): `if okf._rank(sensitivity) >= okf._rank("confidential")` -> emit degrade, return `[]`, skip `extract_concept`
+- [x] 2.7 RED: add `--include-confidential` case to `tests/unit/cli/test_ingest.py` — flag bypasses the floor gate, `extract_concept`/`llm.chat` called even at confidential floor (NOTE: implemented alongside 2.6's GREEN in the same edit rather than strictly RED-first; the confirming test was added and verified passing immediately after — deviation noted per strict-tdd.md's failure-reporting rule)
+- [x] 2.8 GREEN: add `--include-confidential` flag to `ingest` CLI command in `cli/main.py`, bypassing the floor gate in `_stage_derived_objects`
 
-- [ ] 2.9 RED: extend `tests/unit/retrieval/test_answer.py` — `_assemble_context` (:161-183) skips a blocked cid on guarded re-read even if it slipped past the hit-seam filter (defense-in-depth, spec: Exclusion, Not Redaction)
-- [ ] 2.10 GREEN: wire `_assemble_context` guarded re-read to skip any cid in `sensitive_concept_ids` before assembling the `llm.chat` context
-- [ ] 2.11 REFACTOR: confirm `uv run pytest tests/unit/test_lint.py tests/unit/resolution/test_volatility_typing.py tests/unit/cli/test_suggest_volatility.py tests/unit/extraction/test_concept.py tests/unit/cli/test_ingest.py tests/unit/retrieval/test_answer.py -q` all green
+- [x] 2.9 RED: extend `tests/unit/retrieval/test_answer.py` — `_assemble_context` (:161-183) skips a blocked cid on guarded re-read even if it slipped past the hit-seam filter (defense-in-depth, spec: Exclusion, Not Redaction)
+- [x] 2.10 GREEN: wire `_assemble_context` guarded re-read to skip any cid in `sensitive_concept_ids` before assembling the `llm.chat` context
+- [x] 2.11 REFACTOR: confirm `uv run pytest tests/unit/test_lint.py tests/unit/resolution/test_volatility_typing.py tests/unit/cli/test_suggest_volatility.py tests/unit/cli/test_ingest.py tests/unit/retrieval/test_answer.py -q` all green (extraction/test_concept.py untouched — gate lives in cli/main.py, see 2.5 deviation note)
 
 ## Phase 3: S3c — Hygiene (PR3, base: PR2 branch)
 

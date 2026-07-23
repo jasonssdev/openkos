@@ -2099,3 +2099,84 @@ def test_default_include_confidential_false_calls_the_predicate_walk_once(
     )
 
     assert walk_calls == [bundle_dir]
+
+
+# --- sensitivity-fail-closed-filter, S3b: _assemble_context defense-in-depth --
+
+
+def test_assemble_context_skips_a_blocked_cid_directly(tmp_path: Path) -> None:
+    """`_assemble_context` itself (not just the hit-seam filter upstream)
+    skips any `concept_id` present in `blocked`, even though its document is
+    perfectly readable and parseable -- defense-in-depth (spec: Exclusion,
+    Not Redaction): none of that concept's content, full or partial, ever
+    appears in the assembled context."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "open.md",
+        title="Open",
+        body="dichotomyzz private note",
+        sensitivity_value="private",
+    )
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir,
+        ["concepts/secret", "concepts/open"],
+        blocked=frozenset({"concepts/secret"}),
+    )
+
+    assert citations == [answer_mod.Citation(concept_id="concepts/open", title="Open")]
+    assert not any("confidential note" in block for block in context_blocks)
+    assert any("private note" in block for block in context_blocks)
+
+
+def test_assemble_context_default_blocked_is_empty_and_skips_nothing(
+    tmp_path: Path,
+) -> None:
+    """Omitting `blocked` (default empty frozenset) assembles every concept
+    id unchanged -- a no-op, matching pre-S3b behavior byte-for-byte."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="dichotomyzz")
+
+    context_blocks, citations = answer_mod._assemble_context(bundle_dir, ["concepts/a"])
+
+    assert citations == [answer_mod.Citation(concept_id="concepts/a", title="A")]
+    assert len(context_blocks) == 1
+
+
+def test_confidential_cid_that_slips_past_the_hit_seam_filter_is_still_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defense-in-depth end-to-end: even if `lifecycle.filter_hits` were a
+    no-op (simulating a confidential concept that slipped past the hit-seam
+    filter), `answer()`'s guarded re-read at `_assemble_context` still
+    excludes it -- proving the exclusion is not solely dependent on the
+    upstream hit-seam filter (spec: Exclusion, Not Redaction)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/secret", score=1.0)]
+    )
+    llm = _FakeLLM(reply="should never be reached")
+
+    def _noop_filter_hits(hits: list[object], _blocked: frozenset[str]) -> list[object]:
+        return hits
+
+    monkeypatch.setattr(lifecycle, "filter_hits", _noop_filter_hits)
+
+    result = answer_mod.answer(
+        "dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=recording_index
+    )
+
+    assert result.citations == []
+    assert result.answer == answer_mod.NO_MATCH

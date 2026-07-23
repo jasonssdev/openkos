@@ -26,11 +26,14 @@ def _write_doc(
     doc_type: str = "Concept",
     body: str = "",
     volatility: str | None = None,
+    sensitivity_value: str | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frontmatter = f"---\ntype: {doc_type}\ntitle: Stub\n"
     if volatility is not None:
         frontmatter += f"volatility: {volatility}\n"
+    if sensitivity_value is not None:
+        frontmatter += f"sensitivity: {sensitivity_value}\n"
     frontmatter += "---\n"
     path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
@@ -199,6 +202,35 @@ def test_collect_docs_defaults_volatility_to_empty_string_when_absent(
     assert docs[0].volatility == ""
 
 
+# --- sensitivity-fail-closed-filter, S3b: LintDoc `sensitivity` field ---
+
+
+def test_collect_docs_reads_sensitivity_field(tmp_path: Path) -> None:
+    """`collect_docs` reads the doc's frontmatter `sensitivity` field into
+    `LintDoc.sensitivity` (sensitivity-fail-closed-filter, S3b)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md", sensitivity_value="confidential"
+    )
+
+    docs, _skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].sensitivity == "confidential"
+
+
+def test_collect_docs_defaults_sensitivity_to_empty_string_when_absent(
+    tmp_path: Path,
+) -> None:
+    """`LintDoc.sensitivity` defaults to `""` when the frontmatter field is
+    absent, mirroring `volatility`'s absent-by-default contract."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md")
+
+    docs, _skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].sensitivity == ""
+
+
 def test_collect_docs_defaults_type_to_empty_string_when_absent(
     tmp_path: Path,
 ) -> None:
@@ -289,6 +321,7 @@ def _doc(
     freshness: str = "current",
     type: str = "",
     volatility: str = "",
+    sensitivity: str = "",
 ) -> lint.LintDoc:
     rel_dir = str(PurePosixPath(identity).parent)
     if rel_dir == ".":
@@ -301,6 +334,7 @@ def _doc(
         freshness=freshness,
         type=type,
         volatility=volatility,
+        sensitivity=sensitivity,
     )
 
 

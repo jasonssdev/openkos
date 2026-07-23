@@ -39,12 +39,25 @@ class _FakeLLM:
 
 
 def _write_doc(
-    path: Path, *, doc_type: str = "Person", title: str = "Stub", body: str = "Body."
+    path: Path,
+    *,
+    doc_type: str = "Person",
+    title: str = "Stub",
+    body: str = "Body.",
+    sensitivity_value: str | None = "private",
 ) -> None:
+    """`sensitivity_value` defaults to `"private"` (`config.DEFAULT_SENSITIVITY`,
+    matching what a real `ingest` always writes) so fixtures unrelated to the
+    sensitivity-fail-closed-filter feature are never collaterally blocked by
+    the fail-closed default; pass `None` explicitly for the absent-field
+    case."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"---\ntype: {doc_type}\ntitle: {title}\n---\n{body}", encoding="utf-8"
-    )
+    lines = ["---", f"type: {doc_type}", f"title: {title}"]
+    if sensitivity_value is not None:
+        lines.append(f"sensitivity: {sensitivity_value}")
+    lines.append("---")
+    frontmatter = "\n".join(lines) + "\n"
+    path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
 
 def _valid_reply(tier: str = "slow", rationale: str = "changes occasionally") -> str:
@@ -379,3 +392,130 @@ def test_suggest_volatility_builds_a_two_message_json_only_prompt(
     assert "Person" in messages[1]["content"]
     assert "Alpha body text." in messages[1]["content"]
     assert "JSON" in messages[0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# sensitivity-fail-closed-filter, S3b: confidential docs excluded from sampling
+# ---------------------------------------------------------------------------
+
+
+def test_confidential_doc_excluded_from_sampling_by_default(tmp_path: Path) -> None:
+    """A `sensitivity: confidential` doc is dropped before
+    `_sample_bodies_by_type`, so its body never reaches the LLM prompt, while
+    a private doc of the same type is still sampled (spec: Confidential
+    excluded from suggest-volatility)."""
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        body="Alpha secret body.",
+        sensitivity_value="confidential",
+    )
+    _write_doc(
+        tmp_path / "b.md",
+        doc_type="Person",
+        title="B",
+        body="Beta private body.",
+        sensitivity_value="private",
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert len(llm.calls) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Alpha secret body." not in message["content"]
+    assert "Beta private body." in message["content"]
+
+
+def test_all_docs_of_a_type_confidential_yields_no_suggestion_for_that_type(
+    tmp_path: Path,
+) -> None:
+    """A type whose docs are ALL confidential yields no suggestion for that
+    type at all -- it never even appears in the result (spec: Confidential
+    excluded from suggest-volatility)."""
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        sensitivity_value="confidential",
+    )
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert [s.type_name for s in result] == ["Project"]
+    assert len(llm.calls) == 1
+
+
+def test_include_confidential_true_restores_the_confidential_doc(
+    tmp_path: Path,
+) -> None:
+    """`include_confidential=True` restores a confidential doc to sampling,
+    unchanged (spec: `--include-confidential` Escape Flag)."""
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        body="Alpha secret body.",
+        sensitivity_value="confidential",
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=llm, include_confidential=True
+    )
+
+    assert len(llm.calls) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Alpha secret body." in message["content"]
+
+
+def test_include_confidential_true_never_calls_the_predicate_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_confidential=True` skips `sensitivity.sensitive_concept_ids`
+    entirely (spy) -- the escape flag is the zero-cost path (design R1)."""
+    from openkos import sensitivity
+
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    llm = _FakeLLM(replies=[_valid_reply()])
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=llm, include_confidential=True
+    )
+
+    assert walk_calls == []
+
+
+def test_default_include_confidential_false_calls_the_predicate_walk_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default `include_confidential=False` DOES call
+    `sensitivity.sensitive_concept_ids` exactly once per `suggest_volatility`
+    call."""
+    from openkos import sensitivity
+
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    llm = _FakeLLM(replies=[_valid_reply()])
+    walk_calls: list[Path] = []
+    original_predicate = sensitivity.sensitive_concept_ids
+
+    def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
+        walk_calls.append(bundle_dir)
+        return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
+
+    volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert walk_calls == [tmp_path]
