@@ -158,3 +158,37 @@ as before.
 
 - [ ] None blocking. (Threshold and extract seam locked; predicate-vs-`_rank`
   absent/blank strictness resolved above as a deliberate fail-closed choice.)
+
+## Known follow-ups (harden before cloud/export slice)
+
+Recorded by the correction batch (post-4R-review) that fixed R1/R2/R3/R4 —
+NOT implemented now, deliberately deferred:
+
+(a) **Repeated full-bundle walk per invocation (perf).** Every `llm.chat`
+seam that filters both axes (`contradictions`, `adjudicate`, `query`) runs
+TWO separate whole-bundle `okf._iter_docs` walks per invocation —
+`lifecycle.deprecated_concept_ids` and `sensitivity.sensitive_concept_ids`
+each do their own pass. `suggest-volatility` also re-walks via
+`lint.collect_docs` on top of that. A future optimization could share ONE
+`_iter_docs` pass across both predicates (and `lint.collect_docs`), each
+consuming the same `DocScan` stream, rather than each predicate walking the
+bundle independently. Deferred: no measured perf problem yet at MVP-3 scale,
+and correctness (fail-closed on every axis) took priority over this slice's
+correction budget.
+
+(b) **Directory-walk silent-drop observability.** The walk-bypass leak (R4)
+is now mitigated for the `query`/`answer()` seam specifically by FIX 2's
+independent per-doc re-check at `_assemble_context`'s actual send point —
+but the OTHER five `llm.chat` seams (`contradictions`, `adjudicate`,
+`suggest-relations`, `suggest-volatility`, and the `ingest` extract floor
+gate) all still derive their candidate sets EXCLUSIVELY from the same
+walk-based predicates, with no independent re-check at their own send
+points, because (unlike `query`) none of them re-reads a doc by direct path
+outside the walk's own candidate set — a walk-invisible doc is simply never
+a candidate for them, so there is no second read to re-check. A bundle-wide
+observability signal (surfacing `okf._walk_errors`, e.g. as a stderr notice
+on every read command whenever the current run's walk hit an unlistable
+subtree) remains a genuine follow-up before the cloud/export slice, so an
+operator can at least detect "this bundle has a subtree the walk cannot
+see" rather than the silence being indistinguishable from "the bundle has
+no such subtree at all."
