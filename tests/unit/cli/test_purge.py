@@ -323,13 +323,20 @@ def test_purge_all_rails_pass_rewrite_proceeds(
     tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Precondition check, before the heavier blob-history assertions below:
-    once every rail passes, `vcs_git.expunge_paths` is actually invoked."""
+    once every rail passes, `vcs_git.expunge_paths` is actually invoked, with
+    the purge-set as its `scrub_identities` kwarg (Slice 2: threading the
+    scrub-set into the SAME `expunge_paths` call, never omitted)."""
     called: dict[str, object] = {}
     real_expunge = vcs_git.expunge_paths
 
-    def _spy(root: Path, rel_paths: list[str]) -> None:
+    def _spy(
+        root: Path, rel_paths: list[str], *, scrub_identities: list[str] | None = None
+    ) -> None:
         called["rel_paths"] = list(rel_paths)
-        real_expunge(root, rel_paths)
+        called["scrub_identities"] = (
+            list(scrub_identities) if scrub_identities is not None else None
+        )
+        real_expunge(root, rel_paths, scrub_identities=scrub_identities)
 
     monkeypatch.setattr(vcs_git, "expunge_paths", _spy)
 
@@ -340,6 +347,7 @@ def test_purge_all_rails_pass_rewrite_proceeds(
 
     assert result.exit_code == 0, result.output
     assert called["rel_paths"] is not None
+    assert called["scrub_identities"] == [tmp_git_repo.source_id]
 
 
 def test_purge_prints_point_of_no_return_message_before_rewrite(
@@ -363,8 +371,8 @@ def test_purge_self_scope_removes_blobs_from_history(
     tmp_git_repo: TmpGitRepo,
 ) -> None:
     """Full self-scope purge: raw + concept files are gone from ALL git
-    history (rev-list/reflog/cat-file), indexes rebuilt, residual warning
-    printed, no tombstone written (spec req 3 scenario 1, req 4, req 5)."""
+    history (rev-list/reflog/cat-file), indexes rebuilt, no tombstone
+    written (spec req 3 scenario 1, req 4, req 5)."""
     phrase = f"purge {tmp_git_repo.source_id}"
 
     result = runner.invoke(
@@ -380,7 +388,6 @@ def test_purge_self_scope_removes_blobs_from_history(
     assert not (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").exists()
     assert not (tmp_git_repo.root / "raw" / "notes.txt").exists()
 
-    assert "NOT complete right-to-be-forgotten" in result.output
     log_text = (tmp_git_repo.root / "bundle" / "log.md").read_text(encoding="utf-8")
     assert "Tombstone" not in log_text
 
@@ -538,24 +545,23 @@ def test_purge_removes_live_index_catalog_bullet(tmp_git_repo: TmpGitRepo) -> No
     assert "Sibling Concept" in index_after
 
 
-def test_purge_residual_warning_reflects_live_index_cleanup(
-    tmp_git_repo: TmpGitRepo,
-) -> None:
-    """The residual-leak warning must accurately reflect what purge does:
-    it must NOT claim the purged id/title remain only in "historical blobs
-    of index.md/log.md" -- the live index.md bullet is now removed by this
-    correction, and only the HISTORY (past commits) of index.md/log.md
-    (plus any prior forget tombstone still present in the LIVE log.md)
-    remains a residual."""
+def test_purge_no_residual_warning_printed(tmp_git_repo: TmpGitRepo) -> None:
+    """Slice 2: after a successful purge, NO warning claiming purged content
+    remains in `index.md`/`log.md` (live or historical) is printed -- the
+    history content-scrub (git.py `_FILE_INFO_CALLBACK_SNIPPET`) plus the
+    live index/log cleanup means no such residual exists. Asserts by
+    substring absence of the OLD warning's distinctive wording, so this
+    test still fails if a similar warning were reintroduced under a new
+    name."""
     phrase = f"purge {tmp_git_repo.source_id}"
     result = runner.invoke(
         app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
     )
 
     assert result.exit_code == 0, result.output
-    assert "NOT complete right-to-be-forgotten" in result.output
-    assert "history" in result.output.lower()
-    assert "historical blobs of index.md and log.md" not in result.output
+    assert "NOT complete right-to-be-forgotten" not in result.output
+    assert "REMAIN only in the" not in result.output
+    assert "content-scrub) closes this residual" not in result.output
 
 
 # --- GitFinalizeError path (rewrite done, finalize failed) ------------------
@@ -570,7 +576,9 @@ def test_purge_finalize_error_surfaces_recoverability_warning(
     index cleanup STILL runs, and the process exits non-zero to flag that
     manual git-level follow-up is needed."""
 
-    def _raise_finalize_error(root: Path, rel_paths: list[str]) -> None:
+    def _raise_finalize_error(
+        root: Path, rel_paths: list[str], *, scrub_identities: list[str] | None = None
+    ) -> None:
         raise vcs_git.GitFinalizeError(
             "git gc failed after a successful rewrite: boom\n"
             "may still be recoverable -- run: git reflog expire "
@@ -604,7 +612,9 @@ def test_purge_phase_a_writes_nothing_before_phase_b(
     workspace file (including derived `.openkos/*.db`, if any existed) is
     untouched."""
 
-    def _boom(root: Path, rel_paths: list[str]) -> None:
+    def _boom(
+        root: Path, rel_paths: list[str], *, scrub_identities: list[str] | None = None
+    ) -> None:
         raise AssertionError("expunge_paths must be the ONLY write trigger")
 
     monkeypatch.setattr(vcs_git, "expunge_paths", _boom)
@@ -621,6 +631,77 @@ def test_purge_phase_a_writes_nothing_before_phase_b(
     after = _committed_snapshot(tmp_git_repo.root)
     assert before == after
     assert not (tmp_git_repo.root / ".openkos" / "fts.db").exists()
+
+
+# --- Live log.md tombstone cleanup (Slice 2) --------------------------------
+
+
+def test_purge_removes_live_log_tombstone(tmp_git_repo: TmpGitRepo) -> None:
+    """A prior `forget` tombstone for the purge target, still present in the
+    LIVE `log.md`, is removed once `purge` completes -- while an unrelated
+    sibling tombstone survives untouched (spec: "Prior forget tombstone
+    removed from live log.md")."""
+    log_path = tmp_git_repo.root / "bundle" / "log.md"
+    sibling_id = "sources/sibling-notes"
+    log_path.write_text(
+        log_path.read_text(encoding="utf-8").replace(
+            "* **Initialization**",
+            f"* **Tombstone** (12:00:00Z): Removed [Notes]"
+            f"(/{tmp_git_repo.source_id}.md) (id: {tmp_git_repo.source_id}).\n"
+            f"* **Tombstone** (12:00:00Z): Removed [Sibling]"
+            f"(/{sibling_id}.md) (id: {sibling_id}).\n"
+            "* **Initialization**",
+        ),
+        encoding="utf-8",
+    )
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add prior tombstones"], cwd=tmp_git_repo.root)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    log_after = (tmp_git_repo.root / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert tmp_git_repo.source_id not in log_after
+    assert sibling_id in log_after
+
+
+def test_purge_finalize_error_still_cleans_live_log_tombstone(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the `GitFinalizeError` path (rewrite succeeded, finalize failed),
+    the live `log.md` tombstone cleanup STILL runs -- mirroring
+    `_purge_clean_live_index`'s same-path contract."""
+    log_path = tmp_git_repo.root / "bundle" / "log.md"
+    log_path.write_text(
+        log_path.read_text(encoding="utf-8").replace(
+            "* **Initialization**",
+            f"* **Tombstone** (12:00:00Z): Removed [Notes]"
+            f"(/{tmp_git_repo.source_id}.md) (id: {tmp_git_repo.source_id}).\n"
+            "* **Initialization**",
+        ),
+        encoding="utf-8",
+    )
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add prior tombstone"], cwd=tmp_git_repo.root)
+
+    def _raise_finalize_error(
+        root: Path, rel_paths: list[str], *, scrub_identities: list[str] | None = None
+    ) -> None:
+        raise vcs_git.GitFinalizeError("boom -- may still be recoverable")
+
+    monkeypatch.setattr(vcs_git, "expunge_paths", _raise_finalize_error)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 1
+    log_after = (tmp_git_repo.root / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert tmp_git_repo.source_id not in log_after
 
 
 # --- Raw-path resolution: malformed/derived cases ---------------------------

@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
+from openkos.bundle.index import _BULLET_MARKERS, _LINK_RE, _link_identity
+
 
 def render_log(today: date) -> str:
     """Render a fresh `log.md`: heading, dated section, Initialization entry.
@@ -113,3 +115,48 @@ def read_recent_entries(log_text: str, limit: int) -> list[LogEntry]:
             if line.startswith("* "):
                 entries.append(LogEntry(section_date, line[2:]))
     return entries
+
+
+_ANCHOR_RE = re.compile(r"\(id: ([^)]+)\)")
+
+
+def remove_log_entry(log_text: str, concept_id: str) -> tuple[str, int]:
+    """Drop every bullet/tombstone line whose FIRST markdown link resolves
+    to `concept_id`, or whose `(id: <x>)` structured anchor equals
+    `concept_id`.
+
+    A twin of `bundle.index.remove_index_entry`'s live-file cleanup, but for
+    `log.md`: REUSES (imports, never re-implements) that module's
+    `_LINK_RE`, `_BULLET_MARKERS`, and `_link_identity` matcher, so the two
+    files can never diverge on what counts as a matching link. Adds
+    `_ANCHOR_RE` on top, since a `forget` tombstone entry is identified by a
+    structured `(id: <concept_id>)` anchor rather than (only) its own link.
+
+    Unlike `remove_index_entry`, `log.md` carries no frontmatter block (§6/
+    §7) -- there is nothing to split off, so the whole text is walked line
+    by line directly. Count semantics mirror `remove_index_entry` exactly:
+    zero matches returns `(log_text, 0)` completely UNCHANGED; one or more
+    matches drops every matching line, reporting the total count.
+    """
+    lines = log_text.splitlines(keepends=True)
+    kept_lines: list[str] = []
+    removed = 0
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(_BULLET_MARKERS):
+            link_match = _LINK_RE.search(stripped)
+            if (
+                link_match is not None
+                and _link_identity(link_match.group(1)) == concept_id
+            ):
+                removed += 1
+                continue
+            anchor_match = _ANCHOR_RE.search(stripped)
+            if anchor_match is not None and anchor_match.group(1) == concept_id:
+                removed += 1
+                continue
+        kept_lines.append(line)
+
+    if removed == 0:
+        return log_text, 0
+    return "".join(kept_lines), removed
