@@ -46,7 +46,7 @@ openkos query "what did I conclude about how to live well?"
 openkos lint
 ```
 
-*(The full command set — 18 verbs spanning ingest, cited query, the typed graph, entity resolution, and the forget/purge lifecycle — is in [`docs/cli.md`](docs/cli.md).)*
+*(The full command set — 18 verbs spanning ingest, cited query, the typed graph, entity resolution, and the forget/purge lifecycle — is in [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md).)*
 
 ## Getting started
 
@@ -90,7 +90,7 @@ openkos ingest ./meeting-notes.txt   # compile a source into the bundle
 openkos query "what did we decide?"  # get a cited answer
 ```
 
-See [`docs/cli.md`](docs/cli.md) for the full command reference and [`docs/user-journey.md`](docs/user-journey.md) for the end-to-end experience.
+See [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md) for the full command reference and [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md) for the end-to-end experience.
 
 ## Philosophy
 
@@ -112,7 +112,7 @@ The wedge, in one line: **the local-first, personal producer-consumer-runtime fo
 
 ## Roadmap at a glance
 
-OpenKOS ships in three MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](docs/roadmap.md).
+OpenKOS ships in three MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md).
 
 - **MVP 1 — The Compiler. (Complete.)** The Karpathy loop, locally, over text: ingest → OKF concepts with provenance → cited query → freshness lint. Useful in an afternoon.
 - **MVP 2 — The Graph and Memory. (Complete.)** Entity/relationship extraction and reversible merge, a typed knowledge graph (an OpenKOS layer over OKF's untyped links — other tools still read the bundle fine), hybrid retrieval (lexical FTS5 + local vectors + graph, fused via RRF with PageRank), a fail-closed sensitivity filter (confidential concepts never reach the LLM), reference-aware `forget` plus an irreversible `purge` (right-to-be-forgotten), and answers that file back into the base (`query --save`, the two-output rule).
@@ -122,26 +122,26 @@ Beyond that: a desktop app, graph visualization, richer memory, and federation �
 
 ## Documentation
 
-- [`docs/vision.md`](docs/vision.md) — vision, philosophy, and positioning
-- [`docs/philosophy.md`](docs/philosophy.md) — the foundational essay: what knowledge is and why OpenKOS matters
-- [`docs/knowledge-object-model.md`](docs/knowledge-object-model.md) — how knowledge is represented (OKF + the OpenKOS layer)
-- [`docs/roadmap.md`](docs/roadmap.md) — the MVP roadmap
-- [`docs/tech_stack.md`](docs/tech_stack.md) — technology choices
-- [`docs/architecture.md`](docs/architecture.md) — repository and bundle structure, and source versioning
-- [`docs/okf-alignment.md`](docs/okf-alignment.md) — how OpenKOS relates to OKF
-- [`docs/glossary.md`](docs/glossary.md) — definitions of the core vocabulary
-- [`docs/faq.md`](docs/faq.md) — frequently asked questions
-- [`docs/user-journey.md`](docs/user-journey.md) — the end-to-end user experience
-- [`docs/cli.md`](docs/cli.md) — the command-line reference
-- [`docs/brand.md`](docs/brand.md) — visual identity: isotype, wordmark, palette, typography
-- [`docs/adr/`](docs/adr/) — architecture decision records (the log begins with the first code-time decision)
+- [`docs/vision.md`](https://github.com/jasonssdev/openkos/blob/main/docs/vision.md) — vision, philosophy, and positioning
+- [`docs/philosophy.md`](https://github.com/jasonssdev/openkos/blob/main/docs/philosophy.md) — the foundational essay: what knowledge is and why OpenKOS matters
+- [`docs/knowledge-object-model.md`](https://github.com/jasonssdev/openkos/blob/main/docs/knowledge-object-model.md) — how knowledge is represented (OKF + the OpenKOS layer)
+- [`docs/roadmap.md`](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md) — the MVP roadmap
+- [`docs/tech_stack.md`](https://github.com/jasonssdev/openkos/blob/main/docs/tech_stack.md) — technology choices
+- [`docs/architecture.md`](https://github.com/jasonssdev/openkos/blob/main/docs/architecture.md) — repository and bundle structure, and source versioning
+- [`docs/okf-alignment.md`](https://github.com/jasonssdev/openkos/blob/main/docs/okf-alignment.md) — how OpenKOS relates to OKF
+- [`docs/glossary.md`](https://github.com/jasonssdev/openkos/blob/main/docs/glossary.md) — definitions of the core vocabulary
+- [`docs/faq.md`](https://github.com/jasonssdev/openkos/blob/main/docs/faq.md) — frequently asked questions
+- [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md) — the end-to-end user experience
+- [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md) — the command-line reference
+- [`docs/brand.md`](https://github.com/jasonssdev/openkos/blob/main/docs/brand.md) — visual identity: isotype, wordmark, palette, typography
+- [`docs/adr/`](https://github.com/jasonssdev/openkos/blob/main/docs/adr/) — architecture decision records (the log begins with the first code-time decision)
 
 ## Contributing
 
-OpenKOS is early, which is the best time to shape it. The clearest entry points are the "community can contribute" notes under the current MVP in the [roadmap](docs/roadmap.md). Please open an issue to discuss anything larger than a small change before sending a PR, so we can make sure it fits and can be merged.
+OpenKOS is early, which is the best time to shape it. The clearest entry points are the "community can contribute" notes under the current MVP in the [roadmap](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md). Please open an issue to discuss anything larger than a small change before sending a PR, so we can make sure it fits and can be merged.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards. Maintainers: see [MAINTAINERS.md](MAINTAINERS.md) for how contributions are reviewed and decided.
+See [CONTRIBUTING.md](https://github.com/jasonssdev/openkos/blob/main/CONTRIBUTING.md) for how to get involved and [CODE_OF_CONDUCT.md](https://github.com/jasonssdev/openkos/blob/main/CODE_OF_CONDUCT.md) for community standards. Maintainers: see [MAINTAINERS.md](https://github.com/jasonssdev/openkos/blob/main/MAINTAINERS.md) for how contributions are reviewed and decided.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0 — see [LICENSE](https://github.com/jasonssdev/openkos/blob/main/LICENSE).
