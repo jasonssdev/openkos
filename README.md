@@ -132,6 +132,7 @@ Beyond that: a desktop app, graph visualization, richer memory, and federation �
 - [`docs/glossary.md`](https://github.com/jasonssdev/openkos/blob/main/docs/glossary.md) — definitions of the core vocabulary
 - [`docs/faq.md`](https://github.com/jasonssdev/openkos/blob/main/docs/faq.md) — frequently asked questions
 - [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md) — the end-to-end user experience
+- [`docs/testing.md`](https://github.com/jasonssdev/openkos/blob/main/docs/testing.md) — manual end-to-end testing walkthrough (all 18 commands)
 - [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md) — the command-line reference
 - [`docs/brand.md`](https://github.com/jasonssdev/openkos/blob/main/docs/brand.md) — visual identity: isotype, wordmark, palette, typography
 - [`docs/adr/`](https://github.com/jasonssdev/openkos/blob/main/docs/adr/) — architecture decision records (the log begins with the first code-time decision)
