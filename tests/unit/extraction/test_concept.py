@@ -765,7 +765,11 @@ def test_prompt_new_opening_frames_extraction_as_a_list_decision() -> None:
 def test_prompt_contains_anti_enumeration_paragraph_verbatim() -> None:
     """Phase 1 (D1): the anti-enumeration paragraph is present verbatim,
     including the meeting-transcript -> Event+Decisions-not-5-Persons
-    anchor and the closing "When in doubt, leave it out." (design #1115)."""
+    anchor (design #1115), plus the sub-topic clause that extends the same
+    restraint to section headings, features, and explanatory terms. The
+    paragraph's former closing "When in doubt, leave it out." is GONE --
+    see `test_prompt_does_not_reinstate_the_empty_array_escape_hatch` for
+    that negative guard."""
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
 
     concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
@@ -785,7 +789,11 @@ def test_prompt_contains_anti_enumeration_paragraph_verbatim() -> None:
         "NOT about each of the five participants named around the table; "
         "extract the Event and the Decisions, not five Person stubs" in system_content
     )
-    assert "When in doubt, leave it out." in system_content
+    assert (
+        "a section heading, a feature, a component, or a term that exists "
+        "only to EXPLAIN the source's main subject is part of that object's "
+        "body, not a separate object" in system_content
+    )
 
 
 def test_prompt_json_array_template_shape() -> None:
@@ -801,7 +809,11 @@ def test_prompt_json_array_template_shape() -> None:
     assert '[{"type": "Person"' in system_content
     assert "Do NOT wrap the array in an outer object." in system_content
     assert '"extract": true|false' not in system_content
-    assert "Return [] if nothing is worth extracting." in system_content
+    # The JSON-template block no longer repeats the empty-array invitation
+    # -- it was the SECOND of two, and the pair drove the `[]`-for-every-
+    # instructional-document defect. See
+    # `test_prompt_does_not_reinstate_the_empty_array_escape_hatch`.
+    assert "Return [] if nothing is worth extracting." not in system_content
 
 
 def test_prompt_no_longer_forbids_decision() -> None:
@@ -904,6 +916,85 @@ def test_prompt_pins_urbanism_example_under_name_vs_concept_tie_break() -> None:
 
     rule_3_text = system_content[rule_3_start:]
     assert "urbanism" not in rule_3_text
+
+
+def test_prompt_does_not_reinstate_the_empty_array_escape_hatch() -> None:
+    """Regression fence for the "extracts nothing from instructional
+    sources" defect.
+
+    The prompt used to stack THREE suppression levers -- "When in doubt,
+    leave it out.", "If nothing is worth extracting, return an empty array
+    [].", and a second "Return [] if nothing is worth extracting." in the
+    JSON-template block. With qwen3:8b that combination made a how-to /
+    tutorial / FAQ reply with a literal `[]` (two tokens), so `openkos
+    ingest` derived zero objects from an entire instructional corpus.
+
+    `[]` must still be REACHABLE -- an empty source has to have an out --
+    but it may be offered exactly ONCE, and only as a last resort. This
+    test asserts on the PROMPT TEXT, not on a model's output, so it is
+    offline and deterministic; it fences the phrasing, it does not replace
+    a live eval."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "When in doubt, leave it out." not in system_content
+    assert "If nothing is worth extracting" not in system_content
+    assert "Return [] if nothing is worth extracting." not in system_content
+    # Exactly one surviving mention of the empty array as an outcome, and it
+    # is framed as a last resort rather than an invitation.
+    assert system_content.count("empty array []") == 1
+    assert (
+        "Return an empty array [] only as a last resort, for a source with "
+        "no substantive content at all" in system_content
+    )
+
+
+def test_prompt_states_the_positive_extraction_default() -> None:
+    """A substantive source normally yields AT LEAST ONE object -- its
+    primary subject -- and restraint means fewer objects, never zero. This
+    is the positive counterweight that replaced the removed escape
+    hatches; without it the model treats "prefer fewer" as "prefer none"."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert (
+        "Restraint means FEWER objects, never ZERO: a source with "
+        "substantive content normally yields AT LEAST ONE object" in system_content
+    )
+    assert "Extract that primary subject rather than declining." in system_content
+
+
+def test_prompt_routes_instructional_sources_to_procedure_or_concept() -> None:
+    """The nine type definitions frame seven types as "ONE specific, NAMED
+    X", which left a how-to / tutorial / reference / FAQ -- a document about
+    no named subject -- with no rubric branch to land on. A clarifying
+    paragraph (the definitions themselves are untouched) routes such a
+    source to `Procedure` (a repeatable how-to) or `Concept` (an idea,
+    topic, tool, or framework), and states that `Concept` does NOT require a
+    proper name."""
+    llm = _FakeLLM(reply=_array(_PROCEDURE_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "Not every source is about a NAMED subject." in system_content
+    assert (
+        "how-to, tutorial, guide, reference page, or FAQ -- still has a "
+        "primary subject" in system_content
+    )
+    assert '"Concept" does NOT require a proper name.' in system_content
+    # The clarifier must keep BOTH landing types available, not collapse
+    # every instructional document onto one of them.
+    clarifier_start = system_content.index("Not every source is about a NAMED subject.")
+    clarifier = system_content[
+        clarifier_start : system_content.index("Tie-breaks, applied in this order:")
+    ]
+    assert '"Procedure"' in clarifier
+    assert '"Concept"' in clarifier
 
 
 def test_prompt_carries_source_text_and_title() -> None:
