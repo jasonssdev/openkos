@@ -3341,7 +3341,10 @@ def adjudicate(
     `--auto`, no confirmation gate, no `--json` or other structured mode.
 
     Output mirrors `duplicates`'s grouped render (type, tier, trigger,
-    members) with each group's verdict, confidence, and rationale appended.
+    members) with each group's verdict and rationale appended. The parsed
+    confidence is intentionally NOT rendered (issue #138): a local model
+    returns a flat, uncalibrated value, so a two-decimal number would imply
+    a precision it does not have.
     `--same-only` is a DISPLAY-only filter: it hides non-`SAME` verdicts from
     the printed report, but `adjudicate_candidates` always receives -- and
     returns -- every candidate group regardless of the flag; the library
@@ -3440,10 +3443,11 @@ def adjudicate(
         typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
         for member_id in group.member_ids:
             typer.echo(f"  - {member_id}")
-        typer.echo(
-            f"  verdict: {result.verdict.value.upper()} "
-            f"(confidence: {result.confidence:.2f})"
-        )
+        # Confidence is intentionally NOT shown: a local model returns a
+        # flat, uncalibrated value (issue #138), so a fake-precise two-decimal
+        # number would invite trust it has not earned. The value is still
+        # parsed and kept on `AdjudicatedCandidate` for future thresholding.
+        typer.echo(f"  verdict: {result.verdict.value.upper()}")
         typer.echo(f"  rationale: {result.rationale}")
         typer.echo()
 
