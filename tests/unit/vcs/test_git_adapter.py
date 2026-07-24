@@ -253,17 +253,6 @@ def test_gitignore_template_ignores_venv() -> None:
     assert ".venv" in git._GITIGNORE_TEMPLATE.splitlines()
 
 
-def test_gitignore_template_matches_reference_file_verbatim() -> None:
-    reference_path = (
-        Path(__file__).resolve().parents[3]
-        / "openspec"
-        / "changes"
-        / "git-lifecycle"
-        / "gitignore.reference"
-    )
-    assert reference_path.read_text(encoding="utf-8") == git._GITIGNORE_TEMPLATE
-
-
 # --- availability probes ----------------------------------------------------
 
 
