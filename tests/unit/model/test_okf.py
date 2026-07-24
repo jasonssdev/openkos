@@ -299,7 +299,7 @@ def test_survey_bundle_counts_source_type_as_source(tmp_path: Path) -> None:
 
     survey = okf.survey_bundle(tmp_path)
 
-    assert survey == okf.BundleSurvey(1, 0, [])
+    assert survey == okf.BundleSurvey(1, 0, [], {"Source": 1})
 
 
 def test_survey_bundle_counts_other_non_empty_type_as_concept(
@@ -313,7 +313,35 @@ def test_survey_bundle_counts_other_non_empty_type_as_concept(
 
     survey = okf.survey_bundle(tmp_path)
 
-    assert survey == okf.BundleSurvey(0, 1, [])
+    assert survey == okf.BundleSurvey(0, 1, [], {"concept": 1})
+
+
+def test_survey_bundle_reports_per_type_breakdown(tmp_path: Path) -> None:
+    """`by_type` records a count per raw `type` string -- including `Source`
+    and every distinct non-Source type -- so a caller can break the aggregate
+    `concepts` count down by type (issue #133: Procedures et al. must not be
+    folded into "Concepts")."""
+    (tmp_path / "src-a.md").write_text(
+        "---\ntype: Source\n---\nA.\n", encoding="utf-8"
+    )
+    (tmp_path / "src-b.md").write_text(
+        "---\ntype: Source\n---\nB.\n", encoding="utf-8"
+    )
+    (tmp_path / "concept-a.md").write_text(
+        "---\ntype: Concept\n---\nA.\n", encoding="utf-8"
+    )
+    (tmp_path / "concept-b.md").write_text(
+        "---\ntype: Concept\n---\nB.\n", encoding="utf-8"
+    )
+    (tmp_path / "proc-a.md").write_text(
+        "---\ntype: Procedure\n---\nA.\n", encoding="utf-8"
+    )
+
+    survey = okf.survey_bundle(tmp_path)
+
+    assert survey.sources == 2
+    assert survey.concepts == 3
+    assert survey.by_type == {"Source": 2, "Concept": 2, "Procedure": 1}
 
 
 def test_survey_bundle_mixed_sources_and_concepts(tmp_path: Path) -> None:

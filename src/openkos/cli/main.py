@@ -3073,6 +3073,30 @@ Display policy, not parsing policy -- `bundle/log.py::read_recent_entries`
 stays free of this constant and takes it as a parameter instead."""
 
 
+def _bundle_content_lines(survey: okf.BundleSurvey) -> list[tuple[str, int]]:
+    """Build `status`'s per-type "Bundle contents" rows from a survey (#133).
+
+    `Sources` first, then `Concepts` ALWAYS (even at 0, preserving the
+    familiar summary), then every OTHER classifiable type that is actually
+    present, in canonical `_TYPE_TO_SECTION` order using its plural section
+    label -- so a Procedure, Decision, etc. gets its own line instead of
+    being folded into "Concepts". Any non-Source raw `type` outside the
+    classifiable vocabulary (e.g. a malformed lowercase `concept`) is
+    surfaced last, sorted, labelled by its raw string, so nothing is hidden.
+    """
+    by_type = survey.by_type
+    lines: list[tuple[str, int]] = [("Sources", survey.sources)]
+    for type_name, section in _TYPE_TO_SECTION.items():
+        count = by_type.get(type_name, 0)
+        if type_name == "Concept" or count > 0:
+            lines.append((section, count))
+    known = set(_TYPE_TO_SECTION) | {"Source"}
+    for type_name in sorted(by_type):
+        if type_name not in known:
+            lines.append((type_name, by_type[type_name]))
+    return lines
+
+
 @app.command()
 def status() -> None:
     """Report what the bundle currently contains: read-only, Phase-A only.
@@ -3118,8 +3142,10 @@ def status() -> None:
     typer.echo(f"openkos status: workspace at {root}")
     typer.echo()
     typer.echo("Bundle contents:")
-    typer.echo(f"  Sources:  {survey.sources}")
-    typer.echo(f"  Concepts: {survey.concepts}")
+    content_lines = _bundle_content_lines(survey)
+    label_width = max(len(f"{label}:") for label, _ in content_lines)
+    for label, count in content_lines:
+        typer.echo(f"  {(label + ':').ljust(label_width)} {count}")
     typer.echo()
     typer.echo("Recent activity:")
     if recent_entries is None:

@@ -123,6 +123,43 @@ def test_status_healthy_bundle_full_render_has_three_sections(
     assert "Nothing needs attention." in result.stdout
 
 
+def test_status_breaks_down_non_concept_types_instead_of_folding_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle with a Procedure alongside Concepts reports a distinct
+    `Procedures:` line and a `Concepts:` count that excludes it -- never the
+    old two-bucket conflation that folded every non-Source type into
+    "Concepts" (issue #133)."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "alpha.md").write_text(
+        "---\ntype: Concept\ntitle: Alpha\n---\nBody.\n", encoding="utf-8"
+    )
+    (concepts_dir / "beta.md").write_text(
+        "---\ntype: Concept\ntitle: Beta\n---\nBody.\n", encoding="utf-8"
+    )
+    procedures_dir = tmp_path / "bundle" / "procedures"
+    procedures_dir.mkdir()
+    (procedures_dir / "setup.md").write_text(
+        "---\ntype: Procedure\ntitle: Setup\n---\nBody.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "Concepts:" in result.stdout
+    assert "Procedures:" in result.stdout
+    concepts_line = next(
+        line for line in result.stdout.splitlines() if "Concepts:" in line
+    )
+    procedures_line = next(
+        line for line in result.stdout.splitlines() if "Procedures:" in line
+    )
+    assert concepts_line.split(":", 1)[1].strip() == "2"
+    assert procedures_line.split(":", 1)[1].strip() == "1"
+
+
 def test_status_counts_reflect_disk_scan_not_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
