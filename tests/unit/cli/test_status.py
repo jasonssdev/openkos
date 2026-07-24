@@ -88,7 +88,10 @@ def test_status_fresh_bundle_empty_state(
     `Concepts: 0`, the recent-activity empty-state text, and exits 0 (spec:
     Freshly initialized empty bundle). `log.md`'s `Initialization` bullet
     means "no activity recorded yet" is the true empty-log-body case, so
-    this asserts the actual init entry appears instead."""
+    this asserts the actual init entry appears instead. A fresh `init`
+    never creates `.openkos/vectors.db`, so "needs attention" is NOT empty
+    -- it always surfaces the #142 missing-vector-index line until the
+    first `openkos reindex`."""
     _init_workspace(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["status"])
@@ -96,7 +99,8 @@ def test_status_fresh_bundle_empty_state(
     assert result.exit_code == 0
     assert "Sources:  0" in result.stdout
     assert "Concepts: 0" in result.stdout
-    assert "Nothing needs attention." in result.stdout
+    assert "vectors.db" in result.stdout
+    assert "openkos reindex" in result.stdout
 
 
 def test_status_healthy_bundle_full_render_has_three_sections(
@@ -104,7 +108,9 @@ def test_status_healthy_bundle_full_render_has_three_sections(
 ) -> None:
     """A healthy workspace with an ingested source renders all three
     sections and exits 0 (spec: Healthy bundle with sources, Healthy bundle
-    shows recent activity)."""
+    shows recent activity). No `.openkos/vectors.db` exists yet (`ingest`
+    never creates it), so "needs attention" surfaces the #142 missing-
+    vector-index line rather than the empty state."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes.", encoding="utf-8")
@@ -120,7 +126,7 @@ def test_status_healthy_bundle_full_render_has_three_sections(
     assert "Sources:  1" in result.stdout
     assert "Concepts: 0" in result.stdout
     assert "Ingest" in result.stdout
-    assert "Nothing needs attention." in result.stdout
+    assert "vectors.db" in result.stdout
 
 
 def test_status_breaks_down_non_concept_types_instead_of_folding_them(
@@ -203,7 +209,8 @@ def test_status_malformed_log_degrades_and_still_exits_zero(
 ) -> None:
     """A malformed `log.md` degrades to a notice under "Recent activity" and
     the command still exits 0 -- counts and findings are unaffected (spec:
-    Q2/D5, lenient degrade)."""
+    Q2/D5, lenient degrade). No `.openkos/vectors.db` exists yet, so "needs
+    attention" surfaces the #142 missing-vector-index line."""
     _init_workspace(tmp_path, monkeypatch)
     log_path = tmp_path / "bundle" / "log.md"
     log_path.write_text(
@@ -216,7 +223,7 @@ def test_status_malformed_log_degrades_and_still_exits_zero(
     assert result.exit_code == 0
     assert "Recent activity unavailable" in result.stdout
     assert "Sources:  0" in result.stdout
-    assert "Nothing needs attention." in result.stdout
+    assert "vectors.db" in result.stdout
 
 
 def test_status_conformance_violation_is_surfaced_but_non_fatal(
@@ -236,6 +243,108 @@ def test_status_conformance_violation_is_surfaced_but_non_fatal(
 
     assert result.exit_code == 0
     assert "missing non-empty 'type'" in result.stdout
+
+
+# --- purge-transactional-cleanup #141/#142: Needs-attention wiring --------
+
+
+def test_status_surfaces_dangling_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept whose `relations:` target names an id absent from disk is
+    listed under "needs attention", and `status` still exits 0 (status
+    spec: "Dangling reference is surfaced under needs attention")."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\n"
+        "relations:\n"
+        "  - target: concepts/ghost\n"
+        "    type: relates-to\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+    index_path = tmp_path / "bundle" / "index.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8")
+        + "\n# Concepts\n\n* [Stoicism](/concepts/stoicism.md) - test fixture.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "concepts/stoicism.md" in result.stdout
+    assert "concepts/ghost" in result.stdout
+
+
+def test_status_no_dangling_references_no_new_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle where every `relations:` target resolves to a concept id
+    present on disk adds no dangling-reference entry under "needs
+    attention" (status spec: "No dangling references, no new needs-
+    attention entries")."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\n"
+        "relations:\n"
+        "  - target: concepts/epicureanism\n"
+        "    type: relates-to\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "epicureanism.md").write_text(
+        "---\ntype: Concept\ntitle: Epicureanism\n---\nBody.\n", encoding="utf-8"
+    )
+    index_path = tmp_path / "bundle" / "index.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8") + "\n# Concepts\n\n"
+        "* [Stoicism](/concepts/stoicism.md) - test fixture.\n"
+        "* [Epicureanism](/concepts/epicureanism.md) - test fixture.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "references missing concept" not in result.stdout
+
+
+def test_status_surfaces_missing_vectors_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent `.openkos/vectors.db` is listed under "needs attention"
+    with an `openkos reindex` instruction, and `status` still exits 0
+    (status spec: "Missing vectors.db is surfaced")."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "vectors.db" in result.stdout
+    assert "openkos reindex" in result.stdout
+
+
+def test_status_present_vectors_db_produces_no_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A present `.openkos/vectors.db` produces no missing-vector-index
+    entry under "needs attention" (status spec: "Present vectors.db
+    produces no vector-index entry")."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "vectors.db" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
 
 
 def test_status_rejects_json_flag(

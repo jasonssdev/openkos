@@ -234,6 +234,63 @@ def test_commit_paths_never_uses_add_dash_a_or_dash_all_flag(
     assert captured == [["git", "add", "--", "openkos.yaml"]]
 
 
+# --- paths_dirty (purge-transactional-cleanup: purge auto-commit guard) ----
+
+
+def test_paths_dirty_false_when_scoped_paths_are_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Committed, unchanged scoped paths yield `False`."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+
+    assert git.paths_dirty(repo, ["openkos.yaml"]) is False
+
+
+def test_paths_dirty_true_when_a_scoped_path_is_modified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tracked, scoped path with uncommitted changes yields `True`."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+    (repo / "openkos.yaml").write_text("name: y\n", encoding="utf-8")
+
+    assert git.paths_dirty(repo, ["openkos.yaml"]) is True
+
+
+def test_paths_dirty_false_for_unrelated_dirty_file_outside_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dirty file OUTSIDE the scoped paths never makes `paths_dirty`
+    return `True` -- scoped exactly like `commit_paths`' own `git add --
+    <paths>`, so a pre-existing unrelated dirty host file never triggers a
+    spurious auto-commit attempt."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+    (repo / "unrelated.txt").write_text("pre-existing dirty content", encoding="utf-8")
+
+    assert git.paths_dirty(repo, ["openkos.yaml"]) is False
+
+
+def test_paths_dirty_raises_git_error_on_non_git_dir(tmp_path: Path) -> None:
+    """`cwd` not being (inside) a git working tree surfaces as `GitError`,
+    never a silent `False`."""
+    non_repo = tmp_path / "not-a-repo"
+    non_repo.mkdir()
+
+    with pytest.raises(git.GitError):
+        git.paths_dirty(non_repo, ["openkos.yaml"])
+
+
 # --- _GITIGNORE_TEMPLATE (Phase 2: .gitignore scaffolding) ------------------
 
 

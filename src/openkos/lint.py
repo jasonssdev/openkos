@@ -55,13 +55,23 @@ class LintDoc:
     Distinct from `freshness`, which stays a binary snapshot/non-snapshot
     skip flag, never a volatility signal."""
 
+    relations: tuple[str, ...] = ()
+    """This doc's `relations:` frontmatter targets, decoded via
+    `okf.decode_relations` (purge-transactional-cleanup #141). Each entry is
+    already the canonical, `.md`-stripped bundle-relative concept id --
+    byte-identical to `LintDoc.identity`'s shape, no normalization needed
+    (unlike a body markdown link, which must go through `normalize_link`).
+    Defaults to `()` so every pre-existing construction/test fixture that
+    omits it is unaffected. Feeds `check_dangling_targets` as one of its two
+    outbound-reference sources."""
+
 
 @dataclass(frozen=True)
 class LintFinding:
     """One lint finding: a flat, warning-level signal (no error/warning tiers)."""
 
     kind: str
-    """`"stale"` or `"orphan"`."""
+    """`"stale"`, `"orphan"`, or `"dangling"`."""
     path: str
     """The finding's bundle-relative `.md` path, for display."""
     detail: str
@@ -70,11 +80,13 @@ class LintFinding:
 
 @dataclass(frozen=True)
 class LintReport:
-    """The full result of one `lint` run: stale-stamp and orphan findings, plus notices."""
+    """The full result of one `lint` run: stale-stamp, orphan, and
+    dangling-reference findings, plus notices."""
 
     stale: list[LintFinding]
     orphans: list[LintFinding]
-    notices: list[str]
+    dangling: list[LintFinding] = field(default_factory=list)
+    notices: list[str] = field(default_factory=list)
 
 
 def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
@@ -84,8 +96,12 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
     `parse_error` doc is excluded from `docs` but surfaced as a skip
     notice, so it never reads as a false-clean scan. The body re-read
     (`okf.load_frontmatter`, keeping `okf.py` byte-unchanged) is guarded
-    too: a TOCTOU failure there is also skipped with a notice. Returns
-    `(docs, skip_notices)` in walk order.
+    too: a TOCTOU failure there is also skipped with a notice. `relations:`
+    is decoded via `okf.decode_relations` (purge-transactional-cleanup
+    #141); a corrupt `relations:` value (e.g. hand-edited to a non-list)
+    raises `ValueError` there, caught here and surfaced as a skip notice --
+    read-only-never-fail, matching every other guard in this function.
+    Returns `(docs, skip_notices)` in walk order.
     """
     docs: list[LintDoc] = []
     skip_notices: list[str] = []
@@ -110,6 +126,13 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
         except Exception:  # broad: a concurrent edit can corrupt frontmatter mid-scan
             skip_notices.append(f"{identity}.md: skipped (unparseable frontmatter)")
             continue
+        try:
+            relations = tuple(
+                relation.target for relation in okf.decode_relations(metadata)
+            )
+        except ValueError:
+            skip_notices.append(f"{identity}.md: skipped (invalid relations)")
+            continue
         docs.append(
             LintDoc(
                 path=scan.path,
@@ -119,6 +142,7 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
                 freshness=str(metadata.get("freshness", "")),
                 type=str(metadata.get("type", "")),
                 volatility=str(metadata.get("volatility", "")),
+                relations=relations,
             )
         )
     return docs, skip_notices
@@ -449,3 +473,52 @@ def check_orphans(docs: list[LintDoc], *, index_text: str) -> list[LintFinding]:
         for doc in docs
         if doc.identity not in referenced
     ]
+
+
+def check_dangling_targets(docs: list[LintDoc]) -> list[LintFinding]:
+    """Flag each OUTBOUND reference naming a concept id absent from `docs`
+    (purge-transactional-cleanup #141, mirroring `check_orphans`'s inbound
+    scan the opposite direction).
+
+    An outbound reference is either (a) a `relations:` target
+    (`doc.relations`, already canonical -- `okf.decode_relations`/
+    `Relation.target` strips `.md` and normalizes the path shape, identical
+    to `LintDoc.identity`'s form, so no further normalization is needed), or
+    (b) a body markdown bundle link, resolved via the SAME `normalize_link`
+    resolver `check_orphans` uses against `doc.rel_dir`. A link that
+    normalizes to `None` (external `scheme:` URL, pure in-page anchor, or
+    one that escapes the bundle root) or that resolves to the referring
+    doc's OWN identity (a self-link/self-relation) is never flagged -- a
+    self-reference always resolves to a doc that, by definition, exists.
+
+    The existence set is `{d.identity for d in docs}` (exactly the doc set
+    `collect_docs` returned). One finding is produced per unique
+    `(referring doc, missing target)` pair, in the doc's own relations-then-
+    body-links order, so a target referenced twice from the same doc never
+    double-counts. This scan is READ-ONLY and NON-GATING: it never writes
+    and its findings never affect any caller's exit code."""
+    existing = {doc.identity for doc in docs}
+    findings: list[LintFinding] = []
+    for doc in docs:
+        missing: list[str] = []
+        seen: set[str] = set()
+        for target in doc.relations:
+            if target != doc.identity and target not in existing and target not in seen:
+                seen.add(target)
+                missing.append(target)
+        for raw_target in _LINK_RE.findall(doc.body):
+            identity = normalize_link(raw_target, doc.rel_dir)
+            if identity is None or identity == doc.identity:
+                continue
+            if identity not in existing and identity not in seen:
+                seen.add(identity)
+                missing.append(identity)
+        for target in missing:
+            findings.append(
+                LintFinding(
+                    kind="dangling",
+                    path=f"{doc.identity}.md",
+                    detail=f"references missing concept '{target}'",
+                )
+            )
+    return findings

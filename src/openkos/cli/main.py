@@ -1917,6 +1917,27 @@ def purge(
     _purge_clean_live_log(layout, purge_ids)
     _purge_rebuild_indexes(layout)
 
+    # Post-rewrite live-tree auto-commit (design: "purge empty-diff guard",
+    # load-bearing): `_purge_clean_live_*` frequently leaves `index.md`/
+    # `log.md` byte-identical to filter-repo's own rewrite (a no-op), and
+    # `_autocommit` -> `commit_paths` runs `git commit` UNCONDITIONALLY,
+    # raising `GitError` on an empty diff -- so a scoped `paths_dirty` probe
+    # gates the call, avoiding a spurious WARNING on the common clean-purge
+    # path. If the probe itself raises `GitError` (e.g. a genuinely broken
+    # repo), fall through and attempt `_autocommit` anyway -- its own
+    # try/except keeps that non-fatal too, matching this whole step's
+    # never-fail-the-already-irreversible-purge contract.
+    commit_paths_rel = ["bundle/index.md", "bundle/log.md"]
+    try:
+        should_commit = vcs_git.paths_dirty(root, commit_paths_rel)
+    except vcs_git.GitError:
+        should_commit = True
+    if should_commit:
+        commit_message = f"openkos: purge {canonical_id}"
+        if len(purge_ids) > 1:
+            commit_message += f" (+{len(purge_ids) - 1})"
+        _autocommit(root, commit_paths_rel, commit_message)
+
     if scope == "source":
         typer.echo(
             f"openkos purge: permanently expunged {len(purge_ids)} "
@@ -1927,6 +1948,14 @@ def purge(
             f"openkos purge: permanently expunged 'bundle/{canonical_id}.md' "
             "from ALL git history."
         )
+    # #142 (purge-transactional-cleanup): `_purge_rebuild_indexes` always
+    # deletes `.openkos/vectors.db` and deliberately does NOT rebuild it
+    # (design: "Index cleanup decision") -- warn every time so an operator
+    # is never left assuming dense retrieval is still intact.
+    typer.echo(
+        "openkos purge: dense retrieval degraded (vectors.db dropped) — "
+        "run `openkos reindex` to restore it."
+    )
 
 
 @app.command()
@@ -3358,11 +3387,25 @@ def status() -> None:
             typer.echo(f"  {entry.date}  {entry.text}")
     typer.echo()
     typer.echo("Needs attention:")
-    if not survey.findings:
+    # #141: dangling-reference findings are knowledge-health (lint)
+    # vocabulary, not OKF conformance -- `survey_bundle` never computes
+    # them, so `status` calls `lint`'s own `collect_docs` +
+    # `check_dangling_targets` directly and folds the rendered lines in
+    # here, alongside §9 conformance findings and the #142 vector-index
+    # check below. Still read-only, still exits 0.
+    docs, _skip_notices = lint_check.collect_docs(layout.bundle_dir)
+    dangling = lint_check.check_dangling_targets(docs)
+    needs_attention: list[str] = [*survey.findings]
+    needs_attention.extend(f"{finding.path}: {finding.detail}" for finding in dangling)
+    if not layout.vectors_db_path.exists():
+        needs_attention.append(
+            "Dense retrieval unavailable — run `openkos reindex` (vectors.db missing)."
+        )
+    if not needs_attention:
         typer.echo("  Nothing needs attention.")
     else:
-        for finding in survey.findings:
-            typer.echo(f"  {finding}")
+        for line in needs_attention:
+            typer.echo(f"  {line}")
 
 
 @app.command()
@@ -3426,8 +3469,11 @@ def lint() -> None:
     today = datetime.now(UTC).date()
     stale = lint_check.check_stale_stamps(docs, today=today, windows=windows)
     orphans = lint_check.check_orphans(docs, index_text=index_text)
+    dangling = lint_check.check_dangling_targets(docs)
     notices = window_notices + skip_notices
-    report = lint_check.LintReport(stale=stale, orphans=orphans, notices=notices)
+    report = lint_check.LintReport(
+        stale=stale, orphans=orphans, dangling=dangling, notices=notices
+    )
 
     typer.echo(f"openkos lint: workspace at {root}")
     for notice_line in report.notices:
@@ -3445,6 +3491,13 @@ def lint() -> None:
         typer.echo("  No orphan pages.")
     else:
         for finding in report.orphans:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("Dangling references:")
+    if not report.dangling:
+        typer.echo("  No dangling references.")
+    else:
+        for finding in report.dangling:
             typer.echo(f"  {finding.path}: {finding.detail}")
 
 
@@ -4882,7 +4935,7 @@ def doctor() -> None:
     with actionable remediation, usable even before `openkos init`.
 
     Deliberately NEW control-flow shape versus `status`/`lint`/`query`:
-    instead of exiting on the first failure, this runs ALL nine checks,
+    instead of exiting on the first failure, this runs ALL ten checks,
     appends each to a `list[CheckResult]`, renders every line
     unconditionally, then exits ONCE (`code=1`) if any CRITICAL check
     failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
@@ -4899,8 +4952,13 @@ def doctor() -> None:
     (never `[FAIL]`) when Ollama is unreachable, for the same D6 reason --
     Slice 1 does not wire embeddings into any consumed feature yet, so a
     failure here must not flip the exit code; (6) bundle-readable --
-    informational, workspace-only, `[SKIP]` outside a workspace; (7)
-    vector-extension-loadable -- informational, always, via
+    informational, workspace-only, `[SKIP]` outside a workspace; (6b)
+    workspace-vector-index-present -- informational, workspace-only,
+    `[SKIP]` outside a workspace, via `layout.vectors_db_path.exists()`
+    (purge-transactional-cleanup #142) -- distinct from (7): this checks
+    THIS workspace's own `.openkos/vectors.db` file, not a throwaway
+    `:memory:` probe; a `[FAIL]` here always names `openkos reindex` as its
+    remediation; (7) vector-extension-loadable -- informational, always, via
     `state.vectorstore.probe_vec_loadable()` against a throwaway `:memory:`
     connection; UNLIKE (5), this check has NO `[SKIP]` branch -- it depends
     on neither workspace state nor Ollama reachability, so it shares no root
@@ -5067,6 +5125,32 @@ def doctor() -> None:
             )
     else:
         results.append(CheckResult("Bundle readable", "skip", critical=False))
+
+    # 6b. workspace-vectors-present (informational, workspace-only; SKIP
+    # outside -- mirrors check 6's workspace-only shape). Distinct from
+    # check 7's throwaway `:memory:` probe (`probe_vec_loadable()`, which
+    # says nothing about a specific workspace's own index file): this
+    # checks whether THIS workspace's `.openkos/vectors.db` exists on disk
+    # (purge-transactional-cleanup #142). Staleness (mtime) is deliberately
+    # out of scope -- absent-only.
+    if in_workspace:
+        if config.WorkspaceLayout(root).vectors_db_path.exists():
+            results.append(
+                CheckResult("Workspace vector index present", "pass", critical=False)
+            )
+        else:
+            results.append(
+                CheckResult(
+                    "Workspace vector index present",
+                    "fail",
+                    critical=False,
+                    remediation="openkos reindex",
+                )
+            )
+    else:
+        results.append(
+            CheckResult("Workspace vector index present", "skip", critical=False)
+        )
 
     # 7. vector-extension-loadable (informational, always; NO SKIP branch --
     # unlike embedding-model-installed, this shares no root cause with any

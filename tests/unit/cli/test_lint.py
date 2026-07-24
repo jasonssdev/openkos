@@ -297,6 +297,55 @@ def test_lint_surfaces_a_notice_on_malformed_volatility_window_config(
     assert "using default 7d" in result.stdout
 
 
+# --- purge-transactional-cleanup #141: Dangling references section --------
+
+
+def test_lint_renders_empty_dangling_references_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the `Dangling references:` section with
+    its own empty-state line (lint spec: findings don't change exit
+    contract)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Dangling references:" in result.stdout
+    assert "  No dangling references." in result.stdout
+
+
+def test_lint_flags_a_dangling_relations_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept whose `relations:` target names an id absent from disk is
+    reported under `Dangling references:`, and the command still exits 0
+    (lint spec: "relations: target absent from disk is flagged")."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\n"
+        "relations:\n"
+        "  - target: concepts/ghost\n"
+        "    type: relates-to\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+    index_path = tmp_path / "bundle" / "index.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8")
+        + "\n# Concepts\n\n* [Stoicism](/concepts/stoicism.md) - test fixture.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "concepts/stoicism.md" in result.stdout
+    assert "concepts/ghost" in result.stdout
+
+
 def test_lint_never_writes_to_the_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
