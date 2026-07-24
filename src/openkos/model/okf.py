@@ -879,6 +879,13 @@ class BundleSurvey:
     sources: int
     concepts: int
     findings: list[str]
+    by_type: dict[str, int] = field(default_factory=dict)
+    """Count per raw `type` string for every counted doc, INCLUDING `Source`.
+    `sources == by_type.get("Source", 0)` and `concepts` equals the sum of
+    every non-`Source` entry; this field breaks that aggregate down by type
+    so a caller can report Procedures, Decisions, etc. distinctly instead of
+    folding them into "Concepts" (issue #133). Files that become a finding
+    (read/parse error, missing `type`) contribute to no entry."""
 
 
 def _walk_errors(bundle_dir: Path) -> list[OSError]:
@@ -903,8 +910,10 @@ def survey_bundle(bundle_dir: Path) -> BundleSurvey:
 
     Consumes the SAME `_iter_docs` walk `check_conformance` uses, in one
     pass: `type == "Source"` counts as a source, any other non-empty `type`
-    counts as a concept, and every read error, parse error, or missing/empty
-    `type` becomes a finding instead of a count -- including a per-file read
+    counts as a concept, every non-empty `type` also increments its own
+    `by_type` entry (breakdown, issue #133), and every read error, parse
+    error, or missing/empty `type` becomes a finding instead of a count --
+    including a per-file read
     error, which `survey_bundle` degrades to a finding rather than raising
     (D3, Q3), unlike `check_conformance`. Directory-scan errors that
     `_iter_docs`'s walk silently drops (see `_walk_errors`) are appended as
@@ -915,6 +924,7 @@ def survey_bundle(bundle_dir: Path) -> BundleSurvey:
     """
     sources = 0
     concepts = 0
+    by_type: dict[str, int] = {}
     findings: list[str] = []
     for scan in _iter_docs(bundle_dir):
         if scan.read_error is not None:
@@ -925,15 +935,18 @@ def survey_bundle(bundle_dir: Path) -> BundleSurvey:
             doc_type = (scan.metadata or {}).get("type")
             if not doc_type:
                 findings.append(f"{scan.path}: missing non-empty 'type'")
-            elif doc_type == "Source":
-                sources += 1
             else:
-                concepts += 1
+                type_key = str(doc_type)
+                by_type[type_key] = by_type.get(type_key, 0) + 1
+                if type_key == "Source":
+                    sources += 1
+                else:
+                    concepts += 1
     for walk_error in sorted(
         _walk_errors(bundle_dir), key=lambda exc: str(exc.filename)
     ):
         findings.append(f"{walk_error.filename}: unreadable directory ({walk_error})")
-    return BundleSurvey(sources, concepts, findings)
+    return BundleSurvey(sources, concepts, findings, by_type)
 
 
 def _has_frontmatter_fence(text: str) -> bool:
