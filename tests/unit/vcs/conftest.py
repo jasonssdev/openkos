@@ -40,6 +40,36 @@ def _git(args: list[str], cwd: Path) -> None:
     assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
 
 
+def isolate_git_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    name: str | None = None,
+    email: str | None = None,
+) -> None:
+    """Redirect `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to files under
+    `tmp_path`, isolated from the host machine's real `~/.gitconfig` --
+    used by Slice 1 (git-lifecycle) tests so a probe of "unset identity" is
+    real regardless of what identity the machine running the tests happens
+    to have configured, and a probe of "set identity" is deterministic.
+
+    When `name`/`email` are given, the global config file is populated with
+    them (a genuinely SET identity); otherwise both env vars point at
+    nonexistent files, which `git` treats as "no config there" (a genuinely
+    UNSET identity, per `has_git_identity`'s probe-only contract)."""
+    global_config = tmp_path / "isolated-gitconfig-global"
+    system_config = tmp_path / "isolated-gitconfig-system"
+    if name is not None or email is not None:
+        lines = ["[user]"]
+        if name is not None:
+            lines.append(f"\tname = {name}")
+        if email is not None:
+            lines.append(f"\temail = {email}")
+        global_config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(system_config))
+
+
 class TmpGitRepo(NamedTuple):
     """An initialized `openkos` workspace, at a git repository root, with one
     commit containing an ingested Source concept."""
@@ -51,9 +81,21 @@ class TmpGitRepo(NamedTuple):
 @pytest.fixture
 def tmp_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TmpGitRepo:
     """`git init` a `tmp_path` workspace, `openkos init` it, ingest one
-    Source, and commit everything in a single clean commit."""
+    Source, and commit everything in a single clean commit.
+
+    Git identity is isolated to UNSET (`isolate_git_identity`, no name/email
+    -- writes no file, so it cannot pollute the tree) for the duration of
+    `openkos init`: Slice 1 (git-lifecycle)'s own best-effort git-setup step
+    would otherwise make its OWN commit here (using whichever real identity
+    the host/CI machine happens to have configured), breaking this fixture's
+    "exactly one commit" contract non-deterministically. `init` still runs
+    `git init`/writes `.gitignore` as usual -- only its commit step is
+    skipped (a stderr WARNING, not asserted here) -- leaving the fixture's
+    own explicit commit below (pinned `_GIT_ENV` author/committer) as the
+    SOLE commit, deterministically, regardless of host identity."""
     _git(["init"], cwd=tmp_path)
     monkeypatch.chdir(tmp_path)
+    isolate_git_identity(monkeypatch, tmp_path)
 
     init_result = runner.invoke(app, ["init"])
     assert init_result.exit_code == 0
@@ -100,8 +142,13 @@ class MultiCommitRepo(NamedTuple):
 def tmp_git_repo_with_history_residual(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> MultiCommitRepo:
+    # See `tmp_git_repo`'s docstring: git identity is isolated to UNSET so
+    # `openkos init`'s own Slice 1 git-setup commit never runs here, keeping
+    # this fixture's two explicit commits below the deterministic, complete
+    # history (no extra host-identity-dependent commit spliced in front).
     _git(["init"], cwd=tmp_path)
     monkeypatch.chdir(tmp_path)
+    isolate_git_identity(monkeypatch, tmp_path)
 
     init_result = runner.invoke(app, ["init"])
     assert init_result.exit_code == 0
