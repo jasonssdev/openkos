@@ -6,15 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html),
 and commit history follows [Conventional Commits](https://www.conventionalcommits.org/).
 
-> OpenKOS is **alpha** — it runs, the API may still change, and there is no
-> published release yet (no PyPI package, no tagged version). The MVP 1 (Compiler)
+> OpenKOS is **alpha** — it runs, and the API may still change. The package is
+> published on [PyPI](https://pypi.org/project/openkos/); the MVP 1 (Compiler)
 > and MVP 2 (Graph and Memory) arcs are complete. The project's vision,
-> architecture, and design live in the documents under [`docs/`](docs/).
+> architecture, and design live in the documents under
+> [`docs/`](https://github.com/jasonssdev/openkos/tree/main/docs).
 
 ## [Unreleased]
 
-The complete MVP 1 (The Compiler) and MVP 2 (The Graph and Memory) work, not yet
-cut as a versioned release.
+## [0.1.2] - 2026-07-24
+
+### Fixed
+
+- **Extraction no longer returns an empty result for instructional sources.**
+  `ingest` derived zero objects from how-to, tutorial, reference, and FAQ
+  documents because the extraction prompt stacked three suppression cues (and a
+  rubric that assumed every source is about a *named* subject) that made the
+  model decline. The prompt now states a positive default (a substantive source
+  yields at least one object), routes instructional documents to `Procedure` or
+  `Concept`, and keeps the empty-array outcome as a genuine last resort, while a
+  sub-topic restraint clause prevents the fix from over-extracting shallow
+  stubs. (#129)
+
+### Changed
+
+- README documentation links are now absolute GitHub URLs so they resolve on the
+  PyPI project page, not only on GitHub.
+
+## [0.1.1] - 2026-07-23
+
+### Changed
+
+- Packaging and PyPI release preparation: lowered the Python floor to 3.12,
+  finalized PyPI metadata, added the Trusted Publishing release workflow, and
+  synchronized `uv.lock` to the release version.
+
+## [0.1.0] - 2026-07-23
+
+Initial public release — the complete MVP 1 (The Compiler) and MVP 2 (The Graph
+and Memory) work.
 
 ### Added
 
@@ -54,4 +84,7 @@ cut as a versioned release.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/commits/main
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/jasonssdev/openkos/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/jasonssdev/openkos/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/jasonssdev/openkos/releases/tag/v0.1.0
