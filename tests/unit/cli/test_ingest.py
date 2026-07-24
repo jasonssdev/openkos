@@ -16,17 +16,48 @@ import stat
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.model import okf
 
 runner = CliRunner()
+
+
+def test_format_type_tally_empty_dict_yields_empty_string() -> None:
+    """`_format_type_tally({})` returns `""` -- signals "no line to print"
+    (spec: Reusable Type-Tally Formatting Helper, empty dict scenario)."""
+    assert main._format_type_tally({}) == ""
+
+
+def test_format_type_tally_single_object_singular_wording() -> None:
+    """A single `Concept` renders singular `"object"` wording (spec:
+    Single-entry dict yields singular line)."""
+    assert main._format_type_tally({"Concept": 1}) == "extracted 1 object — 1 Concept"
+
+
+def test_format_type_tally_multiple_objects_one_type_plural_wording() -> None:
+    """Three `Entity` objects render plural `"objects"` wording (spec:
+    Per-Type Derived-Object Tally Summary, multiple objects one type)."""
+    assert main._format_type_tally({"Entity": 3}) == "extracted 3 objects — 3 Entity"
+
+
+def test_format_type_tally_orders_by_canonical_registry_not_insertion_order() -> None:
+    """`{"Person": 2, "Concept": 1}` (insertion order Person-then-Concept)
+    renders `Concept` before `Person`, per canonical `_TYPE_TO_SECTION`
+    order (spec: Multi-entry dict is ordered by canonical registry, not
+    insertion order)."""
+    assert (
+        main._format_type_tally({"Person": 2, "Concept": 1})
+        == "extracted 3 objects — 1 Concept, 2 Person"
+    )
 
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2288,3 +2319,164 @@ def test_exists_skip_reports_stderr(
     assert result.exit_code == 0
     assert "stoic-dichotomy-of-control" in result.stderr
     assert "already exists" in result.stderr
+
+
+# --- Ingest Progress Feedback (per-type tally + spinner) --------------------
+
+
+def test_zero_derived_objects_prints_no_tally_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Source-only degrade (zero derived objects written) MUST NOT emit an
+    `extracted ... objects` tally line (spec: Zero derived objects -- no
+    tally line)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "extracted" not in result.stdout
+
+
+def test_single_derived_object_prints_singular_tally_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Writing exactly one `Concept` derived object prints the singular
+    tally line on stdout (spec: Single object, singular wording)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "extracted 1 object — 1 Concept" in result.stdout
+
+
+def test_mixed_derived_objects_print_tally_in_canonical_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Writing derived objects of types `Person`, `Concept`, `Event` (in
+    that reply order) prints the tally line ordered by canonical
+    `_TYPE_TO_SECTION` registry order (`Concept`, `Event`, `Person`), not
+    reply order (spec: Multiple objects, mixed types in canonical order)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _multi_object_reply(_person_reply(), _concept_reply(), _event_reply()),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "extracted 3 objects — 1 Concept, 1 Event, 1 Person" in result.stdout
+
+
+def test_non_tty_ingest_stdout_has_no_spinner_control_chars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under the default (non-TTY) `CliRunner` invocation, `ingest`'s exit
+    code is unchanged and stdout contains no spinner control characters or
+    partial-line artifacts (spec: Spinner is stderr-only and stdout stays
+    clean)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "\x1b[" not in result.stdout
+
+
+class _FakeStatus:
+    """A minimal spy standing in for `rich.console.Console(...).status(...)`'s
+    returned context manager: records whether it was entered/exited so tests
+    can assert the spinner is invoked and cleared without a real TTY."""
+
+    def __init__(self) -> None:
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self) -> "_FakeStatus":
+        self.entered = True
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.exited = True
+
+
+class _FakeConsole:
+    """A spy standing in for `openkos.cli.main.Console`: records the
+    constructor kwargs and every `.status(...)` call so tests can assert
+    `stderr=True` construction and that the spinner is entered/exited."""
+
+    instances: ClassVar[list["_FakeConsole"]] = []
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.init_kwargs = kwargs
+        self.status_calls: list[str] = []
+        self.statuses: list[_FakeStatus] = []
+        _FakeConsole.instances.append(self)
+
+    def status(self, message: str) -> _FakeStatus:
+        self.status_calls.append(message)
+        fake_status = _FakeStatus()
+        self.statuses.append(fake_status)
+        return fake_status
+
+
+def test_spinner_console_constructed_with_stderr_and_cleared_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `main.Console` spy seam is constructed with `stderr=True`,
+    `.status(...)` is entered, and `__exit__` runs (spinner cleared) when
+    `extract_concept` succeeds (spec: Spinner clears on extraction
+    success; design: spy seam verification)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    _FakeConsole.instances.clear()
+    monkeypatch.setattr(main, "Console", _FakeConsole)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(_FakeConsole.instances) == 1
+    console_instance = _FakeConsole.instances[0]
+    assert console_instance.init_kwargs == {"stderr": True}
+    assert len(console_instance.statuses) == 1
+    assert console_instance.statuses[0].entered is True
+    assert console_instance.statuses[0].exited is True
+
+
+def test_spinner_cleared_on_ollama_error_and_degrade_proceeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `main.Console` spy seam's `.status(...)` `__exit__` still runs
+    (spinner cleared) when `extract_concept` raises `OllamaError`, and
+    `ingest` proceeds to its existing Source-only degrade stdout/stderr
+    behavior unchanged (spec: Spinner clears on OllamaError)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, raises=OllamaUnavailable("boom"))
+    _FakeConsole.instances.clear()
+    monkeypatch.setattr(main, "Console", _FakeConsole)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(_FakeConsole.instances) == 1
+    console_instance = _FakeConsole.instances[0]
+    assert console_instance.init_kwargs == {"stderr": True}
+    assert console_instance.statuses[0].exited is True
+    assert "concept extraction skipped" in result.stderr
+    assert "keeping the Source only" in result.stderr

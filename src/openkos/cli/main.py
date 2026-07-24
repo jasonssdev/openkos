@@ -4,6 +4,7 @@ import re
 import shutil
 import sqlite3
 import sys
+from collections import Counter
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 import typer
+from rich.console import Console
 
 from openkos import config, fsio
 from openkos import lint as lint_check
@@ -351,6 +353,26 @@ def _plural(n: int) -> str:
     return "" if n == 1 else "s"
 
 
+def _format_type_tally(counts: dict[str, int]) -> str:
+    """Render a per-type derived-object tally line from a `type -> count`
+    dict, decoupled from any `ingest`-specific internals so other commands
+    MAY reuse it (spec: Reusable Type-Tally Formatting Helper).
+
+    Returns `""` for an empty (or all-zero) dict, signaling "no line to
+    print" to the caller. Otherwise returns `extracted {N} objects -- {c}
+    {Type}, ...`, ordered by canonical `_TYPE_TO_SECTION` registry order
+    (NOT insertion order), so identical input always renders the same
+    string."""
+    total = sum(counts.values())
+    if total == 0:
+        return ""
+    order = {t: i for i, t in enumerate(_TYPE_TO_SECTION)}
+    parts = ", ".join(
+        f"{counts[t]} {t}" for t in sorted(counts, key=lambda t: order[t])
+    )
+    return f"extracted {total} object{_plural(total)} — {parts}"
+
+
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 _TITLE_SEPARATOR_RE = re.compile(r"[-_]+")
 
@@ -491,7 +513,10 @@ def _stage_derived_objects(
         return []
 
     try:
-        extractions = extract_concept(raw_content, source_title=source_title, llm=llm)
+        with Console(stderr=True).status("openkos ingest: extracting concepts…"):
+            extractions = extract_concept(
+                raw_content, source_title=source_title, llm=llm
+            )
     except OllamaError as exc:
         typer.echo(
             f"openkos ingest: concept extraction skipped -- {exc}; "
@@ -923,6 +948,8 @@ def ingest(
         f"openkos ingest: imported '{src}' -> {', '.join(imported_paths)} "
         f"({index_path.name}, {log_path.name} updated)."
     )
+    if derived_plans:
+        typer.echo(_format_type_tally(Counter(plan.doc_type for plan in derived_plans)))
 
     _autocommit(
         root,
