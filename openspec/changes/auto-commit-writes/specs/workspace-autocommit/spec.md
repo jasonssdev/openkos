@@ -117,11 +117,14 @@ before `_autocommit` ran.
 ### Requirement: One-Time Confidential Transparency Notice
 
 WHEN a commit includes any staged concept file whose frontmatter
-`sensitivity` ranks confidential per
-`sensitivity.blocks_llm_send(value, threshold="confidential")`, `openkos`
-MUST emit exactly ONE stderr NOTICE for that command invocation, regardless
-of how many confidential files are staged. A commit containing no
-confidential-ranked staged file MUST NOT emit the notice.
+`sensitivity` value equals `confidential` (the top rank of
+`okf.SENSITIVITY_ORDER`, tested as
+`str(meta.get("sensitivity", "")).strip() == "confidential"` — a
+transparency check, NOT the fail-closed `sensitivity.blocks_llm_send` LLM
+gate), `openkos` MUST emit exactly ONE stderr NOTICE for that command
+invocation, regardless of how many confidential files are staged. A commit
+containing no confidential-ranked staged file — including files with a
+missing, blank, or unparseable `sensitivity` — MUST NOT emit the notice.
 
 #### Scenario: Single confidential file triggers exactly one notice
 
