@@ -1,5 +1,6 @@
 """Typer application object exposed as the `openkos` console script."""
 
+import json
 import re
 import shutil
 import sqlite3
@@ -43,7 +44,11 @@ from openkos.model.types import CLASSIFIABLE_TYPES as _CLASSIFIABLE_TYPES
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates
-from openkos.resolution.adjudication import Verdict, adjudicate_candidates
+from openkos.resolution.adjudication import (
+    AdjudicatedCandidate,
+    Verdict,
+    adjudicate_candidates,
+)
 from openkos.resolution.candidates import Tier
 from openkos.resolution.contradiction import (
     find_contradictions,
@@ -400,6 +405,31 @@ def _format_verdict_tally(same: int, different: int, uncertain: int) -> str:
     if uncertain > 0:
         parts += f", {uncertain} UNCERTAIN"
     return f"adjudicated {total}: {parts}"
+
+
+def _adjudication_payload(
+    results: Sequence[AdjudicatedCandidate], *, same_only: bool
+) -> list[dict[str, object]]:
+    """Build the pure, I/O-free `adjudicate --json` payload from `results`,
+    preserving `results` order and omitting `confidence` and any
+    survivor/absorbed field (spec: Machine-Readable `--json` Output Mode).
+
+    `tier` MUST be rendered via `.name` (uppercase `"HIGH"`/`"LOW"`), NOT
+    `.value` (lowercase) -- mirrors the human path's ternary but sourced
+    directly from the enum member's name. `verdict` mirrors the human path's
+    `.value.upper()` rendering. `same_only=True` keeps only `Verdict.SAME`
+    entries, the same predicate the human `--same-only` display filter uses."""
+    return [
+        {
+            "member_ids": list(result.candidate.member_ids),
+            "okf_type": result.candidate.okf_type,
+            "tier": result.candidate.tier.name,
+            "verdict": result.verdict.value.upper(),
+            "rationale": result.rationale,
+        }
+        for result in results
+        if not same_only or result.verdict is Verdict.SAME
+    ]
 
 
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
@@ -3645,6 +3675,11 @@ def adjudicate(
         "--include-confidential",
         help="Include confidential concepts (excluded by default).",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit adjudication verdicts as JSON to stdout; suppress human output.",
+    ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
 
@@ -3656,7 +3691,15 @@ def adjudicate(
     `resolution.adjudication.adjudicate_candidates`. Distinct from the
     reserved `resolve`/`merge` verbs (slice 3): `adjudicate` never merges,
     writes, or decides -- it only prints a verdict for human review. No
-    `--auto`, no confirmation gate, no `--json` or other structured mode.
+    `--auto`, no confirmation gate.
+
+    `--json` emits the adjudication results as a single pretty-printed JSON
+    array on stdout and fully suppresses all human output (tally, legend,
+    per-group detail, `Next:` hint, and both empty-state messages). It emits
+    every verdict by default; passing `--same-only` filters the array to
+    `SAME` entries, mirroring the human display filter. It short-circuits
+    AFTER the Ollama error handlers below, so a degraded run still exits 1 on
+    stderr with no JSON.
 
     Output mirrors `duplicates`'s grouped render (type, tier, trigger,
     members) with each group's verdict and rationale appended. The parsed
@@ -3741,6 +3784,12 @@ def adjudicate(
     except OllamaError as exc:
         typer.echo(f"openkos adjudicate: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
+
+    if json_output:
+        typer.echo(
+            json.dumps(_adjudication_payload(results, same_only=same_only), indent=2)
+        )
+        return
 
     typer.echo(f"openkos adjudicate: workspace at {root}")
     typer.echo()
