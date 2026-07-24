@@ -14,9 +14,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.bundle import index as bundle_index
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.vcs import git as vcs_git
-from tests.unit.vcs.conftest import TmpGitRepo, _git, tmp_git_repo
+from tests.unit.vcs.conftest import TmpGitRepo, _git, isolate_git_identity, tmp_git_repo
 
 __all__ = ["tmp_git_repo"]
 
@@ -122,6 +124,253 @@ def test_purge_source_scope_cascades_descendants(tmp_git_repo: TmpGitRepo) -> No
     assert f"bundle/{tmp_git_repo.source_id}.md" in result.output
     assert "bundle/concepts/child-a.md" in result.output
     assert "Total: 2 concept(s) to purge." in result.output
+
+
+# --- #142: dense-retrieval-degraded warning ---------------------------------
+
+
+def test_purge_success_output_warns_dense_retrieval_degraded(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """Successful `purge` output includes a warning that dense retrieval is
+    degraded and an `openkos reindex` instruction (privacy-purge spec:
+    "Successful purge warns about degraded dense retrieval")."""
+    phrase = f"purge {tmp_git_repo.source_id}"
+
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "dense retrieval" in result.output.lower()
+    assert "degraded" in result.output.lower()
+    assert "openkos reindex" in result.output
+
+
+def test_purge_does_not_prompt_or_auto_reindex(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful purge that dropped `vectors.db` never prompts for
+    confirmation to reindex and never invokes `reindex` itself -- message-
+    only (privacy-purge spec: "No interactive prompt or auto-reindex
+    occurs")."""
+    called = {"reindex": False}
+
+    def _spy_reindex(*args: object, **kwargs: object) -> None:
+        called["reindex"] = True
+
+    monkeypatch.setattr(main, "reindex", _spy_reindex)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert called["reindex"] is False
+
+
+# --- Post-rewrite live-tree auto-commit -------------------------------------
+
+
+def _commit_count(root: Path) -> int:
+    result = vcs_git._run(["git", "rev-list", "--count", "HEAD"], cwd=root)
+    assert result.returncode == 0, result.stderr
+    return int(result.stdout.strip())
+
+
+def _last_commit_subject(root: Path) -> str:
+    result = vcs_git._run(["git", "log", "-1", "--format=%s"], cwd=root)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def _last_commit_files(root: Path) -> set[str]:
+    result = vcs_git._run(
+        ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"], cwd=root
+    )
+    assert result.returncode == 0, result.stderr
+    return {line for line in result.stdout.splitlines() if line}
+
+
+def test_purge_clean_cleanup_creates_no_commit_and_no_warning(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The DEFAULT self-scope purge is the "clean" case: `git-filter-repo`'s
+    own history content-scrub already removed the live catalog bullet/log
+    entry from the checked-out tip, so `_purge_clean_live_*` is a no-op,
+    `paths_dirty` reports `False`, and NO auto-commit (hence no WARNING) is
+    attempted (privacy-purge spec: "Empty diff after filter-repo's own
+    rewrite still succeeds")."""
+    before = _commit_count(tmp_git_repo.root)
+    phrase = f"purge {tmp_git_repo.source_id}"
+
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _commit_count(tmp_git_repo.root) == before
+    assert "auto-commit" not in result.output.lower()
+    assert vcs_git.is_clean(tmp_git_repo.root) is True
+
+
+def test_purge_non_no_op_cleanup_creates_exactly_one_commit(
+    tmp_git_repo: TmpGitRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """When the live-tree cleanup DOES produce a real change (simulated
+    here since filter-repo's own scrub usually already covers it -- design:
+    "frequently a no-op", not always), `purge` commits exactly once,
+    staging only `bundle/index.md`/`bundle/log.md`, message `openkos:
+    purge <id>`, leaving a clean tree (privacy-purge spec: "Successful
+    purge leaves a clean working tree via commit")."""
+    # Isolated identity config lives OUTSIDE `tmp_git_repo.root` -- writing
+    # it inside the workspace itself would leave a forever-untracked file,
+    # breaking every clean-tree assertion for a reason unrelated to
+    # auto-commit (mirrors `test_main_autocommit.py`'s `_init_workspace`).
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    real_remove = bundle_index.remove_index_entry
+
+    def _fake_remove(index_text: str, concept_id: str) -> tuple[str, int]:
+        text, count = real_remove(index_text, concept_id)
+        return text + "\n<!-- purge-cleanup-marker -->\n", count + 1
+
+    monkeypatch.setattr(bundle_index, "remove_index_entry", _fake_remove)
+    before = _commit_count(tmp_git_repo.root)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _commit_count(tmp_git_repo.root) == before + 1
+    assert _last_commit_subject(tmp_git_repo.root) == (
+        f"openkos: purge {tmp_git_repo.source_id}"
+    )
+    # `commit_paths` stages BOTH scoped paths (`git add -- <paths>`), but
+    # `git diff-tree` only lists paths that actually CHANGED between this
+    # commit and its parent -- `log.md` was untouched here (only
+    # `remove_index_entry` was monkeypatched to force a real diff), so only
+    # `index.md` appears; the assertion is a subset check, not an exact
+    # match, so it stays valid whether or not log.md also changed.
+    committed_files = _last_commit_files(tmp_git_repo.root)
+    assert committed_files <= {"bundle/index.md", "bundle/log.md"}
+    assert "bundle/index.md" in committed_files
+    assert vcs_git.is_clean(tmp_git_repo.root) is True
+
+
+def test_purge_autocommit_message_includes_cascade_count(
+    tmp_git_repo: TmpGitRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """`--scope source` with additional cascaded members uses the `(+N)`
+    commit-message form, `N = len(purge_ids) - 1` (design: "Message")."""
+    _write_child_concept(
+        tmp_git_repo.root,
+        "concepts/child-a",
+        provenance=[tmp_git_repo.source_id],
+        title="Child A",
+    )
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add child"], cwd=tmp_git_repo.root)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    real_remove = bundle_index.remove_index_entry
+
+    def _fake_remove(index_text: str, concept_id: str) -> tuple[str, int]:
+        text, count = real_remove(index_text, concept_id)
+        return text + "\n<!-- purge-cleanup-marker -->\n", count + 1
+
+    monkeypatch.setattr(bundle_index, "remove_index_entry", _fake_remove)
+
+    phrase = f"purge {tmp_git_repo.source_id} (2 concepts)"
+    result = runner.invoke(
+        app,
+        [
+            "purge",
+            tmp_git_repo.source_id,
+            "--scope",
+            "source",
+            "--confirm-phrase",
+            phrase,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _last_commit_subject(tmp_git_repo.root) == (
+        f"openkos: purge {tmp_git_repo.source_id} (+1)"
+    )
+
+
+def test_purge_autocommit_failure_is_non_fatal(
+    tmp_git_repo: TmpGitRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """A commit-step `GitError` (e.g. `commit_paths` raising) prints a non-
+    fatal WARNING to stderr, and `purge` still exits with its normal
+    success code -- the history rewrite and index cleanup already
+    irreversibly landed (privacy-purge spec: "Commit failure does not fail
+    the already-irreversible purge")."""
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    monkeypatch.setattr(vcs_git, "paths_dirty", lambda cwd, rel_paths: True)
+
+    def _raise(cwd: Path, rel_paths: list[str], message: str) -> None:
+        raise vcs_git.GitError("simulated commit failure")
+
+    monkeypatch.setattr(vcs_git, "commit_paths", _raise)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "WARNING" in result.output
+    assert "simulated commit failure" in result.output
+
+
+def test_purge_falls_through_to_autocommit_when_dirty_probe_raises(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `paths_dirty` itself raises `GitError` (e.g. a broken repo probe),
+    `purge` falls through and still attempts `_autocommit` -- non-fatal
+    either way, never blocking the already-irreversible purge (design:
+    "purge empty-diff guard")."""
+
+    def _raise_probe(cwd: Path, rel_paths: list[str]) -> bool:
+        raise vcs_git.GitError("simulated probe failure")
+
+    monkeypatch.setattr(vcs_git, "paths_dirty", _raise_probe)
+    autocommit_calls: list[tuple[Path, list[str], str]] = []
+    real_autocommit = main._autocommit
+
+    def _spy_autocommit(root: Path, paths: list[str], message: str) -> None:
+        autocommit_calls.append((root, list(paths), message))
+        real_autocommit(root, paths, message)
+
+    monkeypatch.setattr(main, "_autocommit", _spy_autocommit)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(autocommit_calls) == 1
+    assert autocommit_calls[0][1] == ["bundle/index.md", "bundle/log.md"]
 
 
 # --- Rail 1: reference-aware refusal ----------------------------------------

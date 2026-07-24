@@ -474,6 +474,25 @@ def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> None:
         raise GitError(f"git commit failed: {commit_result.stderr.strip()}")
 
 
+def paths_dirty(cwd: Path, rel_paths: Sequence[str]) -> bool:
+    """`True` iff `git status --porcelain -- <rel_paths>` reports any
+    untracked, unstaged, or staged change scoped to `rel_paths` (purge-
+    transactional-cleanup #-final: the empty-diff guard for purge's
+    post-rewrite auto-commit).
+
+    Scoped exactly like `commit_paths`' own `git add -- <rel_paths>` (the
+    `--` end-of-options guard, never a whole-tree `is_clean` probe): a dirty
+    UNRELATED file elsewhere in the workspace must never make this return
+    `True`, which would otherwise trigger a spurious auto-commit attempt.
+    Raises `GitError` if the probe itself fails (e.g. `cwd` is not inside a
+    git working tree) -- callers decide how to treat that failure; this
+    function never swallows it."""
+    result = _run(["git", "status", "--porcelain", "--", *rel_paths], cwd=cwd)
+    if result.returncode != 0:
+        raise GitError(f"git status failed: {result.stderr.strip()}")
+    return result.stdout.strip() != ""
+
+
 def _validate_rel_paths(rel_paths: Sequence[str]) -> None:
     """Fail-closed validation of `expunge_paths`' `rel_paths`, BEFORE any
     file is written or subprocess invoked.

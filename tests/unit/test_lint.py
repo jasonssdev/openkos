@@ -218,6 +218,62 @@ def test_collect_docs_defaults_type_to_empty_string_when_absent(
     assert docs[0].type == ""
 
 
+# --- purge-transactional-cleanup #141: collect_docs relations decoding ---
+
+
+def test_collect_docs_populates_relations_from_frontmatter(tmp_path: Path) -> None:
+    """`collect_docs` decodes a doc's `relations:` frontmatter (via
+    `okf.decode_relations`) into `LintDoc.relations`, one canonical target
+    per entry."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\n"
+        "relations:\n"
+        "  - target: concepts/epicureanism\n"
+        "    type: contrasts-with\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    docs, skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].relations == ("concepts/epicureanism",)
+    assert skipped == []
+
+
+def test_collect_docs_defaults_relations_to_empty_tuple_when_absent(
+    tmp_path: Path,
+) -> None:
+    """A doc with no `relations:` key decodes to an empty tuple (`okf.
+    decode_relations`'s "absent key is valid" contract)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md")
+
+    docs, _skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].relations == ()
+
+
+def test_collect_docs_skips_doc_with_corrupt_relations_key(tmp_path: Path) -> None:
+    """A `relations:` value that is not a list (`okf.decode_relations`
+    raises `ValueError`) is skipped, not raised, with a skip notice --
+    read-only-never-fail (purge-transactional-cleanup #141)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "broken.md").write_text(
+        "---\ntype: Concept\ntitle: Broken\nrelations: not-a-list\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    docs, skipped = lint.collect_docs(bundle_dir)
+
+    assert docs == []
+    assert skipped == ["concepts/broken.md: skipped (invalid relations)"]
+
+
 @pytest.mark.parametrize(
     ("raw", "expected_days"),
     [
@@ -292,6 +348,7 @@ def _doc(
     freshness: str = "current",
     type: str = "",
     volatility: str = "",
+    relations: tuple[str, ...] = (),
 ) -> lint.LintDoc:
     rel_dir = str(PurePosixPath(identity).parent)
     if rel_dir == ".":
@@ -304,6 +361,7 @@ def _doc(
         freshness=freshness,
         type=type,
         volatility=volatility,
+        relations=relations,
     )
 
 
@@ -765,6 +823,124 @@ def test_check_orphans_ignores_external_links_in_doc_body() -> None:
     findings = lint.check_orphans(docs, index_text='---\nokf_version: "0.1"\n---\n')
 
     assert [f.path for f in findings] == ["concepts/stoicism.md"]
+
+
+# --- purge-transactional-cleanup #141: check_dangling_targets ---------------
+
+
+def test_check_dangling_targets_relations_target_absent_is_flagged() -> None:
+    """A `relations:` target naming a concept id absent from `docs` is
+    flagged as a dangling-reference finding (lint spec: "relations: target
+    absent from disk is flagged")."""
+    docs = [_doc("concepts/stoicism", "Body.", relations=("concepts/ghost",))]
+
+    findings = lint.check_dangling_targets(docs)
+
+    assert len(findings) == 1
+    assert findings[0].kind == "dangling"
+    assert findings[0].path == "concepts/stoicism.md"
+    assert "concepts/ghost" in findings[0].detail
+
+
+def test_check_dangling_targets_body_link_to_absent_id_is_flagged() -> None:
+    """A body markdown link resolving (via `normalize_link`) to a concept id
+    absent from disk is flagged (lint spec: "Body markdown bundle link to
+    an absent id is flagged")."""
+    docs = [_doc("concepts/stoicism", "See [Ghost](/concepts/ghost.md) for more.")]
+
+    findings = lint.check_dangling_targets(docs)
+
+    assert len(findings) == 1
+    assert findings[0].kind == "dangling"
+    assert "concepts/ghost" in findings[0].detail
+
+
+def test_check_dangling_targets_existing_concept_is_not_flagged() -> None:
+    """A `relations:` target and body link that both resolve to concept ids
+    present on disk produce zero dangling findings (lint spec: "Reference to
+    an existing concept is not flagged")."""
+    docs = [
+        _doc(
+            "concepts/stoicism",
+            "See [Epicureanism](/concepts/epicureanism.md).",
+            relations=("concepts/epicureanism",),
+        ),
+        _doc("concepts/epicureanism", "No outbound refs."),
+    ]
+
+    findings = lint.check_dangling_targets(docs)
+
+    assert findings == []
+
+
+def test_check_dangling_targets_self_link_is_never_flagged() -> None:
+    """A doc's link/relation to ITSELF is never flagged -- a self-reference
+    always resolves to a doc that, by definition, exists."""
+    docs = [
+        _doc(
+            "concepts/self-linker",
+            "See [itself](/concepts/self-linker.md).",
+            relations=("concepts/self-linker",),
+        )
+    ]
+
+    findings = lint.check_dangling_targets(docs)
+
+    assert findings == []
+
+
+def test_check_dangling_targets_ignores_external_and_anchor_links() -> None:
+    """An external `scheme:` URL or a pure in-page anchor (both normalize to
+    `None`) is never treated as an outbound reference, so it never yields a
+    dangling finding on its own."""
+    docs = [
+        _doc(
+            "concepts/stoicism",
+            "See [external](https://example.com) and [anchor](#related).",
+        )
+    ]
+
+    findings = lint.check_dangling_targets(docs)
+
+    assert findings == []
+
+
+def test_check_dangling_targets_dedupes_the_same_missing_target_per_doc() -> None:
+    """The same missing target referenced twice from one doc (once via
+    `relations:`, once via a body link) yields exactly ONE finding for that
+    doc."""
+    docs = [
+        _doc(
+            "concepts/stoicism",
+            "See [Ghost](/concepts/ghost.md) again.",
+            relations=("concepts/ghost",),
+        )
+    ]
+
+    findings = lint.check_dangling_targets(docs)
+
+    assert len(findings) == 1
+
+
+def test_check_dangling_targets_multiple_missing_targets_yield_multiple_findings() -> (
+    None
+):
+    """Two DISTINCT missing targets referenced from the same doc yield two
+    findings, one per missing target."""
+    docs = [
+        _doc(
+            "concepts/stoicism",
+            "Body.",
+            relations=("concepts/ghost-one", "concepts/ghost-two"),
+        )
+    ]
+
+    findings = lint.check_dangling_targets(docs)
+
+    assert len(findings) == 2
+    missing_ids = {f.detail for f in findings}
+    assert any("ghost-one" in detail for detail in missing_ids)
+    assert any("ghost-two" in detail for detail in missing_ids)
 
 
 # --- freshness-lint-v1: resolve_windows(cfg) (load-bearing, never-raising) ---

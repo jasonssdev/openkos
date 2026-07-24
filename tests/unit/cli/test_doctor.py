@@ -74,9 +74,13 @@ def test_doctor_all_healthy_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A fully healthy workspace prints one `[PASS]` per applicable check
-    (seven total) and exits 0 (Scenario: Healthy workspace prints all
-    applicable checks)."""
+    (ten total) and exits 0 (Scenario: Healthy workspace prints all
+    applicable checks). `.openkos/vectors.db` is pre-created so the #142
+    workspace-vector-index-present check also passes."""
     _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
@@ -88,7 +92,7 @@ def test_doctor_all_healthy_exits_zero(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 9
+    assert result.stdout.count("[PASS]") == 10
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
@@ -97,6 +101,7 @@ def test_doctor_all_healthy_exits_zero(
     assert f"[PASS] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in (
         result.stdout
     )
+    assert "[PASS] Workspace vector index present" in result.stdout
     assert "[PASS] Vector extension loadable" in result.stdout
     assert "[PASS] git available" in result.stdout
     assert "[PASS] git-filter-repo available" in result.stdout
@@ -328,8 +333,13 @@ def test_doctor_model_installed_honors_latest_normalization(
     only the `:latest`-suffixed form (`qwen3:latest`): the `<name>:latest`
     normalization flows end-to-end through the doctor model-installed check,
     not just the `model_tag_matches` helper. Every critical check passes, so
-    the command exits 0 (S2)."""
+    the command exits 0 (S2). `.openkos/vectors.db` is pre-created so the
+    #142 workspace-vector-index-present check does not add an unrelated
+    `[FAIL]` to this test's "no failures" assertion."""
     _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
     configured_model = "qwen3"
     (tmp_path / "openkos.yaml").write_text(
         f"model: {configured_model}\n", encoding="utf-8"
@@ -585,6 +595,85 @@ def test_doctor_vector_extension_check_runs_outside_workspace(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
+    assert "[PASS] Vector extension loadable" in result.stdout
+
+
+# --- workspace-vector-index-present check (purge-transactional-cleanup #142)
+
+
+def test_doctor_workspace_vectors_present_shows_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A present `.openkos/vectors.db` prints `[PASS] Workspace vector index
+    present` (doctor-command spec: "Present workspace vectors.db passes")."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[PASS] Workspace vector index present" in result.stdout
+
+
+def test_doctor_workspace_vectors_absent_shows_fail_with_reindex_remediation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent `.openkos/vectors.db` prints `[FAIL] Workspace vector index
+    present` with an indented `openkos reindex` remediation line, and stays
+    informational -- exit 0 when every critical check otherwise passes
+    (doctor-command spec: "Absent workspace vectors.db fails with a reindex
+    remediation")."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[FAIL] Workspace vector index present" in result.stdout
+    assert "openkos reindex" in result.stdout
+
+
+def test_doctor_workspace_vectors_check_skipped_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside an initialized workspace, the check prints `[SKIP]` and does
+    not affect the exit code (doctor-command spec: "Check is skipped
+    outside a workspace")."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[SKIP] Workspace vector index present" in result.stdout
+
+
+def test_doctor_workspace_vectors_check_distinct_from_extension_loadable_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two vector checks are independent: an absent workspace
+    `vectors.db` (`[FAIL]`) coexists with a loadable extension (`[PASS]`),
+    proving neither check's outcome depends on the other."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[FAIL] Workspace vector index present" in result.stdout
     assert "[PASS] Vector extension loadable" in result.stdout
 
 

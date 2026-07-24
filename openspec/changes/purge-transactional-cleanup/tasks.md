@@ -31,81 +31,81 @@ single PR with margin. No maintainer decision required before apply; re-forecast
 
 ## Phase 1: #141 Dangling-Reference Core (lint.py)
 
-- [ ] 1.1 RED: `tests/test_lint.py` — `LintDoc.relations` populated by `collect_docs`
+- [x] 1.1 RED: `tests/test_lint.py` — `LintDoc.relations` populated by `collect_docs`
       via `okf.decode_relations`; corrupt `relations:` raises `ValueError` inside
       `collect_docs` → caught, emits skip notice (read-only-never-fail). Spec: lint
       "Dangling-Reference Scan" (setup for scenarios below).
-- [ ] 1.2 GREEN: add `relations: tuple[str, ...]` to `LintDoc`; populate in
+- [x] 1.2 GREEN: add `relations: tuple[str, ...]` to `LintDoc`; populate in
       `collect_docs` (`src/openkos/lint.py`), catch `ValueError` → skip notice.
-- [ ] 1.3 RED: `tests/test_lint.py` — `check_dangling_targets`: `relations:` target
+- [x] 1.3 RED: `tests/test_lint.py` — `check_dangling_targets`: `relations:` target
       absent flagged; body link (via `normalize_link`) to absent id flagged; existing
       concept not flagged; self-link/external/anchor ignored. Spec: lint scenarios
       "relations: target absent flagged", "Body markdown bundle link ... flagged",
       "Reference to existing concept not flagged".
-- [ ] 1.4 GREEN: implement `check_dangling_targets(docs)` in `src/openkos/lint.py`
+- [x] 1.4 GREEN: implement `check_dangling_targets(docs)` in `src/openkos/lint.py`
       (mirrors `check_orphans`); `LintFinding.kind` gains `"dangling"`; `LintReport`
       gains `dangling` field. Non-gating (informational only).
 
 ## Phase 2: #141 Wiring — lint + status
 
-- [ ] 2.1 RED: `tests/test_cli.py` — `openkos lint` renders "Dangling references:"
+- [x] 2.1 RED: `tests/test_cli.py` — `openkos lint` renders "Dangling references:"
       section; exits 0; no file mutation. Spec: lint "findings don't change exit
       contract".
-- [ ] 2.2 GREEN: wire `check_dangling_targets` into `lint` command render in
+- [x] 2.2 GREEN: wire `check_dangling_targets` into `lint` command render in
       `src/openkos/cli/main.py`.
-- [ ] 2.3 RED: `tests/test_cli.py` — `openkos status` folds dangling findings into
+- [x] 2.3 RED: `tests/test_cli.py` — `openkos status` folds dangling findings into
       "Needs attention"; purge-created dangling ref detected post-purge; no dangling
       → no entry. Spec: status "Needs-Attention Surfaces Dangling References"
       (all 3 scenarios).
-- [ ] 2.4 GREEN: wire `lint.collect_docs` + `check_dangling_targets` into `status`'s
+- [x] 2.4 GREEN: wire `lint.collect_docs` + `check_dangling_targets` into `status`'s
       "Needs attention" section in `src/openkos/cli/main.py`.
 
 ## Phase 3: #142 vectors.db Awareness
 
-- [ ] 3.1 RED: `tests/test_cli.py` — successful `purge` output includes degraded
+- [x] 3.1 RED: `tests/test_cli.py` — successful `purge` output includes degraded
       dense-retrieval warning + `openkos reindex` instruction; no interactive prompt.
       Spec: privacy-purge "Deferred-Reembed Warning On Success" (both scenarios).
-- [ ] 3.2 GREEN: append fixed echo after `_purge_rebuild_indexes` (both scope
+- [x] 3.2 GREEN: append fixed echo after `_purge_rebuild_indexes` (both scope
       branches) in `purge` (`src/openkos/cli/main.py`).
-- [ ] 3.3 RED: `tests/test_cli.py` — `status` "Needs attention" shows missing-
+- [x] 3.3 RED: `tests/test_cli.py` — `status` "Needs attention" shows missing-
       vectors.db line when `layout.vectors_db_path` absent; no entry when present.
       Spec: status "Needs-Attention Surfaces Missing Vector Index" (both scenarios).
-- [ ] 3.4 GREEN: wire `layout.vectors_db_path.exists()` check into `status`'s
+- [x] 3.4 GREEN: wire `layout.vectors_db_path.exists()` check into `status`'s
       "Needs attention" section.
-- [ ] 3.5 RED: `tests/test_cli.py` — `doctor` new workspace-vectors check: present
+- [x] 3.5 RED: `tests/test_cli.py` — `doctor` new workspace-vectors check: present
       passes, absent fails with indented `openkos reindex` remediation, skipped
       outside a workspace. Spec: doctor-command "Workspace Vector Index Presence
       Check" (all 3 scenarios).
-- [ ] 3.6 GREEN: implement workspace-`vectors.db`-presence check in `doctor`
+- [x] 3.6 GREEN: implement workspace-`vectors.db`-presence check in `doctor`
       (`src/openkos/cli/main.py`), distinct from existing `:memory:`-probe check 7;
       skipped pre-init.
 
 ## Phase 4: Purge Auto-Commit
 
-- [ ] 4.1 RED: `tests/test_vcs_git.py` — `paths_dirty(cwd, rel_paths)`: clean paths →
+- [x] 4.1 RED: `tests/test_vcs_git.py` — `paths_dirty(cwd, rel_paths)`: clean paths →
       `False`; modified tracked path → `True`; unrelated dirty file outside scope →
       `False`; non-git dir → `GitError`. Real temp git repo (reuse Slice 1/2
       fixtures).
-- [ ] 4.2 GREEN: implement `paths_dirty(cwd: Path, rel_paths: Sequence[str]) -> bool`
+- [x] 4.2 GREEN: implement `paths_dirty(cwd: Path, rel_paths: Sequence[str]) -> bool`
       in `src/openkos/vcs/git.py` via `git status --porcelain -- <rel_paths>`
       (`--` guard, scoped like `commit_paths`). `_autocommit`/`commit_paths` stay
       byte-unchanged.
-- [ ] 4.3 RED: `tests/test_cli.py` (real temp git repo) — clean post-rewrite cleanup
+- [x] 4.3 RED: `tests/test_cli.py` (real temp git repo) — clean post-rewrite cleanup
       → no commit created, no spurious WARNING; non-no-op cleanup → exactly one
       commit `openkos: purge <id>` (`(+N)` cascaded), staging only `bundle/index.md`
       + `bundle/log.md`, clean `git status`; commit failure → non-fatal WARNING to
       stderr, purge exit code unchanged. Spec: privacy-purge "Post-Rewrite Live-Tree
       Auto-Commit" (all 3 scenarios).
-- [ ] 4.4 GREEN: after `_purge_rebuild_indexes` (main.py, success path), call
+- [x] 4.4 GREEN: after `_purge_rebuild_indexes` (main.py, success path), call
       `paths_dirty(root, ["bundle/index.md", "bundle/log.md"])`; if `True` (or probe
       raises `GitError`, fall through), call `_autocommit` with the same paths and
       message `openkos: purge <id>` / `openkos: purge <id> (+N)`.
 
 ## Phase 5: Full Verification
 
-- [ ] 5.1 Run `uv run pytest` — full suite green, 90% branch coverage maintained.
-- [ ] 5.2 Run `uv run ruff check . && uv run ruff format --check . && uv run mypy .`
+- [x] 5.1 Run `uv run pytest` — full suite green, 90% branch coverage maintained.
+- [x] 5.2 Run `uv run ruff check . && uv run ruff format --check . && uv run mypy .`
       — quality gate green.
-- [ ] 5.3 Manual smoke (per e2e testing guide): purge a referenced concept, confirm
+- [x] 5.3 Manual smoke (per e2e testing guide): purge a referenced concept, confirm
       `lint`/`status`/`doctor` all surface the resulting dangling reference and
       missing/degraded vector index consistently.
