@@ -399,6 +399,47 @@ def test_purge_reference_aware_refuses_without_force(
     )
 
 
+def test_purge_force_leaves_dangling_reference_detected_by_lint_and_status(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """End-to-end acceptance for #141: after `purge <id> --force` erases a
+    concept another document still references, the now-dangling reference is
+    detected by BOTH `lint` (under "Dangling references") and `status`
+    (under "Needs attention") -- neither did before this change. The
+    referrer is committed first so the tree is clean for purge's rails; the
+    detect-only remedy means purge itself leaves the referrer untouched
+    (exactly the dangling state #141 reports), and the follow-up read
+    commands surface it."""
+    referrer = tmp_git_repo.root / "bundle" / "concepts" / "referrer.md"
+    referrer.parent.mkdir(parents=True, exist_ok=True)
+    referrer.write_text(
+        "---\ntype: Concept\ntitle: Referrer\n"
+        "relations:\n"
+        f"  - target: {tmp_git_repo.source_id}\n"
+        "    type: relates-to\n"
+        "---\n\n# Referrer\n\nBody.\n",
+        encoding="utf-8",
+    )
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "add referrer"], cwd=tmp_git_repo.root)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    purge_result = runner.invoke(
+        app,
+        ["purge", tmp_git_repo.source_id, "--force", "--confirm-phrase", phrase],
+    )
+    assert purge_result.exit_code == 0, purge_result.output
+
+    lint_result = runner.invoke(app, ["lint"])
+    assert lint_result.exit_code == 0
+    assert "concepts/referrer" in lint_result.stdout
+    assert tmp_git_repo.source_id in lint_result.stdout
+
+    status_result = runner.invoke(app, ["status"])
+    assert status_result.exit_code == 0
+    assert tmp_git_repo.source_id in status_result.stdout
+
+
 # --- Rail 2: tool availability ----------------------------------------------
 
 
