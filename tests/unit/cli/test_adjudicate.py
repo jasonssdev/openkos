@@ -19,6 +19,7 @@ never depends on whether the real example bundle happens to contain
 candidates.
 """
 
+import json
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -1054,6 +1055,316 @@ def test_adjudicate_no_warning_on_clean_bundle(
 
     assert result.exit_code == 0
     assert "bundle scan was incomplete" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# `adjudicate --json` CLI wiring (issue #137 Slice 2a)
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`adjudicate --json` with mixed verdicts exits 0, its stdout parses
+    cleanly as JSON in `results` order, and NONE of the human-only output
+    substrings leak through (spec: Machine-Readable `--json` Output Mode,
+    `--json` Fully Suppresses Human Output)."""
+    _init_workspace(tmp_path, monkeypatch)
+    same_group = CandidateGroup(
+        okf_type="person", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="org", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [same_group, different_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+            _adjudicated(
+                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+            ),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload == [
+        {
+            "member_ids": ["a", "b"],
+            "okf_type": "person",
+            "tier": "HIGH",
+            "verdict": "SAME",
+            "rationale": "same rationale",
+        },
+        {
+            "member_ids": ["c", "d"],
+            "okf_type": "org",
+            "tier": "LOW",
+            "verdict": "DIFFERENT",
+            "rationale": "diff rationale",
+        },
+    ]
+    assert "adjudicated " not in result.stdout
+    assert "Legend:" not in result.stdout
+    assert "Next: openkos merge" not in result.stdout
+
+
+def test_adjudicate_json_same_only_composability_filters_to_same_verdicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`adjudicate --json --same-only` with mixed verdicts emits ONLY the
+    `"verdict": "SAME"` objects (spec: `--same-only` Composes With
+    `--json`). Verification RED: this flows through
+    `_adjudication_payload(same_only=same_only)` wired in Task 2, so it is
+    expected to already pass -- confirming existing coverage, not a new
+    failure."""
+    _init_workspace(tmp_path, monkeypatch)
+    same_group = CandidateGroup(
+        okf_type="person", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="org", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+    uncertain_group = CandidateGroup(
+        okf_type="org", member_ids=("e", "f"), tier=Tier.LOW, trigger="stub-unc"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [same_group, different_group, uncertain_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+            _adjudicated(
+                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+            ),
+            _adjudicated(
+                uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc rationale"
+            ),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--json", "--same-only"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert len(payload) == 1
+    assert payload[0]["verdict"] == "SAME"
+    assert payload[0]["rationale"] == "same rationale"
+
+
+def test_adjudicate_json_no_candidates_emits_empty_array_not_prose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`adjudicate --json` on a fresh, empty bundle (zero candidate groups)
+    emits `[]`, bypassing the "No candidates found." guard entirely (spec:
+    Empty State Emits Valid Empty Array Under `--json`, no candidates)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == []
+    assert "No candidates found." not in result.stdout
+
+
+def test_adjudicate_json_same_only_all_filtered_out_emits_empty_array_not_prose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`adjudicate --json --same-only` where every result is DIFFERENT emits
+    `[]`, bypassing the "No SAME-verdict candidates to display" guard
+    entirely (spec: Empty State Emits Valid Empty Array Under `--json`,
+    `--same-only` filters all results out)."""
+    _init_workspace(tmp_path, monkeypatch)
+    different_group = CandidateGroup(
+        okf_type="org", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [different_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(
+                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+            )
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--json", "--same-only"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == []
+    assert "No SAME-verdict candidates to display" not in result.stdout
+
+
+def test_adjudicate_json_ollama_unavailable_still_errors_on_stderr_with_no_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`adjudicate --json` with Ollama unreachable still writes the existing
+    unavailability message to stderr, exits 1, and stdout has no partial
+    JSON payload -- the `--json` branch sits after all three Ollama error
+    handlers, so error paths are unaffected (spec: Error Paths Unaffected By
+    `--json`)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_unavailable(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _raise_unavailable)
+
+    result = runner.invoke(app, ["adjudicate", "--json"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "Ollama not reachable" in result.stderr
+    assert "ollama serve" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# `_adjudication_payload` (`adjudicate --json`, issue #137 Slice 2a)
+# ---------------------------------------------------------------------------
+
+
+def test_adjudication_payload_empty_results_returns_empty_list() -> None:
+    """`_adjudication_payload([], same_only=False)` returns `[]` -- proves the
+    builder handles the no-results case without any group to map (spec:
+    Empty State Emits Valid Empty Array Under `--json`)."""
+    assert main._adjudication_payload([], same_only=False) == []
+
+
+def test_adjudication_payload_single_same_result_exact_field_set() -> None:
+    """A single SAME result maps to exactly the locked field set, with
+    `tier` rendered UPPERCASE via `.name` (NOT lowercase `.value`) and no
+    `confidence` key present (spec: Machine-Readable `--json` Output Mode,
+    Exact field set, no confidence)."""
+    group = CandidateGroup(
+        okf_type="person",
+        member_ids=("concept-a", "concept-b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    result = _adjudicated(
+        group,
+        verdict=Verdict.SAME,
+        rationale="Same individual; identical canonical name and role.",
+    )
+
+    payload = main._adjudication_payload([result], same_only=False)
+
+    assert payload == [
+        {
+            "member_ids": ["concept-a", "concept-b"],
+            "okf_type": "person",
+            "tier": "HIGH",
+            "verdict": "SAME",
+            "rationale": "Same individual; identical canonical name and role.",
+        }
+    ]
+    assert "confidence" not in payload[0]
+
+
+def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tier() -> (
+    None
+):
+    """Mixed SAME/DIFFERENT/UNCERTAIN results preserve `results` order and
+    each object's `tier`/`verdict` reflect their own group/result -- proves
+    no re-derivation or re-sorting happens (spec: Deterministic,
+    Pretty-Printed JSON, Stable ordering)."""
+    same_group = CandidateGroup(
+        okf_type="person", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="org", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+    uncertain_group = CandidateGroup(
+        okf_type="org", member_ids=("e", "f"), tier=Tier.LOW, trigger="stub-unc"
+    )
+    results = [
+        _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+        _adjudicated(
+            different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+        ),
+        _adjudicated(
+            uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc rationale"
+        ),
+    ]
+
+    payload = main._adjudication_payload(results, same_only=False)
+
+    assert payload == [
+        {
+            "member_ids": ["a", "b"],
+            "okf_type": "person",
+            "tier": "HIGH",
+            "verdict": "SAME",
+            "rationale": "same rationale",
+        },
+        {
+            "member_ids": ["c", "d"],
+            "okf_type": "org",
+            "tier": "LOW",
+            "verdict": "DIFFERENT",
+            "rationale": "diff rationale",
+        },
+        {
+            "member_ids": ["e", "f"],
+            "okf_type": "org",
+            "tier": "LOW",
+            "verdict": "UNCERTAIN",
+            "rationale": "unc rationale",
+        },
+    ]
+
+
+def test_adjudication_payload_same_only_filters_to_same_verdicts() -> None:
+    """`same_only=True` keeps only `Verdict.SAME` entries, dropping
+    DIFFERENT/UNCERTAIN from the returned list (spec: `--same-only` Composes
+    With `--json`)."""
+    same_group = CandidateGroup(
+        okf_type="person", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="org", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+    results = [
+        _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+        _adjudicated(
+            different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+        ),
+    ]
+
+    payload = main._adjudication_payload(results, same_only=True)
+
+    assert len(payload) == 1
+    assert payload[0]["verdict"] == "SAME"
+    assert payload[0]["rationale"] == "same rationale"
 
 
 def test_adjudicate_include_confidential_suppresses_the_warning(
