@@ -321,12 +321,8 @@ def test_survey_bundle_reports_per_type_breakdown(tmp_path: Path) -> None:
     and every distinct non-Source type -- so a caller can break the aggregate
     `concepts` count down by type (issue #133: Procedures et al. must not be
     folded into "Concepts")."""
-    (tmp_path / "src-a.md").write_text(
-        "---\ntype: Source\n---\nA.\n", encoding="utf-8"
-    )
-    (tmp_path / "src-b.md").write_text(
-        "---\ntype: Source\n---\nB.\n", encoding="utf-8"
-    )
+    (tmp_path / "src-a.md").write_text("---\ntype: Source\n---\nA.\n", encoding="utf-8")
+    (tmp_path / "src-b.md").write_text("---\ntype: Source\n---\nB.\n", encoding="utf-8")
     (tmp_path / "concept-a.md").write_text(
         "---\ntype: Concept\n---\nA.\n", encoding="utf-8"
     )
