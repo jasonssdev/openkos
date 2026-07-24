@@ -70,6 +70,19 @@ def test_validate_relation_type_warns_on_unknown_type(
     assert "custom_relation" in err
 
 
+def test_validate_relation_type_warn_false_suppresses_the_advisory_note(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`warn=False` still accepts (and returns) an unknown type but prints NO
+    advisory note -- for callers on a PREVIEW/suggestion path where the note
+    belongs to the write path only (issue #134: suggest-relations flooded
+    stderr with one note per out-of-vocab suggestion)."""
+    result = relations.validate_relation_type("custom_relation", warn=False)
+
+    assert result == "custom_relation"
+    assert capsys.readouterr().err == ""
+
+
 def test_validate_relation_type_rejects_empty_type() -> None:
     """Empty type is rejected -- no write (spec: "Empty/whitespace type
     rejected")."""

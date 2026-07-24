@@ -45,7 +45,7 @@ string is still a valid relation type -- membership here only controls
 whether `validate_relation_type` prints an advisory note."""
 
 
-def validate_relation_type(rel_type: str) -> str:
+def validate_relation_type(rel_type: str, *, warn: bool = True) -> str:
     """Validate `rel_type` for the `relate` CLI verb's write path.
 
     Strips surrounding whitespace, then raises `ValueError` if the result is
@@ -55,11 +55,17 @@ def validate_relation_type(rel_type: str) -> str:
     one of `SEEDED_RELATION_TYPES` (spec: "Unknown type accepted with WARN
     to stderr"): the vocabulary is open by design, so an unrecognized type
     is always accepted for write, only flagged.
+
+    `warn=False` suppresses that advisory note while keeping the empty-type
+    fail-closed gate and the returned value identical -- for callers on a
+    non-write PREVIEW path (e.g. `suggest-relations`'s per-edge suggestion
+    parse) where one note per out-of-vocab suggestion would flood stderr
+    (issue #134). The note is a write-path affordance, not a preview one.
     """
     stripped = rel_type.strip()
     if not stripped:
         raise ValueError("relation type must be non-empty")
-    if stripped not in SEEDED_RELATION_TYPES:
+    if warn and stripped not in SEEDED_RELATION_TYPES:
         print(
             f"openkos: note -- '{stripped}' is not a seeded relation type "
             f"(known: {', '.join(sorted(SEEDED_RELATION_TYPES))})",

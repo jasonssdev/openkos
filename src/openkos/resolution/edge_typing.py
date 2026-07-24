@@ -38,7 +38,7 @@ from openkos.graph.sqlite_graph import build_graph
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import okf
-from openkos.model.relations import validate_relation_type
+from openkos.model.relations import SEEDED_RELATION_TYPES, validate_relation_type
 
 _MALFORMED_REPLY_RATIONALE = (
     "malformed reply: could not parse a valid suggestion JSON object"
@@ -56,19 +56,30 @@ as a JSON object at all -- this constant is used to uphold
 invariant when the model DID reply with parseable JSON but left `rationale`
 blank."""
 
+_SEEDED_VOCAB_LINE = ", ".join(sorted(SEEDED_RELATION_TYPES))
+"""The seeded relation vocabulary as a stable, sorted, comma-joined string,
+derived from `model.relations.SEEDED_RELATION_TYPES` (single source of
+truth) -- baked into `_SYSTEM_PROMPT` so the model is constrained to the
+closed set rather than inventing out-of-vocab verbs (issue #134)."""
+
 _SYSTEM_PROMPT = (
     "You are a relation-type suggester in a local-first knowledge engine. "
     "Given a SOURCE and a TARGET concept connected by an existing untyped "
-    "link, suggest a single relation `type` string describing how SOURCE "
-    "relates to TARGET, plus a short rationale.\n\n"
+    "link, suggest a single relation `type` describing how SOURCE relates to "
+    "TARGET, plus a short rationale.\n\n"
+    "You MUST choose `type` from exactly this fixed vocabulary, and use the "
+    "string verbatim:\n"
+    f"{_SEEDED_VOCAB_LINE}.\n"
+    "Pick the single best fit. If none clearly fits, use related_to. Do NOT "
+    "invent a type outside this list.\n\n"
     "Return ONLY a JSON object, with NO prose, NO markdown, and NO code "
     "fences around it, matching exactly this shape:\n"
     '{"type": "...", "rationale": "..."}'
 )
 """Stable system half of the 2-message prompt (mirrors
-`adjudication._SYSTEM_PROMPT`): the JSON-only instruction baked into system
-text; the `user` message carries the source/target concept ids, titles, and
-bodies."""
+`adjudication._SYSTEM_PROMPT`): the closed seeded vocabulary plus the
+JSON-only instruction baked into system text; the `user` message carries the
+source/target concept ids, titles, and bodies."""
 
 
 @dataclass(frozen=True)
@@ -210,7 +221,10 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
         return None, rationale if rationale.strip() else _DEGRADED_RATIONALE_FALLBACK
 
     try:
-        suggested_type = validate_relation_type(type_raw)
+        # `warn=False`: this is a read-only PREVIEW path, so an out-of-vocab
+        # suggestion must not print the write-path advisory note -- one per
+        # edge would flood stderr (issue #134). The value is still kept.
+        suggested_type = validate_relation_type(type_raw, warn=False)
     except ValueError:
         return None, rationale if rationale.strip() else _DEGRADED_RATIONALE_FALLBACK
     return suggested_type, rationale
