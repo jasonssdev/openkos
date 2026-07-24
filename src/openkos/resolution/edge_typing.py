@@ -28,7 +28,7 @@ Layering: this module is DERIVED, not canonical -- it MAY import
 Surface" -- see `tests/unit/graph/test_analysis.py`).
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -236,6 +236,7 @@ def suggest_edge_types(
     bundle_dir: Path,
     llm: LLMBackend,
     include_confidential: bool = False,
+    on_progress: Callable[[int, int, EdgeSuggestion], None] | None = None,
 ) -> list[EdgeSuggestion]:
     """Suggest a relation type + rationale for every edge in `edges`
     against `bundle_dir` using `llm`, read-only.
@@ -249,9 +250,17 @@ def suggest_edge_types(
     `include_confidential` is threaded into `_load_doc`'s independent
     per-doc re-check (directory-walk-observability follow-up); it defaults
     to `False`, so a caller that never passes it keeps today's fail-closed
-    behavior unchanged."""
+    behavior unchanged.
+
+    `on_progress`, if given, is called once per edge in input order, AFTER
+    that edge's `EdgeSuggestion` is built, with `(index, total, suggestion)`
+    where `index` is 1-based and `total == len(edges)` -- a hook for a CLI to
+    render a per-edge progress line during an otherwise opaque, minutes-long
+    run (issue #134). It never affects the returned list; an exception it
+    raises propagates to the caller (it is the caller's own callback)."""
     results: list[EdgeSuggestion] = []
-    for edge in edges:
+    total = len(edges)
+    for index, edge in enumerate(edges, start=1):
         src_doc = _load_doc(
             bundle_dir, edge.source_id, include_confidential=include_confidential
         )
@@ -261,42 +270,59 @@ def suggest_edge_types(
         messages = _build_messages(edge, src_doc, tgt_doc)
         reply = llm.chat(messages)
         suggested_type, rationale = _parse_reply(reply)
-        results.append(
-            EdgeSuggestion(
-                edge=edge, suggested_type=suggested_type, rationale=rationale
-            )
+        suggestion = EdgeSuggestion(
+            edge=edge, suggested_type=suggested_type, rationale=rationale
         )
+        results.append(suggestion)
+        if on_progress is not None:
+            on_progress(index, total, suggestion)
     return results
 
 
-def suggest_relations(
-    bundle_dir: Path, *, llm: LLMBackend, include_confidential: bool = False
-) -> list[EdgeSuggestion]:
-    """Orchestrate the whole read-only suggestion flow: open `build_graph`
-    over `bundle_dir` internally, narrow down to the candidate set
-    (`_candidate_edges`: untyped edges whose pair is not already typed
-    elsewhere), and delegate to `suggest_edge_types` -- the only entry point
-    the CLI verb calls (design D2: the `graph` read is encapsulated here so
-    `cli/main.py` never imports `openkos.graph` directly).
+def candidate_edges(
+    bundle_dir: Path, *, include_confidential: bool = False
+) -> list[Edge]:
+    """The read-only candidate set `suggest_relations` would type, computed
+    WITHOUT any `LLMBackend` or inference: open `build_graph` over
+    `bundle_dir`, narrow to `_candidate_edges` (untyped edges whose pair is
+    not already typed elsewhere), then drop any edge with a confidential
+    endpoint unless `include_confidential`.
+
+    This is the pre-flight surface a caller counts to bound cost before
+    committing to `suggest_edge_types`'s one-`llm.chat`-per-edge run (issue
+    #134): `len(candidate_edges(...)) == len(suggest_relations(...))`, and
+    passing the returned list straight to `suggest_edge_types` reproduces
+    `suggest_relations` exactly. Encapsulates the `openkos.graph` read so
+    `cli/main.py` never imports `openkos.graph` directly (design D2/D6).
 
     sensitivity-fail-closed-filter (S3a): unless `include_confidential` is
-    `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
-    predicate is computed ONCE and any candidate edge whose source OR target
-    is blocked is dropped BEFORE `suggest_edge_types`/`_load_doc` ever reads
-    it -- a confidential endpoint's content never reaches the prompt.
-    `include_confidential=True` skips the predicate walk entirely, at zero
-    added cost."""
+    `True`, `sensitivity.sensitive_concept_ids(bundle_dir)` is computed ONCE
+    and any edge whose source OR target is blocked is dropped here, before
+    any downstream read -- a confidential endpoint never reaches a prompt.
+    `include_confidential=True` skips the predicate walk entirely."""
     blocked: frozenset[str] = frozenset()
     if not include_confidential:
         blocked = sensitivity.sensitive_concept_ids(bundle_dir)
 
     with build_graph(bundle_dir) as store:
         edges = _candidate_edges(store)
-    edges = [
+    return [
         edge
         for edge in edges
         if edge.source_id not in blocked and edge.target_id not in blocked
     ]
+
+
+def suggest_relations(
+    bundle_dir: Path, *, llm: LLMBackend, include_confidential: bool = False
+) -> list[EdgeSuggestion]:
+    """Orchestrate the whole read-only suggestion flow: compute the
+    `candidate_edges` set (which owns the internal `build_graph` read and the
+    confidential-endpoint filter) and delegate to `suggest_edge_types`. A
+    library-level convenience that couples counting and typing in one call;
+    the CLI verb instead calls `candidate_edges` and `suggest_edge_types`
+    separately so it can preview the count and gate on it (issue #134)."""
+    edges = candidate_edges(bundle_dir, include_confidential=include_confidential)
     return suggest_edge_types(
         edges,
         bundle_dir=bundle_dir,
