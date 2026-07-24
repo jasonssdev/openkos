@@ -4,6 +4,7 @@ import re
 import shutil
 import sqlite3
 import sys
+from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -111,6 +112,85 @@ def _resolve_model(flag: str | None) -> str:
             typer.prompt("Model", default=config.DEFAULT_MODEL)
         )
     return config.DEFAULT_MODEL
+
+
+def _commit_has_confidential(root: Path, paths: Sequence[str]) -> bool:
+    """`True` iff any of the given (workspace-relative, POSIX) `paths` is a
+    concept file whose frontmatter `sensitivity` equals the canonical top
+    rank (`okf.SENSITIVITY_ORDER[-1]`, `"confidential"`) -- design: "Confidential
+    detection reads frontmatter, not `blocks_llm_send`". `blocks_llm_send`
+    is a FAIL-CLOSED gate that also treats a missing/blank/unreadable
+    `sensitivity` as confidential; this predicate is transparency, not a
+    security gate, so it looks for an EXPLICIT `confidential` value only --
+    a source with no `sensitivity` field must never trigger a false
+    "confidential committed" alarm.
+
+    `bundle/index.md`/`bundle/log.md` (catalog files, never concept
+    frontmatter), any path under `raw/` (source copies, not concept
+    documents), and any path missing on disk (a staged deletion has
+    nothing to read) are all skipped without raising."""
+    reserved = {"bundle/index.md", "bundle/log.md"}
+    for rel_path in paths:
+        if rel_path in reserved or rel_path.startswith("raw/"):
+            continue
+        file_path = root / rel_path
+        if not file_path.is_file():
+            continue
+        try:
+            text = file_path.read_text(encoding="utf-8")
+            metadata, _ = okf.load_frontmatter(text)
+        except (OSError, ValueError):
+            continue
+        if str(metadata.get("sensitivity", "")).strip() == okf.SENSITIVITY_ORDER[-1]:
+            return True
+    return False
+
+
+def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
+    """Best-effort, non-fatal auto-commit after a mutating verb's Phase B
+    (git-lifecycle Slice 2), structurally cloned from `init`'s own
+    best-effort git-setup block below. Every one of `ingest`/`forget`/
+    `relate`/`merge`/`unmerge`/`reconcile` calls this exactly once, on the
+    success path, strictly AFTER its own confirm gate and Phase-B writes
+    have already landed on disk -- so no failure mode here ever changes
+    the caller's exit code or leaves a canonical write unfinished; the
+    worst outcome is a stderr WARNING pointing at `git status`.
+
+    `paths` MUST be workspace-relative, POSIX paths; staging always goes
+    through `commit_paths`' scoped `git add -- <paths>` (never `-A`/`-a`),
+    so a pre-existing unrelated dirty file elsewhere in the workspace is
+    never swept into this commit."""
+    repo = vcs_git.repo_root(root)
+    if repo is None:
+        typer.echo(
+            "openkos: WARNING -- not a git repository; skipped auto-commit "
+            "(writes are on disk).",
+            err=True,
+        )
+        return
+    if not vcs_git.has_git_identity(root):
+        typer.echo(
+            "openkos: WARNING -- git identity unset; skipped auto-commit "
+            "(writes are on disk).",
+            err=True,
+        )
+        return
+    try:
+        vcs_git.commit_paths(root, paths, message)
+    except (vcs_git.GitError, OSError) as exc:
+        typer.echo(
+            f"openkos: WARNING -- auto-commit did not complete ({exc}); "
+            "run `git status` to inspect.",
+            err=True,
+        )
+        return
+    if _commit_has_confidential(root, paths):
+        typer.echo(
+            "openkos: NOTICE -- this commit includes content marked "
+            "'sensitivity: confidential'. openkos commits to LOCAL git "
+            "only and never pushes to a remote.",
+            err=True,
+        )
 
 
 @app.command()
@@ -844,6 +924,12 @@ def ingest(
         f"({index_path.name}, {log_path.name} updated)."
     )
 
+    _autocommit(
+        root,
+        [*imported_paths, "bundle/index.md", "bundle/log.md"],
+        f"openkos: ingest {name} (+{len(derived_plans)} concepts)",
+    )
+
 
 def _canonicalize_concept_id(concept_id: str) -> str:
     """Canonicalize `concept_id` to its bundle-relative form, applying every
@@ -1316,6 +1402,19 @@ def forget(
             f"openkos forget: removed 'bundle/{canonical_id}.md' "
             f"({index_path.name}, {log_path.name} updated)."
         )
+
+    forget_message = f"openkos: forget {canonical_id}"
+    if len(purge_ids) > 1:
+        forget_message += f" (+{len(purge_ids) - 1} descendants)"
+    _autocommit(
+        root,
+        [
+            "bundle/index.md",
+            "bundle/log.md",
+            *(f"bundle/{member}.md" for member in purge_ids),
+        ],
+        forget_message,
+    )
 
 
 _PurgeScope = Literal["self", "source"]
@@ -2015,6 +2114,12 @@ def relate(
         f"({log_path.name} updated)."
     )
 
+    _autocommit(
+        root,
+        [f"bundle/{source_canonical}.md", "bundle/log.md"],
+        f"openkos: relate {source_canonical} -> {target_canonical} ({rel_type})",
+    )
+
 
 def _apply_link_rewrite_idempotently(
     text: str, *, file: str, rewrites: list[okf.LinkRewrite]
@@ -2381,6 +2486,18 @@ def merge(
         f"({index_path.name}, {log_path.name} updated)."
     )
 
+    _autocommit(
+        root,
+        [
+            "bundle/index.md",
+            "bundle/log.md",
+            *(f"bundle/{rel}" for rel in touched_files),
+            f"bundle/{survivor_canonical}.md",
+            f"bundle/{absorbed_canonical}.md",
+        ],
+        f"openkos: merge {absorbed_canonical} into {survivor_canonical}",
+    )
+
 
 @app.command()
 def unmerge(
@@ -2669,6 +2786,19 @@ def unmerge(
         f"openkos unmerge: restored 'bundle/{absorbed_canonical}.md' from "
         f"'bundle/{survivor_canonical}.md' "
         f"({index_path.name}, {log_path.name} updated)."
+    )
+
+    _autocommit(
+        root,
+        [
+            "bundle/index.md",
+            "bundle/log.md",
+            *(f"bundle/{rel}" for rel in rewritten_files),
+            *(f"bundle/{rel}" for rel in relation_rewrite_files),
+            f"bundle/{absorbed_canonical}.md",
+            f"bundle/{survivor_canonical}.md",
+        ],
+        f"openkos: unmerge {absorbed_canonical}",
     )
 
 
@@ -3124,6 +3254,17 @@ def reconcile(
             f"openkos reconcile: recorded '{winner_canonical}' as superseding "
             f"'{loser_canonical}' ({log_path.name} updated)."
         )
+
+    reconcile_message = (
+        f"openkos: reconcile {canonical_a} <-> {canonical_b}"
+        if winner_canonical is None
+        else f"openkos: reconcile {winner_canonical} supersedes {loser_canonical}"
+    )
+    _autocommit(
+        root,
+        [f"bundle/{canonical_a}.md", f"bundle/{canonical_b}.md", "bundle/log.md"],
+        reconcile_message,
+    )
 
 
 RECENT_ACTIVITY_LIMIT = 5
