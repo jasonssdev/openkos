@@ -185,13 +185,15 @@ def test_adjudicate_never_writes_to_the_workspace(
         assert "openkos adjudicate: workspace at" in result.stdout
 
 
-def test_adjudicate_renders_grouped_verdict_confidence_and_rationale(
+def test_adjudicate_renders_grouped_verdict_and_rationale_without_confidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A bundle with one real HIGH candidate group renders its type, tier,
-    trigger, and members (duplicates' render style) PLUS the group's verdict,
-    confidence, and rationale, and exits 0 (spec: Verb renders verdicts with
-    zero writes)."""
+    trigger, and members (duplicates' render style) PLUS the group's verdict
+    and rationale, and exits 0 (spec: Verb renders verdicts with zero
+    writes). The confidence number is NOT displayed: a local model returns a
+    flat, uncalibrated value, and a fake-precise "0.87" invites unwarranted
+    trust (issue #138)."""
     _init_workspace(tmp_path, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Café Society")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="cafe   society")
@@ -220,7 +222,8 @@ def test_adjudicate_renders_grouped_verdict_confidence_and_rationale(
     assert "concepts/a" in result.stdout
     assert "concepts/b" in result.stdout
     assert "SAME" in result.stdout
-    assert "0.87" in result.stdout
+    assert "0.87" not in result.stdout
+    assert "confidence" not in result.stdout.lower()
     assert "Same concept, different casing" in result.stdout
     candidates = captured["candidates"]
     assert isinstance(candidates, list)

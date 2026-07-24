@@ -423,6 +423,27 @@ def test_member_with_unparseable_frontmatter_is_skipped(tmp_path: Path) -> None:
     assert "corrupt" not in user_message
 
 
+def test_system_prompt_distinguishes_part_whole_from_identity(tmp_path: Path) -> None:
+    """The adjudication rubric must explicitly separate "same entity" from a
+    part/component/aspect relationship and bias away from SAME when the
+    relationship is part-whole -- a SAME verdict feeds a destructive merge
+    (issue #138). This pins the instruction against silent regression.
+    """
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    group = _group("a", "b")
+    llm = _FakeLLM(replies=[_valid_reply("different", 0.7, "component, not identity")])
+
+    adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
+
+    system_message = llm.calls[0][0]["content"].lower()
+    assert "component" in system_message
+    assert "part" in system_message
+    # Bias toward not-SAME for part-whole must be stated, not merely implied.
+    assert "different" in system_message
+    assert "merge" in system_message
+
+
 # ---------------------------------------------------------------------------
 # Requirement: All Three Verdicts Preserved, Never Auto-Dropped
 # ---------------------------------------------------------------------------
