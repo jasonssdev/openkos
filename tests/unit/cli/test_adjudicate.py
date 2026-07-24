@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.llm.base import Message
 from openkos.llm.ollama import (
@@ -97,6 +98,39 @@ def _adjudicated(
     return AdjudicatedCandidate(
         candidate=group, verdict=verdict, confidence=confidence, rationale=rationale
     )
+
+
+def test_format_verdict_tally_empty_returns_empty_string() -> None:
+    """`_format_verdict_tally(0, 0, 0)` returns `""` -- signals "no line to
+    print" (spec: Reusable Verdict-Tally Formatting Helper, zero counts)."""
+    assert main._format_verdict_tally(0, 0, 0) == ""
+
+
+def test_format_verdict_tally_same_and_different_only() -> None:
+    """Zero UNCERTAIN omits the segment entirely (spec: Zero UNCERTAIN
+    omits the segment)."""
+    assert main._format_verdict_tally(2, 1, 0) == "adjudicated 3: 2 SAME, 1 DIFFERENT"
+
+
+def test_format_verdict_tally_with_uncertain() -> None:
+    """A nonzero UNCERTAIN count appends its segment (spec: Mixed results
+    with UNCERTAIN present)."""
+    assert (
+        main._format_verdict_tally(2, 1, 1)
+        == "adjudicated 4: 2 SAME, 1 DIFFERENT, 1 UNCERTAIN"
+    )
+
+
+def test_format_verdict_tally_all_same() -> None:
+    """All-SAME results render `0 DIFFERENT` and no UNCERTAIN segment
+    (spec: All-SAME results)."""
+    assert main._format_verdict_tally(3, 0, 0) == "adjudicated 3: 3 SAME, 0 DIFFERENT"
+
+
+def test_format_verdict_tally_all_different() -> None:
+    """All-DIFFERENT results render `0 SAME` and no UNCERTAIN segment
+    (spec: All-DIFFERENT results)."""
+    assert main._format_verdict_tally(0, 3, 0) == "adjudicated 3: 0 SAME, 3 DIFFERENT"
 
 
 def test_adjudicate_refuses_when_not_a_workspace(
@@ -228,6 +262,273 @@ def test_adjudicate_renders_grouped_verdict_and_rationale_without_confidence(
     candidates = captured["candidates"]
     assert isinstance(candidates, list)
     assert len(candidates) == 1
+
+
+def test_adjudicate_prints_leading_verdict_tally_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first stdout line for mixed SAME/DIFFERENT results with zero
+    UNCERTAIN is the verdict tally, and the UNCERTAIN segment is absent
+    (spec: Leading Verdict Tally Line Over Full Results, no UNCERTAIN)."""
+    _init_workspace(tmp_path, monkeypatch)
+    same_group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+            _adjudicated(
+                same_group, verdict=Verdict.SAME, rationale="same rationale 2"
+            ),
+            _adjudicated(
+                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+            ),
+        ]
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [same_group, different_group]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    tally = "adjudicated 3: 2 SAME, 1 DIFFERENT"
+    assert tally in result.stdout
+    assert "UNCERTAIN" not in result.stdout
+    lines = result.stdout.splitlines()
+    assert lines.index(tally) < next(
+        i for i, line in enumerate(lines) if line.startswith("[HIGH]")
+    )
+
+
+def test_adjudicate_prints_uncertain_segment_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verdict tally line appends `, z UNCERTAIN` when the results
+    include at least one UNCERTAIN verdict (spec: Mixed results with
+    UNCERTAIN present)."""
+    _init_workspace(tmp_path, monkeypatch)
+    same_group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+    uncertain_group = CandidateGroup(
+        okf_type="Person", member_ids=("e", "f"), tier=Tier.LOW, trigger="stub-unc"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [same_group, different_group, uncertain_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+            _adjudicated(
+                same_group, verdict=Verdict.SAME, rationale="same rationale 2"
+            ),
+            _adjudicated(
+                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+            ),
+            _adjudicated(
+                uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc rationale"
+            ),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "adjudicated 4: 2 SAME, 1 DIFFERENT, 1 UNCERTAIN" in result.stdout
+
+
+def test_adjudicate_tally_counts_full_results_under_same_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--same-only` filters the printed detail but the tally still counts
+    the FULL `results` set (spec: `--same-only` filters display, not the
+    tally count)."""
+    _init_workspace(tmp_path, monkeypatch)
+    same_group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+    uncertain_group = CandidateGroup(
+        okf_type="Person", member_ids=("e", "f"), tier=Tier.LOW, trigger="stub-unc"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [same_group, different_group, uncertain_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+            _adjudicated(
+                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+            ),
+            _adjudicated(
+                uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc rationale"
+            ),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--same-only"])
+
+    assert result.exit_code == 0
+    assert "adjudicated 3: 1 SAME, 1 DIFFERENT, 1 UNCERTAIN" in result.stdout
+    assert "diff rationale" not in result.stdout
+    assert "unc rationale" not in result.stdout
+
+
+def test_adjudicate_prints_legend_once_before_the_results_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The legend line explaining the verdict/confidence/rationale columns
+    appears exactly once, before the first result's detail lines (spec:
+    One-Time Verdict-Column Legend Line)."""
+    _init_workspace(tmp_path, monkeypatch)
+    group_a = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-a"
+    )
+    group_b = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-b"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group_a, group_b]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(group_a, verdict=Verdict.SAME, rationale="rationale a"),
+            _adjudicated(group_b, verdict=Verdict.DIFFERENT, rationale="rationale b"),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    legend = "Legend: [tier] type -- trigger, then verdict and rationale"
+    assert result.stdout.count(legend) == 1
+    lines = result.stdout.splitlines()
+    legend_idx = lines.index(legend)
+    first_detail_idx = next(
+        i for i, line in enumerate(lines) if line.startswith("[HIGH]")
+    )
+    assert legend_idx < first_detail_idx
+
+
+def test_adjudicate_prints_next_hint_as_the_last_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The last stdout line when at least one result is displayed is the
+    `Next:` merge hint (spec: Trailing Next-Action Hint)."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [_adjudicated(group, verdict=Verdict.SAME, rationale="rationale")]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line]
+    assert lines[-1] == "Next: openkos merge <survivor> <absorbed>"
+
+
+def test_adjudicate_no_results_suppresses_tally_legend_and_next(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `if not results` empty guard suppresses tally, legend, and
+    `Next:` entirely (spec: Empty And Same-Only-Empty States Stay
+    Single-Line, no candidates)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "No candidates found." in result.stdout
+    assert "adjudicated" not in result.stdout
+    assert "Legend:" not in result.stdout
+    assert "Next:" not in result.stdout
+
+
+def test_adjudicate_same_only_empty_suppresses_tally_legend_and_next(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `if not displayed` empty guard (`--same-only` filters every
+    result out) also suppresses tally, legend, and `Next:` entirely (spec:
+    Empty And Same-Only-Empty States Stay Single-Line, same-only empty)."""
+    _init_workspace(tmp_path, monkeypatch)
+    different_group = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [different_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(
+                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+            )
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--same-only"])
+
+    assert result.exit_code == 0
+    assert "No SAME-verdict candidates to display" in result.stdout
+    assert "adjudicated" not in result.stdout
+    assert "Legend:" not in result.stdout
+    assert "Next:" not in result.stdout
 
 
 def test_adjudicate_same_only_hides_non_same_verdicts_from_output_only(

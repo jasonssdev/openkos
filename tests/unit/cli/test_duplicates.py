@@ -14,9 +14,34 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos.cli import main
 from openkos.cli.main import app
+from openkos.resolution.candidates import CandidateGroup, Tier
 
 runner = CliRunner()
+
+
+def test_format_group_tally_empty_returns_empty_string() -> None:
+    """`_format_group_tally(0, 0)` returns `""` -- signals "no line to
+    print" (spec: Reusable Group-Tally Formatting Helper, zero counts)."""
+    assert main._format_group_tally(0, 0) == ""
+
+
+def test_format_group_tally_single_high() -> None:
+    """A single HIGH-tier group renders singular `"group"` wording (spec:
+    Leading Candidate-Group Tally Line, single group scenario)."""
+    assert main._format_group_tally(1, 0) == "1 candidate group (1 exact, 0 near)"
+
+
+def test_format_group_tally_single_low() -> None:
+    """A single LOW-tier group renders singular `"group"` wording."""
+    assert main._format_group_tally(0, 1) == "1 candidate group (0 exact, 1 near)"
+
+
+def test_format_group_tally_mixed_plural() -> None:
+    """Mixed HIGH/LOW counts pluralize and sum correctly (spec: Multiple
+    mixed exact/near groups)."""
+    assert main._format_group_tally(2, 3) == "5 candidate groups (2 exact, 3 near)"
 
 
 def _snapshot_entry(path: Path) -> tuple[bytes, int] | None:
@@ -114,6 +139,118 @@ def test_duplicates_reports_a_low_tier_group(
     assert "LOW" in result.stdout
     assert "concepts/a" in result.stdout
     assert "concepts/b" in result.stdout
+
+
+def test_duplicates_prints_leading_tally_line_for_mixed_groups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The group tally line renders before any group's detail lines for a
+    mixed HIGH/LOW fixture (spec: Leading Candidate-Group Tally Line,
+    multiple mixed exact/near groups)."""
+    _init_workspace(tmp_path, monkeypatch)
+    high_group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-high"
+    )
+    low_group = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-low"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [high_group, low_group]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    tally = "2 candidate groups (1 exact, 1 near)"
+    assert tally in result.stdout
+    lines = result.stdout.splitlines()
+    tally_idx = lines.index(tally)
+    first_detail_idx = next(
+        i for i, line in enumerate(lines) if line.startswith("[HIGH]")
+    )
+    assert tally_idx < first_detail_idx
+
+
+def test_duplicates_prints_legend_once_before_the_group_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The legend line explaining `[tier] type -- trigger` appears exactly
+    once, before the first group's detail lines (spec: One-Time
+    Trigger-Column Legend Line)."""
+    _init_workspace(tmp_path, monkeypatch)
+    group_a = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-a"
+    )
+    group_b = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-b"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group_a, group_b]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    legend = (
+        "Legend: [tier] type -- trigger "
+        "(HIGH = exact normalized key, LOW = near-match score)"
+    )
+    assert result.stdout.count(legend) == 1
+    lines = result.stdout.splitlines()
+    legend_idx = lines.index(legend)
+    first_detail_idx = next(
+        i for i, line in enumerate(lines) if line.startswith("[HIGH]")
+    )
+    assert legend_idx < first_detail_idx
+
+
+def test_duplicates_prints_next_hint_as_the_last_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The last stdout line when at least one group is found is the
+    `Next:` merge hint (spec: Trailing Next-Action Hint)."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line]
+    assert lines[-1] == "Next: openkos merge <survivor> <absorbed>"
+
+
+def test_duplicates_zero_groups_suppresses_tally_legend_and_next(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The zero-groups path prints only the existing "No candidates found."
+    line -- no tally, legend, or `Next:` hint (spec: Empty State Stays
+    Single-Line)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    assert "No candidates found." in result.stdout
+    assert "candidate group" not in result.stdout
+    assert "Legend:" not in result.stdout
+    assert "Next:" not in result.stdout
 
 
 def test_duplicates_rejects_json_flag(

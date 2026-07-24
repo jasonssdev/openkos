@@ -373,6 +373,35 @@ def _format_type_tally(counts: dict[str, int]) -> str:
     return f"extracted {total} object{_plural(total)} — {parts}"
 
 
+def _format_group_tally(high: int, low: int) -> str:
+    """Render the leading candidate-group tally line from per-tier counts,
+    decoupled from `CandidateGroup` internals so callers pass primitive
+    counts (spec: Reusable Group-Tally Formatting Helper).
+
+    Returns `""` for all-zero counts, signaling "no line to print" to the
+    caller. Otherwise returns `N candidate group(s) (X exact, Y near)`."""
+    total = high + low
+    if total == 0:
+        return ""
+    return f"{total} candidate group{_plural(total)} ({high} exact, {low} near)"
+
+
+def _format_verdict_tally(same: int, different: int, uncertain: int) -> str:
+    """Render the leading adjudication verdict-tally line from per-verdict
+    counts (spec: Reusable Verdict-Tally Formatting Helper).
+
+    Returns `""` for all-zero counts, signaling "no line to print" to the
+    caller. Otherwise returns `adjudicated N: x SAME, y DIFFERENT`, with a
+    `, z UNCERTAIN` segment appended only when `uncertain > 0`."""
+    total = same + different + uncertain
+    if total == 0:
+        return ""
+    parts = f"{same} SAME, {different} DIFFERENT"
+    if uncertain > 0:
+        parts += f", {uncertain} UNCERTAIN"
+    return f"adjudicated {total}: {parts}"
+
+
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 _TITLE_SEPARATOR_RE = re.compile(r"[-_]+")
 
@@ -3583,12 +3612,20 @@ def duplicates(
         typer.echo("No candidates found.")
         return
 
+    high_count = sum(1 for group in groups if group.tier is Tier.HIGH)
+    low_count = len(groups) - high_count
+    typer.echo(_format_group_tally(high_count, low_count))
+    typer.echo(
+        "Legend: [tier] type -- trigger "
+        "(HIGH = exact normalized key, LOW = near-match score)"
+    )
     for group in groups:
         tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
         typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
         for member_id in group.member_ids:
             typer.echo(f"  - {member_id}")
         typer.echo()
+    typer.echo("Next: openkos merge <survivor> <absorbed>")
 
 
 @app.command()
@@ -3718,6 +3755,15 @@ def adjudicate(
         typer.echo("No SAME-verdict candidates to display (--same-only).")
         return
 
+    verdict_counts = Counter(result.verdict for result in results)
+    typer.echo(
+        _format_verdict_tally(
+            verdict_counts[Verdict.SAME],
+            verdict_counts[Verdict.DIFFERENT],
+            verdict_counts[Verdict.UNCERTAIN],
+        )
+    )
+    typer.echo("Legend: [tier] type -- trigger, then verdict and rationale")
     for result in displayed:
         group = result.candidate
         tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
@@ -3731,6 +3777,7 @@ def adjudicate(
         typer.echo(f"  verdict: {result.verdict.value.upper()}")
         typer.echo(f"  rationale: {result.rationale}")
         typer.echo()
+    typer.echo("Next: openkos merge <survivor> <absorbed>")
 
 
 @app.command("suggest-relations")
