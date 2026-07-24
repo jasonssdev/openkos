@@ -65,6 +65,20 @@ _SYSTEM_PROMPT = (
     '- "Entity": a fallback for a concrete tool, product, or artifact that '
     "is neither a who, a where, nor an idea -- Entity is never the first "
     "choice, only what remains when nothing else fits.\n\n"
+    # The rubric above says "ONE specific, named X" for seven of the nine
+    # types, which leaves an instructional document -- a how-to, tutorial,
+    # reference page, or FAQ, about no NAMED subject -- with no branch to
+    # land on, and the model then declines instead of classifying. This
+    # clarifier gives such a source a home without restating the nine
+    # definitions above.
+    "Not every source is about a NAMED subject. An instructional document "
+    "-- a how-to, tutorial, guide, reference page, or FAQ -- still has a "
+    'primary subject: choose "Procedure" when it teaches a repeatable '
+    "how-to (an installation walkthrough, a setup or usage routine), or "
+    '"Concept" when it explains an idea, topic, tool, or framework. '
+    '"Concept" does NOT require a proper name. Example: a page explaining '
+    "what a tool is and how it works is a Concept; a page of steps for "
+    "installing that tool is a Procedure.\n\n"
     "Tie-breaks, applied in this order:\n"
     '(1) Name vs. denoted concept -- e.g. "Toyota" the company is '
     'Organization, but "Toyota Production System" is Concept; a person is '
@@ -113,16 +127,29 @@ _SYSTEM_PROMPT = (
     "genuinely about it. Example: a meeting transcript is fundamentally "
     "about the meeting itself (an Event) and any Decisions reached -- NOT "
     "about each of the five participants named around the table; extract "
-    "the Event and the Decisions, not five Person stubs. When in doubt, "
-    "leave it out.\n\n"
-    "If nothing is worth extracting, return an empty array [].\n\n"
+    "the Event and the Decisions, not five Person stubs. The same restraint "
+    "applies to sub-topics: a section heading, a feature, a component, or a "
+    "term that exists only to EXPLAIN the source's main subject is part of "
+    "that object's body, not a separate object. A document explaining one "
+    "topic usually yields exactly ONE object.\n\n"
+    # Positive default. This replaces a stack of three suppression levers
+    # ("When in doubt, leave it out", plus TWO separate invitations to
+    # return []) that together made the model answer a bare `[]` for any
+    # source without a named subject. Restraint is now expressed ONLY as
+    # "fewer, richer" (above) -- never as "extract nothing" -- and the
+    # empty array survives once, framed as a genuine last resort.
+    "Restraint means FEWER objects, never ZERO: a source with substantive "
+    "content normally yields AT LEAST ONE object -- the thing the source is "
+    "primarily about. Extract that primary subject rather than declining. "
+    "Return an empty array [] only as a last resort, for a source with no "
+    "substantive content at all (blank, boilerplate-only, or "
+    "unintelligible).\n\n"
     "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
     "fences around it. Each element matches exactly this shape:\n"
     '[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"'
     '|"Decision"|"Project"|"Concept"|"Entity", "title": "...", '
     '"description": "...", "body": "..."}, ...]\n'
-    "Return [] if nothing is worth extracting. Do NOT wrap the array in "
-    "an outer object."
+    "Do NOT wrap the array in an outer object."
 )
 """Stable system half of the 2-message prompt: the closed 9-value
 vocabulary, the aboutness heuristic (classify by subject, not by a
@@ -131,9 +158,13 @@ Project/Concept-outrank-Entity tie-break chain -- including the bespoke
 KOM-silent sub-rules for a landmark named after a person/org, an
 organization sited at a location, an event at a place, the occurrent
 Event-vs-Procedure distinction, positive Decision-vs-Concept-vs-Event
-disambiguation, and Project-vs-Event/Procedure disambiguation -- and the
-JSON-only instruction baked into system text; the `user` message carries
-the raw source text."""
+disambiguation, and Project-vs-Event/Procedure disambiguation -- the
+unnamed-subject clarifier routing instructional sources (how-to, tutorial,
+reference, FAQ) to Procedure or Concept, the positive default (a
+substantive source yields at least one object; `[]` is a last resort
+mentioned exactly once, never an invitation), and the JSON-only
+instruction baked into system text; the `user` message carries the raw
+source text."""
 
 
 @dataclass(frozen=True)
