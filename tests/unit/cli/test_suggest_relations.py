@@ -1,17 +1,18 @@
 """Unit tests for the `suggest-relations` CLI command: read-only LLM
 relation-type suggestion over untyped body-link edges (MVP-2 slice 2b).
 
-`suggest-relations` mirrors `adjudicate`'s wiring exactly: `config.
-require_workspace` gate -> `config.read_config` -> a real
-`OllamaClient(model=cfg.model)` built from the workspace's configured model
--> `resolution.edge_typing.suggest_relations` (which owns the internal
-`build_graph` read). It is read-only: no writes, no `--auto`, no
-confirmation gate.
+`suggest-relations`: `config.require_workspace` gate -> `config.read_config`
+-> `resolution.edge_typing.candidate_edges` (owns the `build_graph` read, no
+LLM) to count candidates -> a cost-preview confirmation gate (`--auto` skips
+it, issue #134) -> a real `OllamaClient(model=cfg.model)` injected into
+`resolution.edge_typing.suggest_edge_types`, which emits a per-edge progress
+line. It is read-only: it never writes, whatever the gate answer.
 
-Every test that needs a specific suggestion OUTCOME patches
-`openkos.cli.main.suggest_relations` directly (mirrors how `test_adjudicate.py`
-patches `openkos.cli.main.adjudicate_candidates`) -- zero network, zero real
-Ollama process.
+A test that needs a specific suggestion OUTCOME patches
+`openkos.cli.main.candidate_edges` (to control the candidate count without a
+real graph, via `_patch_candidate_edges`) and
+`openkos.cli.main.suggest_edge_types` (to control the typing result), and
+passes `--auto` to skip the gate -- zero network, zero real Ollama process.
 """
 
 import os
@@ -90,6 +91,23 @@ def _suggestion(
     )
 
 
+def _patch_candidate_edges(
+    monkeypatch: pytest.MonkeyPatch, edges: list[Edge]
+) -> dict[str, object]:
+    """Patch `candidate_edges` to return a fixed edge list (no graph read),
+    recording the kwargs it was called with. Lets a test drive the CLI's
+    count/gate/progress path without a real bundle graph."""
+    captured: dict[str, object] = {}
+
+    def _fake(bundle_dir: Path, **kwargs: object) -> list[Edge]:
+        captured["bundle_dir"] = bundle_dir
+        captured["kwargs"] = kwargs
+        return edges
+
+    monkeypatch.setattr("openkos.cli.main.candidate_edges", _fake)
+    return captured
+
+
 def test_suggest_relations_refuses_when_not_a_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -97,11 +115,7 @@ def test_suggest_relations_refuses_when_not_a_workspace(
     shared `require_workspace` reason under a `suggest-relations`-specific
     prefix, and never calls the library function (spec: mirrors `adjudicate`)."""
     monkeypatch.chdir(tmp_path)
-    calls: list[object] = []
-    monkeypatch.setattr(
-        "openkos.cli.main.suggest_relations",
-        lambda *args, **kwargs: calls.append((args, kwargs)),
-    )
+    captured = _patch_candidate_edges(monkeypatch, [])
 
     result = runner.invoke(app, ["suggest-relations"])
 
@@ -112,7 +126,7 @@ def test_suggest_relations_refuses_when_not_a_workspace(
         "found in this directory (run 'openkos init' first).\n"
     )
     assert "Traceback" not in result.stderr
-    assert calls == []
+    assert "bundle_dir" not in captured  # candidate_edges never reached
 
 
 def test_suggest_relations_malformed_config_maps_to_exit_one_before_calling(
@@ -123,11 +137,7 @@ def test_suggest_relations_malformed_config_maps_to_exit_one_before_calling(
     with no raw traceback, and the library function is never reached."""
     _init_workspace(tmp_path, monkeypatch)
     (tmp_path / "openkos.yaml").write_text("model: [unclosed\n", encoding="utf-8")
-    calls: list[object] = []
-    monkeypatch.setattr(
-        "openkos.cli.main.suggest_relations",
-        lambda *args, **kwargs: calls.append((args, kwargs)),
-    )
+    captured = _patch_candidate_edges(monkeypatch, [])
 
     result = runner.invoke(app, ["suggest-relations"])
 
@@ -137,7 +147,7 @@ def test_suggest_relations_malformed_config_maps_to_exit_one_before_calling(
         "openkos suggest-relations: failed while reading the workspace -- "
     )
     assert "Traceback" not in result.stderr
-    assert calls == []
+    assert "bundle_dir" not in captured  # candidate_edges never reached
 
 
 def test_suggest_relations_fresh_bundle_reports_no_untyped_edges(
@@ -184,9 +194,11 @@ def test_suggest_relations_renders_type_source_target_and_rationale(
     lists every untyped edge with a valid suggestion)."""
     _init_workspace(tmp_path, monkeypatch)
     captured: dict[str, object] = {}
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
 
-    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
-        captured["bundle_dir"] = bundle_dir
+    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
         captured["kwargs"] = kwargs
         return [
             _suggestion(
@@ -197,9 +209,9 @@ def test_suggest_relations_renders_type_source_target_and_rationale(
             )
         ]
 
-    monkeypatch.setattr("openkos.cli.main.suggest_relations", _fake_suggest)
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
 
-    result = runner.invoke(app, ["suggest-relations"])
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code == 0
     assert "references" in result.stdout
@@ -207,7 +219,9 @@ def test_suggest_relations_renders_type_source_target_and_rationale(
     assert "concepts/b" in result.stdout
     assert "mentions concept b" in result.stdout
     assert "openkos relate" in result.stdout
-    assert captured["bundle_dir"] == tmp_path / "bundle"
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["bundle_dir"] == tmp_path / "bundle"
 
 
 def test_suggest_relations_degraded_item_renders_as_no_valid_type(
@@ -217,13 +231,16 @@ def test_suggest_relations_degraded_item_renders_as_no_valid_type(
     "no valid type suggested", never as if it were a valid suggestion
     (spec: Invalid suggested type is not surfaced as valid)."""
     _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
 
-    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
         return [_suggestion(suggested_type=None, rationale="malformed reply")]
 
-    monkeypatch.setattr("openkos.cli.main.suggest_relations", _fake_suggest)
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
 
-    result = runner.invoke(app, ["suggest-relations"])
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code == 0
     assert "[?]" in result.stdout
@@ -241,15 +258,18 @@ def test_suggest_relations_builds_ollama_client_from_configured_model(
     (tmp_path / "openkos.yaml").write_text(
         f"model: {configured_model}\n", encoding="utf-8"
     )
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
     captured: dict[str, object] = {}
 
-    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+    def _recording_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
         captured["kwargs"] = kwargs
         return []
 
-    monkeypatch.setattr("openkos.cli.main.suggest_relations", _recording_suggest)
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _recording_suggest)
 
-    result = runner.invoke(app, ["suggest-relations"])
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code == 0
     kwargs = captured["kwargs"]
@@ -266,14 +286,17 @@ def test_suggest_relations_ollama_unavailable_maps_to_exit_one(
     as a friendly stderr message with `ollama serve` remediation, exits 1,
     and writes nothing (spec: mirrors `adjudicate`'s degrade-on-no-model)."""
     _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
     before = _snapshot(tmp_path)
 
-    def _raise_unavailable(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+    def _raise_unavailable(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
         raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
 
-    monkeypatch.setattr("openkos.cli.main.suggest_relations", _raise_unavailable)
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_unavailable)
 
-    result = runner.invoke(app, ["suggest-relations"])
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
@@ -298,16 +321,17 @@ def test_suggest_relations_model_not_found_maps_to_exit_one(
     (tmp_path / "openkos.yaml").write_text(
         f"model: {configured_model}\n", encoding="utf-8"
     )
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
     before = _snapshot(tmp_path)
 
-    def _raise_model_not_found(
-        bundle_dir: Path, **kwargs: object
-    ) -> list[EdgeSuggestion]:
+    def _raise_model_not_found(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
         raise OllamaModelNotFound("Model not found (404): {}")
 
-    monkeypatch.setattr("openkos.cli.main.suggest_relations", _raise_model_not_found)
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_model_not_found)
 
-    result = runner.invoke(app, ["suggest-relations"])
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
@@ -327,14 +351,17 @@ def test_suggest_relations_generic_ollama_error_maps_to_exit_one(
     from openkos.llm.ollama import OllamaError
 
     _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
     before = _snapshot(tmp_path)
 
-    def _raise_generic(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
+    def _raise_generic(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
         raise OllamaError("something else went wrong")
 
-    monkeypatch.setattr("openkos.cli.main.suggest_relations", _raise_generic)
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_generic)
 
-    result = runner.invoke(app, ["suggest-relations"])
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
@@ -345,17 +372,94 @@ def test_suggest_relations_generic_ollama_error_maps_to_exit_one(
     assert _snapshot(tmp_path) == before
 
 
-def test_suggest_relations_no_auto_flag_offered(
+def test_suggest_relations_auto_flag_skips_the_confirmation_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`suggest-relations` is read-only: no `--auto` or confirmation flag
-    exists, unlike `ingest`/`forget`/`relate` (spec: zero writes)."""
+    """`--auto` is accepted and bypasses the confirmation gate (issue #134:
+    the cost gate is opt-out for scripted/non-interactive use). On an empty
+    bundle there is nothing to type, so it still exits 0 cleanly without ever
+    prompting."""
     _init_workspace(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["suggest-relations", "--auto"])
 
-    assert result.exit_code != 0
-    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == 0
+    assert "No untyped relations found." in result.stdout
+    assert "Proceed?" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Cost gate + per-edge progress (issue #134)
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_relations_gate_previews_cost_and_declining_generates_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without `--auto`, the command previews the per-edge LLM cost and asks
+    to proceed; answering "no" exits 0 and NEVER calls `suggest_edge_types`
+    (no model contacted) -- the whole point of the gate (issue #134)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch,
+        [
+            Edge(source_id="concepts/a", target_id="concepts/b"),
+            Edge(source_id="concepts/a", target_id="concepts/c"),
+        ],
+    )
+    called = False
+
+    def _must_not_run(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _must_not_run)
+
+    result = runner.invoke(app, ["suggest-relations"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "2 untyped edge(s) -> 2 LLM call(s)" in result.stderr
+    assert "Aborted" in result.stdout
+    assert called is False
+
+
+def test_suggest_relations_gate_confirmed_runs_and_prints_per_edge_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Answering "yes" at the gate runs the typing pass, and each edge emits
+    a `[i/N] source -> target [type]` progress line to stderr as it completes
+    (issue #134): the run is no longer opaque."""
+    _init_workspace(tmp_path, monkeypatch)
+    edges = [
+        Edge(source_id="concepts/a", target_id="concepts/b"),
+        Edge(source_id="concepts/a", target_id="concepts/c"),
+    ]
+    _patch_candidate_edges(monkeypatch, edges)
+
+    def _fake_suggest(edges_arg: list[Edge], **kwargs: object) -> list[EdgeSuggestion]:
+        on_progress = kwargs["on_progress"]
+        assert callable(on_progress)
+        results = [
+            _suggestion(
+                source="concepts/a", target="concepts/b", suggested_type="references"
+            ),
+            _suggestion(
+                source="concepts/a", target="concepts/c", suggested_type="related_to"
+            ),
+        ]
+        for index, suggestion in enumerate(results, start=1):
+            on_progress(index, len(results), suggestion)
+        return results
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "[1/2] concepts/a -> concepts/b  [references]" in result.stderr
+    assert "[2/2] concepts/a -> concepts/c  [related_to]" in result.stderr
+    assert "openkos relate" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -370,13 +474,7 @@ def test_suggest_relations_include_confidential_flag_forwarded(
     `suggest_relations(..., include_confidential=True)` (spec:
     `--include-confidential` Escape Flag)."""
     _init_workspace(tmp_path, monkeypatch)
-    captured: dict[str, object] = {}
-
-    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
-        captured["kwargs"] = kwargs
-        return []
-
-    monkeypatch.setattr("openkos.cli.main.suggest_relations", _recording_suggest)
+    captured = _patch_candidate_edges(monkeypatch, [])
 
     result = runner.invoke(app, ["suggest-relations", "--include-confidential"])
 
@@ -392,13 +490,7 @@ def test_suggest_relations_omitted_include_confidential_defaults_to_false(
     """Omitting `--include-confidential` forwards the safe default
     `include_confidential=False` (spec: Confidential Excluded By Default)."""
     _init_workspace(tmp_path, monkeypatch)
-    captured: dict[str, object] = {}
-
-    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[EdgeSuggestion]:
-        captured["kwargs"] = kwargs
-        return []
-
-    monkeypatch.setattr("openkos.cli.main.suggest_relations", _recording_suggest)
+    captured = _patch_candidate_edges(monkeypatch, [])
 
     result = runner.invoke(app, ["suggest-relations"])
 

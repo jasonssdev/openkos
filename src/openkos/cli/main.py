@@ -46,7 +46,11 @@ from openkos.resolution.contradiction import (
     find_contradictions,
     is_high_confidence_contradiction,
 )
-from openkos.resolution.edge_typing import suggest_relations
+from openkos.resolution.edge_typing import (
+    EdgeSuggestion,
+    candidate_edges,
+    suggest_edge_types,
+)
 from openkos.resolution.volatility_typing import suggest_volatility
 from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
 from openkos.sensitivity import blocks_llm_send
@@ -3454,6 +3458,11 @@ def adjudicate(
 
 @app.command("suggest-relations")
 def suggest_relations_cmd(
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation gate and type every untyped edge.",
+    ),
     include_confidential: bool = typer.Option(
         False,
         "--include-confidential",
@@ -3463,27 +3472,35 @@ def suggest_relations_cmd(
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
     edge: read-only, like `adjudicate`.
 
-    A FIFTH read command, mirroring `adjudicate`'s wiring exactly: the
-    shared `config.require_workspace` gate (D1), then a Phase-A
-    `read_config` guard (`except (OSError, ValueError)`, lint parity), then
-    a real `OllamaClient(model=cfg.model)` is built and injected -- as the
-    `LLMBackend` -- into `resolution.edge_typing.suggest_relations`, which
-    OWNS the internal `openkos.graph` read (design D2/D6, "No CLI Surface"):
-    this module imports ONLY from `openkos.resolution.edge_typing`, never
-    `openkos.graph` directly.
+    A FIFTH read command, mirroring `adjudicate`'s wiring: the shared
+    `config.require_workspace` gate (D1), then a Phase-A `read_config` guard
+    (`except (OSError, ValueError)`, lint parity). It then counts the
+    candidate edges via `resolution.edge_typing.candidate_edges` (which OWNS
+    the internal `openkos.graph` read, design D2/D6 -- this module imports
+    ONLY from `openkos.resolution.edge_typing`, never `openkos.graph`
+    directly), gates on that count, and only then builds a real
+    `OllamaClient(model=cfg.model)` and injects it into
+    `suggest_edge_types`.
+
+    Cost gate (issue #134): each untyped edge costs one LLM inference, run
+    sequentially, so a large bundle can take many minutes with the model
+    resident. Before contacting the model, the command prints the count
+    (`N untyped edges -> N LLM calls`) and asks for confirmation; `--auto`
+    skips the prompt. A per-edge progress line is written to stderr as the
+    run proceeds. Declining the prompt exits 0 with nothing generated.
 
     `suggest-relations` never writes, merges, or decides -- it only prints a
     suggested `type` + rationale per untyped edge for human review, plus a
     closing hint pointing at the existing `relate` verb, the ONLY write path
     for an accepted suggestion (spec: Human-In-The-Loop Write Path
-    Unchanged). No `--auto`, no confirmation gate, no `--json` or other
-    structured mode.
+    Unchanged). The confirmation gate is read-only (it generates suggestions,
+    never writes); there is no `--json` or other structured mode.
 
     A degraded suggestion (`suggested_type=None` -- a malformed LLM reply,
     or a suggested type that failed `validate_relation_type`) renders as
     `[?]` plus a `note: no valid type suggested` line, never as if it were a
     valid suggestion (spec: Invalid suggested type is not surfaced as
-    valid). Already-typed edges never appear at all -- `suggest_relations`
+    valid). Already-typed edges never appear at all -- `candidate_edges`
     filters them out before this command ever sees them (spec: Already-typed
     edges are excluded from suggestions).
 
@@ -3494,7 +3511,7 @@ def suggest_relations_cmd(
 
     Unless `--include-confidential` is passed, an untyped edge with a
     confidential endpoint (sensitivity-fail-closed-filter) is excluded from
-    candidates -- dropped by `suggest_relations` before `llm.chat` is ever
+    candidates -- dropped by `candidate_edges` before `llm.chat` is ever
     called for it.
 
     No file under the workspace is ever created, modified, or deleted
@@ -3516,13 +3533,54 @@ def suggest_relations_cmd(
         )
         raise typer.Exit(code=1) from exc
 
-    llm = OllamaClient(model=cfg.model)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
+
+    # Count the candidate edges FIRST, with no LLM call, so the cost of the
+    # one-inference-per-edge run can be previewed and gated before the model
+    # is ever contacted (issue #134). `candidate_edges` owns the internal
+    # `openkos.graph` read (design D2/D6): this module never imports
+    # `openkos.graph` directly.
+    edges = candidate_edges(
+        layout.bundle_dir, include_confidential=include_confidential
+    )
+
+    typer.echo(f"openkos suggest-relations: workspace at {root}")
+    typer.echo()
+    total = len(edges)
+    if total == 0:
+        typer.echo("No untyped relations found.")
+        return
+
+    if not auto:
+        typer.echo(
+            f"{total} untyped edge(s) -> {total} LLM call(s), one per edge "
+            "(this can take a while). Pass --auto to skip this prompt.",
+            err=True,
+        )
+        if not typer.confirm("Proceed?"):
+            typer.echo("Aborted -- no suggestions generated.")
+            return
+
+    llm = OllamaClient(model=cfg.model)
+
+    def _on_progress(index: int, count: int, suggestion: EdgeSuggestion) -> None:
+        """Per-edge progress line to stderr (keeps stdout the clean report)."""
+        edge = suggestion.edge
+        label = suggestion.suggested_type or "?"
+        typer.echo(
+            f"  [{index}/{count}] {edge.source_id} -> {edge.target_id}  [{label}]",
+            err=True,
+        )
+
     try:
-        results = suggest_relations(
-            layout.bundle_dir, llm=llm, include_confidential=include_confidential
+        results = suggest_edge_types(
+            edges,
+            bundle_dir=layout.bundle_dir,
+            llm=llm,
+            include_confidential=include_confidential,
+            on_progress=_on_progress,
         )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -3547,12 +3605,6 @@ def suggest_relations_cmd(
     except OllamaError as exc:
         typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
-
-    typer.echo(f"openkos suggest-relations: workspace at {root}")
-    typer.echo()
-    if not results:
-        typer.echo("No untyped relations found.")
-        return
 
     for result in results:
         edge = result.edge

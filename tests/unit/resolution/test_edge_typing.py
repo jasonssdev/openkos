@@ -476,6 +476,71 @@ def test_candidate_edges_keeps_different_pairs_typed_excluded_untyped_included()
     assert result == [untyped]
 
 
+def test_candidate_edges_returns_untyped_pairs_without_calling_an_llm(
+    tmp_path: Path,
+) -> None:
+    """`candidate_edges` (issue #134 preview surface) opens `build_graph`
+    and returns the exact candidate set `suggest_relations` would type --
+    the untyped body-link `a -> c`, with the `relations:`-typed `a -> b`
+    excluded -- taking NO `LLMBackend` and issuing NO inference, so a caller
+    can bound the one-call-per-edge cost before committing to it."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: references\n"
+        "---\nSee [C](/concepts/c.md) for more.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "c.md").write_text(
+        "---\ntype: Concept\ntitle: C\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    edges = edge_typing_mod.candidate_edges(bundle_dir)
+
+    assert [(e.source_id, e.target_id) for e in edges] == [("concepts/a", "concepts/c")]
+
+
+def test_suggest_edge_types_invokes_on_progress_once_per_edge_in_order(
+    tmp_path: Path,
+) -> None:
+    """`on_progress` fires once per edge, in input order, AFTER that edge's
+    suggestion is built -- carrying `(index, total, suggestion)` so a CLI can
+    render a per-edge progress line (issue #134)."""
+    _write_doc(tmp_path / "a.md", title="A", body="x")
+    _write_doc(tmp_path / "b.md", title="B", body="y")
+    _write_doc(tmp_path / "c.md", title="C", body="z")
+    edges = [Edge(source_id="a", target_id="b"), Edge(source_id="a", target_id="c")]
+    llm = _FakeLLM(replies=[_valid_reply("references"), _valid_reply("related_to")])
+    seen: list[tuple[int, int, str, str, str | None]] = []
+
+    def _cb(index: int, total: int, suggestion: edge_typing_mod.EdgeSuggestion) -> None:
+        seen.append(
+            (
+                index,
+                total,
+                suggestion.edge.source_id,
+                suggestion.edge.target_id,
+                suggestion.suggested_type,
+            )
+        )
+
+    edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm, on_progress=_cb
+    )
+
+    assert seen == [
+        (1, 2, "a", "b", "references"),
+        (2, 2, "a", "c", "related_to"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Phase 3: `suggest_relations` orchestrator (owns `build_graph`)
 # ---------------------------------------------------------------------------
