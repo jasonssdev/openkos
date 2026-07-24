@@ -187,6 +187,53 @@ def init(
     )
     typer.echo("Next: run `openkos ingest <path>` to import your first source.")
 
+    # Best-effort git setup (Slice 1, git-lifecycle): runs strictly AFTER
+    # Phase B's last write (`openkos.yaml`, just above), so any git failure
+    # happens only once the workspace is already valid -- mirroring the
+    # Ollama preflight's non-fatal shape below. `git init` only runs when
+    # `repo_root` reports `cwd` is not already inside a git working tree
+    # (never nests a repo inside a parent one); an existing `.gitignore` is
+    # never overwritten; the initial commit stages ONLY the paths `init`
+    # itself just created (never `-A`/`-a`, so unrelated dirty content in a
+    # host repo is never swept in) and is skipped entirely -- with a stderr
+    # WARNING, no fallback bot identity -- when git identity is unset. Any
+    # `GitError`/`GitUnavailable`/`OSError` here is caught and reported as a
+    # non-fatal stderr WARNING; `init`'s exit code and the workspace-write
+    # guarantee above are unaffected either way.
+    try:
+        repo = vcs_git.repo_root(root)
+        if repo is None:
+            vcs_git.init_repo(root)
+
+        gitignore_path = root / ".gitignore"
+        wrote_gitignore = False
+        if not gitignore_path.exists():
+            gitignore_path.write_text(vcs_git._GITIGNORE_TEMPLATE, encoding="utf-8")
+            wrote_gitignore = True
+
+        git_paths = [
+            layout.config_path.name,
+            layout.agents_path.name,
+            layout.raw_dir.name,
+            layout.bundle_dir.name,
+        ]
+        if wrote_gitignore:
+            git_paths.append(gitignore_path.name)
+
+        if vcs_git.has_git_identity(root):
+            vcs_git.commit_paths(
+                root, git_paths, "chore(openkos): initialize workspace"
+            )
+        else:
+            typer.echo(
+                "openkos init: WARNING -- git identity unset; skipped the "
+                "initial commit (the workspace and .gitignore are still "
+                "created).",
+                err=True,
+            )
+    except (vcs_git.GitError, OSError) as exc:
+        typer.echo(f"openkos init: WARNING -- git setup skipped ({exc}).", err=True)
+
     # Non-fatal Ollama preflight (D2): purely observational, runs strictly
     # after the workspace already exists. `except Exception` (not
     # `BaseException`) deliberately catches OllamaUnavailable/

@@ -20,7 +20,249 @@ from tests.unit.vcs.conftest import (
     _git,
     historical_blob_shas,
     historical_blob_texts,
+    isolate_git_identity,
 )
+
+# --- Slice 1 (git-lifecycle): init_repo / has_git_identity / commit_paths --
+
+_isolate_git_identity = isolate_git_identity
+
+
+def test_init_repo_creates_git_directory(tmp_path: Path) -> None:
+    assert not (tmp_path / ".git").exists()
+
+    git.init_repo(tmp_path)
+
+    assert (tmp_path / ".git").is_dir()
+
+
+def test_init_repo_raises_git_unavailable_when_run_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _raise_unavailable(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        raise git.GitUnavailable("git not found on PATH")
+
+    monkeypatch.setattr(git, "_run", _raise_unavailable)
+
+    with pytest.raises(git.GitUnavailable):
+        git.init_repo(tmp_path)
+
+
+def test_init_repo_raises_git_error_on_nonzero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _fake_run(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            argv, returncode=128, stdout="", stderr="git init exploded"
+        )
+
+    monkeypatch.setattr(git, "_run", _fake_run)
+
+    with pytest.raises(git.GitError, match="git init exploded"):
+        git.init_repo(tmp_path)
+
+
+def test_has_git_identity_true_when_both_name_and_email_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git.init_repo(repo)
+    _isolate_git_identity(
+        monkeypatch, tmp_path, name="Isolated Tester", email="tester@example.invalid"
+    )
+
+    assert git.has_git_identity(repo) is True
+
+
+def test_has_git_identity_false_when_both_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git.init_repo(repo)
+    _isolate_git_identity(monkeypatch, tmp_path)
+
+    assert git.has_git_identity(repo) is False
+
+
+def test_has_git_identity_false_when_only_name_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git.init_repo(repo)
+    _isolate_git_identity(monkeypatch, tmp_path, name="Only Name")
+
+    assert git.has_git_identity(repo) is False
+
+
+def test_has_git_identity_false_when_only_email_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git.init_repo(repo)
+    _isolate_git_identity(monkeypatch, tmp_path, email="only@example.invalid")
+
+    assert git.has_git_identity(repo) is False
+
+
+def _init_repo_with_identity(
+    root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    git.init_repo(root)
+    _isolate_git_identity(
+        monkeypatch, tmp_path, name="Isolated Tester", email="tester@example.invalid"
+    )
+
+
+def test_commit_paths_stages_exactly_the_given_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("# manual\n", encoding="utf-8")
+
+    git.commit_paths(repo, ["openkos.yaml", "AGENTS.md"], "chore: initialize")
+
+    log = git._run(["git", "log", "--name-only", "--format="], cwd=repo)
+    committed_files = {line for line in log.stdout.splitlines() if line}
+    assert committed_files == {"openkos.yaml", "AGENTS.md"}
+    message = git._run(["git", "log", "-1", "--format=%s"], cwd=repo)
+    assert message.stdout.strip() == "chore: initialize"
+
+
+def test_commit_paths_does_not_stage_unrelated_dirty_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    (repo / "unrelated.txt").write_text("pre-existing dirty content", encoding="utf-8")
+
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+
+    log = git._run(["git", "log", "--name-only", "--format="], cwd=repo)
+    committed_files = {line for line in log.stdout.splitlines() if line}
+    assert committed_files == {"openkos.yaml"}
+    status = git._run(["git", "status", "--porcelain"], cwd=repo)
+    assert "unrelated.txt" in status.stdout
+    assert (repo / "unrelated.txt").read_text(encoding="utf-8") == (
+        "pre-existing dirty content"
+    )
+
+
+def test_commit_paths_raises_git_error_on_add_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    real_run = git._run
+
+    def _fake_run(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[:2] == ["git", "add"]:
+            return subprocess.CompletedProcess(
+                argv, returncode=128, stdout="", stderr="git add exploded"
+            )
+        return real_run(argv, cwd, env)
+
+    monkeypatch.setattr(git, "_run", _fake_run)
+
+    with pytest.raises(git.GitError, match="git add exploded"):
+        git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+
+
+def test_commit_paths_raises_git_error_on_commit_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    real_run = git._run
+
+    def _fake_run(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[:2] == ["git", "commit"]:
+            return subprocess.CompletedProcess(
+                argv, returncode=1, stdout="", stderr="git commit exploded"
+            )
+        return real_run(argv, cwd, env)
+
+    monkeypatch.setattr(git, "_run", _fake_run)
+
+    with pytest.raises(git.GitError, match="git commit exploded"):
+        git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+
+
+def test_commit_paths_never_uses_add_dash_a_or_dash_all_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Threat matrix guard: `commit_paths` must invoke `git add -- <paths>`,
+    never `git add -A`/`git add --all` -- an unrelated dirty file must never
+    be swept in by a blanket add."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    real_run = git._run
+    captured: list[list[str]] = []
+
+    def _spy_run(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[:2] == ["git", "add"]:
+            captured.append(list(argv))
+        return real_run(argv, cwd, env)
+
+    monkeypatch.setattr(git, "_run", _spy_run)
+
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+
+    assert captured == [["git", "add", "--", "openkos.yaml"]]
+
+
+# --- _GITIGNORE_TEMPLATE (Phase 2: .gitignore scaffolding) ------------------
+
+
+def test_gitignore_template_ignores_openkos_derived_dir() -> None:
+    assert ".openkos/" in git._GITIGNORE_TEMPLATE.splitlines()
+
+
+def test_gitignore_template_ignores_ds_store() -> None:
+    assert ".DS_Store" in git._GITIGNORE_TEMPLATE.splitlines()
+
+
+def test_gitignore_template_ignores_pycache() -> None:
+    assert "__pycache__/" in git._GITIGNORE_TEMPLATE.splitlines()
+
+
+def test_gitignore_template_ignores_venv() -> None:
+    assert ".venv" in git._GITIGNORE_TEMPLATE.splitlines()
+
+
+def test_gitignore_template_matches_reference_file_verbatim() -> None:
+    reference_path = (
+        Path(__file__).resolve().parents[3]
+        / "openspec"
+        / "changes"
+        / "git-lifecycle"
+        / "gitignore.reference"
+    )
+    assert reference_path.read_text(encoding="utf-8") == git._GITIGNORE_TEMPLATE
+
 
 # --- availability probes ----------------------------------------------------
 

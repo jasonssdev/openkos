@@ -468,7 +468,12 @@ def test_purge_deletes_and_rebuilds_index_no_tombstone(
 ) -> None:
     (tmp_git_repo.root / ".openkos").mkdir(exist_ok=True)
     (tmp_git_repo.root / ".openkos" / "vectors.db").write_bytes(b"stale")
-    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    # `-f` is required: `openkos init` (Slice 1, git-lifecycle) now writes a
+    # `.gitignore` that ignores `.openkos/` (it is the engine's own derived
+    # cache, never meant to be committed) -- a plain `git add -A` would
+    # silently stage nothing here, without `-f` to override the ignore for
+    # this test's own deliberate "stale committed vectors.db" setup.
+    _git(["add", "-f", "-A"], cwd=tmp_git_repo.root)
     _git(["commit", "-m", "Add stale vectors.db"], cwd=tmp_git_repo.root)
 
     phrase = f"purge {tmp_git_repo.source_id}"

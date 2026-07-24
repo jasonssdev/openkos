@@ -25,6 +25,274 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
+# The exact bytes to write to a fresh workspace's `.gitignore` (Slice 1,
+# git-lifecycle): an openkos-specific header ignoring `.openkos/` (derived
+# stores), followed VERBATIM by the standard toptal windows/linux/macos/
+# python template. Copied byte-for-byte from the source-of-truth reference
+# `openspec/changes/git-lifecycle/gitignore.reference` -- see
+# `test_gitignore_template_matches_reference_file_verbatim` for the parity
+# guard. None of the template's broad ignores (`build/`, `var/`, `lib/`,
+# `dist/`, `db.sqlite3`, `*.log`) collide with openkos canonical paths
+# (`bundle/**`, `raw/**`, `openkos.yaml`, `AGENTS.md`; the bundle uses
+# `log.md`, not `.log`), so no canonical content is ever ignored.
+_GITIGNORE_TEMPLATE = r"""# --- openkos workspace (derived artifacts) ---
+# The engine's own cache / derived stores (fts.db, vectors.db, graph.db) live
+# under .openkos/ and are always reconstructible from the canonical bundle via
+# `openkos reindex`, so they are never committed.
+.openkos/
+
+# Created by https://www.toptal.com/developers/gitignore/api/windows,linux,macos,python
+# Edit at https://www.toptal.com/developers/gitignore?templates=windows,linux,macos,python
+
+### Linux ###
+*~
+
+# temporary files which can be created if a process still has a handle open of a deleted file
+.fuse_hidden*
+
+# KDE directory preferences
+.directory
+
+# Linux trash folder which might appear on any partition or disk
+.Trash-*
+
+# .nfs files are created when an open file is removed but is still being accessed
+.nfs*
+
+### macOS ###
+# General
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon must end with two \r
+Icon
+
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+### macOS Patch ###
+# iCloud generated files
+*.icloud
+
+### Python ###
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#poetry.lock
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#pdm.lock
+#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
+#   in version control.
+#   https://pdm.fming.dev/#use-with-ide
+.pdm.toml
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#.idea/
+
+### Python Patch ###
+# Poetry local configuration file - https://python-poetry.org/docs/configuration/#local-configuration
+poetry.toml
+
+# ruff
+.ruff_cache/
+
+# LSP config files
+pyrightconfig.json
+
+### Windows ###
+# Windows thumbnail cache files
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+
+# Dump file
+*.stackdump
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Windows Installer files
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
+
+# End of https://www.toptal.com/developers/gitignore/api/windows,linux,macos,python
+"""
+
 
 class GitError(Exception):
     """A `git`/`git-filter-repo` invocation exited non-zero."""
@@ -148,6 +416,52 @@ def has_published_commits(cwd: Path) -> bool:
             f"git for-each-ref --count=1 refs/remotes/ failed: {result.stderr.strip()}"
         )
     return result.stdout.strip() != ""
+
+
+def init_repo(cwd: Path) -> None:
+    """Run `git init` in `cwd`, creating a new git repository.
+
+    Callers (the `init` CLI verb) must only call this when `repo_root(cwd)`
+    is `None` -- this function itself performs no such check, it just runs
+    `git init` unconditionally. Raises `GitUnavailable` if `git` itself is
+    absent from `PATH` (via `_run`'s `FileNotFoundError` mapping), or
+    `GitError` if `git init` exits non-zero for any other reason."""
+    result = _run(["git", "init"], cwd=cwd)
+    if result.returncode != 0:
+        raise GitError(f"git init failed: {result.stderr.strip()}")
+
+
+def has_git_identity(cwd: Path) -> bool:
+    """`True` iff BOTH `git config user.name` and `git config user.email`
+    resolve to a non-empty value at `cwd` (local repo config, falling back
+    to global/system config per git's own resolution order) -- `False` if
+    either is unset/empty or the probe itself fails.
+
+    A probe-only check: this never injects, writes, or falls back to any
+    identity -- callers (the `init` CLI verb) skip the commit step entirely
+    when this returns `False`, rather than using a bot identity."""
+    name_result = _run(["git", "config", "user.name"], cwd=cwd)
+    if name_result.returncode != 0 or not name_result.stdout.strip():
+        return False
+    email_result = _run(["git", "config", "user.email"], cwd=cwd)
+    return email_result.returncode == 0 and bool(email_result.stdout.strip())
+
+
+def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> None:
+    """Stage EXACTLY `rel_paths` (`git add -- <rel_paths>`, never `-A`/
+    `-a`) and commit them with `message`.
+
+    The `--` end-of-options guard keeps a leading-dash path from being
+    re-parsed as a flag. Scoped staging is deliberate (design: `commit_paths`
+    decision) -- in an existing host repo, a blanket `-A`/`-a` would sweep
+    unrelated dirty content into openkos's own commit. Raises `GitError` if
+    either the `add` or the `commit` step exits non-zero."""
+    add_result = _run(["git", "add", "--", *rel_paths], cwd=cwd)
+    if add_result.returncode != 0:
+        raise GitError(f"git add failed: {add_result.stderr.strip()}")
+    commit_result = _run(["git", "commit", "-m", message], cwd=cwd)
+    if commit_result.returncode != 0:
+        raise GitError(f"git commit failed: {commit_result.stderr.strip()}")
 
 
 def _validate_rel_paths(rel_paths: Sequence[str]) -> None:

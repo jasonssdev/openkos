@@ -23,6 +23,8 @@ from openkos.cli.main import app
 from openkos.config import DEFAULT_MODEL
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.model import okf
+from openkos.vcs import git as vcs_git
+from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
 
@@ -708,6 +710,15 @@ def test_preflight_outcome_never_changes_written_files(
     model-missing, unexpected error) writes the SAME five workspace
     artifacts -- the preflight probe runs strictly after Phase B and never
     influences what was written (scenario 2.5, pure-file-writer guarantee)."""
+    # Isolate git identity to "unset" so the git-setup step (Slice 1) never
+    # makes a commit here: a real commit's object SHA is timestamp-
+    # dependent, which would make the four workspaces' `.git/` trees
+    # byte-different for a reason unrelated to what this test actually
+    # checks (preflight-outcome independence). `git init` alone (no commit)
+    # is byte-identical across separate invocations, so this keeps the
+    # snapshot comparison meaningful without weakening it.
+    isolate_git_identity(monkeypatch, tmp_path)
+
     outcomes: dict[str, Callable[..., Any]] = {
         "reachable": _fake_ollama_client(installed=[DEFAULT_MODEL]),
         "unreachable": _fake_ollama_client(
@@ -741,8 +752,18 @@ def test_preflight_never_pulls_or_spawns_a_server(
     spawns any subprocess: `subprocess.run`/`subprocess.Popen` are patched
     to raise if called at all, and the fake `OllamaClient` exposes ONLY
     `list_models` -- any unexpected `pull`/`serve`-style call raises
-    `AttributeError` (scenario 2.6)."""
+    `AttributeError` (scenario 2.6).
+
+    The Slice 1 git-setup step legitimately DOES spawn `subprocess.run`
+    (real `git` commands, via `vcs.git._run`) -- unrelated to this test's
+    concern, which is scoped to the Ollama preflight only. It is neutralized
+    here (no re-init: `repo_root` stubbed non-`None`; no commit: identity
+    stubbed unset) so it makes no subprocess call of its own and cannot trip
+    this test's blanket `subprocess.run`/`Popen` ban.
+    """
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vcs_git, "repo_root", lambda cwd: cwd)
+    monkeypatch.setattr(vcs_git, "has_git_identity", lambda cwd: False)
 
     def _forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("init preflight must never spawn a subprocess")
@@ -757,3 +778,196 @@ def test_preflight_never_pulls_or_spawns_a_server(
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
+
+
+# --- Slice 1 (git-lifecycle): `init` sets up git ---------------------------
+#
+# Every test in this section isolates git identity via `isolate_git_identity`
+# (redirects GIT_CONFIG_GLOBAL/_SYSTEM to files under `tmp_path`) so behavior
+# is deterministic regardless of the host/CI machine's real `~/.gitconfig`.
+
+
+def test_git_fresh_empty_directory_full_commit(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh dir outside any repo, configured identity: `git init` runs, a
+    `.gitignore` ignoring `.openkos/`/`.DS_Store` is written, and one commit
+    with the fixed message contains all five canonical artifacts, leaving a
+    clean tree (spec: Fresh empty directory / Fresh repo, full commit /
+    Gitignore Scaffolding -- no existing)."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".git").is_dir()
+    gitignore_text = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    ignored_lines = gitignore_text.splitlines()
+    assert ".openkos/" in ignored_lines
+    assert ".DS_Store" in ignored_lines
+
+    log = vcs_git._run(["git", "log", "--format=%s"], cwd=tmp_path)
+    assert log.stdout.strip() == "chore(openkos): initialize workspace"
+
+    committed = vcs_git._run(["git", "log", "--name-only", "--format="], cwd=tmp_path)
+    committed_files = {line for line in committed.stdout.splitlines() if line}
+    assert "bundle/index.md" in committed_files
+    assert "bundle/log.md" in committed_files
+    assert "AGENTS.md" in committed_files
+    assert "openkos.yaml" in committed_files
+    assert ".gitignore" in committed_files
+
+    assert vcs_git.is_clean(tmp_path) is True
+
+
+def test_git_existing_repo_no_gitignore_scoped_commit(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cwd` already inside a git working tree, no `.gitignore`, unrelated
+    dirty content present, configured identity: `git init` does NOT run
+    again (no nested `.git`), `.gitignore` is written, and the commit
+    contains only the openkos-created files -- the pre-existing unrelated
+    dirty file stays untouched and uncommitted (spec: Directory already
+    inside a git working tree / Existing repo, scoped commit excludes
+    unrelated content)."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    vcs_git.init_repo(tmp_path)
+    outer_git_head_before = (tmp_path / ".git" / "HEAD").read_bytes()
+    (tmp_path / "unrelated.txt").write_text(
+        "pre-existing dirty content", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".git" / "HEAD").read_bytes() == outer_git_head_before
+    assert not any((tmp_path / "raw").rglob(".git"))
+    assert (tmp_path / ".gitignore").is_file()
+
+    committed = vcs_git._run(["git", "log", "--name-only", "--format="], cwd=tmp_path)
+    committed_files = {line for line in committed.stdout.splitlines() if line}
+    assert "unrelated.txt" not in committed_files
+    assert "openkos.yaml" in committed_files
+
+    status = vcs_git._run(["git", "status", "--porcelain"], cwd=tmp_path)
+    assert "unrelated.txt" in status.stdout
+    assert (tmp_path / "unrelated.txt").read_text(encoding="utf-8") == (
+        "pre-existing dirty content"
+    )
+
+
+def test_git_existing_repo_with_gitignore_preserved(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cwd` inside an existing git working tree that already has a
+    `.gitignore`: content is unchanged byte-for-byte, `git init` does not
+    run, and the commit excludes the pre-existing `.gitignore` (spec:
+    Existing .gitignore is preserved / Existing repo with pre-existing
+    .gitignore, scoped commit)."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    vcs_git.init_repo(tmp_path)
+    original_gitignore = "# my custom rules\nnode_modules/\n"
+    (tmp_path / ".gitignore").write_text(original_gitignore, encoding="utf-8")
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == original_gitignore
+
+    committed = vcs_git._run(["git", "log", "--name-only", "--format="], cwd=tmp_path)
+    committed_files = {line for line in committed.stdout.splitlines() if line}
+    assert ".gitignore" not in committed_files
+    assert "openkos.yaml" in committed_files
+
+
+def test_git_unavailable_warns_and_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`git` unavailable on `PATH`: a non-fatal WARNING is printed to
+    stderr, `init` exits 0, and every pre-existing workspace artifact is
+    present (spec: Git unavailable)."""
+    monkeypatch.chdir(tmp_path)
+
+    def _raise_unavailable(
+        argv: list[str], cwd: Path, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        raise vcs_git.GitUnavailable("git not found on PATH")
+
+    monkeypatch.setattr(vcs_git, "_run", _raise_unavailable)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "warning" in result.stderr.lower()
+    assert (tmp_path / "raw").is_dir()
+    assert (tmp_path / "bundle" / "index.md").is_file()
+    assert (tmp_path / "bundle" / "log.md").is_file()
+    assert (tmp_path / "openkos.yaml").is_file()
+    assert (tmp_path / "AGENTS.md").is_file()
+
+
+def test_git_identity_unset_warns_no_commit_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`git` available but identity unset: a non-fatal WARNING is printed to
+    stderr, `init` exits 0, `.gitignore` and the repository are created, and
+    NO commit is made -- no fallback bot identity is used either (spec: Git
+    identity unset)."""
+    monkeypatch.chdir(tmp_path)
+    isolate_git_identity(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "warning" in result.stderr.lower()
+    assert (tmp_path / ".git").is_dir()
+    assert (tmp_path / ".gitignore").is_file()
+    log = vcs_git._run(["git", "log"], cwd=tmp_path)
+    assert log.stdout.strip() == ""
+
+
+def test_git_setup_runs_after_workspace_marker_exists(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The git-setup step runs strictly AFTER `openkos.yaml` is already
+    written -- proven via a spy on `init_repo` asserting the marker file
+    already exists at call time (spec: Git step runs after the workspace
+    marker)."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    real_init_repo = vcs_git.init_repo
+    observed: dict[str, bool] = {}
+
+    def _spy_init_repo(cwd: Path) -> None:
+        observed["openkos_yaml_exists"] = (cwd / "openkos.yaml").is_file()
+        real_init_repo(cwd)
+
+    monkeypatch.setattr(vcs_git, "init_repo", _spy_init_repo)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert observed["openkos_yaml_exists"] is True
