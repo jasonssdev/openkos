@@ -944,6 +944,61 @@ def test_git_identity_unset_warns_no_commit_exits_zero(
     assert log.stdout.strip() == ""
 
 
+def test_git_unicode_decode_error_warns_and_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If git emits non-UTF-8 bytes on stdout/stderr, the `text=True` decode
+    layer inside `_run` raises `UnicodeDecodeError` (a `ValueError`, not an
+    `OSError`) -- it must not escape the git-setup `try`/`except` and crash
+    `init`. Mapped to `GitError` in `_run`, it is caught by the existing
+    non-fatal WARNING path: exit 0, valid workspace (correction fix 1)."""
+    monkeypatch.chdir(tmp_path)
+
+    def _raise_decode_error(
+        *_args: object, **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(subprocess, "run", _raise_decode_error)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "warning" in result.stderr.lower()
+    assert (tmp_path / "raw").is_dir()
+    assert (tmp_path / "bundle" / "index.md").is_file()
+    assert (tmp_path / "bundle" / "log.md").is_file()
+    assert (tmp_path / "openkos.yaml").is_file()
+    assert (tmp_path / "AGENTS.md").is_file()
+
+
+def test_git_commit_failure_warns_actionably_not_misleadingly_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `git add` succeeds but `git commit` fails mid-setup (hook reject,
+    lock, disk), the workspace may be left with `.git` + `.gitignore` +
+    staged-but-uncommitted files. The degradation WARNING must not claim
+    setup was cleanly "skipped" (misleading -- a repo may already have been
+    created/partially staged) and must point the user at a concrete recovery
+    step (correction fix 2)."""
+    monkeypatch.chdir(tmp_path)
+    isolate_git_identity(
+        monkeypatch, tmp_path, name="Isolated Tester", email="tester@example.invalid"
+    )
+
+    def _raise_commit_failure(cwd: Path, rel_paths: list[str], message: str) -> None:
+        raise vcs_git.GitError("git commit failed: pre-commit hook rejected")
+
+    monkeypatch.setattr(vcs_git, "commit_paths", _raise_commit_failure)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "warning" in result.stderr.lower()
+    assert "git status" in result.stderr
+    assert "skipped" not in result.stderr.lower()
+
+
 def test_git_setup_runs_after_workspace_marker_exists(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,

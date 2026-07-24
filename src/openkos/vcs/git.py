@@ -349,6 +349,16 @@ def _run(
         # race after `shutil.which`, or ENOEXEC) must still map to a typed
         # error -- never let a raw OSError escape the adapter's contract.
         raise GitError(f"failed to invoke {argv[0]}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # `text=True` decodes stdout/stderr as UTF-8 -- non-UTF-8 bytes in
+        # git's output raise `UnicodeDecodeError`, a `ValueError` subclass,
+        # NOT an `OSError`. Left unmapped, it would escape every caller's
+        # `except (GitError, OSError)` handling (e.g. `init`'s git-setup
+        # block) and crash as an uncaught traceback. Map it the same way as
+        # every other `_run` failure mode: a typed `GitError`.
+        raise GitError(
+            f"{argv[0]} produced output that could not be decoded as UTF-8: {exc}"
+        ) from exc
 
 
 def git_available() -> bool:

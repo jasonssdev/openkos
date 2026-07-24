@@ -497,13 +497,19 @@ commit.
 ### Requirement: Non-Fatal Git Degradation
 
 WHEN `git` is unavailable on `PATH`, OR git identity (`user.name`/
-`user.email`) is unset, `init` MUST emit a non-fatal WARNING on stderr and
-MUST still exit 0 with a fully valid, complete workspace (all five
-pre-existing artifacts plus `.gitignore`, per the unmodified Workspace
+`user.email`) is unset, OR any other git step in the git-setup block fails
+(e.g. `git commit` rejected by a hook, a lock, or disk pressure, after
+`git add` already staged files), `init` MUST emit a non-fatal WARNING on
+stderr and MUST still exit 0 with a fully valid, complete workspace (all
+five pre-existing artifacts plus `.gitignore`, per the unmodified Workspace
 Creation requirement). WHEN identity specifically is unset, `init` MUST
 still create the repository (if applicable) and write `.gitignore`, but
 MUST SKIP the commit step entirely — it MUST NOT fall back to any injected
-bot identity.
+bot identity. WHEN a git step fails for any OTHER reason mid-setup (a
+repository and/or `.gitignore` may already exist, and files may already be
+staged but not committed), the WARNING MUST NOT claim setup was cleanly
+"skipped" and MUST point the user at a concrete recovery step (e.g. running
+`git status` to inspect and finish setup manually).
 
 #### Scenario: Git unavailable
 
@@ -519,6 +525,16 @@ bot identity.
 - WHEN `openkos init` runs
 - THEN a non-fatal WARNING is printed to stderr, `init` exits 0, `.gitignore`
   and (when applicable) the repository are created, and no commit is made
+
+#### Scenario: Git error mid-setup leaves a partial but honestly-reported state
+
+- GIVEN `git` is available and identity is configured, but a git step after
+  staging (e.g. `git commit`) fails (hook rejection, lock, disk pressure)
+- WHEN `openkos init` runs
+- THEN a non-fatal WARNING is printed to stderr that does NOT claim setup was
+  cleanly skipped and DOES point at a concrete recovery step (e.g.
+  `git status`), and `init` exits 0 with the workspace itself still fully
+  valid
 
 ### Requirement: Git Step Ordering and Layering
 

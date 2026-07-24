@@ -232,7 +232,16 @@ def init(
                 err=True,
             )
     except (vcs_git.GitError, OSError) as exc:
-        typer.echo(f"openkos init: WARNING -- git setup skipped ({exc}).", err=True)
+        # Honest for ALL failure modes: a repo/.gitignore may already have
+        # been created and files staged before this error hit, so "skipped"
+        # would be misleading here. Actionable: points at `git status` to
+        # inspect and finish setup manually.
+        typer.echo(
+            f"openkos init: WARNING -- git setup did not complete cleanly ({exc}). "
+            "The workspace itself is still valid; run `git status` in it to "
+            "inspect and finish git setup manually if needed.",
+            err=True,
+        )
 
     # Non-fatal Ollama preflight (D2): purely observational, runs strictly
     # after the workspace already exists. `except Exception` (not

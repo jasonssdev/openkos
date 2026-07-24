@@ -738,6 +738,28 @@ def test_run_maps_permission_error_to_git_error(
         git._run(["git", "status"], cwd=tmp_path)
 
 
+# --- CORRECTION FIX 1 (WARNING): non-UTF-8 git output must not escape _run -
+
+
+def test_run_maps_unicode_decode_error_to_git_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`subprocess.run(..., text=True)` decodes stdout/stderr and raises
+    `UnicodeDecodeError` when git emits non-UTF-8 bytes -- a `ValueError`,
+    NOT an `OSError`, so it escapes `_run`'s existing `FileNotFoundError`/
+    `OSError` mapping and propagates as a raw, uncaught exception. Must map
+    to `GitError`, consistent with every other `_run` failure mode."""
+
+    def _raise_decode_error(*_args: object, **_kwargs: object) -> None:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(subprocess, "run", _raise_decode_error)
+
+    with pytest.raises(git.GitError) as exc_info:
+        git._run(["git", "status"], cwd=tmp_path)
+    assert not isinstance(exc_info.value, UnicodeDecodeError)
+
+
 # --- FIX 5 (WARNING): repo_root must not swallow non-"not a repo" errors --
 
 
