@@ -388,6 +388,45 @@ def test_suggest_edge_types_builds_a_two_message_json_only_prompt(
     assert "JSON" in messages[0]["content"]
 
 
+def test_system_prompt_constrains_to_the_seeded_relation_vocabulary(
+    tmp_path: Path,
+) -> None:
+    """The rubric must name every seeded relation type so the model picks
+    from the closed set instead of inventing out-of-vocab verbs (issue #134:
+    the model overwhelmingly proposed `source_of`/`describes`/... none of
+    which are valid `relate` inputs)."""
+    from openkos.model.relations import SEEDED_RELATION_TYPES
+
+    _write_doc(tmp_path / "a.md", title="Alpha", body="Alpha body.")
+    _write_doc(tmp_path / "b.md", title="Beta", body="Beta body.")
+    edges = [Edge(source_id="a", target_id="b")]
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+
+    system = llm.calls[0][0]["content"]
+    for seeded_type in SEEDED_RELATION_TYPES:
+        assert seeded_type in system
+
+
+def test_out_of_vocab_suggestion_is_kept_but_prints_no_advisory_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An out-of-vocab suggested type is still returned (open vocabulary),
+    but on this PREVIEW path it must NOT print the per-type "not a seeded
+    relation type" note -- that note flooded stderr, one line per edge
+    (issue #134). The note belongs to the `relate` write path only."""
+    _write_doc(tmp_path / "a.md", title="A", body="x")
+    _write_doc(tmp_path / "b.md", title="B", body="y")
+    edges = [Edge(source_id="a", target_id="b")]
+    llm = _FakeLLM(replies=[_valid_reply("source_of", "provenance edge")])
+
+    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+
+    assert result[0].suggested_type == "source_of"
+    assert "is not a seeded relation type" not in capsys.readouterr().err
+
+
 # ---------------------------------------------------------------------------
 # Phase 3.5: Pair-level candidate exclusion (`_candidate_edges`) -- fixes the
 # CRITICAL forever-re-suggested bug: `untyped_edges` alone only excludes
