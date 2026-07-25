@@ -261,6 +261,27 @@ def test_candidate_pairs_on_empty_store_returns_empty_and_zero_total() -> None:
     assert total == 0
 
 
+def test_candidate_pairs_excludes_derived_from_typed_edges() -> None:
+    """A `derived_from`-typed edge -- whether synthesized by graph-projection
+    provenance-mirror synthesis or hand-authored in `relations:` frontmatter
+    -- is NEVER a contradiction candidate: a derivation is not a peer
+    contradiction candidate (spec: "Candidate generation MUST NOT surface
+    edges whose relation_type == derived_from"; task 5.1/5.2). A genuine
+    typed non-`derived_from` edge is unaffected."""
+    derived = Edge(
+        source_id="concepts/a", target_id="sources/foo", relation_type="derived_from"
+    )
+    genuine = Edge(
+        source_id="concepts/b", target_id="concepts/c", relation_type="related_to"
+    )
+    store: GraphStore = _FakeGraphStore([derived, genuine])
+
+    pairs, total = contradiction_mod._candidate_pairs(store)
+
+    assert pairs == [("concepts/b", "concepts/c")]
+    assert total == 1
+
+
 # ---------------------------------------------------------------------------
 # Phase 3: fail-closed parse table tests (Req: Verdict Shape, Citation Gate, Parse)
 #
@@ -525,6 +546,139 @@ def test_find_contradictions_no_typed_edges_returns_empty_zero_llm_calls(
     assert verdicts == []
     assert total == 0
     assert llm.calls == []
+
+
+def test_find_contradictions_provenance_only_bundle_yields_zero_candidates(
+    tmp_path: Path,
+) -> None:
+    """A bundle whose only typed edges are provenance-mirror edges typed
+    `derived_from` by graph projection (concept-to-source links backed by
+    `provenance:` frontmatter membership) yields zero candidate pairs and
+    zero LLM calls (spec: "Provenance-only bundle yields zero contradiction
+    candidates"; task 5.1)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "provenance:\n  - sources/foo\n"
+        "---\n[Foo](/sources/foo.md)\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "sources").mkdir()
+    (bundle_dir / "sources" / "foo.md").write_text(
+        "---\ntype: Source\ntitle: Foo\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM()
+
+    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert verdicts == []
+    assert total == 0
+    assert llm.calls == []
+
+
+def test_find_contradictions_excludes_hand_authored_derived_from_relation(
+    tmp_path: Path,
+) -> None:
+    """A `derived_from` edge hand-authored via `relations:` frontmatter (not
+    graph-projection-synthesized) is ALSO excluded from candidate pairs --
+    the guard is type-based, not origin-based (spec: "hand-authored
+    derived_from entry in relations: frontmatter" exclusion; task 5.2)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: derived_from\n"
+        "---\nBody A.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody B.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM()
+
+    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert verdicts == []
+    assert total == 0
+    assert llm.calls == []
+
+
+def test_find_contradictions_relation_label_prefers_genuine_type_over_derived_from(
+    tmp_path: Path,
+) -> None:
+    """4R-review FIX 1: when a candidate pair has BOTH a genuine typed edge
+    (e.g. `related_to`) AND a provenance-mirror-synthesized `derived_from`
+    edge to the SAME target, the LLM prompt's `RELATION:` line MUST show the
+    genuine type, never `derived_from` -- a derivation is not the relation
+    being judged for contradiction, and the pair is only a candidate at all
+    because of its non-`derived_from` edge (`_candidate_pairs`'s guard).
+
+    `related_to` is chosen deliberately because it sorts AFTER
+    `derived_from` alphabetically (`d` < `r`) -- `store.edges()`'s
+    `ORDER BY ... relation_type` would otherwise put `derived_from` FIRST,
+    exposing the bug that a type sorting before it (like `depends_on`)
+    would mask."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "provenance:\n  - concepts/b\n"
+        "relations:\n  - target: concepts/b\n    type: related_to\n"
+        "---\nA claims the meeting is on Tuesday. [B](/concepts/b.md)\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\n"
+        "B claims the meeting is on Wednesday.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert len(llm.calls) == 1
+    user_message = llm.calls[0][1]["content"]
+    relation_line = user_message.splitlines()[0]
+    assert relation_line == "RELATION: concepts/a --related_to--> concepts/b"
+    assert "derived_from" not in user_message
+
+
+def test_find_contradictions_genuine_typed_edge_still_surfaced(
+    tmp_path: Path,
+) -> None:
+    """A genuine typed non-`derived_from` edge (e.g. two event concepts
+    linked `related_to`) is still surfaced and judged, confirming the
+    exclusion applies only to `derived_from`, not to all typed edges (spec:
+    "Genuine typed contradiction-eligible edge is still surfaced"; task
+    5.3)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: related_to\n"
+        "---\nA claims the meeting is on Tuesday.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\n"
+        "B claims the meeting is on Wednesday.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert total == 1
+    assert len(verdicts) == 1
+    assert verdicts[0].pair_ids == ("concepts/a", "concepts/b")
+    assert len(llm.calls) == 1
 
 
 def test_find_contradictions_reads_graph_and_judges_one_typed_pair(

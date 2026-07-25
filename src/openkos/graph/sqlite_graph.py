@@ -11,16 +11,25 @@ per non-reserved doc `_iter_docs` yields -- the same identity `fts.py` and
 inserted as separate rows even between the same `(source_id, target_id)`
 pair:
 
-1. UNTYPED, from `_LINK_RE`: a bundle-relative `[text](/….md)` markdown
-   link in the doc body, with any `#anchor` stripped, `relation_type` always
-   `NULL`. Edges to a target that does not resolve to a known node in the
-   same projection (external, non-bundle-relative, non-`.md`, or dangling)
-   are dropped silently -- the build never raises because of them. A doc
-   body is fence-masked (`_mask_fenced_code_blocks`) before edge extraction,
-   so a link inside a fenced code block (e.g. raw ingested source material
-   embedded verbatim under `## Source content`, see
-   `okf.build_source_concept`) never produces a spurious edge, while the
-   same link in ordinary prose or `## Related` still resolves.
+1. UNTYPED-OR-PROVENANCE-MIRROR, from `_LINK_RE`: a bundle-relative
+   `[text](/….md)` markdown link in the doc body, with any `#anchor`
+   stripped. `relation_type` is synthesized as `"derived_from"` (#135,
+   provenance-mirror synthesis) IF AND ONLY IF the link's target id is a
+   MEMBER of the source document's decoded `provenance:` frontmatter list
+   (exact id match; membership only, never derived from link text or
+   heading) -- otherwise `relation_type` stays `NULL`, unchanged from
+   before. This is projection-READ-TIME synthesis only: it never writes to
+   `relations:` frontmatter, never mutates bundle bytes, and never changes
+   ingest byte-identity; a non-list `provenance:` value degrades to an
+   empty membership set, and a non-string list entry is dropped, rather
+   than crashing the build. Edges to a target that does not resolve to a
+   known node in the same projection (external, non-bundle-relative,
+   non-`.md`, or dangling) are dropped silently -- the build never raises
+   because of them. A doc body is fence-masked (`_mask_fenced_code_blocks`)
+   before edge extraction, so a link inside a fenced code block (e.g. raw
+   ingested source material embedded verbatim under `## Source content`,
+   see `okf.build_source_concept`) never produces a spurious edge, while
+   the same link in ordinary prose or `## Related` still resolves.
 2. TYPED, from the doc's `relations:` frontmatter (`okf.decode_relations`):
    one edge per entry whose `target` resolves to a known node, carrying that
    entry's `type` as `relation_type`. A `relations:` entry whose `target`
@@ -241,10 +250,14 @@ def _populate_graph_tables(conn: sqlite3.Connection, bundle_dir: Path) -> list[s
     the build (mirrors `fts.build_index`); a valid doc has its body AND
     metadata re-read and re-parsed via `okf.load_frontmatter` (the same
     TOCTOU guard `fts.build_index` uses) and becomes one node. Edges are
-    then extracted in two independent passes over that same doc set --
-    untyped from body links, typed from `relations:` frontmatter. Callers
-    own `conn`'s lifecycle -- any exception raised here propagates to the
-    caller unchanged, closing/cleanup is the caller's responsibility.
+    then extracted in two independent passes over that same doc set: the
+    first, from body links, is `NULL` UNLESS the link's target is a member
+    of the source doc's `provenance:` frontmatter list, in which case it is
+    synthesized as `derived_from` (#135, provenance-mirror synthesis,
+    projection-read-time only); the second, from `relations:` frontmatter,
+    always carries that entry's explicit `type`. Callers own `conn`'s
+    lifecycle -- any exception raised here propagates to the caller
+    unchanged, closing/cleanup is the caller's responsibility.
     """
     conn.execute(_CREATE_NODES_SQL)
     conn.execute(_CREATE_EDGES_SQL)
@@ -279,6 +292,16 @@ def _populate_graph_tables(conn: sqlite3.Connection, bundle_dir: Path) -> list[s
         bodies.append((concept_id, body))
         metadatas.append((concept_id, metadata))
 
+    provenance_by_source: dict[str, set[str]] = {}
+    for source_id, metadata in metadatas:
+        raw_provenance = metadata.get("provenance")
+        if isinstance(raw_provenance, list):
+            provenance_by_source[source_id] = {
+                entry for entry in raw_provenance if isinstance(entry, str)
+            }
+        else:
+            provenance_by_source[source_id] = set()
+
     edge_pairs: set[tuple[str, str]] = set()
     for source_id, body in bodies:
         for match in _LINK_RE.finditer(_mask_fenced_code_blocks(body)):
@@ -286,7 +309,12 @@ def _populate_graph_tables(conn: sqlite3.Connection, bundle_dir: Path) -> list[s
             if target_id in node_ids:
                 edge_pairs.add((source_id, target_id))
     for source_id, target_id in sorted(edge_pairs):
-        conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
+        relation_type = (
+            "derived_from"
+            if target_id in provenance_by_source.get(source_id, set())
+            else None
+        )
+        conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, relation_type))
 
     typed_edges: set[tuple[str, str, str]] = set()
     for source_id, metadata in metadatas:

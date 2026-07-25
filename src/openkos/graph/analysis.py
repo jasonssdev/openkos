@@ -23,8 +23,10 @@ def to_digraph(store: GraphStore) -> "nx.DiGraph[str]":
     Every node from `store.nodes()` is added FIRST, so a node with no edges
     (isolated) still survives in the returned graph; every edge from
     `store.edges()` is then added, carrying its `relation_type` as an edge
-    attribute (always `None` this slice -- reserved, unpopulated, see
-    `graph.base.Edge`). `store.nodes()`/`store.edges()` are themselves
+    attribute -- `None` for an untyped body-link edge, or a concrete string
+    (from `relations:` frontmatter, or synthesized `derived_from` for a
+    provenance-mirror body link, #135) for a typed one, see
+    `graph.base.Edge`. `store.nodes()`/`store.edges()` are themselves
     already sorted and deterministic (any conforming `GraphStore`, e.g.
     `graph.sqlite_graph.SqliteGraphStore`, guarantees this), so repeated
     calls over the same store produce graphs with identical node/edge

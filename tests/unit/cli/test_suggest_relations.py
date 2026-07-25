@@ -165,6 +165,90 @@ def test_suggest_relations_fresh_bundle_reports_no_untyped_edges(
     assert "No untyped relations found." in result.stdout
 
 
+def test_suggest_relations_provenance_only_bundle_reports_zero_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle whose only body link is a provenance-mirror edge (typed
+    `derived_from` by graph projection, #135) reports zero candidates and
+    zero LLM calls -- a real `OllamaClient` is safe to construct here
+    because `candidate_edges` is empty (spec: "Bundle with only
+    provenance-mirror edges surfaces zero candidates"; task 3.3)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts" / "a.md").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    (tmp_path / "bundle" / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "provenance:\n  - sources/foo\n"
+        "---\n[Foo](/sources/foo.md)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "sources").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "sources" / "foo.md").write_text(
+        "---\ntype: Source\ntitle: Foo\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert "No untyped relations found." in result.stdout
+
+
+def test_suggest_relations_provenance_mirror_edge_excluded_genuine_edge_surfaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle with one provenance-mirror edge (excluded, typed
+    `derived_from`) and one genuine untyped concept-to-concept edge surfaces
+    ONLY the genuine edge as a candidate (spec: "A genuine untyped
+    concept-to-concept edge is still surfaced"; task 3.4). `suggest_edge_types`
+    is patched to avoid a real LLM call; `candidate_edges` is the REAL,
+    unpatched function reading the actual bundle graph."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "provenance:\n  - sources/foo\n"
+        "---\n[Foo](/sources/foo.md)\n\nSee also [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "sources").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "sources" / "foo.md").write_text(
+        "---\ntype: Source\ntitle: Foo\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+        captured["edges"] = edges
+        return [
+            _suggestion(
+                source="concepts/a",
+                target="concepts/b",
+                suggested_type="related_to",
+                rationale="mentions B",
+            )
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    edges = captured["edges"]
+    assert isinstance(edges, list)
+    assert len(edges) == 1
+    assert edges[0].source_id == "concepts/a"
+    assert edges[0].target_id == "concepts/b"
+    assert "concepts/a" in result.stdout
+    assert "concepts/b" in result.stdout
+    assert "sources/foo" not in result.stdout
+
+
 def test_suggest_relations_never_writes_to_the_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
