@@ -174,6 +174,58 @@ def test_doctor_malformed_config_fails_and_exits_one(
     assert "[FAIL] Config valid" in result.stdout
 
 
+def test_doctor_non_str_model_fails_and_exits_one_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`model: yes` (a YAML 1.1 bool, not a string) prints `[FAIL] Config
+    valid`, exits 1, and renders no traceback -- `read_config`'s str-type
+    guard (issue #128, defect #1) raises `ValueError` inside `doctor`'s
+    existing `except (OSError, ValueError)` handling, so `cfg` stays `None`
+    and later checks still fall back to `config.DEFAULT_MODEL` (design:
+    "RESOLVED FORK: #1 subsumes #3 at the source"). Regression test only --
+    NO production change to `main.py`/`ollama.py` (defect #3 is fully
+    subsumed by the `read_config` guard alone)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text("model: yes\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "[FAIL] Config valid" in result.stdout
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stdout
+    assert "[PASS] Bundle readable" in result.stdout
+
+
+def test_doctor_non_str_embedding_model_with_valid_model_exits_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`embedding_model: yes` (a YAML 1.1 bool) with an otherwise valid
+    `model` no longer crashes with a `TypeError` -- this was the residual
+    crash path (design: `":" in True` at the embedding-model-installed
+    check) that `read_config`'s str-type guard on `embedding_model` alone
+    closes, with zero doctor-side change."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {DEFAULT_MODEL}\nembedding_model: yes\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "[FAIL] Config valid" in result.stdout
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stdout
+
+
 def test_doctor_outside_workspace_unhealthy_ollama_exits_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

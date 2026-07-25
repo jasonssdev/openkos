@@ -52,6 +52,14 @@ tier-resolution precedence are `lint.resolve_windows`'s job, not
 
 _MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9._:/-]+")
 
+_YAML_RESERVED_WORDS = frozenset({"yes", "no", "true", "false", "on", "off", "null"})
+"""PyYAML's default `SafeLoader` resolver treats these exact tokens (any
+casing) as `bool`/`None`, not a plain string -- an unquoted `model: yes` in
+`openkos.yaml` therefore reads back as `model=True`, not `model="yes"`
+(issue #128, defect #2). Rejected as a whole-token match only: a reserved
+word appearing as a substring of a longer tag (`yesmodel`, `on-prem`) is
+unaffected by this resolver behavior and stays valid."""
+
 
 def validate_model(tag: str) -> str:
     """Trim `tag` and reject any value unsafe to substitute into `openkos.yaml`.
@@ -71,6 +79,12 @@ def validate_model(tag: str) -> str:
     trimmed = tag.strip()
     if not trimmed:
         raise ValueError("model must not be blank")
+    if trimmed.lower() in _YAML_RESERVED_WORDS:
+        raise ValueError(
+            "model must not be a YAML reserved word "
+            "(yes/no/true/false/on/off/null) -- it would not round-trip as "
+            "the literal string"
+        )
     if not _MODEL_TOKEN_RE.fullmatch(trimmed):
         raise ValueError(
             "model must not contain characters other than letters, digits, "
@@ -388,6 +402,16 @@ def read_config(root: Path) -> Config:
     embedding_model = raw.get("embedding_model")
     volatility_windows = raw.get("volatility_windows")
     type_tiers = raw.get("type_tiers")
+    if model is not None and not isinstance(model, str):
+        raise ValueError(
+            f"{layout.config_path.name}: 'model' must be a string, got "
+            f"{type(model).__name__}"
+        )
+    if embedding_model is not None and not isinstance(embedding_model, str):
+        raise ValueError(
+            f"{layout.config_path.name}: 'embedding_model' must be a string, got "
+            f"{type(embedding_model).__name__}"
+        )
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,

@@ -154,6 +154,61 @@ def test_validate_model_rejects_unsafe_yaml_indicator_values(raw: str) -> None:
         config.validate_model(raw)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "yes",
+        "Yes",
+        "YES",
+        "no",
+        "No",
+        "NO",
+        "true",
+        "True",
+        "TRUE",
+        "false",
+        "False",
+        "FALSE",
+        "on",
+        "On",
+        "ON",
+        "off",
+        "Off",
+        "OFF",
+        "null",
+        "Null",
+        "NULL",
+    ],
+)
+def test_validate_model_rejects_yaml_reserved_words(raw: str) -> None:
+    """`validate_model` rejects an exact-token (case-insensitive) YAML 1.1
+    reserved word -- these parse as `bool`/`None` under PyYAML's default
+    resolver rather than the literal string, so a `model: yes` line silently
+    reads back as `model=True`, not `model="yes"` (issue #128, defect #2)."""
+    with pytest.raises(ValueError, match="reserved word"):
+        config.validate_model(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "yesmodel",
+        "on-prem",
+        "false-positive:1b",
+        "qwen3:8b",
+        "llama3.1:8b",
+        "bge-m3",
+    ],
+)
+def test_validate_model_accepts_reserved_word_substrings_and_legit_tags(
+    raw: str,
+) -> None:
+    """A reserved word appearing only as a SUBSTRING of an otherwise valid
+    tag must still be accepted -- the guard matches the exact, fully trimmed
+    token only, never a substring."""
+    assert config.validate_model(raw) == raw
+
+
 def test_write_agents_byte_identical(tmp_path: Path) -> None:
     """`write_agents` copies the packaged template byte-for-byte (scenario 5)."""
     template_bytes = (
@@ -557,6 +612,49 @@ def test_read_config_falls_back_to_default_embedding_model_on_explicit_null(
     result = config.read_config(tmp_path)
 
     assert result.embedding_model == config.DEFAULT_EMBEDDING_MODEL
+
+
+@pytest.mark.parametrize(
+    ("field", "yaml_body"),
+    [
+        ("model", "model: yes\n"),
+        ("model", "model: 8\n"),
+        ("embedding_model", "embedding_model: yes\n"),
+        ("embedding_model", "embedding_model: 8\n"),
+    ],
+)
+def test_read_config_raises_valueerror_on_non_str_model_fields(
+    tmp_path: Path, field: str, yaml_body: str
+) -> None:
+    """`read_config` raises `ValueError` naming the offending field when
+    `model` or `embedding_model` parses to a non-`str` (a YAML bool/int) --
+    the field is present, so the `is not None` fallback alone would let a
+    non-str value through and corrupt `Config`'s typed contract (issue #128,
+    defect #1)."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        config.read_config(tmp_path)
+
+
+def test_read_config_model_null_still_falls_back_to_default(tmp_path: Path) -> None:
+    """`model: null` (present but explicit null) still falls back to
+    `DEFAULT_MODEL`, not an error -- the str-type guard must not reject
+    `None`, only a present non-str value."""
+    (tmp_path / "openkos.yaml").write_text("model: null\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.model == config.DEFAULT_MODEL
+
+
+def test_read_config_model_absent_still_falls_back_to_default(tmp_path: Path) -> None:
+    """An absent `model` key still falls back to `DEFAULT_MODEL`, not an error."""
+    (tmp_path / "openkos.yaml").write_text("review: true\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.model == config.DEFAULT_MODEL
 
 
 def test_read_config_preserves_explicit_review_false(tmp_path: Path) -> None:
