@@ -14,6 +14,8 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-25
+
 ### Added
 
 - **`set-volatility` write verb**: `openkos set-volatility <Type> <tier>` writes
@@ -27,6 +29,79 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   behind a typed-count confirmation gate supplied via `--confirm-count`; and
   `--json` emits machine-readable verdicts, suppressing the human report.
   (#137, #139)
+- **Interactive Ollama model picker in `init`**: the free-text model prompt is
+  replaced by a numbered picker over the chat models actually installed on the
+  local Ollama server (embedding models excluded), with the recommended default
+  marked and selected on Enter. `--model` and non-TTY runs bypass the picker,
+  an unreachable server or empty model list falls back to the typed prompt, and
+  the picker never offers a tag that would fail validation. (#128)
+- **`init` sets up git**: initializes a repository when none exists, scaffolds
+  a `.gitignore` (never overwriting an existing one), and makes a scoped
+  initial commit — degrading to a non-fatal warning when git is unavailable or
+  no identity is configured. (#143)
+- **Auto-commit after every mutating verb**: `ingest`, `forget`, `relate`,
+  `merge`, `unmerge`, and `reconcile` now stage exactly the paths they wrote
+  (plus `index.md`/`log.md`) and commit with a pinned message, leaving the
+  working tree clean without the user touching git. Every failure mode degrades
+  to a non-fatal warning that never changes the verb's exit code, and staging a
+  confidential concept emits a one-time transparency notice. (#153)
+- **Manual end-to-end testing guide**: `docs/testing.md` walks the full CLI
+  surface by hand, from setup through every verb. (#144)
+
+### Changed
+
+- **`ingest` shows progress and a per-type tally**: a stderr spinner runs
+  during the blocking extraction call, so the ~20 s LLM inference no longer
+  looks like a hang, and the summary gains an "extracted N objects" line broken
+  down by type in canonical registry order. (#136)
+- **`duplicates` and `adjudicate` reports are legible at a glance**: both now
+  lead with a summary tally ("N candidate group(s) (X exact, Y near)" /
+  "adjudicated N: x SAME, y DIFFERENT"), print a one-time column legend, and
+  end with a `Next: openkos merge` hint; detail lines are unchanged. (#139)
+- **`suggest-relations` previews its LLM cost before running**: the command
+  counts the untyped candidate edges first (no LLM), prints "N untyped edges ->
+  N LLM calls", and asks to proceed — `--auto` skips the prompt — then emits a
+  per-edge progress line to stderr as the run advances. Declining exits 0 with
+  nothing generated. (#134)
+- **Provenance-mirror edges are typed `derived_from` at graph projection**: a
+  body-link edge that duplicates a concept's `provenance:` frontmatter is now
+  synthesized as `derived_from` at read time (no on-disk bytes change), so
+  `suggest-relations` no longer spends one LLM call per edge asking the user to
+  confirm a fact the bundle already knows, and provenance rows are excluded
+  from contradiction candidates. (#135)
+- **`purge` cleanup is transactional and observable**: purge's post-rewrite
+  live-tree cleanup now lands in an auto-commit, `lint` and `status` gain a
+  detect-only scan for outbound relations left dangling by a purge, and
+  `purge`/`status`/`doctor` are aware of the deliberately dropped `vectors.db`.
+  (#141, #142)
+
+### Fixed
+
+- **Answering `yes` to the model prompt can no longer corrupt the config.**
+  `validate_model` rejects YAML 1.1 reserved boolean/null words (yes/no/true/
+  false/on/off/null, case-insensitive), `read_config` raises an actionable
+  error when `model`/`embedding_model` is not a string, and `doctor` reports
+  that failure with remediation instead of crashing with a traceback. (#128)
+- **`ingest` no longer silently drops a same-slug concept from a different
+  source.** A slug collision now writes the candidate to the first free
+  numeric-suffixed slug (`<slug>-2`, `-3`, …) as a distinct concept, so the
+  pair reaches the duplicates → adjudicate → merge flow; re-ingesting a source
+  that already owns a family member stays a create-only no-op, and each
+  disambiguation is recorded in a durable audit log surfaced by `status`.
+  (#131)
+- **`suggest-relations` stays inside the seeded vocabulary**: the edge-typing
+  rubric now names the eight seeded relation types and requires a verbatim
+  choice from that closed set (defaulting to `related_to`), and an occasional
+  out-of-vocab reply no longer floods stderr with a per-edge advisory. (#134)
+- **`adjudicate` distinguishes part-whole from identity**: the rubric states
+  that SAME means the same entity under different names and that a part,
+  subtype, instance, or example of X is a DIFFERENT entity, biasing toward
+  non-destructive verdicts since SAME feeds a merge; the flat, uncalibrated
+  per-verdict confidence number is no longer displayed. (#138)
+- **`status` reports a per-type breakdown**: Sources, Concepts, and every other
+  classifiable type actually present are counted under their own plural section
+  label, instead of folding every non-Source object into a single misleading
+  "Concepts" line. (#133)
 
 ## [0.1.2] - 2026-07-24
 
@@ -98,7 +173,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jasonssdev/openkos/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/jasonssdev/openkos/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jasonssdev/openkos/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jasonssdev/openkos/releases/tag/v0.1.0
