@@ -736,7 +736,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Detect installed models once (config-free: OllamaClient.list_models).
     probe = OllamaClient(model=models[0], host=args.host, timeout=args.timeout)
     try:
-        installed = probe.list_models()
+        installed_models = probe.list_models()
     except OllamaError as exc:
         print(f"error: could not reach Ollama to list models: {exc}", file=sys.stderr)
         print(
@@ -744,6 +744,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    installed = [m.tag for m in installed_models]
     print(f"Installed models on host: {', '.join(installed) or '(none)'}")
 
     reports: list[ModelReport] = []

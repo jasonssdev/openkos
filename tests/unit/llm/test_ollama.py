@@ -22,10 +22,12 @@ import pytest
 
 from openkos.llm.base import EMBED_DIM, Embedder, Message
 from openkos.llm.ollama import (
+    InstalledModel,
     OllamaClient,
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
+    is_embedding_model,
     model_tag_matches,
 )
 
@@ -507,26 +509,59 @@ def _tags_body(entries: list[dict[str, Any]]) -> bytes:
 # --- Phase 9: list_models() ---------------------------------------------------
 
 
-def test_list_models_returns_installed_tags_from_model_field() -> None:
-    """A reachable server's `model` entries are returned as a list of tags
-    (Scenario: Reachable server returns installed tags)."""
-    body = _tags_body([{"model": "qwen3:8b"}, {"model": "llama3.2:1b"}])
+def test_list_models_returns_installed_models_with_tag_and_family() -> None:
+    """A reachable server's `model` entries are returned as `InstalledModel`
+    items carrying both `tag` and `details.family` (Scenario: chat model
+    family "qwen" and embedding family "bert" both returned with family)."""
+    body = _tags_body(
+        [
+            {"model": "qwen3:8b", "details": {"family": "qwen"}},
+            {"model": "bge-m3:latest", "details": {"family": "bert"}},
+        ]
+    )
     client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
 
     result = client.list_models()
 
-    assert result == ["qwen3:8b", "llama3.2:1b"]
+    assert result == [
+        InstalledModel(tag="qwen3:8b", family="qwen"),
+        InstalledModel(tag="bge-m3:latest", family="bert"),
+    ]
+
+
+def test_list_models_missing_details_yields_none_family_and_is_kept() -> None:
+    """An entry missing the `details` key entirely still returns an
+    `InstalledModel` with `family=None` -- never dropped (Scenario: entry
+    missing details/family still returned)."""
+    body = _tags_body([{"model": "qwen3:8b"}])
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
+
+    result = client.list_models()
+
+    assert result == [InstalledModel(tag="qwen3:8b", family=None)]
+
+
+def test_list_models_missing_family_key_yields_none_family() -> None:
+    """An entry with a `details` object but no `family` key still returns
+    `family=None` -- never dropped."""
+    body = _tags_body([{"model": "qwen3:8b", "details": {}}])
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
+
+    result = client.list_models()
+
+    assert result == [InstalledModel(tag="qwen3:8b", family=None)]
 
 
 def test_list_models_falls_back_to_name_field() -> None:
     """An entry with `name` but no `model` key still yields its tag (D2 field
-    variance: Installed entry exposes its tag only under name)."""
-    body = _tags_body([{"name": "mistral:7b"}])
+    variance: Installed entry exposes its tag only under name); family is
+    parsed the same way regardless of which tag field was used."""
+    body = _tags_body([{"name": "mistral:7b", "details": {"family": "llama"}}])
     client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, []))
 
     result = client.list_models()
 
-    assert result == ["mistral:7b"]
+    assert result == [InstalledModel(tag="mistral:7b", family="llama")]
 
 
 def test_list_models_skips_malformed_entries() -> None:
@@ -538,7 +573,7 @@ def test_list_models_skips_malformed_entries() -> None:
 
     result = client.list_models()
 
-    assert result == ["qwen3:8b"]
+    assert result == [InstalledModel(tag="qwen3:8b", family=None)]
 
 
 def test_list_models_unreachable_raises_ollama_unavailable() -> None:
@@ -598,6 +633,36 @@ def test_list_models_non_list_models_value_raises_ollama_error(
 
     with pytest.raises(OllamaError):
         client.list_models()
+
+
+# --- Phase 9b: is_embedding_model() ---------------------------------------------
+
+
+@pytest.mark.parametrize("family", ["bert", "BERT", "nomic-bert", "Nomic-Bert"])
+def test_is_embedding_model_known_embedding_family_returns_true(family: str) -> None:
+    """A known embedding family (`bert`/`nomic-bert`, case-insensitive)
+    classifies as an embedding model (Scenario: known embedding family
+    classifies as embedding)."""
+    model = InstalledModel(tag="bge-m3:latest", family=family)
+
+    assert is_embedding_model(model) is True
+
+
+@pytest.mark.parametrize("family", ["qwen", "llama", "unknownfamily"])
+def test_is_embedding_model_non_embedding_family_returns_false(family: str) -> None:
+    """A chat-model family never classifies as embedding."""
+    model = InstalledModel(tag="qwen3:8b", family=family)
+
+    assert is_embedding_model(model) is False
+
+
+def test_is_embedding_model_none_family_returns_false() -> None:
+    """A missing/unknown family classifies as NON-embedding -- never exclude
+    on ambiguity (Scenario: missing/unknown family classifies as
+    non-embedding)."""
+    model = InstalledModel(tag="qwen3:8b", family=None)
+
+    assert is_embedding_model(model) is False
 
 
 # --- Phase 10: model_tag_matches() ---------------------------------------------

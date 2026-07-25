@@ -21,7 +21,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos import config
 from openkos.cli.main import app
 from openkos.config import DEFAULT_MODEL
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.ollama import InstalledModel, OllamaUnavailable
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
 from tests.unit.vcs.conftest import isolate_git_identity
@@ -41,10 +41,10 @@ def _fake_ollama_client(
         def __init__(self, model: str, **kwargs: object) -> None:
             self.model = model
 
-        def list_models(self) -> list[str]:
+        def list_models(self) -> list[InstalledModel]:
             if error is not None:
                 raise error
-            return list(installed or [])
+            return [InstalledModel(tag=tag, family=None) for tag in (installed or [])]
 
     return _FakeOllamaClient
 

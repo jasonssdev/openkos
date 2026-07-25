@@ -22,7 +22,7 @@ from typer.testing import CliRunner
 
 from openkos.cli.main import app
 from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL
-from openkos.llm.ollama import OllamaError, OllamaUnavailable
+from openkos.llm.ollama import InstalledModel, OllamaError, OllamaUnavailable
 
 runner = CliRunner()
 
@@ -39,12 +39,12 @@ def _fake_ollama_client(
     error: Exception | None = None,
     record: list[dict[str, Any]] | None = None,
 ) -> Callable[..., Any]:
-    """Build a fake `OllamaClient` factory: returns `installed` from
-    `list_models()`, or raises `error` if given. When `record` is provided,
-    each constructor call appends its `{"model": ..., **kwargs}` to it, so a
-    test can assert how `doctor` built the client (e.g. the preflight
-    `timeout`); `doctor` otherwise only calls the constructor and
-    `list_models()`."""
+    """Build a fake `OllamaClient` factory: returns `installed` tags (wrapped
+    as `InstalledModel` with `family=None`) from `list_models()`, or raises
+    `error` if given. When `record` is provided, each constructor call
+    appends its `{"model": ..., **kwargs}` to it, so a test can assert how
+    `doctor` built the client (e.g. the preflight `timeout`); `doctor`
+    otherwise only calls the constructor and `list_models()`."""
 
     class _FakeOllamaClient:
         def __init__(self, model: str, **kwargs: object) -> None:
@@ -52,10 +52,10 @@ def _fake_ollama_client(
             if record is not None:
                 record.append({"model": model, **kwargs})
 
-        def list_models(self) -> list[str]:
+        def list_models(self) -> list[InstalledModel]:
             if error is not None:
                 raise error
-            return list(installed or [])
+            return [InstalledModel(tag=tag, family=None) for tag in (installed or [])]
 
     return _FakeOllamaClient
 

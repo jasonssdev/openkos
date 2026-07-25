@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from openkos.llm.base import EMBED_DIM, Message
@@ -42,6 +43,29 @@ class OllamaUnavailable(OllamaError):
 
 class OllamaModelNotFound(OllamaError):
     """Raised on a 404 response whose body reports the model tag as not found (D4)."""
+
+
+@dataclass(frozen=True, slots=True)
+class InstalledModel:
+    """One entry from `/api/tags`: its tag plus optional model family (D1).
+
+    `family` is `None` when the server omits `details` or `details.family`
+    entirely -- always still returned, never dropped."""
+
+    tag: str
+    family: str | None
+
+
+_EMBEDDING_FAMILIES = frozenset({"bert", "nomic-bert"})
+"""Known embedding-model families (D2), matched case-insensitively."""
+
+
+def is_embedding_model(model: InstalledModel) -> bool:
+    """True if `model.family` is a known embedding family (D2).
+
+    A missing/unknown family classifies as NON-embedding -- ambiguity never
+    excludes a model from chat-model candidacy."""
+    return model.family is not None and model.family.lower() in _EMBEDDING_FAMILIES
 
 
 def _normalize_host(host: str) -> str:
@@ -233,8 +257,9 @@ class OllamaClient:
             raise OllamaError(f"Malformed response from Ollama: {exc}") from exc
         return result
 
-    def list_models(self) -> list[str]:
-        """GET `{host}/api/tags`; return installed model tags (D1). Config-free."""
+    def list_models(self) -> list[InstalledModel]:
+        """GET `{host}/api/tags`; return installed models with tag and
+        family (D1). Config-free."""
         url = f"{self._host}/api/tags"
         # Same trusted-host rationale as `chat()`'s S310 note (D2: host is
         # user/env config, normalized to a scheme, never derived from
@@ -264,16 +289,24 @@ class OllamaClient:
         # instead of leaking a bare TypeError from the `for` loop.
         try:
             entries = json.loads(body)["models"]
-            tags: list[str] = []
+            models: list[InstalledModel] = []
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
                 tag = entry.get("model") or entry.get("name")  # D2 field variance
                 if isinstance(tag, str) and tag:
-                    tags.append(tag)
+                    details = entry.get("details", {})
+                    family = (
+                        details.get("family") if isinstance(details, dict) else None
+                    )
+                    models.append(
+                        InstalledModel(
+                            tag=tag, family=family if isinstance(family, str) else None
+                        )
+                    )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise OllamaError(f"Malformed response from Ollama: {exc}") from exc
-        return tags
+        return models
 
     def _unavailable(self, exc: BaseException) -> OllamaUnavailable:
         """Build the `OllamaUnavailable` for a transport failure, shared by
