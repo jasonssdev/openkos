@@ -12,6 +12,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.cli.main import app
 from openkos.vcs import git as vcs_git
+from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
 
@@ -22,6 +23,15 @@ def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Redirect GIT_CONFIG_GLOBAL/_SYSTEM to isolated files with a set identity
+    # so the autocommit path is exercised deterministically regardless of the
+    # host's git config. Without this, a runner lacking a global git identity
+    # (e.g. CI) makes `has_git_identity` return False, `openkos init` and
+    # `set-volatility --auto` skip their commits by design, and the
+    # commit-message assertions fail against an empty git log.
+    isolate_git_identity(
+        monkeypatch, tmp_path, name="OpenKOS Test", email="test@openkos.example"
+    )
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
