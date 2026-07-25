@@ -336,13 +336,22 @@ ceiling applied after per-item validation, not a target). During staging, the
 system MUST, per candidate in reply order: derive a slug from the candidate's
 title and drop a candidate whose title yields an empty slug; apply an
 in-batch slug-collision guard that keeps the first and drops later
-candidate(s) from the SAME reply that slugify to an already-seen slug; drop,
-create-only, a candidate whose slug already exists on disk; and drop a
-candidate whose fields fail the stricter single-line concept-build gate. A
-slug MUST be reserved only once its candidate survives every check, so a
-dropped candidate never reserves a slug for a later one. Each per-candidate
-drop MUST be reported to stderr and MUST drop only that candidate, never the
-whole batch.
+candidate(s) from the SAME reply that slugify to an already-seen slug; and
+drop a candidate whose fields fail the stricter single-line concept-build
+gate. WHEN a candidate's slug collides with an existing on-disk concept whose
+`provenance` already references THIS source, the candidate MUST be skipped
+create-only (unchanged behavior — the existing file is left untouched). WHEN
+a candidate's slug collides with an existing on-disk concept whose
+`provenance` references a DIFFERENT source (or a slug the candidate's own
+source previously won via disambiguation), the candidate MUST NOT be dropped;
+instead it MUST be written to the first free numeric-suffixed slug
+(`<slug>-2`, then `-3`, ...) with its own single-source `provenance`. A slug
+MUST be reserved only once its candidate survives every check, so a dropped
+or redirected candidate never reserves a slug for a later one. Each
+per-candidate drop or disambiguation MUST be reported to stderr and MUST
+affect only that candidate, never the whole batch.
+(Previously: any slug collision with an existing on-disk file was silently
+dropped, create-only, regardless of which source owned the existing file.)
 
 #### Scenario: More than the cap of validated objects is bounded
 
@@ -359,12 +368,34 @@ whole batch.
 - THEN only the first object in reply order is staged; the second is dropped
   with a note on stderr and not written
 
-#### Scenario: A candidate whose slug already exists is skipped create-only
+#### Scenario: Same-source slug collision is a create-only no-op
 
-- GIVEN a validated candidate whose slug already exists on disk
+- GIVEN a validated candidate whose slug already exists on disk on a concept
+  whose `provenance` references this ingest's source
 - WHEN staging derived objects for write
 - THEN that candidate is skipped (create-only), the existing file is left
-  untouched, and a note is emitted to stderr
+  byte-untouched, and a note is emitted to stderr
+
+#### Scenario: First foreign-source collision writes to `<slug>`
+
+- GIVEN no existing concept file at the candidate's slug
+- WHEN a first source's candidate is staged
+- THEN it is written to `<slug>.md` with single-source `provenance`
+
+#### Scenario: Second, different-source, same-title candidate writes to `<slug>-2`
+
+- GIVEN an existing concept at `<slug>.md` whose `provenance` references a
+  DIFFERENT source than the current candidate
+- WHEN the current candidate is staged
+- THEN it is written to `<slug>-2.md` with its own single-source
+  `provenance`, and the existing `<slug>.md` is left untouched
+
+#### Scenario: Third, different-source, same-title candidate writes to `<slug>-3`
+
+- GIVEN `<slug>.md` and `<slug>-2.md` already exist, each owned by a
+  different source than the current candidate
+- WHEN the current candidate is staged
+- THEN it is written to `<slug>-3.md`, the first free numeric suffix
 
 ### Requirement: Extraction Degrades Gracefully on LLM Unavailability
 
@@ -428,7 +459,14 @@ derived object file byte-untouched — no overwrite, no re-typing, no merge.
 The slug-existence check for a candidate MUST complete BEFORE any write for
 that candidate, so a failed write never leaves a partially-reconciled state.
 Re-ingest re-runs extraction, so a genuinely new object CAN be inserted even
-when older objects for the same source already exist.
+when older objects for the same source already exist. Re-ingesting the SAME
+source MUST NOT spawn a new disambiguated slug on each run: a slug collision
+against a concept already carrying this source's `provenance` — INCLUDING a
+disambiguated slug (`<slug>-N`) this source previously won — MUST be
+recognized as this source's own object and treated as the create-only no-op
+above, not as a foreign-source collision requiring further disambiguation.
+(Previously: reconciliation did not distinguish which source owned a
+colliding slug, and made no mention of disambiguated `-N` slugs.)
 
 #### Scenario: Re-ingest leaves an existing derived object untouched
 
@@ -446,6 +484,27 @@ when older objects for the same source already exist.
 - WHEN `openkos ingest <path>` runs again
 - THEN only the object whose slug does not yet exist is written; the existing
   slug is skipped and not rewritten
+
+#### Scenario: Re-ingesting the first source spawns no new file
+
+- GIVEN a source previously ingested and written to `<slug>.md`
+- WHEN that same source is re-ingested unchanged
+- THEN no new file is written and `<slug>.md` is left byte-unchanged
+
+#### Scenario: Re-ingesting the source that owns `<slug>-2` does not spawn `-3`
+
+- GIVEN a second source previously disambiguated to `<slug>-2.md`
+- WHEN that same second source is re-ingested
+- THEN `ingest` recognizes `<slug>-2.md` as this source's own object, no new
+  file is written, and no `<slug>-3.md` is spawned
+
+#### Scenario: Byte-identical raw re-ingest short-circuits
+
+- GIVEN a source already ingested and re-ingested with byte-identical raw
+  content
+- WHEN `openkos ingest <path>` runs again
+- THEN it short-circuits as today (D2), with no new derived-object files of
+  any kind
 
 ### Requirement: Derived Object Cataloging and Logging
 
@@ -702,6 +761,39 @@ empty string (`""`), signaling "no line to print" to the caller.
 - WHEN the helper is called
 - THEN the returned string lists `Concept` before `Person`, regardless of
   the dict's insertion order
+
+### Requirement: Durable Disambiguation Audit Log
+
+WHEN a candidate is written to a disambiguated slug, `ingest` MUST append one
+durable log entry via the existing bundle log primitive, recording the
+source's slug, the candidate's extracted title, the original colliding slug,
+and the chosen disambiguated slug. This entry MUST be surfaced by `openkos
+status` alongside other recent activity, with no new persisted ledger file.
+
+#### Scenario: Disambiguating ingest is recorded and surfaced
+
+- GIVEN an ingest that writes a candidate to `<slug>-2` due to a
+  foreign-source collision
+- WHEN the bundle log is inspected or `openkos status` is run afterward
+- THEN an entry naming the source, extracted title, original slug `<slug>`,
+  and chosen slug `<slug>-2` is present
+
+### Requirement: Disambiguated Concepts Remain Resolvable
+
+A concept written to a disambiguated slug MUST remain a normal, fully
+conformant concept document discoverable by existing entity-resolution and
+contradiction-detection flows without any change to those flows: the
+disambiguated concept and the concept it collided with MUST both be visible
+to `find_candidates`/`adjudicate` as a candidate group, and, once
+graph-connected, to contradiction detection.
+
+#### Scenario: Disambiguated pair forms a candidate group
+
+- GIVEN two different sources whose extraction both yield the same title,
+  producing `<slug>.md` and `<slug>-2.md`
+- WHEN `openkos duplicates` (or `adjudicate`) runs
+- THEN it reports a candidate group containing both concepts, rather than "No
+  candidates found"
 
 ## OKF §9 Conformance Rules 1-3
 

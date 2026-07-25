@@ -62,8 +62,8 @@ Revert the `main.py` diff to restore the single `.exists()` drop and remove the 
 
 ## Success Criteria
 
-- [ ] Colliding derived candidate is written to a disambiguated slug, not dropped.
-- [ ] Disambiguation recorded in `log.md` and shown by `status`.
-- [ ] Byte-identical / same-source re-ingest produces no new `-N` files (idempotent).
-- [ ] `find_candidates` groups the pair; contradiction detection can compare them.
-- [ ] `uv run pytest` green; #131 closed.
+- [x] Colliding derived candidate is written to a disambiguated slug, not dropped.
+- [x] Disambiguation recorded in `log.md` and shown by `status`.
+- [x] Byte-identical / same-source re-ingest produces no new `-N` files (idempotent).
+- [x] `find_candidates` groups the pair; contradiction detection can compare them.
+- [x] `uv run pytest` green; #131 closed.
