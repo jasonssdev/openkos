@@ -51,7 +51,7 @@ from openkos.resolution.adjudication import (
     Verdict,
     adjudicate_candidates,
 )
-from openkos.resolution.candidates import Tier
+from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.resolution.contradiction import (
     find_contradictions,
     is_high_confidence_contradiction,
@@ -513,6 +513,88 @@ def _adjudication_payload(
     ]
 
 
+def _prepare_one_merge(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    index_path: Path,
+    log_path: Path,
+    group: CandidateGroup,
+) -> "PreparedMerge | None":
+    """Resolve both member ids of one SAME 2-member `group` and build the
+    pure `PreparedMerge` preview, extracted verbatim from
+    `_run_adjudicate_apply`'s former per-pair body (issue #137 closing
+    slice, Phase 1 refactor) so the interactive `--apply` walk and the
+    `--apply-same` batch share exactly one apply-one-pair unit. Returns
+    `None` when either member id fails to resolve
+    (`_resolve_concept_path` raises `ValueError`) -- this covers BOTH a
+    member already absorbed by an earlier merge in this same run AND a
+    genuinely missing/invalid concept id; the two causes are
+    indistinguishable from here, so the caller must not assert either one
+    as the sole reason. Otherwise raises `OSError`/`ValueError` straight
+    from `prepare_merge`, unchanged."""
+    survivor_id, absorbed_id = group.member_ids
+    try:
+        survivor_path, survivor_canonical = _resolve_concept_path(
+            layout.bundle_dir, survivor_id
+        )
+        absorbed_path, absorbed_canonical = _resolve_concept_path(
+            layout.bundle_dir, absorbed_id
+        )
+    except ValueError:
+        return None
+
+    now = datetime.now(UTC)
+    return prepare_merge(
+        layout.bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        root,
+        now=now,
+    )
+
+
+def _format_merge_preview_line(prepared: "PreparedMerge") -> str:
+    """The "merge X into Y (...)" preview line for one prepared merge,
+    extracted verbatim from the former inline body (issue #137 closing
+    slice, Phase 1 refactor)."""
+    return (
+        f"  merge {prepared.absorbed_canonical} into {prepared.survivor_canonical} "
+        f"(sensitivity {prepared.sensitivity_before}->"
+        f"{prepared.sensitivity_after}, {len(prepared.touched_files)} "
+        f"rewrite(s), removes bundle/{prepared.absorbed_canonical}.md)"
+    )
+
+
+def _commit_one_merge(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    index_path: Path,
+    log_path: Path,
+    prepared: "PreparedMerge",
+) -> None:
+    """`merge_core` + `_autocommit` for one prepared merge, extracted
+    verbatim from the former inline body (issue #137 closing slice, Phase 1
+    refactor). Raises `OSError`/`ValueError` straight from `merge_core`,
+    unchanged -- callers decide how to report and whether to stop."""
+    merge_result = merge_core(layout.bundle_dir, index_path, log_path, prepared)
+    _autocommit(
+        root,
+        [
+            "bundle/index.md",
+            "bundle/log.md",
+            *(f"bundle/{rel}" for rel in merge_result.touched_files),
+            f"bundle/{prepared.survivor_canonical}.md",
+            f"bundle/{prepared.absorbed_canonical}.md",
+        ],
+        f"openkos: merge {prepared.absorbed_canonical} into "
+        f"{prepared.survivor_canonical}",
+    )
+
+
 def _run_adjudicate_apply(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -550,48 +632,26 @@ def _run_adjudicate_apply(
         survivor_id, absorbed_id = group.member_ids
 
         try:
-            survivor_path, survivor_canonical = _resolve_concept_path(
-                layout.bundle_dir, survivor_id
-            )
-            absorbed_path, absorbed_canonical = _resolve_concept_path(
-                layout.bundle_dir, absorbed_id
-            )
-        except ValueError:
+            prepared = _prepare_one_merge(root, layout, index_path, log_path, group)
+        except (OSError, ValueError) as exc:
             typer.echo(
-                f"{survivor_id} / {absorbed_id}: skipped (member already merged)"
+                "openkos adjudicate --apply: failed while merging "
+                f"{absorbed_id} into {survivor_id} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        if prepared is None:
+            typer.echo(
+                f"{survivor_id} / {absorbed_id}: skipped (member unresolved "
+                "-- already merged or missing)"
             )
             skipped_already_merged += 1
             continue
 
-        now = datetime.now(UTC)
-        try:
-            prepared = prepare_merge(
-                layout.bundle_dir,
-                index_path,
-                log_path,
-                survivor_path,
-                absorbed_path,
-                survivor_canonical,
-                absorbed_canonical,
-                root,
-                now=now,
-            )
-        except (OSError, ValueError) as exc:
-            typer.echo(
-                "openkos adjudicate --apply: failed while merging "
-                f"{absorbed_canonical} into {survivor_canonical} -- {exc}.",
-                err=True,
-            )
-            raise typer.Exit(code=1) from exc
-
-        typer.echo(
-            f"  merge {absorbed_canonical} into {survivor_canonical} "
-            f"(sensitivity {prepared.sensitivity_before}->"
-            f"{prepared.sensitivity_after}, {len(prepared.touched_files)} "
-            f"rewrite(s), removes bundle/{absorbed_canonical}.md)"
-        )
+        typer.echo(_format_merge_preview_line(prepared))
         answer = typer.prompt(
-            f"Merge {absorbed_canonical} into {survivor_canonical}? [y/N/skip]",
+            f"Merge {prepared.absorbed_canonical} into "
+            f"{prepared.survivor_canonical}? [y/N/skip]",
             default="N",
             show_default=False,
         )
@@ -600,26 +660,15 @@ def _run_adjudicate_apply(
             continue
 
         try:
-            merge_result = merge_core(layout.bundle_dir, index_path, log_path, prepared)
+            _commit_one_merge(root, layout, index_path, log_path, prepared)
         except (OSError, ValueError) as exc:
             typer.echo(
                 "openkos adjudicate --apply: failed while merging "
-                f"{absorbed_canonical} into {survivor_canonical} -- {exc}.",
+                f"{prepared.absorbed_canonical} into "
+                f"{prepared.survivor_canonical} -- {exc}.",
                 err=True,
             )
             raise typer.Exit(code=1) from exc
-
-        _autocommit(
-            root,
-            [
-                "bundle/index.md",
-                "bundle/log.md",
-                *(f"bundle/{rel}" for rel in merge_result.touched_files),
-                f"bundle/{survivor_canonical}.md",
-                f"bundle/{absorbed_canonical}.md",
-            ],
-            f"openkos: merge {absorbed_canonical} into {survivor_canonical}",
-        )
         applied += 1
 
     skipped_total = skipped_n_gt2 + skipped_already_merged + skipped_declined
@@ -628,6 +677,163 @@ def _run_adjudicate_apply(
         f"openkos adjudicate --apply: {prefix}applied {applied}, skipped "
         f"{skipped_total} (N>2: {skipped_n_gt2}, "
         f"already-merged: {skipped_already_merged}, declined: {skipped_declined})"
+    )
+
+
+def _run_adjudicate_apply_same(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    index_path: Path,
+    log_path: Path,
+    results: Sequence[AdjudicatedCandidate],
+    *,
+    confirm_count: str | None,
+) -> None:
+    """The guarded batch `adjudicate --apply-same` merge (issue #137
+    closing slice): Pass 1 builds ONE aggregate preview over every eligible
+    SAME 2-member group (spec: Aggregate Preview Before Any Write), reusing
+    the SAME `_prepare_one_merge`/`_format_merge_preview_line` building
+    blocks the interactive `--apply` walk uses. `total` -- the number
+    printed after the preview and required by the gate -- equals the
+    number of preview lines ACTUALLY DISPLAYED (i.e. the eligible groups
+    that still resolve right now), never the raw structural eligible-group
+    count; a group that is already unresolvable when the preview is built
+    (bogus/missing id, unrelated to this run) is silently excluded from
+    the preview, the total, and Pass 2 (4R fix: preview/Total
+    consistency). Zero eligible groups short-circuits with a "nothing to
+    apply" summary and exit 0 -- BEFORE the confirm gate -- mirroring
+    `_run_adjudicate_apply`'s own empty-state handling, so an empty batch
+    never triggers the non-TTY refusal or forces typing "0" on a TTY (4R
+    fix: zero-eligible spurious failure). The confirmation gate (spec:
+    Typed-Count Confirmation Gate) then requires the operator to type that
+    EXACT count, via `--confirm-count`, an interactive TTY prompt, or
+    refuses outright on a non-TTY without the flag -- any mismatch aborts
+    with ZERO writes. Pass 2 RE-RESOLVES and RE-PREPARES each previewed
+    pair immediately before applying it (spec: Stale-Id Guard Across
+    Batch), since an earlier merge in THIS SAME batch may already have
+    absorbed a later pair's member; that legitimate case is still skipped,
+    not crashed on, and still yields applied < previewed. Accepted merges
+    commit sequentially via `_commit_one_merge`; a mid-batch failure stops
+    the run but keeps every prior commit intact and reversible via
+    `unmerge` -- and, before raising, echoes a partial summary (applied so
+    far / previewed, and that the remainder was never attempted) so the
+    operator can drive that recovery without reconstructing the count
+    themselves (spec: Sequential Execution And Mid-Batch Failure
+    Semantics; 4R fix: mid-batch failure hides the applied count)."""
+    eligible_groups: list[CandidateGroup] = []
+    skipped_n_gt2 = 0
+    for result in results:
+        if result.verdict is not Verdict.SAME:
+            continue
+        group = result.candidate
+        if len(group.member_ids) == 2:
+            eligible_groups.append(group)
+        elif len(group.member_ids) > 2:
+            typer.echo(
+                f"[{group.okf_type}] {group.member_ids}: skipped (N>2, merge manually)"
+            )
+            skipped_n_gt2 += 1
+
+    previewed_groups: list[CandidateGroup] = []
+    for group in eligible_groups:
+        survivor_id, absorbed_id = group.member_ids
+        try:
+            prepared = _prepare_one_merge(root, layout, index_path, log_path, group)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos adjudicate --apply-same: failed while previewing "
+                f"{absorbed_id} into {survivor_id} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        if prepared is None:
+            continue
+        previewed_groups.append(group)
+        typer.echo(_format_merge_preview_line(prepared))
+    total = len(previewed_groups)
+    typer.echo(f"Total: {total}")
+
+    if total == 0:
+        skipped_total = skipped_n_gt2
+        prefix = "nothing to apply -- " if skipped_total == 0 else ""
+        typer.echo(
+            f"openkos adjudicate --apply-same: {prefix}applied 0, skipped "
+            f"{skipped_total} (N>2: {skipped_n_gt2}, already-merged: 0)"
+        )
+        return
+
+    if confirm_count is not None:
+        typed_count = confirm_count
+    elif sys.stdin.isatty():
+        typed_count = typer.prompt(f"Type the eligible count ({total}) to proceed")
+    else:
+        typer.echo(
+            "openkos adjudicate --apply-same: refusing to apply -- stdin is "
+            "not a TTY; re-run with --confirm-count.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if typed_count.strip() != str(total):
+        typer.echo(
+            "openkos adjudicate --apply-same: aborted -- confirmation count "
+            "did not match exactly; nothing was written.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    applied = 0
+    skipped_already_merged = 0
+    for group in previewed_groups:
+        survivor_id, absorbed_id = group.member_ids
+        try:
+            prepared = _prepare_one_merge(root, layout, index_path, log_path, group)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos adjudicate --apply-same: failed while merging "
+                f"{absorbed_id} into {survivor_id} -- {exc}.",
+                err=True,
+            )
+            typer.echo(
+                "openkos adjudicate --apply-same: stopped after failure -- "
+                f"applied {applied} of {total} previewed before this "
+                "failure; the remaining pairs were not attempted. Applied "
+                "merges remain committed and reversible via `unmerge`.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        if prepared is None:
+            typer.echo(
+                f"{survivor_id} / {absorbed_id}: skipped (member unresolved "
+                "-- already merged or missing)"
+            )
+            skipped_already_merged += 1
+            continue
+
+        try:
+            _commit_one_merge(root, layout, index_path, log_path, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos adjudicate --apply-same: failed while merging "
+                f"{prepared.absorbed_canonical} into "
+                f"{prepared.survivor_canonical} -- {exc}.",
+                err=True,
+            )
+            typer.echo(
+                "openkos adjudicate --apply-same: stopped after failure -- "
+                f"applied {applied} of {total} previewed before this "
+                "failure; the remaining pairs were not attempted. Applied "
+                "merges remain committed and reversible via `unmerge`.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        applied += 1
+
+    skipped_total = skipped_n_gt2 + skipped_already_merged
+    typer.echo(
+        f"openkos adjudicate --apply-same: applied {applied} of {total} "
+        f"previewed, skipped {skipped_total} (N>2: {skipped_n_gt2}, "
+        f"already-merged: {skipped_already_merged})"
     )
 
 
@@ -4153,6 +4359,24 @@ def adjudicate(
         "--apply",
         help="Interactively merge each SAME 2-member group after previewing it.",
     ),
+    apply_same: bool = typer.Option(
+        False,
+        "--apply-same",
+        help=(
+            "Batch-merge every eligible SAME 2-member group after one "
+            "guarded confirmation (see --confirm-count)."
+        ),
+    ),
+    confirm_count: str | None = typer.Option(
+        None,
+        "--confirm-count",
+        help=(
+            "The exact eligible-merge count (see the printed preview), for "
+            "non-interactive/test use with --apply-same. On a TTY, "
+            "omitting this prompts interactively instead. There is NO "
+            "bypass for this count -- it must match exactly."
+        ),
+    ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
 
@@ -4209,10 +4433,30 @@ def adjudicate(
     `--json` (interactive vs. machine-readable output is contradictory), so
     that combination is rejected up front, before any workspace gate or
     read, with exit code 2.
+
+    `--apply-same` switches to a GUARDED BATCH merge of every eligible SAME
+    2-member group (issue #137 closing slice): prints one aggregate
+    preview and total count, then requires the operator to type that exact
+    count (via `--confirm-count`, an interactive TTY prompt, or refuses on
+    a non-TTY without the flag) before applying anything -- a mismatch
+    aborts with zero writes. Mutually exclusive with both `--apply` and
+    `--json`, rejected up front with exit code 2.
     """
     if apply and json_output:
         typer.echo(
             "openkos adjudicate: --apply and --json are mutually exclusive.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if apply_same and apply:
+        typer.echo(
+            "openkos adjudicate: --apply-same and --apply are mutually exclusive.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if apply_same and json_output:
+        typer.echo(
+            "openkos adjudicate: --apply-same and --json are mutually exclusive.",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -4281,6 +4525,12 @@ def adjudicate(
 
     if apply:
         _run_adjudicate_apply(root, layout, index_path, log_path, results)
+        return
+
+    if apply_same:
+        _run_adjudicate_apply_same(
+            root, layout, index_path, log_path, results, confirm_count=confirm_count
+        )
         return
 
     typer.echo(f"openkos adjudicate: workspace at {root}")
