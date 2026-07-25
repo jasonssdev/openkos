@@ -865,6 +865,66 @@ def _titleize(stem: str) -> str:
 # subdirectory (design: Path/Catalog).
 
 
+def _collision_family(link_dir: Path, base_slug: str) -> list[Path]:
+    """Return every file in `link_dir` belonging to `base_slug`'s collision
+    family -- `<base_slug>.md` itself and every `<base_slug>-N.md` (N a
+    positive integer) -- sorted ascending by `N` (the bare base slug sorts
+    first). Matched via a REGEX anchored on the full filename stem
+    (`^{base}(-\\d+)?$`), NEVER a glob, so an unrelated sibling like
+    `<base>-word.md` never joins the family (design: Collision loop
+    mechanics; #131)."""
+    if not link_dir.is_dir():
+        return []
+    pattern = re.compile(rf"^{re.escape(base_slug)}(?:-(\d+))?$")
+    members: list[tuple[int, Path]] = []
+    for path in link_dir.glob("*.md"):
+        match = pattern.match(path.stem)
+        if match is None:
+            continue
+        suffix_n = int(match.group(1)) if match.group(1) else 0
+        members.append((suffix_n, path))
+    members.sort(key=lambda item: item[0])
+    return [path for _, path in members]
+
+
+def _family_owns_source(family: list[Path], source_slug: str) -> bool:
+    """`True` if ANY member of `family` already carries THIS ingest's
+    `sources/<source_slug>` provenance key -- the sole idempotency
+    guarantee that a re-ingest never spawns a new disambiguated slug,
+    including for a `<slug>-N` this source previously won (design:
+    Idempotency Predicate; #131). A member whose frontmatter fails to read
+    or parse is skipped, never raised -- the scan degrades per member,
+    mirroring `okf._iter_docs`'s broad parse-failure tolerance."""
+    provenance_key = f"sources/{source_slug}"
+    for path in family:
+        try:
+            text = path.read_text(encoding="utf-8")
+            metadata, _ = okf.load_frontmatter(text)
+        except (OSError, UnicodeDecodeError):
+            continue
+        except Exception:  # noqa: S112 -- broad: malformed frontmatter degrades, never crashes
+            continue
+        provenance = metadata.get("provenance")
+        if isinstance(provenance, list) and provenance_key in provenance:
+            return True
+    return False
+
+
+def _first_free_disambiguated_slug(
+    family: list[Path], base_slug: str, reserved: set[str]
+) -> str:
+    """First free `<base_slug>-N` (N starting at 2) that is neither already
+    on disk (a stem present in `family`) nor already claimed by an earlier
+    candidate in THIS batch (`reserved`) -- deterministic, ascending scan
+    (design: Collision loop mechanics -- batch-local `seen_slugs` guard;
+    #131)."""
+    taken = {path.stem for path in family} | reserved
+    n = 2
+    while f"{base_slug}-{n}" in taken:
+        n += 1
+    return f"{base_slug}-{n}"
+
+
 @dataclass(frozen=True)
 class _DerivedPlan:
     """One validated derived object staged for Phase B write -- one entry
@@ -882,6 +942,12 @@ class _DerivedPlan:
     description: str
     path: Path
     content: str
+    disambiguated_from: str | None = None
+    """The original, colliding slug this plan was disambiguated away from
+    -- `None` for the ordinary (no-collision) case. Set only when a
+    foreign-source collision redirected this candidate to `<slug>-N`
+    (design: Disambiguation loop, #131); Phase B uses it to emit the one
+    audit `insert_log_entry` call for a disambiguated write."""
 
 
 def _stage_derived_objects(
@@ -1020,17 +1086,38 @@ def _stage_derived_objects(
 
         link_dir = _TYPE_TO_LINK_DIR[extraction.type]
         section = _TYPE_TO_SECTION[extraction.type]
-        derived_path = bundle_dir / link_dir / f"{derived_slug}.md"
+        link_dir_path = bundle_dir / link_dir
+        derived_path = link_dir_path / f"{derived_slug}.md"
+        original_slug: str | None = None
         if derived_path.exists():
-            # Create-only reconciliation (design D5): leave the existing
-            # derived object -- and its original catalog/log entries --
-            # untouched rather than overwriting a possibly hand-edited file.
+            # A slug already on disk. Distinguish WHO owns it (design:
+            # Idempotency Predicate, #131): scan the whole `<slug>`/
+            # `<slug>-N` collision family for THIS ingest's own provenance
+            # key before deciding.
+            family = _collision_family(link_dir_path, derived_slug)
+            if _family_owns_source(family, source_slug):
+                # Same-source collision, anywhere in the family (including a
+                # `<slug>-N` this source previously won) -- create-only
+                # no-op (design D5): leave every existing file untouched.
+                typer.echo(
+                    f"openkos ingest: '{derived_slug}' already exists; "
+                    "skipping this candidate (create-only).",
+                    err=True,
+                )
+                continue
+            # Foreign-source collision -- disambiguate to the first free
+            # numeric suffix rather than dropping the candidate.
+            original_slug = derived_slug
+            derived_slug = _first_free_disambiguated_slug(
+                family, original_slug, seen_slugs
+            )
+            derived_path = link_dir_path / f"{derived_slug}.md"
             typer.echo(
-                f"openkos ingest: '{derived_slug}' already exists; skipping "
-                "this candidate (create-only).",
+                f"openkos ingest: '{original_slug}' already exists for a "
+                f"different source; disambiguating this candidate to "
+                f"'{derived_slug}'.",
                 err=True,
             )
-            continue
 
         try:
             content = okf.build_concept(
@@ -1061,6 +1148,7 @@ def _stage_derived_objects(
                 description=extraction.description,
                 path=derived_path,
                 content=content,
+                disambiguated_from=original_slug,
             )
         )
 
@@ -1342,6 +1430,18 @@ def ingest(
                 f"(/{plan.link_dir}/{plan.slug}.md) ({plan.doc_type}) "
                 f"from [{title}](/sources/{slug}.md).",
             )
+            if plan.disambiguated_from is not None:
+                # Durable disambiguation audit (spec: Durable Disambiguation
+                # Audit Log, #131) -- one extra `log.md` bullet via the SAME
+                # `insert_log_entry` primitive, no new persisted ledger file.
+                new_log_text = bundle_log.insert_log_entry(
+                    new_log_text,
+                    now.astimezone().date(),
+                    f"**Disambiguation**: [{plan.title}]"
+                    f"(/{plan.link_dir}/{plan.slug}.md) from source '{slug}' "
+                    f"collided with '{plan.disambiguated_from}'; wrote "
+                    f"distinct concept '{plan.slug}'.",
+                )
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos ingest: failed while preparing the ingest -- {exc}.", err=True

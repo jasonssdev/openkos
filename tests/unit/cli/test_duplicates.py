@@ -103,6 +103,35 @@ def test_duplicates_fresh_bundle_reports_no_candidates(
     assert "No candidates found." in result.stdout
 
 
+def test_disambiguated_pair_forms_candidate_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two different sources whose extraction both yield the same title
+    produce `<slug>.md` and `<slug>-2.md` (post-disambiguation, #131) --
+    `duplicates` reports them as one candidate group, contrasting the
+    PRIOR behavior where a foreign-source collision was silently dropped
+    and `duplicates` found nothing (spec: Disambiguated pair forms a
+    candidate group). Resolution logic itself (`find_candidates`) is
+    unmodified by #131 -- this is a fixture-level regression check, not a
+    new grouping code path."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "stoic-practice.md", title="Stoic Practice"
+    )
+    _write_doc(
+        tmp_path / "bundle" / "concepts" / "stoic-practice-2.md",
+        title="Stoic Practice",
+    )
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    assert "No candidates found." not in result.stdout
+    assert "HIGH" in result.stdout
+    assert "concepts/stoic-practice" in result.stdout
+    assert "concepts/stoic-practice-2" in result.stdout
+
+
 def test_duplicates_reports_a_high_tier_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

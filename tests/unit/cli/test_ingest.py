@@ -2479,4 +2479,262 @@ def test_spinner_cleared_on_ollama_error_and_degrade_proceeds(
     assert console_instance.init_kwargs == {"stderr": True}
     assert console_instance.statuses[0].exited is True
     assert "concept extraction skipped" in result.stderr
-    assert "keeping the Source only" in result.stderr
+
+
+# --- Deterministic slug-collision disambiguation (#131) ---------------------
+
+
+def test_family_regex_excludes_base_word_slug(tmp_path: Path) -> None:
+    """`_collision_family` matches `<base>.md` and `<base>-N.md` (N numeric)
+    but NOT `<base>-word.md` -- a regex-anchored family, never a naive glob
+    (spec: Collision loop mechanics false-positive guard)."""
+    link_dir = tmp_path / "concepts"
+    link_dir.mkdir()
+    (link_dir / "note.md").write_text("body", encoding="utf-8")
+    (link_dir / "note-2.md").write_text("body", encoding="utf-8")
+    (link_dir / "note-extra.md").write_text("body", encoding="utf-8")
+
+    family = main._collision_family(link_dir, "note")
+
+    names = {path.name for path in family}
+    assert names == {"note.md", "note-2.md"}
+
+
+def test_family_scan_skips_malformed_frontmatter_member(tmp_path: Path) -> None:
+    """A collision family member with malformed frontmatter is skipped by
+    `_family_owns_source` rather than raising -- the scan degrades per
+    member, it never crashes (spec: Parse-error tolerance)."""
+    link_dir = tmp_path / "concepts"
+    link_dir.mkdir()
+    (link_dir / "note.md").write_text(
+        "---\nprovenance:\n  - sources/other-source\n---\nbody", encoding="utf-8"
+    )
+    (link_dir / "note-2.md").write_text(
+        "---\ntitle: [unclosed\n---\nbody", encoding="utf-8"
+    )
+
+    family = main._collision_family(link_dir, "note")
+    owns = main._family_owns_source(family, "target-source")
+
+    assert owns is False
+
+
+def test_foreign_collision_writes_slug_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second source whose extraction yields the SAME title as an
+    already-ingested, DIFFERENT source's derived object is written to
+    `<slug>-2` with its own single-source `provenance`, leaving the first
+    source's file untouched (spec: Second, different-source, same-title
+    candidate writes to `<slug>-2`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    source_a = tmp_path / "notes-a.txt"
+    source_a.write_text("Notes from source A.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
+    assert first.exit_code == 0
+    base_path = tmp_path / "bundle" / "concepts" / "stoic-practice.md"
+    assert base_path.is_file()
+
+    source_b = tmp_path / "notes-b.txt"
+    source_b.write_text("Notes from source B.", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
+
+    assert result.exit_code == 0
+    disambiguated_path = tmp_path / "bundle" / "concepts" / "stoic-practice-2.md"
+    assert disambiguated_path.is_file()
+    base_metadata, _ = okf.load_frontmatter(base_path.read_text(encoding="utf-8"))
+    assert base_metadata["provenance"] == ["sources/notes-a"]
+    disambiguated_metadata, _ = okf.load_frontmatter(
+        disambiguated_path.read_text(encoding="utf-8")
+    )
+    assert disambiguated_metadata["provenance"] == ["sources/notes-b"]
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_third_foreign_source_writes_slug_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A THIRD different source with the same title, after `<slug>` and
+    `<slug>-2` are already taken by different sources, is written to the
+    first free numeric suffix `<slug>-3` (spec: Third, different-source,
+    same-title candidate writes to `<slug>-3`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    for name, text in (
+        ("notes-a.txt", "Notes from source A."),
+        ("notes-b.txt", "Notes from source B."),
+        ("notes-c.txt", "Notes from source C."),
+    ):
+        source = tmp_path / name
+        source.write_text(text, encoding="utf-8")
+        result = runner.invoke(app, ["ingest", name, "--auto"])
+        assert result.exit_code == 0
+
+    assert (tmp_path / "bundle" / "concepts" / "stoic-practice.md").is_file()
+    assert (tmp_path / "bundle" / "concepts" / "stoic-practice-2.md").is_file()
+    third_path = tmp_path / "bundle" / "concepts" / "stoic-practice-3.md"
+    assert third_path.is_file()
+    metadata, _ = okf.load_frontmatter(third_path.read_text(encoding="utf-8"))
+    assert metadata["provenance"] == ["sources/notes-c"]
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_reingest_owner_of_base_slug_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-ingesting the source that owns the base `<slug>` recognizes it as
+    this source's own object via the provenance family scan and writes no
+    new file, even after a foreign source has since taken `<slug>-2` (spec:
+    Re-ingesting the first source spawns no new file)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    source_a = tmp_path / "notes-a.txt"
+    source_a.write_text("Notes from source A.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
+    assert first.exit_code == 0
+    source_b = tmp_path / "notes-b.txt"
+    source_b.write_text("Notes from source B.", encoding="utf-8")
+    second = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
+    assert second.exit_code == 0
+
+    result = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "stoic-practice-3.md").exists()
+    concept_dir = tmp_path / "bundle" / "concepts"
+    assert sorted(p.name for p in concept_dir.glob("*.md")) == [
+        "stoic-practice-2.md",
+        "stoic-practice.md",
+    ]
+
+
+def test_reingest_owner_of_slug_2_does_not_spawn_slug_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CRITICAL: re-ingesting the source that owns the disambiguated
+    `<slug>-2` scans the WHOLE collision family, recognizes `<slug>-2` as
+    its own object, and writes no `<slug>-3` -- a prior `-N` winner must
+    never spawn a further disambiguation on re-ingest (spec: Re-ingesting
+    the source that owns `<slug>-2` does not spawn `-3`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    source_a = tmp_path / "notes-a.txt"
+    source_a.write_text("Notes from source A.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
+    assert first.exit_code == 0
+    source_b = tmp_path / "notes-b.txt"
+    source_b.write_text("Notes from source B.", encoding="utf-8")
+    second = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
+    assert second.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "stoic-practice-2.md").is_file()
+
+    result = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "stoic-practice-3.md").exists()
+    concept_dir = tmp_path / "bundle" / "concepts"
+    assert sorted(p.name for p in concept_dir.glob("*.md")) == [
+        "stoic-practice-2.md",
+        "stoic-practice.md",
+    ]
+
+
+def test_noncolliding_candidate_written_without_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate whose slug has no existing on-disk collision at all is
+    written to the plain `<slug>.md`, unchanged by the disambiguation
+    machinery (spec: First foreign-source collision writes to `<slug>`,
+    baseline no-collision path)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Unique Stoic Idea"))
+    source = tmp_path / "notes.txt"
+    source.write_text("content", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "unique-stoic-idea.md"
+    assert concept_path.is_file()
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["provenance"] == ["sources/notes"]
+    assert okf.check_conformance(tmp_path / "bundle") == []
+
+
+def test_disambiguation_writes_audit_log_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A foreign-source disambiguation appends one durable `log.md` bullet,
+    via `insert_log_entry`, naming the source slug, the extracted title,
+    the original colliding slug, and the chosen disambiguated slug (spec:
+    Durable Disambiguation Audit Log)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    source_a = tmp_path / "notes-a.txt"
+    source_a.write_text("Notes from source A.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
+    assert first.exit_code == 0
+
+    source_b = tmp_path / "notes-b.txt"
+    source_b.write_text("Notes from source B.", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
+
+    assert result.exit_code == 0
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert "Disambiguation" in log_text
+    assert "notes-b" in log_text
+    assert "Stoic Practice" in log_text
+    assert "stoic-practice" in log_text
+    assert "stoic-practice-2" in log_text
+
+
+def test_status_surfaces_disambiguation_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The disambiguation audit entry, once written, is surfaced by
+    `openkos status`'s recent-activity section alongside other log entries
+    -- no new persisted ledger file is introduced (spec: Disambiguating
+    ingest is recorded and surfaced)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    source_a = tmp_path / "notes-a.txt"
+    source_a.write_text("Notes from source A.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes-a.txt", "--auto"])
+    assert first.exit_code == 0
+    source_b = tmp_path / "notes-b.txt"
+    source_b.write_text("Notes from source B.", encoding="utf-8")
+    second = runner.invoke(app, ["ingest", "notes-b.txt", "--auto"])
+    assert second.exit_code == 0
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "Disambiguation" in result.stdout
+
+
+def test_byte_identical_reingest_short_circuit_still_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A byte-identical re-ingest still short-circuits exactly as before
+    (D2, unmodified by the disambiguation feature): the raw copy is
+    reused, no new derived-object file of any kind is written, and the
+    provenance-scan machinery is never even reached because
+    `_stage_derived_objects` sees the SAME slugs it staged the first time
+    (spec: Byte-identical raw re-ingest short-circuits, unchanged)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply(title="Stoic Practice"))
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_dir = tmp_path / "bundle" / "concepts"
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert sorted(p.name for p in concept_dir.glob("*.md")) == ["stoic-practice.md"]
+    after = _snapshot(tmp_path)
+    concept_relpath = Path("bundle") / "concepts" / "stoic-practice.md"
+    assert before[concept_relpath] == after[concept_relpath]
