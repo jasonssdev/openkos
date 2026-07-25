@@ -2314,6 +2314,226 @@ def _expected_post_merge_index_and_log(
     return expected_index, expected_log
 
 
+@dataclass(frozen=True)
+class PreparedMerge:
+    """Pure Phase-A result of `prepare_merge`: everything `merge`'s preview,
+    confirm gate, and `merge_core` need, built in memory without writing
+    anything (design: merge-core Extraction, Slice 2b-i). `review` carries
+    `cfg.review`, consumed only by the command's confirm gate -- `prepare_merge`
+    itself never prompts."""
+
+    survivor_canonical: str
+    absorbed_canonical: str
+    plan: "bundle_merge.MergePlan"
+    new_index_text: str
+    new_log_text: str
+    other_files: dict[str, str]
+    link_rewrites: list[okf.LinkRewrite]
+    relation_rewrites: list[okf.RelationRewrite]
+    rewritten_files: list[str]
+    relation_rewritten_files: list[str]
+    touched_files: list[str]
+    removed: int
+    dropped_self_loops: list[okf.Relation]
+    deduped_collisions: list[okf.Relation]
+    sensitivity_before: str
+    sensitivity_after: str
+    review: bool
+    now: datetime
+
+
+@dataclass(frozen=True)
+class MergeResult:
+    """Pure Phase-B result of `merge_core`: what got written, for the
+    command's success echo and `_autocommit` path list. `merge_core` itself
+    performs NO VCS side effect (design decision: `_autocommit` stays in the
+    command)."""
+
+    survivor_canonical: str
+    absorbed_canonical: str
+    touched_files: list[str]
+    committed_paths: list[str]
+
+
+def prepare_merge(
+    bundle_dir: Path,
+    index_path: Path,
+    log_path: Path,
+    survivor_path: Path,
+    absorbed_path: Path,
+    survivor_canonical: str,
+    absorbed_canonical: str,
+    root: Path,
+    *,
+    now: datetime,
+) -> PreparedMerge:
+    """Phase A (pure, no writes): read config + the four texts, scan for
+    inbound link/relation rewrites, plan the merge, and recompute the
+    preview data -- extracted verbatim from `merge`'s former inline body
+    (`main.py:2453-2519`, design: merge-core Extraction, Slice 2b-i).
+    Non-interactive; raises `OSError`/`ValueError` on bad input. Writes
+    nothing to disk."""
+    cfg = config.read_config(root)
+    survivor_text = survivor_path.read_text(encoding="utf-8")
+    absorbed_text = absorbed_path.read_text(encoding="utf-8")
+    index_text = index_path.read_text(encoding="utf-8")
+    log_text = log_path.read_text(encoding="utf-8")
+
+    other_files: dict[str, str] = {}
+    for path in sorted(bundle_dir.rglob("*.md")):
+        if path.name in okf.RESERVED_FILENAMES:
+            continue
+        if path in (survivor_path, absorbed_path):
+            continue
+        rel = path.relative_to(bundle_dir).as_posix()
+        other_files[rel] = path.read_text(encoding="utf-8")
+
+    link_rewrites = bundle_links.find_inbound_link_rewrites(
+        other_files,
+        absorbed_id=absorbed_canonical,
+        survivor_id=survivor_canonical,
+    )
+    # Same `other_files` whole-bundle snapshot, captured ONCE above
+    # BEFORE any write -- both scans see identical pre-merge bytes
+    # (design D3).
+    relation_rewrites = bundle_relations.find_inbound_relation_rewrites(
+        other_files,
+        absorbed_id=absorbed_canonical,
+        survivor_id=survivor_canonical,
+    )
+
+    plan = bundle_merge.plan_merge(
+        survivor_id=survivor_canonical,
+        absorbed_id=absorbed_canonical,
+        survivor_text=survivor_text,
+        absorbed_text=absorbed_text,
+        index_text=index_text,
+        log_text=log_text,
+        merged_at=now.isoformat(),
+        link_rewrites=link_rewrites,
+        relation_rewrites=relation_rewrites,
+    )
+
+    # The OUTBOUND merge_relations report (dropped self-loops, deduped
+    # collisions) for the preview below: recomputed here from the SAME
+    # survivor/absorbed metadata `plan_merge` -> `build_merged_document`
+    # already used internally, since neither is exposed on `MergePlan`
+    # (design: "preview report comes from merge_relations return").
+    # Pure and deterministic -- calling it a second time is cheap and
+    # never diverges from what `plan.merged_survivor` actually carries.
+    survivor_metadata, _ = okf.load_frontmatter(survivor_text)
+    absorbed_metadata, _ = okf.load_frontmatter(absorbed_text)
+    _, dropped_self_loops, deduped_collisions = okf.merge_relations(
+        okf.decode_relations(survivor_metadata),
+        okf.decode_relations(absorbed_metadata),
+        survivor_id=survivor_canonical,
+        absorbed_id=absorbed_canonical,
+    )
+
+    new_index_text, removed = bundle_index.remove_index_entry(
+        index_text, absorbed_canonical
+    )
+    new_log_text = bundle_log.insert_log_entry(
+        log_text,
+        now.astimezone().date(),
+        f"**Merge**: Merged [{absorbed_canonical}](/{absorbed_canonical}.md) "
+        f"into [{survivor_canonical}](/{survivor_canonical}.md).",
+    )
+
+    rewritten_files = sorted({rewrite.file for rewrite in link_rewrites})
+    relation_rewritten_files = sorted({rewrite.file for rewrite in relation_rewrites})
+    touched_files = sorted(set(rewritten_files) | set(relation_rewritten_files))
+    sensitivity_before = plan.ledger_entry.sensitivity_before or "(none)"
+    sensitivity_after = plan.ledger_entry.sensitivity_after
+
+    return PreparedMerge(
+        survivor_canonical=survivor_canonical,
+        absorbed_canonical=absorbed_canonical,
+        plan=plan,
+        new_index_text=new_index_text,
+        new_log_text=new_log_text,
+        other_files=other_files,
+        link_rewrites=link_rewrites,
+        relation_rewrites=relation_rewrites,
+        rewritten_files=rewritten_files,
+        relation_rewritten_files=relation_rewritten_files,
+        touched_files=touched_files,
+        removed=removed,
+        dropped_self_loops=dropped_self_loops,
+        deduped_collisions=deduped_collisions,
+        sensitivity_before=sensitivity_before,
+        sensitivity_after=sensitivity_after,
+        review=cfg.review,
+        now=now,
+    )
+
+
+def merge_core(
+    bundle_dir: Path,
+    index_path: Path,
+    log_path: Path,
+    prepared: PreparedMerge,
+) -> MergeResult:
+    """Phase B (after confirm): ordered writes -- `index.md` then `log.md`,
+    every touched file's rewrite, the merged survivor (carrying the
+    `merged_from` ledger) LAST among writes, then removes the absorbed file
+    -- extracted verbatim from `merge`'s former inline body
+    (`main.py:2559-2596`, design: merge-core Extraction, Slice 2b-i).
+    Non-interactive; raises `OSError`/`ValueError`. Performs NO VCS side
+    effect -- `_autocommit` stays the command's responsibility."""
+    fsio.write_atomic(index_path, prepared.new_index_text)
+    fsio.write_atomic(log_path, prepared.new_log_text)
+
+    # All inbound-link rewrites AND inbound-relation retargets are
+    # computed BEFORE any of them (or the survivor/ledger) is written: a
+    # compute-time failure on any one file thus leaves every other file
+    # untouched, so a re-run's fresh Phase-A rescan sees every still-
+    # absorbed-linked/related file exactly as it was and rewrites it
+    # from scratch -- no file is left silently half-migrated by this
+    # step. A file present in BOTH `rewritten_files` and
+    # `relation_rewritten_files` gets both transforms applied to the
+    # SAME in-memory text -- safe, since they touch disjoint regions
+    # (body link vs. frontmatter `relations:`, design D5).
+    survivor_canonical = prepared.survivor_canonical
+    absorbed_canonical = prepared.absorbed_canonical
+    rewritten_texts = {
+        rel: bundle_relations.apply_relation_rewrites(
+            _apply_link_rewrite_idempotently(
+                prepared.other_files[rel], file=rel, rewrites=prepared.link_rewrites
+            ),
+            file=rel,
+            survivor_id=survivor_canonical,
+            absorbed_id=absorbed_canonical,
+            rewrites=prepared.relation_rewrites,
+        )
+        for rel in prepared.touched_files
+    }
+    for rel in prepared.touched_files:
+        fsio.write_atomic(bundle_dir / rel, rewritten_texts[rel])
+
+    # The merged survivor (with its `merged_from` ledger) is committed
+    # LAST among the writes, only once every rewrite above has
+    # succeeded -- see `merge`'s docstring for why that ordering is what
+    # makes a mid-rewrite failure cleanly retryable.
+    survivor_path = bundle_dir / f"{survivor_canonical}.md"
+    absorbed_path = bundle_dir / f"{absorbed_canonical}.md"
+    fsio.write_atomic(survivor_path, prepared.plan.merged_survivor)
+    fsio.remove_file(absorbed_path)
+
+    return MergeResult(
+        survivor_canonical=survivor_canonical,
+        absorbed_canonical=absorbed_canonical,
+        touched_files=prepared.touched_files,
+        committed_paths=[
+            "index.md",
+            "log.md",
+            *(f"bundle/{rel}" for rel in prepared.touched_files),
+            f"bundle/{survivor_canonical}.md",
+            f"bundle/{absorbed_canonical}.md",
+        ],
+    )
+
+
 @app.command()
 def merge(
     survivor_id: str = typer.Argument(
@@ -2451,71 +2671,16 @@ def merge(
     now = datetime.now(UTC)
 
     try:
-        cfg = config.read_config(root)
-        survivor_text = survivor_path.read_text(encoding="utf-8")
-        absorbed_text = absorbed_path.read_text(encoding="utf-8")
-        index_text = index_path.read_text(encoding="utf-8")
-        log_text = log_path.read_text(encoding="utf-8")
-
-        other_files: dict[str, str] = {}
-        for path in sorted(layout.bundle_dir.rglob("*.md")):
-            if path.name in okf.RESERVED_FILENAMES:
-                continue
-            if path in (survivor_path, absorbed_path):
-                continue
-            rel = path.relative_to(layout.bundle_dir).as_posix()
-            other_files[rel] = path.read_text(encoding="utf-8")
-
-        link_rewrites = bundle_links.find_inbound_link_rewrites(
-            other_files,
-            absorbed_id=absorbed_canonical,
-            survivor_id=survivor_canonical,
-        )
-        # Same `other_files` whole-bundle snapshot, captured ONCE above
-        # BEFORE any write -- both scans see identical pre-merge bytes
-        # (design D3).
-        relation_rewrites = bundle_relations.find_inbound_relation_rewrites(
-            other_files,
-            absorbed_id=absorbed_canonical,
-            survivor_id=survivor_canonical,
-        )
-
-        plan = bundle_merge.plan_merge(
-            survivor_id=survivor_canonical,
-            absorbed_id=absorbed_canonical,
-            survivor_text=survivor_text,
-            absorbed_text=absorbed_text,
-            index_text=index_text,
-            log_text=log_text,
-            merged_at=now.isoformat(),
-            link_rewrites=link_rewrites,
-            relation_rewrites=relation_rewrites,
-        )
-
-        # The OUTBOUND merge_relations report (dropped self-loops, deduped
-        # collisions) for the preview below: recomputed here from the SAME
-        # survivor/absorbed metadata `plan_merge` -> `build_merged_document`
-        # already used internally, since neither is exposed on `MergePlan`
-        # (design: "preview report comes from merge_relations return").
-        # Pure and deterministic -- calling it a second time is cheap and
-        # never diverges from what `plan.merged_survivor` actually carries.
-        survivor_metadata, _ = okf.load_frontmatter(survivor_text)
-        absorbed_metadata, _ = okf.load_frontmatter(absorbed_text)
-        _, dropped_self_loops, deduped_collisions = okf.merge_relations(
-            okf.decode_relations(survivor_metadata),
-            okf.decode_relations(absorbed_metadata),
-            survivor_id=survivor_canonical,
-            absorbed_id=absorbed_canonical,
-        )
-
-        new_index_text, removed = bundle_index.remove_index_entry(
-            index_text, absorbed_canonical
-        )
-        new_log_text = bundle_log.insert_log_entry(
-            log_text,
-            now.astimezone().date(),
-            f"**Merge**: Merged [{absorbed_canonical}](/{absorbed_canonical}.md) "
-            f"into [{survivor_canonical}](/{survivor_canonical}.md).",
+        prepared = prepare_merge(
+            layout.bundle_dir,
+            index_path,
+            log_path,
+            survivor_path,
+            absorbed_path,
+            survivor_canonical,
+            absorbed_canonical,
+            root,
+            now=now,
         )
     except (OSError, ValueError) as exc:
         typer.echo(
@@ -2523,29 +2688,25 @@ def merge(
         )
         raise typer.Exit(code=1) from exc
 
-    rewritten_files = sorted({rewrite.file for rewrite in link_rewrites})
-    relation_rewritten_files = sorted({rewrite.file for rewrite in relation_rewrites})
-    touched_files = sorted(set(rewritten_files) | set(relation_rewritten_files))
-    sensitivity_before = plan.ledger_entry.sensitivity_before or "(none)"
-    sensitivity_after = plan.ledger_entry.sensitivity_after
-
     typer.echo("openkos merge: proposed changes:")
-    typer.echo(f"  ~ sensitivity: {sensitivity_before} -> {sensitivity_after}")
-    for relation in dropped_self_loops:
+    typer.echo(
+        f"  ~ sensitivity: {prepared.sensitivity_before} -> {prepared.sensitivity_after}"
+    )
+    for relation in prepared.dropped_self_loops:
         typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
-    for relation in deduped_collisions:
+    for relation in prepared.deduped_collisions:
         typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
-    for rel in rewritten_files:
+    for rel in prepared.rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
-    for rel in relation_rewritten_files:
+    for rel in prepared.relation_rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (retarget relation to survivor)")
-    if removed >= 1:
+    if prepared.removed >= 1:
         typer.echo(f"  ~ {index_path.name} (remove entry)")
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
     typer.echo(f"  ~ bundle/{survivor_canonical}.md (merged content)")
     typer.echo(f"  - bundle/{absorbed_canonical}.md")
 
-    if not auto and cfg.review:
+    if not auto and prepared.review:
         if sys.stdin.isatty():
             typer.confirm("Proceed with these changes?", abort=True)
         else:
@@ -2557,40 +2718,7 @@ def merge(
             raise typer.Exit(code=1)
 
     try:
-        fsio.write_atomic(index_path, new_index_text)
-        fsio.write_atomic(log_path, new_log_text)
-
-        # All inbound-link rewrites AND inbound-relation retargets are
-        # computed BEFORE any of them (or the survivor/ledger) is written: a
-        # compute-time failure on any one file thus leaves every other file
-        # untouched, so a re-run's fresh Phase-A rescan sees every still-
-        # absorbed-linked/related file exactly as it was and rewrites it
-        # from scratch -- no file is left silently half-migrated by this
-        # step. A file present in BOTH `rewritten_files` and
-        # `relation_rewritten_files` gets both transforms applied to the
-        # SAME in-memory text -- safe, since they touch disjoint regions
-        # (body link vs. frontmatter `relations:`, design D5).
-        rewritten_texts = {
-            rel: bundle_relations.apply_relation_rewrites(
-                _apply_link_rewrite_idempotently(
-                    other_files[rel], file=rel, rewrites=link_rewrites
-                ),
-                file=rel,
-                survivor_id=survivor_canonical,
-                absorbed_id=absorbed_canonical,
-                rewrites=relation_rewrites,
-            )
-            for rel in touched_files
-        }
-        for rel in touched_files:
-            fsio.write_atomic(layout.bundle_dir / rel, rewritten_texts[rel])
-
-        # The merged survivor (with its `merged_from` ledger) is committed
-        # LAST among the writes, only once every rewrite above has
-        # succeeded -- see this command's docstring for why that ordering
-        # is what makes a mid-rewrite failure cleanly retryable.
-        fsio.write_atomic(survivor_path, plan.merged_survivor)
-        fsio.remove_file(absorbed_path)
+        result = merge_core(layout.bundle_dir, index_path, log_path, prepared)
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos merge: failed while writing the merge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
@@ -2606,7 +2734,7 @@ def merge(
         [
             "bundle/index.md",
             "bundle/log.md",
-            *(f"bundle/{rel}" for rel in touched_files),
+            *(f"bundle/{rel}" for rel in result.touched_files),
             f"bundle/{survivor_canonical}.md",
             f"bundle/{absorbed_canonical}.md",
         ],
