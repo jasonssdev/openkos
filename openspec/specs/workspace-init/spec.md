@@ -98,8 +98,21 @@ or serializer. A colon `:` MUST be allowed in the value, since the default
 `qwen3:8b` and Ollama `name:tag` tags contain one. An empty or blank
 (post-trim) value, or a value containing whitespace, a quote (`'` or `"`),
 `#`, or a newline, MUST be rejected before any file is written.
+`validate_model` MUST additionally reject, case-insensitively, any value
+that is EXACTLY one of the YAML 1.1 boolean/null literals recognized by
+PyYAML's default resolver: `yes`, `no`, `true`, `false`, `on`, `off`,
+`null`, and `~`, in any casing PyYAML accepts for those words (including
+but not limited to `Yes`, `YES`, `No`, `NO`, `True`, `TRUE`, `False`,
+`FALSE`, `On`, `ON`, `Off`, `OFF`, `Null`, `NULL`). This rejection MUST be
+exact-token, not substring — a value that merely contains a reserved word
+as part of a longer token (e.g. `yesmodel`, `notus`) MUST still be
+accepted, since it does not resolve to a YAML boolean/null on round-trip.
 (Previously: the template pinned a static `model: qwen3:8b` line with no
-per-workspace substitution of any field.)
+per-workspace substitution of any field. Additionally: `validate_model`
+rejected blank/whitespace values, quotes, `#`, newlines, and
+leading/trailing-colon or leading-dash forms, but did not reject the YAML
+1.1 reserved boolean/null word set, allowing values like `yes` to be
+written and then re-read as the Python `bool` `True`.)
 
 #### Scenario: Byte-identical template except model, default path
 
@@ -179,6 +192,73 @@ per-workspace substitution of any field.)
 - THEN init succeeds, and `openkos.yaml` contains the `model:` line with
   the colon-containing tag written verbatim (`model: mistral:7b` or
   `model: qwen3:8b` respectively)
+
+#### Scenario: Reserved YAML boolean/null word is rejected, case-insensitively
+
+- GIVEN an empty current directory
+- WHEN `openkos init --model` is passed any of `yes`, `no`, `true`,
+  `false`, `on`, `off`, `null`, `~`, or a case variant such as `Yes`,
+  `YES`, `TRUE`, or `Off`
+- THEN `validate_model` raises `ValueError` with a clear message, init
+  exits non-zero, no workspace artifact is created, and `openkos.yaml`
+  does not exist
+
+#### Scenario: Reserved-word substring is still accepted
+
+- GIVEN an empty current directory
+- WHEN `openkos init --model` is passed `yesmodel` or `notus` — tags that
+  contain a reserved word as a substring but are not exactly one
+- THEN init succeeds and `openkos.yaml` contains that exact tag, unmodified
+
+#### Scenario: Legitimate existing tags remain accepted
+
+- GIVEN an empty current directory
+- WHEN `openkos init --model` is passed `qwen3:8b`, `llama3.1:8b`, or
+  `bge-m3`
+- THEN init succeeds and `openkos.yaml` contains that exact tag
+
+### Requirement: Config Model Field Type Enforcement
+
+`read_config` MUST enforce that a present `model` value in `openkos.yaml` is a `str`. It MUST slot this check into the existing "checked `is not
+None`, not truthiness" conditional used for every field's fallback, without
+altering that pattern for `model` or any other field (e.g. `review: false`
+MUST still survive untouched). WHEN the parsed `model` value is present but
+not a `str` (for example a YAML 1.1 boolean or null literal that PyYAML
+resolved to `bool`/`NoneType`), `read_config` MUST raise `ValueError` with a
+message that identifies `model` as the offending field and states that a
+string value is required. WHEN `model` is absent from the YAML, or present
+as YAML `null`, it MUST fall back to `DEFAULT_MODEL` unchanged — this is not
+a type error. WHEN `model` is a normal string, `read_config` MUST use it
+unchanged.
+
+##### Scenario: Boolean-typed model value raises ValueError
+
+- GIVEN an `openkos.yaml` containing `model: yes`, which PyYAML's default
+  resolver parses as the Python `bool` `True`
+- WHEN `read_config` parses the file
+- THEN it raises `ValueError` naming `model` as the offending field and
+  stating that a string is required
+
+##### Scenario: Absent or null model falls back to the default
+
+- GIVEN an `openkos.yaml` with no `model` key, or `model: null` / `model: ~`
+- WHEN `read_config` parses the file
+- THEN the resulting `Config.model` equals `DEFAULT_MODEL`, and no
+  `ValueError` is raised
+
+##### Scenario: String model is used unchanged
+
+- GIVEN an `openkos.yaml` containing `model: qwen3:8b`
+- WHEN `read_config` parses the file
+- THEN the resulting `Config.model` equals `"qwen3:8b"` exactly
+
+##### Scenario: Explicit review: false is unaffected by the model type check
+
+- GIVEN an `openkos.yaml` containing `review: false` and a valid string
+  `model`
+- WHEN `read_config` parses the file
+- THEN `Config.review` is `False`, preserving the existing "is not None, not
+  truthiness" fallback behavior for other fields
 
 ### Requirement: Static AGENTS.md Template
 
