@@ -432,6 +432,124 @@ def _adjudication_payload(
     ]
 
 
+def _run_adjudicate_apply(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    index_path: Path,
+    log_path: Path,
+    results: Sequence[AdjudicatedCandidate],
+) -> None:
+    """The interactive `adjudicate --apply` merge walk (issue #137 Slice
+    2b-ii, design D2-D9): per SAME 2-member group (D3), re-verify both
+    member ids still exist (D4, since an earlier merge this same run may
+    have absorbed a later group's member), preview what `prepare_merge`
+    would fuse (D5), prompt `[y/N/skip]` (D6), and on `y` execute
+    `merge_core` + `_autocommit` (D7) -- reusing every 2b-i building block
+    verbatim. A mid-run write failure (D8) stops the loop immediately;
+    prior per-merge commits remain intact and reversible via `unmerge`. A
+    final summary line (D9) always prints, even when nothing is eligible."""
+    applied = 0
+    skipped_n_gt2 = 0
+    skipped_already_merged = 0
+    skipped_declined = 0
+
+    for result in results:
+        group = result.candidate
+        if result.verdict is not Verdict.SAME:
+            continue
+        if len(group.member_ids) != 2:
+            if len(group.member_ids) > 2:
+                typer.echo(
+                    f"[{group.okf_type}] {group.member_ids}: "
+                    f"skipped (N>2, merge manually)"
+                )
+                skipped_n_gt2 += 1
+            continue
+
+        survivor_id, absorbed_id = group.member_ids
+
+        try:
+            survivor_path, survivor_canonical = _resolve_concept_path(
+                layout.bundle_dir, survivor_id
+            )
+            absorbed_path, absorbed_canonical = _resolve_concept_path(
+                layout.bundle_dir, absorbed_id
+            )
+        except ValueError:
+            typer.echo(
+                f"{survivor_id} / {absorbed_id}: skipped (member already merged)"
+            )
+            skipped_already_merged += 1
+            continue
+
+        now = datetime.now(UTC)
+        try:
+            prepared = prepare_merge(
+                layout.bundle_dir,
+                index_path,
+                log_path,
+                survivor_path,
+                absorbed_path,
+                survivor_canonical,
+                absorbed_canonical,
+                root,
+                now=now,
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos adjudicate --apply: failed while merging "
+                f"{absorbed_canonical} into {survivor_canonical} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        typer.echo(
+            f"  merge {absorbed_canonical} into {survivor_canonical} "
+            f"(sensitivity {prepared.sensitivity_before}->"
+            f"{prepared.sensitivity_after}, {len(prepared.touched_files)} "
+            f"rewrite(s), removes bundle/{absorbed_canonical}.md)"
+        )
+        answer = typer.prompt(
+            f"Merge {absorbed_canonical} into {survivor_canonical}? [y/N/skip]",
+            default="N",
+            show_default=False,
+        )
+        if answer.strip().lower() not in {"y", "yes"}:
+            skipped_declined += 1
+            continue
+
+        try:
+            merge_result = merge_core(layout.bundle_dir, index_path, log_path, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos adjudicate --apply: failed while merging "
+                f"{absorbed_canonical} into {survivor_canonical} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        _autocommit(
+            root,
+            [
+                "bundle/index.md",
+                "bundle/log.md",
+                *(f"bundle/{rel}" for rel in merge_result.touched_files),
+                f"bundle/{survivor_canonical}.md",
+                f"bundle/{absorbed_canonical}.md",
+            ],
+            f"openkos: merge {absorbed_canonical} into {survivor_canonical}",
+        )
+        applied += 1
+
+    skipped_total = skipped_n_gt2 + skipped_already_merged + skipped_declined
+    prefix = "nothing to apply -- " if applied == 0 and skipped_total == 0 else ""
+    typer.echo(
+        f"openkos adjudicate --apply: {prefix}applied {applied}, skipped "
+        f"{skipped_total} (N>2: {skipped_n_gt2}, "
+        f"already-merged: {skipped_already_merged}, declined: {skipped_declined})"
+    )
+
+
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 _TITLE_SEPARATOR_RE = re.compile(r"[-_]+")
 
@@ -3808,6 +3926,11 @@ def adjudicate(
         "--json",
         help="Emit adjudication verdicts as JSON to stdout; suppress human output.",
     ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Interactively merge each SAME 2-member group after previewing it.",
+    ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
 
@@ -3858,7 +3981,20 @@ def adjudicate(
 
     No file under the workspace is ever created, modified, or deleted (spec:
     Verb renders verdicts with zero writes).
+
+    `--apply` switches to an INTERACTIVE merge walk over the same
+    adjudication results (issue #137 Slice 2b-ii): mutually exclusive with
+    `--json` (interactive vs. machine-readable output is contradictory), so
+    that combination is rejected up front, before any workspace gate or
+    read, with exit code 2.
     """
+    if apply and json_output:
+        typer.echo(
+            "openkos adjudicate: --apply and --json are mutually exclusive.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
     root = Path.cwd()
     reason = config.require_workspace(root)
     if reason is not None:
@@ -3866,6 +4002,8 @@ def adjudicate(
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
     try:
         cfg = config.read_config(root)
     except (OSError, ValueError) as exc:
@@ -3917,6 +4055,10 @@ def adjudicate(
         typer.echo(
             json.dumps(_adjudication_payload(results, same_only=same_only), indent=2)
         )
+        return
+
+    if apply:
+        _run_adjudicate_apply(root, layout, index_path, log_path, results)
         return
 
     typer.echo(f"openkos adjudicate: workspace at {root}")
