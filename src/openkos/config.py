@@ -16,6 +16,7 @@ from typing import NamedTuple
 import yaml
 
 from openkos import fsio
+from openkos.model import types
 
 DEFAULT_MODEL = "qwen3:8b"
 """The packaged default Ollama model tag, offered when no `--model` is given."""
@@ -408,3 +409,221 @@ def read_config(root: Path) -> Config:
         ),
         type_tiers=(type_tiers if type_tiers is not None else {}),
     )
+
+
+_TYPE_TIERS_HEADER_PREFIX = "type_tiers:"
+"""Column-0-only header prefix `set_type_tier` looks for. A leading `#`
+never matches this (string `startswith` on the RAW line, no lstrip), so the
+shipped-template fully-commented `# type_tiers:` line is correctly treated
+as case (c) -- absent -- not as an editable header."""
+
+_TYPE_TIERS_ENTRY_RE = re.compile(
+    r"^(?P<indent>[ \t]+)(?P<key>[A-Za-z_][A-Za-z0-9_]*):(?P<sep>[ \t]*)"
+    r"(?P<val>\S+)(?P<rest>.*)$"
+)
+"""One `type_tiers:` block entry: `{indent}{Key}:{sep}{val}{rest}`, where
+`rest` is everything after the value to end-of-line (a trailing comment or
+trailing whitespace), captured so case (a)'s rewrite can preserve it
+byte-for-byte."""
+
+
+def _split_line_ending(line: str) -> tuple[str, str]:
+    """Split `line` (from `str.splitlines(keepends=True)`) into its content
+    and its original line terminator (`"\\n"`, `"\\r\\n"`, or `""` for a
+    final line with none), so a rewritten line can keep the exact same
+    terminator it had before."""
+    if line.endswith("\r\n"):
+        return line[:-2], "\r\n"
+    if line.endswith("\n"):
+        return line[:-1], "\n"
+    return line, ""
+
+
+@dataclass(frozen=True)
+class _TypeTierEntry:
+    """One parsed `type_tiers:` block entry, plus its position in the file."""
+
+    line_index: int
+    indent: str
+    key: str
+    sep: str
+    val: str
+    rest: str
+
+
+def _validate_type_tier_vocab(concept_type: str, tier: str) -> None:
+    valid_types = {ot.name for ot in types.REGISTRY}
+    if concept_type not in valid_types:
+        raise ValueError(
+            f"{concept_type!r} is not a known concept type "
+            f"(expected one of {sorted(valid_types)})"
+        )
+    if tier not in types.VOLATILITY_TIERS:
+        raise ValueError(
+            f"{tier!r} is not a valid volatility tier "
+            f"(expected one of {sorted(types.VOLATILITY_TIERS)})"
+        )
+
+
+def _append_fresh_type_tiers_block(yaml_text: str, concept_type: str, tier: str) -> str:
+    """Case (c): no uncommented `type_tiers:` header exists (absent, or the
+    shipped-template fully-commented state) -- append a brand-new block at
+    EOF after ensuring exactly one trailing newline; the rest of the file is
+    untouched."""
+    if not yaml_text:
+        base = ""
+    elif yaml_text.endswith("\n"):
+        base = yaml_text.rstrip("\n") + "\n"
+    else:
+        base = yaml_text + "\n"
+    return f"{base}type_tiers:\n  {concept_type}: {tier}\n"
+
+
+def _parse_type_tiers_block(lines: list[str], header_idx: int) -> list[_TypeTierEntry]:
+    """Parse the `type_tiers:` block body starting right after `header_idx`.
+
+    The body is every following line that is blank, a comment (at any
+    indent, including column 0), or a real `{indent}Key: val` entry; it ends
+    at the first column-0 line that is neither blank nor a comment (the next
+    top-level key). Raises `ValueError` on a tab-indented entry or a line
+    inside the block that is indented but does not parse as an entry
+    (fail-closed on any un-editable shape)."""
+    entries: list[_TypeTierEntry] = []
+    idx = header_idx + 1
+    while idx < len(lines):
+        content, _ = _split_line_ending(lines[idx])
+        stripped = content.strip()
+        if stripped == "" or stripped.startswith("#"):
+            idx += 1
+            continue
+        if not content[:1].isspace():
+            break
+        match = _TYPE_TIERS_ENTRY_RE.match(content)
+        if match is None:
+            raise ValueError(
+                "openkos.yaml: unrecognized line inside the 'type_tiers:' "
+                f"block (line {idx + 1})"
+            )
+        indent = match.group("indent")
+        if "\t" in indent:
+            raise ValueError(
+                "openkos.yaml: tab-indented 'type_tiers:' entry is not supported"
+            )
+        rest = match.group("rest")
+        rest_stripped = rest.strip()
+        if rest_stripped and not rest_stripped.startswith("#"):
+            # The value token is `\S+`, so anything non-comment after it (a
+            # second token, a YAML anchor tail like `&a slow`, a spilled quoted
+            # value) would be blindly re-appended by the case (a) rewrite and
+            # silently corrupt the value. Refuse rather than guess -- only a
+            # bare tier and an optional trailing comment are editable.
+            raise ValueError(
+                "openkos.yaml: unsupported value in the 'type_tiers:' entry "
+                f"(line {idx + 1}); only a bare tier and an optional trailing "
+                "comment are supported"
+            )
+        entries.append(
+            _TypeTierEntry(
+                line_index=idx,
+                indent=indent,
+                key=match.group("key"),
+                sep=match.group("sep"),
+                val=match.group("val"),
+                rest=rest,
+            )
+        )
+        idx += 1
+
+    if entries:
+        first_indent = entries[0].indent
+        if any(entry.indent != first_indent for entry in entries):
+            raise ValueError(
+                "openkos.yaml: inconsistent indentation inside the 'type_tiers:' block"
+            )
+        key_counts: dict[str, int] = {}
+        for entry in entries:
+            key_counts[entry.key] = key_counts.get(entry.key, 0) + 1
+        if any(count > 1 for count in key_counts.values()):
+            raise ValueError(
+                "openkos.yaml: duplicate entry inside the 'type_tiers:' block"
+            )
+    return entries
+
+
+def set_type_tier(yaml_text: str, concept_type: str, tier: str) -> str:
+    """Return `yaml_text` with `type_tiers[concept_type] = tier` set via
+    comment-safe text surgery -- never a YAML round-trip, so every other
+    line, including comments, stays byte-identical (freshness-suggest-
+    windows / `set-volatility` write verb, #140).
+
+    Three edit cases, all load-bearing (design: "Text-Surgery Algorithm"):
+    (a) the block already has an entry for `concept_type` -- only that
+    line's value is rewritten, indent/separator/trailing comment preserved;
+    (b) the block exists but has no entry for `concept_type` -- a new
+    `{indent}{concept_type}: {tier}` line is inserted right after the last
+    real entry, using the block's own canonical indent (or a fixed 2-space
+    indent if the block is empty, i.e. header-only); (c) no uncommented
+    `type_tiers:` header exists at all (absent, or the shipped-template
+    fully-commented state) -- a fresh block is appended at EOF.
+
+    Raises `ValueError` -- and returns nothing, leaving the caller to not
+    write -- on `concept_type`/`tier` outside the known vocabulary (defense-
+    in-depth; the CLI validates first) or on any `type_tiers:` shape this
+    cannot confidently edit: an inline flow-mapping (`type_tiers: {...}`),
+    more than one `type_tiers:` header key, a non-mapping scalar value, a
+    tab-indented block, inconsistent entry indentation, or a duplicate entry
+    key. Idempotent: if the entry already equals `tier`, the rewritten line
+    is identical to the original, so the returned text is byte-identical to
+    `yaml_text` (defense-in-depth -- the CLI already short-circuits before
+    calling this).
+    """
+    _validate_type_tier_vocab(concept_type, tier)
+
+    lines = yaml_text.splitlines(keepends=True)
+    header_indices = [
+        i
+        for i, line in enumerate(lines)
+        if _split_line_ending(line)[0].startswith(_TYPE_TIERS_HEADER_PREFIX)
+    ]
+
+    if len(header_indices) > 1:
+        raise ValueError("openkos.yaml: multiple 'type_tiers:' keys found")
+
+    if not header_indices:
+        return _append_fresh_type_tiers_block(yaml_text, concept_type, tier)
+
+    header_idx = header_indices[0]
+    header_content, _ = _split_line_ending(lines[header_idx])
+    trailing = header_content[len(_TYPE_TIERS_HEADER_PREFIX) :]
+    trailing_stripped = trailing.strip()
+    if trailing_stripped and not trailing_stripped.startswith("#"):
+        if trailing_stripped.startswith("{"):
+            raise ValueError(
+                "openkos.yaml: inline flow-mapping 'type_tiers: {...}' is not supported"
+            )
+        raise ValueError(
+            "openkos.yaml: 'type_tiers:' has a non-mapping value "
+            f"({trailing_stripped!r})"
+        )
+
+    entries = _parse_type_tiers_block(lines, header_idx)
+    existing = next((entry for entry in entries if entry.key == concept_type), None)
+    new_lines = list(lines)
+
+    if existing is not None:
+        _, terminator = _split_line_ending(lines[existing.line_index])
+        new_content = (
+            f"{existing.indent}{existing.key}:{existing.sep}{tier}{existing.rest}"
+        )
+        new_lines[existing.line_index] = new_content + terminator
+        return "".join(new_lines)
+
+    if entries:
+        insert_indent = entries[0].indent
+        insert_at = entries[-1].line_index + 1
+    else:
+        insert_indent = "  "
+        insert_at = header_idx + 1
+
+    new_lines.insert(insert_at, f"{insert_indent}{concept_type}: {tier}\n")
+    return "".join(new_lines)

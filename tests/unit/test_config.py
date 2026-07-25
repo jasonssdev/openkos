@@ -662,3 +662,140 @@ def test_read_config_type_tiers_passes_through_verbatim(tmp_path: Path) -> None:
     result = config.read_config(tmp_path)
 
     assert result.type_tiers == {"Person": "volatile", "Project": "static"}
+
+
+# --- set-volatility (#140): `config.set_type_tier` comment-safe text surgery ---
+
+
+def test_set_type_tier_case_a_rewrites_existing_entry_value_only(
+    tmp_path: Path,
+) -> None:
+    """Case (a): block present with a `Person` entry -- only that line's
+    value changes; indent, trailing comment, and every other line stay
+    byte-identical (spec: "Updating an existing entry preserves surrounding
+    comments")."""
+    text = (
+        "model: gemma3\n"
+        "type_tiers:\n"
+        "  Person: slow\n"
+        "  Project: static  # rarely changes\n"
+        "review: true\n"
+    )
+
+    result = config.set_type_tier(text, "Person", "volatile")
+
+    assert result == (
+        "model: gemma3\n"
+        "type_tiers:\n"
+        "  Person: volatile\n"
+        "  Project: static  # rarely changes\n"
+        "review: true\n"
+    )
+
+
+def test_set_type_tier_case_b_inserts_new_entry_under_existing_block(
+    tmp_path: Path,
+) -> None:
+    """Case (b): block present, no `Procedure` entry -- inserts
+    `{indent}Procedure: volatile\\n` after the last real entry, using the
+    block's canonical indent (spec: "Adding a new type under an existing
+    block")."""
+    text = "type_tiers:\n  Person: slow\n"
+
+    result = config.set_type_tier(text, "Procedure", "volatile")
+
+    assert result == "type_tiers:\n  Person: slow\n  Procedure: volatile\n"
+
+
+def test_set_type_tier_case_b_empty_block_inserts_with_fixed_two_space_indent(
+    tmp_path: Path,
+) -> None:
+    """Case (b), empty block (header only, no entries): inserts with a fixed
+    2-space indent directly after the header, regardless of the following
+    key's own indentation."""
+    text = "type_tiers:\nother_key: value\n"
+
+    result = config.set_type_tier(text, "Person", "volatile")
+
+    assert result == "type_tiers:\n  Person: volatile\nother_key: value\n"
+
+
+def test_set_type_tier_case_c_appends_fresh_block_when_header_absent(
+    tmp_path: Path,
+) -> None:
+    """Case (c): no `type_tiers:` key at all -- appends `type_tiers:\\n  Person:
+    volatile\\n` at EOF, rest of file untouched (spec: "Block absent or fully
+    commented is created fresh")."""
+    text = "model: gemma3\nreview: true\n"
+
+    result = config.set_type_tier(text, "Person", "volatile")
+
+    assert result == "model: gemma3\nreview: true\ntype_tiers:\n  Person: volatile\n"
+
+
+def test_set_type_tier_case_c_appends_fresh_block_when_fully_commented(
+    tmp_path: Path,
+) -> None:
+    """Case (c): the shipped-template fully-commented `# type_tiers:` state
+    never matches the real header (leading `#`) -- treated as absent, block
+    appended fresh at EOF."""
+    text = "model: gemma3\n# type_tiers:\n#   Person: volatile\nreview: true\n"
+
+    result = config.set_type_tier(text, "Person", "volatile")
+
+    assert result == (
+        "model: gemma3\n# type_tiers:\n#   Person: volatile\nreview: true\n"
+        "type_tiers:\n  Person: volatile\n"
+    )
+
+
+def test_set_type_tier_idempotent_identity_returns_byte_identical_text(
+    tmp_path: Path,
+) -> None:
+    """Defense-in-depth: an entry already equal to the target tier returns
+    text byte-identical to the input (CLI still short-circuits before
+    calling the core -- see the CLI idempotence tests)."""
+    text = "type_tiers:\n  Person: volatile\n"
+
+    result = config.set_type_tier(text, "Person", "volatile")
+
+    assert result == text
+
+
+@pytest.mark.parametrize(
+    "bad_text",
+    [
+        "type_tiers: {Person: volatile}\n",
+        "type_tiers:\n  Person: slow\ntype_tiers:\n  Project: static\n",
+        "type_tiers: foo\n",
+        "type_tiers: [a, b]\n",
+        "type_tiers: null\n",
+        "type_tiers:\n\tPerson: slow\n",
+        "type_tiers:\n  Person: slow\n    Project: static\n",
+        "type_tiers:\n  Person: slow\n  Person: volatile\n",
+        "type_tiers:\n  Person: slow extra\n",
+        "type_tiers:\n  Person: &anchor slow\n",
+    ],
+)
+def test_set_type_tier_fails_closed_on_unparseable_shapes(bad_text: str) -> None:
+    """Every un-editable `type_tiers:` shape (inline flow-mapping, multiple
+    header keys, non-mapping scalar, tab-indented block, inconsistent entry
+    indent, duplicate entry, and a non-bare/non-comment trailing value such as
+    a second token or a YAML anchor tail) raises `ValueError` -- fail-closed, no
+    partial edit returned (spec: "Fail-Closed On Unparseable Config Shape")."""
+    with pytest.raises(ValueError, match=r"openkos\.yaml"):
+        config.set_type_tier(bad_text, "Person", "volatile")
+
+
+def test_set_type_tier_rejects_unknown_concept_type() -> None:
+    """Defense-in-depth vocabulary check in the core: an unknown
+    `concept_type` raises `ValueError` even though the CLI validates first."""
+    with pytest.raises(ValueError, match="Widget"):
+        config.set_type_tier("type_tiers:\n  Person: slow\n", "Widget", "volatile")
+
+
+def test_set_type_tier_rejects_unknown_tier() -> None:
+    """Defense-in-depth vocabulary check in the core: an unknown `tier`
+    raises `ValueError` even though the CLI validates first."""
+    with pytest.raises(ValueError, match="bogus"):
+        config.set_type_tier("type_tiers:\n  Person: slow\n", "Person", "bogus")
