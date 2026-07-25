@@ -32,6 +32,7 @@ from openkos.graph import sqlite_graph
 from openkos.graph.base import GraphStore
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
+    InstalledModel,
     OllamaClient,
     OllamaError,
     OllamaModelNotFound,
@@ -340,7 +341,7 @@ def init(
     # unaffected either way.
     try:
         probe = OllamaClient(model=resolved_model, timeout=_PREFLIGHT_TIMEOUT)
-        ready = model_tag_matches(resolved_model, probe.list_models())
+        ready = model_tag_matches(resolved_model, [m.tag for m in probe.list_models()])
     except Exception:
         ready = False
     if not ready:
@@ -5556,10 +5557,12 @@ def doctor() -> None:
 
     # 3. Ollama-reachable (critical, always)
     reachable = False
-    installed: list[str] = []
+    installed: list[InstalledModel] = []
+    installed_tags: list[str] = []
     client = OllamaClient(model=model, timeout=_PREFLIGHT_TIMEOUT)
     try:
         installed = client.list_models()
+        installed_tags = [m.tag for m in installed]
         reachable = True
         results.append(
             CheckResult(
@@ -5600,7 +5603,7 @@ def doctor() -> None:
                 label, "skip", critical=True, detail="blocked: Ollama unreachable"
             )
         )
-    elif model_tag_matches(model, installed):
+    elif model_tag_matches(model, installed_tags):
         results.append(CheckResult(label, "pass", critical=True))
     else:
         results.append(
@@ -5623,7 +5626,7 @@ def doctor() -> None:
                 detail="blocked: Ollama unreachable",
             )
         )
-    elif model_tag_matches(embedding_model, installed):
+    elif model_tag_matches(embedding_model, installed_tags):
         results.append(CheckResult(embedding_label, "pass", critical=False))
     else:
         results.append(
