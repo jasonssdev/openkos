@@ -47,7 +47,7 @@ Chain strategy: pending
 - [x] 4.1 RED: `test_byte_identical_reingest_short_circuit_still_holds` (D2 untouched).
 - [x] 4.2 RED: `test_disambiguated_pair_forms_candidate_group` in the `duplicates`/`adjudicate` test module — contrasts prior "No candidates found".
 - [x] 4.3 GREEN: confirm no changes needed to `find_candidates`/`adjudicate`/`merge` (design-confirmed generic grouping); tests pass unmodified against new fixtures.
-- [ ] 4.4 Update `openspec/specs/ingestion/spec.md` to match `sdd/ingest-slug-collision/spec` delta (Modified + Added requirements). **DEFERRED to sdd-archive** — per explicit orchestrator process rule, `sdd-apply` must not touch the main `openspec/specs/` tree; the delta spec at `openspec/changes/ingest-slug-collision/specs/ingestion/spec.md` is already in sync (verified) and will be merged during archive.
+- [x] 4.4 Update `openspec/specs/ingestion/spec.md` to match `sdd/ingest-slug-collision/spec` delta (Modified + Added requirements). **MERGED during archive** — per explicit orchestrator process rule, `sdd-apply` must not touch the main `openspec/specs/` tree; the delta spec at `openspec/changes/ingest-slug-collision/specs/ingestion/spec.md` was verified already in sync and has been merged during archive.
 
 ## Phase 5: Quality Gate
 
