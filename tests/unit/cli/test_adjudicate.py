@@ -38,6 +38,8 @@ from openkos.llm.ollama import (
 )
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
+from openkos.vcs import git as vcs_git
+from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
 
@@ -959,6 +961,641 @@ def test_adjudicate_omitted_include_confidential_defaults_to_false(
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["include_confidential"] is False
+
+
+# ---------------------------------------------------------------------------
+# `adjudicate --apply` (interactive merge path, issue #137 Slice 2b-ii)
+# ---------------------------------------------------------------------------
+
+
+def _init_apply_workspace(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_init_workspace` plus a real, isolated git identity (mirrors
+    `test_main_autocommit.py::_init_workspace`) -- `--apply` auto-commits
+    each accepted merge, so tests exercising the accept path need an actual
+    git identity, never the host machine's real `~/.gitconfig`."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+
+
+def _commit_count(root: Path) -> int:
+    result = vcs_git._run(["git", "log", "--format=%H"], cwd=root)
+    return len([line for line in result.stdout.splitlines() if line])
+
+
+def _last_commit_subject(root: Path) -> str:
+    result = vcs_git._run(["git", "log", "-1", "--format=%s"], cwd=root)
+    return result.stdout.strip()
+
+
+def _seed_commit(root: Path, rel_paths: list[str], message: str = "seed") -> None:
+    """Pre-track paths via `commit_paths` -- test setup only, mirrors
+    `test_main_autocommit.py::_seed_commit`: `git add -- <deleted-untracked-
+    path>` fails, so a merge's absorbed-file removal must already be
+    tracked before `_autocommit` can stage its deletion."""
+    vcs_git.commit_paths(root, rel_paths, message)
+
+
+def test_adjudicate_apply_and_json_rejected_with_exit_code_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`adjudicate --apply --json` is rejected before any work: a clear
+    stderr message, exit code 2, and `adjudicate_candidates` is never called
+    (spec: `--apply` Rejects `--json`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "openkos.cli.main.adjudicate_candidates",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = runner.invoke(app, ["adjudicate", "--apply", "--json"])
+
+    assert result.exit_code == 2
+    assert "No such option" not in result.stderr
+    assert "openkos adjudicate" in result.stderr
+    assert "--apply" in result.stderr
+    assert "--json" in result.stderr
+    assert calls == []
+
+
+def test_adjudicate_apply_offers_a_same_two_member_group(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A SAME-verdict group with exactly 2 members is prompted for merge
+    (spec: SAME 2-member group is offered)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert "Merge concepts/b into concepts/a? [y/N/skip]" in result.stdout
+
+
+def test_adjudicate_apply_never_prompts_different_or_uncertain_groups(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DIFFERENT and UNCERTAIN groups are never offered for merge (spec:
+    DIFFERENT group is never offered)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    different_group = CandidateGroup(
+        okf_type="Concept", member_ids=("x", "y"), tier=Tier.LOW, trigger="stub-diff"
+    )
+    uncertain_group = CandidateGroup(
+        okf_type="Concept", member_ids=("p", "q"), tier=Tier.LOW, trigger="stub-unc"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [different_group, uncertain_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff"),
+            _adjudicated(uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc"),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"])
+
+    assert "[y/N/skip]" not in result.stdout
+    assert result.exit_code == 0
+
+
+def test_adjudicate_apply_same_group_with_three_members_is_skipped_not_prompted(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A SAME-verdict group with 3 members prints `skipped (N>2, merge
+    manually)` and is never prompted (spec: SAME group with >2 members is
+    skipped, not prompted)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b", "c"), tier=Tier.HIGH, trigger="stub"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"])
+
+    assert "skipped (N>2, merge manually)" in result.stdout
+    assert "[y/N/skip]" not in result.stdout
+    assert result.exit_code == 0
+
+
+def test_adjudicate_apply_overlapping_groups_second_reports_already_merged(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two overlapping SAME 2-member groups sharing a member: the first is
+    accepted (`y`), the second prints `skipped (member already merged)` and
+    the run does not crash (spec: Later group referencing an
+    already-absorbed member is skipped)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    group1 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub1",
+    )
+    group2 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/b", "concepts/c"),
+        tier=Tier.HIGH,
+        trigger="stub2",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group1, group2]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
+            _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "skipped (member already merged)" in result.stdout
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "c.md").exists()
+
+
+def _seed_one_same_group(
+    tmp_path: Path,
+) -> tuple[
+    CandidateGroup,
+    Callable[..., list[CandidateGroup]],
+    Callable[..., list[AdjudicatedCandidate]],
+]:
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+
+    return group, _fake_find_candidates, _fake_adjudicate
+
+
+def test_adjudicate_apply_preview_precedes_the_exact_prompt_text(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `prepare_merge` preview is printed before the exact prompt text
+    (spec: Preview precedes the exact prompt text)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    prompt_line = "Merge concepts/b into concepts/a? [y/N/skip]"
+    assert prompt_line in result.stdout
+    lines = result.stdout.splitlines()
+    prompt_idx = next(i for i, line in enumerate(lines) if prompt_line in line)
+    assert prompt_idx > 0
+    preview_text = "\n".join(lines[:prompt_idx])
+    assert "concepts/b" in preview_text
+    assert "concepts/a" in preview_text
+
+
+def test_adjudicate_apply_accepts_merge_updates_filesystem_and_ledger(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`input="y\\n"` applies the merge: survivor file updated, absorbed file
+    removed, index/log updated, `merged_from` ledger entry written (spec:
+    `y` applies the merge / Applied merge updates filesystem and ledger)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    survivor_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "merged_from" in survivor_text
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "concepts/b" not in index_text
+
+
+@pytest.mark.parametrize("declining_input", ["\n", "n\n", "skip\n"])
+def test_adjudicate_apply_declining_inputs_do_not_merge_and_continue(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    declining_input: str,
+) -> None:
+    """Empty input, `n`, and `skip` all decline the merge, write nothing,
+    and the run continues (spec: empty input / `skip` / `N`/`n` does not
+    merge)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input=declining_input)
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "a.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "declined" in result.stdout
+
+
+def test_adjudicate_apply_two_accepted_merges_produce_two_separate_commits(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two accepted merges auto-commit independently -- two separate
+    commits, not one commit for the whole run (spec: Two applied merges
+    produce two commits)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    _seed_commit(
+        tmp_path,
+        [
+            "bundle/concepts/a.md",
+            "bundle/concepts/b.md",
+            "bundle/concepts/c.md",
+            "bundle/concepts/d.md",
+        ],
+    )
+    group1 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub1",
+    )
+    group2 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/c", "concepts/d"),
+        tier=Tier.HIGH,
+        trigger="stub2",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group1, group2]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
+            _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    before_commits = _commit_count(tmp_path)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert _commit_count(tmp_path) == before_commits + 2
+    assert "concepts/d" in _last_commit_subject(tmp_path)
+
+
+def test_adjudicate_apply_then_unmerge_restores_the_absorbed_member(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Applying a real merge via `adjudicate --apply`, then running
+    `unmerge` against the survivor, restores the absorbed member (spec:
+    Applied merge is unmerge-reversible)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/a", "concepts/b", "--auto"]
+    )
+
+    assert unmerge_result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
+
+
+def test_adjudicate_apply_mid_run_merge_core_failure_stops_the_run(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `merge_core` failure for the first accepted merge stops the run
+    before the second group, exits non-zero with a clear stderr message, and
+    the run does not crash with a raw traceback (spec: `merge_core` failure
+    halts remaining groups)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    group1 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub1",
+    )
+    group2 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/c", "concepts/d"),
+        tier=Tier.HIGH,
+        trigger="stub2",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group1, group2]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
+            _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
+        ]
+
+    def _raise_merge_core(*args: object, **kwargs: object) -> object:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    monkeypatch.setattr("openkos.cli.main.merge_core", _raise_merge_core)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\ny\n")
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    assert result.stderr.strip() != ""
+    assert (tmp_path / "bundle" / "concepts" / "c.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "d.md").exists()
+
+
+def test_adjudicate_apply_prepare_merge_failure_stops_the_run(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `prepare_merge` (Phase A, read-only) failure halts the run before any
+    prompt or write, exits non-zero with a clear stderr message and no raw
+    traceback, and destroys nothing -- both concept files remain (spec:
+    mid-run failure stops remaining groups; `prepare_merge` writes nothing so a
+    failure there cannot corrupt on-disk state)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    group1 = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub1",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group1]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [_adjudicated(group1, verdict=Verdict.SAME, rationale="same1")]
+
+    def _raise_prepare_merge(*args: object, **kwargs: object) -> object:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    monkeypatch.setattr("openkos.cli.main.prepare_merge", _raise_prepare_merge)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    assert result.stderr.strip() != ""
+    assert (tmp_path / "bundle" / "concepts" / "a.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
+
+
+def test_adjudicate_apply_summary_reflects_applied_and_skipped_counts(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mixed run (one applied, one N>2 skip, one declined) prints
+    `applied 1, skipped 2` with the breakdown of skip reasons (spec:
+    Summary reflects applied and skipped counts)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    applied_group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub1",
+    )
+    n_gt2_group = CandidateGroup(
+        okf_type="Concept", member_ids=("x", "y", "z"), tier=Tier.HIGH, trigger="stub2"
+    )
+    declined_group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/c", "concepts/d"),
+        tier=Tier.HIGH,
+        trigger="stub3",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [applied_group, n_gt2_group, declined_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(applied_group, verdict=Verdict.SAME, rationale="r1"),
+            _adjudicated(n_gt2_group, verdict=Verdict.SAME, rationale="r2"),
+            _adjudicated(declined_group, verdict=Verdict.SAME, rationale="r3"),
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert "applied 1, skipped 2" in result.stdout
+    assert "N>2: 1" in result.stdout
+    assert "already-merged: 0" in result.stdout
+    assert "declined: 1" in result.stdout
+
+
+def test_adjudicate_apply_no_eligible_groups_prints_nothing_to_apply(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No SAME 2-member groups exist: a clear "nothing to apply" message,
+    exit 0, and no filesystem writes (spec: No eligible groups, nothing
+    applied)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    different_group = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [different_group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff")
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"])
+
+    assert result.exit_code == 0
+    assert "nothing to apply" in result.stdout.lower()
+    assert _snapshot(tmp_path) == before
+
+
+def test_adjudicate_apply_same_only_is_a_no_op_composition(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`adjudicate --apply --same-only` produces identical eligibility,
+    prompts, and outcomes as `adjudicate --apply` alone (spec: `--apply
+    --same-only` behaves like `--apply`)."""
+    plain_root = tmp_path_factory.mktemp("apply-plain")
+    _init_apply_workspace(plain_root, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(plain_root)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    plain_result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    same_only_root = tmp_path_factory.mktemp("apply-same-only")
+    _init_apply_workspace(same_only_root, tmp_path_factory, monkeypatch)
+    _, fake_find2, fake_adjudicate2 = _seed_one_same_group(same_only_root)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find2)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate2)
+
+    same_only_result = runner.invoke(
+        app, ["adjudicate", "--apply", "--same-only"], input="n\n"
+    )
+
+    def _strip_workspace_line(stdout: str) -> str:
+        return "\n".join(
+            line for line in stdout.splitlines() if "workspace at" not in line
+        )
+
+    assert plain_result.exit_code == same_only_result.exit_code == 0
+    assert _strip_workspace_line(plain_result.stdout) == _strip_workspace_line(
+        same_only_result.stdout
+    )
 
 
 def test_adjudicate_command_name_is_not_resolve() -> None:
