@@ -1,0 +1,332 @@
+"""Direct unit tests for the merge-core extraction (Slice 2b-i, #137):
+`PreparedMerge`, `prepare_merge`, and `merge_core` are exercised directly
+(no `CliRunner`, no confirm gate) -- the behavior-preservation gate for the
+`merge` COMMAND itself stays entirely in `test_merge.py`/
+`test_merge_roundtrip.py`, unmodified.
+"""
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from openkos.bundle import index as bundle_index
+from openkos.cli.main import (
+    MergeResult,
+    PreparedMerge,
+    _resolve_concept_path,
+    app,
+    merge_core,
+    prepare_merge,
+)
+from openkos.vcs import git as vcs_git
+
+runner = CliRunner()
+
+
+def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+
+
+def _write_concept(
+    tmp_path: Path,
+    concept_id: str,
+    *,
+    title: str,
+    section: str = "Concepts",
+    sensitivity: str | None = None,
+    body: str = "Body.",
+) -> None:
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "type: Concept", f"title: {title}"]
+    if sensitivity is not None:
+        lines.append(f"sensitivity: {sensitivity}")
+    lines.append("---")
+    lines.append("")
+    lines.append(f"# {title}")
+    lines.append("")
+    lines.append(body)
+    lines.append("")
+    concept_path.write_text("\n".join(lines), encoding="utf-8")
+
+    link_dir, slug = concept_id.rsplit("/", 1)
+    index_path = tmp_path / "bundle" / "index.md"
+    index_text = index_path.read_text(encoding="utf-8")
+    new_index_text = bundle_index.insert_index_entry(
+        index_text,
+        section=section,
+        link_dir=link_dir,
+        title=title,
+        slug=slug,
+        description=f"{title}.",
+    )
+    index_path.write_text(new_index_text, encoding="utf-8")
+
+
+def _resolve(
+    bundle_dir: Path, survivor_id: str, absorbed_id: str
+) -> tuple[Path, str, Path, str]:
+    survivor_path, survivor_canonical = _resolve_concept_path(bundle_dir, survivor_id)
+    absorbed_path, absorbed_canonical = _resolve_concept_path(bundle_dir, absorbed_id)
+    return survivor_path, survivor_canonical, absorbed_path, absorbed_canonical
+
+
+def test_prepare_merge_returns_prepared_merge_with_expected_plan_and_preview_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`prepare_merge` returns a `PreparedMerge` carrying the plan, the
+    recomputed sensitivity outcome, and the touched-files set -- and writes
+    nothing to disk (Phase A is pure)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", sensitivity="private"
+    )
+    _write_concept(
+        tmp_path, "concepts/absorbed", title="Absorbed", sensitivity="confidential"
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/other",
+        title="Other",
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=now,
+    )
+
+    assert isinstance(prepared, PreparedMerge)
+    assert prepared.plan.ledger_entry.absorbed_id == absorbed_canonical
+    assert prepared.sensitivity_before == "private"
+    assert prepared.sensitivity_after == "confidential"
+    assert prepared.touched_files == ["concepts/other.md"]
+    assert prepared.now == now
+    assert prepared.review is True
+    assert prepared.dropped_self_loops == []
+    assert prepared.deduped_collisions == []
+
+    # Phase A must write nothing.
+    assert absorbed_path.exists()
+    assert "merged_from" not in survivor_path.read_text(encoding="utf-8")
+    assert "concepts/absorbed.md" in index_path.read_text(encoding="utf-8")
+
+
+def test_prepare_merge_raises_oserror_on_missing_absorbed_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nonexistent absorbed file must surface as `OSError` (bad input),
+    not succeed silently -- Phase A never writes before this."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+
+    bundle_dir = tmp_path / "bundle"
+    survivor_path, survivor_canonical = _resolve_concept_path(
+        bundle_dir, "concepts/survivor"
+    )
+    missing_absorbed_path = bundle_dir / "concepts" / "missing.md"
+
+    with pytest.raises(OSError, match=r"missing\.md"):
+        prepare_merge(
+            bundle_dir,
+            bundle_dir / "index.md",
+            bundle_dir / "log.md",
+            survivor_path,
+            missing_absorbed_path,
+            survivor_canonical,
+            "concepts/missing",
+            tmp_path,
+            now=datetime.now(UTC),
+        )
+
+
+def test_prepare_merge_raises_value_error_when_already_merged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Calling `prepare_merge` twice for the same pair must raise
+    `ValueError` on the second call (`plan_merge`'s already-merged guard),
+    proving `prepare_merge` propagates `plan_merge`'s validation instead of
+    swallowing it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    now = datetime.now(UTC)
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=now,
+    )
+    merge_core(bundle_dir, index_path, log_path, prepared)
+
+    # `merge_core` removed the absorbed file (it's now merged); recreate it
+    # (as a stale retry after an out-of-band restore might see) so the
+    # second `prepare_merge` call fails on `plan_merge`'s already-merged
+    # guard specifically, not a missing-file `OSError`.
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    with pytest.raises(ValueError, match="already merged"):
+        prepare_merge(
+            bundle_dir,
+            index_path,
+            log_path,
+            survivor_path,
+            absorbed_path,
+            survivor_canonical,
+            absorbed_canonical,
+            tmp_path,
+            now=now,
+        )
+
+
+def test_merge_core_writes_index_log_touched_files_survivor_last_and_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`merge_core` applied to a `PreparedMerge` writes `index.md`, `log.md`,
+    every touched file's rewrite, the merged survivor (carrying the
+    `merged_from` ledger, with the injected `now` reflected verbatim), and
+    removes the absorbed file -- matching current `main.py:2559-2596`
+    output exactly."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", sensitivity="private"
+    )
+    _write_concept(
+        tmp_path, "concepts/absorbed", title="Absorbed", sensitivity="confidential"
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/other",
+        title="Other",
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    now = datetime(2026, 3, 15, 12, 30, tzinfo=UTC)
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=now,
+    )
+
+    result = merge_core(bundle_dir, index_path, log_path, prepared)
+
+    assert isinstance(result, MergeResult)
+    assert result.survivor_canonical == survivor_canonical
+    assert result.absorbed_canonical == absorbed_canonical
+    assert result.touched_files == ["concepts/other.md"]
+
+    assert not absorbed_path.exists()
+
+    survivor_text = survivor_path.read_text(encoding="utf-8")
+    assert "merged_from" in survivor_text
+    assert now.isoformat() in survivor_text
+    assert "Absorbed body" not in survivor_text or "Absorbed" in survivor_text
+
+    other_text = (bundle_dir / "concepts" / "other.md").read_text(encoding="utf-8")
+    assert "/concepts/survivor.md" in other_text
+    assert "/concepts/absorbed.md" not in other_text
+
+    index_text = index_path.read_text(encoding="utf-8")
+    assert "concepts/absorbed.md" not in index_text
+    assert "concepts/survivor.md" in index_text
+
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "**Merge**" in log_text
+
+
+def test_merge_core_makes_zero_vcs_side_effect_and_is_unmerge_reversible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`merge_core` must not create a git commit (that is the command's
+    `_autocommit` responsibility, called separately) -- the working tree is
+    left dirty. A subsequent `unmerge` through the real CLI must still fully
+    reverse the writes, mirroring `test_merge_roundtrip.py`'s parity
+    contract."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", sensitivity="private"
+    )
+    _write_concept(
+        tmp_path, "concepts/absorbed", title="Absorbed", sensitivity="confidential"
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    now = datetime.now(UTC)
+
+    head_before = (tmp_path / ".git" / "HEAD").read_text(encoding="utf-8")
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=now,
+    )
+    merge_core(bundle_dir, index_path, log_path, prepared)
+
+    assert not vcs_git.is_clean(tmp_path), (
+        "merge_core must leave the working tree dirty -- it performs no commit"
+    )
+    head_after = (tmp_path / ".git" / "HEAD").read_text(encoding="utf-8")
+    assert head_before == head_after
+
+    result = runner.invoke(
+        app, ["unmerge", survivor_canonical, absorbed_canonical, "--auto"]
+    )
+    assert result.exit_code == 0, result.stderr
+    assert absorbed_path.exists()
+    assert "merged_from" not in survivor_path.read_text(encoding="utf-8")
