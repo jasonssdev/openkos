@@ -134,7 +134,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 ### `openkos duplicates`
 
-**Read-only.** Reports cross-source CANDIDATE duplicates: same-type concepts that MIGHT be the same real-world entity (for example, "Stoicism" and "Stoic Philosophy" living as two separate documents). Mirrors `status`/`lint`'s shape exactly: no Phase B, no confirm gate, no `--auto`. This is a **report only** — `duplicates` never merges, deletes, or otherwise adjudicates a candidate; that is reserved for a later, explicitly-named `resolve`/`merge` verb.
+**Read-only.** Reports cross-source CANDIDATE duplicates: same-type concepts that MIGHT be the same real-world entity (for example, "Stoicism" and "Stoic Philosophy" living as two separate documents). Mirrors `status`/`lint`'s shape exactly: no Phase B, no confirm gate, no `--auto`. This is a **report only** — `duplicates` never merges, deletes, or otherwise adjudicates a candidate; adjudication belongs to `openkos adjudicate`, and the actual fusion to an explicit `openkos merge` call (or `adjudicate`'s `--apply`/`--apply-same` modes).
 
 One read-only, whole-bundle pass compares titles only within the same declared OKF `type` (a `Concept` is never compared against an `Entity`, even with an identical title) and proposes two deterministic, stdlib-only confidence tiers: **HIGH** — titles that normalize to an identical key (case-folded, punctuation-stripped, diacritics-removed, whitespace-collapsed); and **LOW** — titles that clear a fixed near-match threshold (`difflib`-based token-subset similarity) without being normalized-identical. Neither tier uses an LLM or embeddings in this slice.
 
@@ -148,13 +148,17 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 ### `openkos adjudicate`
 
-**Read-only.** LLM-adjudicates the candidate groups `duplicates` reports, printing a `SAME`/`DIFFERENT`/`UNCERTAIN` verdict, confidence, and rationale per group for human review. It never merges, writes, or decides — an accepted `SAME` verdict still needs an explicit `openkos merge` call. Degrades the same way `query` does on an unreachable Ollama server or a missing model, with the same actionable stderr guidance.
+**Read-only by default.** LLM-adjudicates the candidate groups `duplicates` reports, printing a `SAME`/`DIFFERENT`/`UNCERTAIN` verdict and rationale per group for human review (the parsed confidence is deliberately not rendered — a local model returns a flat, uncalibrated value, so a two-decimal number would imply a precision it does not have). Without an apply flag it never merges, writes, or decides — an accepted `SAME` verdict still needs an explicit `openkos merge` call, or one of the two apply modes below, which run that same merge path for you. Degrades the same way `query` does on an unreachable Ollama server or a missing model, with the same actionable stderr guidance.
 
 | Flag | Meaning |
 | --- | --- |
-| `--same-only` | Display-only filter: print only groups with a `SAME` verdict. `adjudicate_candidates` still judges every candidate group either way. |
+| `--same-only` | Display-only filter: print only groups with a `SAME` verdict. `adjudicate_candidates` still judges every candidate group either way. With `--json`, filters the emitted array the same way. |
 | `--include-deprecated` | Include deprecated and superseded concepts in candidate groups. Excluded by default — shares `duplicates`'s `find_candidates` call. |
 | `--include-confidential` | Include confidential concepts. Excluded by default — a confidential member is dropped from a group before its content is ever read, and never sent to the LLM. |
+| `--json` | Emit every verdict as a single pretty-printed JSON array on stdout (`member_ids`, `okf_type`, `tier`, `verdict`, `rationale` — no confidence), suppressing all human output. Mutually exclusive with `--apply`/`--apply-same` (exit 2). A degraded run (unreachable Ollama, missing model) still exits 1 on stderr with no JSON. |
+| `--apply` | Interactive merge walk over the same adjudication results: each `SAME` two-member group is previewed and prompted `[y/N/skip]`; an accepted pair runs the same prepare/merge path `openkos merge` uses, committed per merge and reversible via `unmerge`. Groups with more than two members are skipped (merge those manually), and each pair's member ids are re-verified just before merging, since an earlier merge in the same run may already have absorbed one. A summary line (applied/skipped counts) always prints. Mutually exclusive with `--json`. |
+| `--apply-same` | Guarded batch merge of every eligible `SAME` two-member group: prints one aggregate preview plus a `Total: <n>` line, then requires the operator to type that exact count before anything is written (see `--confirm-count`) — a mismatch aborts with zero writes. Merges then commit sequentially, re-resolving each pair immediately before applying it; a mid-batch failure stops the run, reports how many of the previewed merges were applied, and leaves every prior commit intact and reversible via `unmerge`. Mutually exclusive with `--apply` and `--json`. |
+| `--confirm-count <n>` | With `--apply-same`, supplies the exact eligible-merge count non-interactively (unattended/non-TTY use). On a TTY, omitting it prompts interactively instead; on a non-TTY without it, the batch is refused. There is no bypass — the count must match exactly. |
 
 ### `openkos contradictions`
 
@@ -202,15 +206,27 @@ The edge is **idempotent**: an identical `(target, type)` pair already present i
 
 ### `openkos suggest-volatility`
 
-**Read-only.** LLM-suggests a volatility `tier` for every concept `type` present in the bundle, printing a suggested tier and rationale per type (or `[?]` when the suggestion is invalid) for human review. There is no dedicated write path for this one — accepting a suggestion means hand-editing `type_tiers:` in `openkos.yaml`. Degrades the same way `suggest-relations`/`adjudicate`/`query` do.
+**Read-only.** LLM-suggests a volatility `tier` for every concept `type` present in the bundle, printing a suggested tier and rationale per type (or `[?]` when the suggestion is invalid) for human review. It never writes — accepting a suggestion is a separate, explicit `openkos set-volatility <Type> <tier>` call (below), which records the tier in `openkos.yaml`'s `type_tiers:`. Degrades the same way `suggest-relations`/`adjudicate`/`query` do.
 
 | Flag | Meaning |
 | --- | --- |
 | `--include-confidential` | Include confidential concepts. Excluded by default — a confidential concept is dropped from its type's sampled bodies before any content is shown to the LLM; a type whose docs are all confidential yields no suggestion at all. |
 
+### `openkos set-volatility <Type> <tier>`
+
+Writes `type_tiers[<Type>]: <tier>` into `openkos.yaml` — the write counterpart to `suggest-volatility`, which only reports. **No LLM in the write path**: the type and tier are supplied by you, not inferred, so this is the explicit write path `suggest-volatility` forward-references. Vocabulary validation runs first, before any read or write: `<tier>` must be one of `static`, `slow`, or `volatile`, and `<Type>` must exact-match, case-sensitive, one of the ten PascalCase registry type names — including `Source`, which `suggest-volatility` can suggest a tier for even though it is never a classification target. Either failure refuses (exit 1) with nothing read and nothing written.
+
+The write is **idempotent** against the parsed config: when `type_tiers:` already maps `<Type>` to `<tier>`, the command is a no-op — a message, exit `0`, no write, no commit. An explicit override equal to the type's registry *default* is not present in the parsed map, so it is NOT treated as idempotent; it still proceeds as a real write. The edit itself is comment-safe text surgery on `openkos.yaml`'s raw text — never a YAML round-trip that would reflow the file — so an existing `type_tiers:` shape the editor cannot safely modify (an inline flow mapping, duplicate headers or entries, a non-mapping value, tab or inconsistent indentation) refuses (exit 1) with the file left byte-identical.
+
+A one-line preview (`<Type>: <old-or-default> -> <new>`) prints before the same confirm gate every other mutating verb shares — `--auto` skips it; otherwise config `review: false` skips it the same way; otherwise an interactive TTY prompts and aborts on decline; otherwise (non-TTY, no `--auto`) the command refuses to write. Declining or refusing leaves `openkos.yaml` untouched. A confirmed write is atomic and commits as `openkos: set-volatility <Type> -> <tier>`, mirroring every other mutating verb's commit-message convention.
+
+| Flag | Meaning |
+| --- | --- |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+
 ### `openkos merge <survivor-id> <absorbed-id>`
 
-Fuses two distinct concept-ids a human has confirmed are the same real-world entity — the first DESTRUCTIVE entity-resolution write. `survivor-id`'s id survives; `absorbed-id`'s file is removed. This is the verb `duplicates` and the (not-yet-implemented) `resolve`/`adjudicate` flow forward-reference: a candidate pair still needs an explicit `merge` to actually be fused.
+Fuses two distinct concept-ids a human has confirmed are the same real-world entity — the first DESTRUCTIVE entity-resolution write. `survivor-id`'s id survives; `absorbed-id`'s file is removed. This is the verb `duplicates` and `adjudicate` forward-reference: a candidate pair still needs an explicit `merge` to actually be fused — invoked directly, or per accepted pair through `adjudicate`'s `--apply`/`--apply-same` modes, which run this same merge path.
 
 `merge` mirrors `forget`'s Phase A (validate + preview) / confirm gate / Phase B (write) shape, doubled for two objects. Both ids are resolved the same way `forget` resolves its target, and MUST be distinct, existing concepts — a same-id or unknown-id argument refuses (exit 1) before any read. The survivor's body gains the absorbed content by **append** (a delimited `## Merged content (<absorbed-id>)` heading, then the absorbed body) — never an overwrite. Frontmatter conflicts resolve deterministically: a scalar field (`type`/`title`/`description`/`status`/`version`/`resource`) keeps the **survivor's** value; a list field (`tags`, `provenance`) is **unioned**, deduped, order-preserving; `freshness`+`timestamp` are taken together from whichever side has the strictly more recent `timestamp`. `sensitivity` is never copied — it is **recomputed** as the high-water-mark of both sides (`public < private < confidential`; a missing value counts as `private`, an unrecognized/malformed one fails closed to `confidential`). Every one of these conflicts is shown in the Phase A preview before you confirm.
 

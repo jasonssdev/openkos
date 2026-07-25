@@ -4,7 +4,7 @@
 
 OpenKOS turns your scattered text into a living, portable knowledge base your AI agents can actually use — compiled once, kept current, and stored as plain [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) files so it is never locked to any app, model, or vendor.
 
-> **Project status: alpha.** OpenKOS runs: the Compiler and the Graph-and-Memory arcs (MVP 1 and MVP 2) are complete — 18 CLI verbs, hybrid retrieval, and the full forget/purge lifecycle all ship today. The API may still change between releases, but OpenKOS is published and installable now — `pip install openkos`, see [Getting started](#getting-started). Early contributors and feedback are welcome — see [Contributing](#contributing).
+> **Project status: alpha.** OpenKOS runs: the Compiler and the Graph-and-Memory arcs (MVP 1 and MVP 2) are complete — 19 CLI verbs, hybrid retrieval, and the full forget/purge lifecycle all ship today. The API may still change between releases, but OpenKOS is published and installable now — `pip install openkos`, see [Getting started](#getting-started). Early contributors and feedback are welcome — see [Contributing](#contributing).
 
 ---
 
@@ -46,7 +46,7 @@ openkos query "what did I conclude about how to live well?"
 openkos lint
 ```
 
-*(The full command set — 18 verbs spanning ingest, cited query, the typed graph, entity resolution, and the forget/purge lifecycle — is in [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md).)*
+*(The full command set — 19 verbs spanning ingest, cited query, the typed graph, entity resolution, volatility tiers (`suggest-volatility`/`set-volatility`), and the forget/purge lifecycle — is in [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md).)*
 
 ## Getting started
 
@@ -132,7 +132,7 @@ Beyond that: a desktop app, graph visualization, richer memory, and federation �
 - [`docs/glossary.md`](https://github.com/jasonssdev/openkos/blob/main/docs/glossary.md) — definitions of the core vocabulary
 - [`docs/faq.md`](https://github.com/jasonssdev/openkos/blob/main/docs/faq.md) — frequently asked questions
 - [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md) — the end-to-end user experience
-- [`docs/testing.md`](https://github.com/jasonssdev/openkos/blob/main/docs/testing.md) — manual end-to-end testing walkthrough (all 18 commands)
+- [`docs/testing.md`](https://github.com/jasonssdev/openkos/blob/main/docs/testing.md) — manual end-to-end testing walkthrough (all 19 commands)
 - [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md) — the command-line reference
 - [`docs/brand.md`](https://github.com/jasonssdev/openkos/blob/main/docs/brand.md) — visual identity: isotype, wordmark, palette, typography
 - [`docs/adr/`](https://github.com/jasonssdev/openkos/blob/main/docs/adr/) — architecture decision records (the log begins with the first code-time decision)

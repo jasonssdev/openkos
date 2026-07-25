@@ -14,6 +14,20 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- **`set-volatility` write verb**: `openkos set-volatility <Type> <tier>` writes
+  `type_tiers[<Type>]` into `openkos.yaml` — the write half of
+  `suggest-volatility`'s read-only recommendation — with up-front vocabulary
+  validation, idempotence against the parsed config, comment-safe text-surgery
+  editing, and the shared confirm gate. (#140)
+- **`adjudicate` batch apply and JSON output**: `--apply` walks each SAME
+  two-member group interactively (`[y/N/skip]`) through the same merge path
+  `openkos merge` uses; `--apply-same` batch-merges every eligible SAME pair
+  behind a typed-count confirmation gate supplied via `--confirm-count`; and
+  `--json` emits machine-readable verdicts, suppressing the human report.
+  (#137, #139)
+
 ## [0.1.2] - 2026-07-24
 
 ### Fixed

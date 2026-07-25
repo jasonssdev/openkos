@@ -7,7 +7,7 @@
 # End-to-End Testing Guide
 
 This is a hands-on walkthrough for testing OpenKOS the way a real user would:
-from an empty machine to a curated knowledge base, exercising all 18 commands.
+from an empty machine to a curated knowledge base, exercising all 19 commands.
 It complements [`user-journey.md`](user-journey.md) — that document explains the
 *philosophy*; this one is the *procedure*.
 
@@ -20,32 +20,30 @@ yourself to the full surface of the tool.
 
 ---
 
-## What you are testing, and against which build
+## Phase 0 — Setup: install everything first
 
-Decide this first — it is the most common way to waste a test session.
+Complete every step in this section before any walkthrough phase; a fresh
+machine needs all of it. OpenKOS is local-first — there are no API keys and no
+cloud endpoints; everything runs against a local [Ollama](https://ollama.com)
+server. (The prerequisites here match the README's Getting started section.)
 
-- **The published package:** `uv tool install openkos` (or `uvx --from openkos==<version> openkos …` for a throwaway run). This is what real users get.
-- **A local build (e.g. an unreleased fix):** `uv tool install --force --from /path/to/openkos openkos`. This replaces the `openkos` on your PATH with your working tree.
+> **Looking for the automated test suite instead?** This document is the
+> *manual* walkthrough. Contributors run the automated tests from a source
+> checkout with `uv sync` followed by `uv run pytest` (add `--cov` for the
+> coverage report, gated at 90% in CI); see
+> [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the full development workflow.
 
-Confirm which one is active before you start:
+### 0.1 Python 3.12+ and uv
+
+OpenKOS targets **Python 3.12+** and both install paths below use
+[`uv`](https://docs.astral.sh/uv/), which can also provision Python itself:
 
 ```bash
-which openkos
-openkos --help | head -3
+curl -LsSf https://astral.sh/uv/install.sh | sh   # or: brew install uv
+uv python install 3.12    # only if no Python 3.12+ is already present
 ```
 
-**Never run the test from inside the source checkout** unless you specifically
-intend to — you may be exercising local code instead of the build you think you
-are testing. Use a clean, separate workspace directory.
-
----
-
-## Phase 0 — Machine prerequisites
-
-OpenKOS is local-first. There are no API keys and no cloud endpoints; everything
-runs against a local [Ollama](https://ollama.com) server.
-
-### 0.1 Ollama and **two** models
+### 0.2 Ollama and **two** models
 
 ```bash
 ollama serve            # leave running in its own terminal
@@ -63,7 +61,7 @@ Both models are mandatory for full coverage — they serve different commands:
 > The embedding dimension is hard-coded to 1024. `bge-m3` produces 1024
 > dimensions; substituting a differently-sized embedding model fails at runtime.
 
-### 0.2 System tools
+### 0.3 System tools
 
 ```bash
 git --version
@@ -74,7 +72,36 @@ git-filter-repo --version    # optional — required ONLY by `purge`
 phase works except `purge`. Install it with `pip install git-filter-repo` or your
 package manager if you intend to test purge.
 
-### 0.3 Warm the model
+### 0.4 Install OpenKOS — and decide which build you are testing
+
+Decide this now — it is the most common way to waste a test session.
+
+- **End user — the published package:** `uv tool install openkos` (or `pipx install openkos` / `pip install openkos`; `uvx --from openkos==<version> openkos …` for a throwaway run). This is what real users get.
+- **Contributor — from source (e.g. an unreleased fix):** clone the repository and run `uv sync` to set up the dev environment, then install your working tree as the `openkos` on your PATH.
+
+```bash
+# End user
+uv tool install openkos
+
+# Contributor, from source
+git clone https://github.com/jasonssdev/openkos.git
+cd openkos
+uv sync                                     # dev environment (automated tests, lint, types)
+uv tool install --force --from . openkos    # put THIS working tree on your PATH
+```
+
+Confirm which one is active before you start:
+
+```bash
+which openkos
+openkos --help | head -3
+```
+
+**Never run the test from inside the source checkout** unless you specifically
+intend to — you may be exercising local code instead of the build you think you
+are testing. Use a clean, separate workspace directory.
+
+### 0.5 Warm the model
 
 The first LLM call after idle pays a cold-start cost (loading ~10 GB into memory)
 that can exceed the request timeout and surface as `Ollama … timed out`. Warm it
@@ -301,11 +328,14 @@ two docs about the same topic before Phase 6.
 
 ## Phase 6 — LLM advisors (read-only; they call the model)
 
-All four **report**; they never write. Each pairs with a write verb in Phase 7.
+All four **report**; in the forms below they never write. Each pairs with a
+write path in Phase 7 — and `adjudicate` additionally has its own
+`--apply`/`--apply-same` merge modes, exercised in Phase 7.2.
 
 ```bash
 openkos adjudicate                 # SAME/DIFFERENT/UNCERTAIN on the duplicates groups
 openkos adjudicate --same-only
+openkos adjudicate --json          # machine-readable verdicts; suppresses the human report
 openkos suggest-relations          # proposes a relation type per untyped edge
 openkos suggest-volatility         # proposes a volatility tier per concept type
 openkos contradictions             # detects conflicts between RELATED concepts
@@ -349,6 +379,17 @@ that survivor) and restores `index.md`/`log.md` from a pre-merge snapshot,
 **discarding any intervening writes** — do not run other writes between a merge
 and its unmerge during this test.
 
+`adjudicate` can drive this same merge path in bulk. If your corpus still has
+SAME pairs, test both modes:
+
+```bash
+openkos adjudicate --apply                            # interactive [y/N/skip] walk per SAME pair
+openkos adjudicate --apply-same --confirm-count <N>   # batch — <N> must equal the printed Total exactly
+```
+
+Try a wrong `--confirm-count` first and confirm it aborts with zero writes;
+every applied merge is an ordinary commit, reversible via `unmerge`.
+
 ### 7.3 `contradictions` → `reconcile`
 
 ```bash
@@ -364,6 +405,22 @@ conflicting re-resolution is refused (test that too).
 ```bash
 openkos reindex && git add -A && git commit -m "fix: curate concepts"
 ```
+
+### 7.4 `suggest-volatility` → `set-volatility`
+
+```bash
+openkos suggest-volatility               # note one suggested tier, e.g. "Person: volatile"
+openkos set-volatility Person volatile
+grep -n -A5 'type_tiers' openkos.yaml    # verify the write landed
+openkos set-volatility Person volatile   # re-run: idempotent no-op, nothing written
+openkos set-volatility Person sometimes  # expect refusal — invalid tier
+```
+
+`set-volatility` validates both arguments before touching anything (the type is
+case-sensitive PascalCase; the tier is one of `static`/`slow`/`volatile`), edits
+`openkos.yaml` with comment-safe text surgery, and auto-commits a confirmed
+write — no `git add` needed, and no `reindex` either (it changes config, not
+bundle content).
 
 ---
 
@@ -423,6 +480,9 @@ grep -r "<distinctive string from that file>" .    # expect nothing
 
 ## Coverage checklist
 
+Twenty rows for the 19 commands — `query` appears twice, once for its read-only
+default and once for its writing `--save` form.
+
 | # | Command | Writes? | LLM | ✓ |
 |---|---|---|---|---|
 | 1 | `doctor` | no | probes | ☐ |
@@ -434,16 +494,17 @@ grep -r "<distinctive string from that file>" .    # expect nothing
 | 7 | `reindex` | yes (derived) | embeddings | ☐ |
 | 8 | `query` | no | both models | ☐ |
 | 9 | `query --save` | yes | yes | ☐ |
-| 10 | `adjudicate` | no | yes | ☐ |
+| 10 | `adjudicate` | only with `--apply`/`--apply-same` | yes | ☐ |
 | 11 | `suggest-relations` | no | yes | ☐ |
 | 12 | `suggest-volatility` | no | yes | ☐ |
-| 13 | `contradictions` | no | yes | ☐ |
-| 14 | `relate` | yes | no | ☐ |
-| 15 | `merge` | yes | no | ☐ |
-| 16 | `unmerge` | yes | no | ☐ |
-| 17 | `reconcile` | yes | no | ☐ |
-| 18 | `forget` | yes | no | ☐ |
-| 19 | `purge` | yes | no | ☐ |
+| 13 | `set-volatility` | yes (config) | no | ☐ |
+| 14 | `contradictions` | no | yes | ☐ |
+| 15 | `relate` | yes | no | ☐ |
+| 16 | `merge` | yes | no | ☐ |
+| 17 | `unmerge` | yes | no | ☐ |
+| 18 | `reconcile` | yes | no | ☐ |
+| 19 | `forget` | yes | no | ☐ |
+| 20 | `purge` | yes | no | ☐ |
 
 ---
 
@@ -460,10 +521,7 @@ expected; add evidence to the existing issue rather than opening a new one.
 | `suggest-relations` | Wall of "not a seeded relation type" notes; one slow LLM call per edge | #134 |
 | `suggest-relations` | Only types concept→source provenance edges | #135 |
 | `ingest` feedback | No spinner during the ~20 s extraction; no per-type counter | #136 |
-| `adjudicate` → `merge` | No batch/`--json`/interactive apply — merges are manual, one at a time | #137 |
-| `adjudicate` | Flat `0.95` confidence on every verdict; part-whole pairs marked SAME | #138 |
-| `duplicates`/`adjudicate` | Long unsummarized output; `[LOW] … 1.000` labels confuse | #139 |
-| `suggest-volatility` | No write verb — "Next: edit type_tiers in openkos.yaml" by hand | #140 |
+| `adjudicate` | Part-whole pairs marked SAME | #138 |
 | `purge --force` | Leaves dangling references that `lint`/`status` never detect | #141 |
 | `purge` | Deletes `vectors.db` without rebuilding it or prompting `reindex` | #142 |
 | `init` | No `git init` / `.gitignore`, yet `forget`/`purge` depend on git | #143 |
@@ -492,5 +550,6 @@ knowing the tool, still had to stop and guess what to do next.
 ## Not available yet — do not test as missing features
 
 MCP server, local REST API, full OKF import/export, batch/glob ingest, a
-`--sensitivity` flag on ingest, a configurable extraction cap, and any `--json`
-or structured-output mode. All deferred by design (see [`roadmap.md`](roadmap.md)).
+`--sensitivity` flag on ingest, a configurable extraction cap, and `--json` or
+structured output on any command other than `adjudicate` (which has `--json`).
+All deferred by design (see [`roadmap.md`](roadmap.md)).

@@ -13,7 +13,7 @@ You do not need to write code to make a real difference right now:
 - **Shape the design.** React to [`docs/vision.md`](docs/vision.md), [`docs/roadmap.md`](docs/roadmap.md), and [`docs/knowledge-object-model.md`](docs/knowledge-object-model.md). Disagreement, edge cases, and prior art are especially valuable.
 - **Improve the docs.** Clarify wording, fix errors, add examples.
 - **Report issues and propose features.** Open an issue describing the problem or idea and the use case behind it.
-- **Contribute code** once MVP 1 is underway — see the "community can contribute" notes under the current MVP in the [roadmap](docs/roadmap.md) for the clearest entry points (new producers, consumers, extraction strategies, retrieval rankers).
+- **Contribute code** — see the "community can contribute" notes under the current MVP in the [roadmap](docs/roadmap.md) for the clearest entry points (new producers, consumers, extraction strategies, retrieval rankers).
 - **Share example OKF bundles** we can use as fixtures and living documentation.
 
 ---
@@ -45,8 +45,6 @@ So for a change above that bar the flow is: **issue (discuss the approach) → o
 ## Development setup
 
 AI coding agents: [`AGENTS.md`](AGENTS.md) is the project canon — principles, conventions, and quality gates. Read it first.
-
-> The codebase is being bootstrapped. This section describes the intended toolchain so you can prepare; commands will be finalized as MVP 1 lands.
 
 OpenKOS targets **Python 3.12+** and uses [`uv`](https://github.com/astral-sh/uv) for environment and dependency management.
 
