@@ -38,7 +38,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
     model_tag_matches,
 )
-from openkos.model import okf
+from openkos.model import okf, types
 from openkos.model.relations import validate_relation_type
 from openkos.model.types import CLASSIFIABLE_TYPES as _CLASSIFIABLE_TYPES
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
@@ -2354,6 +2354,147 @@ def relate(
     )
 
 
+@app.command("set-volatility")
+def set_volatility_cmd(
+    concept_type: str = typer.Argument(
+        ..., help="Exact PascalCase REGISTRY type name, e.g. 'Person'."
+    ),
+    tier: str = typer.Argument(
+        ..., help="Volatility tier: one of 'static', 'slow', 'volatile'."
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Write `type_tiers[<ConceptType>] = <tier>` into `openkos.yaml` --
+    the write half of `suggest-volatility`'s read-only recommendation
+    (freshness-suggest-windows, write-verb #140).
+
+    Vocabulary validation happens FIRST, before any read or write:
+    `tier` must exact-match one of `types.VOLATILITY_TIERS`; `concept_type`
+    must exact-match, case-sensitive, one of the 10 PascalCase `REGISTRY`
+    type names (including `Source`, since `suggest-volatility` can suggest a
+    tier for it even though it is not LLM-classifiable). Either failure
+    refuses with a clear stderr message and non-zero exit, with zero
+    read/write of the workspace.
+
+    The shared `config.require_workspace` gate runs next, then
+    `config.read_config` -- both `except (OSError, ValueError)`, matching
+    every other write verb's convention. Idempotence is then checked against
+    the PARSED `type_tiers` map (design: "Idempotence detected in CLI via
+    parsed map, not the core"): if `concept_type` already maps to `tier`
+    there, this is a no-op -- a message is printed, exit 0, and NEITHER
+    `config.set_type_tier` NOR any write/commit happens. An explicit
+    override equal to the type's REGISTRY default is NOT idempotent (it is
+    not present in the parsed map), so it still proceeds as a real write.
+
+    `openkos.yaml`'s raw text is read and passed to the pure
+    `config.set_type_tier` text-surgery core (comment-safe, no YAML
+    round-trip). Any un-editable existing shape (inline flow-mapping,
+    multiple headers, non-mapping scalar, tab-indented block, inconsistent
+    indent, duplicate entry) makes that core raise `ValueError`, caught here
+    and reported as a refusal on stderr, exit 1, `openkos.yaml` left
+    byte-identical -- the file is never touched on this path.
+
+    A preview line `<ConceptType>: <old-or-default> -> <new>` is printed
+    before the same confirm gate every other mutating verb shares (`--auto`
+    skips it; otherwise config `review: false` skips it the same way;
+    otherwise a TTY prompts via `typer.confirm` and aborts on decline;
+    otherwise, non-TTY with no `--auto`, this refuses to write). Declining
+    or refusing leaves `openkos.yaml` untouched.
+
+    A confirmed write goes through `fsio.write_atomic`, then
+    `_autocommit(root, ["openkos.yaml"], ...)` with message `openkos:
+    set-volatility <ConceptType> -> <tier>`, mirroring every other mutating
+    verb's commit-message convention (`openkos: <verb> ...`).
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+
+    valid_types = {ot.name for ot in types.REGISTRY}
+    if tier not in types.VOLATILITY_TIERS:
+        typer.echo(
+            f"openkos set-volatility: refusing to set -- {tier!r} is not a "
+            f"valid tier (expected one of {sorted(types.VOLATILITY_TIERS)}).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if concept_type not in valid_types:
+        typer.echo(
+            f"openkos set-volatility: refusing to set -- {concept_type!r} is "
+            f"not a known concept type (expected one of {sorted(valid_types)}).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos set-volatility: refusing to set -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos set-volatility: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    if cfg.type_tiers.get(concept_type) == tier:
+        typer.echo(
+            f"openkos set-volatility: {concept_type!r} already maps to "
+            f"{tier!r}; no change made."
+        )
+        return
+
+    old_tier = cfg.type_tiers.get(
+        concept_type, types.TYPE_TO_DEFAULT_VOLATILITY[concept_type]
+    )
+
+    try:
+        config_text = layout.config_path.read_text(encoding="utf-8")
+        new_config_text = config.set_type_tier(config_text, concept_type, tier)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos set-volatility: refusing to set -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos set-volatility: proposed changes:")
+    typer.echo(f"  {concept_type}: {old_tier} -> {tier}")
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos set-volatility: refusing to write without "
+                "confirmation -- stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        fsio.write_atomic(layout.config_path, new_config_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos set-volatility: failed while writing -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos set-volatility: set {concept_type} -> {tier} in "
+        f"{layout.config_path.name}."
+    )
+
+    _autocommit(
+        root,
+        ["openkos.yaml"],
+        f"openkos: set-volatility {concept_type} -> {tier}",
+    )
+
+
 def _apply_link_rewrite_idempotently(
     text: str, *, file: str, rewrites: list[okf.LinkRewrite]
 ) -> str:
@@ -4285,10 +4426,9 @@ def suggest_volatility_cmd(
 
     `suggest-volatility` never writes, merges, or decides -- it only prints
     a suggested `tier` + rationale per concept type present for human
-    review, plus a closing hint pointing at hand-editing `type_tiers:` in
-    `openkos.yaml` -- there is no dedicated write-path verb for this one
-    (unlike `suggest-relations` -> `relate`). No `--auto`, no confirmation
-    gate, no `--json` or other structured mode.
+    review, plus a closing hint pointing at `openkos set-volatility
+    <ConceptType> <tier>` (write-verb #140) to apply an accepted suggestion.
+    No `--auto`, no confirmation gate, no `--json` or other structured mode.
 
     A degraded suggestion (`suggested_tier=None` -- a malformed LLM reply,
     or a suggested tier that is not a member of `types.VOLATILITY_TIERS`)
@@ -4376,7 +4516,7 @@ def suggest_volatility_cmd(
             typer.echo(f"  rationale: {result.rationale}")
         typer.echo()
 
-    typer.echo("Next: edit type_tiers in openkos.yaml")
+    typer.echo("Next: openkos set-volatility <ConceptType> <tier>")
 
 
 @app.command()

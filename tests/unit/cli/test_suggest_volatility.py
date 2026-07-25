@@ -197,7 +197,7 @@ def test_suggest_volatility_renders_tier_type_and_rationale(
     assert result.exit_code == 0
     assert "[slow] Person" in result.stdout
     assert "people change slowly" in result.stdout
-    assert "Next: edit type_tiers in openkos.yaml" in result.stdout
+    assert "Next: openkos set-volatility <ConceptType> <tier>" in result.stdout
     assert captured["bundle_dir"] == tmp_path / "bundle"
 
 
