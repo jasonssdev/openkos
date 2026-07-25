@@ -507,6 +507,60 @@ def test_candidate_edges_returns_untyped_pairs_without_calling_an_llm(
     assert [(e.source_id, e.target_id) for e in edges] == [("concepts/a", "concepts/c")]
 
 
+# ---------------------------------------------------------------------------
+# Provenance-mirror exclusion (#135): confirms NO code change is needed --
+# `derived_from` provenance-mirror edges are excluded automatically once
+# `relation_type` is non-`None` at the graph-projection layer.
+# ---------------------------------------------------------------------------
+
+
+def test_derived_from_provenance_mirror_edge_absent_from_candidate_edges() -> None:
+    """A `derived_from`-typed provenance-mirror edge is a typed row like any
+    other, so `_candidate_edges` (which filters on `relation_type is None`
+    via `untyped_edges`) excludes it -- confirming the exclusion is
+    automatic, with zero code change to this module (task 3.1)."""
+    provenance_mirror = Edge(
+        source_id="concepts/a", target_id="sources/foo", relation_type="derived_from"
+    )
+    genuine_untyped = Edge(source_id="concepts/a", target_id="concepts/b")
+    store: GraphStore = _FakeGraphStore([provenance_mirror, genuine_untyped])
+
+    result = edge_typing_mod._candidate_edges(store)
+
+    assert result == [genuine_untyped]
+
+
+def test_provenance_only_bundle_yields_zero_candidates_and_zero_llm_calls(
+    tmp_path: Path,
+) -> None:
+    """A bundle whose only body link is a provenance-mirror edge (typed
+    `derived_from` by graph projection) produces zero suggestion candidates
+    and `suggest_relations` never calls `llm.chat` (spec: "Bundle with only
+    provenance-mirror edges surfaces zero candidates"; task 3.2)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "provenance:\n  - sources/foo\n"
+        "---\n[Foo](/sources/foo.md)\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "sources").mkdir()
+    (bundle_dir / "sources" / "foo.md").write_text(
+        "---\ntype: Source\ntitle: Foo\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM()
+
+    edges = edge_typing_mod.candidate_edges(bundle_dir)
+    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+
+    assert edges == []
+    assert result == []
+    assert llm.calls == []
+
+
 def test_suggest_edge_types_invokes_on_progress_once_per_edge_in_order(
     tmp_path: Path,
 ) -> None:

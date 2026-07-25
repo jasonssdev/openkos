@@ -4,7 +4,10 @@ graph typed edges (MVP-2 slice 3, freshness-lint-v1 S3).
 Mirrors `resolution/edge_typing.py` one layer over: `find_contradictions`
 OWNS the `openkos.graph` read internally -- opens `sqlite_graph.build_graph`,
 derives candidate pairs from TYPED edges only (`relation_type is not None`),
-and judges each already-related concept pair via an injected `LLMBackend`
+EXCLUDING `derived_from`-typed edges (#135: a derivation/provenance link is
+never a contradiction candidate, whether graph-projection-synthesized or
+hand-authored), and judges each remaining already-related concept pair via
+an injected `LLMBackend`
 into a `CONTRADICTS`/`CONSISTENT`/`UNCERTAIN` verdict with confidence,
 rationale, and cited conflicting claims. Verdicts are advisory, for human
 review only -- this module never writes, merges, or reconciles.
@@ -150,10 +153,17 @@ def _candidate_pairs(
     store: GraphStore, deprecated: frozenset[str] = frozenset()
 ) -> tuple[list[tuple[str, str]], int]:
     """Derive candidate pairs from `store`'s TYPED edges only
-    (`relation_type is not None`), deduped by `frozenset({source_id,
-    target_id})` so symmetric, duplicate, and multi-edge pairs collapse to
-    exactly one candidate (spec: Symmetric and multi-edge pairs judged
-    once).
+    (`relation_type is not None`), EXCLUDING any edge whose `relation_type
+    == "derived_from"` (#135, provenance-mirror-typed-projection): a
+    `derived_from` relationship is a derivation/provenance link, never a
+    contradiction candidate -- regardless of whether it was synthesized by
+    graph-projection provenance-mirror typing or hand-authored in
+    `relations:` frontmatter, since this function has no signal to
+    distinguish the two and a derivation is never a contradiction candidate
+    either way. The remaining typed edges are deduped by
+    `frozenset({source_id, target_id})` so symmetric, duplicate, and
+    multi-edge pairs collapse to exactly one candidate (spec: Symmetric and
+    multi-edge pairs judged once).
 
     `deprecated` (status-aware-retrieval Phase 3, post-review correction) is
     applied to the deduped, sorted set BEFORE the `_MAX_PAIRS` cap slice --
@@ -174,7 +184,11 @@ def _candidate_pairs(
     cap-reached truncation (spec: Cap truncation is reported) -- truncation
     is never silent, and the cap-reached signal now only fires when LIVE
     pairs genuinely exceed the cap."""
-    typed_edges = [edge for edge in store.edges() if edge.relation_type is not None]
+    typed_edges = [
+        edge
+        for edge in store.edges()
+        if edge.relation_type is not None and edge.relation_type != "derived_from"
+    ]
     pair_keys = {_pair_key(edge.source_id, edge.target_id) for edge in typed_edges}
     ordered = sorted(pair_keys)
     live = [
@@ -186,17 +200,33 @@ def _candidate_pairs(
 
 
 def _pair_relation_types(store: GraphStore) -> dict[tuple[str, str], str]:
-    """Map each deduped pair key to the relation `type` of the FIRST typed
-    edge encountered for it, in `store.edges()`'s own deterministic order --
-    used only to enrich the LLM prompt with "the relation_type linking them"
-    (design's LLM Prompt Contract); has no bearing on dedup/ordering/cap,
-    which `_candidate_pairs` owns exclusively."""
+    """Map each deduped pair key to the relation `type` shown to the LLM as
+    "the relation_type linking them" (design's LLM Prompt Contract); has no
+    bearing on dedup/ordering/cap, which `_candidate_pairs` owns exclusively.
+
+    4R-review FIX (readability/reliability): prefers the FIRST GENUINE
+    (non-`derived_from`) typed edge encountered for a pair, in
+    `store.edges()`'s own deterministic order, over a `derived_from` edge
+    for the SAME pair. Without this, a pair carrying BOTH a genuine typed
+    edge (e.g. `related_to`) AND a provenance-mirror-synthesized
+    `derived_from` edge to the same target would have `derived_from` picked
+    whenever it sorts alphabetically before the genuine type (`store.edges()`
+    orders `NULL`, then `relation_type` ascending) -- mislabeling the actual
+    assertable relation that made the pair a contradiction candidate in the
+    first place. A `derived_from` edge is only ever recorded as a LAST
+    resort, so a pair reaching this function (already guaranteed by
+    `_candidate_pairs`'s guard to carry at least one non-`derived_from` typed
+    edge) always prefers that genuine type; `derived_from` is kept as a
+    degrade-safe fallback only, never surfaced when a genuine type exists."""
     mapping: dict[tuple[str, str], str] = {}
     for edge in store.edges():
         if edge.relation_type is None:
             continue
         key = _pair_key(edge.source_id, edge.target_id)
-        mapping.setdefault(key, edge.relation_type)
+        if key not in mapping or (
+            mapping[key] == "derived_from" and edge.relation_type != "derived_from"
+        ):
+            mapping[key] = edge.relation_type
     return mapping
 
 

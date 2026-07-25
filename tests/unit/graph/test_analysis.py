@@ -156,6 +156,40 @@ def test_build_graph_to_digraph_round_trip_over_good_life_demo_bundle() -> None:
     assert ("concepts/stoicism", "concepts/epicureanism") in graph.edges
 
 
+# --- Non-regression (#135): provenance-mirror type flip is PPR/digraph-safe -
+
+
+def test_provenance_mirror_edge_present_in_digraph_with_derived_from_attribute(
+    tmp_path: Path,
+) -> None:
+    """A provenance-mirror edge (now typed `derived_from` at projection time,
+    #135) is still present in the converted `DiGraph`'s edge set -- the edge
+    COUNT and node/edge SET are unaffected by the type-attribute flip; only
+    the `relation_type` attribute value changes from `None` to
+    `"derived_from"` (spec: graph-projection non-regression, task 7.2).
+    Undirected PPR (`graph_retrieve.py`/this module) reads the same edge
+    set regardless of `relation_type`, so this confirms the flip is benign
+    for retrieval."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nprovenance:\n  - sources/foo\n"
+        "---\n[Foo](/sources/foo.md)\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "sources").mkdir(parents=True)
+    (bundle_dir / "sources" / "foo.md").write_text(
+        "---\ntype: Source\ntitle: Foo\n---\nBody.\n", encoding="utf-8"
+    )
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        graph = to_digraph(store)
+
+    assert ("concepts/a", "sources/foo") in graph.edges
+    assert graph.edges["concepts/a", "sources/foo"]["relation_type"] == "derived_from"
+    assert graph.number_of_edges() == 1
+
+
 # --- Layering guard: No CLI Surface (cli/main.py half) ----------------------
 
 

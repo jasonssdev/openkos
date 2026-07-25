@@ -63,6 +63,25 @@ def _write_doc_with_relations(
     )
 
 
+def _write_doc_with_provenance(
+    path: Path,
+    *,
+    doc_type: str = "Concept",
+    title: str = "Stub",
+    provenance: list[str],
+    body: str = "",
+) -> None:
+    """Write a doc whose frontmatter includes a `provenance:` list, given as
+    concept ids (`sources/<slug>` or `concepts/<slug>`), mirroring
+    `_write_doc_with_relations`'s raw-frontmatter-text fixture style."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    provenance_lines = "".join(f"  - {entry}\n" for entry in provenance)
+    path.write_text(
+        f"---\ntype: {doc_type}\ntitle: {title}\nprovenance:\n{provenance_lines}---\n{body}",
+        encoding="utf-8",
+    )
+
+
 def _node_ids(store: sqlite_graph.SqliteGraphStore) -> list[str]:
     rows = store._conn.execute(
         "SELECT concept_id FROM nodes ORDER BY concept_id"
@@ -616,6 +635,171 @@ def test_malformed_relations_contributes_no_typed_edges_and_is_noted_in_skipped(
     assert node_ids == ["concepts/epicureanism", "concepts/stoicism"]
     assert edges == []
     assert store.skipped == ["concepts/stoicism.md: skipped (malformed relations)"]
+
+
+# --- Provenance-mirror synthesis (#135): body links typed derived_from -----
+
+
+def test_provenance_mirror_body_link_is_typed_derived_from(tmp_path: Path) -> None:
+    """A body link from a concept to a target that IS a member of the
+    concept's `provenance:` frontmatter list is synthesized as a
+    `derived_from` edge at projection time -- no `relations:` entry needed
+    (spec: "Provenance-mirror link to a source is synthesized as
+    derived_from"; task 1.1)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_provenance(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        provenance=["sources/foo"],
+        body="## Related\n\n[foo](/sources/foo.md) — source this was extracted from\n",
+    )
+    _write_doc(bundle_dir / "sources" / "foo.md", doc_type="Source", title="Foo")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+
+    assert edges == [("concepts/stoicism", "sources/foo", "derived_from")]
+
+
+def test_multi_entry_provenance_types_each_matching_target(tmp_path: Path) -> None:
+    """A document with a two-entry `provenance:` list and matching body links
+    to both targets has BOTH edges synthesized as `derived_from` (spec:
+    "Multi-entry provenance list types each matching target"; task 1.2)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_provenance(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        provenance=["sources/a", "sources/b"],
+        body=(
+            "## Related\n\n"
+            "[a](/sources/a.md) — source this was extracted from\n"
+            "[b](/sources/b.md) — source this was extracted from\n"
+        ),
+    )
+    _write_doc(bundle_dir / "sources" / "a.md", doc_type="Source", title="A")
+    _write_doc(bundle_dir / "sources" / "b.md", doc_type="Source", title="B")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+
+    assert edges == [
+        ("concepts/stoicism", "sources/a", "derived_from"),
+        ("concepts/stoicism", "sources/b", "derived_from"),
+    ]
+
+
+def test_provenance_mirror_typing_keys_on_membership_not_source_prefix(
+    tmp_path: Path,
+) -> None:
+    """A `query --save` concept whose `provenance:` list names another
+    CONCEPT (not a `sources/` doc) and whose body links to it also gets
+    `derived_from` -- typing is keyed on list membership, never a
+    `sources/`-prefix check (spec: "Provenance-mirror link to a cited
+    concept is also synthesized"; task 1.3)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_provenance(
+        bundle_dir / "concepts" / "saved-answer.md",
+        title="Saved Answer",
+        provenance=["concepts/bar"],
+        body="## Related\n\n[bar](/concepts/bar.md) — concept this answer cites\n",
+    )
+    _write_doc(bundle_dir / "concepts" / "bar.md", title="Bar")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+
+    assert edges == [("concepts/saved-answer", "concepts/bar", "derived_from")]
+
+
+def test_genuine_link_outside_provenance_list_stays_untyped(tmp_path: Path) -> None:
+    """A body link to a target that is NOT a member of the source's
+    `provenance:` list remains `relation_type IS NULL`, even though the
+    source document DOES carry a `provenance:` list (for a different target)
+    (spec: "Genuine concept-to-concept link outside provenance stays
+    untyped"; task 1.4)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_provenance(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        provenance=["sources/foo"],
+        body=(
+            "## Related\n\n[foo](/sources/foo.md) — source this was extracted from\n\n"
+            "See also [Epicureanism](/concepts/epicureanism.md).\n"
+        ),
+    )
+    _write_doc(bundle_dir / "sources" / "foo.md", doc_type="Source", title="Foo")
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+
+    assert ("concepts/stoicism", "concepts/epicureanism", None) in edges
+    assert ("concepts/stoicism", "sources/foo", "derived_from") in edges
+
+
+def test_existing_relations_typed_edge_unaffected_by_provenance_synthesis(
+    tmp_path: Path,
+) -> None:
+    """An existing `relations:`-typed edge is untouched by provenance-mirror
+    synthesis, even when the SAME target also happens to be a member of the
+    source's `provenance:` list -- the typed pass and the untyped/provenance
+    pass insert distinct rows (spec non-regression; task 1.5)."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\n"
+        "provenance:\n  - concepts/epicureanism\n"
+        "relations:\n  - target: concepts/epicureanism\n    type: depends_on\n"
+        "---\n[Epicureanism](/concepts/epicureanism.md)\n",
+        encoding="utf-8",
+    )
+    _write_doc(bundle_dir / "concepts" / "epicureanism.md", title="Epicureanism")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = store.edges()
+
+    assert edges == [
+        Edge(
+            source_id="concepts/stoicism",
+            target_id="concepts/epicureanism",
+            relation_type="depends_on",
+        ),
+        Edge(
+            source_id="concepts/stoicism",
+            target_id="concepts/epicureanism",
+            relation_type="derived_from",
+        ),
+    ]
+
+
+def test_dirty_provenance_degrades_to_empty_set_without_crashing(
+    tmp_path: Path,
+) -> None:
+    """A non-list `provenance:` scalar degrades to an empty set (no matches,
+    every body link stays untyped) rather than crashing the build; a
+    non-string entry within an otherwise-list `provenance:` is dropped, also
+    without crashing (spec/design: "dirty/dangling provenance degrades, no
+    crash"; task 1.6)."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "scalar-provenance.md").write_text(
+        "---\ntype: Concept\ntitle: Scalar Provenance\nprovenance: not-a-list\n"
+        "---\n[Foo](/sources/foo.md)\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "dirty-entries.md").write_text(
+        "---\ntype: Concept\ntitle: Dirty Entries\n"
+        "provenance:\n  - 42\n  - sources/foo\n"
+        "---\n[Foo](/sources/foo.md)\n",
+        encoding="utf-8",
+    )
+    _write_doc(bundle_dir / "sources" / "foo.md", doc_type="Source", title="Foo")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+
+    assert ("concepts/scalar-provenance", "sources/foo", None) in edges
+    assert ("concepts/dirty-entries", "sources/foo", "derived_from") in edges
 
 
 # --- Phase 3.1/3.2: GraphStore query surface --------------------------------
