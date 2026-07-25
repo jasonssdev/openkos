@@ -37,6 +37,7 @@ from openkos.llm.ollama import (
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
+    is_embedding_model,
     model_tag_matches,
 )
 from openkos.model import okf, types
@@ -86,6 +87,12 @@ _PREFLIGHT_TIMEOUT = 5.0
 # the three verbs cannot drift from each other in wording.
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
 
+_MAX_PICKER_ATTEMPTS = 3
+"""Bounded reprompt count for `_pick_chat_model`'s numeric-choice loop --
+an invalid answer reprompts up to this many times before the picker gives
+up and silently falls back to `config.DEFAULT_MODEL`, so a non-interactive
+or misbehaving stdin can never hang `init` forever (design D3)."""
+
 # Uniform lock-contention message for `reindex`'s two error ladders
 # (vectors/fts and graph) -- a single source of truth so a locked
 # vectors.db/fts.db/graph.db always reads identically regardless of which
@@ -102,24 +109,97 @@ def callback() -> None:
 
 
 def _resolve_model(flag: str | None) -> str:
-    """Resolve the model tag to write, precedence flag > TTY prompt > default.
+    """Resolve the model tag to write, precedence flag > interactive picker > default.
 
     `flag` (already the raw `--model` value, or `None` if not given) wins
-    outright -- no prompt is shown even on a TTY. Otherwise, if stdin is a
-    TTY, `typer.prompt` offers `config.DEFAULT_MODEL` and the user may
-    accept it or type a different tag. If stdin is not a TTY (e.g. piped,
-    or a non-interactive CI run), no prompt is shown and the default is
-    used silently. Every path runs through `config.validate_model`, which
-    raises `ValueError` for a blank or unsafe value -- callers must catch
-    it before any file is written.
+    outright -- no prompt or picker is shown even on a TTY. Otherwise, if
+    stdin is a TTY, `_pick_chat_model` probes Ollama and offers a numbered
+    list of installed chat models (falling back to a typed prompt if the
+    probe fails or no chat model is installed). If stdin is not a TTY (e.g.
+    piped, or a non-interactive CI run), neither prompt nor picker is shown
+    and the default is used silently. Every path runs through
+    `config.validate_model`, which raises `ValueError` for a blank or unsafe
+    value -- callers must catch it before any file is written.
     """
     if flag is not None:
         return config.validate_model(flag)
     if sys.stdin.isatty():
+        return _pick_chat_model()
+    return config.DEFAULT_MODEL
+
+
+def _is_selectable_model_tag(tag: str) -> bool:
+    """`True` iff `tag` would pass `config.validate_model` -- used to drop a
+    server-reported tag the picker could otherwise list but that would
+    hard-fail `init` the moment the user selected it."""
+    try:
+        config.validate_model(tag)
+        return True
+    except ValueError:
+        return False
+
+
+def _pick_chat_model() -> str:
+    """Interactive numbered picker over Ollama's installed chat models.
+
+    Probes Ollama in Phase A, strictly before any workspace write, wrapped
+    in a broad `except Exception` so an unreachable server (or any other
+    probe failure) never blocks `init` -- it silently falls back to the
+    pre-picker typed prompt below instead (spec: Graceful Degradation).
+    Embedding models (per `is_embedding_model`) are excluded from the
+    candidate list; if that leaves zero chat models, the picker falls back
+    the same way. `config.DEFAULT_MODEL` is always listed first, marked
+    "(recommended)" -- prepended if the probe didn't report it installed.
+
+    `typer.prompt("Model", default=str(<recommended index>))` reads the
+    choice: pressing Enter re-supplies that default, so it resolves to the
+    recommended tag with no special-casing needed. An in-range digit picks
+    that list entry; anything else reprompts, up to `_MAX_PICKER_ATTEMPTS`
+    times, rather than silently accepting garbage or hanging forever on a
+    misbehaving/non-interactive stdin -- after which it falls back to
+    `config.DEFAULT_MODEL`. The final choice is still validated by
+    `config.validate_model`, same as every other `_resolve_model` path.
+    """
+    try:
+        probe = OllamaClient(model=config.DEFAULT_MODEL, timeout=_PREFLIGHT_TIMEOUT)
+        candidates = [
+            m.tag
+            for m in probe.list_models()
+            if not is_embedding_model(m) and _is_selectable_model_tag(m.tag)
+        ]
+    except Exception:
+        candidates = []
+
+    if not candidates:
         return config.validate_model(
             typer.prompt("Model", default=config.DEFAULT_MODEL)
         )
-    return config.DEFAULT_MODEL
+
+    if config.DEFAULT_MODEL in candidates:
+        candidates.remove(config.DEFAULT_MODEL)
+    candidates.insert(0, config.DEFAULT_MODEL)
+
+    typer.echo("Installed chat models:")
+    for index, tag in enumerate(candidates, start=1):
+        suffix = " (recommended)" if tag == config.DEFAULT_MODEL else ""
+        typer.echo(f"  {index}) {tag}{suffix}")
+
+    for _ in range(_MAX_PICKER_ATTEMPTS):
+        choice = typer.prompt("Model", default="1")
+        if (
+            choice.isascii()
+            and choice.isdigit()
+            and 1 <= int(choice) <= len(candidates)
+        ):
+            return config.validate_model(candidates[int(choice) - 1])
+        typer.echo(
+            f"openkos init: '{choice}' isn't a valid choice -- enter a "
+            f"number from 1 to {len(candidates)}, or press Enter for the "
+            "recommended model.",
+            err=True,
+        )
+
+    return config.validate_model(config.DEFAULT_MODEL)
 
 
 def _commit_has_confidential(root: Path, paths: Sequence[str]) -> bool:
