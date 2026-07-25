@@ -30,12 +30,19 @@ runner = CliRunner()
 
 
 def _fake_ollama_client(
-    *, installed: list[str] | None = None, error: Exception | None = None
+    *,
+    installed: list[str | InstalledModel] | None = None,
+    error: Exception | None = None,
 ) -> Callable[..., Any]:
     """Build a fake `OllamaClient` factory exposing ONLY `list_models` --
     mirrors `test_doctor.py`'s stub. Deliberately has no `pull`/`serve`-style
-    method, so any attempt by the preflight to call one raises
-    `AttributeError` and fails the test loudly (task 2.6 guard)."""
+    method, so any attempt by the preflight or picker to call one raises
+    `AttributeError` and fails the test loudly (task 2.6 guard).
+
+    `installed` entries may be a bare `str` (shorthand for a chat model with
+    `family=None`, used by every pre-picker test) or a full `InstalledModel`
+    (needed by the B-ii picker tests to set `family` and exercise the
+    embedding-model filter)."""
 
     class _FakeOllamaClient:
         def __init__(self, model: str, **kwargs: object) -> None:
@@ -44,7 +51,12 @@ def _fake_ollama_client(
         def list_models(self) -> list[InstalledModel]:
             if error is not None:
                 raise error
-            return [InstalledModel(tag=tag, family=None) for tag in (installed or [])]
+            return [
+                entry
+                if isinstance(entry, InstalledModel)
+                else InstalledModel(tag=entry, family=None)
+                for entry in (installed or [])
+            ]
 
     return _FakeOllamaClient
 
@@ -355,7 +367,11 @@ def test_model_flag_wins_over_tty_prompt(
 def test_tty_prompt_accepts_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No `--model` flag, stdin is a TTY, user accepts the offered default (scenario: TTY prompt, accept default)."""
+    """No `--model` flag, stdin is a TTY, Ollama reachable with the default
+    chat model installed: the picker's numbered list is shown and pressing
+    Enter selects `config.DEFAULT_MODEL` (scenario: TTY picker, accept
+    recommended default). Relies on the module's autouse fixture, which
+    reports `DEFAULT_MODEL` installed."""
     monkeypatch.chdir(tmp_path)
     _simulate_tty(monkeypatch)
 
@@ -392,11 +408,19 @@ def test_tty_init_prints_exact_next_step_hint(
 def test_tty_prompt_custom_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No `--model` flag, stdin is a TTY, user enters a custom value (scenario: TTY prompt, custom value)."""
+    """No `--model` flag, stdin is a TTY, Ollama reports a second installed
+    chat model: the user picks it by NUMBER, not free text (scenario:
+    TTY+picker custom selection). The picker only accepts a numeric index
+    (or Enter for the recommended default) -- superseded from B-i's
+    free-text-prompt version of this test now that the picker is active."""
     monkeypatch.chdir(tmp_path)
     _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, "mistral"]),
+    )
 
-    result = runner.invoke(app, ["init"], input="mistral\n")
+    result = runner.invoke(app, ["init"], input="2\n")
 
     assert result.exit_code == 0
     content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
@@ -415,6 +439,247 @@ def test_non_tty_no_flag_silent_default(
     assert "Model" not in result.output
     content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
     assert "model: qwen3:8b" in content
+
+
+# --- Slice B (init-model-picker): interactive chat-model picker ------------
+
+
+def test_picker_lists_chat_models_excludes_embedding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The picker's numbered list shows installed chat models and marks the
+    recommended default, but never lists an embedding model (family
+    "bert") as a selectable option (spec: Embedding Models Excluded From
+    Picker Candidates)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag=DEFAULT_MODEL, family="qwen"),
+                InstalledModel(tag="bge-m3", family="bert"),
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert "qwen3:8b" in result.output
+    assert "(recommended)" in result.output
+    assert "bge-m3" not in result.output
+
+
+def test_picker_numeric_choice_selects_and_persists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Choosing a non-default chat model by its list number persists that
+    tag to `openkos.yaml` (spec: selecting a number picks that model)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag=DEFAULT_MODEL, family="qwen"),
+                InstalledModel(tag="gemma3", family="gemma"),
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="2\n")
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: gemma3" in content
+
+
+def test_model_flag_bypasses_picker_no_list_shown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--model` wins outright even on a TTY: no picker list is rendered at
+    all (spec: --model on TTY -> no picker)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, "gemma3"]),
+    )
+
+    result = runner.invoke(app, ["init", "--model", "mistral"])
+
+    assert result.exit_code == 0
+    assert "(recommended)" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: mistral" in content
+
+
+def test_non_tty_bypasses_picker_silent_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-TTY, no `--model` flag: the default is taken silently, no picker
+    list is shown, even though Ollama reports multiple chat models (spec:
+    non-TTY no flag -> silent default, no picker)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, "gemma3"]),
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "(recommended)" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: qwen3:8b" in content
+
+
+def test_picker_unreachable_ollama_falls_back_to_typed_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama unreachable during the picker's probe: falls back to the
+    typed-prompt/default flow, never hard-fails, and the workspace is still
+    created with exit 0 (spec: Graceful Degradation -- unreachable)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert "(recommended)" not in result.output
+    assert (tmp_path / "openkos.yaml").is_file()
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: qwen3:8b" in content
+
+
+def test_picker_zero_chat_models_falls_back_to_typed_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only embedding models installed (zero chat candidates after the
+    family filter): the picker falls back to the typed-prompt/default flow
+    without crashing (spec: Graceful Degradation -- only embedding models
+    installed)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[InstalledModel(tag="bge-m3", family="bert")]),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert "(recommended)" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: qwen3:8b" in content
+
+
+def test_picker_invalid_selection_reprompts_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An out-of-range/non-numeric first answer reprompts instead of
+    crashing or silently accepting garbage; a valid follow-up answer then
+    completes the picker (spec design D3: invalid -> stderr err + reprompt)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag=DEFAULT_MODEL, family="qwen"),
+                InstalledModel(tag="gemma3", family="gemma"),
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="not-a-number\n2\n")
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: gemma3" in content
+
+
+def test_picker_exhausted_invalid_selections_falls_back_to_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reprompt loop is bounded: after `_MAX_PICKER_ATTEMPTS` invalid
+    answers the picker stops reprompting and falls back to the recommended
+    default instead of looping forever on a misbehaving stdin (spec:
+    Graceful Degradation / bounded reprompt)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag=DEFAULT_MODEL, family="qwen"),
+                InstalledModel(tag="gemma3", family="gemma"),
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="bad\nbad\nbad\n")
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert f"model: {DEFAULT_MODEL}" in content
+
+
+def test_picker_unicode_digit_input_reprompts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Unicode digit-like character (e.g. superscript two, U+00B2) passes
+    `str.isdigit()` but is not `int()`-parseable. It must be treated as an
+    invalid choice and reprompt, never escape as a raw `int()` ValueError
+    that hard-fails init (bounded-reprompt / graceful-degradation contract)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag=DEFAULT_MODEL, family="qwen"),
+                InstalledModel(tag="gemma3", family="gemma"),
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="²\n2\n")
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "model: gemma3" in content
+
+
+def test_picker_excludes_tags_that_fail_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server-reported chat tag that would fail `validate_model` (e.g. one
+    containing a space) must not be offered as a selectable option, so a user
+    can never pick a listed entry that then hard-fails init on validation."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag=DEFAULT_MODEL, family="qwen"),
+                InstalledModel(tag="bad tag", family="qwen"),
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert "bad tag" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert f"model: {DEFAULT_MODEL}" in content
 
 
 @pytest.mark.parametrize("bad_model", ["", " ", "a b", 'a"b', "a'b", "a#b"])

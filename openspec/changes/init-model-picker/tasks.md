@@ -70,27 +70,27 @@ Chain strategy: sequential-to-main
 
 ### Phase 4: Picker implementation — `src/openkos/cli/main.py`
 
-- [ ] 4.1 RED: extend `tests/unit/cli/test_init.py` — `_fake_ollama_client` returns `InstalledModel` list; test numbered list rendered with chat models, `DEFAULT_MODEL` marked "(recommended)".
-- [ ] 4.2 GREEN: implement `_pick_chat_model() -> str` — probe Ollama, filter via `is_embedding_model`, ensure `DEFAULT_MODEL` present, print numbered list.
-- [ ] 4.3 RED: test Enter (empty input) selects `DEFAULT_MODEL`; test numeric choice maps to corresponding tag.
-- [ ] 4.4 GREEN: implement bounded `typer.prompt` reprompt loop mapping empty→recommended, in-range digit→tag.
-- [ ] 4.5 RED: test invalid input reprompts until valid; result still passes through `validate_model`.
-- [ ] 4.6 GREEN: wire invalid-input reprompt + `validate_model` call on chosen tag.
-- [ ] 4.7 RED: test `--model` flag bypasses picker entirely (no probe call).
-- [ ] 4.8 GREEN: confirm `_resolve_model` short-circuits before `_pick_chat_model` when `--model` given.
-- [ ] 4.9 RED: test non-TTY path silently returns `DEFAULT_MODEL`, no picker invoked.
-- [ ] 4.10 GREEN: confirm non-TTY branch bypasses `_pick_chat_model`.
-- [ ] 4.11 RED: test Ollama unreachable → falls back to existing typed-prompt/default flow, no hard-fail, workspace still created, exit 0.
-- [ ] 4.12 RED: test zero chat models after embedding filter → same fallback behavior.
-- [ ] 4.13 GREEN: wrap probe + filter in broad `except Exception`; on exception or zero candidates, fall back to `typer.prompt("Model", default=DEFAULT_MODEL)`.
-- [ ] 4.14 RED: test embedding model (e.g. `bge-m3`, family "bert") absent from numbered list while chat model (e.g. `qwen3:8b`) present.
-- [ ] 4.15 GREEN: confirm embedding filter applied before rendering list (should already pass from 4.13; add if gap found).
+- [x] 4.1 RED: extend `tests/unit/cli/test_init.py` — `_fake_ollama_client` returns `InstalledModel` list; test numbered list rendered with chat models, `DEFAULT_MODEL` marked "(recommended)".
+- [x] 4.2 GREEN: implement `_pick_chat_model() -> str` — probe Ollama, filter via `is_embedding_model`, ensure `DEFAULT_MODEL` present, print numbered list.
+- [x] 4.3 RED: test Enter (empty input) selects `DEFAULT_MODEL`; test numeric choice maps to corresponding tag.
+- [x] 4.4 GREEN: implement bounded `typer.prompt` reprompt loop mapping empty→recommended, in-range digit→tag.
+- [x] 4.5 RED: test invalid input reprompts until valid; result still passes through `validate_model`.
+- [x] 4.6 GREEN: wire invalid-input reprompt + `validate_model` call on chosen tag.
+- [x] 4.7 RED: test `--model` flag bypasses picker entirely (no probe call).
+- [x] 4.8 GREEN: confirm `_resolve_model` short-circuits before `_pick_chat_model` when `--model` given.
+- [x] 4.9 RED: test non-TTY path silently returns `DEFAULT_MODEL`, no picker invoked.
+- [x] 4.10 GREEN: confirm non-TTY branch bypasses `_pick_chat_model`.
+- [x] 4.11 RED: test Ollama unreachable → falls back to existing typed-prompt/default flow, no hard-fail, workspace still created, exit 0.
+- [x] 4.12 RED: test zero chat models after embedding filter → same fallback behavior.
+- [x] 4.13 GREEN: wrap probe + filter in broad `except Exception`; on exception or zero candidates, fall back to `typer.prompt("Model", default=DEFAULT_MODEL)`.
+- [x] 4.14 RED: test embedding model (e.g. `bge-m3`, family "bert") absent from numbered list while chat model (e.g. `qwen3:8b`) present.
+- [x] 4.15 GREEN: confirm embedding filter applied before rendering list (verified via 4.1's assertion; no gap found).
 
 ### Phase 5: Quality Gate (B-ii)
 
-- [ ] 5.1 Run `uv run pytest` — full suite green.
-- [ ] 5.2 Run `uv run ruff check . && uv run ruff format --check .`.
-- [ ] 5.3 Run `uv run mypy .`.
+- [x] 5.1 Run `uv run pytest` — full suite green.
+- [x] 5.2 Run `uv run ruff check . && uv run ruff format --check .`.
+- [x] 5.3 Run `uv run mypy .`.
 
 ## Notes
 
