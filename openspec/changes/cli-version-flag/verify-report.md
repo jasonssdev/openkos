@@ -1,3 +1,35 @@
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:5b6ca343bdb294a467f76c192d51d955c75deca4a6cd9580b840dd937374f405
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 7/8
+scenarios: 12/13
+test_command: uv run pytest
+test_exit_code: 0
+test_output_hash: sha256:ad0ccf9229ac89e3defe3a7a59c44a18eb3d7e06ae80d700b58c56909167f20f
+build_command: uv run ruff check . && uv run ruff format --check . && uv run mypy .
+build_exit_code: 0
+build_output_hash: sha256:c028c2b916869a306e6c5e3b9656d0fae094dd2afb3689f8fe8158bd1200ba92
+```
+
+<!--
+The numerators are deliberately short of their denominators. One of the 13
+scenarios is PARTIAL: the doctor-command scenario "Other applicable checks
+still run despite the malformed model" names four checks, and its
+(pre-existing, #128-era) regression test asserts three of them. So scenarios
+is 12/13, and its parent requirement "Doctor Never Raises On A Malformed
+Model Config" is likewise not fully pinned, making requirements 7/8 -- the
+same both-numerators-decrement convention the archived
+2026-07-18-add-ingest-command envelope uses.
+
+verdict is pass_with_warnings, not pass, because the body records two
+WARNINGs. The envelope is the routing input, so a bare `pass` would strip
+that signal from any consumer that reads only this block. Neither warning is
+a code defect and neither was introduced by this change.
+-->
+
 # Verification Report: cli-version-flag
 
 **Change**: cli-version-flag (closes #181, PR #182, merged to `main` as `ab914a9`)
