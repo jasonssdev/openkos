@@ -14,6 +14,21 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- **`openkos --version`**: prints `openkos {version}` (read from installed
+  distribution metadata) and exits 0, evaluated eagerly so it works outside a
+  workspace and short-circuits before any subcommand runs; `openkos doctor`
+  now leads its output with the same version banner. (cli) (#181)
+
+### Fixed
+
+- **Docs: `doctor` check count**: `docs/cli.md` and `docs/testing.md` both
+  documented nine environment checks and omitted `Workspace vector index
+  present`; `doctor` has emitted ten since that check shipped. Both now list
+  ten, and the CI wheel smoke test asserts `openkos --version` output instead
+  of only its exit status. (docs, ci) (#181)
+
 ## [0.2.0] - 2026-07-25
 
 ### Added
