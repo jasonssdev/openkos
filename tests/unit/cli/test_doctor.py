@@ -1,17 +1,19 @@
 """Unit tests for the `doctor` CLI command: read-only environment health scan.
 
-`doctor` runs ALL nine checks (workspace-initialized, config-valid,
+`doctor` runs ALL ten checks (workspace-initialized, config-valid,
 Ollama-reachable, model-installed, embedding-model-installed,
-bundle-readable, vector-extension-loadable, git-available,
-git-filter-repo-available), renders every result unconditionally
-(accumulate-then-exit-once, D5), and exits 1 iff any CRITICAL check failed.
-`embedding-model-installed`, `vector-extension-loadable`, and the two git
+bundle-readable, workspace-vector-index-present, vector-extension-loadable,
+git-available, git-filter-repo-available), renders every result
+unconditionally (accumulate-then-exit-once, D5), and exits 1 iff any CRITICAL
+check failed. `embedding-model-installed`, `workspace-vector-index-present`,
+`vector-extension-loadable`, and the two git
 checks are all informational (non-critical): the git checks exist for the
 (not-yet-wired, PR2) `purge` verb, so a failing check must not flip the
 exit code. Every test patches `openkos.cli.main.OllamaClient` with a fake
 stub (D-seam) -- zero network, zero real Ollama process.
 """
 
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -189,16 +191,22 @@ def test_doctor_non_str_model_fails_and_exits_one_without_traceback(
     (tmp_path / "openkos.yaml").write_text("model: yes\n", encoding="utf-8")
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
-        _fake_ollama_client(installed=[DEFAULT_MODEL]),
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 1
     assert "[FAIL] Config valid" in result.stdout
+    assert "  -> fix openkos.yaml" in result.stdout
     assert isinstance(result.exception, SystemExit)
     assert "Traceback" not in result.stdout
     assert "[PASS] Bundle readable" in result.stdout
+    assert "[PASS] Ollama reachable" in result.stdout
+    assert f"[PASS] Model '{DEFAULT_MODEL}' installed" in result.stdout
+    assert f"[PASS] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in (
+        result.stdout
+    )
 
 
 def test_doctor_non_str_embedding_model_with_valid_model_exits_cleanly(
@@ -821,3 +829,30 @@ def test_doctor_git_checks_run_pre_init_independent_of_ollama(
     assert "[FAIL] Workspace initialized" in result.stdout
     assert "[PASS] git available" in result.stdout
     assert "[PASS] git-filter-repo available" in result.stdout
+
+
+def test_doctor_prints_version_banner_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`doctor` prints the `openkos {version}` banner as its first stdout
+    line, before any check line, without changing the check count or exit
+    code (ADDED requirement: Doctor Prints A Leading Version Banner)."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    lines = result.stdout.splitlines()
+    assert re.match(r"^openkos \d+\.\d+\.\d+", lines[0])
+    assert lines[1] == f"openkos doctor: checking environment at {tmp_path}"
+    assert result.exit_code == 0
+    assert result.stdout.count("[PASS]") == 10

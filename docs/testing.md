@@ -166,13 +166,11 @@ uv tool install --force --from . openkos    # put THIS working tree on your PATH
 
 ```bash
 which openkos
-openkos --help | head -3
+openkos --version
 ```
 
-> **There is no `openkos --version` yet** ([#181](https://github.com/jasonssdev/openkos/issues/181)).
-> Until it lands, read the installed version from the packaging tool instead —
-> `uv tool list | grep openkos`, or `pip show openkos` — and record it in your
-> findings log, because a bug report without a version is not reproducible.
+> Record that output in your findings log — a bug report without a version is
+> not reproducible.
 
 **Never run the walkthrough from inside the source checkout.** You may be
 exercising local code instead of the build you think you are testing, and
@@ -200,9 +198,11 @@ cd ~
 openkos doctor ; echo "exit: $?"
 ```
 
-Expect nine `[PASS]`/`[FAIL]`/`[SKIP]` lines. The nine checks and their
-criticality (exit code is `1` only if a **critical** check fails; a `[SKIP]`
-never causes exit 1):
+Expect an `openkos <version>` banner, then the `openkos doctor: checking
+environment at <path>` header, a blank line, and then ten
+`[PASS]`/`[FAIL]`/`[SKIP]` lines — the banner and the header are not checks.
+The ten checks and their criticality (exit code is `1` only if a **critical**
+check fails; a `[SKIP]` never causes exit 1):
 
 | # | Check | Critical |
 |---|---|---|
@@ -212,9 +212,10 @@ never causes exit 1):
 | 4 | Chat model installed | **yes** |
 | 5 | Embedding model installed | no |
 | 6 | Bundle readable | no |
-| 7 | Vector extension loadable | no |
-| 8 | `git` available | no |
-| 9 | `git-filter-repo` available | no |
+| 7 | Workspace vector index present | no |
+| 8 | Vector extension loadable | no |
+| 9 | `git` available | no |
+| 10 | `git-filter-repo` available | no |
 
 **Adversarial sub-test.** Stop Ollama (`Ctrl-C` in its terminal), re-run
 `openkos doctor`, confirm check 3 fails with an actionable remediation line and
@@ -592,7 +593,7 @@ descendants); `--force` proceeds even when inbound links would dangle (it does
 reflog and runs `git gc`. There is no undo. Preflight:
 
 ```bash
-openkos doctor       # checks 8 and 9 must PASS
+openkos doctor       # checks 9 and 10 must PASS
 git status           # working tree MUST be clean
 git remote -v        # MUST be empty
 ```
@@ -652,20 +653,20 @@ default and once for its writing `--save` form.
 
 ## Known issues — expect these, don't re-file them
 
-Open issues already surfaced by prior end-to-end testing. If you hit one, it is
-expected; add evidence to the existing issue rather than opening a new one.
+When prior end-to-end testing has left issues open, they are listed here so you
+add evidence to the existing issue rather than opening a new one.
 
-| Area | Behavior you'll see | Issue |
-|---|---|---|
-| CLI | No `openkos --version`; the installed version can only be read from the packaging tool | [#181](https://github.com/jasonssdev/openkos/issues/181) |
+**There are no open known issues right now.** Anything you hit in this round is
+new: open an issue for it.
 
 **Everything the previous rounds found is now fixed** — the `init` model prompt
 (#128), same-slug source collisions (#131), `status` per-type counts (#133),
 `suggest-relations` vocabulary noise and per-edge latency (#134) and its
 provenance duplication (#135), missing `ingest` extraction feedback (#136),
 `adjudicate` part-whole verdicts (#138), `purge --force` dangling references
-(#141), `purge` deleting `vectors.db` (#142), and `init` not setting up git
-(#143). If any of them reappears, that is a **regression** and deserves a new
+(#141), `purge` deleting `vectors.db` (#142), `init` not setting up git
+(#143), and the missing `--version` flag (#181). If any of them reappears,
+that is a **regression** and deserves a new
 issue, not a comment on the closed one.
 
 ---

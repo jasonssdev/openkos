@@ -114,7 +114,31 @@ jobs:
       # the console script exercises the artifact's own entry-point metadata
       # rather than the checkout or the dev environment.
       - name: Wheel smoke test
-        run: uv run --isolated --no-project --with dist/openkos-*.whl openkos --help
+        run: |
+          # Resolve the glob to exactly one wheel up front: with a stale second
+          # wheel in `dist/`, an unquoted `--with dist/openkos-*.whl` would expand
+          # to two arguments and fail with an unrelated-looking spawn error.
+          # `nullglob` makes the no-wheel case collapse to an empty array so the
+          # guard below reports it, instead of passing the literal pattern through.
+          shopt -s nullglob
+          wheels=(dist/openkos-*.whl)
+          test "${#wheels[@]}" -eq 1 || {
+            echo "wheel smoke test: expected exactly one wheel, found ${wheels[*]}" >&2
+            exit 1
+          }
+          wheel="${wheels[0]}"
+          uv run --isolated --no-project --with "$wheel" openkos --help
+          # `--version` exits 0 even on its degraded `openkos unknown` fallback, so
+          # asserting the exit status alone would let a wheel whose distribution
+          # metadata is unreadable pass this step green. Compare the printed line
+          # against the version in the built wheel's own filename instead -- that is
+          # what makes this step proof the flag reads real packaged metadata.
+          expected="openkos $(basename "$wheel" | cut -d- -f2)"
+          actual=$(uv run --isolated --no-project --with "$wheel" openkos --version)
+          test "$actual" = "$expected" || {
+            echo "wheel smoke test: expected '$expected', got '$actual'" >&2
+            exit 1
+          }
 
       # The unit suite runs `init` against the editable install, where
       # `src/openkos/templates/` is just a directory on disk -- it would

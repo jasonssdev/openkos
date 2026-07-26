@@ -10,6 +10,8 @@ from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -103,8 +105,43 @@ _LOCK_CONTENTION_MSG = (
 )
 
 
+def _version_line() -> str:
+    """The single `openkos {version}` line emitted by both `--version` and
+    `doctor`'s banner, read from installed distribution metadata (never from a
+    constant, so it cannot drift from the built artifact). `PackageNotFoundError`
+    -- realistically only a raw `sys.path` run with no install step -- degrades to
+    `openkos unknown`: `unknown` cannot be misread as a released build the way
+    `0.0.0-dev` would. Staleness (a bumped `pyproject.toml` without `uv sync`) is
+    an explicit NON-GOAL: this reports what is installed, not what is checked out."""
+    try:
+        return f"openkos {_pkg_version('openkos')}"
+    except PackageNotFoundError:
+        return "openkos unknown"
+
+
+def _version_callback(value: bool) -> None:
+    """Eager `--version` handler: print and exit 0 before Typer resolves any
+    subcommand, so the flag works standalone and outside a workspace."""
+    if value:
+        typer.echo(_version_line())
+        raise typer.Exit(code=0)
+
+
 @app.callback()
-def callback() -> None:
+def callback(
+    # `version` is never read in the body and looks dead, but it is load-bearing:
+    # Typer derives the `--version` option from this signature, so deleting the
+    # parameter deletes the flag. All the work happens in `_version_callback`,
+    # which fires eagerly during parsing. Ruff's `ARG` rules are not enabled, so
+    # nothing but this comment protects it from a well-meaning cleanup.
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Show the installed openkos version and exit.",
+        is_eager=True,
+        callback=_version_callback,
+    ),
+) -> None:
     """openkos: local-first engine that compiles text into a portable knowledge base."""
 
 
@@ -5905,6 +5942,11 @@ def doctor() -> None:
     failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
     TEXT lives only here; `llm/` stays config-free (D1).
 
+    Output leads with an `openkos {version}` banner -- the same line
+    `--version` prints (cli-version-flag, #181). It is informational only,
+    never a `CheckResult`, and precedes both the header and the check lines,
+    so it affects neither the check count nor the exit code.
+
     Checks, in order: (1) workspace-initialized -- informational, via the
     shared `config.require_workspace` gate; (2) config-valid -- critical,
     workspace-only, `[SKIP]` outside a workspace; (3) Ollama-reachable --
@@ -5916,24 +5958,24 @@ def doctor() -> None:
     (never `[FAIL]`) when Ollama is unreachable, for the same D6 reason --
     Slice 1 does not wire embeddings into any consumed feature yet, so a
     failure here must not flip the exit code; (6) bundle-readable --
-    informational, workspace-only, `[SKIP]` outside a workspace; (6b)
+    informational, workspace-only, `[SKIP]` outside a workspace; (7)
     workspace-vector-index-present -- informational, workspace-only,
     `[SKIP]` outside a workspace, via `layout.vectors_db_path.exists()`
-    (purge-transactional-cleanup #142) -- distinct from (7): this checks
+    (purge-transactional-cleanup #142) -- distinct from (8): this checks
     THIS workspace's own `.openkos/vectors.db` file, not a throwaway
     `:memory:` probe; a `[FAIL]` here always names `openkos reindex` as its
-    remediation; (7) vector-extension-loadable -- informational, always, via
+    remediation; (8) vector-extension-loadable -- informational, always, via
     `state.vectorstore.probe_vec_loadable()` against a throwaway `:memory:`
     connection; UNLIKE (5), this check has NO `[SKIP]` branch -- it depends
     on neither workspace state nor Ollama reachability, so it shares no root
     cause with any other check (embedding-vector-store, Slice 2a; the
-    scaffolding this checks has no consumed feature yet either); (8)
+    scaffolding this checks has no consumed feature yet either); (9)
     git-available -- informational, always, via `vcs.git.git_available()`;
-    (9) git-filter-repo-available -- informational, always, via
-    `vcs.git.filter_repo_available()`. Checks (8)/(9) exist for the
-    not-yet-wired `purge` verb (privacy-purge Slice 1, PR2): like (7), they
+    (10) git-filter-repo-available -- informational, always, via
+    `vcs.git.filter_repo_available()`. Checks (9)/(10) exist for the
+    not-yet-wired `purge` verb (privacy-purge Slice 1, PR2): like (8), they
     have no `[SKIP]` branch -- they depend on neither workspace state nor
-    Ollama. Outside a workspace, checks (3)/(4)/(5)/(7)/(8)/(9) still run
+    Ollama. Outside a workspace, checks (3)/(4)/(5)/(8)/(9)/(10) still run
     against `config.DEFAULT_MODEL`/`config.DEFAULT_EMBEDDING_MODEL` and
     (3)/(4) still determine the exit code (spec: Doctor Works Outside An
     Initialized Workspace).
@@ -6092,9 +6134,10 @@ def doctor() -> None:
     else:
         results.append(CheckResult("Bundle readable", "skip", critical=False))
 
-    # 6b. workspace-vectors-present (informational, workspace-only; SKIP
+    # 7. workspace-vectors-present (informational, workspace-only; SKIP
     # outside -- mirrors check 6's workspace-only shape). Distinct from
-    # check 7's throwaway `:memory:` probe (`probe_vec_loadable()`, which
+    # vector-extension-loadable's throwaway `:memory:` probe
+    # (`probe_vec_loadable()`, which
     # says nothing about a specific workspace's own index file): this
     # checks whether THIS workspace's `.openkos/vectors.db` exists on disk
     # (purge-transactional-cleanup #142). Staleness (mtime) is deliberately
@@ -6118,7 +6161,7 @@ def doctor() -> None:
             CheckResult("Workspace vector index present", "skip", critical=False)
         )
 
-    # 7. vector-extension-loadable (informational, always; NO SKIP branch --
+    # 8. vector-extension-loadable (informational, always; NO SKIP branch --
     # unlike embedding-model-installed, this shares no root cause with any
     # other check: it depends only on the local Python/SQLite build, never
     # on workspace state or Ollama reachability). Probes a throwaway
@@ -6139,7 +6182,7 @@ def doctor() -> None:
             )
         )
 
-    # 8. git-available (informational, always; NO SKIP branch -- shares no
+    # 9. git-available (informational, always; NO SKIP branch -- shares no
     # root cause with any other check; exists for the not-yet-wired `purge`
     # verb, privacy-purge Slice 1 PR2)
     if vcs_git.git_available():
@@ -6157,7 +6200,7 @@ def doctor() -> None:
             )
         )
 
-    # 9. git-filter-repo-available (informational, always; NO SKIP branch)
+    # 10. git-filter-repo-available (informational, always; NO SKIP branch)
     if vcs_git.filter_repo_available():
         results.append(CheckResult("git-filter-repo available", "pass", critical=False))
     else:
@@ -6173,6 +6216,10 @@ def doctor() -> None:
             )
         )
 
+    # Leading version banner (cli-version-flag, #181): informational only, NOT
+    # a CheckResult -- it is deliberately outside `results` so it can never
+    # affect the check count or the exit code.
+    typer.echo(_version_line())
     typer.echo(f"openkos doctor: checking environment at {root}")
     typer.echo()
     for r in results:
