@@ -14,17 +14,18 @@ checks against the local workspace and the local Ollama server, printed as
 `doctor` MUST execute all checks applicable to the current context —
 workspace initialized, `openkos.yaml` valid, Ollama reachable, configured
 chat model installed, configured embedding model installed, bundle
-readable, vector extension loadable — and print exactly one
+readable, workspace vector index present, vector extension loadable, `git`
+available, `git-filter-repo` available — and print exactly one
 `[PASS]`/`[FAIL]`/`[SKIP]` line per applicable check. It MUST NOT stop or
 skip remaining checks after any single check fails.
 
 #### Scenario: Healthy workspace prints all applicable checks
 
 - GIVEN an initialized workspace, valid config, reachable Ollama, both
-  configured models installed, a readable bundle, and a loadable vector
-  extension
+  configured models installed, a readable bundle, a present workspace vector
+  index, a loadable vector extension, and both git binaries available
 - WHEN `openkos doctor` runs
-- THEN it prints one `[PASS]` line per check, covering all 7 checks
+- THEN it prints one `[PASS]` line per check, covering all ten checks
 
 #### Scenario: A failing check does not stop later checks from running
 
@@ -97,9 +98,10 @@ PATH.)
 
 `doctor` MUST exit with code 1 if any CRITICAL check (config valid, Ollama
 reachable, chat model installed) failed, and MUST exit 0 otherwise.
-Informational checks (workspace initialized, bundle readable, embedding
-model installed, vector extension loadable) failing alone MUST NOT cause a
-non-zero exit.
+The other seven checks are informational (workspace initialized, embedding
+model installed, bundle readable, workspace vector index present, vector
+extension loadable, `git` available, `git-filter-repo` available); failing
+alone they MUST NOT cause a non-zero exit.
 
 #### Scenario: Informational-only failure still exits zero
 
@@ -264,6 +266,29 @@ and a `[FAIL]` line MUST be followed by an indented fix line naming
 - THEN the workspace-vectors check prints `[SKIP]` (not applicable), and
   does not affect the exit code
 
+### Requirement: Doctor Prints A Leading Version Banner
+
+`openkos doctor` MUST print a version banner line — the same
+`openkos {version}` string produced by `openkos --version` — before any
+check output, using the same resolution and `PackageNotFoundError` fallback
+(`openkos unknown`) as `--version`. This banner is informational only: it is
+NOT a `CheckResult` at all (doctor emits ten of those), MUST NOT be counted
+among the applicable checks, and MUST NOT affect the exit code.
+
+#### Scenario: Banner precedes all check lines
+
+- GIVEN any workspace state (initialized or not)
+- WHEN `openkos doctor` runs
+- THEN the first printed line is `openkos {version}`, followed by the
+  existing per-check `[PASS]`/`[FAIL]`/`[SKIP]` lines
+
+#### Scenario: Check count and exit code are unaffected by the banner
+
+- GIVEN an initialized workspace where every applicable check passes
+- WHEN `openkos doctor` runs
+- THEN ten check lines print — the banner adds none — and the process still
+  exits 0
+
 ### Requirement: Doctor Never Raises On A Malformed Model Config
 
 `openkos doctor` MUST NOT raise an uncaught exception when the configured
@@ -278,9 +303,13 @@ guard around the model-installed checks, the end state MUST be identical —
 doctor reports a `[FAIL]` line with actionable remediation pointing at
 fixing `openkos.yaml`, reuses the existing accumulated-never-raised
 `CheckResult` convention and the standard `[PASS]/[FAIL]/[SKIP] <label>` +
-optional indented `-> <remediation>` output shape, and every other
-applicable check still runs and prints its own result. No new output shape
-is introduced by this requirement.
+optional indented `-> <remediation>` output shape for every check line, and
+every other applicable check still runs and prints its own result. No new
+check-line shape is introduced by this requirement; the one exception is the
+single leading version banner line (see "Doctor Prints A Leading Version
+Banner"), which precedes the checks and is not itself a check line.
+(Previously: the requirement stated no new line shape at all was introduced,
+with no carve-out for a non-check banner line.)
 
 #### Scenario: Non-str model value fails cleanly instead of crashing
 
@@ -306,13 +335,15 @@ is introduced by this requirement.
   installed, bundle readable, vector-extension loadable) still prints its
   own `[PASS]`/`[FAIL]`/`[SKIP]` result
 
-#### Scenario: Output shape is unchanged
+#### Scenario: Check-line shape is unchanged; only the leading banner is new
 
 - GIVEN an initialized workspace whose `openkos.yaml` contains `model: yes`
 - WHEN `openkos doctor` runs
-- THEN every printed line still matches the existing
+- THEN every check line still matches the existing
   `[PASS]`/`[FAIL]`/`[SKIP] <label>` format, with remediation (when present)
-  as an indented `-> <fix command>` line — no new line shape is introduced
+  as an indented `-> <fix command>` line, and the only new line in the
+  entire output is the single leading `openkos {version}` banner preceding
+  all checks
 
 ### Requirement: Doctor Behavior Unchanged By list_models() Contract Widening
 
@@ -354,11 +385,11 @@ this is a no-behavior-change requirement guarding the refactor.
 
 `doctor` MUST report whether `git` is resolvable on PATH and whether
 `git-filter-repo` is installed and invocable, reusing the same
-accumulate-never-raise `CheckResult` pattern as the other checks and printing
-exactly one `[PASS]`/`[FAIL]` line for this check. This check MUST be
-informational (its failure alone MUST NOT affect the exit code) and MUST run
-independently of workspace state and Ollama reachability, since `purge` needs
-this signal even outside an initialized workspace.
+accumulate-never-raise `CheckResult` pattern as the other checks. These are
+two independent checks and MUST print one `[PASS]`/`[FAIL]` line each. Both
+MUST be informational (their failure alone MUST NOT affect the exit code) and
+MUST run independently of workspace state and Ollama reachability, since
+`purge` needs this signal even outside an initialized workspace.
 
 #### Scenario: Both available passes
 
