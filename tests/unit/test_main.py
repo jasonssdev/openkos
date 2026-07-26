@@ -15,6 +15,17 @@ from typer.testing import CliRunner
 
 import openkos.cli.main
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Drop SGR style codes so an assertion sees the words a user reads.
+
+    Rich decides whether to emit color from the environment, so raw stdout is
+    not stable across a local run and a CI run; the rendered TEXT is.
+    """
+    return _ANSI_RE.sub("", text)
+
 
 def test_console_script_entry_point_resolves_to_app() -> None:
     """The `openkos` console script is declared once and loads the Typer `app`."""
@@ -134,10 +145,26 @@ def test_version_flag_has_no_side_effects(
 
 
 def test_version_flag_is_discoverable_in_help_text() -> None:
-    """`openkos --help` lists `--version` among the top-level options."""
+    """`openkos --help` lists `--version` among the top-level options.
+
+    The assertion runs against ANSI-stripped output on purpose. Typer renders
+    help through Rich with `FORCE_TERMINAL = True` whenever `GITHUB_ACTIONS`,
+    `FORCE_COLOR`, or `PY_COLORS` is set (`typer/rich_utils.py`) -- and every
+    GitHub Actions runner sets `GITHUB_ACTIONS`, so CI always gets styled
+    output even though nothing in this repo asks for color. Rich then emits
+    style codes *inside* the option name, so the literal substring
+    `--version` is absent from raw stdout even though the flag is plainly
+    listed. Asserting on the styled bytes made this test pass locally and
+    fail in CI (it did: run 30187024173).
+
+    `COLUMNS` is pinned for the same reason: Rich reads it even when stdout is
+    not a TTY, and below ~40 columns it truncates the option name to
+    `--versi…`, which would fail this test for a rendering condition that says
+    nothing about whether the flag exists.
+    """
     runner = CliRunner()
 
-    result = runner.invoke(openkos.cli.main.app, ["--help"])
+    result = runner.invoke(openkos.cli.main.app, ["--help"], env={"COLUMNS": "80"})
 
     assert result.exit_code == 0
-    assert "--version" in result.stdout
+    assert "--version" in _strip_ansi(result.stdout)
