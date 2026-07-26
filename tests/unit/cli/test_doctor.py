@@ -193,6 +193,10 @@ def test_doctor_non_str_model_fails_and_exits_one_without_traceback(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
     )
+    # Stubbed so the fourth check the spec scenario names is asserted against a
+    # controlled value rather than whatever the host's SQLite build happens to
+    # support -- otherwise this assertion would be environment-dependent.
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -201,12 +205,18 @@ def test_doctor_non_str_model_fails_and_exits_one_without_traceback(
     assert "  -> fix openkos.yaml" in result.stdout
     assert isinstance(result.exception, SystemExit)
     assert "Traceback" not in result.stdout
+    # The spec scenario "Other applicable checks still run despite the malformed
+    # model" names four checks: Ollama-reachable, embedding-model installed,
+    # bundle readable, and vector-extension loadable. All four are asserted below
+    # -- plus model-installed, which the scenario does not name but which the
+    # `read_config` fallback to DEFAULT_MODEL makes worth pinning here too.
     assert "[PASS] Bundle readable" in result.stdout
     assert "[PASS] Ollama reachable" in result.stdout
     assert f"[PASS] Model '{DEFAULT_MODEL}' installed" in result.stdout
     assert f"[PASS] Embedding model '{DEFAULT_EMBEDDING_MODEL}' installed" in (
         result.stdout
     )
+    assert "[PASS] Vector extension loadable" in result.stdout
 
 
 def test_doctor_non_str_embedding_model_with_valid_model_exits_cleanly(

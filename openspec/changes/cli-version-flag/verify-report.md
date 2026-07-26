@@ -4,30 +4,29 @@ evidence_revision: sha256:5b6ca343bdb294a467f76c192d51d955c75deca4a6cd9580b840dd
 verdict: pass_with_warnings
 blockers: 0
 critical_findings: 0
-requirements: 7/8
-scenarios: 12/13
+requirements: 8/8
+scenarios: 13/13
 test_command: uv run pytest
 test_exit_code: 0
-test_output_hash: sha256:ad0ccf9229ac89e3defe3a7a59c44a18eb3d7e06ae80d700b58c56909167f20f
+test_output_hash: sha256:c15677b7c1870b5ae09b5ed5b6e91936bca81fd6fdd30b165522c6f72b254f82
 build_command: uv run ruff check . && uv run ruff format --check . && uv run mypy .
 build_exit_code: 0
 build_output_hash: sha256:c028c2b916869a306e6c5e3b9656d0fae094dd2afb3689f8fe8158bd1200ba92
 ```
 
 <!--
-The numerators are deliberately short of their denominators. One of the 13
-scenarios is PARTIAL: the doctor-command scenario "Other applicable checks
-still run despite the malformed model" names four checks, and its
-(pre-existing, #128-era) regression test asserts three of them. So scenarios
-is 12/13, and its parent requirement "Doctor Never Raises On A Malformed
-Model Config" is likewise not fully pinned, making requirements 7/8 -- the
-same both-numerators-decrement convention the archived
-2026-07-18-add-ingest-command envelope uses.
+The numerators were briefly 7/8 and 12/13: the doctor-command scenario
+"Other applicable checks still run despite the malformed model" names four
+checks, and its (pre-existing, #128-era) regression test asserted only three.
+Rather than archive with a knowingly partial scenario -- the requirement it
+belongs to is MODIFIED by this change's delta spec -- the gap was closed: the
+test now stubs `probe_vec_loadable` and asserts the fourth check. Both
+numerators are therefore honestly complete.
 
-verdict is pass_with_warnings, not pass, because the body records two
-WARNINGs. The envelope is the routing input, so a bare `pass` would strip
-that signal from any consumer that reads only this block. Neither warning is
-a code defect and neither was introduced by this change.
+verdict is pass_with_warnings, not pass, because the body still records one
+WARNING (no `apply-progress` artifact). The envelope is the routing input, so
+a bare `pass` would strip that signal from any consumer that reads only this
+block. That warning is a process-recording gap, not a code defect.
 -->
 
 # Verification Report: cli-version-flag
@@ -40,9 +39,9 @@ a code defect and neither was introduced by this change.
 
 All 26 tasks in `tasks.md` are checked `[x]` across Phases 1-6 (11 + 5 + 1 + 4 + 1 + 4). Independent inspection confirms every task was genuinely delivered:
 
-- Phase 1 (RED tests, 1.1-1.11): all 8 `--version` tests exist in `tests/unit/test_main.py:53-175`; the doctor banner test exists at `tests/unit/cli/test_doctor.py:834-858`; the malformed-model regression test (`test_doctor_non_str_model_fails_and_exits_one_without_traceback`, `test_doctor.py:179-210`) pre-exists and was confirmed still covering the MODIFIED requirement's scenarios, with one
-graded PARTIAL in the doctor matrix below (it does not assert `[PASS] Vector extension
-loadable`). That gap pre-dates this change.
+- Phase 1 (RED tests, 1.1-1.11): all 8 `--version` tests exist in `tests/unit/test_main.py:53-175`; the doctor banner test exists at `tests/unit/cli/test_doctor.py:844-868`; the malformed-model regression test (`test_doctor_non_str_model_fails_and_exits_one_without_traceback`, `test_doctor.py:179-219`) pre-exists and covers the MODIFIED requirement's scenarios. It was
+extended during verification to stub `probe_vec_loadable` and assert `[PASS] Vector extension
+loadable`, closing a pre-existing gap that had left one scenario partially pinned.
 - Phase 2 (GREEN, 2.1-2.5): `src/openkos/cli/main.py:13-14` (alias import), `:108-127` (`_version_line`/`_version_callback`), `:137-143` (`--version` option), `:6222` (banner call). All Phase-1 tests pass.
 - Phase 3 (CI, 3.1): `.github/workflows/ci.yml:117-141` extends the wheel-smoke step; the shipped version goes beyond the design's plan (see Design Conformance, deviation D-CI below).
 - Phase 4 (docs, 4.1-4.4): `docs/cli.md:26-28` (Global options section), `docs/cli.md:325-342` (ten-check enumeration, corrected), `docs/testing.md:169` (`--version` replaces `--help | head -3`), `docs/testing.md:172-173` (old #181 callout replaced).
@@ -88,14 +87,14 @@ scenarios and therefore two rows.)
 
 | Requirement | Scenario | Test(s) | Status |
 |---|---|---|---|
-| Doctor Prints A Leading Version Banner (ADDED) | Banner precedes all check lines | `test_doctor_prints_version_banner_first` (`test_doctor.py:834-858`) — `lines[0]` regex `^openkos \d+\.\d+\.\d+`, `lines[1]` equals the existing header | PASS |
+| Doctor Prints A Leading Version Banner (ADDED) | Banner precedes all check lines | `test_doctor_prints_version_banner_first` (`test_doctor.py:844-868`) — `lines[0]` regex `^openkos \d+\.\d+\.\d+`, `lines[1]` equals the existing header | PASS |
 | Doctor Prints A Leading Version Banner (ADDED) | Check count and exit code are unaffected by the banner | Same test — `result.exit_code == 0`, `stdout.count("[PASS]") == 10` | PASS |
-| Doctor Never Raises On A Malformed Model Config (MODIFIED) | Non-str model value fails cleanly instead of crashing | `test_doctor_non_str_model_fails_and_exits_one_without_traceback` (`:179-210`) — `isinstance(result.exception, SystemExit)`, `"Traceback" not in result.stdout` | PASS |
+| Doctor Never Raises On A Malformed Model Config (MODIFIED) | Non-str model value fails cleanly instead of crashing | `test_doctor_non_str_model_fails_and_exits_one_without_traceback` (`:179-219`) — `isinstance(result.exception, SystemExit)`, `"Traceback" not in result.stdout` | PASS |
 | Doctor Never Raises On A Malformed Model Config (MODIFIED) | Malformed model reports FAIL with actionable remediation | Same test — `"[FAIL] Config valid"`, `"  -> fix openkos.yaml"` | PASS |
-| Doctor Never Raises On A Malformed Model Config (MODIFIED) | Other applicable checks still run despite the malformed model | Same test — asserts `[PASS]` for Bundle readable, Ollama reachable, Model installed, Embedding model installed | **PARTIAL** — the scenario names 4 checks ("Ollama-reachable, embedding-model installed, bundle readable, vector-extension loadable"); the test asserts the first 3 explicitly but does not assert a `[PASS] Vector extension loadable` line, and does not monkeypatch `probe_vec_loadable`, so that check runs against the real environment rather than a controlled stub. This gap pre-dates `cli-version-flag` (the test itself is unmodified regression coverage from #128) and is not introduced by this change. |
+| Doctor Never Raises On A Malformed Model Config (MODIFIED) | Other applicable checks still run despite the malformed model | Same test — asserts `[PASS]` for all four checks the scenario names (Ollama reachable, Embedding model installed, Bundle readable, Vector extension loadable), plus Model installed, which the scenario does not name. The Vector-extension assertion was added during verification with `probe_vec_loadable` stubbed, so it is not environment-dependent | PASS |
 | Doctor Never Raises On A Malformed Model Config (MODIFIED) | Check-line shape is unchanged; only the leading banner is new | Covered jointly by `test_doctor_non_str_model_fails_and_exits_one_without_traceback` (shape) and `test_doctor_prints_version_banner_first` (banner-is-the-only-new-line) | PASS |
 
-5/6 scenarios fully pinned, 1/6 partially pinned (pre-existing gap, unrelated to this change's diff). No CRITICAL — the partial scenario is about a check unrelated to the version-banner feature and the check does execute; only the explicit assertion is missing, and it predates this PR.
+6/6 scenarios fully pinned. No CRITICAL. One scenario was partially pinned when verification began (a #128-era regression test omitted the vector-extension assertion); it was closed rather than waived, since the requirement it belongs to is MODIFIED by this change's delta spec.
 
 ## Design Conformance
 
@@ -138,7 +137,7 @@ None found. The one extra behavior beyond the design (the wheel-filename compari
 
 ## Assertion Quality
 
-Reviewed all 10 test functions added/relied upon by this change (`test_main.py:53-175`, `test_doctor.py:834-858`, plus `test_doctor.py:179-210` regression coverage). No tautologies, no orphan empty-collection checks, no ghost loops, no assertion-without-production-call, no smoke-test-only patterns. Each test exercises the real `CliRunner().invoke(app, ...)` path and asserts specific, non-trivial output (exact strings, regex-anchored version format, single-line counts, exit codes, filesystem snapshots). Mock-to-assertion ratio is low for the `--version` tests (0-1 `monkeypatch.setattr` calls
+Reviewed all 10 test functions added/relied upon by this change (`test_main.py:53-175`, `test_doctor.py:844-868`, plus `test_doctor.py:179-219` regression coverage). No tautologies, no orphan empty-collection checks, no ghost loops, no assertion-without-production-call, no smoke-test-only patterns. Each test exercises the real `CliRunner().invoke(app, ...)` path and asserts specific, non-trivial output (exact strings, regex-anchored version format, single-line counts, exit codes, filesystem snapshots). Mock-to-assertion ratio is low for the `--version` tests (0-1 `monkeypatch.setattr` calls
 against 1-3 assertions). `test_doctor_prints_version_banner_first` is the exception at 4
 `monkeypatch.setattr` calls against 4 assertions -- unavoidable, since `doctor` probes Ollama,
 the vector extension, and both git binaries, all of which must be stubbed to reach a
@@ -168,7 +167,8 @@ rendering change as `ValueError` rather than `AssertionError`; the signal is equ
 
 **WARNING**:
 1. No `apply-progress` artifact was persisted for this change, so the strict-TDD RED/GREEN cadence cannot be cross-verified against a recorded evidence table (only against reproduced runtime results). Does not block archive given the strength of independently-reproduced test/coverage/CI evidence, but should not recur.
-2. `test_doctor_non_str_model_fails_and_exits_one_without_traceback` (pre-existing, unmodified by this change) does not assert a `[PASS] Vector extension loadable` line and does not stub `probe_vec_loadable`, leaving one of the 4 checks named in the doctor-command spec's "Other applicable checks still run" scenario only implicitly covered. Pre-existing gap, out of scope for this change's diff.
+
+**RESOLVED DURING VERIFICATION**: `test_doctor_non_str_model_fails_and_exits_one_without_traceback` did not assert a `[PASS] Vector extension loadable` line and did not stub `probe_vec_loadable`, leaving one of the 4 checks named in the doctor-command spec's "Other applicable checks still run" scenario only implicitly covered. Because that requirement is MODIFIED by this change's delta spec, the gap was closed rather than carried into the archive.
 
 **SUGGESTION**: None.
 
@@ -176,4 +176,4 @@ rendering change as `ValueError` rather than `AssertionError`; the signal is equ
 
 **PASS WITH WARNINGS**
 
-All spec requirements and scenarios (except one pre-existing, out-of-scope partial assertion) are pinned by passing tests. Design decisions (D1-D5, placement, no new module/dependency, no `-V`, no workspace resolution) all match the shipped code exactly. All 26 tasks are genuinely delivered, including both mid-review amendments (task 4.2's doc-drift correction, and all 5 proposal success criteria). Full suite (2166 tests), mypy strict, ruff, and the CI wheel smoke test all reproduce green independently. The only real gap is process-recording (missing `apply-progress`), not a code defect, and does not block archive.
+All spec requirements and scenarios are pinned by passing tests. Design decisions (D1-D5, placement, no new module/dependency, no `-V`, no workspace resolution) all match the shipped code exactly. All 26 tasks are genuinely delivered, including both mid-review amendments (task 4.2's doc-drift correction, and all 5 proposal success criteria). Full suite (2166 tests), mypy strict, ruff, and the CI wheel smoke test all reproduce green independently. The only real gap is process-recording (missing `apply-progress`), not a code defect, and does not block archive.
