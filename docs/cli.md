@@ -21,6 +21,7 @@ This is the single source of truth for the OpenKOS command line. It covers the c
 - **Local-first.** Every command runs on your machine and works offline.
 - **Color is a layer, not a requirement.** Output uses color to encode meaning, but respects `NO_COLOR` and a `--no-color` flag, and auto-disables when output is not a TTY (e.g. piped to a file). The symbols (`+`, `~`, `✔`, `→`) carry the meaning without color.
 - **Config lives in `openkos.yaml`** at the workspace root, beside `raw/` and `bundle/`; the agent operating manual lives in `AGENTS.md`, next to it.
+- **git is handled for you.** `init` creates the repository, the `.gitignore`, and the first commit; every mutating verb except `query --save` then auto-commits its own writes with a scoped `git add -- <paths>` (never `-A`). You never have to run a git command to keep the workspace versioned — `git log`/`git diff`/`git revert` remain available for inspection and undo. When git is unavailable or its identity is unset, commands print a stderr `WARNING` and still leave every write on disk; they never fail because of git.
 
 ## Install and first run
 
@@ -32,14 +33,14 @@ Install the engine once (from PyPI):
 uv tool install openkos   # or: pipx install openkos — or: pip install openkos
 ```
 
-Create a bundle per knowledge base:
+Create a bundle per knowledge base. By convention the first workspace lives at the root of your home directory, named `knowledge`:
 
 ```bash
 mkdir ~/knowledge && cd ~/knowledge
 openkos init
 ```
 
-You install the engine once and run `openkos init` in each knowledge base — like installing git once and running `git init` per repository. One machine can hold several independent bundles, each with its own `openkos.yaml`, model, and default sensitivity.
+You install the engine once and run `openkos init` in each knowledge base — like installing git once and having one repository per project. One machine can hold several independent bundles, each with its own `openkos.yaml`, model, and default sensitivity; `~/knowledge` is simply the default worth starting from. Do not run `git init` yourself: `init` does it for you (see below).
 
 ## Commands
 
@@ -47,7 +48,9 @@ You install the engine once and run `openkos init` in each knowledge base — li
 
 Creates a new workspace in the current directory: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (`index.md` and `log.md`; concept folders are not pre-created, `ingest` adds them on first write), a config file (`openkos.yaml`), and an `AGENTS.md` operating manual. Run once per workspace. On success, `init` unconditionally prints a next-step hint pointing at `openkos ingest <path>` — there is no TTY/quiet gate on it.
 
-The model written into `openkos.yaml` resolves in this order: the `--model <tag>` flag, if given; otherwise, when stdin is a TTY, an interactive prompt offering the default `qwen3:8b`; otherwise the default `qwen3:8b` is used silently, no prompt shown. A blank value, or one containing whitespace, a quote (`'`/`"`), or `#`, refuses (exit 1) before anything is written; a colon is allowed, since Ollama `name:tag` tags (including the default) contain one.
+After those artifacts land, `init` sets the workspace up for git — **best-effort and strictly last**, so a git failure can never leave a half-written workspace. It runs `git init` only if the directory is not already inside a git working tree (it never nests a repository inside a parent one), writes a `.gitignore` from the packaged template (which ignores the derived `.openkos/`) unless one already exists, and commits exactly the paths it just created — a scoped `git add -- <paths>`, never `-A`, so unrelated dirty content in a host repository is never swept in — with the message `chore(openkos): initialize workspace`. If git identity is unset it skips the commit with a stderr `WARNING` rather than inventing a bot identity; any other git failure is likewise reported as a non-fatal `WARNING` pointing at `git status`. Neither case changes `init`'s exit code or the workspace-write guarantee. This is what makes `forget`'s undo and `purge`'s history rewrite work without asking the user to run git themselves.
+
+The model written into `openkos.yaml` resolves in this order: the `--model <tag>` flag, if given; otherwise, when stdin is a TTY, an interactive picker that probes Ollama and lists the installed chat models as a numbered menu (embedding models filtered out, `qwen3:8b` listed first and marked `(recommended)`, Enter takes it; an out-of-range or non-numeric answer reprompts, and after three failed attempts it falls back to the default) — degrading to a plain `Model [qwen3:8b]:` text prompt if the probe fails or no chat model is installed; otherwise the default `qwen3:8b` is used silently, no prompt shown. A blank value, or one containing whitespace, a quote (`'`/`"`), or `#`, refuses (exit 1) before anything is written; a colon is allowed, since Ollama `name:tag` tags (including the default) contain one.
 
 After the workspace is written, `init` runs one non-fatal, bounded-timeout Ollama preflight (reusing the same short timeout as `doctor`): if Ollama is unreachable, the resolved model is not installed, or the probe itself fails unexpectedly, a one-line note pointing at `openkos doctor` is printed to stderr. This is purely observational — it never pulls a model, never starts a server, and never changes `init`'s exit code (always `0` on success); a clean, ready Ollama produces no extra output.
 

@@ -116,10 +116,10 @@ These are starting conventions; like everything pre-code, they can change as the
 
 ## Workspace structure (the user's knowledge base)
 
-The directory a user opens in Obsidian, VS Code, or GitHub. We call it a **workspace**, and it holds three things that are deliberately kept apart: the immutable sources, the compiled bundle, and the engine's own files.
+The directory a user opens in Obsidian, VS Code, or GitHub. We call it a **workspace**, and it holds three things that are deliberately kept apart: the immutable sources, the compiled bundle, and the engine's own files. By convention it lives at the root of the user's home directory and is named `knowledge` (`~/knowledge`) — one machine can hold several workspaces, but that is the default a user should meet first.
 
 ```
-my-knowledge/             # the WORKSPACE (the git repository)
+~/knowledge/              # the WORKSPACE (the git repository, created by `openkos init`)
 ├── openkos.yaml          # config: model, review, default_sensitivity, freshness window, layout…
 ├── AGENTS.md             # agent operating manual (how to work with this workspace)
 ├── raw/                  # source material — any extension (see "Source material and versioning")

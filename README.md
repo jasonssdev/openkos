@@ -74,14 +74,16 @@ Prefer the latest unreleased `main`? Install from the repository instead — the
 uv tool install git+https://github.com/jasonssdev/openkos
 ```
 
-**Create a bundle** (per knowledge base):
+**Create a bundle** (per knowledge base). By convention the first workspace lives at the root of your home directory, named `knowledge`:
 
 ```bash
 mkdir ~/knowledge && cd ~/knowledge
 openkos init
 ```
 
-`init` scaffolds the workspace — `raw/` for your immutable sources and `bundle/` for the compiled OKF bundle (starting with just `index.md` and `log.md`; concept-type folders are never pre-created, only added as you ingest) — then writes `AGENTS.md` and, last, the `openkos.yaml` marker. It refuses without writing anything if the directory already looks like a workspace. Sources sit beside the bundle rather than inside it, so `bundle/` stays pure OKF: portable, conformant, and shareable on its own.
+`init` scaffolds the workspace — `raw/` for your immutable sources and `bundle/` for the compiled OKF bundle (starting with just `index.md` and `log.md`; concept-type folders are never pre-created, only added as you ingest) — then writes `AGENTS.md` and, last, the `openkos.yaml` marker. It refuses without writing anything if the directory already looks like a workspace.
+
+**You never run git yourself.** `init` also turns the workspace into a git repository, writes a `.gitignore` (the derived `.openkos/` stays out of version control), and makes the first commit; from then on every mutating command auto-commits its own writes. Git remains fully available for inspection and undo (`git log`, `git diff`, `git revert`) — it is just no longer a chore. Sources sit beside the bundle rather than inside it, so `bundle/` stays pure OKF: portable, conformant, and shareable on its own.
 
 **Then the loop:**
 

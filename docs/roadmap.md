@@ -86,7 +86,7 @@ Where the community can contribute: extraction strategies, relation vocabularies
 
 MVP 3 exposes the knowledge base to agents and to the wider world of OKF-speaking tools.
 
-**Before MVP 3 work begins — onboarding hardening ([#128](https://github.com/jasonssdev/openkos/issues/128)):** replace the free-text model prompt in `openkos init` with a selection list over the models actually installed on the local Ollama server, with the recommended default marked. Every new user passes through that prompt on their first command, and a mistyped value there currently corrupts `openkos.yaml` silently and crashes `doctor`. Bundled with it: type-checking `model` on config read, rejecting YAML-reserved words in `validate_model`, and making `doctor` report a failed check instead of raising.
+**Onboarding hardening — shipped ([#128](https://github.com/jasonssdev/openkos/issues/128), closed).** The free-text model prompt in `openkos init` was replaced with a selection list over the chat models actually installed on the local Ollama server, with the recommended default marked, plus type-checking `model` on config read, rejecting YAML-reserved words in `validate_model`, and having `doctor` report a failed check instead of raising. Still open in the onboarding area: `openkos --version` ([#181](https://github.com/jasonssdev/openkos/issues/181)), so a user can tell which build they are running.
 
 Deliverables:
 

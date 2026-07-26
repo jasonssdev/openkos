@@ -127,7 +127,7 @@ Apply? [Y]es / [e]dit / [n]o:
 
 ### Step 4 — Commit
 
-**In MVP 1**, accepted changes are written to disk (`raw/`, the new `Source` concept, any derived documents extraction produced — across the nine types, up to five per source — `index.md`, `log.md`); committing them to git is a manual, optional step the user takes themselves. **Later MVPs** may make that commit automatic as part of `ingest`. Either way the workspace is a normal git repository, so `git log`/`git diff` always show what changed.
+Accepted changes are written to disk (`raw/`, the new `Source` concept, any derived documents extraction produced — across the nine types, up to five per source — `index.md`, `log.md`) **and committed for the user**: `ingest` auto-commits exactly the paths it wrote, as does every other mutating verb except `query --save`. This was a manual step in MVP 1; MVP 2 made it automatic, which is what closes the loop on "the human curates, the engine maintains" — the safety net exists without the user having to maintain it. The workspace is still a normal git repository, so `git log`/`git diff` always show what changed, and `git revert` undoes any single step. When git is unavailable or its identity is unset, the write still lands and a stderr `WARNING` says the commit was skipped.
 
 ### Step 5 — Use (the value moment)
 
@@ -198,7 +198,7 @@ That is the mature shape, and most of it now ships. `forget` is **reference-awar
 | | Interactive (default) | Unattended |
 | --- | --- | --- |
 | Command | `openkos ingest <path>` | `openkos ingest <path> --auto` (or `review: false`) |
-| Before saving | Shows proposed changes, asks to confirm | Saves directly to disk (git commit stays manual/optional, same as interactive) |
+| Before saving | Shows proposed changes, asks to confirm | Saves directly to disk (auto-commits either way, same as interactive) |
 | Best for | Staying involved, important sources | Bulk capture, trusted flows |
 | Safety net | Review, plus git history | git history (inspect / revert anytime) |
 

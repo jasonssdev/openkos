@@ -15,17 +15,24 @@ Use it to validate a release candidate, to reproduce a bug, or to onboard
 yourself to the full surface of the tool.
 
 > **Rule for the whole run.** After every command, check three things: the exit
-> code (`echo $?`), what was printed, and what changed on disk (`git status`). A
-> test that only reads stdout misses half the behavior.
+> code (`echo $?`), what was printed, and what changed on disk. A test that only
+> reads stdout misses half the behavior.
+>
+> **Where "what changed on disk" lives.** Every mutating verb except
+> `query --save` **auto-commits** its own writes, so `git status` is normally
+> clean and the evidence is in `git log -1 --stat` / `git show`. A *dirty* tree
+> after a mutating verb is itself a finding — it means the auto-commit was
+> skipped (check stderr for a `WARNING`).
 
 ---
 
-## Phase 0 — Setup: install everything first
+## Phase 0 — Setup: install every dependency first
 
 Complete every step in this section before any walkthrough phase; a fresh
-machine needs all of it. OpenKOS is local-first — there are no API keys and no
-cloud endpoints; everything runs against a local [Ollama](https://ollama.com)
-server. (The prerequisites here match the README's Getting started section.)
+machine needs all of it, and nothing here is assumed to be present already.
+OpenKOS is local-first — there are no API keys and no cloud endpoints;
+everything runs against a local [Ollama](https://ollama.com) server. (The
+prerequisites here match the README's Getting started section.)
 
 > **Looking for the automated test suite instead?** This document is the
 > *manual* walkthrough. Contributors run the automated tests from a source
@@ -33,22 +40,63 @@ server. (The prerequisites here match the README's Getting started section.)
 > coverage report, gated at 90% in CI); see
 > [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the full development workflow.
 
-### 0.1 Python 3.12+ and uv
+### 0.1 First, decide which build you are testing
 
-OpenKOS targets **Python 3.12+** and both install paths below use
+Decide this before installing anything — it is the most common way to waste a
+test session. Everything below branches on this one choice:
+
+| | **End user** | **Contributor** |
+|---|---|---|
+| What you test | the published PyPI package | your working tree (e.g. an unreleased fix) |
+| Install path | §0.5a | §0.5b |
+| Virtual environment | **none needed** — `uv tool install` manages its own isolated environment for you | `uv sync` creates a `.venv/` **inside the checkout**, used only for the automated suite |
+| Needs the repo cloned | no | yes |
+
+If you are here to validate a release candidate as a real user would, you are
+the **end user**. Only pick the contributor path if you specifically need code
+that is not published yet.
+
+> **You never create or activate a virtualenv by hand for either path.** For the
+> end-user path `uv tool install` isolates the CLI itself; for the contributor
+> path `uv sync` and `uv run` manage `.venv/` for you.
+
+### 0.2 Python 3.12+ and uv
+
+OpenKOS targets **Python 3.12+** and both install paths use
 [`uv`](https://docs.astral.sh/uv/), which can also provision Python itself:
 
 ```bash
+# install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh   # or: brew install uv
-uv python install 3.12    # only if no Python 3.12+ is already present
+uv --version                                      # verify
+
+# install Python only if no 3.12+ is already present
+python3 --version
+uv python install 3.12
 ```
 
-### 0.2 Ollama and **two** models
+### 0.3 Ollama and **two** models
+
+Install the Ollama runtime first — it is a separate application, not a Python
+package, and nothing in OpenKOS installs it for you:
+
+```bash
+# macOS
+brew install ollama          # or download the app from https://ollama.com/download
+
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+ollama --version             # verify before continuing
+```
+
+Then start the server and pull both models:
 
 ```bash
 ollama serve            # leave running in its own terminal
 ollama pull qwen3:8b    # chat model — the default written into openkos.yaml
 ollama pull bge-m3      # embedding model — required by reindex and query
+ollama list             # verify both appear
 ```
 
 Both models are mandatory for full coverage — they serve different commands:
@@ -61,47 +109,77 @@ Both models are mandatory for full coverage — they serve different commands:
 > The embedding dimension is hard-coded to 1024. `bge-m3` produces 1024
 > dimensions; substituting a differently-sized embedding model fails at runtime.
 
-### 0.3 System tools
+### 0.4 git and git-filter-repo
+
+git is **not optional**: `openkos init` sets the workspace up as a git
+repository, every mutating verb auto-commits into it, and `forget`/`purge`
+depend on that history.
 
 ```bash
-git --version
-git-filter-repo --version    # optional — required ONLY by `purge`
+# install git if missing
+brew install git                    # macOS (or use Xcode Command Line Tools)
+sudo apt install git                # Debian/Ubuntu
+git --version                       # verify
 ```
 
-`git-filter-repo` is **not** installed with the package. If it is missing, every
-phase works except `purge`. Install it with `pip install git-filter-repo` or your
-package manager if you intend to test purge.
-
-### 0.4 Install OpenKOS — and decide which build you are testing
-
-Decide this now — it is the most common way to waste a test session.
-
-- **End user — the published package:** `uv tool install openkos` (or `pipx install openkos` / `pip install openkos`; `uvx --from openkos==<version> openkos …` for a throwaway run). This is what real users get.
-- **Contributor — from source (e.g. an unreleased fix):** clone the repository and run `uv sync` to set up the dev environment, then install your working tree as the `openkos` on your PATH.
+git also needs an **identity**, or OpenKOS cannot create commits (it refuses to
+invent a bot identity and prints a WARNING instead — you would silently test an
+uncommitted workspace):
 
 ```bash
-# End user
-uv tool install openkos
+git config --get user.name || git config --global user.name "Your Name"
+git config --get user.email || git config --global user.email "you@example.com"
+```
 
-# Contributor, from source
+`git-filter-repo` is a separate system tool, **not** installed with the package,
+and is required **only** by `purge`. If it is missing, every phase works except
+Phase 8.2:
+
+```bash
+pip install git-filter-repo     # or: brew install git-filter-repo
+git-filter-repo --version       # verify
+```
+
+### 0.5 Install OpenKOS
+
+Follow **only** the subsection matching your §0.1 decision.
+
+#### 0.5a End user — the published package
+
+```bash
+uv tool install openkos     # or: pipx install openkos / pip install openkos
+```
+
+For a throwaway run of a specific release without installing anything
+persistent: `uvx --from openkos==<version> openkos …`.
+
+#### 0.5b Contributor — from source
+
+```bash
 git clone https://github.com/jasonssdev/openkos.git
 cd openkos
 uv sync                                     # dev environment (automated tests, lint, types)
 uv tool install --force --from . openkos    # put THIS working tree on your PATH
 ```
 
-Confirm which one is active before you start:
+#### Confirm what is actually on your PATH
 
 ```bash
 which openkos
 openkos --help | head -3
 ```
 
-**Never run the test from inside the source checkout** unless you specifically
-intend to — you may be exercising local code instead of the build you think you
-are testing. Use a clean, separate workspace directory.
+> **There is no `openkos --version` yet** ([#181](https://github.com/jasonssdev/openkos/issues/181)).
+> Until it lands, read the installed version from the packaging tool instead —
+> `uv tool list | grep openkos`, or `pip show openkos` — and record it in your
+> findings log, because a bug report without a version is not reproducible.
 
-### 0.5 Warm the model
+**Never run the walkthrough from inside the source checkout.** You may be
+exercising local code instead of the build you think you are testing, and
+`init` would try to set up git inside the OpenKOS repository itself. Use a
+clean, separate workspace directory (Phase 2).
+
+### 0.6 Warm the model
 
 The first LLM call after idle pays a cold-start cost (loading ~10 GB into memory)
 that can exceed the request timeout and surface as `Ollama … timed out`. Warm it
@@ -146,27 +224,33 @@ the exit code is 1. Then restart Ollama.
 
 ## Phase 2 — Create the workspace
 
+By convention a workspace lives at the root of your home directory and is named
+`knowledge`:
+
 ```bash
-mkdir -p ~/kos-test && cd ~/kos-test
-git init
+mkdir -p ~/knowledge && cd ~/knowledge
 ```
 
-`openkos init` does **not** run `git init` for you, and does not scaffold a
-`.gitignore`. Do both yourself — git is the undo mechanism for `forget`/`merge`,
-and `purge` cannot run without committed history. **Do not add a git remote**:
-`purge` refuses if any commit was published.
+Create the directory and nothing else — **do not run `git init` yourself.**
+`openkos init` sets git up for you (see below). **Do not add a git remote**
+either: `purge` refuses if any commit was published.
 
 ```bash
 openkos init ; echo "exit: $?"
 ls -la
 ```
 
-> **Watch the model prompt.** `init` prints `Model [qwen3:8b]:` — this is a
-> *value* prompt with a default in brackets, **not** a yes/no confirmation. Press
-> **Enter** to accept `qwen3:8b`. Typing `yes` sets the model to the literal
-> string `yes`, which YAML parses as a boolean and breaks every later LLM call.
+> **The model prompt is a numbered picker.** On a TTY, `init` probes Ollama and
+> prints `Installed chat models:` followed by a numbered list, with `qwen3:8b`
+> first and marked `(recommended)`. Answer with a **number**; pressing Enter
+> takes `1)`. An invalid answer reprompts (up to three attempts) instead of
+> being accepted. Only when the probe fails or no chat model is installed does
+> it degrade to the older free-text `Model [qwen3:8b]:` prompt — there, press
+> **Enter**; typing `yes` would set the model to the literal string `yes`.
+> Embedding models such as `bge-m3` are filtered out of the list by design.
 
-Expect exactly five artifacts and nothing else:
+Expect exactly five workspace artifacts, plus the git setup `init` performs
+after them:
 
 | Path | Purpose |
 |---|---|
@@ -175,19 +259,46 @@ Expect exactly five artifacts and nothing else:
 | `bundle/log.md` | append-only dated activity log |
 | `AGENTS.md` | agent operating manual |
 | `openkos.yaml` | workspace marker + config (written last) |
+| `.git/` + `.gitignore` | git setup, done by `init` itself — see below |
 
 There should be **no** `.openkos/` yet (created lazily by `reindex`) and no
 concept-type subfolders (created by `ingest`).
 
-**Idempotence sub-test.** Run `openkos init` again — it must refuse without
-writing anything.
+### 2.1 Verify the git setup `init` performed
 
-Now set up git so `forget`/`purge` work later:
+Once the five artifacts are on disk, `init` runs a **best-effort** git setup —
+this is deliberately last, so a git failure can never leave a half-written
+workspace. Verify all three parts:
 
 ```bash
-printf '.openkos/\n.DS_Store\n' > .gitignore    # .openkos/ is derived — never commit it
-git add -A && git commit -m "chore: initialize workspace"
+git log --oneline        # expect one commit: "chore(openkos): initialize workspace"
+git status               # expect a clean tree
+head -5 .gitignore       # expect "# --- openkos workspace (derived artifacts) ---"
+wc -l .gitignore         # expect the full template (~250 lines), not a stub
 ```
+
+What `init` does, precisely:
+
+1. **`git init`**, but only if the directory is not *already* inside a git
+   working tree — it never nests a repository inside a parent one.
+2. **Writes `.gitignore`** from the packaged template (the standard
+   Python/macOS/Linux/Windows set, which ignores the derived `.openkos/`). An
+   **existing `.gitignore` is never overwritten** — and you should never
+   overwrite the generated one either.
+3. **Commits** exactly the paths it just created (a scoped `git add -- <paths>`,
+   never `-A`), with the message `chore(openkos): initialize workspace`.
+
+Every part is non-fatal: a git failure prints a stderr `WARNING` and leaves the
+workspace valid, without changing `init`'s exit code.
+
+**Adversarial sub-test — missing git identity.** If `git config user.name` /
+`user.email` are unset, `init` prints `WARNING -- git identity unset; skipped
+the initial commit` and creates no commit; it never falls back to a bot
+identity. If you skipped §0.4, you will see this here — fix the identity and
+commit manually before continuing, because the whole run depends on history.
+
+**Idempotence sub-test.** Run `openkos init` again — it must refuse without
+writing anything.
 
 ---
 
@@ -205,10 +316,15 @@ git add -A && git commit -m "chore: initialize workspace"
 - **`raw/` is immutable.** A byte-identical re-ingest is idempotent and **re-runs
   extraction** (useful to recover from a transient LLM failure). A *different*
   file under the same basename is refused.
-- **Same-title collision.** Two sources whose extracted objects produce the same
-  slug do **not** both survive: the first wins, the later one prints
-  `'…' already exists; skipping this candidate (create-only)` and is dropped. Give
-  overlapping sources distinct titles if you need both.
+- **Same-slug collisions resolve by origin.** Two sources whose extracted
+  objects produce the same slug now **both survive**: the later one is
+  disambiguated to the first free numeric suffix and announces
+  `'<slug>' already exists for a different source; disambiguating this candidate
+  to '<slug>-2'`, with a durable `**Disambiguation**` bullet written to
+  `log.md`. Only a collision from the **same** source is a create-only no-op
+  (`'…' already exists; skipping this candidate (create-only)`) — that is
+  idempotence, not data loss. Verify both behaviors: ingest two different files
+  about the same entity, then re-ingest one of them.
 
 ### 3.2 First ingest
 
@@ -224,14 +340,20 @@ You will hit the confirmation gate (identical across `ingest`/`forget`/`relate`/
 3. Else interactive terminal → prompt; declining aborts (exit 1).
 4. Else (non-interactive, `review: true`, no `--auto`) → refuse to write (exit 1).
 
-> Extraction is a single blocking LLM call (~20 s). It runs **before** the
-> "proposed changes" preview, so the terminal is silent during it — this is
-> normal, not a hang.
+> Extraction is a single blocking LLM call (~20 s), running **before** the
+> "proposed changes" preview. On a TTY a spinner reading
+> `openkos ingest: extracting concepts…` is shown on stderr for its duration —
+> if you see it, the tool is working, not hung. (The spinner is stderr-only and
+> no-ops when output is piped, so stdout stays clean for scripting.) On success
+> the summary ends with a per-type tally: `extracted 3 objects — 2 Concept, 1
+> Person`.
 
-Inspect the result:
+Inspect the result — note that `ingest` **auto-commits** on success, so a clean
+`git status` is the expected outcome and the commit is where the diff lives:
 
 ```bash
-git status
+git log -1 --stat        # expect "openkos: ingest <name> (+N concepts)"
+git status               # expect clean
 cat bundle/sources/*.md | head -40
 cat bundle/index.md
 ```
@@ -252,13 +374,16 @@ that generic docs will not produce:
   titles** or one is dropped before it can contradict anything. Example that
   works: two files, `# MCP Launch` ("launched 2024-11") and `# MCP Origin`
   ("originated 2004-01").
-- **`suggest-relations`** currently only ever sees concept→source provenance
-  edges; expect it to produce provenance noise rather than concept↔concept
-  relations (see Known Issues).
+- **`suggest-relations`** no longer wastes its LLM calls on provenance mirrors:
+  a body link that merely repeats the source's `provenance:` frontmatter is now
+  typed `derived_from` at projection time, so the command should surface real
+  concept↔concept candidates. On an ingest-only corpus it may legitimately find
+  nothing — build genuine cross-links (Phase 7.1) if you want candidates to
+  judge.
 
 ```bash
 for f in /path/to/corpus/*.md; do openkos ingest "$f" --auto; done
-git add -A && git commit -m "feat: ingest corpus"
+git log --oneline        # one auto-commit per successful ingest
 ```
 
 ### 3.4 Adversarial ingest sub-tests
@@ -303,11 +428,15 @@ openkos reindex
 openkos query "the same question"                       # now answers
 ```
 
-**`query --save`** is the only writing form of query:
+**`query --save`** is the only writing form of query — and the **only mutating
+path that does not auto-commit**, so this is the one place in the walkthrough
+where you commit by hand:
 
 ```bash
 openkos query "a synthesis question" --save --title "My Synthesis" --type Concept
-openkos reindex && git add -A && git commit -m "feat: save synthesized concept"
+git status                                    # expect dirty — no auto-commit here
+git add bundle/ && git commit -m "feat: save synthesized concept"
+openkos reindex
 ```
 
 ---
@@ -352,7 +481,9 @@ Record for each whether it found what you planted. `contradictions` only inspect
 
 ## Phase 7 — Curation writes
 
-Run `git status` before and after each command. `reindex` after any of them.
+Every verb in this phase auto-commits, so inspect each one with
+`git log -1 --stat` (not `git status`, which should stay clean) and check stderr
+for any `WARNING -- ... skipped auto-commit`. Run `reindex` after any of them.
 
 ### 7.1 `relate`
 
@@ -367,11 +498,17 @@ Use one of the **seeded** relation types to avoid a warning: `caused_by`,
 
 ### 7.2 `merge` / `unmerge` (round-trip)
 
+Because both verbs auto-commit, byte-parity is verified **against the pre-merge
+commit**, not with a bare `git diff` (the tree is committed and therefore always
+clean):
+
 ```bash
+BEFORE=$(git rev-parse HEAD)         # capture the pre-merge state
 openkos merge <survivor_id> <absorbed_id>
 openkos status                       # absorbed concept is gone
 openkos unmerge <survivor_id> <absorbed_id>
-git diff                             # expect NO diff — byte-parity restored
+git diff "$BEFORE" HEAD              # expect EMPTY — byte-parity restored
+git log --oneline "$BEFORE"..HEAD    # expect two commits: the merge and the unmerge
 ```
 
 Constraints: `unmerge` is **LIFO-only** (reverses only the most recent merge on
@@ -403,7 +540,8 @@ Without `--winner`, `reconcile` records a symmetric `reconciled_with` on both. A
 conflicting re-resolution is refused (test that too).
 
 ```bash
-openkos reindex && git add -A && git commit -m "fix: curate concepts"
+git log -2 --stat        # relate and reconcile each left their own auto-commit
+openkos reindex
 ```
 
 ### 7.4 `suggest-volatility` → `set-volatility`
@@ -426,17 +564,21 @@ bundle content).
 
 ## Phase 8 — Removal (run last)
 
-> `forget`/`purge` depend on git. Ensure the workspace is **committed and clean**
-> before this phase — otherwise `forget` has nothing to restore and `purge` will
-> not run.
+> `forget`/`purge` depend on git. The tree should already be **committed and
+> clean** here, since every earlier verb auto-committed — but verify with
+> `git status` first: `purge` refuses to run on a dirty tree, and a leftover
+> uncommitted `query --save` (Phase 4) is the likeliest cause.
 
 ### 8.1 `forget` — recoverable
 
+`forget` auto-commits the deletion, so the undo is **`git revert`**, not
+`git restore` (there is nothing uncommitted left to restore):
+
 ```bash
 openkos forget <concept_id>
-git status                    # concept deleted; index.md/log.md modified
-git restore .                 # undo the ENTIRE forget (concept + index + log)
-git status                    # clean again
+git log -1 --stat             # the deletion, committed: concept + index.md + log.md
+openkos status                # concept is gone
+git revert --no-edit HEAD     # undo the ENTIRE forget in one commit
 openkos status                # concept is back
 ```
 
@@ -510,21 +652,21 @@ default and once for its writing `--save` form.
 
 ## Known issues — expect these, don't re-file them
 
-Surfaced by prior end-to-end testing and already tracked. If you hit one, it is
+Open issues already surfaced by prior end-to-end testing. If you hit one, it is
 expected; add evidence to the existing issue rather than opening a new one.
 
 | Area | Behavior you'll see | Issue |
 |---|---|---|
-| `init` model prompt | `Model [qwen3:8b]:` reads like a yes/no; typing a word breaks config | #128 |
-| Same-title sources | Second source's concept dropped as `create-only`; blocks contradiction detection | #131 |
-| `status` counts | Every non-Source type lumped under `Concepts:` (Procedures/Events hidden) | #133 |
-| `suggest-relations` | Wall of "not a seeded relation type" notes; one slow LLM call per edge | #134 |
-| `suggest-relations` | Only types concept→source provenance edges | #135 |
-| `ingest` feedback | No spinner during the ~20 s extraction; no per-type counter | #136 |
-| `adjudicate` | Part-whole pairs marked SAME | #138 |
-| `purge --force` | Leaves dangling references that `lint`/`status` never detect | #141 |
-| `purge` | Deletes `vectors.db` without rebuilding it or prompting `reindex` | #142 |
-| `init` | No `git init` / `.gitignore`, yet `forget`/`purge` depend on git | #143 |
+| CLI | No `openkos --version`; the installed version can only be read from the packaging tool | [#181](https://github.com/jasonssdev/openkos/issues/181) |
+
+**Everything the previous rounds found is now fixed** — the `init` model prompt
+(#128), same-slug source collisions (#131), `status` per-type counts (#133),
+`suggest-relations` vocabulary noise and per-edge latency (#134) and its
+provenance duplication (#135), missing `ingest` extraction feedback (#136),
+`adjudicate` part-whole verdicts (#138), `purge --force` dangling references
+(#141), `purge` deleting `vectors.db` (#142), and `init` not setting up git
+(#143). If any of them reappears, that is a **regression** and deserves a new
+issue, not a comment on the closed one.
 
 ---
 
