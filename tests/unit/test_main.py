@@ -167,4 +167,9 @@ def test_version_flag_is_discoverable_in_help_text() -> None:
     result = runner.invoke(openkos.cli.main.app, ["--help"], env={"COLUMNS": "80"})
 
     assert result.exit_code == 0
-    assert "--version" in _strip_ansi(result.stdout)
+    help_text = _strip_ansi(result.stdout)
+    # The spec requires more than the flag NAME being present: the entry must
+    # describe what it does ("a `--version` entry describing it as printing the
+    # installed version"), so assert the help string too, on the same line.
+    (version_line,) = [ln for ln in help_text.splitlines() if "--version" in ln]
+    assert "Show the installed openkos version and exit." in version_line
