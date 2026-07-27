@@ -24,10 +24,20 @@ DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_EMBEDDING_MODEL = "bge-m3"
 """The packaged default Ollama embedding model tag (ADR-0006: reliability-
 first -- `bge-m3` proved measurably more resilient to transient embed
-failures than the previous `qwen3-embedding:0.6b` default). Default-only
-for this slice (hybrid-retrieval Slice 1): not written to
-`openkos.yaml.template`, resolved solely via `read_config`'s `is not None`
-fallback, distinct from the chat `DEFAULT_MODEL`."""
+failures than the previous `qwen3-embedding:0.6b` default). Written into
+`openkos.yaml.template` via its own placeholder (`write_config`), and used
+as `read_config`'s `is not None` fallback for an omitted or explicit-null
+`embedding_model:` key, distinct from the chat `DEFAULT_MODEL`."""
+
+EMBEDDING_MODEL_ALLOWLIST: tuple[str, ...] = (DEFAULT_EMBEDDING_MODEL,)
+"""Vetted embedding model tags known to produce 1024-float vectors,
+satisfying the `EMBED_DIM` contract (ADR-0006). Default first (=
+recommended). This is policy data, not transport/classification, so it
+lives here rather than `llm/ollama.py` (D1). Honesty rule: an entry is
+added only after a measured 1024-dim embed -- never a guess. Gates ONLY
+the interactive embedding-model picker's candidate list; it never gates
+`--embedding-model` or a hand-written `openkos.yaml` value (see
+`validate_embedding_model`, which checks YAML-safety alone)."""
 
 DEFAULT_REVIEW = True
 """Packaged default for `review`: show a preview and confirm before saving."""
@@ -61,40 +71,69 @@ word appearing as a substring of a longer tag (`yesmodel`, `on-prem`) is
 unaffected by this resolver behavior and stays valid."""
 
 
-def validate_model(tag: str) -> str:
+def _validate_model_token(tag: str, field: str) -> str:
     """Trim `tag` and reject any value unsafe to substitute into `openkos.yaml`.
 
-    The assembled line `model: <VALUE>  # comment` must remain a valid
-    single-line YAML plain scalar, so this validates via an ALLOWLIST rather
-    than blocking individually known-bad characters: every character of the
-    trimmed value must be a letter, digit, `.`, `_`, `:`, `/`, or `-`. Within
-    that allowlist, a trailing colon (`qwen3:`) would still corrupt the line
-    into `model: qwen3:  # ...`, whose `: ` is invalid YAML (a colon read as
-    a mapping separator), and a leading colon or leading `-` would likewise
-    be misread (an empty key, or a YAML block-sequence entry), so those three
+    Shared body for `validate_model` and `validate_embedding_model` (D5):
+    one source of truth for YAML-scalar safety, parameterized only by
+    `field` for the raised messages. The assembled line
+    `<field>: <VALUE>  # comment` must remain a valid single-line YAML plain
+    scalar, so this validates via an ALLOWLIST rather than blocking
+    individually known-bad characters: every character of the trimmed value
+    must be a letter, digit, `.`, `_`, `:`, `/`, or `-`. Within that
+    allowlist, a trailing colon (`qwen3:`) would still corrupt the line into
+    `<field>: qwen3:  # ...`, whose `: ` is invalid YAML (a colon read as a
+    mapping separator), and a leading colon or leading `-` would likewise be
+    misread (an empty key, or a YAML block-sequence entry), so those three
     positions are rejected on top of the character allowlist. A colon in the
     middle stays allowed: Ollama's `name:tag` convention (`qwen3:8b`,
-    `mistral:7b`) and the default `qwen3:8b` both rely on it.
+    `mistral:7b`) and the defaults `qwen3:8b`/`bge-m3` both rely on it.
+
+    Checks safety only -- never allowlist membership. `validate_model` has
+    no allowlist; `validate_embedding_model` deliberately does not gate on
+    `EMBEDDING_MODEL_ALLOWLIST` here (D6) -- that gate applies to the
+    interactive picker's candidates only.
     """
     trimmed = tag.strip()
     if not trimmed:
-        raise ValueError("model must not be blank")
+        raise ValueError(f"{field} must not be blank")
     if trimmed.lower() in _YAML_RESERVED_WORDS:
         raise ValueError(
-            "model must not be a YAML reserved word "
+            f"{field} must not be a YAML reserved word "
             "(yes/no/true/false/on/off/null) -- it would not round-trip as "
             "the literal string"
         )
     if not _MODEL_TOKEN_RE.fullmatch(trimmed):
         raise ValueError(
-            "model must not contain characters other than letters, digits, "
+            f"{field} must not contain characters other than letters, digits, "
             "'.', '_', ':', '/', or '-'"
         )
     if trimmed.startswith(":") or trimmed.endswith(":"):
-        raise ValueError("model must not start or end with ':'")
+        raise ValueError(f"{field} must not start or end with ':'")
     if trimmed.startswith("-"):
-        raise ValueError("model must not start with '-'")
+        raise ValueError(f"{field} must not start with '-'")
     return trimmed
+
+
+def validate_model(tag: str) -> str:
+    """Trim `tag` and reject any value unsafe to substitute into `openkos.yaml`.
+
+    See `_validate_model_token` for the full safety-check rationale.
+    """
+    return _validate_model_token(tag, "model")
+
+
+def validate_embedding_model(tag: str) -> str:
+    """Trim `tag` and reject any value unsafe to substitute into
+    `openkos.yaml`'s `embedding_model:` line.
+
+    Applies the SAME YAML-safety and reserved-word rejection as
+    `validate_model` (see `_validate_model_token`), independent of
+    `EMBEDDING_MODEL_ALLOWLIST` membership (D6): an off-allowlist value
+    passed via `--embedding-model` must still pass this check and be
+    written, never silently coerced to the default.
+    """
+    return _validate_model_token(tag, "embedding_model")
 
 
 @dataclass(frozen=True)
@@ -305,32 +344,64 @@ def write_agents(root: Path) -> None:
 
 
 _MODEL_PLACEHOLDER = "__OPENKOS_MODEL__"
+_EMBEDDING_MODEL_PLACEHOLDER = "__OPENKOS_EMBEDDING_MODEL__"
+
+_PLACEHOLDER_RE = re.compile(
+    "|".join(re.escape(p) for p in (_MODEL_PLACEHOLDER, _EMBEDDING_MODEL_PLACEHOLDER))
+)
+"""Matches either placeholder, so `write_config` substitutes both in ONE pass.
+
+Sequential `str.replace` calls would not be order-independent: the character
+allowlist in `_MODEL_TOKEN_RE` admits `_`, so a validated `model` value may
+itself equal the embedding placeholder token, and a later pass would overwrite
+the value the earlier pass just wrote. A single pass never re-examines
+substituted text."""
 
 
-def write_config(root: Path, model: str = DEFAULT_MODEL) -> None:
+def write_config(
+    root: Path,
+    model: str = DEFAULT_MODEL,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+) -> None:
     """Write the packaged `openkos.yaml` template at `root`, with `model`
-    substituted for the template's single `__OPENKOS_MODEL__` placeholder.
+    and `embedding_model` substituted for the template's two independent
+    placeholders (`__OPENKOS_MODEL__`, `__OPENKOS_EMBEDDING_MODEL__`).
 
-    `model` is the ONLY user-selectable field (D5): every other line is
-    byte-identical to the packaged template regardless of the chosen model.
-    The directory itself remains the single source of truth for the
-    workspace's identity, so nothing in `openkos.yaml` is derived from
-    `root`. Substitution is a single constrained `str.replace` on a known
-    placeholder token -- never a YAML dumper or serializer -- so it cannot
-    reformat, reorder, or fold any other line the way a round-trip through a
-    YAML library could. `validate_model` runs first and raises `ValueError`
-    before any file is written if `model` is blank or contains whitespace, a
-    quote, or `#`. Exclusive-create mode ("x") never overwrites an existing
-    file (D2).
+    `model` and `embedding_model` are the ONLY user-selectable fields: every
+    other line is byte-identical to the packaged template regardless of the
+    chosen model(s). The directory itself remains the single source of
+    truth for the workspace's identity, so nothing in `openkos.yaml` is
+    derived from `root`. Substitution is ONE constrained pass over the two
+    known placeholder tokens (`_PLACEHOLDER_RE`) -- never a YAML dumper or
+    serializer -- so it cannot reformat, reorder, or fold any other line the
+    way a round-trip through a YAML library could, and it never re-examines
+    text it just substituted (see `_PLACEHOLDER_RE`). `validate_model` and
+    `validate_embedding_model` each run first and raise `ValueError` before
+    any file is written if their value is blank or contains whitespace, a
+    quote, or `#`; `embedding_model` is validated for YAML-safety only,
+    independent of `EMBEDDING_MODEL_ALLOWLIST` membership (D6). Each
+    placeholder's count in the packaged template is checked independently
+    (must be exactly one). Exclusive-create mode ("x") never overwrites an
+    existing file (D2).
     """
     validated_model = validate_model(model)
+    validated_embedding_model = validate_embedding_model(embedding_model)
     template = _read_template("openkos.yaml.template")
     if template.count(_MODEL_PLACEHOLDER) != 1:
         raise ValueError(
             f"expected exactly one {_MODEL_PLACEHOLDER!r} placeholder in the "
             "packaged template"
         )
-    content = template.replace(_MODEL_PLACEHOLDER, validated_model)
+    if template.count(_EMBEDDING_MODEL_PLACEHOLDER) != 1:
+        raise ValueError(
+            f"expected exactly one {_EMBEDDING_MODEL_PLACEHOLDER!r} placeholder "
+            "in the packaged template"
+        )
+    substitutions = {
+        _MODEL_PLACEHOLDER: validated_model,
+        _EMBEDDING_MODEL_PLACEHOLDER: validated_embedding_model,
+    }
+    content = _PLACEHOLDER_RE.sub(lambda m: substitutions[m.group(0)], template)
     layout = WorkspaceLayout(root)
     fsio.write_exclusive(layout.config_path, content)
 
@@ -341,9 +412,12 @@ class Config:
 
     Fields absent from the file fall back to the same packaged defaults
     `openkos.yaml.template` ships (D3): `DEFAULT_MODEL`, `DEFAULT_REVIEW`,
-    `DEFAULT_SENSITIVITY`, `DEFAULT_FRESHNESS_WINDOW`. `embedding_model` is
-    default-only (`DEFAULT_EMBEDDING_MODEL`): it is not part of
-    `openkos.yaml.template`, but a user may hand-add the key to override it.
+    `DEFAULT_SENSITIVITY`, `DEFAULT_FRESHNESS_WINDOW`, and
+    `DEFAULT_EMBEDDING_MODEL`. `embedding_model` IS part of
+    `openkos.yaml.template`, written via its own placeholder by
+    `write_config`; this fallback still applies when reading a
+    pre-existing or hand-edited `openkos.yaml` that omits the key or sets
+    it to an explicit YAML null.
     """
 
     model: str
