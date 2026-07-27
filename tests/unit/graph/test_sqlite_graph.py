@@ -1595,3 +1595,43 @@ def test_pass_three_row_order_is_deterministic_and_canonical(
     ]
     assert first == second
     assert forward.received == [["concepts/a", "concepts/b", "concepts/c"]]
+
+
+# --- Phase 3.4 (#183): zero-candidate success path, through the real seam --
+
+
+@pytest.mark.parametrize("state", ["absent", "empty"])
+def test_build_graph_succeeds_with_no_usable_vectors_db(
+    tmp_path: Path, state: str
+) -> None:
+    """A bundle whose embeddings are not usable still builds -- successfully,
+    with zero candidate rows and no exception.
+
+    Driven through the REAL CLI seam (`_open_proximity_or_degrade`), not the
+    stub the pass-3 tests use: the stub proves pass 3's logic, this proves
+    the wiring production actually executes. A regression here would mean
+    every `suggest-relations`/`contradictions`/`status` run on a workspace
+    that has not been reindexed yet crashes instead of degrading.
+
+    Both states matter and are NOT the same code path: `absent` never opens
+    a store at all, while `empty` opens one, finds zero rows, and must still
+    decline -- the CLI's "embeddings missing" message keys on that same
+    absent-OR-empty predicate."""
+    from openkos.cli.main import _open_proximity_or_degrade
+    from openkos.state.vectorstore import open_vector_store
+
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    vectors_db = tmp_path / ".openkos" / "vectors.db"
+    if state == "empty":
+        with open_vector_store(vectors_db):
+            pass  # schema created, nothing embedded
+        assert vectors_db.exists()
+
+    source = _open_proximity_or_degrade(vectors_db)
+
+    assert source is None
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        assert _edge_rows(store) == []
+        assert len(_node_ids(store)) == 2

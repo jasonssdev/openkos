@@ -30,10 +30,10 @@ from openkos.bundle import references as bundle_references
 from openkos.bundle import relations as bundle_relations
 from openkos.cli import observability
 from openkos.extraction.concept import extract_concept
-from openkos.graph import sqlite_graph
+from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import GraphStore
 from openkos.graph.summary import graph_edge_summary
-from openkos.llm.base import LLMBackend
+from openkos.llm.base import Embedder, LLMBackend
 from openkos.llm.ollama import (
     InstalledModel,
     OllamaClient,
@@ -1194,6 +1194,62 @@ def _stage_derived_objects(
     return plans
 
 
+def _embed_after_ingest(
+    layout: config.WorkspaceLayout, embedder: Embedder, *, model_tag: str
+) -> None:
+    """Embed the concepts `ingest` just wrote, so candidate edges are
+    available in the SAME run (#183).
+
+    Without this, `vectors.db` stays absent until a separate `openkos
+    reindex`, so a user's first `suggest-relations` after ingesting always
+    reports an empty graph -- the symptom issue #183 opens with.
+
+    FAIL-OPEN, and deliberately so. Embeddings are an enhancement layered
+    onto ingest; the Source and its concepts are already written and
+    COMMITTED by the time this runs. Losing embeddings must never cost the
+    user the ingest itself, so every ordinary exception degrades to one
+    stderr notice and an unchanged exit code.
+
+    The `except Exception` is broad ON PURPOSE, mirroring
+    `vectorstore.probe_vec_loadable`'s rationale: not just the three mapped
+    `OllamaError` subclasses, but any exception a backend might raise that
+    nobody anticipated. `KeyboardInterrupt` and `SystemExit` derive from
+    `BaseException`, so a user's Ctrl-C still interrupts the command rather
+    than being mistaken for a degraded embed.
+
+    Reuses `state.reindex.reindex` rather than embedding here (design
+    Decision D), and passes NO `fts_db_path`: the FTS index is `reindex`'s
+    job, not ingest's, and rebuilding it here would make every ingest pay
+    for a full-text rebuild it did not ask for."""
+    try:
+        with open_vector_store(layout.vectors_db_path) as db:
+            report = reindex_module.reindex(
+                layout.bundle_dir, db, embedder, model_tag=model_tag
+            )
+    except Exception as exc:
+        typer.echo(
+            f"openkos ingest: embeddings not updated -- {exc}; candidate "
+            "relations unavailable until `openkos reindex` succeeds.",
+            err=True,
+        )
+        return
+
+    # An exception is not the only way embedding degrades. `reindex` treats
+    # a generic `OllamaError` as a PER-DOC transient failure and folds it
+    # into `embed_failed` instead of raising -- only `OllamaUnavailable` and
+    # `OllamaModelNotFound` are fatal enough to propagate. Reporting solely
+    # on exceptions would therefore let a run where nothing was embedded
+    # look identical to a clean one, and the user would meet the silence
+    # later, as an inexplicably empty `suggest-relations`.
+    if report.embed_failed:
+        typer.echo(
+            f"openkos ingest: embeddings not updated for {report.embed_failed} "
+            f"doc{_plural(report.embed_failed)}; candidate relations may be "
+            "incomplete until `openkos reindex` succeeds.",
+            err=True,
+        )
+
+
 @app.command()
 def ingest(
     src: Path = typer.Argument(
@@ -1558,6 +1614,15 @@ def ingest(
         root,
         [*imported_paths, "bundle/index.md", "bundle/log.md"],
         f"openkos: ingest {name} (+{len(derived_plans)} concepts)",
+    )
+
+    # AFTER the commit, never before: the ingest is durable by this point,
+    # so a failing embedder degrades to a notice instead of stranding
+    # written-but-uncommitted files (#183).
+    _embed_after_ingest(
+        layout,
+        OllamaClient(model=cfg.embedding_model),
+        model_tag=cfg.embedding_model,
     )
 
 
@@ -4739,15 +4804,44 @@ both sites' state-3 message identical, and both key it on
 `neighbors()`/`proximity.py` plumbing is out of scope for this check)."""
 
 
+def _open_proximity_or_degrade(
+    vectors_db_path: Path,
+) -> proximity.VectorProximitySource | None:
+    """Resolve the embedding-proximity candidate source for this run, or
+    `None` when embeddings cannot serve one (#183).
+
+    The ONE place any command decides whether candidate edges are available.
+    Every caller then derives the user-facing "embeddings missing" state
+    from `is None` rather than probing `vectors.db` a second time -- that
+    probe used to live inside `_zero_edge_state_message`, on a path taken
+    every run.
+
+    Returns the source rather than a `(source, unavailable)` pair on
+    purpose: `unavailable` IS `source is None`, and a tuple carrying the
+    same fact twice invites the two halves to drift. `status`, which needs
+    the state but never the source, keeps calling `vector_store_is_empty` --
+    consistent by construction, because `open_proximity_source` is defined
+    against that exact predicate.
+
+    Never raises: `open_proximity_source` already absorbs an absent, empty,
+    unreadable or extension-less store."""
+    return proximity.open_proximity_source(vectors_db_path)
+
+
 def _zero_edge_state_message(
     layout: config.WorkspaceLayout,
     *,
     use_typed_count: bool,
     none_survived: str,
+    embeddings_missing: bool,
     all_excluded: str | None = None,
 ) -> str:
     """Select the Slice 0 (issue #183) three-state message for a
     zero-candidate outcome at `suggest-relations`/`contradictions`.
+
+    `embeddings_missing` comes from the caller's `_open_proximity_or_degrade`
+    result (`source is None`), never from a second probe of `vectors.db` --
+    the seam already read it.
 
     State 3 (embeddings absent OR empty) is checked FIRST: it also starves
     any embedding-sourced candidate edge, so it wins over whatever the
@@ -4773,7 +4867,7 @@ def _zero_edge_state_message(
     be factually FALSE there, because `graph_edge_summary` counts raw rows
     with neither filter applied. It is formatted with `count=` and
     `untyped=`; omitting it keeps the plain `none_survived` wording."""
-    if vector_store_is_empty(layout.vectors_db_path):
+    if embeddings_missing:
         return _CANDIDATES_UNAVAILABLE_MESSAGE
     total, typed = graph_edge_summary(layout.bundle_dir)
     count = typed if use_typed_count else total
@@ -4870,12 +4964,18 @@ def suggest_relations_cmd(
 
     # Count the candidate edges FIRST, with no LLM call, so the cost of the
     # one-inference-per-edge run can be previewed and gated before the model
-    # is ever contacted (issue #134). `candidate_edges` owns the internal
-    # `openkos.graph` read (design D2/D6): this module never imports
-    # `openkos.graph` directly.
-    edges = candidate_edges(
-        layout.bundle_dir, include_confidential=include_confidential
-    )
+    # is ever contacted (issue #134).
+    source = _open_proximity_or_degrade(layout.vectors_db_path)
+    embeddings_missing = source is None
+    try:
+        edges = candidate_edges(
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            candidates=source,
+        )
+    finally:
+        if source is not None:
+            source.close()
 
     typer.echo(f"openkos suggest-relations: workspace at {root}")
     typer.echo()
@@ -4885,6 +4985,7 @@ def suggest_relations_cmd(
             _zero_edge_state_message(
                 layout,
                 use_typed_count=False,
+                embeddings_missing=embeddings_missing,
                 none_survived="{count} relation(s) exist; none are untyped.",
                 all_excluded=(
                     "{count} relation(s) exist; {untyped} untyped, but every "
@@ -5165,12 +5266,15 @@ def contradictions(
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
+    source = _open_proximity_or_degrade(layout.vectors_db_path)
+    embeddings_missing = source is None
     try:
         verdicts, total_pairs = find_contradictions(
             layout.bundle_dir,
             llm=llm,
             include_deprecated=include_deprecated,
             include_confidential=include_confidential,
+            candidates=source,
         )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -5195,6 +5299,11 @@ def contradictions(
     except OllamaError as exc:
         typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
+    finally:
+        # Every branch above either returns a result or raises typer.Exit;
+        # the source holds a real SQLite connection on all of them.
+        if source is not None:
+            source.close()
 
     typer.echo(f"openkos contradictions: workspace at {root}")
     typer.echo()
@@ -5203,6 +5312,7 @@ def contradictions(
             _zero_edge_state_message(
                 layout,
                 use_typed_count=True,
+                embeddings_missing=embeddings_missing,
                 none_survived=(
                     "{count} typed relation(s); none are contradiction candidates."
                 ),
@@ -5988,7 +6098,17 @@ def reindex(
     # message unchanged (reindex-lock-handling; this closes the gap this
     # comment used to flag as deferred).
     try:
-        sqlite_graph.reindex_graph(layout.bundle_dir, layout.graph_db_path, force=force)
+        with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
+        try:
+            sqlite_graph.reindex_graph(
+                layout.bundle_dir,
+                layout.graph_db_path,
+                force=force,
+                candidates=with_candidates,
+            )
+        finally:
+            if with_candidates is not None:
+                with_candidates.close()
     except sqlite3.Error as exc:
         if isinstance(exc, sqlite3.OperationalError) and derived.is_lock_contention(
             exc

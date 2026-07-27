@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos.cli import main as contradiction_main
 from openkos.cli.main import app
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.contradiction import ContradictionVerdict, Verdict
@@ -974,3 +975,57 @@ def test_contradictions_over_good_life_demo_is_read_only(
     assert _snapshot(bundle_dir) == before
     if result.exit_code == 0:
         assert "openkos contradictions: workspace at" in result.stdout
+
+
+# --- Phase 3.2 (#183): the proximity seam ---------------------------------
+
+
+class _ClosableSource:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_contradictions_closes_the_proximity_source_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seam hands back a real SQLite connection; `contradictions` owns
+    closing it."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = _ClosableSource()
+    monkeypatch.setattr(
+        contradiction_main, "_open_proximity_or_degrade", lambda p: source
+    )
+    monkeypatch.setattr(
+        contradiction_main, "find_contradictions", lambda *a, **k: ([], 0)
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert source.closed is True
+
+
+def test_contradictions_closes_the_proximity_source_when_the_llm_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The error paths raise `typer.Exit` mid-command, so a close placed
+    after the call would never run. A user whose Ollama is down must not
+    also leak a file handle."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = _ClosableSource()
+
+    def _boom(*args: object, **kwargs: object) -> tuple[list[object], int]:
+        raise OllamaUnavailable("connection refused")
+
+    monkeypatch.setattr(
+        contradiction_main, "_open_proximity_or_degrade", lambda p: source
+    )
+    monkeypatch.setattr(contradiction_main, "find_contradictions", _boom)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 1
+    assert source.closed is True
