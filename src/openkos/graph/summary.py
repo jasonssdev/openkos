@@ -12,7 +12,7 @@ crashed)."""
 
 from pathlib import Path
 
-from openkos.graph.base import Edge
+from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.model.types import CLASSIFIABLE_LINK_DIRS
 
@@ -43,7 +43,22 @@ def _is_concept_edge(edge: Edge) -> bool:
     return _is_concept_node(edge.source_id) and _is_concept_node(edge.target_id)
 
 
-def graph_edge_summary(bundle_dir: Path) -> tuple[int, int]:
+def _summarize(store: GraphStore) -> tuple[int, int]:
+    """Compute `(total, typed)` concept-to-concept edge counts over an
+    already-open `store` (`graph_edge_summary`'s two-branch shape,
+    graph-projection-reuse design §3): holds the two lines that used to live
+    directly inside `graph_edge_summary`'s own `with build_graph(...)` block,
+    so both branches (caller-supplied or self-built) share identical
+    counting logic."""
+    edges = [edge for edge in store.edges() if _is_concept_edge(edge)]
+    total = len(edges)
+    typed = sum(1 for edge in edges if edge.relation_type is not None)
+    return total, typed
+
+
+def graph_edge_summary(
+    bundle_dir: Path, *, store: GraphStore | None = None
+) -> tuple[int, int]:
     """Return `(total, typed)` CONCEPT-TO-CONCEPT edge counts for the graph
     projection over `bundle_dir`.
 
@@ -51,9 +66,20 @@ def graph_edge_summary(bundle_dir: Path) -> tuple[int, int]:
     nodes (untyped-or-provenance-mirror plus typed, but NEVER a Concept<->
     Source `derived_from` link); `typed` is the subset of those whose
     `relation_type` is not `None`. Both are 0 for a bundle with no eligible
-    docs or no concept-to-concept edges between them."""
-    with build_graph(bundle_dir) as store:
-        edges = [edge for edge in store.edges() if _is_concept_edge(edge)]
-    total = len(edges)
-    typed = sum(1 for edge in edges if edge.relation_type is not None)
-    return total, typed
+    docs or no concept-to-concept edges between them.
+
+    `store` (graph-projection-reuse, issue #195): if the caller already has
+    an open `GraphStore` (e.g. built once per CLI invocation and shared with
+    another reader), pass it here and this function computes over it
+    directly WITHOUT opening its own `build_graph` projection and WITHOUT
+    ever closing the supplied store -- ownership stays with whoever opened
+    it. `bundle_dir` is still required in that case (kept for signature
+    symmetry with the `store=None` path and the zero-branch caller's
+    context), even though it is not read again. Omitting `store` (the
+    default) preserves today's behavior byte-for-byte: this function opens
+    its own `with build_graph(bundle_dir) as store:` block and closes it
+    before returning."""
+    if store is not None:
+        return _summarize(store)
+    with build_graph(bundle_dir) as owned:
+        return _summarize(owned)

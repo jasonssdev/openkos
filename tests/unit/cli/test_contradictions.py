@@ -24,6 +24,7 @@ from typer.testing import CliRunner
 
 from openkos.cli import main as contradiction_main
 from openkos.cli.main import app
+from openkos.graph import sqlite_graph
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.contradiction import ContradictionVerdict, Verdict
 
@@ -971,6 +972,9 @@ class _ClosableSource:
     def __init__(self) -> None:
         self.closed = False
 
+    def pairs(self, concept_ids: object) -> list[object]:
+        return []
+
     def close(self) -> None:
         self.closed = True
 
@@ -1016,3 +1020,38 @@ def test_contradictions_closes_the_proximity_source_when_the_llm_fails(
 
     assert result.exit_code == 1
     assert source.closed is True
+
+
+# --- graph-projection-reuse (#196): one build per invocation ---------------
+
+
+def test_contradictions_builds_the_graph_once_on_the_zero_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#196: the zero-candidate path must not rebuild the projection for its
+    "no typed edges" message."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+
+    calls: list[Path] = []
+    real = sqlite_graph.build_graph
+
+    def _counting_build_graph(
+        bundle_dir: Path, *, candidates: sqlite_graph.CandidateSource | None = None
+    ) -> sqlite_graph.SqliteGraphStore:
+        calls.append(bundle_dir)
+        return real(bundle_dir, candidates=candidates)
+
+    monkeypatch.setattr("openkos.cli.main.build_graph", _counting_build_graph)
+    monkeypatch.setattr("openkos.graph.summary.build_graph", _counting_build_graph)
+    monkeypatch.setattr(
+        "openkos.resolution.contradiction.build_graph", _counting_build_graph
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert "The graph has no typed edges yet." in result.stdout

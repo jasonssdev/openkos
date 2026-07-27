@@ -389,7 +389,7 @@ def test_status_state1_no_edges_reports_distinct_message_from_state3(
     seed_vectors_db(tmp_path)
 ```
 
-Applied at all 13 sites; the three helper defs
+Applied at all 14 sites; the three helper defs
 (`test_suggest_relations.py:74`, `test_contradictions.py:73`,
 `test_status.py:40`) are deleted, along with any `import sqlite3` that becomes
 unused (verify per-module — `test_status.py` imports it at line 11 and may use it

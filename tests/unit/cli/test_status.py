@@ -16,6 +16,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
+from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
 
 runner = CliRunner()
@@ -428,6 +429,45 @@ def test_status_state2_edges_present_reports_counts(
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0
+    assert "1 concept-to-concept edge(s) (0 typed)." in result.stdout
+
+
+def test_status_builds_the_graph_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """`status` calls `build_graph` exactly once per invocation (#195 --
+    plumbing pins today's already-single-call behavior as a regression
+    guard, not a new speedup: `status` has no redundant build to remove)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\n---\nSee also [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\n---\nBody.\n", encoding="utf-8"
+    )
+
+    calls: list[Path] = []
+    real = sqlite_graph.build_graph
+
+    def _counting_build_graph(
+        bundle_dir: Path, *, candidates: sqlite_graph.CandidateSource | None = None
+    ) -> sqlite_graph.SqliteGraphStore:
+        calls.append(bundle_dir)
+        return real(bundle_dir, candidates=candidates)
+
+    monkeypatch.setattr("openkos.cli.main.build_graph", _counting_build_graph)
+    monkeypatch.setattr("openkos.graph.summary.build_graph", _counting_build_graph)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
     assert "1 concept-to-concept edge(s) (0 typed)." in result.stdout
 
 

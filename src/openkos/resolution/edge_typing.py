@@ -23,9 +23,15 @@ or dropped: `suggest_edge_types` returns exactly one `EdgeSuggestion` per
 input `Edge`, in the same order.
 
 Layering: this module is DERIVED, not canonical -- it MAY import
-`openkos.graph` (derived -> derived, allowed). `cli/main.py` MUST NOT import
-`openkos.graph` directly; it imports only this module (design D2/D6, "No CLI
-Surface" -- see `tests/unit/graph/test_analysis.py`).
+`openkos.graph` (derived -> derived, allowed). The live, tested constraint is
+narrower than an earlier version of this docstring claimed: the canonical
+layer (`openkos.model`, `openkos.bundle`, `openkos.state`) MUST NOT import
+`openkos.graph` (`tests/unit/graph/test_base.py::test_canonical_layer_does_not_import_graph`),
+and `graph/` MUST NOT register a CLI verb
+(`tests/unit/graph/test_analysis.py::test_cli_main_registers_no_graph_command`).
+`cli/main.py` importing `openkos.graph` is NOT a violation and is established
+practice (`query`, `reindex`, and -- since graph-projection-reuse -- the shared
+per-invocation `build_graph` this module's optional `store` parameter accepts).
 """
 
 from collections.abc import Callable, Sequence
@@ -279,11 +285,20 @@ def suggest_edge_types(
     return results
 
 
+def _edges_from(store: GraphStore) -> list[Edge]:
+    """Return `_candidate_edges(store)` over an already-open `store`
+    (`candidate_edges`'s two-branch shape, graph-projection-reuse design
+    §3): a one-line extraction that keeps both the caller-supplied and
+    self-built branches computing candidates identically."""
+    return _candidate_edges(store)
+
+
 def candidate_edges(
     bundle_dir: Path,
     *,
     include_confidential: bool = False,
     candidates: CandidateSource | None = None,
+    store: GraphStore | None = None,
 ) -> list[Edge]:
     """The read-only candidate set `suggest_relations` would type, computed
     WITHOUT any `LLMBackend` or inference: open `build_graph` over
@@ -295,8 +310,13 @@ def candidate_edges(
     committing to `suggest_edge_types`'s one-`llm.chat`-per-edge run (issue
     #134): `len(candidate_edges(...)) == len(suggest_relations(...))`, and
     passing the returned list straight to `suggest_edge_types` reproduces
-    `suggest_relations` exactly. Encapsulates the `openkos.graph` read so
-    `cli/main.py` never imports `openkos.graph` directly (design D2/D6).
+    `suggest_relations` exactly. Owns the `openkos.graph` read logic (the
+    `_candidate_edges` narrowing and the confidentiality filter live here,
+    not in any caller). Lifecycle ownership is optional: pass an
+    already-open `store` and this function reuses it without closing it,
+    letting one CLI invocation build the projection once
+    (graph-projection-reuse); omit it and the function opens and closes its
+    own `build_graph`, byte-identically to before.
 
     sensitivity-fail-closed-filter (S3a): unless `include_confidential` is
     `True`, `sensitivity.sensitive_concept_ids(bundle_dir)` is computed ONCE
@@ -304,20 +324,28 @@ def candidate_edges(
     any downstream read -- a confidential endpoint never reaches a prompt.
     `include_confidential=True` skips the predicate walk entirely.
 
-    `candidates` (#183) is forwarded verbatim to `build_graph`, which emits
-    pass-3 proximity rows as ordinary UNTYPED edges. `_candidate_edges` is
-    deliberately NOT modified to accommodate them: a proximity row is
-    indistinguishable from a body link at this layer, so the existing
-    untyped-and-not-typed-elsewhere filter already treats it correctly, and
-    the confidentiality filter below applies to it unchanged -- proximity
-    must never become a side channel that walks a confidential concept into
-    a prompt."""
+    `candidates` (#183) is forwarded verbatim to `build_graph` on the
+    self-built path, which emits pass-3 proximity rows as ordinary UNTYPED
+    edges. `_candidate_edges` is deliberately NOT modified to accommodate
+    them: a proximity row is indistinguishable from a body link at this
+    layer, so the existing untyped-and-not-typed-elsewhere filter already
+    treats it correctly, and the confidentiality filter below applies to it
+    unchanged -- proximity must never become a side channel that walks a
+    confidential concept into a prompt.
+
+    `store` (graph-projection-reuse, issue #196): when supplied, `candidates`
+    is silently unused -- the caller already consumed it building that
+    store -- and `bundle_dir` is used ONLY for the confidentiality walk
+    below, never re-walked to build a second projection."""
     blocked: frozenset[str] = frozenset()
     if not include_confidential:
         blocked = sensitivity.sensitive_concept_ids(bundle_dir)
 
-    with build_graph(bundle_dir, candidates=candidates) as store:
-        edges = _candidate_edges(store)
+    if store is not None:
+        edges = _edges_from(store)
+    else:
+        with build_graph(bundle_dir, candidates=candidates) as owned:
+            edges = _edges_from(owned)
     return [
         edge
         for edge in edges
