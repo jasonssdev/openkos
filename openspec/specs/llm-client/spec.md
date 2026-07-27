@@ -189,6 +189,12 @@ classify as embedding. A missing or unrecognized family MUST classify as
 NON-embedding — ambiguity MUST NEVER cause a model to be excluded from
 chat candidates.
 
+As a second, independent signal, an entry whose tag contains the marker
+`embed` (case-insensitive) MUST classify as embedding regardless of the
+reported family. A self-describing tag is evidence, not ambiguity, so it
+does not weaken the fail-open rule above; it also covers the case where the
+server reports a plausible chat family for an embedding tag.
+
 #### Scenario: Known embedding family classifies as embedding
 
 - GIVEN an installed entry with family `"bert"`
@@ -198,9 +204,17 @@ chat candidates.
 #### Scenario: Missing or unknown family classifies as non-embedding
 
 - GIVEN an installed entry with no family, or a family not in the
-  documented embedding-family set
+  documented embedding-family set, and a tag without the `embed` marker
 - WHEN the classification helper is applied
 - THEN the entry is classified as NON-embedding
+
+#### Scenario: Embedding marker in the tag classifies as embedding
+
+- GIVEN an installed entry whose tag contains `embed`, such as
+  `qwen3-embedding:0.6b`, and whose family is absent or is a chat family
+- WHEN the classification helper is applied
+- THEN the entry is classified as an embedding model, and it is therefore
+  excluded from the `init` chat-model picker
 
 ### Requirement: Model Tag Matching Tolerates Bare And Latest-Qualified Tags
 
