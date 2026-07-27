@@ -34,7 +34,7 @@ from pathlib import Path
 
 from openkos import sensitivity
 from openkos.graph.base import Edge, GraphStore
-from openkos.graph.sqlite_graph import build_graph
+from openkos.graph.sqlite_graph import CandidateSource, build_graph
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import okf
@@ -280,7 +280,10 @@ def suggest_edge_types(
 
 
 def candidate_edges(
-    bundle_dir: Path, *, include_confidential: bool = False
+    bundle_dir: Path,
+    *,
+    include_confidential: bool = False,
+    candidates: CandidateSource | None = None,
 ) -> list[Edge]:
     """The read-only candidate set `suggest_relations` would type, computed
     WITHOUT any `LLMBackend` or inference: open `build_graph` over
@@ -299,12 +302,21 @@ def candidate_edges(
     `True`, `sensitivity.sensitive_concept_ids(bundle_dir)` is computed ONCE
     and any edge whose source OR target is blocked is dropped here, before
     any downstream read -- a confidential endpoint never reaches a prompt.
-    `include_confidential=True` skips the predicate walk entirely."""
+    `include_confidential=True` skips the predicate walk entirely.
+
+    `candidates` (#183) is forwarded verbatim to `build_graph`, which emits
+    pass-3 proximity rows as ordinary UNTYPED edges. `_candidate_edges` is
+    deliberately NOT modified to accommodate them: a proximity row is
+    indistinguishable from a body link at this layer, so the existing
+    untyped-and-not-typed-elsewhere filter already treats it correctly, and
+    the confidentiality filter below applies to it unchanged -- proximity
+    must never become a side channel that walks a confidential concept into
+    a prompt."""
     blocked: frozenset[str] = frozenset()
     if not include_confidential:
         blocked = sensitivity.sensitive_concept_ids(bundle_dir)
 
-    with build_graph(bundle_dir) as store:
+    with build_graph(bundle_dir, candidates=candidates) as store:
         edges = _candidate_edges(store)
     return [
         edge

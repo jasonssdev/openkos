@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from openkos.graph.base import Edge, GraphStore
+from openkos.graph.proximity import ProximityPair
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.resolution import edge_typing as edge_typing_mod
@@ -875,3 +876,80 @@ def test_include_confidential_true_bypasses_the_load_doc_recheck(
     assert len(llm.calls) == 1
     sent_content = " ".join(str(m["content"]) for m in llm.calls[0])
     assert "confidential note" in sent_content
+
+
+# --- Phase 2.5 (#183): candidates kwarg plumbed to build_graph -------------
+
+
+class _StubCandidateSource:
+    """Stands in for `graph.proximity.VectorProximitySource` -- fixed pairs,
+    no `vectors.db`, no sqlite-vec, no Ollama."""
+
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        self._pairs = pairs
+
+    def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+        return [
+            ProximityPair(source_id=s, target_id=t, distance=0.1)
+            for s, t in self._pairs
+        ]
+
+
+def test_candidate_edges_surfaces_proximity_rows_through_unmodified_filter(
+    tmp_path: Path,
+) -> None:
+    """The whole point of #183: a bundle whose concepts share no links can
+    still yield suggestions, because pass-3 candidate rows reach
+    `_candidate_edges` untouched.
+
+    `_candidate_edges` is deliberately NOT modified -- a proximity row is
+    just an untyped edge, indistinguishable from a body link, so the
+    existing untyped-and-not-typed-elsewhere filter already does the right
+    thing."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    without = edge_typing_mod.candidate_edges(bundle)
+    with_candidates = edge_typing_mod.candidate_edges(bundle, candidates=source)
+
+    assert without == []
+    assert with_candidates == [
+        Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+    ]
+
+
+def test_candidate_edges_still_excludes_a_pair_typed_elsewhere(
+    tmp_path: Path,
+) -> None:
+    """Regression guard on the pre-existing pair-level exclusion: adding a
+    candidate source must not resurrect a pair a human already typed. Pass 3
+    declines to emit the row at all, and `_candidate_edges` would filter it
+    even if it did."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    (bundle / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: relates_to\n---\nBody.",
+        encoding="utf-8",
+    )
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    assert edge_typing_mod.candidate_edges(bundle, candidates=source) == []
+
+
+def test_candidate_edges_drops_a_proximity_row_with_a_confidential_endpoint(
+    tmp_path: Path,
+) -> None:
+    """The sensitivity fail-closed filter applies to candidate rows exactly
+    as it does to body links -- proximity must not become a side channel
+    that walks a confidential concept into an LLM prompt."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(
+        bundle / "concepts" / "b.md", title="B", sensitivity_value="confidential"
+    )
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    assert edge_typing_mod.candidate_edges(bundle, candidates=source) == []

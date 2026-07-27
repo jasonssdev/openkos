@@ -59,40 +59,40 @@ Satisfies: specs/candidate-edge-seeding, specs/graph-projection. Fakes only, NO 
 
 ### Phase 2.1: Unit-norm assumption pin (MUST run first)
 
-- [ ] 2.1.1 RED+GREEN together (assertion test, not a behavior to implement): `tests/unit/state/test_vectorstore.py` or a new `tests/unit/llm/test_ollama_embed_norm.py` -- assert Ollama `/api/embed` output vectors are L2-normalized (`||v|| ~= 1`), gated like the existing `probe_vec_loadable` real-interpreter tests. If this fails, STOP -- `MAX_NEIGHBOR_DISTANCE` is meaningless and design Decision B must be reopened.
-- [ ] 2.1.2 Calibration task: fixture anchor pair (mirroring `resolution/similarity.py:18-21`'s `stoic`/`stoicism` lock) -- assert two topically-close fixture concept embeddings fall within `CANDIDATE_SIMILARITY_THRESHOLD = 0.65`, and one topically-unrelated pair falls outside it. Document the anchor pair in the module docstring of `graph/proximity.py`.
+- [x] 2.1.1 RED+GREEN together (assertion test, not a behavior to implement): `tests/unit/state/test_vectorstore.py` or a new `tests/unit/llm/test_ollama_embed_norm.py` -- assert Ollama `/api/embed` output vectors are L2-normalized (`||v|| ~= 1`), gated like the existing `probe_vec_loadable` real-interpreter tests. If this fails, STOP -- `MAX_NEIGHBOR_DISTANCE` is meaningless and design Decision B must be reopened.
+- [x] 2.1.2 Calibration task: fixture anchor pair (mirroring `resolution/similarity.py:18-21`'s `stoic`/`stoicism` lock) -- assert two topically-close fixture concept embeddings fall within `CANDIDATE_SIMILARITY_THRESHOLD = 0.70`, and one topically-unrelated pair falls outside it. Document the anchor pair in the module docstring of `graph/proximity.py`.
 
 ### Phase 2.2: `VectorStoreDB.neighbors()`
 
-- [ ] 2.2.1 RED: `tests/unit/state/test_vectorstore.py` -- `neighbors(concept_id, k)` round-trip test, gated on `probe_vec_loadable()`, real sqlite-vec.
-- [ ] 2.2.2 GREEN: `src/openkos/state/vectorstore.py` -- add `neighbors(self, concept_id: str, k: int) -> list[VecHit]` to `VectorStoreDB` only (reads the stored blob, reuses `_QUERY_VECTORS_SQL`). Do NOT add to the `VectorStore` Protocol (150-156) -- would break every existing fake.
+- [x] 2.2.1 RED: `tests/unit/state/test_vectorstore.py` -- `neighbors(concept_id, k)` round-trip test, gated on `probe_vec_loadable()`, real sqlite-vec.
+- [x] 2.2.2 GREEN: `src/openkos/state/vectorstore.py` -- add `neighbors(self, concept_id: str, k: int) -> list[VecHit]` to `VectorStoreDB` only (reads the stored blob, reuses `_QUERY_VECTORS_SQL`). Do NOT add to the `VectorStore` Protocol (150-156) -- would break every existing fake.
 
 ### Phase 2.3: `graph/proximity.py` -- scoring module
 
-- [ ] 2.3.1 RED: `tests/unit/graph/test_proximity.py` (new) -- threshold boundary (at/above/below `MAX_NEIGHBOR_DISTANCE`), top-K cap (`TOP_K = 5`), self-exclusion, symmetry collapse (one canonical direction per unordered pair), empty store -> `[]`. Use a fake `NeighborQuery` returning fixed `VecHit` lists -- no Ollama, no sqlite-vec.
-- [ ] 2.3.2 GREEN: create `src/openkos/graph/proximity.py` -- `NeighborQuery` Protocol, `ProximityPair` dataclass, `VectorProximitySource`, `open_proximity_source(path) -> VectorProximitySource | None` (existence-gated), `CANDIDATE_SIMILARITY_THRESHOLD = 0.65`, `MAX_NEIGHBOR_DISTANCE = sqrt(2 - 2 * CANDIDATE_SIMILARITY_THRESHOLD)`, `TOP_K = 5`. Never raises: a k-NN failure inside the source returns `[]`.
+- [x] 2.3.1 RED: `tests/unit/graph/test_proximity.py` (new) -- threshold boundary (at/above/below `MAX_NEIGHBOR_DISTANCE`), top-K cap (`TOP_K = 5`), self-exclusion, symmetry collapse (one canonical direction per unordered pair), empty store -> `[]`. Use a fake `NeighborQuery` returning fixed `VecHit` lists -- no Ollama, no sqlite-vec.
+- [x] 2.3.2 GREEN: create `src/openkos/graph/proximity.py` -- `NeighborQuery` Protocol, `ProximityPair` dataclass, `VectorProximitySource`, `open_proximity_source(path) -> VectorProximitySource | None` (existence-gated), `CANDIDATE_SIMILARITY_THRESHOLD = 0.70`, `MAX_NEIGHBOR_DISTANCE = sqrt(2 - 2 * CANDIDATE_SIMILARITY_THRESHOLD)`, `TOP_K = 5`. Never raises: a k-NN failure inside the source returns `[]`.
 
 ### Phase 2.4: Pass 3 in `sqlite_graph.py`
 
-- [ ] 2.4.1 RED: `tests/unit/graph/test_sqlite_graph.py` -- pass 3 determinism (stable edge order/dedup) with a stub source object; pass 1/2 output byte-identical with and without a source; dedup vs an existing body link; `candidates=None` -> no-op (existing tests must still pass unchanged).
-- [ ] 2.4.2 GREEN: `src/openkos/graph/sqlite_graph.py` -- add `candidates` kwarg to `_populate_graph_tables`; implement pass 3 (~25 lines) per the design pseudocode: dedup against `edge_pairs` (both directions), one canonical `(min, max)` row per pair, `relation_type = NULL`, sorted insertion order. Update module docstring to reflect three passes.
-- [ ] 2.4.3 GREEN: `src/openkos/graph/sqlite_graph.py` -- add `candidates` kwarg to `build_graph`, `write_graph_store`, `reindex_graph` (plumbing only, per Decision E / `sqlite_graph.py:369-371` on-disk/in-memory parity).
+- [x] 2.4.1 RED: `tests/unit/graph/test_sqlite_graph.py` -- pass 3 determinism (stable edge order/dedup) with a stub source object; pass 1/2 output byte-identical with and without a source; dedup vs an existing body link; `candidates=None` -> no-op (existing tests must still pass unchanged).
+- [x] 2.4.2 GREEN: `src/openkos/graph/sqlite_graph.py` -- add `candidates` kwarg to `_populate_graph_tables`; implement pass 3 (~25 lines) per the design pseudocode: dedup against `edge_pairs` (both directions), one canonical `(min, max)` row per pair, `relation_type = NULL`, sorted insertion order. Update module docstring to reflect three passes.
+- [x] 2.4.3 GREEN: `src/openkos/graph/sqlite_graph.py` -- add `candidates` kwarg to `build_graph`, `write_graph_store`, `reindex_graph` (plumbing only, per Decision E / `sqlite_graph.py:369-371` on-disk/in-memory parity).
 
 ### Phase 2.5: `resolution/` kwarg plumbing (no filter changes)
 
-- [ ] 2.5.1 RED: `tests/unit/resolution/test_edge_typing.py` -- existing already-typed-pair exclusion re-run unchanged; add a case confirming a `candidates` kwarg reaches `build_graph` at `edge_typing.py:307` and NULL-typed candidate rows surface via `_candidate_edges` (116-138) unmodified.
-- [ ] 2.5.2 GREEN: `src/openkos/resolution/edge_typing.py` -- plumb `candidates` kwarg to the `build_graph` call at line 307. `_candidate_edges` (116-138) stays untouched.
-- [ ] 2.5.3 RED: `tests/unit/resolution/test_contradiction.py` -- existing `derived_from` exclusion re-run unchanged; add a case confirming NULL-typed candidate rows are excluded from `_candidate_pairs` (187-191) the same way `derived_from` is.
-- [ ] 2.5.4 GREEN: `src/openkos/resolution/contradiction.py` -- plumb `candidates` kwarg to the `build_graph` call at line 442. `_candidate_pairs` (187-191) stays untouched.
+- [x] 2.5.1 RED: `tests/unit/resolution/test_edge_typing.py` -- existing already-typed-pair exclusion re-run unchanged; add a case confirming a `candidates` kwarg reaches `build_graph` at `edge_typing.py:307` and NULL-typed candidate rows surface via `_candidate_edges` (116-138) unmodified.
+- [x] 2.5.2 GREEN: `src/openkos/resolution/edge_typing.py` -- plumb `candidates` kwarg to the `build_graph` call at line 307. `_candidate_edges` (116-138) stays untouched.
+- [x] 2.5.3 RED: `tests/unit/resolution/test_contradiction.py` -- existing `derived_from` exclusion re-run unchanged; add a case confirming NULL-typed candidate rows are excluded from `_candidate_pairs` (187-191) the same way `derived_from` is.
+- [x] 2.5.4 GREEN: `src/openkos/resolution/contradiction.py` -- plumb `candidates` kwarg to the `build_graph` call at line 442. `_candidate_pairs` (187-191) stays untouched.
 
 ### Phase 2.6: Invariant assertions (cheap, explicit)
 
-- [ ] 2.6.1 Test: `tests/unit/bundle/` or existing merge/unmerge suite -- assert a bundle containing pass-3 candidate rows leaves `model/okf.py` `Relation` encode/decode and `bundle/relations.py` merge/unmerge behavior byte-identical to a bundle without them (projection-ephemeral invariant from specs/candidate-edge-seeding).
+- [x] 2.6.1 Test: `tests/unit/bundle/` or existing merge/unmerge suite -- assert a bundle containing pass-3 candidate rows leaves `model/okf.py` `Relation` encode/decode and `bundle/relations.py` merge/unmerge behavior byte-identical to a bundle without them (projection-ephemeral invariant from specs/candidate-edge-seeding).
 
 ### Phase 2.7: PR2 gate
 
-- [ ] 2.7.1 `uv run pytest` green; branch coverage >= 90%.
-- [ ] 2.7.2 Confirm no CLI wiring landed (`cli/main.py` untouched in this PR) and PR2's diff targets PR1's branch cleanly (no PR1 changes leaking in).
+- [x] 2.7.1 `uv run pytest` green; branch coverage >= 90%.
+- [x] 2.7.2 Confirm no CLI wiring landed (`cli/main.py` untouched in this PR) and PR2's diff targets PR1's branch cleanly (no PR1 changes leaking in).
 
 ## PR3 -- CLI/Ingest Wiring + Fail-Open Degradation + End-to-End (targets: PR2 branch)
 

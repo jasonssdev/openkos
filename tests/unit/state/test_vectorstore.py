@@ -1200,3 +1200,72 @@ def test_vector_store_is_empty_true_when_path_is_a_directory(tmp_path: Path) -> 
     db_path.mkdir(parents=True)
 
     assert vectorstore.vector_store_is_empty(db_path) is True
+
+
+# --- Phase 2.2 (#183): neighbors() by stored concept_id --------------------
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_neighbors_returns_stored_concepts_ascending_by_distance(
+    tmp_path: Path,
+) -> None:
+    """Round-trip against the real extension: `neighbors(concept_id, k)`
+    looks up `concept_id`'s OWN stored embedding and runs the same k-NN as
+    `query`, so a caller never has to hold the vector itself (#183 task
+    2.2).
+
+    The anchor is included in its own result set at distance ~0 --
+    self-exclusion is `graph/proximity.py`'s job (task 2.3), deliberately
+    NOT this layer's, so `neighbors` stays a thin, honest k-NN."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/anchor", [1.0] + [0.0] * (EMBED_DIM - 1), "h-anchor")
+        db.upsert("concepts/near", [0.9, 0.1] + [0.0] * (EMBED_DIM - 2), "h-near")
+        db.upsert("concepts/far", [0.0] * (EMBED_DIM - 1) + [1.0], "h-far")
+
+        hits = db.neighbors("concepts/anchor", 3)
+
+    assert [hit.concept_id for hit in hits] == [
+        "concepts/anchor",
+        "concepts/near",
+        "concepts/far",
+    ]
+    assert hits[0].distance < hits[1].distance < hits[2].distance
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_neighbors_honors_k_and_returns_empty_for_an_unknown_concept_id(
+    tmp_path: Path,
+) -> None:
+    """`k` caps the result set, and a `concept_id` with no stored embedding
+    degrades to `[]` rather than raising -- the caller cannot distinguish a
+    never-embedded concept from a pruned one, and neither is an error."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/anchor", [1.0] + [0.0] * (EMBED_DIM - 1), "h-anchor")
+        db.upsert("concepts/near", [0.9, 0.1] + [0.0] * (EMBED_DIM - 2), "h-near")
+        db.upsert("concepts/far", [0.0] * (EMBED_DIM - 1) + [1.0], "h-far")
+
+        capped = db.neighbors("concepts/anchor", 2)
+        missing = db.neighbors("concepts/never-embedded", 5)
+
+    assert len(capped) == 2
+    assert missing == []
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_neighbors_returns_empty_on_an_empty_store(tmp_path: Path) -> None:
+    """An empty `vectors` table yields `[]`, mirroring `query`'s documented
+    empty-store behavior."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        assert db.neighbors("concepts/anything", 5) == []

@@ -18,12 +18,14 @@ for its own low-level cases. Phase 3 (below) exercises the friendly
 
 import hashlib
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge, GraphStore
+from openkos.graph.proximity import ProximityPair
 from openkos.model import okf
 from openkos.state import derived
 
@@ -1137,7 +1139,12 @@ def test_write_graph_store_leaves_prior_projection_intact_on_mid_rebuild_failure
     )
     original_populate = sqlite_graph._populate_graph_tables
 
-    def _crashing_populate(conn: sqlite3.Connection, bundle_dir_arg: Path) -> list[str]:
+    def _crashing_populate(
+        conn: sqlite3.Connection,
+        bundle_dir_arg: Path,
+        *,
+        candidates: sqlite_graph.CandidateSource | None = None,
+    ) -> list[str]:
         original_populate(conn, bundle_dir_arg)
         raise RuntimeError("simulated crash mid-rebuild")
 
@@ -1418,3 +1425,173 @@ def test_reindex_graph_edited_doc_stays_invisible_to_readonly_open_until_next_ru
             relation_type=None,
         )
     ]
+
+
+# --- Phase 2.4 (#183): pass 3, embedding-proximity candidate edges ----------
+
+
+class _StubCandidateSource:
+    """A `candidates` source returning fixed pairs, standing in for
+    `graph.proximity.VectorProximitySource` -- no `vectors.db`, no sqlite-vec.
+
+    Records the node ids it was handed so tests can prove pass 3 offers the
+    source a deterministic, sorted view of the projection."""
+
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        self._pairs = pairs
+        self.received: list[list[str]] = []
+
+    def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+        self.received.append(list(concept_ids))
+        return [
+            ProximityPair(source_id=s, target_id=t, distance=0.1)
+            for s, t in self._pairs
+        ]
+
+
+def test_pass_three_inserts_untyped_candidate_rows(tmp_path: Path) -> None:
+    """A candidate pair with no existing edge becomes ONE row with
+    `relation_type = NULL` -- untyped, because proximity nominates a pair
+    for a human to consider, it never claims what the relationship IS."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        rows = _edge_rows(store)
+
+    assert rows == [("concepts/a", "concepts/b", None)]
+
+
+def test_pass_three_is_a_no_op_when_no_source_is_given(tmp_path: Path) -> None:
+    """`candidates=None` is the default and must leave the projection
+    byte-identical to the pre-#183 two-pass build -- a bundle with no
+    `vectors.db` still builds successfully with zero candidate rows."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+
+    with sqlite_graph.build_graph(bundle) as store:
+        rows = _edge_rows(store)
+
+    assert rows == []
+
+
+def test_pass_one_and_two_output_is_identical_with_and_without_a_source(
+    tmp_path: Path,
+) -> None:
+    """Pass 3 is purely ADDITIVE: introducing a source must not perturb a
+    single row that passes 1 and 2 produce. Anything else would make
+    candidate edges a silent rewrite of the provenance graph."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "a.md", title="A", body="See [B](/concepts/b.md).\n"
+    )
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    _write_doc_with_relations(
+        bundle / "concepts" / "c.md",
+        title="C",
+        relations="  - target: concepts/b\n    type: relates_to\n",
+    )
+
+    with sqlite_graph.build_graph(bundle) as store:
+        without = _edge_rows(store)
+    source = _StubCandidateSource([("concepts/a", "concepts/c")])
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        with_source = _edge_rows(store)
+
+    assert without == [
+        ("concepts/a", "concepts/b", None),
+        ("concepts/c", "concepts/b", "relates_to"),
+    ]
+    # Every pre-existing row survives untouched; only the candidate is added.
+    assert with_source == sorted([*without, ("concepts/a", "concepts/c", None)])
+
+
+def test_pass_three_skips_a_pair_that_already_has_a_body_link_edge(
+    tmp_path: Path,
+) -> None:
+    """A pair already joined by a body link needs no candidate row --
+    duplicating it would double-count the pair in `graph_edge_summary` and
+    put the same relationship in the review queue twice. Deduped in BOTH
+    directions, because a body link is directed while proximity is not."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "a.md", title="A", body="See [B](/concepts/b.md).\n"
+    )
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    # Reversed relative to the body link, to prove direction does not matter.
+    source = _StubCandidateSource([("concepts/b", "concepts/a")])
+
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        rows = _edge_rows(store)
+
+    assert rows == [("concepts/a", "concepts/b", None)]
+
+
+def test_pass_three_skips_a_pair_that_already_has_a_typed_relations_edge(
+    tmp_path: Path,
+) -> None:
+    """A pair a human already typed via `relations:` must not gain an
+    untyped candidate row. It would be filtered out of suggestions anyway
+    (`_candidate_edges` excludes already-typed pairs), but it would still
+    inflate `graph_edge_summary`'s total and trigger the state-2b message
+    for a pair nobody needs to look at again."""
+    bundle = tmp_path / "bundle"
+    _write_doc_with_relations(
+        bundle / "concepts" / "a.md",
+        title="A",
+        relations="  - target: concepts/b\n    type: relates_to\n",
+    )
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    source = _StubCandidateSource([("concepts/b", "concepts/a")])
+
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        rows = _edge_rows(store)
+
+    assert rows == [("concepts/a", "concepts/b", "relates_to")]
+
+
+def test_pass_three_ignores_pairs_whose_endpoints_are_not_nodes(
+    tmp_path: Path,
+) -> None:
+    """A stale `vectors.db` can name a concept the bundle no longer holds.
+    Such a pair is dropped rather than creating a dangling edge."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    source = _StubCandidateSource([("concepts/a", "concepts/forgotten")])
+
+    with sqlite_graph.build_graph(bundle, candidates=source) as store:
+        rows = _edge_rows(store)
+
+    assert rows == []
+
+
+def test_pass_three_row_order_is_deterministic_and_canonical(
+    tmp_path: Path,
+) -> None:
+    """Rows are inserted sorted and collapsed to one canonical `(min, max)`
+    direction per unordered pair, so two builds over the same bundle produce
+    an identical projection regardless of the source's emission order."""
+    bundle = tmp_path / "bundle"
+    for name in ("a", "b", "c"):
+        _write_doc(bundle / "concepts" / f"{name}.md", title=name.upper())
+    forward = _StubCandidateSource(
+        [("concepts/c", "concepts/a"), ("concepts/b", "concepts/a")]
+    )
+    reversed_order = _StubCandidateSource(
+        [("concepts/a", "concepts/b"), ("concepts/a", "concepts/c")]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=forward) as store:
+        first = _edge_rows(store)
+    with sqlite_graph.build_graph(bundle, candidates=reversed_order) as store:
+        second = _edge_rows(store)
+
+    assert first == [
+        ("concepts/a", "concepts/b", None),
+        ("concepts/a", "concepts/c", None),
+    ]
+    assert first == second
+    assert forward.received == [["concepts/a", "concepts/b", "concepts/c"]]
