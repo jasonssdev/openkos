@@ -1,7 +1,6 @@
 """Typer application object exposed as the `openkos` console script."""
 
 import json
-import os
 import re
 import shutil
 import sqlite3
@@ -14,8 +13,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal
-from urllib.parse import urlsplit
+from typing import Literal
 
 import typer
 from rich.console import Console
@@ -1199,56 +1197,6 @@ def _stage_derived_objects(
     return plans
 
 
-_LOCAL_HOSTS: Final = ("localhost", "127.0.0.1", "::1", "0.0.0.0")  # noqa: S104
-"""Hostnames that mean "this machine". `S104` reads `0.0.0.0` as binding to
-every interface, but nothing here binds -- these are compared against a
-CLIENT host, and a client connecting to `0.0.0.0` reaches the local machine.
-Dropping it to satisfy the lint would emit a false "not local" warning for a
-setup that is local."""
-
-
-def _non_local_embedding_host() -> str | None:
-    """Return the configured Ollama host when it is NOT on this machine,
-    else `None`.
-
-    `OllamaClient` resolves `host or OLLAMA_HOST or DEFAULT_HOST` with no
-    localhost enforcement, so "the backend is local" is a DEFAULT, not an
-    invariant. That distinction did not matter much while content only
-    reached the embedding backend when a user deliberately ran `reindex`;
-    it matters now that `ingest` embeds automatically, because a host
-    pointed elsewhere for some unrelated reason silently starts shipping
-    every ingested document off-machine.
-
-    Deliberately advisory, never a block: a remote Ollama on a trusted LAN
-    is a legitimate setup, and refusing it would be the tool overriding a
-    choice its operator is entitled to make. Naming the host once is enough
-    to turn an inherited default into a visible decision."""
-    raw = os.environ.get("OLLAMA_HOST", "").strip()
-    if not raw:
-        return None
-    netloc = raw.split("//", 1)[1] if "//" in raw else raw
-    # A bracket-less IPv6 literal must be bracketed before `urlsplit` sees
-    # it: `_hostinfo` partitions on the FIRST colon when there is no `[`, so
-    # `fe80::1234` would parse as host `fe80` and we would warn about a host
-    # the operator never configured. Credentials are stripped first --
-    # `user:pass@host` also carries several colons without being IPv6.
-    userinfo, _, hostpart = netloc.rpartition("@")
-    if hostpart.count(":") > 1 and "[" not in hostpart:
-        raw = f"//{userinfo}@[{hostpart}]" if userinfo else f"//[{hostpart}]"
-    try:
-        hostname = urlsplit(raw if "//" in raw else f"//{raw}").hostname
-    except ValueError:
-        # `urlsplit` raises on an unmatched bracket -- a plausible typo when
-        # writing an IPv6 host and port. This function runs after the commit
-        # inside a command that promises to degrade, so it must not raise.
-        # Surface the raw value: a host we cannot parse is a host we cannot
-        # call local.
-        return raw
-    if hostname is None or hostname in _LOCAL_HOSTS:
-        return None
-    return hostname
-
-
 def _embed_after_ingest(
     layout: config.WorkspaceLayout, embedder: Embedder, *, model_tag: str
 ) -> None:
@@ -1262,8 +1210,14 @@ def _embed_after_ingest(
     FAIL-OPEN, and deliberately so. Embeddings are an enhancement layered
     onto ingest; the Source and its concepts are already written and
     COMMITTED by the time this runs. Losing embeddings must never cost the
-    user the ingest itself, so every ordinary exception degrades to one
-    stderr notice and an unchanged exit code.
+    user the ingest itself, so every ordinary exception from the embed
+    itself degrades to one stderr notice and an unchanged exit code.
+
+    Scope of that promise, stated precisely rather than overclaimed: it
+    covers the embed. It does not cover a failure to WRITE the notice --
+    a `BrokenPipeError` from a closed downstream pipe still propagates, as
+    it does from every other `typer.echo` in this module. Making stderr
+    writes unkillable is a repo-wide concern, not this function's.
 
     The `except Exception` is broad ON PURPOSE, mirroring
     `vectorstore.probe_vec_loadable`'s rationale: not just the three mapped
@@ -1276,15 +1230,6 @@ def _embed_after_ingest(
     Decision D), and passes NO `fts_db_path`: the FTS index is `reindex`'s
     job, not ingest's, and rebuilding it here would make every ingest pay
     for a full-text rebuild it did not ask for."""
-    remote_host = _non_local_embedding_host()
-    if remote_host is not None:
-        typer.echo(
-            f"openkos ingest: embedding backend at '{remote_host}' is not "
-            "local; document text will be sent to it -- including confidential "
-            "content, which the sensitivity floor excludes from `llm.chat` but "
-            "not from embeddings.",
-            err=True,
-        )
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
