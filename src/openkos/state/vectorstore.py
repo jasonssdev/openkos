@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol
+from urllib.parse import quote
 
 import sqlite_vec
 
@@ -280,6 +281,34 @@ def _load_vec_extension(conn: sqlite3.Connection) -> None:
     except BaseException:
         conn.close()
         raise
+
+
+def vector_store_is_empty(path: Path) -> bool:
+    """Return whether `path` is absent OR present but has zero embedded
+    concepts -- the "absent or empty" precondition issue #183's state 3
+    (embeddings missing) keys on, across `status`/`suggest-relations`/
+    `contradictions`.
+
+    "Empty" means zero `vector_meta` rows (the cheapest available signal --
+    a row count, not a full vector query), read over a plain read-only
+    connection that never loads the `sqlite-vec` extension (mirrors
+    `sqlite_graph.open_graph_store_readonly`'s `file:...?mode=ro` posture),
+    so this check works even when the extension itself is unavailable. A
+    file that exists but is not a valid SQLite database, or lacks
+    `vector_meta` entirely, also counts as empty rather than raising."""
+    if not path.exists():
+        return True
+    uri = f"file:{quote(str(path))}?mode=ro"
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+        row = conn.execute("SELECT COUNT(*) FROM vector_meta").fetchone()
+    except sqlite3.Error:
+        return True
+    finally:
+        if conn is not None:
+            conn.close()
+    return bool(row is None or row[0] == 0)
 
 
 def open_vector_store(

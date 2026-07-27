@@ -16,6 +16,7 @@ passes `--auto` to skip the gate -- zero network, zero real Ollama process.
 """
 
 import os
+import sqlite3
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -67,6 +68,26 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
+
+
+def _touch_vectors_db(tmp_path: Path) -> None:
+    """Create a `.openkos/vectors.db` with one `vector_meta` row so a
+    bundle counts as having embeddings present for the three-state message
+    vocabulary (issue #183) -- state 3 keys on "absent OR empty", so a
+    zero-byte file must NOT count as present. `init` never creates this
+    file, so state 3 (embeddings missing) is the default for a bare
+    `_init_workspace` call unless a test opts out of it via this helper."""
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
 
 
 def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") -> None:
@@ -155,25 +176,49 @@ def test_suggest_relations_fresh_bundle_reports_no_untyped_edges(
 ) -> None:
     """A freshly initialized, empty bundle has zero untyped edges, so the
     real `suggest_relations` never calls `llm.chat` -- a real `OllamaClient`
-    is safe to construct here. Prints a clear "no untyped relations" line
-    and exits 0."""
+    is safe to construct here. With `vectors.db` present (state 1's
+    precondition), prints the empty-graph message and exits 0 (specs/
+    llm-edge-production: "Empty graph reports nothing-to-work-with")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _touch_vectors_db(tmp_path)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert "No concept relationships in the graph yet." in result.stdout
+
+
+def test_suggest_relations_missing_vectors_db_reports_not_computable_yet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent `vectors.db` (state 3) reports candidates as not computable
+    yet, using a message distinct from the empty-graph state (specs/
+    llm-edge-production: "Missing embeddings reports not-computable-yet")."""
     _init_workspace(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["suggest-relations"])
 
     assert result.exit_code == 0
-    assert "No untyped relations found." in result.stdout
+    assert "Candidate relations unavailable" in result.stdout
+    assert "vectors.db missing" in result.stdout
+    assert "No concept relationships in the graph yet." not in result.stdout
 
 
 def test_suggest_relations_provenance_only_bundle_reports_zero_candidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A bundle whose only body link is a provenance-mirror edge (typed
-    `derived_from` by graph projection, #135) reports zero candidates and
-    zero LLM calls -- a real `OllamaClient` is safe to construct here
-    because `candidate_edges` is empty (spec: "Bundle with only
-    provenance-mirror edges surfaces zero candidates"; task 3.3)."""
+    """A bundle whose only body link is a Concept->Source provenance-mirror
+    edge (typed `derived_from` by graph projection, #135) reports zero
+    candidates and zero LLM calls -- a real `OllamaClient` is safe to
+    construct here because `candidate_edges` is empty (spec: "Bundle with
+    only provenance-mirror edges surfaces zero candidates"; task 3.3). A
+    Concept->Source edge is NOT concept-to-concept (issue #183 Fix 1), so
+    `graph_edge_summary` counts zero -- this is state 1 ("no
+    concept-to-concept edges at all"), NOT state 2, reported distinctly from
+    the embeddings-missing state (specs/llm-edge-production: "Empty graph
+    reports nothing-to-work-with")."""
     _init_workspace(tmp_path, monkeypatch)
+    _touch_vectors_db(tmp_path)
     (tmp_path / "bundle" / "concepts" / "a.md").parent.mkdir(
         parents=True, exist_ok=True
     )
@@ -192,7 +237,48 @@ def test_suggest_relations_provenance_only_bundle_reports_zero_candidates(
     result = runner.invoke(app, ["suggest-relations"])
 
     assert result.exit_code == 0
-    assert "No untyped relations found." in result.stdout
+    assert "No concept relationships in the graph yet." in result.stdout
+
+
+def test_suggest_relations_post_relate_reports_excluded_untyped_rows_not_none_untyped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The state a human leaves behind by running `relate`: the accepted
+    suggestion becomes a NEW typed `relations:` row while the ORIGINAL
+    untyped body-link row survives (`edge_typing.py:116-138` --
+    "the original untyped body-link row is never removed by `relate`"), so
+    `_candidate_edges`'s PAIR-level exclusion drops it and zero candidates
+    remain.
+
+    `graph_edge_summary` counts raw rows with neither the pair-level nor
+    the confidentiality filter applied, so its total (2) says nothing about
+    how many rows are untyped (1). Claiming "none are untyped" here is
+    factually FALSE. Locks state 2b (specs/llm-edge-production: "Untyped
+    edges exist but every one was excluded")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _touch_vectors_db(tmp_path)
+    concepts = tmp_path / "bundle" / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: relates_to\n"
+        "---\nSee also [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (concepts / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\n# B\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert (
+        "2 relation(s) exist; 1 untyped, but every untyped pair is already "
+        "typed elsewhere or filtered as confidential -- nothing left to "
+        "suggest." in result.stdout
+    )
+    assert "none are untyped" not in result.stdout
 
 
 def test_suggest_relations_provenance_mirror_edge_excluded_genuine_edge_surfaced(
@@ -464,11 +550,12 @@ def test_suggest_relations_auto_flag_skips_the_confirmation_gate(
     bundle there is nothing to type, so it still exits 0 cleanly without ever
     prompting."""
     _init_workspace(tmp_path, monkeypatch)
+    _touch_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code == 0
-    assert "No untyped relations found." in result.stdout
+    assert "No concept relationships in the graph yet." in result.stdout
     assert "Proceed?" not in result.stdout
 
 
