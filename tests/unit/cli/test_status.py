@@ -15,6 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
+from openkos.llm.base import EMBED_DIM
 
 runner = CliRunner()
 
@@ -51,6 +52,23 @@ def _write_nonempty_vectors_db(tmp_path: Path) -> None:
     )
     conn.commit()
     conn.close()
+
+
+class _OfflineOllama:
+    """Serves both halves of `OllamaClient` without a network.
+
+    `ingest` builds a real client for `_embed_after_ingest` (#183), so any
+    test that invokes `ingest` and then asserts on embedding-dependent
+    output MUST patch this seam -- the convention every test in
+    `test_ingest.py` already follows. Without it the assertion silently
+    becomes "is an Ollama server reachable on this machine", which passes
+    for a developer running one and fails in CI."""
+
+    def chat(self, messages: object) -> str:
+        return '{"extract": false}'
+
+    def embed(self, texts: "list[str]") -> "list[list[float]]":
+        return [[1.0] + [0.0] * (EMBED_DIM - 1) for _ in texts]
 
 
 def test_status_refuses_when_not_a_workspace(
@@ -126,10 +144,18 @@ def test_status_healthy_bundle_full_render_has_three_sections(
 ) -> None:
     """A healthy workspace with an ingested source renders all three
     sections and exits 0 (spec: Healthy bundle with sources, Healthy bundle
-    shows recent activity). No `.openkos/vectors.db` exists yet (`ingest`
-    never creates it), so "needs attention" surfaces the #142 missing-
-    vector-index line rather than the empty state."""
+    shows recent activity).
+
+    Updated by #183: `ingest` now embeds what it wrote, so `vectors.db`
+    exists and carries the Source's own vector by the time `status` runs.
+    The #142 missing-vector-index line is therefore GONE -- its absence is
+    the assertion now. This test previously documented "`ingest` never
+    creates it", which was the starving behavior the issue set out to
+    fix."""
     _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient", lambda *a, **k: _OfflineOllama()
+    )
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes.", encoding="utf-8")
     ingest_result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
@@ -144,7 +170,9 @@ def test_status_healthy_bundle_full_render_has_three_sections(
     assert "Sources:  1" in result.stdout
     assert "Concepts: 0" in result.stdout
     assert "Ingest" in result.stdout
-    assert "vectors.db" in result.stdout
+    assert (tmp_path / ".openkos" / "vectors.db").exists()
+    assert "vectors.db" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
 
 
 def test_status_breaks_down_non_concept_types_instead_of_folding_them(

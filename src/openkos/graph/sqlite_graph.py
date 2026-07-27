@@ -299,12 +299,17 @@ def _populate_graph_tables(
     the build (mirrors `fts.build_index`); a valid doc has its body AND
     metadata re-read and re-parsed via `okf.load_frontmatter` (the same
     TOCTOU guard `fts.build_index` uses) and becomes one node. Edges are
-    then extracted in two independent passes over that same doc set: the
-    first, from body links, is `NULL` UNLESS the link's target is a member
-    of the source doc's `provenance:` frontmatter list, in which case it is
-    synthesized as `derived_from` (#135, provenance-mirror synthesis,
-    projection-read-time only); the second, from `relations:` frontmatter,
-    always carries that entry's explicit `type`. Callers own `conn`'s
+    then extracted in up to three independent passes over that same doc set,
+    exactly as documented at module level: the first, from body links, is
+    `NULL` UNLESS the link's target is a member of the source doc's
+    `provenance:` frontmatter list, in which case it is synthesized as
+    `derived_from` (#135, provenance-mirror synthesis, projection-read-time
+    only); the second, from `relations:` frontmatter, always carries that
+    entry's explicit `type`; the third runs ONLY when `candidates` is given
+    (#183) and writes one untyped row per nominated pair that neither
+    earlier pass already claimed, in either direction. With
+    `candidates=None` -- the default -- the third pass does not run and the
+    output is byte-identical to the two-pass build. Callers own `conn`'s
     lifecycle -- any exception raised here propagates to the caller
     unchanged, closing/cleanup is the caller's responsibility.
     """

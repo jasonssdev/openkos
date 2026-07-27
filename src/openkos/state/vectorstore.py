@@ -109,6 +109,13 @@ _QUERY_VECTORS_SQL = (
     "SELECT concept_id, distance FROM vectors "
     "WHERE embedding MATCH ? AND k = ? ORDER BY distance"
 )
+"""vec0 permits exactly one `ORDER BY distance` clause on a KNN query and
+rejects a secondary sort key outright (`OperationalError: Only a single
+'ORDER BY distance' clause is allowed on vec0 KNN queries`), so equidistant
+rows come back in rowid -- i.e. insertion -- order. Measured against the
+real extension, inserting the same two tied rows in opposite orders returns
+them in opposite orders. Callers that need a reproducible order must break
+ties themselves; `neighbors` does."""
 
 _SELECT_META_HASHES_SQL = "SELECT concept_id, content_hash FROM vector_meta"
 
@@ -447,12 +454,29 @@ class VectorStoreDB:
         A `concept_id` with no stored embedding -- never embedded, or
         pruned -- returns `[]` rather than raising: the two cases are
         indistinguishable from here and neither is an error. An empty
-        `vectors` table likewise returns `[]`, mirroring `query`."""
+        `vectors` table likewise returns `[]`, mirroring `query`.
+
+        Results are re-sorted by `(distance, concept_id)` before returning.
+        vec0 refuses a secondary sort key in SQL (see `_QUERY_VECTORS_SQL`),
+        and its own tie order follows rowid, so without this a rebuild that
+        re-inserted rows in a different sequence would hand `graph/proximity`
+        a different ordering and silently change the graph projection.
+
+        RESIDUAL LIMIT, deliberately not papered over: this fixes the ORDER
+        of the rows vec0 returns, not WHICH rows it returns. The `k` cut
+        happens inside the extension, so if more rows tie exactly at the
+        `k`-th distance than fit, which of them arrive here is still vec0's
+        choice. Fixing that would mean over-fetching by an unbounded amount.
+        Exact ties require byte-identical embeddings -- realistically,
+        duplicate or template documents -- so the residue is narrow, but it
+        is not zero."""
         row = self._conn.execute(_SELECT_VECTOR_BLOB_SQL, (concept_id,)).fetchone()
         if row is None:
             return []
         rows = self._conn.execute(_QUERY_VECTORS_SQL, (row[0], k)).fetchall()
-        return [VecHit(concept_id=str(r[0]), distance=float(r[1])) for r in rows]
+        hits = [VecHit(concept_id=str(r[0]), distance=float(r[1])) for r in rows]
+        hits.sort(key=lambda hit: (hit.distance, hit.concept_id))
+        return hits
 
     def meta_hashes(self) -> dict[str, str]:
         """Return `{concept_id: content_hash}` for every `vector_meta` row --

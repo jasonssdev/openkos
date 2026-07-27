@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.graph.base import Edge
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
@@ -745,3 +746,98 @@ def test_suggest_relations_over_good_life_demo_is_read_only(
     assert _snapshot(bundle_dir) == before
     if result.exit_code == 0:
         assert "openkos suggest-relations: workspace at" in result.stdout
+
+
+# --- Phase 3.2 (#183): the proximity seam ---------------------------------
+
+
+def test_suggest_relations_opens_the_proximity_source_once_and_forwards_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`suggest-relations` resolves the candidate source through ONE shared
+    seam and hands it to `candidate_edges`.
+
+    Opening it once matters twice over: it is a real SQLite connection, and
+    the state-3 message must be driven by what the seam already learned
+    rather than by a second probe of the same file."""
+    _init_workspace(tmp_path, monkeypatch)
+    _touch_vectors_db(tmp_path)
+    opened: list[Path] = []
+    forwarded: list[object] = []
+
+    class _Source:
+        def close(self) -> None:
+            return None
+
+    def _fake_open(path: Path) -> object:
+        opened.append(path)
+        return _Source()
+
+    def _fake_candidate_edges(bundle_dir: Path, **kwargs: object) -> list[object]:
+        forwarded.append(kwargs.get("candidates"))
+        return []
+
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", _fake_open)
+    monkeypatch.setattr(main, "candidate_edges", _fake_candidate_edges)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert len(opened) == 1
+    assert opened[0] == tmp_path / ".openkos" / "vectors.db"
+    assert len(forwarded) == 1
+    assert forwarded[0] is not None
+
+
+def test_suggest_relations_state_three_comes_from_the_seam_not_a_second_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the seam reports no source, the embeddings-missing message is
+    printed WITHOUT re-reading `vectors.db`.
+
+    PR1 shipped that message keyed on its own `vector_store_is_empty` call
+    inside `_zero_edge_state_message`; once the seam already knows, that
+    second read is redundant work on a path taken every run."""
+    _init_workspace(tmp_path, monkeypatch)
+    probes: list[Path] = []
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: None)
+
+    def _probing_is_empty(path: Path) -> bool:
+        probes.append(path)
+        return True
+
+    monkeypatch.setattr(main, "vector_store_is_empty", _probing_is_empty)
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert "Candidate relations unavailable" in result.stdout
+    assert probes == [], "the zero-edge message re-probed vectors.db"
+
+
+def test_suggest_relations_closes_the_proximity_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seam hands back a real SQLite connection; the command owns
+    closing it, or a long-lived shell leaks one handle per invocation."""
+    _init_workspace(tmp_path, monkeypatch)
+    _touch_vectors_db(tmp_path)
+    closed: list[bool] = []
+
+    class _Source:
+        def close(self) -> None:
+            closed.append(True)
+
+        def __enter__(self) -> "_Source":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self.close()
+
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _Source())
+    monkeypatch.setattr(main, "candidate_edges", lambda bundle_dir, **kwargs: [])
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert closed == [True]

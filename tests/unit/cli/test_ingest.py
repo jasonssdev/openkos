@@ -24,8 +24,12 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos import fsio
 from openkos.cli import main
 from openkos.cli.main import app
-from openkos.llm.base import Message
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.base import EMBED_DIM, Message
+from openkos.llm.ollama import (
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.model import okf
 
 runner = CliRunner()
@@ -2738,3 +2742,138 @@ def test_byte_identical_reingest_short_circuit_still_holds(
     after = _snapshot(tmp_path)
     concept_relpath = Path("bundle") / "concepts" / "stoic-practice.md"
     assert before[concept_relpath] == after[concept_relpath]
+
+
+# --- Phase 3.3 (#183): embeddings computed during ingest ------------------
+
+
+_EMBED_FAILURES = [
+    OllamaUnavailable("connection refused"),
+    OllamaModelNotFound("model 'bge-m3' is not installed"),
+    OllamaError("malformed response"),
+    RuntimeError("something nobody mapped"),
+]
+
+
+class _EmbeddingLLM(_FakeLLM):
+    """A `_FakeLLM` that also serves `embed()`, as the real `OllamaClient`
+    does -- `ingest` builds both roles from that one class."""
+
+    def __init__(self, reply: str, *, embed_raises: Exception | None = None) -> None:
+        super().__init__(reply)
+        self.embed_raises = embed_raises
+        self.embed_calls: list[list[str]] = []
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.embed_calls.append(list(texts))
+        if self.embed_raises is not None:
+            raise self.embed_raises
+        return [[1.0] + [0.0] * (EMBED_DIM - 1) for _ in texts]
+
+
+def test_ingest_embeds_the_concepts_it_just_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #183's fix: embeddings are computed in the SAME run that
+    creates the concepts, so candidate edges are available immediately
+    rather than only after a separate `openkos reindex`.
+
+    Without this, a user's first `suggest-relations` after ingesting always
+    reports an empty graph -- which is the symptom the issue opens with."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert fake.embed_calls, "ingest never embedded the concepts it wrote"
+    assert (tmp_path / ".openkos" / "vectors.db").exists()
+
+
+@pytest.mark.parametrize("failure", _EMBED_FAILURES, ids=lambda e: type(e).__name__)
+def test_ingest_survives_every_embedder_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """Fail-open: embeddings are an ENHANCEMENT layered onto ingest, so
+    losing them must never cost the user the ingest itself.
+
+    Parametrized over the three mapped Ollama errors AND one deliberately
+    unmapped exception type: the guard is broad on purpose, because a
+    future backend raising something nobody anticipated must still not
+    destroy a successful ingest. Exit code stays 0, the Source and its
+    concepts are still on disk, and the failure is REPORTED rather than
+    swallowed silently."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _EmbeddingLLM(_concept_reply(), embed_raises=failure)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert list((tmp_path / "bundle" / "sources").glob("*.md"))
+    assert list((tmp_path / "bundle" / "concepts").glob("*.md"))
+    assert "openkos ingest: embeddings not updated" in result.stderr
+    assert "openkos reindex" in result.stderr
+    # Distinct from the pre-existing concept-extraction-skipped message, so
+    # an operator can tell which half degraded.
+    assert "concept extraction skipped" not in result.stderr
+
+
+def test_ingest_embedding_failure_does_not_abort_the_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Embedding runs AFTER `_autocommit`, so a failing embedder cannot
+    leave the workspace with files written but uncommitted -- the ingest is
+    already durable by the time embeddings are attempted."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _EmbeddingLLM(_concept_reply(), embed_raises=OllamaUnavailable("down"))
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    committed: list[str] = []
+    monkeypatch.setattr(
+        main,
+        "_autocommit",
+        lambda root, paths, message: committed.append(message),
+    )
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(committed) == 1
+
+
+# --- Sensitivity honesty + non-local backend warning (#183 review) ---------
+
+
+def test_confidential_skip_message_admits_embeddings_still_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ingest` tells the user it is withholding confidential content from
+    the LLM, then embeds that same content. Both are intentional -- the
+    embedding backend is local and `.openkos/` is gitignored -- but saying
+    only the first half leaves the user believing NOTHING was sent.
+
+    The sensitivity contract covers the six `llm.chat` call sites, not
+    `embed()`. That scope is defensible; silently implying otherwise is
+    not."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nSecret material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "skipping concept extraction" in result.stderr
+    assert fake.embed_calls, "embeddings should still be computed"
+    assert "added to the embedding index" in result.stderr

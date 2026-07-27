@@ -100,30 +100,30 @@ Satisfies: specs/ingestion, remaining wiring for specs/graph-projection, specs/c
 
 ### Phase 3.1: RED-first end-to-end reproduction of #183
 
-- [ ] 3.1.1 RED: new `tests/unit/cli/test_candidate_edges_e2e.py` -- fake Embedder + fake LLM: ingest N sources -> candidate edges appear -> `suggest-relations` types them -> `contradictions` finds pairs. This test does not exist today; must fail first, reproducing issue #183's symptom.
+- [x] 3.1.1 RED: new `tests/unit/cli/test_candidate_edges_e2e.py` -- fake Embedder + fake LLM: ingest N sources -> candidate edges appear -> `suggest-relations` types them -> `contradictions` finds pairs. This test does not exist today; must fail first, reproducing issue #183's symptom.
 
 ### Phase 3.2: `_open_proximity_or_degrade` seam
 
-- [ ] 3.2.1 RED: `tests/unit/cli/test_suggest_relations.py` / `test_contradictions.py` -- CLI holds `(source, was_unavailable)` before calling into `resolution/`, so the "embeddings missing" message (PR1's state 3) is driven by this seam, not a second pass.
-- [ ] 3.2.2 GREEN: `src/openkos/cli/main.py` -- add `_open_proximity_or_degrade(layout.vectors_db_path)` wrapping `graph.proximity.open_proximity_source`; wire into `suggest-relations`, `contradictions`, `status` (replacing the ad hoc `vectors_db_path.exists()` check from PR1 with the shared seam), and `reindex`.
+- [x] 3.2.1 RED: `tests/unit/cli/test_suggest_relations.py` / `test_contradictions.py` -- CLI holds `(source, was_unavailable)` before calling into `resolution/`, so the "embeddings missing" message (PR1's state 3) is driven by this seam, not a second pass.
+- [x] 3.2.2 GREEN: `src/openkos/cli/main.py` -- add `_open_proximity_or_degrade(layout.vectors_db_path)` wrapping `graph.proximity.open_proximity_source`; wire into `suggest-relations`, `contradictions`, `status` (replacing the ad hoc `vectors_db_path.exists()` check from PR1 with the shared seam), and `reindex`.
 
 ### Phase 3.3: `ingest` embedder wiring + fail-open degrade
 
-- [ ] 3.3.1 RED: `tests/unit/cli/test_ingest.py` -- ingest with a reachable fake embedder produces candidate edges in the same run (Decision D: ingest reuses `state.reindex.reindex(bundle_dir, db, embedder, model_tag=cfg.embedding_model)`, no `fts_db_path`).
-- [ ] 3.3.2 RED: `tests/unit/cli/test_ingest.py` -- ingest with an embedder raising each of `OllamaUnavailable`, `OllamaModelNotFound`, `OllamaError`, and one unmapped exception type -> exit 0, Source + concepts still written, distinct stderr message (not the existing concept-extraction-skipped message): `"openkos ingest: embeddings not updated -- {exc}; candidate relations unavailable until \`openkos reindex\` succeeds."`
-- [ ] 3.3.3 GREEN: `src/openkos/cli/main.py` -- add `_embed_after_ingest`, called AFTER `_autocommit`, with the deliberately broad `try/except Exception` (mirroring `probe_vec_loadable`'s rationale, `vectorstore.py:246-258`); `KeyboardInterrupt`/`SystemExit` still propagate; never re-raises, never changes exit code.
-- [ ] 3.3.4 GREEN: `src/openkos/cli/main.py` -- construct an `Embedder` in the `ingest` command path (near 1424) and pass it to `_embed_after_ingest`.
+- [x] 3.3.1 RED: `tests/unit/cli/test_ingest.py` -- ingest with a reachable fake embedder produces candidate edges in the same run (Decision D: ingest reuses `state.reindex.reindex(bundle_dir, db, embedder, model_tag=cfg.embedding_model)`, no `fts_db_path`).
+- [x] 3.3.2 RED: `tests/unit/cli/test_ingest.py` -- ingest with an embedder raising each of `OllamaUnavailable`, `OllamaModelNotFound`, `OllamaError`, and one unmapped exception type -> exit 0, Source + concepts still written, distinct stderr message (not the existing concept-extraction-skipped message): `"openkos ingest: embeddings not updated -- {exc}; candidate relations unavailable until \`openkos reindex\` succeeds."`
+- [x] 3.3.3 GREEN: `src/openkos/cli/main.py` -- add `_embed_after_ingest`, called AFTER `_autocommit`, with the deliberately broad `try/except Exception` (mirroring `probe_vec_loadable`'s rationale, `vectorstore.py:246-258`); `KeyboardInterrupt`/`SystemExit` still propagate; never re-raises, never changes exit code.
+- [x] 3.3.4 GREEN: `src/openkos/cli/main.py` -- construct an `Embedder` in the `ingest` command path (near 1424) and pass it to `_embed_after_ingest`.
 
 ### Phase 3.4: `build_graph(candidates=None)` zero-candidate success path
 
-- [ ] 3.4.1 RED: `tests/unit/graph/test_sqlite_graph.py` -- `build_graph()` with absent/empty `vectors.db` succeeds, yields zero candidates (regression guard now exercised through the real CLI seam, not just the stub from PR2).
-- [ ] 3.4.2 GREEN: confirm `_open_proximity_or_degrade` returns `None` cleanly for this case (should already hold from 3.2.2 -- this task is verification, not new code).
+- [x] 3.4.1 RED: `tests/unit/graph/test_sqlite_graph.py` -- `build_graph()` with absent/empty `vectors.db` succeeds, yields zero candidates (regression guard now exercised through the real CLI seam, not just the stub from PR2).
+- [x] 3.4.2 GREEN: confirm `_open_proximity_or_degrade` returns `None` cleanly for this case (should already hold from 3.2.2 -- this task is verification, not new code).
 
 ### Phase 3.5: PR3 gate
 
-- [ ] 3.5.1 `uv run pytest` green; branch coverage >= 90% (`fail_under = 90`, branch coverage on).
-- [ ] 3.5.2 Full regression re-run: `tests/unit/resolution/test_edge_typing.py`, `tests/unit/resolution/test_contradiction.py`, `tests/unit/graph/test_sqlite_graph.py`.
-- [ ] 3.5.3 Confirm PR3's diff targets PR2's branch cleanly.
+- [x] 3.5.1 `uv run pytest` green; branch coverage >= 90% (`fail_under = 90`, branch coverage on).
+- [x] 3.5.2 Full regression re-run: `tests/unit/resolution/test_edge_typing.py`, `tests/unit/resolution/test_contradiction.py`, `tests/unit/graph/test_sqlite_graph.py`.
+- [x] 3.5.3 Confirm PR3's diff targets PR2's branch cleanly.
 
 ## Known Limitations (recorded, not tasked)
 
