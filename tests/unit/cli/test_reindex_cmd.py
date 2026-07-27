@@ -22,7 +22,12 @@ from typer.testing import CliRunner
 from openkos import config
 from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM
-from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.llm.ollama import (
+    OllamaEmbeddingDimensionMismatch,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.state.fts import FtsUnavailable
 from openkos.state.reindex import ReindexReport
 from openkos.state.vectorstore import VecUnavailable, open_vector_store
@@ -473,6 +478,49 @@ def test_reindex_model_not_found_maps_to_exit_one(
     assert result.stderr.startswith("openkos reindex: failed -- ")
     assert "is not installed" in result.stderr
     assert f"ollama pull {configured_embedding_model}" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_reindex_dimension_mismatch_maps_to_exit_one_with_dedicated_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The orchestrator raising `OllamaEmbeddingDimensionMismatch` is caught
+    by a DEDICATED branch -- distinct from the generic `OllamaError` ladder
+    entry -- printed with remediation naming `embedding_model` in
+    `openkos.yaml`, and exits 1 with no raw traceback. It must never say
+    "will retry next run" (spec: Per-Doc Embed Failure Is Isolated, Not
+    Fatal -- dimension mismatch propagation).
+
+    The remediation phrase ("restore" + "openkos.yaml") is the genuine RED
+    proof: the generic `except (VecUnavailable, FtsUnavailable, OllamaError)`
+    branch below only ever echoes `f"openkos reindex: failed -- {exc}."` --
+    it never mentions `openkos.yaml` or "restore". If the dedicated
+    `except OllamaEmbeddingDimensionMismatch` branch were reordered to AFTER
+    that generic tuple, this exception (an `OllamaError` subclass) would be
+    swallowed by the generic branch instead, and this assertion would fail
+    for real -- not merely by coincidence of matching exception text."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_dimension_mismatch(*args: object, **kwargs: object) -> ReindexReport:
+        raise OllamaEmbeddingDimensionMismatch(
+            "Ollama returned an embedding row of length 768, expected "
+            "exactly 1024 (EMBED_DIM) -- this is a permanent dimension "
+            "mismatch caused by the configured embedding model, not a "
+            "transient failure; it will not heal by retrying."
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.reindex_module.reindex", _raise_dimension_mismatch
+    )
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos reindex: failed -- ")
+    assert "restore" in result.stderr.lower()
+    assert "openkos.yaml" in result.stderr
+    assert "will retry next run" not in result.stderr.lower()
     assert "Traceback" not in result.stderr
 
 
