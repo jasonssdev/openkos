@@ -18,6 +18,16 @@ So the default is offline. Modules needing specific behavior override it:
 `test_ingest.py` has its own autouse fixture, and individual tests patch the
 same seam directly -- both take precedence, since module-level and
 function-level fixtures resolve after this one.
+
+One consequence worth naming rather than discovering later: `test_ingest.py`
+overrides this with `_FakeLLM`, which serves `chat()` but NOT `embed()`. Its
+tests therefore reach `_embed_after_ingest`, raise `AttributeError` inside
+`reindex`, and degrade through the broad guard to a stderr notice with an
+unchanged exit code. That is the fail-open contract working, not a fixture
+gap -- those tests assert on extraction, not embedding, and the ones that do
+care use `_EmbeddingLLM`. It does mean their stderr carries an extra
+embedding notice, so a strict full-stderr equality assertion added there
+would fail for a reason that has nothing to do with what it is testing.
 """
 
 from collections.abc import Sequence

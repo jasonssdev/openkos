@@ -2876,7 +2876,7 @@ def test_confidential_skip_message_admits_embeddings_still_ran(
     assert result.exit_code == 0, result.stdout
     assert "skipping concept extraction" in result.stderr
     assert fake.embed_calls, "embeddings should still be computed"
-    assert "embedded locally" in result.stderr
+    assert "added to the embedding index" in result.stderr
 
 
 def test_ingest_warns_when_the_embedding_backend_is_not_local(
@@ -2920,3 +2920,53 @@ def test_ingest_stays_quiet_about_the_backend_when_it_is_local(
 
     assert result.exit_code == 0, result.stdout
     assert "not local" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("[::1:11434", "[::1:11434"),  # unmatched bracket: unparseable, surfaced raw
+        ("fe80::1234:5678", "fe80::1234:5678"),  # bracket-less IPv6, not truncated
+        ("[::1]:11434", None),  # bracketed loopback
+        ("[fe80::1]:11434", "fe80::1"),  # bracketed remote
+        ("::1", None),  # bare loopback
+        ("localhost:11434", None),
+        ("user:pass@remote:11434", "remote"),
+        ("", None),
+    ],
+)
+def test_non_local_embedding_host_never_raises_and_never_truncates(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: str | None
+) -> None:
+    """This runs on EVERY ingest, after the commit, inside a command whose
+    contract is that embedding problems degrade to a notice.
+
+    A malformed `OLLAMA_HOST` must therefore never raise -- `urlsplit`
+    raises `ValueError: Invalid IPv6 URL` on an unmatched bracket, a
+    plausible typo when writing an IPv6 host and port. And a bracket-less
+    IPv6 value must not be silently truncated at its first colon, which
+    would warn about a hostname the user never configured."""
+    if raw:
+        monkeypatch.setenv("OLLAMA_HOST", raw)
+    else:
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+    assert main._non_local_embedding_host() == expected
+
+
+def test_ingest_survives_a_malformed_ollama_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: a malformed host cannot take down an ingest whose Source
+    and concepts are already written and committed."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", "[::1:11434")
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert list((tmp_path / "bundle" / "sources").glob("*.md"))

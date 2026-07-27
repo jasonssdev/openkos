@@ -1079,9 +1079,9 @@ def _stage_derived_objects(
         typer.echo(
             "openkos ingest: workspace default_sensitivity floor is confidential; "
             "skipping concept extraction, keeping the Source only. The Source "
-            "is still embedded locally so search and candidate relations keep "
-            "working -- the sensitivity floor governs `llm.chat`, not the "
-            "embedding index.",
+            "is still added to the embedding index so search and candidate "
+            "relations keep working -- the sensitivity floor governs "
+            "`llm.chat`, not embeddings.",
             err=True,
         )
         return []
@@ -1223,10 +1223,27 @@ def _non_local_embedding_host() -> str | None:
     is a legitimate setup, and refusing it would be the tool overriding a
     choice its operator is entitled to make. Naming the host once is enough
     to turn an inherited default into a visible decision."""
-    raw = os.environ.get("OLLAMA_HOST")
+    raw = os.environ.get("OLLAMA_HOST", "").strip()
     if not raw:
         return None
-    hostname = urlsplit(raw if "//" in raw else f"//{raw}").hostname
+    netloc = raw.split("//", 1)[1] if "//" in raw else raw
+    # A bracket-less IPv6 literal must be bracketed before `urlsplit` sees
+    # it: `_hostinfo` partitions on the FIRST colon when there is no `[`, so
+    # `fe80::1234` would parse as host `fe80` and we would warn about a host
+    # the operator never configured. Credentials are stripped first --
+    # `user:pass@host` also carries several colons without being IPv6.
+    userinfo, _, hostpart = netloc.rpartition("@")
+    if hostpart.count(":") > 1 and "[" not in hostpart:
+        raw = f"//{userinfo}@[{hostpart}]" if userinfo else f"//[{hostpart}]"
+    try:
+        hostname = urlsplit(raw if "//" in raw else f"//{raw}").hostname
+    except ValueError:
+        # `urlsplit` raises on an unmatched bracket -- a plausible typo when
+        # writing an IPv6 host and port. This function runs after the commit
+        # inside a command that promises to degrade, so it must not raise.
+        # Surface the raw value: a host we cannot parse is a host we cannot
+        # call local.
+        return raw
     if hostname is None or hostname in _LOCAL_HOSTS:
         return None
     return hostname
@@ -1262,10 +1279,10 @@ def _embed_after_ingest(
     remote_host = _non_local_embedding_host()
     if remote_host is not None:
         typer.echo(
-            f"openkos ingest: embedding backend at '{remote_host}' is not local; "
-            "document text -- including confidential content, which the "
-            "sensitivity floor excludes from `llm.chat` but not from the "
-            "embedding index -- leaves this machine.",
+            f"openkos ingest: embedding backend at '{remote_host}' is not "
+            "local; document text will be sent to it -- including confidential "
+            "content, which the sensitivity floor excludes from `llm.chat` but "
+            "not from embeddings.",
             err=True,
         )
     try:
