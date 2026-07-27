@@ -105,7 +105,7 @@ Chain strategy: feature-branch-chain
 - [x] 10.2 `ruff check` clean across all touched files (`uv run ruff check .` — all checks passed; `uv run ruff format --check .` — 141 files formatted).
 - [x] 10.3 `uv run pytest` full suite green (2254 passed); `uv run pytest --cov` at 97.58% branch (gate 90%) — the new `if store is not None: return ...` branches are covered by Phase 4/8 supplied-store tests plus every existing default-`None` call site (design §8d).
 - [x] 10.4 Grep confirms `open_graph_store_readonly` still appears only inside `_open_graph_or_degrade` (`cli/main.py`, used by `query`) — the on-disk `.openkos/graph.db` path is untouched (non-goal 5). Line number drifted from the design's `5458` estimate to `5511` (verified at apply time); the constraint itself (single call site) holds.
-- [ ] 10.5 Comment on issue #196 explaining the `suggest-relations` zero-result count change and its rationale when PR2 merges. **Not performed by sdd-apply** — this is a GitHub-issue-comment action, out of scope for the code-implementation executor; the orchestrator/maintainer should post it when PR2 merges, using the rationale captured in this file's Phase 8 note and design.md §4.
+- [x] 10.5 Comment on issue #196 explaining the `suggest-relations` zero-result count change and its rationale when PR2 merges. **Posted** — comment explaining the count delta and its correctness foundation has been added to #196 when PR2 merged.
 
 ---
 
