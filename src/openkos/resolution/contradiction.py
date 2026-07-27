@@ -56,7 +56,7 @@ from pathlib import Path
 
 from openkos import lifecycle, sensitivity
 from openkos.graph.base import GraphStore
-from openkos.graph.sqlite_graph import build_graph
+from openkos.graph.sqlite_graph import CandidateSource, build_graph
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import okf
@@ -384,6 +384,7 @@ def find_contradictions(
     llm: LLMBackend,
     include_deprecated: bool = False,
     include_confidential: bool = False,
+    candidates: CandidateSource | None = None,
 ) -> tuple[list[ContradictionVerdict], int]:
     """Orchestrate the whole read-only contradiction-detection flow: open
     `build_graph` over `bundle_dir` internally, derive candidate pairs
@@ -439,7 +440,7 @@ def find_contradictions(
         confidential = sensitivity.sensitive_concept_ids(bundle_dir)
     excluded = deprecated | confidential
 
-    with build_graph(bundle_dir) as store:
+    with build_graph(bundle_dir, candidates=candidates) as store:
         pairs, total_count = _candidate_pairs(store, excluded)
         relation_types = _pair_relation_types(store)
 

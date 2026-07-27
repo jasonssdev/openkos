@@ -29,7 +29,7 @@ back the behavior `NULL` already has, while adding a latent suppression bug. Acc
 cost: legibility. Mitigated by Slice 0's message vocabulary naming proximity as the
 source, and by `relate` staying human-gated. **Lines changed in `resolution/`: zero.**
 
-### Decision B — cosine floor 0.65, top-K 5
+### Decision B — cosine floor 0.70, top-K 5
 
 `VectorStore.query` returns ASCENDING vec0 **L2 distance** (`vectorstore.py:107-110`),
 not similarity. Ollama `/api/embed` returns L2-normalized vectors, so for unit vectors
@@ -37,10 +37,42 @@ not similarity. Ollama `/api/embed` returns L2-normalized vectors, so for unit v
 converted once:
 
 ```python
-CANDIDATE_SIMILARITY_THRESHOLD: Final[float] = 0.65  # cosine floor
+CANDIDATE_SIMILARITY_THRESHOLD: Final[float] = 0.70  # cosine floor
 MAX_NEIGHBOR_DISTANCE: Final[float] = sqrt(2 - 2 * CANDIDATE_SIMILARITY_THRESHOLD)
 TOP_K: Final[int] = 5
 ```
+
+**Both halves of this decision are now empirically pinned** by
+`tests/unit/llm/test_ollama_embed_norm.py` (task 2.1), measured against a live
+`bge-m3` on 2026-07-27.
+
+The normalization assumption holds with room to spare: worst observed deviation
+from `||v|| = 1` was **3.5e-07** across ordinary prose, a single character, the
+empty string, and a long repetitive text — float32 rounding, not drift.
+
+The floor moved from 0.65 to **0.70** after calibration. Measured over full OKF
+concept documents (the shape `reindex.py:252` actually embeds — whole file text,
+frontmatter included, NOT the title):
+
+| | cosine range |
+|---|---|
+| Topically-related pairs | 0.7614 – 0.8018 |
+| Unrelated pairs | 0.3837 – 0.6460 |
+
+Both 0.65 and 0.70 admit zero false positives on that sample, but 0.65 sits only
+**0.005** above the nearest unrelated pair (`Raft` / `Dependency Injection` at
+0.6460 — both software-engineering concepts) while 0.70 is essentially the gap
+midpoint (0.7037), leaving 0.054 of headroom below and 0.061 above.
+
+Caveat recorded deliberately: the sample is 7 documents / 21 pairs. It
+demonstrates that a real separation exists and that 0.70 sits inside it; it does
+not justify tuning to more precision than that. Recalibrate against a real
+fixture bundle before treating the constant as settled.
+
+An earlier calibration attempt on bare title phrases suggested 0.65 was far too
+aggressive (`distributed consensus` / `Raft` scored 0.47). That measurement was
+invalid — it embedded the wrong text shape. Recorded here because the mistake is
+easy to repeat.
 
 Below `similarity.SIMILARITY_THRESHOLD = 0.75` because that constant scores *lexical*
 token ratios, while every doc in one knowledge base shares vocabulary, compressing
@@ -106,12 +138,30 @@ pins "the on-disk projection always contains exactly the nodes/edges an equivale
 
 | Site | State 1 (no edges) | State 2 (edges, no candidates) | State 3 (embeddings missing) |
 |---|---|---|---|
-| `suggest-relations` (4804-4806) | "No concept relationships in the graph yet." | "N relation(s) exist; none are untyped." | "Candidate relations unavailable — run `openkos reindex` (vectors.db missing)." |
-| `contradictions` (5037-5038) | same 1 | "N typed relation(s); none are contradiction candidates." | same 3 |
-| `status` (near 4297-4300) | "No concept relationships yet." | "N concept-to-concept edge(s) (M typed)." | existing vectors.db line, reworded to name candidates |
+| `suggest-relations` | "No concept relationships in the graph yet." | "N relation(s) exist; none are untyped." | "Candidate relations unavailable — run `openkos reindex` (vectors.db missing)." |
+| `contradictions` | "The graph has no typed edges yet." | "N typed relation(s); none are contradiction candidates." | same 3 |
+| `status` | "No concept relationships yet." | "N concept-to-concept edge(s) (M typed)." | existing vectors.db line, reworded to name candidates |
+
+`contradictions`' state 1 deliberately does NOT reuse `suggest-relations`'
+wording. It counts only TYPED edges, so "no typed edges yet" is the accurate
+claim — the graph may still hold untyped concept-to-concept edges, which is a
+different and non-contradictory statement from `suggest-relations`' total-count
+wording. This table said "same 1" through PR1; corrected here after the
+`review-readability` lens caught the divergence between the table and the
+shipped code.
+
+**State 2b (added during PR1's bounded correction).** `suggest-relations` needs a
+fourth message: untyped rows that exist but were ALL excluded by
+`_candidate_edges`' pair-level filter or `candidate_edges`' confidentiality
+gate. `graph_edge_summary` counts raw rows with neither filter applied, so
+claiming "none are untyped" from its total is factually false in the state
+`relate` leaves behind. Selected on `untyped = total - typed > 0`:
+"N relation(s) exist; M untyped, but every untyped pair is already typed
+elsewhere or filtered as confidential -- nothing left to suggest."
 
 One read-only helper, `graph/summary.py::graph_edge_summary(bundle_dir) -> (total, typed)`.
-State 3 keys purely on `vectors_db_path.exists()`, so Slice 0 ships independently of Slice 1.
+State 3 keys on "vectors.db absent OR empty" via `state/vectorstore.py::vector_store_is_empty`,
+so Slice 0 ships independently of Slice 1.
 
 ## File Changes
 

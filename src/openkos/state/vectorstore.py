@@ -112,6 +112,10 @@ _QUERY_VECTORS_SQL = (
 
 _SELECT_META_HASHES_SQL = "SELECT concept_id, content_hash FROM vector_meta"
 
+_SELECT_VECTOR_BLOB_SQL = "SELECT embedding FROM vectors WHERE concept_id = ?"
+"""Read back one concept's OWN stored embedding blob, so `neighbors` can run
+a k-NN from a `concept_id` alone without the caller holding the vector."""
+
 _BUSY_TIMEOUT_MS = 5000
 """Busy-timeout (milliseconds) set on the `vectors.db` connection, matching
 `state/derived.py`'s `_BUSY_TIMEOUT_MS` for `fts.db`/`graph.db` -- keeps all
@@ -422,6 +426,33 @@ class VectorStoreDB:
         blob = sqlite_vec.serialize_float32(list(embedding))
         rows = self._conn.execute(_QUERY_VECTORS_SQL, (blob, k)).fetchall()
         return [VecHit(concept_id=str(row[0]), distance=float(row[1])) for row in rows]
+
+    def neighbors(self, concept_id: str, k: int) -> list[VecHit]:
+        """Return up to `k` `VecHit`s nearest to `concept_id`'s OWN stored
+        embedding, ascending distance (#183: candidate-edge sourcing).
+
+        Deliberately NOT on the `VectorStore` Protocol. That Protocol is the
+        narrow write/query surface every fake in the test suite already
+        implements; adding a method there would break all of them for a
+        capability only the real on-disk store can provide -- it reads a
+        blob back out of `vectors`, which a dict-backed fake has no notion
+        of.
+
+        `concept_id` is INCLUDED in its own result set, at distance ~0.
+        Self-exclusion belongs to `graph/proximity.py`, which also owns the
+        similarity floor and the symmetry collapse; keeping it out here
+        leaves this a thin, honest k-NN rather than a policy layer. Callers
+        must therefore budget `k` for the anchor's own row.
+
+        A `concept_id` with no stored embedding -- never embedded, or
+        pruned -- returns `[]` rather than raising: the two cases are
+        indistinguishable from here and neither is an error. An empty
+        `vectors` table likewise returns `[]`, mirroring `query`."""
+        row = self._conn.execute(_SELECT_VECTOR_BLOB_SQL, (concept_id,)).fetchone()
+        if row is None:
+            return []
+        rows = self._conn.execute(_QUERY_VECTORS_SQL, (row[0], k)).fetchall()
+        return [VecHit(concept_id=str(r[0]), distance=float(r[1])) for r in rows]
 
     def meta_hashes(self) -> dict[str, str]:
         """Return `{concept_id: content_hash}` for every `vector_meta` row --

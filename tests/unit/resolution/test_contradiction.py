@@ -19,6 +19,7 @@ import pytest
 
 from openkos import lifecycle, sensitivity
 from openkos.graph.base import Edge, GraphStore
+from openkos.graph.proximity import ProximityPair
 from openkos.llm import parsing
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
@@ -929,7 +930,9 @@ def test_find_contradictions_at_exact_cap_boundary_all_pairs_judged(
     max_pairs = contradiction_mod._MAX_PAIRS
     store: GraphStore = _FakeGraphStore(_chain_edges(max_pairs))
     monkeypatch.setattr(
-        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(store)
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(store),
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * max_pairs)
 
@@ -951,7 +954,9 @@ def test_find_contradictions_one_over_cap_boundary_truncates_and_signals(
     max_pairs = contradiction_mod._MAX_PAIRS
     store: GraphStore = _FakeGraphStore(_chain_edges(max_pairs + 1))
     monkeypatch.setattr(
-        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(store)
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(store),
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * max_pairs)
 
@@ -1086,7 +1091,9 @@ def test_live_pair_beyond_cap_index_is_not_starved_by_deprecated_pairs_in_cap(
     )
     store: GraphStore = _FakeGraphStore(edges)
     monkeypatch.setattr(
-        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(store)
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(store),
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
@@ -1268,7 +1275,9 @@ def test_pair_touching_a_confidential_concept_is_excluded_by_default(
         ]
     )
     monkeypatch.setattr(
-        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(fake_store)
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(fake_store),
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
@@ -1298,7 +1307,9 @@ def test_include_confidential_true_restores_the_confidential_pair(
         [Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel")]
     )
     monkeypatch.setattr(
-        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(fake_store)
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(fake_store),
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
@@ -1396,7 +1407,9 @@ def test_load_doc_independently_excludes_a_confidential_doc_the_walk_never_saw(
         [Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel")]
     )
     monkeypatch.setattr(
-        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(fake_store)
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(fake_store),
     )
     # Simulate the walk missing "concepts/a"'s subtree entirely: the
     # precomputed confidential-id set is empty, so the pair is NOT filtered
@@ -1440,7 +1453,9 @@ def test_include_confidential_true_bypasses_the_load_doc_recheck(
         [Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel")]
     )
     monkeypatch.setattr(
-        contradiction_mod, "build_graph", lambda _bundle_dir: _store_context(fake_store)
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(fake_store),
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
@@ -1451,3 +1466,78 @@ def test_include_confidential_true_bypasses_the_load_doc_recheck(
     assert len(llm.calls) == 1
     sent_content = " ".join(str(message["content"]) for message in llm.calls[0])
     assert "confidential note" in sent_content
+
+
+# --- Phase 2.5 (#183): candidate rows never become contradiction pairs -----
+
+
+class _StubCandidateSource:
+    """Stands in for `graph.proximity.VectorProximitySource`."""
+
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        self._pairs = pairs
+
+    def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+        return [
+            ProximityPair(source_id=s, target_id=t, distance=0.1)
+            for s, t in self._pairs
+        ]
+
+
+def test_proximity_candidate_rows_are_not_contradiction_candidates(
+    tmp_path: Path,
+) -> None:
+    """A pass-3 candidate row is UNTYPED, and `_candidate_pairs` admits only
+    typed edges -- so proximity can never manufacture a contradiction
+    judgement, exactly as `derived_from` cannot.
+
+    This matters because the two features share one graph: candidate edges
+    exist to feed `suggest-relations`, and leaking them into
+    `contradictions` would spend an LLM call per merely-similar pair and
+    report disagreements between concepts nobody ever claimed were related.
+    `_candidate_pairs` is deliberately NOT modified -- its
+    `relation_type is not None` test already excludes them."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+    calls: list[object] = []
+
+    class _RecordingLLM:
+        def chat(self, messages: Sequence[Message]) -> str:
+            calls.append(messages)
+            raise AssertionError("no pair should have been judged")
+
+    verdicts, total = contradiction_mod.find_contradictions(
+        bundle, llm=_RecordingLLM(), candidates=source
+    )
+
+    assert verdicts == []
+    assert total == 0
+    assert calls == []
+
+
+def test_typed_edges_still_judged_when_a_candidate_source_is_present(
+    tmp_path: Path,
+) -> None:
+    """Regression guard: introducing a candidate source must not suppress
+    the typed pairs `contradictions` already judged."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    (bundle / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: contradicts\n---\nBody.",
+        encoding="utf-8",
+    )
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    class _AgreeLLM:
+        def chat(self, messages: Sequence[Message]) -> str:
+            return '{"verdict": "no_contradiction", "rationale": "fine"}'
+
+    verdicts, total = contradiction_mod.find_contradictions(
+        bundle, llm=_AgreeLLM(), candidates=source
+    )
+
+    assert total == 1
+    assert len(verdicts) == 1

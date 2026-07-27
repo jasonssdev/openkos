@@ -38,13 +38,31 @@ pair:
    decode (malformed shape) contributes no typed edges rather than crashing
    the build, mirroring this module's existing degrade-not-crash posture.
 
+3. CANDIDATE, from an INJECTED `candidates` source (#183, pass 3). Optional:
+   with `candidates=None` -- the default, and what a bundle with no
+   `vectors.db` gets -- this pass is a complete no-op and the projection is
+   byte-identical to the two-pass build. When a source IS given, each
+   nominated pair becomes ONE row with `relation_type = NULL`. Proximity
+   nominates a pair for a human to consider; it never claims what the
+   relationship IS, which is why these rows are untyped and why
+   `suggest-relations` still asks an LLM and `relate` still asks a human.
+   A pair is dropped if either endpoint is not a known node (a stale
+   `vectors.db` can name a forgotten concept), if the two endpoints are the
+   same, or if EITHER DIRECTION already carries an edge from pass 1 or
+   pass 2 -- a pair the bundle already links, or that a human already typed,
+   needs no candidate. Rows are collapsed to one canonical `(min, max)`
+   direction, because k-NN is near-symmetric and two rows would double every
+   suggestion a human is asked to review.
+
 Each pass dedupes its own rows before insert -- the untyped pass on
 `(source_id, target_id)`, the typed pass on `(source_id, target_id,
-relation_type)` -- and both are inserted in sorted order so a rebuild over
-an unchanged bundle is deterministic. A typed edge and an untyped edge
-between the same pair are DISTINCT rows: this dedup key is why a doc can
-have both a `## Related` link AND a `relations:` entry pointing at the same
-target without collapsing into one row.
+relation_type)`, the candidate pass on the canonical unordered pair -- and
+all are inserted in sorted order so a rebuild over an unchanged bundle is
+deterministic. A typed edge and an untyped edge between the same pair are
+DISTINCT rows: this dedup key is why a doc can have both a `## Related` link
+AND a `relations:` entry pointing at the same target without collapsing into
+one row. Pass 3 is the exception -- it defers to both, never adding a row
+for a pair either has already claimed.
 
 Any exception during the build closes the in-memory connection before
 propagating, so a failed build never leaks it -- only a successful build
@@ -83,14 +101,40 @@ importing `openkos.state.derived` (canonical) below is the ALLOWED direction
 
 import re
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 from types import TracebackType
-from typing import Final
+from typing import Final, Protocol
 from urllib.parse import quote
 
 from openkos.graph.base import Edge
 from openkos.model import okf
 from openkos.state import derived
+
+
+class ProximityPairLike(Protocol):
+    """The shape pass 3 reads off a candidate pair.
+
+    Structural rather than an import of `graph.proximity.ProximityPair`:
+    this module must stay ignorant of where candidates come from, so a test
+    can hand it a stub with no `vectors.db` in sight and a future source
+    (a different embedding backend, a co-citation heuristic) needs no change
+    here."""
+
+    @property
+    def source_id(self) -> str: ...
+
+    @property
+    def target_id(self) -> str: ...
+
+
+class CandidateSource(Protocol):
+    """Injected supplier of candidate concept pairs for pass 3."""
+
+    def pairs(self, concept_ids: Sequence[str]) -> Sequence[ProximityPairLike]:
+        """Nominate pairs among `concept_ids`. Must never raise."""
+        ...
+
 
 _LINK_RE: Final = re.compile(r"\[[^\]]*\]\(/([^)\s#]+\.md)(?:#[^)]*)?\)")
 """A bundle-relative `[text](/….md)` markdown link, per
@@ -239,7 +283,12 @@ class SqliteGraphStore:
         self.close()
 
 
-def _populate_graph_tables(conn: sqlite3.Connection, bundle_dir: Path) -> list[str]:
+def _populate_graph_tables(
+    conn: sqlite3.Connection,
+    bundle_dir: Path,
+    *,
+    candidates: CandidateSource | None = None,
+) -> list[str]:
     """Shared node/edge-population core (D-refactor, dedupes the in-memory/
     on-disk writer paths): creates the `nodes`/`edges` tables + indexes on
     `conn`, then walks `okf._iter_docs(bundle_dir)` once and extracts nodes
@@ -329,10 +378,39 @@ def _populate_graph_tables(conn: sqlite3.Connection, bundle_dir: Path) -> list[s
     for source_id, target_id, relation_type in sorted(typed_edges):
         conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, relation_type))
 
+    if candidates is not None:
+        # Dedup against BOTH prior passes, in both directions. The design
+        # sketch deduped only against body links; that is not enough. A pair
+        # a human already typed via `relations:` would otherwise gain a
+        # redundant NULL row -- filtered right back out of suggestions by
+        # `edge_typing._candidate_edges`' pair-level exclusion, but still
+        # inflating `graph_edge_summary`'s total and firing the "untyped but
+        # all excluded" message for a pair nobody needs to revisit. Both
+        # directions because links are directed and proximity is not.
+        seen: set[tuple[str, str]] = set()
+        for source_id, target_id in edge_pairs:
+            seen.add((source_id, target_id))
+            seen.add((target_id, source_id))
+        for source_id, target_id, _ in typed_edges:
+            seen.add((source_id, target_id))
+            seen.add((target_id, source_id))
+        candidate_rows = {
+            (min(pair.source_id, pair.target_id), max(pair.source_id, pair.target_id))
+            for pair in candidates.pairs(sorted(node_ids))
+            if pair.source_id in node_ids
+            and pair.target_id in node_ids
+            and pair.source_id != pair.target_id
+            and (pair.source_id, pair.target_id) not in seen
+        }
+        for source_id, target_id in sorted(candidate_rows):
+            conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
+
     return skipped
 
 
-def build_graph(bundle_dir: Path) -> SqliteGraphStore:
+def build_graph(
+    bundle_dir: Path, *, candidates: CandidateSource | None = None
+) -> SqliteGraphStore:
     """Build an in-memory node-edge projection over every eligible doc under
     `bundle_dir`.
 
@@ -347,7 +425,7 @@ def build_graph(bundle_dir: Path) -> SqliteGraphStore:
     """
     conn = sqlite3.connect(":memory:")
     try:
-        skipped = _populate_graph_tables(conn, bundle_dir)
+        skipped = _populate_graph_tables(conn, bundle_dir, candidates=candidates)
     except BaseException:
         conn.close()
         raise
@@ -356,7 +434,11 @@ def build_graph(bundle_dir: Path) -> SqliteGraphStore:
 
 
 def write_graph_store(
-    path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+    path: Path,
+    bundle_dir: Path,
+    *,
+    manifest_hash: str | None = None,
+    candidates: CandidateSource | None = None,
 ) -> None:
     """Write a full, on-disk node-edge projection for `bundle_dir` to `path`,
     invoked ONLY by `reindex` (derived-index-cache: On-Disk Persistence Of
@@ -395,7 +477,7 @@ def write_graph_store(
         try:
             conn.execute("DROP TABLE IF EXISTS nodes")
             conn.execute("DROP TABLE IF EXISTS edges")
-            _populate_graph_tables(conn, bundle_dir)
+            _populate_graph_tables(conn, bundle_dir, candidates=candidates)
             digest = (
                 manifest_hash
                 if manifest_hash is not None
@@ -443,7 +525,13 @@ def open_graph_store_readonly(path: Path) -> "SqliteGraphStore | None":
     return SqliteGraphStore(conn, [])
 
 
-def reindex_graph(bundle_dir: Path, path: Path, *, force: bool = False) -> None:
+def reindex_graph(
+    bundle_dir: Path,
+    path: Path,
+    *,
+    force: bool = False,
+    candidates: CandidateSource | None = None,
+) -> None:
     """Rebuild the on-disk graph projection at `path` iff the bundle's
     manifest hash changed since the last run, or `force` (mirrors
     `state/reindex.py`'s `_reindex_fts` gate for the FTS store).
@@ -464,4 +552,14 @@ def reindex_graph(bundle_dir: Path, path: Path, *, force: bool = False) -> None:
     three derived stores in one run) without violating the documented
     canonical/derived layering boundary (docs/architecture.md).
     """
-    derived.reindex_gate(bundle_dir, path, force=force, write=write_graph_store)
+
+    def write(
+        path: Path, bundle_dir: Path, *, manifest_hash: str | None = None
+    ) -> None:
+        """Parameter NAMES matter: `derived.DerivedStoreWriter` is a callable
+        Protocol, so they are part of the contract, not free-form."""
+        write_graph_store(
+            path, bundle_dir, manifest_hash=manifest_hash, candidates=candidates
+        )
+
+    derived.reindex_gate(bundle_dir, path, force=force, write=write)
