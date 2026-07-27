@@ -245,11 +245,15 @@ def test_suggest_relations_post_relate_reports_excluded_untyped_rows_not_none_un
     factually FALSE. Locks state 2b (specs/llm-edge-production: "Untyped
     edges exist but every one was excluded").
 
-    graph-projection-reuse (#196) re-verification: this bundle's
-    `seed_vectors_db` embedding does not match either concept here, so the
-    candidates-seeded store `_zero_edge_state_message` now reads produces
-    ZERO proximity rows -- the counts below (`2`/`1`) are UNCHANGED by the
-    shared-store correctness fix. See
+    graph-projection-reuse (#196) re-verification: `seed_vectors_db` stores
+    a row for the dummy `concept_id` `stub` ONLY, so `concepts/a` and
+    `concepts/b` are never embedded at all and `VectorStoreDB.neighbors`
+    returns `[]` for them (`state/vectorstore.py`: an id with no stored
+    embedding "returns `[]` rather than raising"). Not a too-distant match
+    -- no match is attempted. The candidates-seeded store
+    `_zero_edge_state_message` now reads therefore holds ZERO proximity
+    rows, so the counts below (`2`/`1`) are UNCHANGED by the shared-store
+    correctness fix. See
     `test_suggest_relations_all_excluded_message_counts_proximity_rows` for
     the bundle where the accepted count delta actually fires."""
     _init_workspace(tmp_path, monkeypatch)
