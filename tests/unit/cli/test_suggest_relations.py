@@ -16,7 +16,6 @@ passes `--auto` to skip the gate -- zero network, zero real Ollama process.
 """
 
 import os
-import sqlite3
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -69,26 +68,6 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
-
-
-def _touch_vectors_db(tmp_path: Path) -> None:
-    """Create a `.openkos/vectors.db` with one `vector_meta` row so a
-    bundle counts as having embeddings present for the three-state message
-    vocabulary (issue #183) -- state 3 keys on "absent OR empty", so a
-    zero-byte file must NOT count as present. `init` never creates this
-    file, so state 3 (embeddings missing) is the default for a bare
-    `_init_workspace` call unless a test opts out of it via this helper."""
-    openkos_dir = tmp_path / ".openkos"
-    openkos_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
 
 
 def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") -> None:
@@ -173,7 +152,9 @@ def test_suggest_relations_malformed_config_maps_to_exit_one_before_calling(
 
 
 def test_suggest_relations_fresh_bundle_reports_no_untyped_edges(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A freshly initialized, empty bundle has zero untyped edges, so the
     real `suggest_relations` never calls `llm.chat` -- a real `OllamaClient`
@@ -181,7 +162,7 @@ def test_suggest_relations_fresh_bundle_reports_no_untyped_edges(
     precondition), prints the empty-graph message and exits 0 (specs/
     llm-edge-production: "Empty graph reports nothing-to-work-with")."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["suggest-relations"])
 
@@ -206,7 +187,9 @@ def test_suggest_relations_missing_vectors_db_reports_not_computable_yet(
 
 
 def test_suggest_relations_provenance_only_bundle_reports_zero_candidates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A bundle whose only body link is a Concept->Source provenance-mirror
     edge (typed `derived_from` by graph projection, #135) reports zero
@@ -219,7 +202,7 @@ def test_suggest_relations_provenance_only_bundle_reports_zero_candidates(
     the embeddings-missing state (specs/llm-edge-production: "Empty graph
     reports nothing-to-work-with")."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
     (tmp_path / "bundle" / "concepts" / "a.md").parent.mkdir(
         parents=True, exist_ok=True
     )
@@ -242,7 +225,9 @@ def test_suggest_relations_provenance_only_bundle_reports_zero_candidates(
 
 
 def test_suggest_relations_post_relate_reports_excluded_untyped_rows_not_none_untyped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The state a human leaves behind by running `relate`: the accepted
     suggestion becomes a NEW typed `relations:` row while the ORIGINAL
@@ -257,7 +242,7 @@ def test_suggest_relations_post_relate_reports_excluded_untyped_rows_not_none_un
     factually FALSE. Locks state 2b (specs/llm-edge-production: "Untyped
     edges exist but every one was excluded")."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
     concepts = tmp_path / "bundle" / "concepts"
     concepts.mkdir(parents=True, exist_ok=True)
     (concepts / "a.md").write_text(
@@ -544,14 +529,16 @@ def test_suggest_relations_generic_ollama_error_maps_to_exit_one(
 
 
 def test_suggest_relations_auto_flag_skips_the_confirmation_gate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """`--auto` is accepted and bypasses the confirmation gate (issue #134:
     the cost gate is opt-out for scripted/non-interactive use). On an empty
     bundle there is nothing to type, so it still exits 0 cleanly without ever
     prompting."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["suggest-relations", "--auto"])
 
@@ -752,7 +739,9 @@ def test_suggest_relations_over_good_life_demo_is_read_only(
 
 
 def test_suggest_relations_opens_the_proximity_source_once_and_forwards_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """`suggest-relations` resolves the candidate source through ONE shared
     seam and hands it to `candidate_edges`.
@@ -761,7 +750,7 @@ def test_suggest_relations_opens_the_proximity_source_once_and_forwards_it(
     the state-3 message must be driven by what the seam already learned
     rather than by a second probe of the same file."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
     opened: list[Path] = []
     forwarded: list[object] = []
 
@@ -816,12 +805,14 @@ def test_suggest_relations_state_three_comes_from_the_seam_not_a_second_probe(
 
 
 def test_suggest_relations_closes_the_proximity_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The seam hands back a real SQLite connection; the command owns
     closing it, or a long-lived shell leaks one handle per invocation."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
     closed: list[bool] = []
 
     class _Source:

@@ -9,6 +9,7 @@ read; the ONLY non-zero path is an absent/unreadable workspace.
 """
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -35,23 +36,6 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
-
-
-def _write_nonempty_vectors_db(tmp_path: Path) -> None:
-    """Create a `.openkos/vectors.db` with one `vector_meta` row, so it
-    counts as embeddings PRESENT (issue #183 state 3 keys on "absent OR
-    empty", not merely absent -- a zero-byte file must NOT mean present)."""
-    openkos_dir = tmp_path / ".openkos"
-    openkos_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
 
 
 class _OfflineOllama:
@@ -379,7 +363,9 @@ def test_status_surfaces_missing_vectors_db(
 
 
 def test_status_present_vectors_db_produces_no_missing_index_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A present `.openkos/vectors.db` produces no missing-vector-index
     entry under "needs attention" (status spec: "Present vectors.db
@@ -388,7 +374,7 @@ def test_status_present_vectors_db_produces_no_missing_index_entry(
     so "needs attention" is no longer empty -- but it is state 1, distinct
     from the embeddings-missing state."""
     _init_workspace(tmp_path, monkeypatch)
-    _write_nonempty_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["status"])
 
@@ -401,14 +387,16 @@ def test_status_present_vectors_db_produces_no_missing_index_entry(
 
 
 def test_status_state1_no_edges_reports_distinct_message_from_state3(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """State 1 (zero concept-to-concept edges, `vectors.db` present) reports
     "No concept relationships yet." -- distinct from the state-3
     embeddings-missing message (specs/status: "Empty graph reports no
     concept relationships")."""
     _init_workspace(tmp_path, monkeypatch)
-    _write_nonempty_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["status"])
 
@@ -418,13 +406,15 @@ def test_status_state1_no_edges_reports_distinct_message_from_state3(
 
 
 def test_status_state2_edges_present_reports_counts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """State 2 (concept-to-concept edges exist, some typed) reports the
     total edge count and the typed subset (specs/status: "Edges present
     reports counts")."""
     _init_workspace(tmp_path, monkeypatch)
-    _write_nonempty_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
     concepts_dir = tmp_path / "bundle" / "concepts"
     concepts_dir.mkdir(parents=True, exist_ok=True)
     (concepts_dir / "a.md").write_text(
@@ -481,7 +471,9 @@ def test_status_state3_empty_vectors_db_names_candidates(
 
 
 def test_status_healthy_workspace_reports_nothing_needs_attention(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The edge-count summary is a purely INFORMATIONAL line, never a
     `needs_attention` entry (spec: "or an adjacent informational line") --
@@ -490,7 +482,7 @@ def test_status_healthy_workspace_reports_nothing_needs_attention(
     attention." even though the informational line is also printed (issue
     #183 Fix 2 -- this branch was previously unreachable)."""
     _init_workspace(tmp_path, monkeypatch)
-    _write_nonempty_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["status"])
 

@@ -16,7 +16,6 @@ zero network, zero real Ollama process.
 """
 
 import os
-import sqlite3
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -68,26 +67,6 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
-
-
-def _touch_vectors_db(tmp_path: Path) -> None:
-    """Create a `.openkos/vectors.db` with one `vector_meta` row so a
-    bundle counts as having embeddings present for the three-state message
-    vocabulary (issue #183) -- state 3 keys on "absent OR empty", so a
-    zero-byte file must NOT count as present. `init` never creates this
-    file, so state 3 (embeddings missing) is the default for a bare
-    `_init_workspace` call unless a test opts out of it via this helper."""
-    openkos_dir = tmp_path / ".openkos"
-    openkos_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
 
 
 def _write_doc(
@@ -474,7 +453,9 @@ def test_contradictions_all_flag_does_not_affect_find_contradictions_call(
 
 
 def test_contradictions_fresh_bundle_reports_no_typed_edges(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A freshly initialized, empty bundle has zero candidate pairs, so the
     real `find_contradictions` never calls `llm.chat` -- a real
@@ -483,7 +464,7 @@ def test_contradictions_fresh_bundle_reports_no_typed_edges(
     (spec: Empty graph yields clear message, no crash; "No typed edges at
     all")."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["contradictions"])
 
@@ -508,10 +489,12 @@ def test_contradictions_missing_vectors_db_reports_not_computable_yet(
 
 
 def test_contradictions_no_candidate_pairs_never_calls_llm(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
     calls: list[object] = []
 
     def _fake_find(
@@ -764,7 +747,9 @@ def test_contradictions_omitted_include_deprecated_defaults_to_false(
 
 
 def test_contradictions_default_excludes_a_pair_touching_a_superseded_concept(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Real (unmocked) `find_contradictions`, with a real `OllamaClient`
     substituted for a fake `LLMBackend`: a supersedes edge alone forms a
@@ -774,7 +759,7 @@ def test_contradictions_default_excludes_a_pair_touching_a_superseded_concept(
     Excluded By Default -- contradiction candidates). `vectors.db` is
     touched so the outcome is state 2, not state 3."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
     bundle_dir = tmp_path / "bundle"
     _write_relation_doc(
         bundle_dir / "concepts" / "a.md",
@@ -869,7 +854,9 @@ def test_contradictions_omitted_include_confidential_defaults_to_false(
 
 
 def test_contradictions_include_confidential_restores_the_confidential_pair(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A real bundle with a confidential concept: by default the pair is
     excluded (state 2's "none are contradiction candidates" message), and
@@ -877,7 +864,7 @@ def test_contradictions_include_confidential_restores_the_confidential_pair(
     `--include-confidential` Escape Flag). `vectors.db` is touched so the
     outcome is state 2, not state 3."""
     _init_workspace(tmp_path, monkeypatch)
-    _touch_vectors_db(tmp_path)
+    seed_vectors_db(tmp_path)
     bundle_dir = tmp_path / "bundle"
     _write_relation_doc(
         bundle_dir / "concepts" / "a.md",
