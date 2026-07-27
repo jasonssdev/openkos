@@ -16,7 +16,8 @@ passes `--auto` to skip the gate -- zero network, zero real Ollama process.
 """
 
 import os
-from collections.abc import Callable, Iterator
+import sqlite3
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,9 @@ from typer.testing import CliRunner
 
 from openkos.cli import main
 from openkos.cli.main import app
+from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge
+from openkos.graph.proximity import ProximityPair
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.edge_typing import EdgeSuggestion
 
@@ -240,7 +243,15 @@ def test_suggest_relations_post_relate_reports_excluded_untyped_rows_not_none_un
     the confidentiality filter applied, so its total (2) says nothing about
     how many rows are untyped (1). Claiming "none are untyped" here is
     factually FALSE. Locks state 2b (specs/llm-edge-production: "Untyped
-    edges exist but every one was excluded")."""
+    edges exist but every one was excluded").
+
+    graph-projection-reuse (#196) re-verification: this bundle's
+    `seed_vectors_db` embedding does not match either concept here, so the
+    candidates-seeded store `_zero_edge_state_message` now reads produces
+    ZERO proximity rows -- the counts below (`2`/`1`) are UNCHANGED by the
+    shared-store correctness fix. See
+    `test_suggest_relations_all_excluded_message_counts_proximity_rows` for
+    the bundle where the accepted count delta actually fires."""
     _init_workspace(tmp_path, monkeypatch)
     seed_vectors_db(tmp_path)
     concepts = tmp_path / "bundle" / "concepts"
@@ -744,17 +755,23 @@ def test_suggest_relations_opens_the_proximity_source_once_and_forwards_it(
     seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """`suggest-relations` resolves the candidate source through ONE shared
-    seam and hands it to `candidate_edges`.
+    seam and hands it to `build_graph`, which produces the ONE shared store
+    that `candidate_edges` then reuses via `store=` (graph-projection-reuse:
+    `candidates` is consumed once by `build_graph`, never forwarded again).
 
-    Opening it once matters twice over: it is a real SQLite connection, and
-    the state-3 message must be driven by what the seam already learned
-    rather than by a second probe of the same file."""
+    Opening the proximity source once matters twice over: it is a real
+    SQLite connection, and the state-3 message must be driven by what the
+    seam already learned rather than by a second probe of the same file."""
     _init_workspace(tmp_path, monkeypatch)
     seed_vectors_db(tmp_path)
     opened: list[Path] = []
+    build_calls: list[object] = []
     forwarded: list[object] = []
 
     class _Source:
+        def pairs(self, concept_ids: object) -> list[object]:
+            return []
+
         def close(self) -> None:
             return None
 
@@ -762,11 +779,20 @@ def test_suggest_relations_opens_the_proximity_source_once_and_forwards_it(
         opened.append(path)
         return _Source()
 
+    real_build_graph = sqlite_graph.build_graph
+
+    def _recording_build_graph(
+        bundle_dir: Path, *, candidates: sqlite_graph.CandidateSource | None = None
+    ) -> object:
+        build_calls.append(candidates)
+        return real_build_graph(bundle_dir, candidates=candidates)
+
     def _fake_candidate_edges(bundle_dir: Path, **kwargs: object) -> list[object]:
-        forwarded.append(kwargs.get("candidates"))
+        forwarded.append(kwargs.get("store"))
         return []
 
     monkeypatch.setattr(main, "_open_proximity_or_degrade", _fake_open)
+    monkeypatch.setattr("openkos.cli.main.build_graph", _recording_build_graph)
     monkeypatch.setattr(main, "candidate_edges", _fake_candidate_edges)
 
     result = runner.invoke(app, ["suggest-relations"])
@@ -774,6 +800,8 @@ def test_suggest_relations_opens_the_proximity_source_once_and_forwards_it(
     assert result.exit_code == 0
     assert len(opened) == 1
     assert opened[0] == tmp_path / ".openkos" / "vectors.db"
+    assert len(build_calls) == 1
+    assert isinstance(build_calls[0], _Source)
     assert len(forwarded) == 1
     assert forwarded[0] is not None
 
@@ -816,6 +844,9 @@ def test_suggest_relations_closes_the_proximity_source(
     closed: list[bool] = []
 
     class _Source:
+        def pairs(self, concept_ids: object) -> list[object]:
+            return []
+
         def close(self) -> None:
             closed.append(True)
 
@@ -832,3 +863,131 @@ def test_suggest_relations_closes_the_proximity_source(
 
     assert result.exit_code == 0
     assert closed == [True]
+
+
+# --- graph-projection-reuse (#196): one build per invocation ---------------
+
+
+def test_suggest_relations_builds_the_graph_once_on_the_zero_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#196: the zero-candidate path must not rebuild the projection for its
+    "nothing to suggest" message."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+
+    calls: list[Path] = []
+    real = sqlite_graph.build_graph
+
+    def _counting_build_graph(
+        bundle_dir: Path, *, candidates: sqlite_graph.CandidateSource | None = None
+    ) -> sqlite_graph.SqliteGraphStore:
+        calls.append(bundle_dir)
+        return real(bundle_dir, candidates=candidates)
+
+    monkeypatch.setattr("openkos.cli.main.build_graph", _counting_build_graph)
+    monkeypatch.setattr("openkos.graph.summary.build_graph", _counting_build_graph)
+    monkeypatch.setattr(
+        "openkos.resolution.edge_typing.build_graph", _counting_build_graph
+    )
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert "No concept relationships in the graph yet." in result.stdout
+
+
+def test_suggest_relations_builds_the_graph_once_on_the_non_zero_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Guards the split-block refactor: exactly one `build_graph` call on
+    the non-zero path, AND the shared store is already closed before the
+    LLM run starts -- the store is only needed to materialize `edges`, not
+    for the minutes-long `suggest_edge_types` loop (graph-projection-reuse)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n---\n"
+        "See also [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    stores: list[sqlite_graph.SqliteGraphStore] = []
+    real = sqlite_graph.build_graph
+
+    def _counting_build_graph(
+        bundle_dir: Path, *, candidates: sqlite_graph.CandidateSource | None = None
+    ) -> sqlite_graph.SqliteGraphStore:
+        store = real(bundle_dir, candidates=candidates)
+        stores.append(store)
+        return store
+
+    monkeypatch.setattr("openkos.cli.main.build_graph", _counting_build_graph)
+    monkeypatch.setattr("openkos.graph.summary.build_graph", _counting_build_graph)
+    monkeypatch.setattr(
+        "openkos.resolution.edge_typing.build_graph", _counting_build_graph
+    )
+
+    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+        assert len(stores) == 1
+        store = stores[0]
+        with pytest.raises(sqlite3.ProgrammingError):
+            store.edges()
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(stores) == 1
+
+
+def test_suggest_relations_all_excluded_message_counts_proximity_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A confidential concept reachable only via a proximity row is dropped
+    from `candidate_edges` by the confidentiality filter (zero candidates),
+    but the shared candidates-seeded store `_zero_edge_state_message` reads
+    still counts that untyped proximity row -- `untyped` reflects the SAME
+    projection the filtering ran on (graph-projection-reuse, the accepted
+    behavior delta in design.md §4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n---\nBody A.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: confidential\n---\nBody B.\n",
+        encoding="utf-8",
+    )
+
+    class _StubSource:
+        def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+            return [
+                ProximityPair(
+                    source_id="concepts/a", target_id="concepts/b", distance=0.1
+                )
+            ]
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
+
+    result = runner.invoke(app, ["suggest-relations"])
+
+    assert result.exit_code == 0
+    assert (
+        "1 relation(s) exist; 1 untyped, but every untyped pair is already "
+        "typed elsewhere or filtered as confidential -- nothing left to "
+        "suggest." in result.stdout
+    )

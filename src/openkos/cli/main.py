@@ -32,6 +32,7 @@ from openkos.cli import observability
 from openkos.extraction.concept import extract_concept
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import GraphStore
+from openkos.graph.sqlite_graph import build_graph
 from openkos.graph.summary import graph_edge_summary
 from openkos.llm.base import Embedder, LLMBackend
 from openkos.llm.ollama import (
@@ -4310,18 +4311,24 @@ def status() -> None:
     This is the ONLY non-zero exit path.
 
     On a workspace, sequences three reads and renders their result as plain
-    text via `typer.echo`, always exiting 0: `okf.survey_bundle` scans
-    `bundle/**/*.md` ONCE for source/concept counts and §9 findings (D2) --
-    counts always reflect the disk scan, never `index.md` alone, so catalog
-    drift after an interrupted `ingest` is still visible; `log.md` is read
-    and passed through `bundle_log.read_recent_entries` for the most recent
-    `RECENT_ACTIVITY_LIMIT` entries, newest-first -- an unreadable or
-    malformed `log.md` degrades to a notice (`except (OSError, ValueError)`)
-    rather than failing the whole command (D5), because recent activity is
-    the one nice-to-have `status` exists to show, not the counts or the
-    conformance findings. `survey_bundle`'s findings (missing/unparseable
-    frontmatter, unreadable files) are informational: their presence never
-    changes the exit code (spec: Needs-Attention via §9 Conformance).
+    text via `typer.echo`, always exiting 0. Note that these reads perform
+    THREE independent `bundle/**/*.md` walks, not one: `okf.survey_bundle`
+    (source/concept counts and §9 findings, D2) -- counts always reflect the
+    disk scan, never `index.md` alone, so catalog drift after an
+    interrupted `ingest` is still visible; `lint_check.collect_docs`
+    (dangling-reference findings, #141); and -- only when `vectors.db` is
+    non-empty -- `build_graph`'s walk behind the informational edge-count
+    line. Consolidating them is deliberately out of scope (issue #195);
+    what IS guaranteed is that `status` calls `build_graph` exactly once.
+    `log.md` is read and passed through `bundle_log.read_recent_entries` for
+    the most recent `RECENT_ACTIVITY_LIMIT` entries, newest-first -- an
+    unreadable or malformed `log.md` degrades to a notice (`except (OSError,
+    ValueError)`) rather than failing the whole command (D5), because recent
+    activity is the one nice-to-have `status` exists to show, not the
+    counts or the conformance findings. `survey_bundle`'s findings
+    (missing/unparseable frontmatter, unreadable files) are informational:
+    their presence never changes the exit code (spec: Needs-Attention via §9
+    Conformance).
 
     No file under the workspace is ever created, modified, or deleted, and
     no `--json` or other structured output mode is offered (spec: Read-Only
@@ -4393,7 +4400,8 @@ def status() -> None:
     # `vectors_missing`, since it already starves any embedding-sourced
     # candidate edge and is covered by the line above.
     if not vectors_missing:
-        total, typed = graph_edge_summary(layout.bundle_dir)
+        with build_graph(layout.bundle_dir) as store:
+            total, typed = graph_edge_summary(layout.bundle_dir, store=store)
         if total == 0:
             typer.echo("  No concept relationships yet.")
         else:
@@ -4840,6 +4848,7 @@ def _open_proximity_or_degrade(
 def _zero_edge_state_message(
     layout: config.WorkspaceLayout,
     *,
+    store: GraphStore,
     use_typed_count: bool,
     none_survived: str,
     embeddings_missing: bool,
@@ -4851,6 +4860,15 @@ def _zero_edge_state_message(
     `embeddings_missing` comes from the caller's `_open_proximity_or_degrade`
     result (`source is None`), never from a second probe of `vectors.db` --
     the seam already read it.
+
+    `store` (graph-projection-reuse, issue #196): the SAME already-open
+    `GraphStore` the caller built for its primary read -- REQUIRED, not
+    optional, so a forgotten keyword fails a `TypeError` at import-time test
+    collection rather than silently rebuilding the projection a second time.
+    Both call sites now sit lexically inside their own `with build_graph(...)
+    as store:` block, so this function never opens or closes a store itself.
+    `layout` is retained for the state-3 early return's context even though
+    its `bundle_dir` is not read again here.
 
     State 3 (embeddings absent OR empty) is checked FIRST: it also starves
     any embedding-sourced candidate edge, so it wins over whatever the
@@ -4878,7 +4896,7 @@ def _zero_edge_state_message(
     `untyped=`; omitting it keeps the plain `none_survived` wording."""
     if embeddings_missing:
         return _CANDIDATES_UNAVAILABLE_MESSAGE
-    total, typed = graph_edge_summary(layout.bundle_dir)
+    total, typed = graph_edge_summary(layout.bundle_dir, store=store)
     count = typed if use_typed_count else total
     if count == 0:
         if use_typed_count:
@@ -4909,10 +4927,15 @@ def suggest_relations_cmd(
     A FIFTH read command, mirroring `adjudicate`'s wiring: the shared
     `config.require_workspace` gate (D1), then a Phase-A `read_config` guard
     (`except (OSError, ValueError)`, lint parity). It then counts the
-    candidate edges via `resolution.edge_typing.candidate_edges` (which OWNS
-    the internal `openkos.graph` read, design D2/D6 -- this module imports
-    ONLY from `openkos.resolution.edge_typing`, never `openkos.graph`
-    directly), gates on that count, and only then builds a real
+    candidate edges via `resolution.edge_typing.candidate_edges`, which owns
+    the candidate-narrowing logic. This command builds the graph projection
+    ONCE per invocation via `graph.sqlite_graph.build_graph` and threads the
+    open store into every reader it calls, including the zero-result
+    `_zero_edge_state_message` path that used to trigger a second full build
+    (#196). Holding an open `openkos.graph` store here is established
+    practice (`query`, `reindex`); the live layering rule forbids only
+    canonical-layer imports of `openkos.graph` and a `graph` CLI verb. It
+    gates on the candidate count, and only then builds a real
     `OllamaClient(model=cfg.model)` and injects it into
     `suggest_edge_types`.
 
@@ -4974,37 +4997,53 @@ def suggest_relations_cmd(
     # Count the candidate edges FIRST, with no LLM call, so the cost of the
     # one-inference-per-edge run can be previewed and gated before the model
     # is ever contacted (issue #134).
+    #
+    # graph-projection-reuse (#196): the proximity source is closed as early
+    # as possible -- `build_graph` consumes it eagerly inside
+    # `_populate_graph_tables`, so it is dead the instant `build_graph`
+    # returns. The projection itself is built exactly ONCE per invocation
+    # and threaded, via `store=`, into both `candidate_edges` and the
+    # zero-result `_zero_edge_state_message` path (which used to trigger a
+    # second full build).
     source = _open_proximity_or_degrade(layout.vectors_db_path)
     embeddings_missing = source is None
     try:
-        edges = candidate_edges(
-            layout.bundle_dir,
-            include_confidential=include_confidential,
-            candidates=source,
-        )
+        graph = build_graph(layout.bundle_dir, candidates=source)
     finally:
         if source is not None:
             source.close()
 
-    typer.echo(f"openkos suggest-relations: workspace at {root}")
-    typer.echo()
-    total = len(edges)
-    if total == 0:
-        typer.echo(
-            _zero_edge_state_message(
-                layout,
-                use_typed_count=False,
-                embeddings_missing=embeddings_missing,
-                none_survived="{count} relation(s) exist; none are untyped.",
-                all_excluded=(
-                    "{count} relation(s) exist; {untyped} untyped, but every "
-                    "untyped pair is already typed elsewhere or filtered as "
-                    "confidential -- nothing left to suggest."
-                ),
-            )
+    with graph as store:
+        edges = candidate_edges(
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            store=store,
         )
-        return
 
+        typer.echo(f"openkos suggest-relations: workspace at {root}")
+        typer.echo()
+        total = len(edges)
+        if total == 0:
+            typer.echo(
+                _zero_edge_state_message(
+                    layout,
+                    store=store,
+                    use_typed_count=False,
+                    embeddings_missing=embeddings_missing,
+                    none_survived="{count} relation(s) exist; none are untyped.",
+                    all_excluded=(
+                        "{count} relation(s) exist; {untyped} untyped, but every "
+                        "untyped pair is already typed elsewhere or filtered as "
+                        "confidential -- nothing left to suggest."
+                    ),
+                )
+            )
+            return
+
+    # Everything from here on runs OUTSIDE the `with` block: the store is
+    # not needed once `edges` is materialized, so the minutes-long LLM run
+    # and its progress loop stay out of the store's lifetime
+    # (graph-projection-reuse design §4).
     if not auto:
         typer.echo(
             f"{total} untyped edge(s) -> {total} LLM call(s), one per edge "
@@ -5214,9 +5253,14 @@ def contradictions(
     `read_config` guard (`except (OSError, ValueError)`, lint parity), then
     a real `OllamaClient(model=cfg.model)` is built and injected -- as the
     `LLMBackend` -- into `resolution.contradiction.find_contradictions`,
-    which OWNS the internal `openkos.graph` read (design D2/D6, "No CLI
-    Surface"): this module imports ONLY from `openkos.resolution.
-    contradiction`, never `openkos.graph` directly.
+    which owns the candidate-narrowing logic. This command builds the graph
+    projection ONCE per invocation via `graph.sqlite_graph.build_graph` and
+    threads the open store into every reader it calls, including the
+    zero-result `_zero_edge_state_message` path that used to trigger a
+    second full build (#196). Holding an open `openkos.graph` store here is
+    established practice (`query`, `reindex`); the live layering rule
+    forbids only canonical-layer imports of `openkos.graph` and a `graph`
+    CLI verb.
 
     `contradictions` never writes, merges, or reconciles -- it only prints a
     verdict, confidence, rationale, and cited conflicting claims per
@@ -5275,59 +5319,68 @@ def contradictions(
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
+    # graph-projection-reuse (#196): source-then-build prologue, mirroring
+    # `suggest_relations_cmd` -- the proximity source is closed as early as
+    # possible, right after `build_graph` consumes it. Unlike
+    # `suggest-relations`, the LLM loop runs INSIDE `find_contradictions`, so
+    # the store stays open across it (design §4): splitting this block would
+    # require two builds, which is exactly what #196 removes.
     source = _open_proximity_or_degrade(layout.vectors_db_path)
     embeddings_missing = source is None
     try:
-        verdicts, total_pairs = find_contradictions(
-            layout.bundle_dir,
-            llm=llm,
-            include_deprecated=include_deprecated,
-            include_confidential=include_confidential,
-            candidates=source,
-        )
-    except OllamaUnavailable as exc:
-        typer.echo(
-            f"openkos contradictions: failed -- {exc}. Start it with "
-            f"`ollama serve`, then try again.{_DOCTOR_HINT}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    except OllamaModelNotFound as exc:
-        typer.echo(
-            f"openkos contradictions: failed -- model '{cfg.model}' is not "
-            f"installed. Pull it with `ollama pull {cfg.model}`, then try "
-            "again.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    # The two specific handlers above MUST precede this generic handler:
-    # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
-    # `OllamaError`, so reordering would silently funnel them into this
-    # fallback and lose their actionable remediation messages (mirrors
-    # `suggest-relations`'s ordering).
-    except OllamaError as exc:
-        typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
+        graph = build_graph(layout.bundle_dir, candidates=source)
     finally:
-        # Every branch above either returns a result or raises typer.Exit;
-        # the source holds a real SQLite connection on all of them.
         if source is not None:
             source.close()
 
-    typer.echo(f"openkos contradictions: workspace at {root}")
-    typer.echo()
-    if not verdicts:
-        typer.echo(
-            _zero_edge_state_message(
-                layout,
-                use_typed_count=True,
-                embeddings_missing=embeddings_missing,
-                none_survived=(
-                    "{count} typed relation(s); none are contradiction candidates."
-                ),
+    with graph as store:
+        try:
+            verdicts, total_pairs = find_contradictions(
+                layout.bundle_dir,
+                llm=llm,
+                include_deprecated=include_deprecated,
+                include_confidential=include_confidential,
+                store=store,
             )
-        )
-        return
+        except OllamaUnavailable as exc:
+            typer.echo(
+                f"openkos contradictions: failed -- {exc}. Start it with "
+                f"`ollama serve`, then try again.{_DOCTOR_HINT}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        except OllamaModelNotFound as exc:
+            typer.echo(
+                f"openkos contradictions: failed -- model '{cfg.model}' is not "
+                f"installed. Pull it with `ollama pull {cfg.model}`, then try "
+                "again.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        # The two specific handlers above MUST precede this generic handler:
+        # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
+        # `OllamaError`, so reordering would silently funnel them into this
+        # fallback and lose their actionable remediation messages (mirrors
+        # `suggest-relations`'s ordering).
+        except OllamaError as exc:
+            typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
+            raise typer.Exit(code=1) from exc
+
+        typer.echo(f"openkos contradictions: workspace at {root}")
+        typer.echo()
+        if not verdicts:
+            typer.echo(
+                _zero_edge_state_message(
+                    layout,
+                    store=store,
+                    use_typed_count=True,
+                    embeddings_missing=embeddings_missing,
+                    none_survived=(
+                        "{count} typed relation(s); none are contradiction candidates."
+                    ),
+                )
+            )
+            return
 
     if total_pairs > len(verdicts):
         typer.echo(f"{len(verdicts)} of {total_pairs} pairs shown (cap reached)")
