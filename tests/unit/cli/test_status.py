@@ -8,6 +8,7 @@ then renders three sections via `typer.echo`. Exit 0 on every successful
 read; the ONLY non-zero path is an absent/unreadable workspace.
 """
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,23 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
+
+
+def _write_nonempty_vectors_db(tmp_path: Path) -> None:
+    """Create a `.openkos/vectors.db` with one `vector_meta` row, so it
+    counts as embeddings PRESENT (issue #183 state 3 keys on "absent OR
+    empty", not merely absent -- a zero-byte file must NOT mean present)."""
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_status_refuses_when_not_a_workspace(
@@ -319,7 +337,9 @@ def test_status_surfaces_missing_vectors_db(
 ) -> None:
     """An absent `.openkos/vectors.db` is listed under "needs attention"
     with an `openkos reindex` instruction, and `status` still exits 0
-    (status spec: "Missing vectors.db is surfaced")."""
+    (status spec: "Missing vectors.db is surfaced"). It must NOT also
+    print "Nothing needs attention." -- the two lines are contradictory
+    (issue #183 Fix 2 follow-up)."""
     _init_workspace(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["status"])
@@ -327,24 +347,152 @@ def test_status_surfaces_missing_vectors_db(
     assert result.exit_code == 0
     assert "vectors.db" in result.stdout
     assert "openkos reindex" in result.stdout
+    assert "Nothing needs attention." not in result.stdout
 
 
-def test_status_present_vectors_db_produces_no_entry(
+def test_status_present_vectors_db_produces_no_missing_index_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A present `.openkos/vectors.db` produces no missing-vector-index
     entry under "needs attention" (status spec: "Present vectors.db
-    produces no vector-index entry")."""
+    produces no vector-index entry"). A fresh, concept-free bundle still
+    surfaces the state-1 "no concept relationships yet" line (issue #183),
+    so "needs attention" is no longer empty -- but it is state 1, distinct
+    from the embeddings-missing state."""
     _init_workspace(tmp_path, monkeypatch)
-    openkos_dir = tmp_path / ".openkos"
-    openkos_dir.mkdir(parents=True, exist_ok=True)
-    (openkos_dir / "vectors.db").write_bytes(b"")
+    _write_nonempty_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0
     assert "vectors.db" not in result.stdout
+    assert "No concept relationships yet." in result.stdout
+
+
+# --- concept-edge-seeding #183: three-state concept-to-concept summary ----
+
+
+def test_status_state1_no_edges_reports_distinct_message_from_state3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State 1 (zero concept-to-concept edges, `vectors.db` present) reports
+    "No concept relationships yet." -- distinct from the state-3
+    embeddings-missing message (specs/status: "Empty graph reports no
+    concept relationships")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_nonempty_vectors_db(tmp_path)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "No concept relationships yet." in result.stdout
+    assert "candidate edges are not computable" not in result.stdout.lower()
+
+
+def test_status_state2_edges_present_reports_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State 2 (concept-to-concept edges exist, some typed) reports the
+    total edge count and the typed subset (specs/status: "Edges present
+    reports counts")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_nonempty_vectors_db(tmp_path)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\n---\nSee also [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\n---\nBody.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "1 concept-to-concept edge(s) (0 typed)." in result.stdout
+
+
+def test_status_state3_missing_vectors_db_names_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State 3 (`vectors.db` absent) reports that candidate edges are not
+    computable yet, using a message distinct from the state-1 "no concept
+    relationships yet" line (specs/status: "Missing embeddings reports a
+    distinct not-computable state")."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "candidate edges" in result.stdout.lower()
+    assert "No concept relationships yet." not in result.stdout
+
+
+def test_status_state3_empty_vectors_db_names_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State 3 also fires for an existing but EMPTY `vectors.db` (zero
+    `vector_meta` rows), not merely an absent one -- `vector_store_is_empty`
+    keys on "absent OR empty" (issue #183)."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "candidate edges" in result.stdout.lower()
+    assert "No concept relationships yet." not in result.stdout
+
+
+def test_status_healthy_workspace_reports_nothing_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The edge-count summary is a purely INFORMATIONAL line, never a
+    `needs_attention` entry (spec: "or an adjacent informational line") --
+    a genuinely healthy workspace (no survey findings, no dangling refs, no
+    conformance issues) must still be able to print "Nothing needs
+    attention." even though the informational line is also printed (issue
+    #183 Fix 2 -- this branch was previously unreachable)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_nonempty_vectors_db(tmp_path)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
     assert "Nothing needs attention." in result.stdout
+
+
+def test_status_state3_wins_even_with_existing_concept_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State 3 is checked FIRST: an absent `vectors.db` reports the
+    embeddings-missing message even when concept-to-concept edges already
+    exist in the graph -- it wins over whatever the edge count would
+    otherwise say (issue #183, both call sites' documented ordering)."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\n---\nSee also [B](/concepts/b.md).\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\n---\nBody.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "candidate edges" in result.stdout.lower()
+    assert "concept-to-concept edge(s)" not in result.stdout
 
 
 def test_status_rejects_json_flag(

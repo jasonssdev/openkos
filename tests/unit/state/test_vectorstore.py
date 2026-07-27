@@ -1140,3 +1140,63 @@ def test_meta_hashes_unaffected_by_the_new_meta_table(tmp_path: Path) -> None:
     assert hashes == {"concepts/a": "hash-a"}
     assert "embedding_model" not in hashes
     assert "qwen3-embedding:0.6b" not in hashes.values()
+
+
+# --- issue #183: `vector_store_is_empty` (absent OR empty precondition) ----
+
+
+def test_vector_store_is_empty_true_when_path_absent(tmp_path: Path) -> None:
+    """An absent `vectors.db` path counts as empty (issue #183 state 3)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    assert vectorstore.vector_store_is_empty(db_path) is True
+
+
+def test_vector_store_is_empty_true_when_vector_meta_has_zero_rows(
+    tmp_path: Path,
+) -> None:
+    """An existing `vectors.db` with zero `vector_meta` rows counts as empty
+    -- a zero-byte-equivalent file must not be mistaken for present."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path):
+        pass
+
+    assert vectorstore.vector_store_is_empty(db_path) is True
+
+
+def test_vector_store_is_empty_false_when_vector_meta_has_rows(
+    tmp_path: Path,
+) -> None:
+    """An existing `vectors.db` with at least one `vector_meta` row is NOT
+    empty."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [0.1] * EMBED_DIM, "hash-a")
+        db.commit()
+
+    assert vectorstore.vector_store_is_empty(db_path) is False
+
+
+def test_vector_store_is_empty_true_for_a_malformed_non_sqlite_file(
+    tmp_path: Path,
+) -> None:
+    """A path that exists but is not a valid SQLite database counts as
+    empty rather than raising (docstring's stated promise)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_bytes(b"not a sqlite database")
+
+    assert vectorstore.vector_store_is_empty(db_path) is True
+
+
+def test_vector_store_is_empty_true_when_path_is_a_directory(tmp_path: Path) -> None:
+    """A path that `.exists()` but is a directory (not a file) fails at
+    `sqlite3.connect` time rather than at `execute` time -- still counts as
+    empty rather than raising (docstring's stated promise covers connect-time
+    failures too, not just execute-time ones)."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    db_path.mkdir(parents=True)
+
+    assert vectorstore.vector_store_is_empty(db_path) is True

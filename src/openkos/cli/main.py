@@ -32,6 +32,7 @@ from openkos.cli import observability
 from openkos.extraction.concept import extract_concept
 from openkos.graph import sqlite_graph
 from openkos.graph.base import GraphStore
+from openkos.graph.summary import graph_edge_summary
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
     InstalledModel,
@@ -74,6 +75,7 @@ from openkos.state.vectorstore import (
     VecUnavailable,
     open_vector_store,
     probe_vec_loadable,
+    vector_store_is_empty,
 )
 from openkos.vcs import git as vcs_git
 
@@ -4294,15 +4296,34 @@ def status() -> None:
     dangling = lint_check.check_dangling_targets(docs)
     needs_attention: list[str] = [*survey.findings]
     needs_attention.extend(f"{finding.path}: {finding.detail}" for finding in dangling)
-    if not layout.vectors_db_path.exists():
+    # issue #183 (Slice 0): a missing/empty `vectors.db` is genuinely
+    # ACTIONABLE (spec: "Needs-Attention Surfaces Missing Vector Index"), so
+    # it belongs in `needs_attention` itself -- unlike the edge-count line
+    # below, which stays purely INFORMATIONAL.
+    vectors_missing = vector_store_is_empty(layout.vectors_db_path)
+    if vectors_missing:
         needs_attention.append(
-            "Dense retrieval unavailable — run `openkos reindex` (vectors.db missing)."
+            "Dense retrieval and candidate edges unavailable — run "
+            "`openkos reindex` (vectors.db missing)."
         )
     if not needs_attention:
         typer.echo("  Nothing needs attention.")
     else:
         for line in needs_attention:
             typer.echo(f"  {line}")
+    # The edge-count summary stays a separate, purely INFORMATIONAL line
+    # (spec: "or an adjacent informational line") -- never appended to
+    # `needs_attention`, so a healthy workspace still prints "Nothing needs
+    # attention." above; `graph_edge_summary` is read-only over the graph
+    # projection, so this never changes the exit code either. Skipped when
+    # `vectors_missing`, since it already starves any embedding-sourced
+    # candidate edge and is covered by the line above.
+    if not vectors_missing:
+        total, typed = graph_edge_summary(layout.bundle_dir)
+        if total == 0:
+            typer.echo("  No concept relationships yet.")
+        else:
+            typer.echo(f"  {total} concept-to-concept edge(s) ({typed} typed).")
 
 
 @app.command()
@@ -4708,6 +4729,64 @@ def adjudicate(
     typer.echo("Next: openkos merge <survivor> <absorbed>")
 
 
+_CANDIDATES_UNAVAILABLE_MESSAGE = (
+    "Candidate relations unavailable — run `openkos reindex` (vectors.db missing)."
+)
+"""Slice 0 (issue #183) state-3 message, shared verbatim by
+`suggest-relations` and `contradictions` -- design.md's Slice 0 table marks
+both sites' state-3 message identical, and both key it on
+`vector_store_is_empty(layout.vectors_db_path)` (absent OR empty; Slice 1's
+`neighbors()`/`proximity.py` plumbing is out of scope for this check)."""
+
+
+def _zero_edge_state_message(
+    layout: config.WorkspaceLayout,
+    *,
+    use_typed_count: bool,
+    none_survived: str,
+    all_excluded: str | None = None,
+) -> str:
+    """Select the Slice 0 (issue #183) three-state message for a
+    zero-candidate outcome at `suggest-relations`/`contradictions`.
+
+    State 3 (embeddings absent OR empty) is checked FIRST: it also starves
+    any embedding-sourced candidate edge, so it wins over whatever the
+    typed/total edge count would otherwise say (design.md's Graceful
+    Degradation table). Otherwise state 1 or state 2 (`none_survived`,
+    formatted with `count=`) is picked from `graph_edge_summary`'s `(total,
+    typed)` -- `use_typed_count` selects which of the two
+    `suggest-relations` counts total edges while `contradictions` counts
+    only typed ones, since a typed-but-excluded edge (e.g. `derived_from`)
+    is still "nothing to contradict" but is NOT "nothing to type". State 1's
+    wording also tracks `use_typed_count`: the typed-count mode (`contradictions`)
+    says "no typed edges yet" (the graph may still have untyped
+    concept-to-concept edges -- a DIFFERENT, non-contradictory claim from
+    `status`'s total-count wording), while the total-count mode
+    (`suggest-relations`) says "no concept relationships yet".
+
+    `all_excluded` (total-count mode only) covers the case where the graph
+    DOES still hold untyped rows but none of them survived the caller's
+    filtering -- `_candidate_edges`'s PAIR-level exclusion (`relate` adds a
+    typed `relations:` row without ever removing the original untyped
+    body-link row, `edge_typing.py:116-138`) or `candidate_edges`'s
+    confidentiality gate. `none_survived`'s "none are untyped" wording would
+    be factually FALSE there, because `graph_edge_summary` counts raw rows
+    with neither filter applied. It is formatted with `count=` and
+    `untyped=`; omitting it keeps the plain `none_survived` wording."""
+    if vector_store_is_empty(layout.vectors_db_path):
+        return _CANDIDATES_UNAVAILABLE_MESSAGE
+    total, typed = graph_edge_summary(layout.bundle_dir)
+    count = typed if use_typed_count else total
+    if count == 0:
+        if use_typed_count:
+            return "The graph has no typed edges yet."
+        return "No concept relationships in the graph yet."
+    untyped = total - typed
+    if all_excluded is not None and untyped > 0:
+        return all_excluded.format(count=count, untyped=untyped)
+    return none_survived.format(count=count)
+
+
 @app.command("suggest-relations")
 def suggest_relations_cmd(
     auto: bool = typer.Option(
@@ -4802,7 +4881,18 @@ def suggest_relations_cmd(
     typer.echo()
     total = len(edges)
     if total == 0:
-        typer.echo("No untyped relations found.")
+        typer.echo(
+            _zero_edge_state_message(
+                layout,
+                use_typed_count=False,
+                none_survived="{count} relation(s) exist; none are untyped.",
+                all_excluded=(
+                    "{count} relation(s) exist; {untyped} untyped, but every "
+                    "untyped pair is already typed elsewhere or filtered as "
+                    "confidential -- nothing left to suggest."
+                ),
+            )
+        )
         return
 
     if not auto:
@@ -5109,7 +5199,15 @@ def contradictions(
     typer.echo(f"openkos contradictions: workspace at {root}")
     typer.echo()
     if not verdicts:
-        typer.echo("No candidate pairs found.")
+        typer.echo(
+            _zero_edge_state_message(
+                layout,
+                use_typed_count=True,
+                none_survived=(
+                    "{count} typed relation(s); none are contradiction candidates."
+                ),
+            )
+        )
         return
 
     if total_pairs > len(verdicts):
