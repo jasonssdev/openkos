@@ -87,12 +87,12 @@ Satisfies: specs/candidate-edge-seeding, specs/graph-projection. Fakes only, NO 
 
 ### Phase 2.6: Invariant assertions (cheap, explicit)
 
-- [ ] 2.6.1 Test: `tests/unit/bundle/` or existing merge/unmerge suite -- assert a bundle containing pass-3 candidate rows leaves `model/okf.py` `Relation` encode/decode and `bundle/relations.py` merge/unmerge behavior byte-identical to a bundle without them (projection-ephemeral invariant from specs/candidate-edge-seeding).
+- [x] 2.6.1 Test: `tests/unit/bundle/` or existing merge/unmerge suite -- assert a bundle containing pass-3 candidate rows leaves `model/okf.py` `Relation` encode/decode and `bundle/relations.py` merge/unmerge behavior byte-identical to a bundle without them (projection-ephemeral invariant from specs/candidate-edge-seeding).
 
 ### Phase 2.7: PR2 gate
 
-- [ ] 2.7.1 `uv run pytest` green; branch coverage >= 90%.
-- [ ] 2.7.2 Confirm no CLI wiring landed (`cli/main.py` untouched in this PR) and PR2's diff targets PR1's branch cleanly (no PR1 changes leaking in).
+- [x] 2.7.1 `uv run pytest` green; branch coverage >= 90%.
+- [x] 2.7.2 Confirm no CLI wiring landed (`cli/main.py` untouched in this PR) and PR2's diff targets PR1's branch cleanly (no PR1 changes leaking in).
 
 ## PR3 -- CLI/Ingest Wiring + Fail-Open Degradation + End-to-End (targets: PR2 branch)
 

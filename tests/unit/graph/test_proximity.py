@@ -13,7 +13,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from openkos.graph import proximity
+from openkos.llm.base import EMBED_DIM
+from openkos.state import vectorstore
 from openkos.state.vectorstore import VecHit
 
 
@@ -242,3 +246,77 @@ def test_proximity_source_close_is_a_no_op_for_a_store_without_close() -> None:
     source = proximity.VectorProximitySource(_FakeNeighborQuery({}))
 
     source.close()  # must not raise
+
+
+def test_top_k_cap_holds_even_if_the_store_ignores_k() -> None:
+    """`TOP_K` is enforced HERE, not delegated to the store honoring `k`.
+    A store that over-returns -- a different backend, a future vec0 -- must
+    not be able to widen the cap."""
+
+    class _OverReturningQuery:
+        def neighbors(self, concept_id: str, k: int) -> list[VecHit]:
+            del k  # deliberately ignored
+            return [_hit(concept_id, 0.0)] + [
+                _hit(f"concepts/n{i}", 0.1) for i in range(proximity.TOP_K + 10)
+            ]
+
+    pairs = proximity.VectorProximitySource(_OverReturningQuery()).pairs(
+        ["concepts/anchor"]
+    )
+
+    assert len(pairs) == proximity.TOP_K
+
+
+def test_close_swallows_a_failing_underlying_close() -> None:
+    """Teardown must never be what breaks a build: a store whose `close`
+    raises is reported as closed anyway, exactly as a failing k-NN degrades
+    to zero candidates."""
+
+    class _FailingCloseQuery:
+        def neighbors(self, concept_id: str, k: int) -> list[VecHit]:
+            return []
+
+        def close(self) -> None:
+            raise OSError("disk went away")
+
+    source = proximity.VectorProximitySource(_FailingCloseQuery())
+
+    source.close()  # must not raise
+
+
+def test_open_proximity_source_returns_none_for_a_malformed_vectors_db(
+    tmp_path: Path,
+) -> None:
+    """A file that exists but is not a usable vector store degrades to
+    `None` rather than raising -- `build_graph` then behaves exactly as it
+    does with no `vectors.db` at all."""
+    db_path = tmp_path / "vectors.db"
+    db_path.write_bytes(b"not a sqlite database")
+
+    assert proximity.open_proximity_source(db_path) is None
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+def test_open_proximity_source_yields_a_working_source_over_a_real_store(
+    tmp_path: Path,
+) -> None:
+    """End-to-end over the REAL store: `open_proximity_source` returns a
+    source whose `pairs` runs a genuine vec0 k-NN and whose context manager
+    closes the connection. This is the only test that proves
+    `VectorStoreDB` actually satisfies `NeighborQuery` structurally -- every
+    other test here uses a fake."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    with vectorstore.open_vector_store(db_path) as db:
+        db.upsert("concepts/a", [1.0] + [0.0] * (EMBED_DIM - 1), "h-a")
+        db.upsert("concepts/b", [0.99, 0.01] + [0.0] * (EMBED_DIM - 2), "h-b")
+        db.upsert("concepts/far", [0.0] * (EMBED_DIM - 1) + [1.0], "h-far")
+
+    source = proximity.open_proximity_source(db_path)
+
+    assert source is not None
+    with source:
+        pairs = source.pairs(["concepts/a", "concepts/b", "concepts/far"])
+
+    assert [(p.source_id, p.target_id) for p in pairs] == [("concepts/a", "concepts/b")]

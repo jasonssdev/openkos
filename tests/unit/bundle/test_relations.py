@@ -17,10 +17,15 @@ verbatim -- an ABSOLUTE overwrite, never offset math (design D1/D3),
 unlike the link-rewrite trio.
 """
 
+from collections.abc import Sequence
+from pathlib import Path
+
 import pytest
 
 from openkos.bundle import links as bundle_links
 from openkos.bundle import relations
+from openkos.graph.proximity import ProximityPair
+from openkos.graph.sqlite_graph import build_graph
 from openkos.model import okf
 
 
@@ -459,3 +464,137 @@ def test_reverse_relation_rewrites_fails_closed_on_drifted_current_text() -> Non
             rewrites=[rewrite],
             link_rewrites=[],
         )
+
+
+# -- projection-ephemeral invariant (#183, task 2.6) -----------------------
+
+
+class _StubCandidateSource:
+    """Stands in for `graph.proximity.VectorProximitySource`."""
+
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        self._pairs = pairs
+
+    def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+        return [
+            ProximityPair(source_id=s, target_id=t, distance=0.1)
+            for s, t in self._pairs
+        ]
+
+
+def _write_concept(path: Path, *, title: str, relations_block: str = "") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Concept\ntitle: {title}\nsensitivity: private\n"
+        f"{relations_block}---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def _snapshot(bundle: Path) -> dict[str, bytes]:
+    return {
+        p.relative_to(bundle).as_posix(): p.read_bytes()
+        for p in sorted(bundle.rglob("*.md"))
+    }
+
+
+def test_building_with_candidates_leaves_every_bundle_byte_unchanged(
+    tmp_path: Path,
+) -> None:
+    """The load-bearing invariant of #183: candidate edges are
+    PROJECTION-EPHEMERAL. They exist in the in-memory graph and nowhere
+    else -- never in `relations:` frontmatter, never in any bundle byte.
+
+    This is what makes the similarity threshold safe to change: recompute
+    on the next build, no migration, no bundle schema change. If a
+    candidate ever reached disk it would become indistinguishable from a
+    relationship a human actually accepted."""
+    bundle = tmp_path / "bundle"
+    _write_concept(bundle / "concepts" / "a.md", title="A")
+    _write_concept(bundle / "concepts" / "b.md", title="B")
+    before = _snapshot(bundle)
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    with build_graph(bundle, candidates=source) as store:
+        rows = [(e.source_id, e.target_id, e.relation_type) for e in store.edges()]
+
+    # The candidate really was produced -- this is not a vacuous pass.
+    assert rows == [("concepts/a", "concepts/b", None)]
+    assert _snapshot(bundle) == before
+
+
+def test_candidate_rows_never_decode_as_relations(tmp_path: Path) -> None:
+    """`okf.decode_relations` reads `relations:` frontmatter, which pass 3
+    never writes. A candidate must stay invisible to the canonical layer,
+    so re-reading the docs after a build yields exactly the relations the
+    author wrote -- none."""
+    bundle = tmp_path / "bundle"
+    _write_concept(bundle / "concepts" / "a.md", title="A")
+    _write_concept(bundle / "concepts" / "b.md", title="B")
+    source = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    with build_graph(bundle, candidates=source):
+        pass
+
+    for name in ("a", "b"):
+        metadata, _ = okf.load_frontmatter(
+            (bundle / "concepts" / f"{name}.md").read_text(encoding="utf-8")
+        )
+        assert okf.decode_relations(metadata) == []
+        assert "relations" not in metadata
+
+
+def test_merge_rewrite_and_reverse_are_identical_with_and_without_candidates(
+    tmp_path: Path,
+) -> None:
+    """Merge/unmerge operates on bundle text, so a build that produced
+    candidates must not perturb it by a single byte -- otherwise `unmerge`
+    could not restore a pre-merge snapshot verbatim."""
+    bundle = tmp_path / "bundle"
+    _write_concept(
+        bundle / "concepts" / "third.md",
+        title="Third",
+        relations_block="relations:\n  - target: concepts/absorbed\n    type: relates_to\n",
+    )
+    _write_concept(bundle / "concepts" / "absorbed.md", title="Absorbed")
+    _write_concept(bundle / "concepts" / "survivor.md", title="Survivor")
+
+    def _round_trip() -> tuple[str, str]:
+        files = {
+            p.relative_to(bundle).as_posix(): p.read_text(encoding="utf-8")
+            for p in sorted(bundle.rglob("*.md"))
+        }
+        rewrites = relations.find_inbound_relation_rewrites(
+            files, absorbed_id="concepts/absorbed", survivor_id="concepts/survivor"
+        )
+        applied = relations.apply_relation_rewrites(
+            files["concepts/third.md"],
+            file="concepts/third.md",
+            survivor_id="concepts/survivor",
+            absorbed_id="concepts/absorbed",
+            rewrites=rewrites,
+        )
+        reversed_text = relations.reverse_relation_rewrites(
+            applied,
+            file="concepts/third.md",
+            survivor_id="concepts/survivor",
+            absorbed_id="concepts/absorbed",
+            rewrites=rewrites,
+            link_rewrites=[],
+        )
+        return applied, reversed_text
+
+    without = _round_trip()
+    source = _StubCandidateSource(
+        [
+            ("concepts/absorbed", "concepts/survivor"),
+            ("concepts/third", "concepts/survivor"),
+        ]
+    )
+    with build_graph(bundle, candidates=source) as store:
+        assert any(e.relation_type is None for e in store.edges())
+    with_candidates = _round_trip()
+
+    assert with_candidates == without
+    # And the reverse really does restore the original text.
+    assert without[1] == (bundle / "concepts" / "third.md").read_text(encoding="utf-8")
