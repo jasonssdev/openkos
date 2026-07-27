@@ -24,10 +24,11 @@ per-doc failure. A doc that reads/parses fine but whose embed call
 transiently fails (the generic `OllamaError` EOF class, after the client-
 layer retry budget is exhausted) is counted separately as `embed_failed`
 (TRANSIENT) -- also never pruned, but distinct from `skipped` since a re-run
-gives it another chance. `OllamaUnavailable`/`OllamaModelNotFound` mid-loop
-are NOT per-doc failures at all: they re-raise immediately, propagating out
-of this function (reindex-embedding-resilience: Per-Doc Embed Failure Is
-Isolated, Not Fatal). WHEN `okf._walk_errors(bundle_dir)` reports one or
+gives it another chance. `OllamaUnavailable`/`OllamaModelNotFound`/
+`OllamaEmbeddingDimensionMismatch` mid-loop are NOT per-doc failures at all:
+they re-raise immediately, propagating out of this function
+(reindex-embedding-resilience: Per-Doc Embed Failure Is Isolated, Not
+Fatal). WHEN `okf._walk_errors(bundle_dir)` reports one or
 more directory-scan errors for this run (e.g. a permission-denied
 subdirectory `_iter_docs`'s `rglob` walk silently could not descend into),
 the ENTIRE prune pass is skipped for that run -- an unreadable subtree can
@@ -58,7 +59,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from openkos.llm.base import Embedder
-from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.llm.ollama import (
+    OllamaEmbeddingDimensionMismatch,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.model import okf
 from openkos.state import derived, fts
 from openkos.state.vectorstore import VectorStore, content_hash
@@ -258,16 +264,24 @@ def reindex(
         for concept_id, text, digest in to_embed:
             try:
                 vector = embedder.embed([text])[0]
-            except (OllamaUnavailable, OllamaModelNotFound):
-                # FATAL, not a per-doc skip (design D2/D3): an unreachable
-                # server or a missing model cannot serve ANY embed, so this
+            except (
+                OllamaUnavailable,
+                OllamaModelNotFound,
+                OllamaEmbeddingDimensionMismatch,
+            ):
+                # FATAL, not a per-doc skip (design D2/D3, D7/D8): an
+                # unreachable server, a missing model, or a permanent
+                # wrong-dimension response cannot serve ANY embed, so this
                 # is not a transient per-input failure. Re-raise immediately
                 # -- no further queued docs are processed, and nothing from
                 # this interrupted run is committed (the loop never reaches
                 # `db.upsert_many`/`commit()` below). MUST be checked BEFORE
-                # the generic `OllamaError` catch: both subclass it, and a
-                # bare `except OllamaError` here would silently swallow a
-                # fatal condition as "every doc skipped, exit 0".
+                # the generic `OllamaError` catch: all three subclass it, and
+                # a bare `except OllamaError` here would silently swallow a
+                # fatal condition as "every doc skipped, exit 0" -- the exact
+                # misclassification this branch closes for a dimension
+                # mismatch (reindex-command: Per-Doc Embed Failure Is
+                # Isolated, Not Fatal).
                 raise
             except OllamaError:
                 # Generic transient failure (the HTTP-400 EOF class) with

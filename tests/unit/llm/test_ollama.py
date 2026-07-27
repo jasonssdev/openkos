@@ -24,6 +24,7 @@ from openkos.llm.base import EMBED_DIM, Embedder, Message
 from openkos.llm.ollama import (
     InstalledModel,
     OllamaClient,
+    OllamaEmbeddingDimensionMismatch,
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
@@ -1138,6 +1139,128 @@ def test_chat_never_retries_on_transient_error() -> None:
         client.chat([{"role": "user", "content": "hi"}])
 
     assert sleep_spy.calls == []
+
+
+# --- Phase 13: OllamaEmbeddingDimensionMismatch (D7/D8) -----------------------
+
+
+def test_embed_row_wrong_length_raises_dimension_mismatch_not_generic_error() -> None:
+    """A wrong-length row raises the distinct `OllamaEmbeddingDimensionMismatch`,
+    not the generic `OllamaError` (task 2.1; llm-client: Wrong-dimension row
+    raises the distinct permanent error)."""
+    short_row = [0.1] * (EMBED_DIM - 1)
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(_embed_body([short_row]), []),
+        embed_retry_attempts=1,
+    )
+
+    with pytest.raises(OllamaEmbeddingDimensionMismatch):
+        client.embed(["a"])
+
+
+def test_embed_dimension_mismatch_message_names_actual_and_expected_length() -> None:
+    """The message states both the actual row length and the expected
+    `EMBED_DIM` (task 2.2; llm-client: Message names the actual and expected
+    dimension)."""
+    short_row = [0.1] * 768
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(_embed_body([short_row]), []),
+        embed_retry_attempts=1,
+    )
+
+    with pytest.raises(OllamaEmbeddingDimensionMismatch) as excinfo:
+        client.embed(["a"])
+
+    message = str(excinfo.value)
+    assert "768" in message
+    assert str(EMBED_DIM) in message
+
+
+def test_embed_dimension_mismatch_is_a_ollama_error_subclass() -> None:
+    """`OllamaEmbeddingDimensionMismatch` subclasses `OllamaError`, so an
+    unmodified bare `except OllamaError` still catches it (task 2.2;
+    llm-client: Subclass relationship preserves existing broad catches)."""
+    assert issubclass(OllamaEmbeddingDimensionMismatch, OllamaError)
+
+
+def test_embed_dimension_mismatch_never_retried() -> None:
+    """A dimension mismatch on every attempt is raised immediately on the
+    first occurrence, consuming zero retry attempts -- `sleep` is never
+    called and `urlopen` is called exactly once (task 2.4/2.5; llm-client:
+    Dimension mismatch is never retried)."""
+    sleep_spy = _SleepSpy()
+    short_row = [0.1] * (EMBED_DIM - 1)
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_sequenced_urlopen([_FakeResponse(_embed_body([short_row]))]),
+        sleep=sleep_spy,
+    )
+
+    with pytest.raises(OllamaEmbeddingDimensionMismatch):
+        client.embed(["a"])
+
+    assert sleep_spy.calls == []
+
+
+def test_embed_row_non_numeric_value_still_raises_generic_ollama_error() -> None:
+    """A non-numeric row entry of the CORRECT length still raises the
+    generic `OllamaError`, not `OllamaEmbeddingDimensionMismatch` (task 2.6;
+    D7 scope-discipline regression guard: only the wrong-LENGTH branch gets
+    the new permanent error)."""
+    bad_row: list[Any] = [0.1] * (EMBED_DIM - 1) + ["not-a-float"]
+    body = json.dumps({"embeddings": [bad_row]}).encode("utf-8")
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(body, []),
+        embed_retry_attempts=1,
+    )
+
+    with pytest.raises(OllamaError) as excinfo:
+        client.embed(["a"])
+
+    assert not isinstance(excinfo.value, OllamaEmbeddingDimensionMismatch)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not json at all {{{",
+        json.dumps({"unexpected": "shape"}).encode("utf-8"),
+    ],
+)
+def test_embed_malformed_or_missing_key_response_stays_generic_ollama_error(
+    body: bytes,
+) -> None:
+    """Malformed JSON and a missing vector key both still raise the generic
+    `OllamaError`, unaffected by the new dimension-mismatch branch (task 2.7;
+    parity with the pre-existing malformed-response behavior)."""
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(body, []),
+        embed_retry_attempts=1,
+    )
+
+    with pytest.raises(OllamaError) as excinfo:
+        client.embed(["a"])
+
+    assert not isinstance(excinfo.value, OllamaEmbeddingDimensionMismatch)
+
+
+def test_embed_singular_key_wrong_dimension_also_raises_dimension_mismatch() -> None:
+    """The dimension-mismatch branch applies identically to the legacy
+    singular `embedding` key, not only the plural `embeddings` key (task 2.7
+    parity guard)."""
+    short_row = [0.1] * (EMBED_DIM - 1)
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        urlopen=_fake_urlopen(_embed_body_singular(short_row), []),
+        embed_retry_attempts=1,
+    )
+
+    with pytest.raises(OllamaEmbeddingDimensionMismatch):
+        client.embed(["only"])
 
 
 # --- Phase 8: layering guard --------------------------------------------------

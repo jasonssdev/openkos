@@ -41,21 +41,21 @@ Rationale: total estimate is under the session's raised 800-line budget but comf
 
 ## Phase 2: `llm/ollama.py` dimension error (PR2)
 
-- [ ] 2.1 RED: `tests/unit/llm/test_ollama.py` — a 768-length row raises `OllamaEmbeddingDimensionMismatch`, not generic `OllamaError`
-- [ ] 2.2 GREEN: add `OllamaEmbeddingDimensionMismatch(OllamaError)` in `llm/ollama.py`, message states actual and expected (`EMBED_DIM`) length
-- [ ] 2.3 GREEN: raise it from `_validate_embedding_row`'s wrong-length branch (bypasses the `except (JSONDecodeError, KeyError, TypeError, ValueError)` rewrap in `_embed_once` since it is not a `ValueError`)
-- [ ] 2.4 RED: `tests/unit/llm/test_ollama.py` — dimension mismatch triggers zero `sleep` calls (not retried)
-- [ ] 2.5 GREEN — **safety-critical ordering**: in `embed()`'s retry loop (~lines 197-207), add `except OllamaEmbeddingDimensionMismatch: raise` alongside the existing `except OllamaModelNotFound: raise`, BOTH placed BEFORE `except OllamaError:` (retry-with-backoff)
-- [ ] 2.6 RED: `tests/unit/llm/test_ollama.py` — non-numeric row still raises generic `OllamaError` (D7 scope-discipline regression guard)
-- [ ] 2.7 RED: `tests/unit/llm/test_ollama.py` — malformed JSON / missing vector key / singular `embedding` key parity unaffected by the new branch
+- [x] 2.1 RED: `tests/unit/llm/test_ollama.py` — a 768-length row raises `OllamaEmbeddingDimensionMismatch`, not generic `OllamaError`
+- [x] 2.2 GREEN: add `OllamaEmbeddingDimensionMismatch(OllamaError)` in `llm/ollama.py`, message states actual and expected (`EMBED_DIM`) length
+- [x] 2.3 GREEN: raise it from `_validate_embedding_row`'s wrong-length branch (bypasses the `except (JSONDecodeError, KeyError, TypeError, ValueError)` rewrap in `_embed_once` since it is not a `ValueError`)
+- [x] 2.4 RED: `tests/unit/llm/test_ollama.py` — dimension mismatch triggers zero `sleep` calls (not retried)
+- [x] 2.5 GREEN — **safety-critical ordering**: in `embed()`'s retry loop (~lines 197-207), add `except OllamaEmbeddingDimensionMismatch: raise` alongside the existing `except OllamaModelNotFound: raise`, BOTH placed BEFORE `except OllamaError:` (retry-with-backoff)
+- [x] 2.6 RED: `tests/unit/llm/test_ollama.py` — non-numeric row still raises generic `OllamaError` (D7 scope-discipline regression guard)
+- [x] 2.7 RED: `tests/unit/llm/test_ollama.py` — malformed JSON / missing vector key / singular `embedding` key parity unaffected by the new branch
 
 ## Phase 3: `state/reindex.py` fatal handling (PR2)
 
-- [ ] 3.1 RED: `tests/unit/state/test_reindex.py` — `OllamaEmbeddingDimensionMismatch` propagates out of `reindex`; `embed_failed` stays `0`; no `upsert_many`/`commit`/`write_model_tag` called
-- [ ] 3.2 GREEN — **safety-critical ordering**: at `state/reindex.py:272`, add `OllamaEmbeddingDimensionMismatch` to the fatal tuple `(OllamaUnavailable, OllamaModelNotFound)` — this clause MUST precede the broad `except OllamaError:` also at line 272
-- [ ] 3.3 RED: `tests/unit/state/test_reindex.py` — stderr message on this path names it a permanent dimension mismatch, never "will retry next run"
-- [ ] 3.4 GREEN: build the dedicated stderr message text for the dimension-mismatch fatal path
-- [ ] 3.5 RED: `tests/unit/state/test_reindex.py` — existing `OllamaUnavailable`/`OllamaModelNotFound` fatal-path scenarios remain unaffected (regression)
+- [x] 3.1 RED: `tests/unit/state/test_reindex.py` — `OllamaEmbeddingDimensionMismatch` propagates out of `reindex`; `embed_failed` stays `0`; no `upsert_many`/`commit`/`write_model_tag` called
+- [x] 3.2 GREEN — **safety-critical ordering**: at `state/reindex.py:272`, add `OllamaEmbeddingDimensionMismatch` to the fatal tuple `(OllamaUnavailable, OllamaModelNotFound)` — this clause MUST precede the broad `except OllamaError:` also at line 272
+- [x] 3.3 RED: `tests/unit/state/test_reindex.py` — stderr message on this path names it a permanent dimension mismatch, never "will retry next run"
+- [x] 3.4 GREEN: build the dedicated stderr message text for the dimension-mismatch fatal path
+- [x] 3.5 RED: `tests/unit/state/test_reindex.py` — existing `OllamaUnavailable`/`OllamaModelNotFound` fatal-path scenarios remain unaffected (regression)
 
 ## Phase 4: `cli/main.py` wiring (PR3)
 

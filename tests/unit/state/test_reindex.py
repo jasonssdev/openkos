@@ -18,7 +18,12 @@ from pathlib import Path
 import pytest
 
 from openkos.llm.base import EMBED_DIM
-from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.llm.ollama import (
+    OllamaEmbeddingDimensionMismatch,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.state import derived, fts, reindex, vectorstore
 
 
@@ -1181,6 +1186,98 @@ def test_reindex_ollama_model_not_found_mid_loop_is_reraised_not_counted_as_embe
         hashes = db.meta_hashes()
 
     assert hashes == {}
+
+
+def test_reindex_dimension_mismatch_mid_loop_propagates_and_stays_unrecorded(
+    tmp_path: Path,
+) -> None:
+    """`OllamaEmbeddingDimensionMismatch` raised mid-loop is FATAL, not a
+    per-doc skip: it propagates out of `reindex()` unchanged, `embed_failed`
+    stays `0`, and nothing from this interrupted run is committed -- no
+    `upsert_many`/`commit`/`write_model_tag` (task 3.1; spec: Dimension
+    mismatch mid-embed-loop is fatal, not a per-doc skip)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="fine")
+    _write_doc(bundle_dir / "concepts" / "z.md", title="Z", body="wrong-dim")
+    embedder = _FaultyEmbedder(
+        {"wrong-dim": OllamaEmbeddingDimensionMismatch("expected 1024, got 768")}
+    )
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        with pytest.raises(OllamaEmbeddingDimensionMismatch):
+            reindex.reindex(bundle_dir, db, embedder)
+        hashes = db.meta_hashes()
+        stored_tag = db.read_model_tag()
+
+    assert hashes == {}
+    assert stored_tag is None
+
+
+def test_reindex_dimension_mismatch_ordering_precedes_generic_ollama_error_catch(
+    tmp_path: Path,
+) -> None:
+    """Safety-critical ordering guard (task 3.2): `reindex()` must check
+    `OllamaEmbeddingDimensionMismatch` BEFORE the broad `except OllamaError`
+    clause. A test that only asserts the exception type raised would still
+    pass if the clauses were reversed (a bare `except OllamaError` also
+    catches the subclass) -- this test instead proves the ORDERING by
+    asserting the doc was NEVER counted as `embed_failed` and no further
+    queued docs were processed after the raise, which only holds if the
+    dimension-mismatch branch is checked first."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A", body="fine")
+    _write_doc(bundle_dir / "concepts" / "z.md", title="Z", body="wrong-dim")
+    _write_doc(bundle_dir / "concepts" / "zz.md", title="ZZ", body="never-reached")
+    embedder = _FaultyEmbedder(
+        {"wrong-dim": OllamaEmbeddingDimensionMismatch("expected 1024, got 768")}
+    )
+
+    with (
+        vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db,
+        pytest.raises(OllamaEmbeddingDimensionMismatch),
+    ):
+        reindex.reindex(bundle_dir, db, embedder)
+
+    # If the ordering were reversed (generic `except OllamaError` checked
+    # first), the subclass would still match it -- BUT `reindex()`'s current
+    # generic branch increments `embed_failed` and `continue`s instead of
+    # re-raising, so the loop would proceed to "zz.md" (never-reached) and
+    # `embed()` would be called a THIRD time. Asserting exactly 2 calls
+    # (a.md succeeds, z.md raises) proves the fatal branch stopped the loop
+    # immediately -- reversing the clauses would make this assertion fail.
+    assert embedder.call_count == 2
+
+
+def test_reindex_dimension_mismatch_message_is_permanent_never_will_retry(
+    tmp_path: Path,
+) -> None:
+    """The stderr-bound message on this fatal path names it a permanent
+    dimension mismatch and never claims "will retry next run" (task 3.3/
+    3.4): the propagated exception's own message (built in `llm/ollama.py`,
+    D7) is what any caller prints unchanged, so it must already satisfy this
+    wording constraint by the time it leaves `reindex()`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "z.md", title="Z", body="wrong-dim")
+    embedder = _FaultyEmbedder(
+        {
+            "wrong-dim": OllamaEmbeddingDimensionMismatch(
+                "Ollama returned an embedding row of length 768, expected "
+                "exactly 1024 (EMBED_DIM) -- this is a permanent dimension "
+                "mismatch caused by the configured embedding model, not a "
+                "transient failure; it will not heal by retrying."
+            )
+        }
+    )
+
+    with (
+        vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db,
+        pytest.raises(OllamaEmbeddingDimensionMismatch) as excinfo,
+    ):
+        reindex.reindex(bundle_dir, db, embedder)
+
+    message = str(excinfo.value)
+    assert "permanent" in message
+    assert "will retry next run" not in message
 
 
 def test_reindex_model_tag_mismatch_with_an_embed_failed_doc_converges_across_runs(
