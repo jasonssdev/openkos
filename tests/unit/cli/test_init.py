@@ -450,7 +450,9 @@ def test_picker_lists_chat_models_excludes_embedding(
     """The picker's numbered list shows installed chat models and marks the
     recommended default, but never lists an embedding model (family
     "bert") as a selectable option (spec: Embedding Models Excluded From
-    Picker Candidates)."""
+    Picker Candidates). `bge-m3` legitimately appears further down, in the
+    SEPARATE embedding-model picker's own section -- this test scopes its
+    exclusion assertion to the chat-model section only."""
     monkeypatch.chdir(tmp_path)
     _simulate_tty(monkeypatch)
     monkeypatch.setattr(
@@ -463,12 +465,13 @@ def test_picker_lists_chat_models_excludes_embedding(
         ),
     )
 
-    result = runner.invoke(app, ["init"], input="\n")
+    result = runner.invoke(app, ["init"], input="\n\n")
 
     assert result.exit_code == 0
     assert "qwen3:8b" in result.output
     assert "(recommended)" in result.output
-    assert "bge-m3" not in result.output
+    chat_section = result.output.split("Installed embedding models:")[0]
+    assert "bge-m3" not in chat_section
 
 
 def test_picker_numeric_choice_selects_and_persists(
@@ -563,7 +566,9 @@ def test_picker_zero_chat_models_falls_back_to_typed_prompt(
     """Only embedding models installed (zero chat candidates after the
     family filter): the picker falls back to the typed-prompt/default flow
     without crashing (spec: Graceful Degradation -- only embedding models
-    installed)."""
+    installed). `bge-m3` legitimately IS a valid, recommended candidate for
+    the SEPARATE embedding-model picker, so this test scopes its assertion
+    to the chat-model picker's own header, not the whole output."""
     monkeypatch.chdir(tmp_path)
     _simulate_tty(monkeypatch)
     monkeypatch.setattr(
@@ -571,10 +576,10 @@ def test_picker_zero_chat_models_falls_back_to_typed_prompt(
         _fake_ollama_client(installed=[InstalledModel(tag="bge-m3", family="bert")]),
     )
 
-    result = runner.invoke(app, ["init"], input="\n")
+    result = runner.invoke(app, ["init"], input="\n\n")
 
     assert result.exit_code == 0
-    assert "(recommended)" not in result.output
+    assert "Installed chat models:" not in result.output
     content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
     assert "model: qwen3:8b" in content
 
@@ -697,6 +702,300 @@ def test_model_flag_rejects_blank_or_unsafe_value(
     assert "refusing" in result.stderr
     assert _snapshot(tmp_path) == before
     assert not (tmp_path / "openkos.yaml").exists()
+
+
+# --- Slice C (init-embedding-model-choice): embedding model wiring --------
+
+
+def test_embedding_model_flag_overrides_picker_and_writes_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--embedding-model` wins outright, even on a TTY: no embedding picker
+    is shown, and every other field (including `model:`) resolves to its
+    default (spec: Embedding flag override selects the embedding model)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(
+        app, ["init", "--embedding-model", "custom-embed:test"], input="\n"
+    )
+
+    assert result.exit_code == 0
+    assert "Installed embedding models:" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: custom-embed:test" in content
+    assert "model: qwen3:8b" in content
+
+
+def test_embedding_model_flag_wins_over_default_picker_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Precedence proof: with the flag given, the picker's installed
+    candidates (which would otherwise pick `bge-m3`) are never consulted."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag=DEFAULT_MODEL, family="qwen"),
+                InstalledModel(tag="bge-m3", family="bert"),
+            ]
+        ),
+    )
+
+    result = runner.invoke(
+        app, ["init", "--embedding-model", "custom-embed:test"], input="\n\n"
+    )
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: custom-embed:test" in content
+
+
+def test_embedding_model_non_tty_no_flag_resolves_to_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `--embedding-model` flag, stdin is not a TTY: no picker, the
+    packaged default is written silently (precedence: flag > picker >
+    default, default branch)."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "Installed embedding models:" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: bge-m3" in content
+
+
+def test_embedding_picker_lists_allowlisted_candidate_with_default_marked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The embedding picker's numbered list is allowlist-only -- NOT
+    `is_embedding_model(m) and allowlisted` -- and marks `bge-m3` as
+    recommended. `InstalledModel(tag="bge-m3", family=None)` (no reported
+    `details.family`) MUST still appear as a candidate (D2 regression
+    guard: the allowlist is stronger evidence than the heuristic tag/family
+    classifier, so it must not be stacked on top of it)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[InstalledModel(tag="bge-m3", family=None)],
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n\n")
+
+    assert result.exit_code == 0
+    assert "Installed embedding models:" in result.output
+    embedding_section = result.output.split("Installed embedding models:")[1]
+    assert "bge-m3" in embedding_section
+    assert "(recommended)" in embedding_section
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: bge-m3" in content
+
+
+def test_embedding_picker_server_latest_tag_normalizes_to_allowlist_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server-reported `bge-m3:latest` tag (Ollama's own `/api/tags`
+    convention) still matches the allowlisted `bge-m3` entry via
+    `ollama.model_tag_matches`, and the ALLOWLIST spelling -- not the raw
+    server tag -- is what gets written, so `cfg.embedding_model` never
+    diverges from `DEFAULT_EMBEDDING_MODEL` for a no-op selection (D3)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[InstalledModel(tag="bge-m3:latest", family="bert")],
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n\n")
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: bge-m3 " in content
+    assert "bge-m3:latest" not in content
+
+
+def test_embedding_model_flag_off_allowlist_writes_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `--embedding-model` value that passes YAML-safety validation but is
+    NOT on the vetted allowlist is still validated, written, and warned
+    about on stderr -- never blocked, exit code unaffected (spec:
+    Off-Allowlist Embedding Model Flag Is Warned, Not Blocked)."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init", "--embedding-model", "custom-embed:latest"])
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: custom-embed:latest" in content
+    assert "custom-embed:latest" in result.stderr
+    assert "not on the" in result.stderr
+
+
+def test_embedding_model_flag_latest_qualified_allowlist_entry_is_not_warned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--embedding-model bge-m3:latest` names the vetted model, so it must
+    neither warn nor write the raw server-style tag.
+
+    The flag path resolves allowlist membership with the SAME
+    `model_tag_matches` normalization the picker uses (D3). Exact string
+    membership would call this vetted model off-allowlist, and writing
+    `bge-m3:latest` would diverge from `DEFAULT_EMBEDDING_MODEL` and trip the
+    model-tag re-embed gate into a full corpus re-embed for a no-op change.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init", "--embedding-model", "bge-m3:latest"])
+
+    assert result.exit_code == 0
+    assert "not on the" not in result.stderr
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: bge-m3 " in content
+    assert "bge-m3:latest" not in content
+
+
+def test_sticky_reembed_warning_does_not_blame_another_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sticky warning must describe only what affects THIS workspace.
+
+    Running `init` on a different workspace cannot force a re-embed here, so
+    naming that as a cause is misleading to a reader who does not know the
+    codebase.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "is sticky" in result.stderr
+    assert "different workspace" not in result.stderr
+
+
+def test_embedding_picker_unreachable_ollama_falls_back_to_default_silently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama unreachable during the shared probe: no embedding picker is
+    shown, `embedding_model` silently resolves to the default, and the
+    workspace is still created with exit 0 (spec: Graceful Degradation Of
+    The Embedding Picker -- unreachable)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert "Installed embedding models:" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: bge-m3" in content
+
+
+def test_embedding_picker_zero_allowlisted_candidates_falls_back_silently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama reachable but no installed model is on the vetted allowlist:
+    no embedding picker is shown, `embedding_model` silently resolves to
+    the default, no exception propagates (spec: Graceful Degradation Of The
+    Embedding Picker -- zero candidates)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[InstalledModel(tag=DEFAULT_MODEL, family="qwen")]
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert "Installed embedding models:" not in result.output
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: bge-m3" in content
+
+
+def test_embedding_picker_reuses_shared_probe_no_second_reachability_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both the chat picker and the embedding picker resolve candidates from
+    ONE shared reachability probe during Phase A (spec: Graceful
+    Degradation Of The Embedding Picker -- MUST reuse the chat picker's
+    existing probe call, MUST NOT issue a second, separate reachability
+    request). `list_models()` is called exactly TWICE per `init` run here:
+    once for the shared Phase A picker probe (chat + embedding combined),
+    and once more for the separate, pre-existing post-success Ollama
+    preflight (unrelated feature, unaffected by this change). If the
+    embedding picker issued its OWN Phase A probe instead of reusing the
+    chat picker's, the count would be THREE, not two."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    call_count = 0
+
+    class _CountingFakeOllamaClient:
+        def __init__(self, model: str, **kwargs: object) -> None:
+            self.model = model
+
+        def list_models(self) -> list[InstalledModel]:
+            nonlocal call_count
+            call_count += 1
+            return [
+                InstalledModel(tag=DEFAULT_MODEL, family="qwen"),
+                InstalledModel(tag="bge-m3", family="bert"),
+            ]
+
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingFakeOllamaClient)
+
+    result = runner.invoke(app, ["init"], input="\n\n")
+
+    assert result.exit_code == 0
+    assert call_count == 2
+
+
+def test_sticky_reembed_warning_prints_on_every_successful_init_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every successful `init` prints the sticky re-embed warning, worded
+    about FUTURE cost only -- a fresh workspace has nothing to re-embed yet
+    (spec: Sticky Re-Embed Warning On Every Successful Init)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert "sticky" in result.stderr.lower()
+    assert "re-embed" in result.stderr.lower()
+    assert "forces" in result.stderr.lower()
+    assert "has been" not in result.stderr.lower()
+    assert "already re-embedded" not in result.stderr.lower()
+
+
+def test_sticky_reembed_warning_prints_on_every_successful_init_non_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sticky warning is unconditional -- printed on a non-TTY run too,
+    regardless of which embedding model was resolved."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init", "--embedding-model", "custom-embed:test"])
+
+    assert result.exit_code == 0
+    assert "sticky" in result.stderr.lower()
+    assert "re-embed" in result.stderr.lower()
 
 
 def test_raw_default_permissions(

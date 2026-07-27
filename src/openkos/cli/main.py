@@ -38,6 +38,7 @@ from openkos.llm.base import Embedder, LLMBackend
 from openkos.llm.ollama import (
     InstalledModel,
     OllamaClient,
+    OllamaEmbeddingDimensionMismatch,
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
@@ -148,23 +149,42 @@ def callback(
     """openkos: local-first engine that compiles text into a portable knowledge base."""
 
 
-def _resolve_model(flag: str | None) -> str:
+def _probe_installed_models() -> list[InstalledModel]:
+    """Single reachability probe shared by BOTH the chat-model and the
+    embedding-model pickers (spec: Graceful Degradation Of The Embedding
+    Picker -- MUST reuse the chat picker's existing probe call, MUST NOT
+    issue a second, separate reachability request). Wrapped in a broad
+    `except Exception` so an unreachable Ollama server (or any other probe
+    failure) never blocks `init`; returns an empty list on any failure,
+    letting each picker fall back to its own default resolution
+    independently."""
+    try:
+        probe = OllamaClient(model=config.DEFAULT_MODEL, timeout=_PREFLIGHT_TIMEOUT)
+        return probe.list_models()
+    except Exception:
+        return []
+
+
+def _resolve_model(flag: str | None, installed: list[InstalledModel]) -> str:
     """Resolve the model tag to write, precedence flag > interactive picker > default.
 
     `flag` (already the raw `--model` value, or `None` if not given) wins
     outright -- no prompt or picker is shown even on a TTY. Otherwise, if
-    stdin is a TTY, `_pick_chat_model` probes Ollama and offers a numbered
-    list of installed chat models (falling back to a typed prompt if the
-    probe fails or no chat model is installed). If stdin is not a TTY (e.g.
-    piped, or a non-interactive CI run), neither prompt nor picker is shown
-    and the default is used silently. Every path runs through
-    `config.validate_model`, which raises `ValueError` for a blank or unsafe
-    value -- callers must catch it before any file is written.
+    stdin is a TTY, `_pick_chat_model` offers a numbered list of `installed`
+    chat models (falling back to a typed prompt if `installed` is empty or
+    no chat model is among it). If stdin is not a TTY (e.g. piped, or a
+    non-interactive CI run), neither prompt nor picker is shown and the
+    default is used silently. Every path runs through `config.validate_model`,
+    which raises `ValueError` for a blank or unsafe value -- callers must
+    catch it before any file is written.
+
+    `installed` is the single shared reachability probe's result (see
+    `_probe_installed_models`), passed in rather than probed here again.
     """
     if flag is not None:
         return config.validate_model(flag)
     if sys.stdin.isatty():
-        return _pick_chat_model()
+        return _pick_chat_model(installed)
     return config.DEFAULT_MODEL
 
 
@@ -179,17 +199,18 @@ def _is_selectable_model_tag(tag: str) -> bool:
         return False
 
 
-def _pick_chat_model() -> str:
+def _pick_chat_model(installed: list[InstalledModel]) -> str:
     """Interactive numbered picker over Ollama's installed chat models.
 
-    Probes Ollama in Phase A, strictly before any workspace write, wrapped
-    in a broad `except Exception` so an unreachable server (or any other
-    probe failure) never blocks `init` -- it silently falls back to the
-    pre-picker typed prompt below instead (spec: Graceful Degradation).
-    Embedding models (per `is_embedding_model`) are excluded from the
-    candidate list; if that leaves zero chat models, the picker falls back
-    the same way. `config.DEFAULT_MODEL` is always listed first, marked
-    "(recommended)" -- prepended if the probe didn't report it installed.
+    `installed` comes from the shared `_probe_installed_models` probe (run
+    strictly before any workspace write, Phase A) -- this function issues no
+    reachability request of its own. An empty `installed` list (probe
+    failed, or Ollama reported nothing) falls back to the pre-picker typed
+    prompt below (spec: Graceful Degradation). Embedding models (per
+    `is_embedding_model`) are excluded from the candidate list; if that
+    leaves zero chat models, the picker falls back the same way.
+    `config.DEFAULT_MODEL` is always listed first, marked "(recommended)"
+    -- prepended if the probe didn't report it installed.
 
     `typer.prompt("Model", default=str(<recommended index>))` reads the
     choice: pressing Enter re-supplies that default, so it resolves to the
@@ -200,15 +221,11 @@ def _pick_chat_model() -> str:
     `config.DEFAULT_MODEL`. The final choice is still validated by
     `config.validate_model`, same as every other `_resolve_model` path.
     """
-    try:
-        probe = OllamaClient(model=config.DEFAULT_MODEL, timeout=_PREFLIGHT_TIMEOUT)
-        candidates = [
-            m.tag
-            for m in probe.list_models()
-            if not is_embedding_model(m) and _is_selectable_model_tag(m.tag)
-        ]
-    except Exception:
-        candidates = []
+    candidates = [
+        m.tag
+        for m in installed
+        if not is_embedding_model(m) and _is_selectable_model_tag(m.tag)
+    ]
 
     if not candidates:
         return config.validate_model(
@@ -240,6 +257,119 @@ def _pick_chat_model() -> str:
         )
 
     return config.validate_model(config.DEFAULT_MODEL)
+
+
+def _canonical_allowlist_spelling(tag: str) -> str:
+    """Return the `EMBEDDING_MODEL_ALLOWLIST` spelling `tag` names, or `tag`.
+
+    One source of truth for D3 normalization, shared by the flag path and the
+    picker so the two entry points can never disagree about whether a value
+    is on the allowlist. A tag matching nothing is returned unchanged -- D6's
+    off-allowlist escape hatch stays verbatim, never coerced."""
+    for allowed in config.EMBEDDING_MODEL_ALLOWLIST:
+        if model_tag_matches(allowed, [tag]):
+            return allowed
+    return tag
+
+
+def _resolve_embedding_model(flag: str | None, installed: list[InstalledModel]) -> str:
+    """Resolve the embedding model tag to write, precedence flag >
+    interactive picker over the vetted allowlist > `DEFAULT_EMBEDDING_MODEL`.
+
+    `flag` wins outright -- validated for YAML-safety via
+    `config.validate_embedding_model` but NOT gated on
+    `config.EMBEDDING_MODEL_ALLOWLIST` membership (D6): an off-allowlist
+    value is still written, with a non-fatal stderr warning (see
+    `init`). Otherwise, if stdin is a TTY, `_pick_embedding_model` offers a
+    numbered list of `installed` models that are ALSO on the allowlist
+    (falling back to the silent default if none qualify). If stdin is not a
+    TTY, no prompt or picker is shown and the default is used silently.
+
+    `installed` is the single shared reachability probe's result (see
+    `_probe_installed_models`) -- this resolver never issues its own
+    reachability request.
+
+    A flag value that MATCHES an allowlist entry under `model_tag_matches`
+    normalization resolves to the allowlist spelling, exactly as the picker
+    does (D3): `--embedding-model bge-m3:latest` names the vetted model, so
+    writing the raw server-style tag would make `cfg.embedding_model` differ
+    from `DEFAULT_EMBEDDING_MODEL` and trip the model-tag re-embed gate into
+    a full corpus re-embed for a no-op change. This is canonicalizing one
+    model's spelling, NOT the silent coercion to the default that D6
+    forbids -- an off-allowlist value still matches nothing here and is
+    written verbatim.
+    """
+    if flag is not None:
+        validated = config.validate_embedding_model(flag)
+        return _canonical_allowlist_spelling(validated)
+    if sys.stdin.isatty():
+        return _pick_embedding_model(installed)
+    return config.DEFAULT_EMBEDDING_MODEL
+
+
+def _pick_embedding_model(installed: list[InstalledModel]) -> str:
+    """Interactive numbered picker over the vetted embedding-model allowlist.
+
+    Candidates are filtered on `config.EMBEDDING_MODEL_ALLOWLIST` ALONE --
+    deliberately NOT `is_embedding_model(m) and allowlisted` (D2): `bge-m3`
+    has no `embed` substring in its tag, so `_EMBEDDING_TAG_MARKER` never
+    fires for it, and it classifies as an embedding model only via
+    `family == "bert"`. An installed entry reporting no `details.family`
+    (`InstalledModel(tag="bge-m3", family=None)`) would silently drop the
+    recommended default from its own picker if the heuristic classifier
+    were stacked on top of the allowlist -- the allowlist is stronger
+    evidence on its own and must gate alone.
+
+    Matching uses `ollama.model_tag_matches` (D3): a server-reported
+    `bge-m3:latest` still matches the allowlisted `bge-m3` entry via
+    Ollama's `:latest` normalization, and the ALLOWLIST spelling -- never
+    the raw server tag -- is what gets listed/written, so `cfg.
+    embedding_model` never diverges from `DEFAULT_EMBEDDING_MODEL` for a
+    no-op selection.
+
+    Graceful degradation (spec: Graceful Degradation Of The Embedding
+    Picker) differs from the chat picker: an empty `installed` list or zero
+    allowlisted candidates falls back SILENTLY to `DEFAULT_EMBEDDING_MODEL`
+    -- no prompt of any kind, unlike `_pick_chat_model`'s typed-prompt
+    fallback -- since a fresh workspace has nothing to lose by a silent
+    default and the spec explicitly forbids a second reachability request
+    just to ask a question the user never opted into.
+    """
+    installed_tags = [m.tag for m in installed]
+    candidates = [
+        allowed
+        for allowed in config.EMBEDDING_MODEL_ALLOWLIST
+        if model_tag_matches(allowed, installed_tags)
+    ]
+
+    if not candidates:
+        return config.DEFAULT_EMBEDDING_MODEL
+
+    if config.DEFAULT_EMBEDDING_MODEL in candidates:
+        candidates.remove(config.DEFAULT_EMBEDDING_MODEL)
+    candidates.insert(0, config.DEFAULT_EMBEDDING_MODEL)
+
+    typer.echo("Installed embedding models:")
+    for index, tag in enumerate(candidates, start=1):
+        suffix = " (recommended)" if tag == config.DEFAULT_EMBEDDING_MODEL else ""
+        typer.echo(f"  {index}) {tag}{suffix}")
+
+    for _ in range(_MAX_PICKER_ATTEMPTS):
+        choice = typer.prompt("Embedding model", default="1")
+        if (
+            choice.isascii()
+            and choice.isdigit()
+            and 1 <= int(choice) <= len(candidates)
+        ):
+            return config.validate_embedding_model(candidates[int(choice) - 1])
+        typer.echo(
+            f"openkos init: '{choice}' isn't a valid choice -- enter a "
+            f"number from 1 to {len(candidates)}, or press Enter for the "
+            "recommended embedding model.",
+            err=True,
+        )
+
+    return config.validate_embedding_model(config.DEFAULT_EMBEDDING_MODEL)
 
 
 def _commit_has_confidential(root: Path, paths: Sequence[str]) -> bool:
@@ -329,6 +459,14 @@ def init(
         help="Ollama model tag to write into openkos.yaml. "
         "Prompted on a TTY, defaults to qwen3:8b otherwise.",
     ),
+    embedding_model: str | None = typer.Option(
+        None,
+        "--embedding-model",
+        help="Ollama embedding model tag to write into openkos.yaml. "
+        "Prompted on a TTY over the vetted allowlist, defaults to bge-m3 "
+        "otherwise. A value off the allowlist is still accepted, with a "
+        "warning.",
+    ),
 ) -> None:
     """Create a fresh OKF workspace in the current directory.
 
@@ -337,7 +475,9 @@ def init(
     checks (existing `openkos.yaml`, existing `AGENTS.md`, `raw/` or
     `bundle/` non-empty, or `raw/` or `bundle/` existing as a plain file or
     a symlink), OR if the resolved model (see `_resolve_model`: `--model`
-    flag > TTY prompt > default `qwen3:8b`) is blank or contains
+    flag > TTY prompt > default `qwen3:8b`) or the resolved embedding model
+    (see `_resolve_embedding_model`: `--embedding-model` flag > TTY picker
+    over the vetted allowlist > default `bge-m3`) is blank or contains
     whitespace, a quote, or `#`.
     The refusal reason is printed to stderr so the user knows which
     condition triggered it. This is Phase A (D1): a pure read plus model
@@ -369,18 +509,44 @@ def init(
         typer.echo(f"openkos init: refusing to initialize -- {reason}.", err=True)
         raise typer.Exit(code=1)
 
+    # Single shared reachability probe (spec: Graceful Degradation Of The
+    # Embedding Picker -- MUST reuse the chat picker's existing probe call,
+    # MUST NOT issue a second, separate reachability request). Only needed
+    # when at least one of the two pickers might actually run: a TTY with at
+    # least one of the two flags unset. Skipping it otherwise avoids an
+    # unnecessary network call when both flags are given, or neither picker
+    # can ever be shown (non-TTY).
+    installed_models: list[InstalledModel] = []
+    if sys.stdin.isatty() and (model is None or embedding_model is None):
+        installed_models = _probe_installed_models()
+
     try:
-        resolved_model = _resolve_model(model)
+        resolved_model = _resolve_model(model, installed_models)
+        resolved_embedding_model = _resolve_embedding_model(
+            embedding_model, installed_models
+        )
     except ValueError as exc:
         typer.echo(f"openkos init: refusing to initialize -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
+
+    if (
+        embedding_model is not None
+        and resolved_embedding_model not in config.EMBEDDING_MODEL_ALLOWLIST
+    ):
+        typer.echo(
+            f"openkos init: WARNING -- '{resolved_embedding_model}' is not "
+            "on the vetted embedding-model allowlist; writing it anyway.",
+            err=True,
+        )
 
     layout = config.WorkspaceLayout(root)
     try:
         layout.raw_dir.mkdir(parents=True, exist_ok=True)
         bundle.create(layout.bundle_dir, datetime.now().astimezone().date())
         config.write_agents(root)
-        config.write_config(root, model=resolved_model)
+        config.write_config(
+            root, model=resolved_model, embedding_model=resolved_embedding_model
+        )
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos init: failed while creating the workspace -- {exc}.", err=True
@@ -471,6 +637,25 @@ def init(
             "(ingest and query need it; the workspace was still created).",
             err=True,
         )
+
+    # Sticky re-embed warning (spec: Sticky Re-Embed Warning On Every
+    # Successful Init): printed UNCONDITIONALLY on every successful init,
+    # regardless of TTY/non-TTY or which embedding model was resolved --
+    # never conditioned on a prior corpus existing, since a fresh workspace
+    # has nothing to re-embed yet. Worded about FUTURE cost only: this
+    # workspace has never re-embedded anything, so it must never claim a
+    # re-embed already happened.
+    #
+    # It also names only causes that can affect THIS workspace. An earlier
+    # revision blamed "a future init of a different workspace", which cannot
+    # force a re-embed here and read as a non-sequitur to anyone who did not
+    # already know the model-tag gate is per-workspace.
+    typer.echo(
+        f"openkos init: note -- the embedding model ('{resolved_embedding_model}') "
+        "is sticky: editing it in this workspace's openkos.yaml later forces "
+        "a full corpus re-embed the next time `openkos reindex` runs.",
+        err=True,
+    )
 
 
 def _plural(n: int) -> str:
@@ -6033,6 +6218,26 @@ def reindex(
             "openkos reindex: failed -- embedding model "
             f"'{cfg.embedding_model}' is not installed. Pull it with "
             f"`ollama pull {cfg.embedding_model}`, then try again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    # `OllamaEmbeddingDimensionMismatch` is a PERMANENT, non-healing
+    # misconfiguration -- unlike `OllamaUnavailable`/`OllamaModelNotFound`,
+    # it names a concrete remediation: the configured `embedding_model` no
+    # longer produces `EMBED_DIM`-dimensional vectors, so it must be
+    # restored in `openkos.yaml`. Placed BEFORE the generic
+    # `(VecUnavailable, FtsUnavailable, OllamaError)` tuple below --
+    # `OllamaEmbeddingDimensionMismatch` subclasses `OllamaError`, so
+    # reordering this branch after that tuple would silently swallow it
+    # into the generic message (same ordering discipline as the two
+    # handlers above). MUST NOT say "will retry next run" -- that phrasing
+    # is reserved for a transient `embed_failed` skip, not a permanent
+    # misconfiguration.
+    except OllamaEmbeddingDimensionMismatch as exc:
+        typer.echo(
+            f"openkos reindex: failed -- {exc} Restore the working "
+            "'embedding_model' value in openkos.yaml, then run `openkos "
+            "reindex` again.",
             err=True,
         )
         raise typer.Exit(code=1) from exc
