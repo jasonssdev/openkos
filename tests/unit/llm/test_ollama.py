@@ -665,6 +665,42 @@ def test_is_embedding_model_none_family_returns_false() -> None:
     assert is_embedding_model(model) is False
 
 
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "qwen3-embedding:0.6b",
+        "Qwen3-Embedding:0.6B",
+        "nomic-embed-text:latest",
+        "granite-embedding",
+    ],
+)
+def test_is_embedding_model_embedding_marker_in_tag_returns_true(tag: str) -> None:
+    """A tag naming itself an embedding model classifies as embedding even
+    when the server reports no family -- the name is evidence, not ambiguity
+    (Scenario: embedding marker in tag classifies as embedding)."""
+    model = InstalledModel(tag=tag, family=None)
+
+    assert is_embedding_model(model) is True
+
+
+def test_is_embedding_model_embedding_marker_outranks_chat_family() -> None:
+    """The tag marker also applies when the server reports a plausible chat
+    family: a mislabelled family must not readmit an embedding model to the
+    chat-model picker."""
+    model = InstalledModel(tag="qwen3-embedding:0.6b", family="qwen")
+
+    assert is_embedding_model(model) is True
+
+
+@pytest.mark.parametrize("tag", ["qwen3:8b", "embers:latest", "gemma3:12b"])
+def test_is_embedding_model_tag_without_marker_stays_candidate(tag: str) -> None:
+    """Tags that merely look similar carry no embedding evidence and keep
+    chat-model candidacy -- the marker is `embed`, not a fuzzy match."""
+    model = InstalledModel(tag=tag, family=None)
+
+    assert is_embedding_model(model) is False
+
+
 # --- Phase 10: model_tag_matches() ---------------------------------------------
 
 

@@ -59,13 +59,25 @@ class InstalledModel:
 _EMBEDDING_FAMILIES = frozenset({"bert", "nomic-bert"})
 """Known embedding-model families (D2), matched case-insensitively."""
 
+_EMBEDDING_TAG_MARKER = "embed"
+"""Substring that makes a tag self-describing as an embedding model
+(`qwen3-embedding`, `nomic-embed-text`, ...), matched case-insensitively."""
+
 
 def is_embedding_model(model: InstalledModel) -> bool:
-    """True if `model.family` is a known embedding family (D2).
+    """True if `model.family` is a known embedding family (D2), or the tag
+    itself names the model as an embedding one (issue #188).
 
-    A missing/unknown family classifies as NON-embedding -- ambiguity never
-    excludes a model from chat-model candidacy."""
-    return model.family is not None and model.family.lower() in _EMBEDDING_FAMILIES
+    A missing/unknown family still classifies as NON-embedding -- ambiguity
+    never excludes a model from chat-model candidacy. The tag marker is not
+    ambiguity but evidence, so it classifies on its own: Ollama reports no
+    family for some embedding tags, and a family it does report may be a
+    plausible chat family (`qwen` for `qwen3-embedding`). Matching the marker
+    regardless of family keeps that mislabelling from readmitting an
+    unusable model to the chat-model picker."""
+    if model.family is not None and model.family.lower() in _EMBEDDING_FAMILIES:
+        return True
+    return _EMBEDDING_TAG_MARKER in model.tag.lower()
 
 
 def _normalize_host(host: str) -> str:
