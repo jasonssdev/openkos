@@ -45,6 +45,19 @@ class OllamaModelNotFound(OllamaError):
     """Raised on a 404 response whose body reports the model tag as not found (D4)."""
 
 
+class OllamaEmbeddingDimensionMismatch(OllamaError):
+    """Raised when an `/api/embed` response row has a length other than
+    `EMBED_DIM` (D7): a PERMANENT, non-healing misconfiguration -- the
+    configured embedding model itself does not emit `EMBED_DIM`-dimensional
+    vectors -- distinct from the generic transient `OllamaError` (malformed
+    JSON, missing vector key, non-numeric row entries). Subclasses
+    `OllamaError` so an unmodified bare `except OllamaError` still catches
+    it, but MUST be checked ahead of that bare clause at any call site that
+    needs to treat it as fatal rather than transient (mirrors the existing
+    `OllamaModelNotFound` ordering discipline). Never retried by `embed()`'s
+    retry-with-backoff loop (D8): a wrong dimension cannot heal by retry."""
+
+
 @dataclass(frozen=True, slots=True)
 class InstalledModel:
     """One entry from `/api/tags`: its tag plus optional model family (D1).
@@ -180,8 +193,10 @@ class OllamaClient:
         Short-circuits to `[]` with no HTTP call when `texts` is empty.
         Wraps `_embed_once` in a retry-with-backoff loop (D1/D3, llm-client:
         Transient Embed Failures Are Retried Before Propagating):
-        `OllamaModelNotFound` raises immediately, consuming no retry attempt
-        -- a missing model cannot heal mid-run. Every other `OllamaError`
+        `OllamaModelNotFound` and `OllamaEmbeddingDimensionMismatch` both
+        raise immediately, consuming no retry attempt -- a missing model or
+        a wrong-dimension response cannot heal mid-run (D8). Every other
+        `OllamaError`
         (the generic transient class, AND `OllamaUnavailable`) is retried up
         to `embed_retry_attempts` times total, sleeping
         `embed_retry_backoff_base * 2 ** (attempt - 1)` between attempts
@@ -198,7 +213,7 @@ class OllamaClient:
             attempt += 1
             try:
                 return self._embed_once(texts)
-            except OllamaModelNotFound:
+            except (OllamaModelNotFound, OllamaEmbeddingDimensionMismatch):
                 raise
             except OllamaError:
                 if attempt >= self._embed_retry_attempts:
@@ -343,13 +358,21 @@ def model_tag_matches(configured: str, installed: list[str]) -> bool:
 
 def _validate_embedding_row(row: object) -> list[float]:
     """Validate one embedding row: exactly `EMBED_DIM` numeric entries,
-    coerced to `float` (Embedder contract). Raises `ValueError` on a wrong
-    length or a non-numeric entry, always caught and rewrapped as
-    `OllamaError` by the caller."""
+    coerced to `float` (Embedder contract). Raises the distinct
+    `OllamaEmbeddingDimensionMismatch` (D7) on a wrong length -- NOT a
+    `ValueError`, so it escapes `_embed_once`'s
+    `except (JSONDecodeError, KeyError, TypeError, ValueError)` rewrap
+    unwrapped, with the actual and expected (`EMBED_DIM`) length in its
+    message. Raises `ValueError` on a non-numeric entry (correct length),
+    always caught and rewrapped as the generic `OllamaError` by the caller
+    -- scope discipline: only the wrong-LENGTH branch is permanent."""
     if not isinstance(row, list) or len(row) != EMBED_DIM:
         got = len(row) if isinstance(row, list) else type(row).__name__
-        raise ValueError(
-            f"expected each embedding row to have exactly {EMBED_DIM} entries, got {got}"
+        raise OllamaEmbeddingDimensionMismatch(
+            f"Ollama returned an embedding row of length {got}, expected "
+            f"exactly {EMBED_DIM} (EMBED_DIM) -- this is a permanent "
+            "dimension mismatch caused by the configured embedding model, "
+            "not a transient failure; it will not heal by retrying."
         )
     validated: list[float] = []
     for value in row:
