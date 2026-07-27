@@ -19,6 +19,7 @@ from openkos.graph import proximity
 from openkos.llm.base import EMBED_DIM
 from openkos.state import vectorstore
 from openkos.state.vectorstore import VecHit
+from openkos.state.vectorstore import VecUnavailable as proximity_vec_unavailable
 
 
 class _FakeNeighborQuery:
@@ -320,3 +321,45 @@ def test_open_proximity_source_yields_a_working_source_over_a_real_store(
         pairs = source.pairs(["concepts/a", "concepts/b", "concepts/far"])
 
     assert [(p.source_id, p.target_id) for p in pairs] == [("concepts/a", "concepts/b")]
+
+
+def test_open_proximity_source_returns_none_for_a_present_but_empty_store(
+    tmp_path: Path,
+) -> None:
+    """ "Empty" means the same thing here as everywhere else in this feature:
+    `state/vectorstore.py::vector_store_is_empty` -- absent OR present with
+    zero embedded concepts.
+
+    `cli/main.py` keys its "embeddings missing" state on exactly that
+    predicate, so a source that reported itself AVAILABLE for a zero-row
+    store would leave the two halves of the same feature disagreeing: the
+    CLI telling the user embeddings are missing while pass 3 ran anyway."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    with vectorstore.open_vector_store(db_path):
+        pass  # creates the schema, embeds nothing
+
+    assert db_path.exists()
+    assert proximity.open_proximity_source(db_path) is None
+
+
+def test_open_proximity_source_returns_none_when_opening_the_store_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard around `open_vector_store` is not dead code.
+
+    `vector_store_is_empty` runs over a plain read-only connection that
+    never loads `sqlite-vec`, so a store it reports as NON-empty can still
+    fail to open as a real vector store -- the extension missing on this
+    interpreter is the obvious case, a permission change between the two
+    opens the narrower one. Either way the caller gets `None` and
+    `build_graph` degrades, rather than an exception escaping into a CLI
+    command that was only trying to read."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    monkeypatch.setattr(proximity, "vector_store_is_empty", lambda path: False)
+
+    def _explode(path: Path) -> object:
+        raise proximity_vec_unavailable("sqlite-vec is not loadable here")
+
+    monkeypatch.setattr(proximity, "open_vector_store", _explode)
+
+    assert proximity.open_proximity_source(db_path) is None

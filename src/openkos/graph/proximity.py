@@ -50,7 +50,11 @@ from math import sqrt
 from pathlib import Path
 from typing import Final, Protocol
 
-from openkos.state.vectorstore import VecHit, open_vector_store
+from openkos.state.vectorstore import (
+    VecHit,
+    open_vector_store,
+    vector_store_is_empty,
+)
 
 CANDIDATE_SIMILARITY_THRESHOLD: Final[float] = 0.70
 """Cosine floor a pair must reach to be nominated. See the module docstring
@@ -179,8 +183,15 @@ def open_proximity_source(path: Path) -> VectorProximitySource | None:
     extension-less `vectors.db` all yield `None`, which `build_graph` treats
     as `candidates=None` -- a successful build with zero candidate rows, not
     an error. This is the seam that makes candidate edges degrade instead of
-    break when embeddings have not been computed yet."""
-    if not path.exists():
+    break when embeddings have not been computed yet.
+
+    "Empty" means what `state/vectorstore.py::vector_store_is_empty` means:
+    absent, OR present with zero embedded concepts. `cli/main.py` keys its
+    "embeddings missing" message on that same predicate, so reporting a
+    zero-row store as AVAILABLE here would leave the two halves of this
+    feature disagreeing -- the CLI telling a user embeddings are missing
+    while pass 3 ran anyway."""
+    if vector_store_is_empty(path):
         return None
     try:
         return VectorProximitySource(open_vector_store(path))

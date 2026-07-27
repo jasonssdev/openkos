@@ -1269,3 +1269,44 @@ def test_neighbors_returns_empty_on_an_empty_store(tmp_path: Path) -> None:
 
     with vectorstore.open_vector_store(db_path) as db:
         assert db.neighbors("concepts/anything", 5) == []
+
+
+@pytest.mark.skipif(
+    not vectorstore.probe_vec_loadable(), reason="sqlite-vec extension not loadable"
+)
+@pytest.mark.parametrize("insertion_order", [("zzz", "aaa"), ("aaa", "zzz")])
+def test_neighbors_breaks_distance_ties_deterministically(
+    tmp_path: Path, insertion_order: tuple[str, str]
+) -> None:
+    """`graph/proximity.py` truncates each anchor's hits at `TOP_K`, so which
+    of several EQUIDISTANT neighbors falls inside the cut decides what ends
+    up in the graph projection.
+
+    `ORDER BY distance` alone leaves that to rowid order. Measured against
+    the real extension, the two insertion orders below returned the tied
+    pair in OPPOSITE orders -- so an incremental reindex that re-inserts
+    rows differently silently produces a different projection, breaking the
+    byte-identical-rebuild guarantee `proximity.py` documents. Both
+    parametrizations must agree; a secondary sort on `concept_id` is what
+    makes the cut total and reproducible.
+
+    Parametrized deliberately: a single insertion order passes by accident
+    whichever way the tie happens to fall."""
+    db_path = tmp_path / ".openkos" / "vectors.db"
+    anchor = [1.0] + [0.0] * (EMBED_DIM - 1)
+    # Both are exactly sqrt(2) from the anchor -- a genuine tie.
+    vectors = {
+        "aaa": [0.0, 1.0] + [0.0] * (EMBED_DIM - 2),
+        "zzz": [0.0, 0.0, 1.0] + [0.0] * (EMBED_DIM - 3),
+    }
+
+    with vectorstore.open_vector_store(db_path) as db:
+        for name in insertion_order:
+            db.upsert(f"concepts/{name}", vectors[name], f"h-{name}")
+        db.upsert("concepts/anchor", anchor, "h-anchor")
+
+        hits = db.neighbors("concepts/anchor", 3)
+
+    assert hits[0].concept_id == "concepts/anchor"
+    assert hits[1].distance == hits[2].distance, "fixture must produce a real tie"
+    assert [h.concept_id for h in hits[1:]] == ["concepts/aaa", "concepts/zzz"]
