@@ -38,7 +38,7 @@ Chain strategy: feature-branch-chain
 
 ### Phase 1: RED
 
-- [x] 1.1 In `tests/unit/cli/test_suggest_relations.py`, `test_contradictions.py`, `test_status.py`, replace all 13 call sites of `_touch_vectors_db(tmp_path)` / `_write_nonempty_vectors_db(tmp_path)` with `seed_vectors_db(tmp_path)`, adding `seed_vectors_db: Callable[[Path], None]` to each affected test's signature. **RED**: `uv run pytest tests/unit/cli/` now fails with `fixture 'seed_vectors_db' not found` — proves the fixture is required and does not yet exist.
+- [x] 1.1 In `tests/unit/cli/test_suggest_relations.py`, `test_contradictions.py`, `test_status.py`, replace all 14 call sites of `_touch_vectors_db(tmp_path)` / `_write_nonempty_vectors_db(tmp_path)` with `seed_vectors_db(tmp_path)`, adding `seed_vectors_db: Callable[[Path], None]` to each affected test's signature. **RED**: `uv run pytest tests/unit/cli/` now fails with `fixture 'seed_vectors_db' not found` — proves the fixture is required and does not yet exist.
 
 ### Phase 2: GREEN
 

@@ -41,7 +41,7 @@ before editing; anchors are given as symbol names, not only line numbers.
 | `_write_nonempty_vectors_db` | `tests/unit/cli/test_status.py` | 40 |
 | `conftest.py` (`_offline_ollama_by_default`) | `tests/unit/cli/conftest.py` | 61-65 |
 
-Call sites of the three helpers (13 total): `test_suggest_relations.py` 184, 222, 260,
+Call sites of the three helpers (14 total): `test_suggest_relations.py` 184, 222, 260,
 554, 764, 824; `test_contradictions.py` 486, 514, 777, 880; `test_status.py` 391, 411,
 427, 493.
 
@@ -535,7 +535,7 @@ Replace with:
 
 | Slice | Scope | Files | Est. changed lines (add+del) |
 |---|---|---|---|
-| **PR1 — #197** | Factory fixture in `tests/unit/cli/conftest.py`; delete 3 helpers; update 13 call sites + their signatures | `tests/unit/cli/conftest.py` (+~40), `test_suggest_relations.py` (~±35), `test_contradictions.py` (~±25), `test_status.py` (~±30) | **~130** |
+| **PR1 — #197** | Factory fixture in `tests/unit/cli/conftest.py`; delete 3 helpers; update 14 call sites + their signatures | `tests/unit/cli/conftest.py` (+~40), `test_suggest_relations.py` (~±35), `test_contradictions.py` (~±25), `test_status.py` (~±30) | **~130** |
 | **PR2 — #196 + #195** | `store` keyword ×3 + helper extractions; `_zero_edge_state_message` signature; 3 CLI call-site restructures; 4 docstring corrections; new RED tests | `graph/summary.py` (+~18), `resolution/edge_typing.py` (+~25), `resolution/contradiction.py` (+~28), `cli/main.py` (~±90), 3 CLI test modules (+~110), `tests/unit/resolution/*` + `tests/unit/graph/test_summary.py` (+~70) | **~340** |
 
 Both slices are under the 400-line review budget. PR2 targets PR1's branch
