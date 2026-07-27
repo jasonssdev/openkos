@@ -2846,3 +2846,77 @@ def test_ingest_embedding_failure_does_not_abort_the_commit(
 
     assert result.exit_code == 0, result.stdout
     assert len(committed) == 1
+
+
+# --- Sensitivity honesty + non-local backend warning (#183 review) ---------
+
+
+def test_confidential_skip_message_admits_embeddings_still_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ingest` tells the user it is withholding confidential content from
+    the LLM, then embeds that same content. Both are intentional -- the
+    embedding backend is local and `.openkos/` is gitignored -- but saying
+    only the first half leaves the user believing NOTHING was sent.
+
+    The sensitivity contract covers the six `llm.chat` call sites, not
+    `embed()`. That scope is defensible; silently implying otherwise is
+    not."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nSecret material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "skipping concept extraction" in result.stderr
+    assert fake.embed_calls, "embeddings should still be computed"
+    assert "embedded locally" in result.stderr
+
+
+def test_ingest_warns_when_the_embedding_backend_is_not_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`OLLAMA_HOST` is honored with no localhost enforcement, so "the
+    backend is local" is a DEFAULT, not an invariant.
+
+    Embedding now runs automatically on every ingest rather than only when
+    a user deliberately runs `reindex`, so a host pointed elsewhere for any
+    unrelated reason starts shipping content off-machine unprompted. Warn
+    once, naming the host, so the choice is visible rather than
+    inherited."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", "http://gpu-box.internal:11434")
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "gpu-box.internal" in result.stderr
+    assert "not local" in result.stderr
+
+
+def test_ingest_stays_quiet_about_the_backend_when_it_is_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The warning must not fire on the default local setup, or it becomes
+    noise every user learns to ignore."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    fake = _EmbeddingLLM(_concept_reply())
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *a, **k: fake)
+    src = tmp_path / "note.md"
+    src.write_text("# Note\n\nRaw material.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "not local" not in result.stderr

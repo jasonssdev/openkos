@@ -1,6 +1,7 @@
 """Typer application object exposed as the `openkos` console script."""
 
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -13,7 +14,8 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Final, Literal
+from urllib.parse import urlsplit
 
 import typer
 from rich.console import Console
@@ -1076,7 +1078,10 @@ def _stage_derived_objects(
     if not include_confidential and blocks_llm_send(sensitivity):
         typer.echo(
             "openkos ingest: workspace default_sensitivity floor is confidential; "
-            "skipping concept extraction, keeping the Source only.",
+            "skipping concept extraction, keeping the Source only. The Source "
+            "is still embedded locally so search and candidate relations keep "
+            "working -- the sensitivity floor governs `llm.chat`, not the "
+            "embedding index.",
             err=True,
         )
         return []
@@ -1194,6 +1199,39 @@ def _stage_derived_objects(
     return plans
 
 
+_LOCAL_HOSTS: Final = ("localhost", "127.0.0.1", "::1", "0.0.0.0")  # noqa: S104
+"""Hostnames that mean "this machine". `S104` reads `0.0.0.0` as binding to
+every interface, but nothing here binds -- these are compared against a
+CLIENT host, and a client connecting to `0.0.0.0` reaches the local machine.
+Dropping it to satisfy the lint would emit a false "not local" warning for a
+setup that is local."""
+
+
+def _non_local_embedding_host() -> str | None:
+    """Return the configured Ollama host when it is NOT on this machine,
+    else `None`.
+
+    `OllamaClient` resolves `host or OLLAMA_HOST or DEFAULT_HOST` with no
+    localhost enforcement, so "the backend is local" is a DEFAULT, not an
+    invariant. That distinction did not matter much while content only
+    reached the embedding backend when a user deliberately ran `reindex`;
+    it matters now that `ingest` embeds automatically, because a host
+    pointed elsewhere for some unrelated reason silently starts shipping
+    every ingested document off-machine.
+
+    Deliberately advisory, never a block: a remote Ollama on a trusted LAN
+    is a legitimate setup, and refusing it would be the tool overriding a
+    choice its operator is entitled to make. Naming the host once is enough
+    to turn an inherited default into a visible decision."""
+    raw = os.environ.get("OLLAMA_HOST")
+    if not raw:
+        return None
+    hostname = urlsplit(raw if "//" in raw else f"//{raw}").hostname
+    if hostname is None or hostname in _LOCAL_HOSTS:
+        return None
+    return hostname
+
+
 def _embed_after_ingest(
     layout: config.WorkspaceLayout, embedder: Embedder, *, model_tag: str
 ) -> None:
@@ -1221,6 +1259,15 @@ def _embed_after_ingest(
     Decision D), and passes NO `fts_db_path`: the FTS index is `reindex`'s
     job, not ingest's, and rebuilding it here would make every ingest pay
     for a full-text rebuild it did not ask for."""
+    remote_host = _non_local_embedding_host()
+    if remote_host is not None:
+        typer.echo(
+            f"openkos ingest: embedding backend at '{remote_host}' is not local; "
+            "document text -- including confidential content, which the "
+            "sensitivity floor excludes from `llm.chat` but not from the "
+            "embedding index -- leaves this machine.",
+            err=True,
+        )
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(

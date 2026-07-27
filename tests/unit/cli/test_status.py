@@ -15,6 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.cli.main import app
+from openkos.llm.base import EMBED_DIM
 
 runner = CliRunner()
 
@@ -51,6 +52,23 @@ def _write_nonempty_vectors_db(tmp_path: Path) -> None:
     )
     conn.commit()
     conn.close()
+
+
+class _OfflineOllama:
+    """Serves both halves of `OllamaClient` without a network.
+
+    `ingest` builds a real client for `_embed_after_ingest` (#183), so any
+    test that invokes `ingest` and then asserts on embedding-dependent
+    output MUST patch this seam -- the convention every test in
+    `test_ingest.py` already follows. Without it the assertion silently
+    becomes "is an Ollama server reachable on this machine", which passes
+    for a developer running one and fails in CI."""
+
+    def chat(self, messages: object) -> str:
+        return '{"extract": false}'
+
+    def embed(self, texts: "list[str]") -> "list[list[float]]":
+        return [[1.0] + [0.0] * (EMBED_DIM - 1) for _ in texts]
 
 
 def test_status_refuses_when_not_a_workspace(
@@ -135,6 +153,9 @@ def test_status_healthy_bundle_full_render_has_three_sections(
     creates it", which was the starving behavior the issue set out to
     fix."""
     _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient", lambda *a, **k: _OfflineOllama()
+    )
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes.", encoding="utf-8")
     ingest_result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
