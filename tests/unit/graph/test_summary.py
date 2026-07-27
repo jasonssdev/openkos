@@ -11,6 +11,7 @@ mutates the bundle and never leaves a connection open.
 
 from pathlib import Path
 
+from openkos.graph.sqlite_graph import build_graph
 from openkos.graph.summary import graph_edge_summary
 
 
@@ -125,3 +126,36 @@ def test_graph_edge_summary_empty_bundle(tmp_path: Path) -> None:
     total, typed = graph_edge_summary(bundle_dir)
 
     assert (total, typed) == (0, 0)
+
+
+def test_graph_edge_summary_with_supplied_store_matches_own_build(
+    tmp_path: Path,
+) -> None:
+    """Supplying an already-open `store` returns the same `(total, typed)`
+    tuple as letting `graph_edge_summary` open its own build over the same
+    bundle (graph-projection-reuse)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="See also [B](/concepts/b.md).\n",
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+
+    with build_graph(bundle_dir) as store:
+        supplied_result = graph_edge_summary(bundle_dir, store=store)
+
+    assert supplied_result == graph_edge_summary(bundle_dir)
+
+
+def test_graph_edge_summary_does_not_close_supplied_store(tmp_path: Path) -> None:
+    """`graph_edge_summary` must never close a store it did not open itself
+    (graph-projection-reuse ownership rule): the caller's store stays usable
+    after the call returns."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+
+    with build_graph(bundle_dir) as store:
+        graph_edge_summary(bundle_dir, store=store)
+        # A closed sqlite3 connection raises ProgrammingError on further use.
+        store.edges()

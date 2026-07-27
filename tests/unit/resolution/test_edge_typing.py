@@ -15,6 +15,7 @@ import pytest
 
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.proximity import ProximityPair
+from openkos.graph.sqlite_graph import build_graph
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.resolution import edge_typing as edge_typing_mod
@@ -506,6 +507,60 @@ def test_candidate_edges_returns_untyped_pairs_without_calling_an_llm(
     edges = edge_typing_mod.candidate_edges(bundle_dir)
 
     assert [(e.source_id, e.target_id) for e in edges] == [("concepts/a", "concepts/c")]
+
+
+def test_candidate_edges_with_supplied_store_matches_own_build(tmp_path: Path) -> None:
+    """Supplying an already-open `store` returns the same candidate list as
+    letting `candidate_edges` open its own build over the same bundle
+    (graph-projection-reuse)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="See [C](/concepts/c.md).\n",
+    )
+    _write_doc(bundle_dir / "concepts" / "c.md", title="C")
+
+    with build_graph(bundle_dir) as store:
+        supplied_result = edge_typing_mod.candidate_edges(bundle_dir, store=store)
+
+    assert supplied_result == edge_typing_mod.candidate_edges(bundle_dir)
+
+
+def test_candidate_edges_does_not_close_supplied_store(tmp_path: Path) -> None:
+    """`candidate_edges` must never close a store it did not open itself
+    (graph-projection-reuse ownership rule)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="A")
+
+    with build_graph(bundle_dir) as store:
+        edge_typing_mod.candidate_edges(bundle_dir, store=store)
+        store.edges()
+
+
+def test_candidate_edges_ignores_bundle_walk_when_store_supplied(
+    tmp_path: Path,
+) -> None:
+    """When `store` is supplied, `candidate_edges` must compute over THAT
+    store's projection, not re-walk `bundle_dir` -- passing bundle B's path
+    while supplying a store built from bundle A returns A's edges."""
+    bundle_a = tmp_path / "bundle_a"
+    _write_doc(
+        bundle_a / "concepts" / "a.md",
+        title="A",
+        body="See [C](/concepts/c.md).\n",
+    )
+    _write_doc(bundle_a / "concepts" / "c.md", title="C")
+
+    bundle_b = tmp_path / "bundle_b"
+    bundle_b.mkdir()
+
+    with build_graph(bundle_a) as store:
+        result = edge_typing_mod.candidate_edges(bundle_b, store=store)
+
+    assert [(e.source_id, e.target_id) for e in result] == [
+        ("concepts/a", "concepts/c")
+    ]
 
 
 # ---------------------------------------------------------------------------

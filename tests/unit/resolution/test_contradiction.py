@@ -20,6 +20,7 @@ import pytest
 from openkos import lifecycle, sensitivity
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.proximity import ProximityPair
+from openkos.graph.sqlite_graph import build_graph
 from openkos.llm import parsing
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
@@ -607,6 +608,54 @@ def test_find_contradictions_excludes_hand_authored_derived_from_relation(
     assert verdicts == []
     assert total == 0
     assert llm.calls == []
+
+
+def test_find_contradictions_with_supplied_store_matches_own_build(
+    tmp_path: Path,
+) -> None:
+    """Supplying an already-open `store` returns the same `(verdicts, total)`
+    as letting `find_contradictions` open its own build over the same
+    bundle (graph-projection-reuse)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: references\n"
+        "---\nBody A.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody B.\n",
+        encoding="utf-8",
+    )
+
+    with build_graph(bundle_dir) as store:
+        supplied_llm = _FakeLLM(replies=[_valid_reply()])
+        supplied_result = contradiction_mod.find_contradictions(
+            bundle_dir, llm=supplied_llm, store=store
+        )
+
+    own_llm = _FakeLLM(replies=[_valid_reply()])
+    own_result = contradiction_mod.find_contradictions(bundle_dir, llm=own_llm)
+
+    assert supplied_result == own_result
+
+
+def test_find_contradictions_does_not_close_supplied_store(tmp_path: Path) -> None:
+    """`find_contradictions` must never close a store it did not open itself
+    (graph-projection-reuse ownership rule)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\n---\nNo links here.\n", encoding="utf-8"
+    )
+    llm = _FakeLLM()
+
+    with build_graph(bundle_dir) as store:
+        contradiction_mod.find_contradictions(bundle_dir, llm=llm, store=store)
+        store.edges()
 
 
 def test_find_contradictions_relation_label_prefers_genuine_type_over_derived_from(

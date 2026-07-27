@@ -23,9 +23,15 @@ exactly one `ContradictionVerdict` per candidate pair (after the
 `_MAX_PAIRS` cap), in the same deterministic order.
 
 Layering: this module is DERIVED, not canonical -- it MAY import
-`openkos.graph` (derived -> derived, allowed). `cli/main.py` MUST NOT import
-`openkos.graph` directly; it imports only this module (design D2/D6, "No CLI
-Surface").
+`openkos.graph` (derived -> derived, allowed). The live, tested constraint is
+narrower than an earlier version of this docstring claimed: the canonical
+layer (`openkos.model`, `openkos.bundle`, `openkos.state`) MUST NOT import
+`openkos.graph` (`tests/unit/graph/test_base.py::test_canonical_layer_does_not_import_graph`),
+and `graph/` MUST NOT register a CLI verb
+(`tests/unit/graph/test_analysis.py::test_cli_main_registers_no_graph_command`).
+`cli/main.py` importing `openkos.graph` is NOT a violation and is established
+practice (`query`, `reindex`, and -- since graph-projection-reuse -- the shared
+per-invocation `build_graph` this module's optional `store` parameter accepts).
 
 status-aware-retrieval (MVP-3 gap #8 · S1, Phase 3): unless the caller
 passes `include_deprecated=True`, `find_contradictions` computes the shared
@@ -378,6 +384,20 @@ def is_high_confidence_contradiction(verdict: ContradictionVerdict) -> bool:
     )
 
 
+def _pairs_and_types(
+    store: GraphStore, excluded: frozenset[str]
+) -> tuple[list[tuple[str, str]], int, dict[tuple[str, str], str]]:
+    """Return `(pairs, total_count, relation_types)` over an already-open
+    `store` (`find_contradictions`'s two-branch shape, graph-projection-
+    reuse design §3): a one-line extraction holding today's
+    `_candidate_pairs`/`_pair_relation_types` pair, so both the
+    caller-supplied and self-built branches compute candidates
+    identically."""
+    pairs, total_count = _candidate_pairs(store, excluded)
+    relation_types = _pair_relation_types(store)
+    return pairs, total_count, relation_types
+
+
 def find_contradictions(
     bundle_dir: Path,
     *,
@@ -385,11 +405,18 @@ def find_contradictions(
     include_deprecated: bool = False,
     include_confidential: bool = False,
     candidates: CandidateSource | None = None,
+    store: GraphStore | None = None,
 ) -> tuple[list[ContradictionVerdict], int]:
     """Orchestrate the whole read-only contradiction-detection flow: open
     `build_graph` over `bundle_dir` internally, derive candidate pairs
     (`_candidate_pairs`: typed edges only, deduped, sorted, capped at
     `_MAX_PAIRS`), then judge each pair with one `llm.chat` call.
+
+    `store` (graph-projection-reuse, issue #196): when supplied, this
+    function reuses that already-open store instead of building its own,
+    and never closes it -- ownership stays with whoever opened it. When
+    supplied, `candidates` is silently unused (the caller already consumed
+    it building that store).
 
     Returns `(verdicts, total_pair_count)`: `verdicts` has exactly one
     `ContradictionVerdict` per candidate pair (after dropping, unless
@@ -440,9 +467,11 @@ def find_contradictions(
         confidential = sensitivity.sensitive_concept_ids(bundle_dir)
     excluded = deprecated | confidential
 
-    with build_graph(bundle_dir, candidates=candidates) as store:
-        pairs, total_count = _candidate_pairs(store, excluded)
-        relation_types = _pair_relation_types(store)
+    if store is not None:
+        pairs, total_count, relation_types = _pairs_and_types(store, excluded)
+    else:
+        with build_graph(bundle_dir, candidates=candidates) as owned:
+            pairs, total_count, relation_types = _pairs_and_types(owned, excluded)
 
     verdicts: list[ContradictionVerdict] = []
     for pair in pairs:
