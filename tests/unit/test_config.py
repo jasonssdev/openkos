@@ -6,6 +6,7 @@ root directory. `is_workspace` decides whether init must refuse;
 packaged templates.
 """
 
+import re
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -209,6 +210,87 @@ def test_validate_model_accepts_reserved_word_substrings_and_legit_tags(
     assert config.validate_model(raw) == raw
 
 
+def test_default_embedding_model_in_allowlist() -> None:
+    """`DEFAULT_EMBEDDING_MODEL` is always a member of
+    `EMBEDDING_MODEL_ALLOWLIST` (D1 honesty rule): the picker's own
+    recommended default must be selectable from its own allowlist."""
+    assert config.DEFAULT_EMBEDDING_MODEL in config.EMBEDDING_MODEL_ALLOWLIST
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("bge-m3", "bge-m3"),
+        ("  bge-m3  ", "bge-m3"),
+        ("nomic-embed-text", "nomic-embed-text"),
+        ("qwen3-embedding:0.6b", "qwen3-embedding:0.6b"),
+    ],
+)
+def test_validate_embedding_model_trims_and_allows_colon(
+    raw: str, expected: str
+) -> None:
+    """`validate_embedding_model` trims whitespace and allows a mid-value
+    colon, mirroring `validate_model`."""
+    assert config.validate_embedding_model(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "   ", "a b", 'a"b', "a'b", "a#b", "a\nb"],
+)
+def test_validate_embedding_model_rejects_unsafe_values(raw: str) -> None:
+    """`validate_embedding_model` rejects blank, whitespace-containing,
+    quote, `#`, and newline values, mirroring `validate_model`."""
+    with pytest.raises(ValueError, match="embedding_model must not"):
+        config.validate_embedding_model(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["qwen3:", ":", "-foo", "&anchor", "!tag", "[a"],
+)
+def test_validate_embedding_model_rejects_unsafe_yaml_indicator_values(
+    raw: str,
+) -> None:
+    """`validate_embedding_model` rejects a trailing/leading colon, a
+    leading `-`, and a leading YAML indicator character, mirroring
+    `validate_model`."""
+    with pytest.raises(ValueError, match="embedding_model must not"):
+        config.validate_embedding_model(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "yes",
+        "Yes",
+        "YES",
+        "no",
+        "true",
+        "True",
+        "false",
+        "False",
+        "on",
+        "off",
+        "null",
+        "NULL",
+    ],
+)
+def test_validate_embedding_model_rejects_yaml_reserved_words(raw: str) -> None:
+    """`validate_embedding_model` rejects an exact-token (case-insensitive)
+    YAML 1.1 reserved word, mirroring `validate_model`."""
+    with pytest.raises(ValueError, match="reserved word"):
+        config.validate_embedding_model(raw)
+
+
+def test_validate_embedding_model_accepts_off_allowlist_value() -> None:
+    """`validate_embedding_model` checks YAML-safety only, independent of
+    allowlist membership (D6): an off-allowlist tag still validates and is
+    returned unchanged."""
+    assert "nomic-embed-text" not in config.EMBEDDING_MODEL_ALLOWLIST
+    assert config.validate_embedding_model("nomic-embed-text") == "nomic-embed-text"
+
+
 def test_write_agents_byte_identical(tmp_path: Path) -> None:
     """`write_agents` copies the packaged template byte-for-byte (scenario 5)."""
     template_bytes = (
@@ -228,12 +310,30 @@ def test_write_agents_raises_on_existing_file(tmp_path: Path) -> None:
         config.write_agents(tmp_path)
 
 
-def _expected_config_bytes(model: str = config.DEFAULT_MODEL) -> bytes:
-    """The packaged `openkos.yaml.template` with its placeholder substituted."""
+def _expected_config_bytes(
+    model: str = config.DEFAULT_MODEL,
+    embedding_model: str = config.DEFAULT_EMBEDDING_MODEL,
+) -> bytes:
+    """The packaged `openkos.yaml.template` with both placeholders substituted.
+
+    Substitutes in ONE pass, like `write_config` does. This helper necessarily
+    mirrors the production substitution strategy, so it can never prove that
+    strategy correct -- the placeholder-collision cases assert through
+    `read_config` instead.
+    """
     template_text = (
         resources.files("openkos") / "templates" / "openkos.yaml.template"
     ).read_text(encoding="utf-8")
-    return template_text.replace("__OPENKOS_MODEL__", model).encode("utf-8")
+    values = {
+        "__OPENKOS_MODEL__": model,
+        "__OPENKOS_EMBEDDING_MODEL__": embedding_model,
+    }
+    content = re.sub(
+        "|".join(re.escape(p) for p in values),
+        lambda m: values[m.group(0)],
+        template_text,
+    )
+    return content.encode("utf-8")
 
 
 def test_write_config_byte_identical(tmp_path: Path) -> None:
@@ -272,6 +372,115 @@ def test_write_config_custom_model(tmp_path: Path) -> None:
     content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
     assert "model: gemma3" in content
     assert (tmp_path / "openkos.yaml").read_bytes() == _expected_config_bytes("gemma3")
+
+
+def test_write_config_custom_embedding_model(tmp_path: Path) -> None:
+    """`write_config(root, embedding_model="nomic-embed-text")` writes
+    `embedding_model: nomic-embed-text` and leaves every other line
+    byte-identical to the template, independent of `model` (scenario:
+    embedding flag override selects the embedding model)."""
+    config.write_config(tmp_path, embedding_model="nomic-embed-text")
+
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: nomic-embed-text" in content
+    assert (tmp_path / "openkos.yaml").read_bytes() == _expected_config_bytes(
+        embedding_model="nomic-embed-text"
+    )
+
+
+def test_write_config_both_custom_model_and_embedding_model(tmp_path: Path) -> None:
+    """Both placeholders substitute independently in the same call."""
+    config.write_config(tmp_path, model="gemma3", embedding_model="nomic-embed-text")
+
+    assert (tmp_path / "openkos.yaml").read_bytes() == _expected_config_bytes(
+        "gemma3", "nomic-embed-text"
+    )
+
+
+def test_write_config_model_equal_to_embedding_placeholder_is_not_overwritten(
+    tmp_path: Path,
+) -> None:
+    """Substitution is single-pass: a `model` value that happens to equal the
+    OTHER field's placeholder token survives verbatim.
+
+    The token passes `validate_model` (the character allowlist admits `_`), so
+    a sequential two-pass substitution would inject it into the `model:` line
+    and then let the second pass overwrite it with `embedding_model`'s value --
+    silently writing the wrong model with no error and valid YAML, which
+    `read_config` cannot detect.
+    """
+    config.write_config(tmp_path, model="__OPENKOS_EMBEDDING_MODEL__")
+
+    # Asserted through `read_config`, NOT `_expected_config_bytes`: that helper
+    # mirrors the substitution strategy, so a two-pass helper would reproduce a
+    # two-pass bug and the comparison would pass vacuously.
+    assert config.read_config(tmp_path).model == "__OPENKOS_EMBEDDING_MODEL__"
+    assert (
+        config.read_config(tmp_path).embedding_model == config.DEFAULT_EMBEDDING_MODEL
+    )
+
+
+def test_write_config_embedding_model_equal_to_model_placeholder_is_not_overwritten(
+    tmp_path: Path,
+) -> None:
+    """The symmetric case: an `embedding_model` value equal to `model`'s
+    placeholder token survives verbatim, so the fix cannot be a mere
+    reordering of the two substitutions."""
+    config.write_config(tmp_path, embedding_model="__OPENKOS_MODEL__")
+
+    assert config.read_config(tmp_path).embedding_model == "__OPENKOS_MODEL__"
+    assert config.read_config(tmp_path).model == config.DEFAULT_MODEL
+
+
+@pytest.mark.parametrize("bad_embedding_model", ["", "   ", "a b", 'a"b', "a'b", "a#b"])
+def test_write_config_rejects_invalid_embedding_model(
+    tmp_path: Path, bad_embedding_model: str
+) -> None:
+    """A blank or unsafe `embedding_model` is rejected before any file is
+    written, independent of `model`'s validity."""
+    with pytest.raises(ValueError, match="embedding_model must not"):
+        config.write_config(tmp_path, embedding_model=bad_embedding_model)
+
+    assert not (tmp_path / "openkos.yaml").exists()
+
+
+def test_write_config_raises_when_embedding_placeholder_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`write_config` raises if the packaged template lacks the
+    `__OPENKOS_EMBEDDING_MODEL__` placeholder -- the embedding placeholder
+    count is validated independently of the model placeholder's."""
+    original_template = (
+        resources.files("openkos") / "templates" / "openkos.yaml.template"
+    ).read_text(encoding="utf-8")
+    without_embedding_placeholder = original_template.replace(
+        "__OPENKOS_EMBEDDING_MODEL__", "bge-m3"
+    )
+    monkeypatch.setattr(
+        config, "_read_template", lambda _: without_embedding_placeholder
+    )
+
+    with pytest.raises(ValueError, match="__OPENKOS_EMBEDDING_MODEL__"):
+        config.write_config(tmp_path)
+
+    assert not (tmp_path / "openkos.yaml").exists()
+
+
+def test_write_config_raises_when_embedding_placeholder_duplicated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two copies of the embedding placeholder also raise -- its count must
+    be exactly one, mirroring the model placeholder's guard."""
+    original_template = (
+        resources.files("openkos") / "templates" / "openkos.yaml.template"
+    ).read_text(encoding="utf-8")
+    duplicated = original_template + "\n# __OPENKOS_EMBEDDING_MODEL__\n"
+    monkeypatch.setattr(config, "_read_template", lambda _: duplicated)
+
+    with pytest.raises(ValueError, match="__OPENKOS_EMBEDDING_MODEL__"):
+        config.write_config(tmp_path)
+
+    assert not (tmp_path / "openkos.yaml").exists()
 
 
 @pytest.mark.parametrize("bad_model", ["", "   ", "a b", 'a"b', "a'b", "a#b"])

@@ -1,4 +1,5 @@
 model: __OPENKOS_MODEL__  # local model served via Ollama; see tech_stack.md
+embedding_model: __OPENKOS_EMBEDDING_MODEL__  # 1024-dim; changing it forces a full re-embed
 review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
