@@ -59,23 +59,23 @@ Rationale: total estimate is under the session's raised 800-line budget but comf
 
 ## Phase 4: `cli/main.py` wiring (PR3)
 
-- [ ] 4.1 RED: `tests/unit/cli/test_init.py` — `--embedding-model` overrides picker, writes value, all other fields template-identical
-- [ ] 4.2 GREEN: add `--embedding-model` option to the `init` command in `cli/main.py`
-- [ ] 4.3 RED: `tests/unit/cli/test_init.py` — `_resolve_embedding_model` precedence: flag > picker > `DEFAULT_EMBEDDING_MODEL`
-- [ ] 4.4 GREEN: add `_resolve_embedding_model` in `cli/main.py`, structurally mirroring `_resolve_model`
-- [ ] 4.5 RED: `tests/unit/cli/test_init.py` — picker candidates are allowlist-only (NOT `is_embedding_model(m) and allowlisted`); `bge-m3` marked recommended; `InstalledModel(tag="bge-m3", family=None)` still appears (D2 regression guard — no `details.family` must not drop the default)
-- [ ] 4.6 GREEN: add `_pick_embedding_model` in `cli/main.py` — own `list_models()` probe, same broad `except Exception`, same `_MAX_PICKER_ATTEMPTS`, same non-TTY silence as `_pick_chat_model`; filter candidates on allowlist alone
-- [ ] 4.7 RED: `tests/unit/cli/test_init.py` — server tag `bge-m3:latest` normalizes via `ollama.model_tag_matches` and writes the allowlist spelling `bge-m3`, not the raw server tag (D3)
-- [ ] 4.8 GREEN: wire that normalization into `_pick_embedding_model`'s selection/write path
-- [ ] 4.9 RED: `tests/unit/cli/test_init.py` — off-allowlist `--embedding-model` value validates, writes, warns on stderr, exit code unaffected
-- [ ] 4.10 GREEN: call `validate_embedding_model` on the flag path and print the off-allowlist warning
-- [ ] 4.11 RED: `tests/unit/cli/test_init.py` — unreachable Ollama and zero allowlisted-candidate cases both fall back to default, exit 0, and reuse the chat picker's existing probe call (no second reachability request)
-- [ ] 4.12 GREEN: confirm `_pick_embedding_model` reuses the shared probe result, `except Exception -> [] -> default`
-- [ ] 4.13 GREEN: pass the resolved value into `write_config(embedding_model=...)` in `init`
-- [ ] 4.14 RED: `tests/unit/cli/test_init.py` — sticky re-embed warning prints on every successful `init` (TTY and non-TTY), worded about future cost only, never present cost
-- [ ] 4.15 GREEN: print the sticky warning unconditionally in `init`, next to the existing post-success Ollama preflight warning, after Phase B completes
-- [ ] 4.16 RED: `tests/unit/cli/test_reindex_cmd.py` — the `reindex` CLI error ladder prints a dedicated message for dimension mismatch (names the fix: restore `embedding_model` in `openkos.yaml`, re-run) and exits 1, never "will retry next run"
-- [ ] 4.17 GREEN — **safety-critical ordering**: in `cli/main.py`'s `reindex` ladder (~line 6066), add a dedicated `except OllamaEmbeddingDimensionMismatch` branch immediately after the `OllamaModelNotFound` branch, BEFORE the broad `except (VecUnavailable, FtsUnavailable, OllamaError):` tuple
+- [x] 4.1 RED: `tests/unit/cli/test_init.py` — `--embedding-model` overrides picker, writes value, all other fields template-identical
+- [x] 4.2 GREEN: add `--embedding-model` option to the `init` command in `cli/main.py`
+- [x] 4.3 RED: `tests/unit/cli/test_init.py` — `_resolve_embedding_model` precedence: flag > picker > `DEFAULT_EMBEDDING_MODEL`
+- [x] 4.4 GREEN: add `_resolve_embedding_model` in `cli/main.py`, structurally mirroring `_resolve_model`
+- [x] 4.5 RED: `tests/unit/cli/test_init.py` — picker candidates are allowlist-only (NOT `is_embedding_model(m) and allowlisted`); `bge-m3` marked recommended; `InstalledModel(tag="bge-m3", family=None)` still appears (D2 regression guard — no `details.family` must not drop the default)
+- [x] 4.6 GREEN: add `_pick_embedding_model` in `cli/main.py` — filter candidates on allowlist alone (deviation: shared probe, see below, not its own `list_models()` probe)
+- [x] 4.7 RED: `tests/unit/cli/test_init.py` — server tag `bge-m3:latest` normalizes via `ollama.model_tag_matches` and writes the allowlist spelling `bge-m3`, not the raw server tag (D3)
+- [x] 4.8 GREEN: wire that normalization into `_pick_embedding_model`'s selection/write path
+- [x] 4.9 RED: `tests/unit/cli/test_init.py` — off-allowlist `--embedding-model` value validates, writes, warns on stderr, exit code unaffected
+- [x] 4.10 GREEN: call `validate_embedding_model` on the flag path and print the off-allowlist warning
+- [x] 4.11 RED: `tests/unit/cli/test_init.py` — unreachable Ollama and zero allowlisted-candidate cases both fall back to default, exit 0, and reuse the chat picker's existing probe call (no second reachability request)
+- [x] 4.12 GREEN: confirm `_pick_embedding_model` reuses the shared probe result, `except Exception -> [] -> default`
+- [x] 4.13 GREEN: pass the resolved value into `write_config(embedding_model=...)` in `init`
+- [x] 4.14 RED: `tests/unit/cli/test_init.py` — sticky re-embed warning prints on every successful `init` (TTY and non-TTY), worded about future cost only, never present cost
+- [x] 4.15 GREEN: print the sticky warning unconditionally in `init`, next to the existing post-success Ollama preflight warning, after Phase B completes
+- [x] 4.16 RED: `tests/unit/cli/test_reindex_cmd.py` — the `reindex` CLI error ladder prints a dedicated message for dimension mismatch (names the fix: restore `embedding_model` in `openkos.yaml`, re-run) and exits 1, never "will retry next run"
+- [x] 4.17 GREEN — **safety-critical ordering**: in `cli/main.py`'s `reindex` ladder (~line 6066), add a dedicated `except OllamaEmbeddingDimensionMismatch` branch immediately after the `OllamaModelNotFound` branch, BEFORE the broad `except (VecUnavailable, FtsUnavailable, OllamaError):` tuple
 
 ## Phase 5: Verification (spans PR1–PR3, gate at each)
 
