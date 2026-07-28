@@ -798,6 +798,94 @@ def test_embedding_picker_lists_allowlisted_candidate_with_default_marked(
     assert "embedding_model: bge-m3" in content
 
 
+def test_embedding_picker_numbered_choice_selects_that_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Entering a valid number picks THAT candidate, not the recommended one.
+
+    `EMBEDDING_MODEL_ALLOWLIST` ships with a single member today, so index 2
+    is unreachable through production data alone and this branch would go
+    untested until the allowlist grows -- exactly when a regression would be
+    silent. The allowlist is monkeypatched to two members to exercise it now.
+    """
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.config.EMBEDDING_MODEL_ALLOWLIST", ("bge-m3", "nomic-embed-text")
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag="bge-m3", family="bert"),
+                InstalledModel(tag="nomic-embed-text", family="nomic-bert"),
+            ],
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="\n2\n")
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: nomic-embed-text" in content
+
+
+def test_embedding_picker_invalid_choice_reprompts_then_accepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-numeric choice warns and reprompts rather than being accepted,
+    mirroring `_pick_chat_model`'s reprompt discipline."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.config.EMBEDDING_MODEL_ALLOWLIST", ("bge-m3", "nomic-embed-text")
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag="bge-m3", family="bert"),
+                InstalledModel(tag="nomic-embed-text", family="nomic-bert"),
+            ],
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="\nnot-a-number\n2\n")
+
+    assert result.exit_code == 0
+    assert "isn't a valid choice" in result.stderr
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: nomic-embed-text" in content
+
+
+def test_embedding_picker_exhausted_attempts_falls_back_to_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated invalid input exhausts `_MAX_PICKER_ATTEMPTS` and falls back
+    to the default rather than hanging or failing -- the workspace is still
+    created with exit 0."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.config.EMBEDDING_MODEL_ALLOWLIST", ("bge-m3", "nomic-embed-text")
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[
+                InstalledModel(tag="bge-m3", family="bert"),
+                InstalledModel(tag="nomic-embed-text", family="nomic-bert"),
+            ],
+        ),
+    )
+
+    result = runner.invoke(app, ["init"], input="\nbad\nbad\nbad\n")
+
+    assert result.exit_code == 0
+    content = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "embedding_model: bge-m3" in content
+
+
 def test_embedding_picker_server_latest_tag_normalizes_to_allowlist_spelling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
