@@ -2009,7 +2009,13 @@ def test_reingest_raises_when_workspace_default_exceeds_on_disk(
 ) -> None:
     """A raised `default_sensitivity` still raises a Source on re-ingest
     when it exceeds the on-disk value -- the high-water-mark, not a frozen
-    read-and-reuse (design: "(b) dominates (a)")."""
+    read-and-reuse (design: "(b) dominates (a)"). A final re-ingest then
+    lowers the config default back below the just-raised on-disk value: the
+    Source must stay at the raised level, not follow the config default
+    back down. A pre-fix implementation that writes
+    `cfg.default_sensitivity` unconditionally, ignoring the on-disk value,
+    would downgrade it to `public` at that final step, so the expected
+    outcome is not a bare pass-through of the config default."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: public"
@@ -2028,6 +2034,16 @@ def test_reingest_raises_when_workspace_default_exceeds_on_disk(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "private"
+
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+
+    final = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert final.exit_code == 0
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
     assert metadata["sensitivity"] == "private"
 
@@ -2197,6 +2213,33 @@ def test_reingest_with_unknown_on_disk_sensitivity_fails_closed_to_confidential(
     first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
     assert first.exit_code == 0
     _set_source_sensitivity(tmp_path, "notes", "secret")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+
+
+def test_reingest_with_non_string_on_disk_sensitivity_fails_closed_to_confidential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-string on-disk `sensitivity` value (an `int`, here) is the
+    second disjunct of the "Unrecognized or non-string on-disk sensitivity
+    fails closed to confidential" scenario. Only the unrecognized-string
+    disjunct (`"secret"`) was previously exercised at the `ingest`
+    integration level; `okf._rank`'s non-string handling itself already had
+    a primitive-level unit test, but nothing forged a genuinely non-string
+    value through the real CLI path. This is the fail-closed escalation
+    branch of a security field, so it is proven end-to-end here, not only
+    at the primitive level."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", 42)
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 

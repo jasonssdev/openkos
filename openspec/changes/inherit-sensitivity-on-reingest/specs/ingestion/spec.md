@@ -133,3 +133,13 @@ re-ingest, so a re-ingest silently reset any level a human had raised via
 - WHEN the re-ingest preview is shown before Phase B writes
 - THEN the preview line for the regenerated Source states the resolved
   level with the trailing clause "unchanged"
+
+#### Scenario: Preview reports the workspace default after `forget`
+
+- GIVEN a source whose Source concept was removed via `openkos forget`
+  (`had_prior_source` is `False`), so there is no on-disk `sensitivity` to
+  read
+- WHEN the re-ingest preview is shown before Phase B writes
+- THEN the preview line for the regenerated Source states the resolved
+  level (`cfg.default_sensitivity`) with the trailing clause "from the
+  workspace default"
