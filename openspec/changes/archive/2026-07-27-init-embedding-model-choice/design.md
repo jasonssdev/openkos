@@ -20,10 +20,39 @@ Reversibility evidence, not assertion: the allowlist gates the picker but never 
 | D2 | The embedding picker filters on the allowlist **alone** — `is_embedding_model` is NOT applied. | Filter with `is_embedding_model(m) and allowlisted`. | Load-bearing: `bge-m3` has no `embed` substring, so `_EMBEDDING_TAG_MARKER` never fires and it classifies as embedding **only** via `family == "bert"`. An Ollama entry with no `details.family` would silently drop the recommended default from its own picker. The curated allowlist is stronger evidence than the heuristic; stacking them can only subtract correct candidates. |
 | D3 | Candidate matching uses `ollama.model_tag_matches` normalization; the **allowlist** spelling is what gets displayed and written. | Raw string equality on server tags. | `/api/tags` reports `bge-m3:latest`; writing that would make `cfg.embedding_model` differ from `DEFAULT_EMBEDDING_MODEL` and trip the model-tag re-embed gate for a no-op change. |
 | D4 | `_pick_embedding_model` runs its **own** `list_models()` probe, structurally cloned from `_pick_chat_model` (same broad `except Exception`, same `_MAX_PICKER_ATTEMPTS`, same non-TTY silence). | Hoist one shared probe into `init` and pass candidates to both pickers. | The probe is a cheap local GET dwarfed by human prompt latency. A shared probe couples the two pickers' degradation (one failure kills both) and rewrites `_pick_chat_model`'s signature plus its existing tests, for no user-visible gain. |
+| D4-correction | **SUPERSEDED DURING IMPLEMENTATION** — see note below the table. | — | — |
 | D5 | `validate_embedding_model` = the existing `validate_model` body extracted into a private `_validate_model_token(tag, field)` helper, reused by both with a field-specific message. | Duplicate the regex/reserved-word logic. | One source of truth for YAML-scalar safety. The validator checks **safety only** — never allowlist membership (D6). |
 | D6 | `--embedding-model` accepts an off-allowlist value: validated, **warned** on stderr in Phase A, never blocked. | Reject off-allowlist values. | The escape hatch is the whole reason staleness is bounded. Blocking would make the allowlist a hard gate on the config key, which the proposal explicitly rejects. |
 | D7 | New `OllamaEmbeddingDimensionMismatch(OllamaError)`, raised **directly** by `_validate_embedding_row` on the length branch. | Keep `ValueError` and re-classify in `_embed_once`. | The length branch is inside `_embed_once`'s `except (JSONDecodeError, KeyError, TypeError, ValueError)` rewrap. An `OllamaError` subclass is not a `ValueError`, so it escapes that clause unwrapped with zero restructuring. Non-numeric entries stay `ValueError` → generic `OllamaError` (scope discipline). |
 | D8 | `embed()`'s retry loop raises it immediately: `except (OllamaModelNotFound, OllamaEmbeddingDimensionMismatch): raise`. | Leave it to fall into `except OllamaError` and retry. | **The proposal does not mention this and it is mandatory.** Without it every mismatched embed burns the full backoff budget (`base * 2**(n-1)` sleeps) before failing — per document — for a condition that cannot heal. Same reasoning that already exempts `OllamaModelNotFound`. |
+
+> **CORRECTING NOTE (added at archive time, 2026-07-27): D4 was superseded during implementation.**
+> D4 as originally written above states `_pick_embedding_model` should run its **own**
+> `list_models()` probe, and explicitly names "hoist one shared probe into `init` and pass
+> candidates to both pickers" as the **rejected** alternative. The shipped code does the
+> opposite, and does so correctly — this was not a silent drift.
+>
+> `tasks.md` 4.11/4.12 ("reuse the chat picker's existing probe call (no second reachability
+> request)") and `specs/workspace-init/spec.md`'s "Graceful Degradation Of The Embedding
+> Picker" requirement ("This probe MUST reuse the chat picker's existing probe call — it MUST
+> NOT issue a second, separate reachability request") both directly contradict D4's own-probe
+> rationale. Those are the reviewed acceptance criteria, and they postdate/override this design
+> prose.
+>
+> What shipped instead: one shared `_probe_installed_models()` function, hoisted into `init`
+> and invoked at most once per run (skipped entirely when both `--model` and
+> `--embedding-model` flags are given, or on non-TTY). Its result is threaded into both
+> `_resolve_embedding_model`/`_pick_embedding_model` and a refactored `_resolve_model`/
+> `_pick_chat_model` — which now accepts `installed: list[InstalledModel]` instead of probing
+> internally, the exact signature change D4's rejected-alternative rationale predicted and
+> warned against. That coupling cost was accepted deliberately: the spec's "no second
+> reachability request" clause is a correctness contract on probe count, not a style
+> preference.
+>
+> This divergence is recorded, not rewritten as though D4 always said the right thing:
+> `apply-progress.md` (Deviation 1) flagged it during PR3, and `verify-report.md`'s
+> "Known contradiction: `design.md` D4 vs. shipped code" independently confirmed it as a
+> deliberate, spec-driven deviation with zero functional defect.
 
 ## `init` Phase A sequence
 

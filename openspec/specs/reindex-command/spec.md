@@ -315,14 +315,20 @@ perform its single end-of-run commit (covering every successfully embedded
 doc plus any pruning, unchanged atomic-commit contract) and MUST exit 0.
 
 WHEN an individual doc's embed call instead raises `OllamaUnavailable`
-(server unreachable) or `OllamaModelNotFound` (configured model not
-installed), `reindex` MUST NOT treat it as a per-doc failure — an
-environment that cannot serve any embed is not a transient per-input
-failure. `reindex` MUST re-raise it and let it propagate to the existing
-"Error Ladder Mirrors `query`" requirement unchanged: a clear stderr
-message and exit 1, with no further queued docs processed after the raise.
-Per-doc isolation applies ONLY to the generic transient `OllamaError`,
-never to these two fatal subclasses.
+(server unreachable), `OllamaModelNotFound` (configured model not
+installed), OR `OllamaEmbeddingDimensionMismatch` (the configured
+embedding model returns vectors of the wrong length — a permanent,
+non-healing misconfiguration, not a transient per-input failure),
+`reindex` MUST NOT treat it as a per-doc failure. `reindex` MUST re-raise
+it and let it propagate to the existing "Error Ladder Mirrors `query`"
+requirement unchanged: a clear stderr message and exit 1, with no further
+queued docs processed after the raise. `OllamaEmbeddingDimensionMismatch`
+MUST be checked ahead of the generic `except OllamaError` catch, alongside
+`OllamaUnavailable`/`OllamaModelNotFound` — a bare `except OllamaError`
+here would silently swallow it as a transient per-doc skip and reproduce
+the exact misclassification this requirement closes. Per-doc isolation
+applies ONLY to the generic transient `OllamaError`, never to these three
+fatal subclasses.
 
 `ReindexReport.embedded` MUST equal the count of docs successfully embedded
 this run.
@@ -374,6 +380,17 @@ this run.
   clear stderr message, and exits `1`, exactly as the existing "Error
   Ladder Mirrors `query`" requirement specifies for a missing model
 
+#### Scenario: Dimension mismatch mid-embed-loop is fatal, not a per-doc skip
+
+- GIVEN the configured embedding model returns a wrong-length vector row
+  and `OllamaEmbeddingDimensionMismatch` is raised while embedding a
+  queued doc
+- WHEN `openkos reindex` runs
+- THEN it does NOT count that doc as `embed_failed`, does NOT proceed to
+  the remaining queued docs, prints a clear stderr message identifying the
+  failure as a permanent dimension mismatch (not "will retry next run"),
+  and exits `1`
+
 ### Requirement: Reindex Surfaces An Actionable Re-Run Notice On Embed-Failure Skips
 
 WHEN `ReindexReport.embed_failed > 0` — one or more docs were skipped
@@ -393,9 +410,12 @@ new-model (survivor) and old-model (failed) vectors until a later run
 reaches `skipped == 0 AND embed_failed == 0`; the user MUST be told the
 reindex is incomplete rather than left to discover the mixed state
 silently. A run whose embed loop instead hits a FATAL error
-(`OllamaUnavailable`/`OllamaModelNotFound`, see the Per-Doc Embed Failure Is
-Isolated, Not Fatal requirement) exits 1 before reaching this notice — the
-notice applies only to a run that completes with exit 0.
+(`OllamaUnavailable`/`OllamaModelNotFound`/`OllamaEmbeddingDimensionMismatch`,
+see the Per-Doc Embed Failure Is Isolated, Not Fatal requirement) exits 1
+before reaching this notice — the notice applies only to a run that
+completes with exit 0. A dimension-mismatch exit MUST NOT be worded as
+"will retry next run"; that phrasing is reserved for the transient
+`embed_failed` case this notice covers.
 
 #### Scenario: Embed-failure skip prints the actionable re-run notice
 
@@ -423,6 +443,15 @@ notice applies only to a run that completes with exit 0.
   Embedding-Model Tag Gate requirement), survivors are committed on the new
   model, the failed doc's vector remains on the old model, and stderr
   contains the same actionable incomplete-run notice
+
+#### Scenario: Dimension mismatch never reaches the transient re-run notice
+
+- GIVEN a run whose embed loop raises `OllamaEmbeddingDimensionMismatch`
+  on some queued doc
+- WHEN `openkos reindex` exits 1
+- THEN the transient "will retry next run" notice is NOT printed for that
+  doc; the permanent dimension-mismatch stderr message (see Per-Doc Embed
+  Failure Is Isolated, Not Fatal) is the only failure message shown
 
 ### Requirement: Embedding-Model Tag Gate Forces Full Re-Embed On Mismatch
 

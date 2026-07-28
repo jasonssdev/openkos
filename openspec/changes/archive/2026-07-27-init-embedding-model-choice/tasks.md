@@ -79,11 +79,12 @@ Rationale: total estimate is under the session's raised 800-line budget but comf
 
 ## Phase 5: Verification (spans PR1–PR3, gate at each)
 
-- [ ] 5.1 Run full local gate per PR: `uv run pytest`, `uv run ruff check src tests`, `uv run ruff format --check src tests`, `uv run mypy`
-- [ ] 5.2 Confirm each rollback boundary independently (design rollback §1 config/template/cli, §2 llm/reindex)
-- [ ] 5.3 File a named follow-up (issue, not code): `retrieval/answer.py:311` `_vector_hits` still degrades silently to FTS-only on a permanent dimension mismatch — deliberately out of scope here
+- [x] 5.1 Run full local gate per PR: `uv run pytest`, `uv run ruff check src tests`, `uv run ruff format --check src tests`, `uv run mypy` — reproduced independently at archive time: 2333 passed, coverage 97.61% against a 90% gate, ruff/format/mypy clean (post-PR4)
+- [x] 5.2 Confirm each rollback boundary independently (design rollback §1 config/template/cli, §2 llm/reindex) — confirmed in `archive-report.md`, both rollback layers remain independent and clean as designed
+- [x] 5.3 File a named follow-up (issue, not code): `retrieval/answer.py:311` `_vector_hits` still degrades silently to FTS-only on a permanent dimension mismatch — deliberately out of scope here — filed as [#209](https://github.com/jasonssdev/openkos/issues/209)
 
 ## Follow-ups (not work in this change)
 
-- `retrieval/answer.py:311` dimension-mismatch handling — named deferral, see 5.3.
-- Consider filing a small linked sub-issue under #189 for the `reindex` dimension-mismatch fatal reclassification (PR2/Phase 2–3) for traceability, since it has no issue of its own; not required to land the change — #189 alone can track it given it's bounded and reviewed alongside the picker.
+- `retrieval/answer.py:311` dimension-mismatch handling — filed as [#209](https://github.com/jasonssdev/openkos/issues/209), see 5.3.
+- `config.py`'s dual hand-maintained placeholder structures (`_PLACEHOLDER_RE` tuple vs. `substitutions` dict) — filed as [#210](https://github.com/jasonssdev/openkos/issues/210).
+- PR4 ([#208](https://github.com/jasonssdev/openkos/pull/208), `7d44b2e`) closed the embedding-picker numbered-selection/reprompt/exhaustion coverage gap `sdd-verify` found — see `verify-report.md` and `archive-report.md`.
