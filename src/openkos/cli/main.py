@@ -4495,13 +4495,19 @@ def status() -> None:
     `ingest` uses -- printing the reason to stderr with no raw traceback.
     This is the ONLY non-zero exit path.
 
-    On a workspace, sequences three reads and renders their result as plain
-    text via `typer.echo`, always exiting 0. Note that these reads perform
-    THREE independent `bundle/**/*.md` walks, not one: `okf.survey_bundle`
-    (source/concept counts and §9 findings, D2) -- counts always reflect the
-    disk scan, never `index.md` alone, so catalog drift after an
-    interrupted `ingest` is still visible; `lint_check.collect_docs`
-    (dangling-reference findings, #141); and -- only when `vectors.db` is
+    On a workspace, sequences several reads and renders their result as
+    plain text via `typer.echo`, always exiting 0. Note that these reads
+    perform FOUR independent `bundle/**/*.md` walks, not one:
+    `okf.survey_bundle` (source/concept counts and §9 findings, D2) --
+    counts always reflect the disk scan, never `index.md` alone, so catalog
+    drift after an interrupted `ingest` is still visible;
+    `lint_check.collect_docs` (dangling-reference findings, #141);
+    `resolution.find_candidates` (exact-title candidate groups, #186), run
+    UNCONDITIONALLY -- unlike the edge-count line below, it is never gated
+    on `vectors_missing`, because its similarity path is stdlib `difflib`
+    (`similarity.py`) and never touches embeddings; with the default
+    `include_deprecated=False` it also evaluates
+    `lifecycle.deprecated_concept_ids`; and -- only when `vectors.db` is
     non-empty -- `build_graph`'s walk behind the informational edge-count
     line. Consolidating them is deliberately out of scope (issue #195);
     what IS guaranteed is that `status` calls `build_graph` exactly once.
@@ -4562,6 +4568,17 @@ def status() -> None:
     dangling = lint_check.check_dangling_targets(docs)
     needs_attention: list[str] = [*survey.findings]
     needs_attention.extend(f"{finding.path}: {finding.detail}" for finding in dangling)
+    # #186: pending duplicate groups are ACTIONABLE -- name `duplicates` as
+    # the next step. Exact-title matches only (Tier.HIGH); near-match (LOW)
+    # is a deliberate high-recall review queue, not an alert (similarity.py).
+    exact_title_groups = sum(
+        1 for group in find_candidates(layout.bundle_dir) if group.tier is Tier.HIGH
+    )
+    if exact_title_groups:
+        needs_attention.append(
+            f"{exact_title_groups} candidate group{_plural(exact_title_groups)} with "
+            "identical titles — run `openkos duplicates` to review."
+        )
     # issue #183 (Slice 0): a missing/empty `vectors.db` is genuinely
     # ACTIONABLE (spec: "Needs-Attention Surfaces Missing Vector Index"), so
     # it belongs in `needs_attention` itself -- unlike the edge-count line
