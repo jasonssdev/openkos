@@ -2229,13 +2229,57 @@ def test_reingest_with_missing_on_disk_sensitivity_resolves_to_private(
     to lump `missing, non-string, or otherwise unrecognized` together as all
     failing closed to `confidential`; `_rank(None)` (`okf.py`) actually
     floors at `private` (spec: "Missing on-disk sensitivity floors to
-    private")."""
+    private").
+
+    Config `default_sensitivity` is raised to `public` specifically so this
+    test discriminates: a broken implementation that ignored the on-disk
+    value entirely and just wrote `cfg.default_sensitivity` would produce
+    `public` here, not `private` -- only a real
+    `combine_sensitivity(None, "public")` call floors the result at
+    `private` (mirrors `test_reingest_after_forget_uses_the_config_default`'s
+    technique)."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes about self-control.", encoding="utf-8")
     first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
     assert first.exit_code == 0
     _delete_source_sensitivity(tmp_path, "notes")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "private"
+
+
+def test_reingest_with_blank_on_disk_sensitivity_resolves_to_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source whose on-disk `sensitivity` value is present but
+    whitespace-only ranks `private` under `okf._rank`'s blank-string
+    handling (the config default floor), NOT `confidential` -- distinct
+    from both a missing key and an unrecognized string (spec: "Blank
+    on-disk sensitivity floors to private").
+
+    Config `default_sensitivity` is raised to `public` for the same reason
+    as `test_reingest_with_missing_on_disk_sensitivity_resolves_to_private`:
+    a broken implementation that ignored the on-disk value entirely and
+    just wrote `cfg.default_sensitivity` would produce `public` here, not
+    `private` -- only a real `combine_sensitivity("   ", "public")` call
+    floors the result at `private`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "   ")
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 

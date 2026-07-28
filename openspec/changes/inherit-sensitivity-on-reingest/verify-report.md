@@ -99,7 +99,9 @@ $ uv run pytest tests/unit/cli/test_ingest.py -q -k "reingest"
 
 **WARNING**:
 1. **Delta spec Scenario 6 ("Malformed on-disk sensitivity fails closed to confidential") is factually inaccurate for its "missing" disjunct, and that disjunct is untested at the `ingest` integration level.** The scenario's GIVEN clause groups "missing, non-string, or otherwise unrecognized" as all resolving to `confidential`. Verified directly: `okf.combine_sensitivity(None, "public")` returns `"private"`, not `"confidential"` (confirmed both by direct invocation and by the pre-existing, unmodified, still-passing unit test `tests/unit/model/test_okf.py:1002`). This exact correction is already stated in this change's own `design.md` ("A missing key or blank string floors at `private`, not `confidential`"), but the design's correction was never propagated into the delta spec's Scenario 6 text, nor into the now-canonical `openspec/specs/ingestion/spec.md`. Only the "unrecognized string" disjunct (`"secret"`) is exercised by `test_reingest_with_unknown_on_disk_sensitivity_fails_closed_to_confidential`; no test forges a Source file with a genuinely *missing* `sensitivity` key to confirm end-to-end behavior for that disjunct. Recommend: split Scenario 6 into two scenarios (missing/blank -> `private`; non-string/unrecognized-string -> `confidential`), matching the requirement paragraph's own more careful "malformed or non-string" wording, and add one integration test for the missing-key sub-case before archive. Not a runtime defect — the implementation and the underlying primitive are correct and already well-tested; this is a spec-accuracy and integration-coverage gap in newly authored text.
+   **RESOLVED by `cf36e57` (same branch).** Both spec copies (`openspec/changes/inherit-sensitivity-on-reingest/specs/ingestion/spec.md` and the canonical `openspec/specs/ingestion/spec.md`) now carry three separate scenarios — "Missing on-disk sensitivity floors to private", "Blank on-disk sensitivity floors to private", and "Unrecognized or non-string on-disk sensitivity fails closed to confidential" — replacing the single lumped Scenario 6. `cf36e57` also added `test_reingest_with_missing_on_disk_sensitivity_resolves_to_private`, closing the missing-key integration-coverage gap. A follow-up review found that test's original assertion did not discriminate a correct `combine_sensitivity` call from an implementation that just wrote `cfg.default_sensitivity` (both land on `private` when the config default is left at its packaged value); it was strengthened to set `default_sensitivity: public` so the two implementations diverge, and a sibling test, `test_reingest_with_blank_on_disk_sensitivity_resolves_to_private`, was added for the blank/whitespace-only disjunct using the same technique — closing the last untested case named in the new spec split.
 2. **The post-forget "from the workspace default" preview clause (`main.py:1832`) is implemented per design's 4-row table but is not pinned by any delta-spec scenario or any test asserting that exact stdout string.** `grep -n "from the workspace default" tests/unit/cli/test_ingest.py` returns no matches. Recommend adding a scenario + test, or accept as an intentionally under-specified corner of the preview surface.
+   **RESOLVED by `cf36e57` (same branch).** `test_reingest_after_forget_preview_reports_workspace_default_clause` now asserts the exact stdout string `"~ bundle/sources/notes.md (regenerated -- sensitivity private from the workspace default)"`, and the delta/canonical specs carry the corresponding scenario alongside the preserved/raised/unchanged preview scenarios.
 
 **SUGGESTION**:
 1. The `except OSError` branch in `_read_source_sensitivity` (`main.py:1152-1156`) is unreached by any test (`coverage: 1153` uncovered) since `concept_path.exists()` is always confirmed true immediately before the call; the branch only guards a TOCTOU race or permission error. Defensible as defensive coding for a security-classification read, but currently dead in test terms — consider a targeted `monkeypatch`-based test if 100% branch coverage on this file is ever required, or leave as documented defensive code.
@@ -109,9 +111,9 @@ $ uv run pytest tests/unit/cli/test_ingest.py -q -k "reingest"
 | Check | Result | Details |
 |-------|--------|---------|
 | TDD Evidence reported | ✅ | Found in apply-progress, full RED/GREEN/TRIANGULATE/SAFETY NET table |
-| All tasks have tests | ✅ | 13/13 new behaviors have test files |
-| RED confirmed (tests exist) | ✅ | 13/13 test files verified present in `tests/unit/cli/test_ingest.py` |
-| GREEN confirmed (tests pass) | ✅ | 118/118 in `test_ingest.py`, 2410/2410 full suite, independently re-run |
+| All tasks have tests | ✅ | 13/13 new behaviors had test files at this report's original snapshot (HEAD `0ffa992`); now 16/16 — `cf36e57` added 2 (missing-key resolution, post-forget preview clause) and a later fix closed WARNING-1/2 above by strengthening `test_reingest_with_missing_on_disk_sensitivity_resolves_to_private` (no new function) and adding `test_reingest_with_blank_on_disk_sensitivity_resolves_to_private` (+1) |
+| RED confirmed (tests exist) | ✅ | 13/13 test files verified present in `tests/unit/cli/test_ingest.py` at this report's original snapshot; 16/16 present as of the current branch tip |
+| GREEN confirmed (tests pass) | ✅ | 118/118 in `test_ingest.py`, 2410/2410 full suite, independently re-run (original snapshot); `tests/unit/cli/test_ingest.py -k reingest` now 35/35 (was 32/32) after the two follow-up commits |
 | RED cross-validated independently | ✅ | Reproduced the exact reported RED set (9/32 reingest-tagged tests fail) via a scratch `git worktree` at unmodified `main` with this branch's test file copied in — not taken on the apply agent's word |
 | Triangulation adequate | ✅ | 10 distinct Phase-2 scenarios + 3 distinct Phase-4 preview-direction scenarios |
 | Safety Net for modified files | ✅ | 105/105 baseline before Phase 2 edits, 115/115 before Phase 4 edits (per apply-progress, consistent with cumulative counts observed) |
@@ -123,10 +125,10 @@ $ uv run pytest tests/unit/cli/test_ingest.py -q -k "reingest"
 ### Test Layer Distribution
 | Layer | Tests | Files | Tools |
 |-------|-------|-------|-------|
-| Unit (CLI integration via `CliRunner`, real OKF bundles, faked LLM only) | 13 | 1 (`tests/unit/cli/test_ingest.py`) | pytest, typer.testing |
+| Unit (CLI integration via `CliRunner`, real OKF bundles, faked LLM only) | 16 (13 at this report's original snapshot + 2 from `cf36e57` + 1 from the WARNING-1/2 follow-up fix) | 1 (`tests/unit/cli/test_ingest.py`) | pytest, typer.testing |
 | Integration | 0 | 0 | not applicable |
 | E2E | 0 | 0 | not applicable |
-| **Total** | **13** | **1** | |
+| **Total** | **16** | **1** | |
 
 ---
 
