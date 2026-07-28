@@ -116,3 +116,11 @@ None blocking. See Deviation 1 above (design/spec conflict on D4) — flagged fo
 ## Status
 
 38/38 Phase 1–4 tasks complete (9 PR1 + 12 PR2 + 17 PR3). Ready for `sdd-verify` across the full change (PR1+PR2+PR3), and Phase 5 (5.2/5.3) for the orchestrator.
+
+## Post-Archive Note
+
+A fourth PR ([#208](https://github.com/jasonssdev/openkos/pull/208), `7d44b2e`) landed after
+this progress file was written, adding coverage for the embedding-picker
+numbered-selection/reprompt/exhaustion paths that `sdd-verify` found untested (see
+`verify-report.md` and `archive-report.md`). This apply-progress file is preserved as
+the historical record of PR1–PR3; it is not the final state of the change.
