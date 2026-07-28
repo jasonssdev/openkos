@@ -45,3 +45,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0007](0007-volatility-taxonomy.md) | Volatility taxonomy and volatility-aware freshness windows | Accepted | 2026-07-22 |
 | [0008](0008-human-sensitivity-override.md) | Human sensitivity override, and where lowering needs a flag | Accepted | 2026-07-27 |
 | [0009](0009-source-sensitivity-propagation.md) | Source sensitivity propagates to provenance descendants, raise-only | Accepted | 2026-07-28 |
+| [0010](0010-reingest-raise-only-sensitivity.md) | Re-ingest resolves sensitivity as a raise-only high-water mark | Proposed | 2026-07-28 |
