@@ -36,7 +36,8 @@ The forces: correcting a wrong default is a legitimate downgrade and is the
 whole point of the verb; AGENTS.md requires that "consequential changes stay
 reviewable, not silently automatic"; and the confirm prompt — the mechanism that
 makes a change reviewable — does not always run. `--auto` silences it for one
-invocation, and config `review: false` silences it workspace-wide, for every
+invocation, a non-interactive stdin makes it impossible to ask at all, and
+config `review: false` silences it workspace-wide, for every
 verb. On those paths a script downgrades an access-control field with no human
 present at the moment it happens, which is structurally the `merge` case
 ADR-0003 refused, not the reviewed case AGENTS.md permits.
@@ -54,8 +55,9 @@ the reviewable mechanism the principle asks for, not a violation of it.
 Therefore `openkos set-sensitivity <concept-id> <level>` may lower a concept's
 sensitivity. Raising and same-value assignment pass the standard confirm gate.
 Lowering passes the standard gate **when the confirm prompt actually runs and is
-accepted**. On every path where the prompt does not run — `--auto`, or config
-`review: false` — lowering additionally requires an explicit `--allow-downgrade`;
+accepted**. On every path where the prompt does not run — `--auto`, config
+`review: false`, or a non-interactive stdin — lowering additionally requires an
+explicit `--allow-downgrade`;
 without it the verb refuses in Phase A with exit 1, no write, no commit, and a
 message naming the flag. Friction is placed precisely, and only, where review is
 absent.

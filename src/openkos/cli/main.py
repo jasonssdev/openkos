@@ -3203,9 +3203,11 @@ def set_sensitivity_cmd(
         if prompt_will_run:
             typer.confirm("Proceed with these changes?", abort=True)
         else:
-            # Reached only for a raise or a normalization: a lowering with
-            # no interactive stdin already refused at the Phase-A gate
-            # above, which names `--allow-downgrade` instead.
+            # A lowering reaches here only when `--allow-downgrade` was
+            # passed -- without it the Phase-A gate already refused, naming
+            # that flag. So this refusal is about the WRITE lacking
+            # confirmation, not about the downgrade lacking authorization,
+            # and `--auto` is the correct remedy to name.
             typer.echo(
                 "openkos set-sensitivity: refusing to write without "
                 "confirmation -- stdin is not a TTY; re-run with --auto.",

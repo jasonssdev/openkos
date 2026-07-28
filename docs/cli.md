@@ -231,6 +231,25 @@ A one-line preview (`<Type>: <old-or-default> -> <new>`) prints before the same 
 | --- | --- |
 | `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
 
+### `openkos set-sensitivity <concept-id> <level>`
+
+Writes one existing concept's `sensitivity` frontmatter field. This is the guarded path for the field that decides what reaches the LLM — `confidential` content is held back, fail-closed — which until now could only be changed by hand-editing YAML, where a typo silently degrades the guard. **No LLM in the write path.** Vocabulary validation runs first, before any read or write: `<level>` must exact-match `public`, `private`, or `confidential`. The concept-id is resolved the same way `forget` and `relate` resolve theirs, so an absolute path, a `..` segment, a reserved basename, or a nonexistent concept refuses (exit 1) with nothing read and nothing written.
+
+**This verb changes exactly the one concept you name.** It does not touch siblings, and it does not touch objects extracted from that concept. Note the contrast with `merge` below, which recomputes `sensitivity` as a high-water-mark across two objects: that recompute is a merge-time fold, not a propagation, and no equivalent propagation exists here. Marking a source confidential therefore does not reclassify the concepts extracted from it.
+
+The write is **idempotent** against the raw stored value: when the field already reads exactly `<level>`, the command is a no-op — a message, exit `0`, no write, no commit. The comparison is deliberately exact and unstripped, so a dirty value (missing, blank, whitespace-padded, or an unrecognized string) never short-circuits and always reaches the fail-closed ranking described next.
+
+Lowering a level is permitted, because correcting a wrong default is a legitimate downgrade. It is permitted **through review**, so the friction sits exactly where review is absent: when no confirm prompt will actually run — `--auto`, config `review: false`, or a non-interactive stdin — a lowering additionally requires `--allow-downgrade`, and refuses (exit 1) without it, before any preview is printed and before anything is written. Raising is never gated beyond the standard confirm. A dirty current value ranks fail-closed (missing or blank counts as `private`, anything else unrecognized as `confidential`), so assigning below that floor counts as a lowering and is gated too — otherwise the verb would launder bad frontmatter into a lower classification. See ADR-0008 for why an explicit human assignment may lower a value that `merge`'s automatic recompute may not.
+
+A one-line preview naming the direction in words (`sensitivity: lowering 'confidential' -> public`) prints before the same confirm gate every other mutating verb shares. A confirmed write appends a `**Set-sensitivity**` entry to `log.md`, leaves `index.md` untouched, and commits as `openkos: set-sensitivity <concept-id> -> <level>`.
+
+Like `merge`'s Phase B below, the write is **not transactional as a whole**: the concept file is written first, then `log.md`, then the commit. Each individual file write is atomic, but a failure between them leaves the sensitivity already changed on disk while the log entry and the commit do not yet record it. That is a benign, git-recoverable partial result rather than corruption — `git status` shows it, and re-running the same command completes it — but for a field that gates what reaches the LLM it is worth knowing the audit trail can lag the value by one failed step.
+
+| Flag | Meaning |
+| --- | --- |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+| `--allow-downgrade` | Permit lowering the level on a path where no confirm prompt will run. Has no effect when raising, and none when the prompt does run. |
+
 ### `openkos merge <survivor-id> <absorbed-id>`
 
 Fuses two distinct concept-ids a human has confirmed are the same real-world entity — the first DESTRUCTIVE entity-resolution write. `survivor-id`'s id survives; `absorbed-id`'s file is removed. This is the verb `duplicates` and `adjudicate` forward-reference: a candidate pair still needs an explicit `merge` to actually be fused — invoked directly, or per accepted pair through `adjudicate`'s `--apply`/`--apply-same` modes, which run this same merge path.
