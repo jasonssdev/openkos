@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Final
+from typing import Final, Literal
 
 import frontmatter
 
@@ -228,6 +228,37 @@ def _rank(value: object) -> int:
         if stripped in SENSITIVITY_ORDER:
             return SENSITIVITY_ORDER.index(stripped)
     return SENSITIVITY_ORDER.index("confidential")
+
+
+def sensitivity_direction(
+    current: object, target: str
+) -> Literal["raise", "same", "lower"]:
+    """Classify a proposed sensitivity change from `current` to `target`.
+
+    `target` MUST already be a validated member of `SENSITIVITY_ORDER`; the
+    caller is responsible for that check -- this helper does not repeat it.
+    `current` is deliberately typed `object`: it is raw, possibly dirty
+    frontmatter (missing, blank, non-string, or an unrecognized string), and
+    ranks through the same fail-closed `_rank` that `combine_sensitivity`
+    uses (ADR-0003). A missing/blank `current` floors at `private`; anything
+    else dirty floors at `confidential` -- the most restrictive level -- so a
+    `target` below that floor always classifies as `"lower"`, never `"same"`
+    or `"raise"`. This is the security-load-bearing behavior a downgrade
+    gate depends on (ADR-0008).
+
+    Returns a three-way verdict rather than an integer rank or a bool: `_rank`
+    stays private (exporting it would invite ad-hoc call-site comparisons,
+    the alternative ADR-0003 already rejected), and a bool `is_downgrade`
+    cannot honestly label the dirty-but-equivalent `"same"` case in a caller's
+    preview.
+    """
+    current_rank = _rank(current)
+    target_rank = SENSITIVITY_ORDER.index(target)
+    if target_rank > current_rank:
+        return "raise"
+    if target_rank == current_rank:
+        return "same"
+    return "lower"
 
 
 def combine_sensitivity(a: object, b: object) -> str:
