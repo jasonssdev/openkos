@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos import fsio
 from openkos.cli.main import app
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
@@ -57,6 +58,15 @@ def _init_workspace_git(
     assert result.exit_code == 0
 
 
+def _set_config_field(tmp_path: Path, old: str, new: str) -> None:
+    """Rewrite one `openkos.yaml` line in place (mirrors
+    `test_ingest.py::_set_config_field`)."""
+    config_path = tmp_path / "openkos.yaml"
+    content = config_path.read_text(encoding="utf-8")
+    assert old in content
+    config_path.write_text(content.replace(old, new), encoding="utf-8")
+
+
 def _ingest_source(tmp_path: Path, name: str) -> str:
     """Ingest one Source concept via `ingest --auto`, returning its concept-id."""
     source = tmp_path / name
@@ -96,6 +106,32 @@ def _last_commit_subject(root: Path) -> str:
 def _last_commit_files(root: Path) -> set[str]:
     result = vcs_git._run(["git", "show", "--name-only", "--format=", "-1"], cwd=root)
     return {line for line in result.stdout.splitlines() if line}
+
+
+def _write_derived_concept(
+    tmp_path: Path,
+    *,
+    slug: str,
+    provenance: list[str],
+    sensitivity: str = "public",
+) -> str:
+    """Hand-write a derived `Concept` object directly into the bundle,
+    citing `provenance`, bypassing the LLM/extraction pipeline entirely --
+    mirrors `_write_raw_sensitivity`'s direct-frontmatter-write pattern.
+    Returns its concept-id (`concepts/<slug>`)."""
+    content = okf.build_concept(
+        type="Concept",
+        title=slug.replace("-", " ").title(),
+        description="A derived concept used to exercise propagation.",
+        body="",
+        provenance=provenance,
+        sensitivity=sensitivity,
+        timestamp="2024-01-01T00:00:00Z",
+    )
+    path = tmp_path / "bundle" / "concepts" / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return f"concepts/{slug}"
 
 
 # -- 2.2: invalid level refused before any read/write -----------------------
@@ -355,14 +391,39 @@ def test_setting_confidential_emits_notice(
 def test_success_message_contains_honesty_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The post-write success message states that only the one named
-    concept was touched -- no sibling or derived object (spec "Scope Is
-    Exactly One Named Concept")."""
+    """On a Source with a derived object eligible for a raise, the
+    post-write success message MUST name the propagated descendant --
+    propagation is reported, not silent (spec "Raise-Only Propagation to
+    Provenance Descendants")."""
     _init_workspace(tmp_path, monkeypatch)
     source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id]
+    )
 
     result = runner.invoke(
         app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert derived_id in result.output
+
+
+def test_non_source_success_message_keeps_only_this_concept_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a non-Source target, the success message is byte-for-byte the
+    original single-concept honesty line -- no sibling or derived object
+    was touched (spec "Scope Is Exactly One Named Concept", preserved for
+    the non-Source path)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id]
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", derived_id, "confidential", "--auto"]
     )
 
     assert result.exit_code == 0
@@ -371,14 +432,18 @@ def test_success_message_contains_honesty_line(
 
 
 def test_help_contains_honesty_line(tmp_path: Path) -> None:
-    """`--help` states the same only-this-concept honesty line (spec
-    "Scope Is Exactly One Named Concept")."""
+    """`--help` states the bounded new scope honestly: the named concept,
+    plus raise-only propagation to a Source's provenance descendants (spec
+    "Scope Is Exactly One Named Concept" / "Raise-Only Propagation to
+    Provenance Descendants")."""
     result = runner.invoke(app, ["set-sensitivity", "--help"])
 
     assert result.exit_code == 0
     lowered = result.output.lower()
     assert "sibling" in lowered
     assert "derived" in lowered
+    assert "source" in lowered
+    assert "raise" in lowered or "raising" in lowered
 
 
 # -- 2.14: exact commit message and staged paths -----------------------------
@@ -482,3 +547,323 @@ def test_padded_current_equal_to_target_is_not_a_no_op(
     assert result.exit_code == 0
     assert "no change made" not in result.stdout
     assert _sensitivity_of(tmp_path, source_id) == "public"
+
+
+# -- Phase 2: raise-only propagation to provenance descendants (#219) -------
+
+
+def test_raising_source_raises_derived_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raising a Source's `sensitivity` raises every provenance descendant
+    in the same run (spec "Raise-Only Propagation to Provenance
+    Descendants")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id], sensitivity="public"
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, source_id) == "confidential"
+    assert _sensitivity_of(tmp_path, derived_id) == "confidential"
+
+
+def test_lowering_source_never_lowers_derived(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lowering a Source never lowers an already-raised derived object --
+    propagation is raise-only, and a Source downgrade must not cascade
+    (spec "Raise-Only Propagation to Provenance Descendants")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id], sensitivity="private"
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, derived_id) == "confidential"
+    derived_after_raise = (tmp_path / "bundle" / f"{derived_id}.md").read_bytes()
+
+    result = runner.invoke(
+        app,
+        [
+            "set-sensitivity",
+            source_id,
+            "public",
+            "--auto",
+            "--allow-downgrade",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, source_id) == "public"
+    assert (tmp_path / "bundle" / f"{derived_id}.md").read_bytes() == (
+        derived_after_raise
+    )
+
+
+def test_downgrade_does_not_propagate_even_when_result_would_be_a_raise(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Propagation is gated on the Source's OWN assignment being a raise,
+    not merely on the Source type: `combine_sensitivity` alone can still
+    compute a raise for a descendant below the new (lower) target, but a
+    Source downgrade must never cascade (spec "Raise-Only Propagation to
+    Provenance Descendants"; ADR-0009)."""
+    _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    source_id = _ingest_source(tmp_path, "a.txt")
+    _write_raw_sensitivity(tmp_path, source_id, "confidential")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id], sensitivity="public"
+    )
+    derived_before = (tmp_path / "bundle" / f"{derived_id}.md").read_bytes()
+
+    result = runner.invoke(
+        app,
+        [
+            "set-sensitivity",
+            source_id,
+            "private",
+            "--auto",
+            "--allow-downgrade",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, source_id) == "private"
+    assert _sensitivity_of(tmp_path, derived_id) == "public"
+    assert (tmp_path / "bundle" / f"{derived_id}.md").read_bytes() == derived_before
+    assert derived_id not in result.stdout
+    assert _last_commit_files(tmp_path) == {
+        f"bundle/{source_id}.md",
+        "bundle/log.md",
+    }
+
+
+def test_descendant_already_higher_is_not_lowered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A derived concept already at a higher `sensitivity` than the
+    Source's new target level is not staged for write and stays unchanged
+    (spec scenario "A derived object already at a higher level is not
+    lowered"). The Source must genuinely change level (`public` ->
+    `private`) so the `current == level` short-circuit doesn't skip the
+    propagation branch and make this test vacuous."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    source_id = _ingest_source(tmp_path, "a.txt")
+    assert _sensitivity_of(tmp_path, source_id) == "public"
+    derived_id = _write_derived_concept(
+        tmp_path,
+        slug="stoic-dichotomy",
+        provenance=[source_id],
+        sensitivity="confidential",
+    )
+    before = (tmp_path / "bundle" / f"{derived_id}.md").read_bytes()
+
+    result = runner.invoke(app, ["set-sensitivity", source_id, "private", "--auto"])
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, source_id) == "private"
+    assert f"{derived_id}" not in result.stdout
+    assert (tmp_path / "bundle" / f"{derived_id}.md").read_bytes() == before
+
+
+def test_non_source_concept_touches_only_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Targeting a non-Source (derived) concept behaves byte-identically
+    to today -- no bundle scan, no propagation, the Source itself untouched
+    (spec "Scope Is Exactly One Named Concept")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id], sensitivity="public"
+    )
+    source_before = (tmp_path / "bundle" / f"{source_id}.md").read_bytes()
+
+    result = runner.invoke(
+        app, ["set-sensitivity", derived_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, derived_id) == "confidential"
+    assert (tmp_path / "bundle" / f"{source_id}.md").read_bytes() == source_before
+
+
+def test_preview_lists_every_derived_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confirmation preview lists one line per staged descendant raise,
+    under `--auto` on a non-TTY stdin (spec scenario "`--auto` propagates
+    without prompting")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    first = _write_derived_concept(
+        tmp_path, slug="first-derived", provenance=[source_id], sensitivity="public"
+    )
+    second = _write_derived_concept(
+        tmp_path, slug="second-derived", provenance=[source_id], sensitivity="public"
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert f"bundle/{first}.md" in result.stdout
+    assert f"bundle/{second}.md" in result.stdout
+
+
+def test_dangling_provenance_warns_and_never_lowers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept citing a provenance reference that resolves to no
+    existing concept emits a warning naming the dangling reference, is
+    excluded from propagation, and never blocks the Source's own write
+    (spec scenario "Unresolvable provenance warns, is excluded, and does
+    not abort")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    dangling_id = _write_derived_concept(
+        tmp_path,
+        slug="orphaned-derived",
+        provenance=["sources/does-not-exist"],
+        sensitivity="public",
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert "WARNING" in result.stderr
+    assert "does-not-exist" in result.stderr
+    assert _sensitivity_of(tmp_path, dangling_id) == "public"
+    assert _sensitivity_of(tmp_path, source_id) == "confidential"
+
+
+def test_descendants_written_before_target_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the write of the target Source concept fails, its provenance
+    descendants are already raised on disk -- Phase B writes descendants
+    BEFORE the target, so a partial failure leaves the bundle
+    over-classified rather than under-classified (design: "Descendants are
+    written BEFORE the target concept")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id], sensitivity="public"
+    )
+    source_path = tmp_path / "bundle" / f"{source_id}.md"
+
+    real_write_atomic = fsio.write_atomic
+
+    def _failing_write_atomic(path: Path, content: str) -> None:
+        if path == source_path:
+            raise OSError("simulated disk failure")
+        real_write_atomic(path, content)
+
+    monkeypatch.setattr("openkos.cli.main.fsio.write_atomic", _failing_write_atomic)
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert _sensitivity_of(tmp_path, derived_id) == "confidential"
+    assert _sensitivity_of(tmp_path, source_id) == "private"
+
+
+def test_commit_stages_every_changed_path(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The auto-commit's staged path list includes every changed descendant
+    path, and an unrelated dirty file elsewhere in the workspace stays
+    unstaged (spec: "Raise-Only Propagation to Provenance Descendants";
+    threat matrix "Commit state")."""
+    _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id], sensitivity="public"
+    )
+    unrelated = tmp_path / "bundle" / "concepts" / "unrelated.md"
+    unrelated.parent.mkdir(parents=True, exist_ok=True)
+    unrelated.write_text("stray uncommitted content", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert _last_commit_files(tmp_path) == {
+        f"bundle/{source_id}.md",
+        f"bundle/{derived_id}.md",
+        "bundle/log.md",
+    }
+    status = vcs_git._run(["git", "status", "--porcelain"], cwd=tmp_path)
+    assert "concepts/unrelated.md" in status.stdout
+
+
+def test_source_with_zero_derived_objects_unchanged(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Source with no provenance descendants behaves exactly as today:
+    only the Source concept's frontmatter changes, matching prior
+    single-concept behavior (spec scenario "A Source with zero derived
+    objects behaves exactly as today")."""
+    _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert "no sibling" in result.output.lower()
+    assert _last_commit_files(tmp_path) == {
+        f"bundle/{source_id}.md",
+        "bundle/log.md",
+    }
+
+
+def test_auto_propagates_without_prompting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--auto` still performs propagation to eligible descendants; it only
+    skips the confirmation prompt (spec scenario "`--auto` propagates
+    without prompting")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id], sensitivity="public"
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, derived_id) == "confidential"
+    assert derived_id in result.output

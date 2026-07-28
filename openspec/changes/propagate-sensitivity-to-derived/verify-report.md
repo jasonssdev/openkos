@@ -102,3 +102,123 @@ No tautologies, ghost loops, or assertion-free tests found in the 3 reviewed tes
 **SUGGESTION**: `cfg.default_sensitivity` has no format/type validation in `config.py` (pre-existing — not introduced by this change); the new `str(...)` cast at the read-back site is incidentally more defensive than the status quo, not a regression.
 
 ## Final Verdict: PASS
+
+---
+
+# Verification Report: propagate-sensitivity-to-derived (PR 2 of 2)
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:66825be18c34544996c926c7522cd58ba2eef624
+verdict: pass
+blockers: 0
+critical_findings: 0
+requirements: 2/2
+scenarios: 7/7
+test_command: uv run pytest -q
+test_exit_code: 0
+test_output_hash: sha256:761b5136f3069ffc374046416d0080ee073bcf27d3c080071dcb9555319ef873
+build_command: uv run ruff check . && uv run ruff format --check . && uv run mypy .
+build_exit_code: 0
+build_output_hash: sha256:03a2fe9a7ba5d4487df1326a2cf7e35215a3c1d711527d7ebabc9c8f4b56fac
+```
+
+**Scope of this run**: `feat/set-sensitivity-propagates-to-derived` branch, 4 commits off `fix/ingest-inherits-source-sensitivity` (`d0900a2`, PR 1, already open as PR #226 with green CI) — Phase 2 tasks 2.1-2.19 (set-time raise-only propagation from a Source to its provenance descendants), ADR-0009, and the `sensitivity-config` delta spec. PR 1's creation-time inheritance is treated as already verified; re-checked here only for regression risk.
+
+**Verdict: PASS** — 0 CRITICAL, 1 WARNING, 1 SUGGESTION.
+
+## Commits reviewed
+- `c912fa8` feat(cli): raise Source sensitivity to provenance descendants
+- `3f402d1` docs(sensitivity-config): back raise-only propagation with a spec delta
+- `1e9242e` docs(adr): record ADR-0009 superseding ADR-0008's scope statement
+- `66825be` chore(sdd): mark Phase 2 tasks complete for propagate-sensitivity-to-derived
+
+## Completeness (Phase 2 tasks)
+All 19 tasks (2.1-2.19) checked `[x]` in `tasks.md`, each verified against the actual diff (`git diff fix/ingest-inherits-source-sensitivity..HEAD`): 11 test additions/inversions in `tests/unit/cli/test_set_sensitivity.py`, the `_DescendantRaise` dataclass and Source-branch propagation block in `src/openkos/cli/main.py`, the `sensitivity-config` spec delta applied verbatim, and ADR-0009 + README index row created. No unchecked tasks. Changed lines vs base: 698 additions + 45 deletions across 6 files (743 total) — over the 400-line default budget by design (chained/stacked `auto-chain`), under the 800-line session ledger cap, matching the tasks-phase forecast (~590, actual 743 including the +38-line tasks.md checkbox diff).
+
+## Behavioral invariants — proven, not assumed
+
+| # | Invariant | Proof | Result |
+|---|---|---|---|
+| 1 | Raise-only: lowering a Source must not lower a descendant | `test_lowering_source_never_lowers_derived` — raises both, then lowers Source with `--allow-downgrade`; asserts descendant file bytes unchanged post-lowering | ✅ PASS |
+| 2 | A descendant already above the Source's new (lower) target level stays put | `test_descendant_already_higher_is_not_lowered` — descendant at `confidential`, Source lowered to `private`; descendant bytes unchanged | ✅ PASS |
+| 3 | Phase B write order is descendants → target; a mid-way failure over-classifies, never under-classifies | `test_descendants_written_before_target_on_failure` — monkeypatches `fsio.write_atomic` to raise `OSError` only for the Source's own path; asserts exit 1, descendant already raised to `confidential` on disk, Source's own file still `private` (unwritten) | ✅ PASS — real ordering proof, not inferred from source order |
+| 4 | Non-Source targets are byte-identical to today, whole-bundle scan skipped entirely | Source inspection: the entire descendant-closure/warning-scan block sits inside `if metadata.get("type") == "Source":` — a non-Source `concept_id` never enters that branch, no `rglob`/frontmatter read of any other file occurs. Behaviorally confirmed by `test_non_source_concept_touches_only_itself` (Source's own file byte-identical) and `test_non_source_success_message_keeps_only_this_concept_line` | ✅ PASS — skip is structural (whole `if` block), not merely an empty result set |
+| 5 | Dangling/unresolvable provenance warns, is excluded, does not abort the target's own write | `test_dangling_provenance_warns_and_never_lowers` — stderr WARNING names `does-not-exist`, dangling concept's own `sensitivity` unchanged (`public`), Source's own write still exits 0 and reaches `confidential` | ✅ PASS |
+| 6 | `--auto` still propagates; skips only the confirmation prompt | `test_auto_propagates_without_prompting` proves propagation under `--auto`. Source inspection confirms the descendant-closure/staging block runs unconditionally, before the `confirm_enabled`/`prompt_will_run` branch — `auto` only affects the boolean gating `typer.confirm`, never the staging loop | ✅ PASS |
+| 7 | `combine_sensitivity` reused, never reimplemented | `okf.combine_sensitivity(member_current, level)` called directly at the one call site (`cli/main.py` descendant loop); `model/okf.py`'s `combine_sensitivity`/`_rank` are unmodified by this diff; no second max/rank/ordering implementation found anywhere in the new code | ✅ PASS |
+| 8 | `sensitivity-aware-llm` untouched | `git diff` shows zero changes to `openspec/specs/sensitivity-aware-llm/spec.md` (still 8 `### Requirement` blocks) and zero changes to any of its call sites (`blocks_llm_send` import/gate at `main.py:1243-1265` untouched by this diff — only lines ≥3056 changed) | ✅ PASS |
+
+## Flagged items — verdicts
+
+### Dangling-provenance warning as an independent full-bundle re-scan
+**Verdict: correct as implemented, not a defect — but scoped wider than the closure it complements, by design.**
+
+`find_provenance_descendants`'s fixed-point algorithm (`bundle/provenance.py:86-98`) requires a candidate's *entire* `provenance` set to already be a subset of the growing `purge` set seeded from `root_ids`. A candidate is silently excluded from the closure both when a cited id is truly dangling (no file anywhere) and when a cited id is a *different, real* Source (the deferred multi-source high-water-mark case) — the closure algorithm does not distinguish the two reasons for exclusion.
+
+The independent warning scan checks each bundle file's `provenance` entries against `known_ids = {canonical_id} ∪ {every file id in the snapshot}` — i.e. "does this id resolve to *any* file in the bundle," not "is this id reachable from the current root." This means:
+- It never disagrees with the closure on the multi-source case: those entries reference real files, so `entry_id in known_ids` is true and no warning fires — correctly silent, matching the design's deferred-non-goal.
+- It never disagrees with the closure on truly-missing ids: both mechanisms treat them the same way (excluded from closure, and separately reported).
+- It **is** unscoped to the current run: the scan iterates every file in the bundle snapshot, so a `set-sensitivity <SourceA> ...` invocation will also warn about a dangling reference belonging to an entirely unrelated `SourceB`'s descendant tree, if one exists anywhere in the bundle. This matches design.md's literal instruction ("scan the parsed provenance map for entries naming an id with no file in the snapshot") and apply-progress's own flagged deviation note.
+- Cost is exactly what design.md states: one extra frontmatter parse per bundle file, on a rare human verb, only when the target is a Source (already paid once for the closure itself).
+
+No test exercises a multi-Source-tree bundle to confirm the "unrelated dangling reference still warns" behavior is intentional rather than accidental scope creep. **WARNING**: add (or explicitly accept as a documented follow-up) a test asserting the scan's bundle-wide scope, so a future reader cannot mistake the unscoped noise for a bug and silently narrow it in a way that would then hide a real dangling reference outside the current root's own descendants.
+
+### ADR-0008 left unedited (no status change)
+**Verdict: correct, matches established repo convention — not a documentation gap.**
+
+`docs/adr/README.md`'s status lifecycle defines `Superseded by ADR-XXXX` as "replaced by a later decision" (whole-ADR framing). This repository has direct, in-repo precedent for a *partial*, scope-narrowing decision that does NOT trigger a status change on the ADR being narrowed: ADR-0008 itself states "We scope ADR-0003's 'never less' to **machine-chosen** values" — an explicit narrowing of ADR-0003's "never less" rule — yet ADR-0003's `status` was left `Accepted` (verified: `docs/adr/0003-sensitivity-high-water-mark.md:5,17` and the README index row both still read `Accepted`, not `Superseded by ADR-0008`). ADR-0009 does the same kind of thing to ADR-0008 (narrows one scope sentence, leaves the downgrade-gate decision fully in force) and follows the exact same precedent: no status edit. This is consistent, not a gap — the apply agent's own flagged uncertainty is resolved in favor of "zero edits was correct."
+
+## Spec compliance matrix — `sensitivity-config` delta (2 requirements, 7 scenarios)
+
+| Requirement | Scenario | Test | Result |
+|---|---|---|---|
+| Scope Is Exactly One Named Concept (modified) | Sibling concepts and a non-Source target's derived concepts are untouched | `test_non_source_concept_touches_only_itself`, `test_non_source_success_message_keeps_only_this_concept_line` | ✅ COMPLIANT |
+| Raise-Only Propagation to Provenance Descendants (added) | Raising a Source raises every derived object in the same run | `test_raising_source_raises_derived_objects` | ✅ COMPLIANT |
+| " | Lowering a Source leaves derived objects untouched | `test_lowering_source_never_lowers_derived` | ✅ COMPLIANT |
+| " | A derived object already at a higher level is not lowered | `test_descendant_already_higher_is_not_lowered` | ✅ COMPLIANT |
+| " | Unresolvable provenance warns, is excluded, and does not abort | `test_dangling_provenance_warns_and_never_lowers` | ✅ COMPLIANT |
+| " | A Source with zero derived objects behaves exactly as today | `test_source_with_zero_derived_objects_unchanged` | ✅ COMPLIANT |
+| " | `--auto` propagates without prompting | `test_auto_propagates_without_prompting` | ✅ COMPLIANT |
+
+**Compliance summary**: 7/7 scenarios compliant.
+
+## Design coherence
+`design.md`'s decisions all match implementation exactly: reuse `find_provenance_descendants` unchanged (no signature change, confirmed by diff); descendants written before target (`test_descendants_written_before_target_on_failure`); Source detection via `type` field, never path (`metadata.get("type") == "Source"`, confirmed); idempotence short-circuit (`current == level` early return) sits before the descendant block, confirmed by reading source order — the early `return` at the top of the function precludes the descendant-closure code from ever running on that path; `combine_sensitivity` used only for descendants, never for the target's own human-assigned value (target still uses `sensitivity_direction`/ADR-0008's gate, unchanged). No deviations found beyond the two explicitly flagged and resolved above.
+
+## Full gate results
+| Command | Exit | Result |
+|---|---|---|
+| `uv run pytest -q` | 0 | 2396 passed |
+| `uv run pytest tests/unit/cli/test_set_sensitivity.py -q` | 0 | 35 passed |
+| `uv run pytest --cov=openkos --cov-branch --cov-report=term-missing -q` | 0 (one transient run showed 2 unrelated flaky failures in `tests/unit/cli/test_relate.py`, a file untouched by this diff; both passed in isolation and on two subsequent full reruns — pre-existing/environmental flake, not a regression from this change) | 97.52% total branch coverage (gate: 90%). New code's 3 required branches (Source branch, empty-descendant branch, dangling-provenance branch) are fully covered per tasks 2.1/2.8/2.5; the only missing branches inside the new descendant-propagation block are the defensive `OSError`/`ValueError` exception arms and the per-file malformed-frontmatter skip inside the warning scan — explicitly out of scope per task 2.17 and apply-progress |
+| `uv run ruff check .` | 0 | All checks passed |
+| `uv run ruff format --check .` | 0 | 143 files already formatted |
+| `uv run mypy .` | 0 | Success: no issues found in 143 source files |
+
+## TDD Compliance
+| Check | Result | Details |
+|---|---|---|
+| TDD Evidence reported | ✅ | Full cycle table for tasks 2.1-2.10 in apply-progress |
+| All tasks have tests | ✅ | 10/10 RED tasks have test files; 9 GREEN/REFACTOR tasks are implementation/spec/doc tasks |
+| RED confirmed | ✅ | Cross-referenced against actual test file content (all 11 new/inverted tests present and asserting real behavior) |
+| GREEN confirmed | ✅ | 35/35 pass in the focused file; 2396/2396 full suite |
+| Triangulation | ✅ | 9 distinct propagation behaviors each get a distinct test asserting a different expected value (raised, unchanged, byte-identical, warning text, commit set, etc.) — no repeated trivial assertion pattern |
+| Safety net | ✅ | Full-repo suite (2396) run and green; `test_relate.py` flake is isolated and unrelated to files this change touches |
+
+**TDD Compliance**: 6/6 checks passed
+
+## Assertion Quality
+Reviewed all 11 new/modified tests in `test_set_sensitivity.py`. No tautologies, no ghost loops over possibly-empty collections, no assertion-free tests. All assertions check real file bytes, real exit codes, real stdout/stderr text, or the real `git` commit path set (`_last_commit_files` reads actual `git show --name-only`). `test_commit_stages_every_changed_path` explicitly checks a companion non-swept case (`"concepts/unrelated.md" in status`) rather than only an empty/negative assertion.
+
+**Assertion quality**: ✅ All assertions verify real behavior
+
+## Issues Found
+**CRITICAL**: None.
+
+**WARNING**: The dangling-provenance warning scan is intentionally bundle-wide (not scoped to the current Source's own closure/tree) — correct and matches design, but no test pins this scope decision for a multi-Source bundle, so a future reader could mistake the cross-tree noise for a bug and narrow it incorrectly, silently hiding a real dangling reference. Recommend a follow-up test asserting the scan's bundle-wide scope explicitly.
+
+**SUGGESTION**: The `test_relate.py` flake observed once under `--cov` (passed on 2 other full-suite runs, and in isolation) appears pre-existing and unrelated to this diff (file untouched); worth a separate investigation ticket for test isolation under coverage instrumentation, not a blocker for this change.
+
+## Final Verdict: PASS WITH WARNINGS
+0 CRITICAL, 1 WARNING (informational — behavior is correct, only its scope is undocumented by a test), 1 SUGGESTION (pre-existing, unrelated flake). All 7 spec scenarios and all 8 explicitly requested behavioral invariants are proven by real, passing runtime tests, not source-reading inference. Ready for `sdd-archive`.

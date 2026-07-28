@@ -36,25 +36,25 @@ Chain strategy: stacked-to-main
 
 ## Phase 2: Set-time propagation (PR 2, base PR 1)
 
-- [ ] 2.1 RED — `tests/unit/cli/test_set_sensitivity.py`: `test_raising_source_raises_derived_objects` — ingest, then `set-sensitivity <source> confidential --auto`, assert derived file's stored `sensitivity` raised
-- [ ] 2.2 RED — same file: `test_lowering_source_never_lowers_derived` — raise both, then lower the Source with `--allow-downgrade`; derived files byte-identical
-- [ ] 2.3 RED — same file: `test_non_source_concept_touches_only_itself` — target a derived (non-Source) object; assert byte-identical single-file behavior, no bundle scan
-- [ ] 2.4 RED — same file: `test_preview_lists_every_derived_raise` — non-TTY `--auto`, assert one preview line per descendant
-- [ ] 2.5 RED — same file: `test_dangling_provenance_warns_and_never_lowers` — hand-write a concept citing a missing source id; assert stderr WARNING naming it, no write, target Source write still succeeds
-- [ ] 2.6 RED — same file: `test_descendants_written_before_target_on_failure` — force the target concept write to fail; assert descendants are already raised on disk (fail-closed ordering)
-- [ ] 2.7 RED — same file: `test_commit_stages_every_changed_path` — assert `_autocommit` path list includes each descendant path, and an unrelated dirty file stays unstaged
-- [ ] 2.8 RED — same file: `test_source_with_zero_derived_objects_unchanged` — Source with no provenance descendants behaves exactly as today (single-file write)
-- [ ] 2.9 RED — same file, invert `test_success_message_contains_honesty_line` (`:355`) — on a Source, success message must name the propagated objects; add companion `test_non_source_success_message_keeps_only_this_concept_line` preserving the original single-concept assertion for non-Source targets
-- [ ] 2.10 RED — same file, reword `test_help_contains_honesty_line` (`:373`) — `--help` states the bounded new scope (named concept + Source provenance descendants, raise-only)
-- [ ] 2.11 GREEN — `src/openkos/bundle/provenance.py`: expose/import `find_provenance_descendants` in `cli/main.py` (no signature change)
-- [ ] 2.12 GREEN — `src/openkos/cli/main.py:3043-3245`: add `_DescendantRaise` dataclass; in `set_sensitivity_cmd`, after resolving `concept_id`, branch on `metadata.get("type") == "Source"` — build bundle snapshot (same `rglob` pattern as `forget`), call `find_provenance_descendants`, compute `okf.combine_sensitivity(descendant_current, level)` per descendant, stage only strict raises, warn on unresolvable provenance and exclude
-- [ ] 2.13 GREEN — same file: extend preview and success message to list each staged descendant raise
-- [ ] 2.14 GREEN — same file: order Phase B writes as descendants first, then target concept, then `log.md`, then one `_autocommit` covering every changed path
-- [ ] 2.15 GREEN — same file: extend `--help` text with the new bounded-scope honesty line
-- [ ] 2.16 REFACTOR — confirm idempotence short-circuit (`current == level`) still returns early with no descendant work; `ruff check`/`ruff format --check`/`mypy --strict` clean
-- [ ] 2.17 Run `uv run pytest tests/unit/cli/test_set_sensitivity.py -q --cov` and confirm branch coverage for: Source branch, empty-descendant branch, dangling-provenance branch
-- [ ] 2.18 Apply `openspec/changes/propagate-sensitivity-to-derived/specs/sensitivity-config/spec.md` delta to `openspec/specs/sensitivity-config/spec.md`
-- [ ] 2.19 Create `docs/adr/0009-source-sensitivity-propagation.md` per design's ADR-0009 content plan; add index row to `docs/adr/README.md`, status `Proposed`. Do NOT edit ADR-0008.
+- [x] 2.1 RED — `tests/unit/cli/test_set_sensitivity.py`: `test_raising_source_raises_derived_objects` — ingest, then `set-sensitivity <source> confidential --auto`, assert derived file's stored `sensitivity` raised
+- [x] 2.2 RED — same file: `test_lowering_source_never_lowers_derived` — raise both, then lower the Source with `--allow-downgrade`; derived files byte-identical
+- [x] 2.3 RED — same file: `test_non_source_concept_touches_only_itself` — target a derived (non-Source) object; assert byte-identical single-file behavior, no bundle scan
+- [x] 2.4 RED — same file: `test_preview_lists_every_derived_raise` — non-TTY `--auto`, assert one preview line per descendant
+- [x] 2.5 RED — same file: `test_dangling_provenance_warns_and_never_lowers` — hand-write a concept citing a missing source id; assert stderr WARNING naming it, no write, target Source write still succeeds
+- [x] 2.6 RED — same file: `test_descendants_written_before_target_on_failure` — force the target concept write to fail; assert descendants are already raised on disk (fail-closed ordering)
+- [x] 2.7 RED — same file: `test_commit_stages_every_changed_path` — assert `_autocommit` path list includes each descendant path, and an unrelated dirty file stays unstaged
+- [x] 2.8 RED — same file: `test_source_with_zero_derived_objects_unchanged` — Source with no provenance descendants behaves exactly as today (single-file write)
+- [x] 2.9 RED — same file, invert `test_success_message_contains_honesty_line` (`:355`) — on a Source, success message must name the propagated objects; add companion `test_non_source_success_message_keeps_only_this_concept_line` preserving the original single-concept assertion for non-Source targets
+- [x] 2.10 RED — same file, reword `test_help_contains_honesty_line` (`:373`) — `--help` states the bounded new scope (named concept + Source provenance descendants, raise-only)
+- [x] 2.11 GREEN — `src/openkos/bundle/provenance.py`: expose/import `find_provenance_descendants` in `cli/main.py` (no signature change) — already imported as `bundle_provenance` from Phase 1's predecessor work; no import change needed
+- [x] 2.12 GREEN — `src/openkos/cli/main.py:3043-3245`: add `_DescendantRaise` dataclass; in `set_sensitivity_cmd`, after resolving `concept_id`, branch on `metadata.get("type") == "Source"` — build bundle snapshot (same `rglob` pattern as `forget`), call `find_provenance_descendants`, compute `okf.combine_sensitivity(descendant_current, level)` per descendant, stage only strict raises, warn on unresolvable provenance and exclude
+- [x] 2.13 GREEN — same file: extend preview and success message to list each staged descendant raise
+- [x] 2.14 GREEN — same file: order Phase B writes as descendants first, then target concept, then `log.md`, then one `_autocommit` covering every changed path
+- [x] 2.15 GREEN — same file: extend `--help` text with the new bounded-scope honesty line
+- [x] 2.16 REFACTOR — confirm idempotence short-circuit (`current == level`) still returns early with no descendant work; `ruff check`/`ruff format --check`/`mypy --strict` clean
+- [x] 2.17 Run `uv run pytest tests/unit/cli/test_set_sensitivity.py -q --cov` and confirm branch coverage for: Source branch, empty-descendant branch, dangling-provenance branch
+- [x] 2.18 Apply `openspec/changes/propagate-sensitivity-to-derived/specs/sensitivity-config/spec.md` delta to `openspec/specs/sensitivity-config/spec.md`
+- [x] 2.19 Create `docs/adr/0009-source-sensitivity-propagation.md` per design's ADR-0009 content plan; add index row to `docs/adr/README.md`, status `Proposed`. Do NOT edit ADR-0008.
 
 ## Rules Carried Forward (do not re-derive at apply time)
 

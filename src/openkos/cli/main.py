@@ -3056,6 +3056,24 @@ def relate(
     )
 
 
+@dataclass(frozen=True)
+class _DescendantRaise:
+    """One staged raise-only descendant write, computed in Phase A of
+    `set_sensitivity_cmd` (design: "Set-time propagation, Interfaces /
+    Contracts"). `current` is the descendant's raw, possibly dirty
+    `sensitivity` value (fail-closed ranked by `okf.combine_sensitivity`,
+    ADR-0003); `new_level` is always a strict raise over it -- a member
+    with `combine_sensitivity(current, level) == current` is never staged.
+    `content` is the descendant's full frontmatter-plus-body text,
+    already re-rendered via `okf.dump_frontmatter`, ready to write as-is."""
+
+    concept_id: str
+    path: Path
+    current: object
+    new_level: str
+    content: str
+
+
 @app.command("set-sensitivity")
 def set_sensitivity_cmd(
     concept_id: str = typer.Argument(
@@ -3082,8 +3100,13 @@ def set_sensitivity_cmd(
 ) -> None:
     """Set exactly one existing concept's `sensitivity` field directly --
     the write layer of the sensitivity-config domain (write-verb #185).
-    Touches ONLY `<concept-id>`'s own frontmatter: no sibling and no
-    derived object is read for propagation or written.
+    Touches `<concept-id>`'s own frontmatter, PLUS, when `<concept-id>`
+    resolves to a Source-typed concept, raises (never lowers) the
+    `sensitivity` of every provenance descendant found by
+    `bundle.provenance.find_provenance_descendants`, each combined via
+    `okf.combine_sensitivity` (ADR-0003, ADR-0009). No sibling concept and
+    no non-Source target's derived concept is ever read for propagation or
+    written.
 
     Vocabulary validation happens FIRST, before any read of the concept
     file or the workspace: `level` must exact-match one of
@@ -3116,13 +3139,32 @@ def set_sensitivity_cmd(
     prompts via `typer.confirm` and aborts on decline; otherwise
     (non-TTY, no `--auto`) this refuses to write.
 
+    When `<concept-id>` resolves to a Source-typed concept (`metadata.get
+    ("type") == "Source"`) AND the assignment itself raises (`direction ==
+    "raise"`), Phase A additionally reads a whole-bundle snapshot, resolves
+    its provenance descendants, and computes `okf.combine_sensitivity
+    (descendant_current, level)` per descendant -- staging a write only
+    when that is a strict raise over the descendant's current value. Every
+    staged raise appears in the preview and the success message. A
+    provenance reference that resolves to no file in the snapshot emits a
+    stderr WARNING naming it and is excluded -- fail-closed, never lowered,
+    never blocking the Source's own write. A non-Source target, or a
+    Source assignment that is a lowering or a same-rank normalization,
+    skips this scan entirely -- a downgrade must never cascade even when
+    `combine_sensitivity` would compute a raise for some individual
+    descendant sitting below the new (lower) level.
+
     A confirmed write re-renders the frontmatter (`okf.dump_frontmatter`,
     changing only `sensitivity`), appends a `log.md` entry (no
     `index.md` change -- editing an existing catalog entry, not a new
-    one), writes both via `fsio.write_atomic`, then auto-commits via
-    `_autocommit` with message `openkos: set-sensitivity <id> -> <level>`.
-    Any failure, Phase A or Phase B, is caught (`OSError`/`ValueError`)
-    and reported on stderr (exit 1), never a raw traceback.
+    one). Phase B writes in this order: every staged descendant raise,
+    then the target concept, then `log.md` -- via `fsio.write_atomic` --
+    then one `_autocommit` covering every changed path, with message
+    `openkos: set-sensitivity <id> -> <level>`. There is no cross-file
+    rollback (matching `relate`/`merge`): a mid-way failure leaves the
+    bundle over-classified, never under-classified. Any failure, Phase A or
+    Phase B, is caught (`OSError`/`ValueError`) and reported on stderr
+    (exit 1), never a raw traceback.
     """
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
@@ -3182,6 +3224,88 @@ def set_sensitivity_cmd(
         )
         raise typer.Exit(code=1)
 
+    # Raise-only propagation to provenance descendants (design: "Set-time
+    # propagation"; ADR-0009). Source detection is the OKF `type` field of
+    # record, never a path convention -- a non-Source target skips this
+    # whole-bundle scan entirely and behaves byte-identically to today.
+    # Propagation ALSO requires the Source's own assignment to be a raise
+    # (`direction`, computed above) so a downgrade never cascades, even
+    # when `combine_sensitivity` would compute a raise for some individual
+    # descendant below the new (lower) level.
+    descendant_raises: list[_DescendantRaise] = []
+    if metadata.get("type") == "Source" and direction == "raise":
+        try:
+            bundle_snapshot: dict[str, str] = {}
+            for path in sorted(layout.bundle_dir.rglob("*.md")):
+                if path.name in okf.RESERVED_FILENAMES:
+                    continue
+                if path == concept_path:
+                    continue
+                rel = path.relative_to(layout.bundle_dir).as_posix()
+                bundle_snapshot[rel] = path.read_text(encoding="utf-8")
+
+            descendant_ids = [
+                member
+                for member in bundle_provenance.find_provenance_descendants(
+                    bundle_snapshot, root_ids={canonical_id}
+                )
+                if member != canonical_id
+            ]
+
+            # Unresolvable provenance (design: "Unresolvable provenance"):
+            # scan every file's parsed `provenance` list for an entry
+            # naming an id with no file in the snapshot. Each one is
+            # reported on stderr; the citing concept is fail-closed
+            # excluded -- `find_provenance_descendants`'s own non-empty-
+            # subset rule already keeps it out of `descendant_ids` above,
+            # so this is purely reporting, never an extra write gate.
+            known_ids = {canonical_id} | {
+                rel.removesuffix(".md") for rel in bundle_snapshot
+            }
+            for rel, text in bundle_snapshot.items():
+                try:
+                    member_metadata, _ = okf.load_frontmatter(text)
+                except (OSError, ValueError):
+                    continue
+                raw_provenance = member_metadata.get("provenance")
+                if not isinstance(raw_provenance, list):
+                    continue
+                member_id = rel.removesuffix(".md")
+                for entry in raw_provenance:
+                    entry_id = str(entry).removesuffix(".md")
+                    if entry_id not in known_ids:
+                        typer.echo(
+                            "openkos set-sensitivity: WARNING -- "
+                            f"{member_id!r} cites unresolvable provenance "
+                            f"{entry_id!r}; excluded from propagation.",
+                            err=True,
+                        )
+
+            for member in descendant_ids:
+                member_text = bundle_snapshot[f"{member}.md"]
+                member_metadata, member_body = okf.load_frontmatter(member_text)
+                member_current = member_metadata.get("sensitivity")
+                new_level = okf.combine_sensitivity(member_current, level)
+                if new_level == member_current:
+                    continue
+                member_metadata["sensitivity"] = new_level
+                descendant_raises.append(
+                    _DescendantRaise(
+                        concept_id=member,
+                        path=layout.bundle_dir / f"{member}.md",
+                        current=member_current,
+                        new_level=new_level,
+                        content=okf.dump_frontmatter(member_metadata, member_body),
+                    )
+                )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                f"openkos set-sensitivity: failed while preparing the "
+                f"set-sensitivity -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
     now = datetime.now(UTC)
 
     try:
@@ -3213,6 +3337,12 @@ def set_sensitivity_cmd(
         f"  ~ bundle/{canonical_id}.md (sensitivity: {direction_word} "
         f"{current!r} -> {level})"
     )
+    for descendant_raise in descendant_raises:
+        typer.echo(
+            f"  ~ bundle/{descendant_raise.concept_id}.md (sensitivity: "
+            f"raising {descendant_raise.current!r} -> "
+            f"{descendant_raise.new_level})"
+        )
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
     if confirm_enabled:
@@ -3232,6 +3362,13 @@ def set_sensitivity_cmd(
             raise typer.Exit(code=1)
 
     try:
+        # Write order: descendants BEFORE the target concept BEFORE
+        # `log.md` (design: "Descendants are written BEFORE the target
+        # concept"). A mid-way failure then leaves the bundle
+        # over-classified, never under-classified -- there is no
+        # cross-file rollback, matching `relate`/`merge`.
+        for descendant_raise in descendant_raises:
+            fsio.write_atomic(descendant_raise.path, descendant_raise.content)
         fsio.write_atomic(concept_path, new_concept_text)
         fsio.write_atomic(log_path, new_log_text)
     except (OSError, ValueError) as exc:
@@ -3246,15 +3383,31 @@ def set_sensitivity_cmd(
         )
         raise typer.Exit(code=1) from exc
 
-    typer.echo(
-        f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
-        f"sensitivity to {level} ({log_path.name} updated). Only this "
-        "concept was changed; no sibling or derived object was touched."
-    )
+    if descendant_raises:
+        propagated = ", ".join(
+            f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
+            for descendant_raise in descendant_raises
+        )
+        typer.echo(
+            f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
+            f"sensitivity to {level} ({log_path.name} updated). Also raised "
+            f"{len(descendant_raises)} provenance descendant(s): "
+            f"{propagated}."
+        )
+    else:
+        typer.echo(
+            f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
+            f"sensitivity to {level} ({log_path.name} updated). Only this "
+            "concept was changed; no sibling or derived object was touched."
+        )
 
     _autocommit(
         root,
-        [f"bundle/{canonical_id}.md", "bundle/log.md"],
+        [
+            f"bundle/{descendant_raise.concept_id}.md"
+            for descendant_raise in descendant_raises
+        ]
+        + [f"bundle/{canonical_id}.md", "bundle/log.md"],
         f"openkos: set-sensitivity {canonical_id} -> {level}",
     )
 
