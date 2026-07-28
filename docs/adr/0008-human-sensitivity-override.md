@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0008: Human sensitivity override, and where lowering needs a flag"
 description: An explicit human assignment may lower sensitivity; unattended paths require --allow-downgrade.
-status: Proposed
+status: Accepted
 date: 2026-07-27
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0008: Human sensitivity override, and where lowering needs a flag
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-27
 
 ## Context
