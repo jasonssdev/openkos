@@ -408,3 +408,54 @@ def test_commit_message_and_staged_paths_exact(
         f"bundle/{source_id}.md",
         "bundle/log.md",
     }
+
+
+def test_lowering_on_non_tty_without_flag_refuses_before_any_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lowering with no `--auto`, `review: true`, and a non-interactive
+    stdin must hit the Phase-A downgrade gate, not the Phase-B TTY refusal.
+
+    The confirm prompt cannot run without a TTY, so this is an unattended
+    downgrade and `--allow-downgrade` is required. Naming `--auto` here
+    would hand the user a remedy that still refuses, and printing the
+    preview would leak the concept's current classification on a path the
+    design says refuses before any preview.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    _write_raw_sensitivity(tmp_path, source_id, "confidential")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["set-sensitivity", source_id, "public"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--allow-downgrade" in result.stderr
+    assert "proposed changes" not in result.stdout
+    assert _snapshot(tmp_path) == before
+
+
+def test_dirty_current_of_equal_rank_normalizes_and_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dirty current value that ranks EQUAL to the target is neither a
+    raise nor a lowering, so it is not gated and the preview says so.
+
+    `'CONFIDENTIAL'` is not a canonical member of `SENSITIVITY_ORDER`, so
+    it ranks fail-closed to `confidential` -- the same rank as the target.
+    Exact-equality idempotence does not fire because the raw strings
+    differ, so the write proceeds and canonicalizes the field. This is the
+    only path that reaches the `"same"` direction word.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    _write_raw_sensitivity(tmp_path, source_id, "CONFIDENTIAL")
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert "normalizing 'CONFIDENTIAL' -> confidential" in result.stdout
+    assert _sensitivity_of(tmp_path, source_id) == "confidential"

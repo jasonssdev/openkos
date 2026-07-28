@@ -3142,14 +3142,26 @@ def set_sensitivity_cmd(
         return
 
     direction = okf.sensitivity_direction(current, level)
-    prompt_will_run = not auto and cfg.review
+    # ADR-0008: lowering rides on the confirm prompt as its whole friction
+    # budget, so the gate must key on whether a human is ACTUALLY asked --
+    # not merely on whether review is enabled. `confirm_enabled` answers
+    # "is review on for this run"; `prompt_will_run` additionally requires
+    # an interactive stdin. Dropping the TTY term here would let a piped
+    # `review: true` run skip the gate, print the preview, and then refuse
+    # via the Phase-B ladder naming `--auto` -- a remedy that still
+    # refuses. Both gates below read these two names; never re-spell either
+    # predicate inline, or the security rule acquires a second copy that
+    # can drift.
+    confirm_enabled = not auto and cfg.review
+    prompt_will_run = confirm_enabled and sys.stdin.isatty()
 
     if direction == "lower" and not prompt_will_run and not allow_downgrade:
         typer.echo(
             "openkos set-sensitivity: refusing to lower "
             f"{canonical_id} from {current!r} to {level} without "
-            "confirmation -- the confirm prompt is disabled (--auto, or "
-            "config review: false); re-run with --allow-downgrade.",
+            "confirmation -- no confirm prompt will run (--auto, config "
+            "review: false, or a non-interactive stdin); re-run with "
+            "--allow-downgrade.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -3168,7 +3180,11 @@ def set_sensitivity_cmd(
             log_text, now.astimezone().date(), log_line
         )
     except (OSError, ValueError) as exc:
-        typer.echo(f"openkos set-sensitivity: refusing to set -- {exc}.", err=True)
+        typer.echo(
+            f"openkos set-sensitivity: failed while preparing the "
+            f"set-sensitivity -- {exc}.",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
 
     direction_word = {
@@ -3183,10 +3199,13 @@ def set_sensitivity_cmd(
     )
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
-    if not auto and cfg.review:
-        if sys.stdin.isatty():
+    if confirm_enabled:
+        if prompt_will_run:
             typer.confirm("Proceed with these changes?", abort=True)
         else:
+            # Reached only for a raise or a normalization: a lowering with
+            # no interactive stdin already refused at the Phase-A gate
+            # above, which names `--allow-downgrade` instead.
             typer.echo(
                 "openkos set-sensitivity: refusing to write without "
                 "confirmation -- stdin is not a TTY; re-run with --auto.",
@@ -3198,7 +3217,15 @@ def set_sensitivity_cmd(
         fsio.write_atomic(concept_path, new_concept_text)
         fsio.write_atomic(log_path, new_log_text)
     except (OSError, ValueError) as exc:
-        typer.echo(f"openkos set-sensitivity: refusing to set -- {exc}.", err=True)
+        # Distinct from the two phases above on purpose: this one is
+        # reached only after the write phase began, so the concept file may
+        # already be on disk while `log.md` is not. "refusing" would tell an
+        # operator nothing happened, which is exactly wrong here.
+        typer.echo(
+            f"openkos set-sensitivity: failed while writing the "
+            f"set-sensitivity -- {exc}.",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
 
     typer.echo(
