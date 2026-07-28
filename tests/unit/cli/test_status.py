@@ -586,3 +586,141 @@ def test_status_never_writes_to_the_workspace(
 
     assert result.exit_code == 0
     assert _snapshot(tmp_path) == before
+
+
+# --- status-surfaces-pending-duplicates #186: fourth needs-attention source
+
+
+def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: {doc_type}\ntitle: {title}\n---\n# {title}\n",
+        encoding="utf-8",
+    )
+
+
+def test_status_surfaces_exact_title_duplicate_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exact-title-match candidate group (Tier.HIGH) is surfaced under
+    "needs attention", naming `openkos duplicates` as the next step (status
+    spec: "Exact-title duplicate groups are surfaced")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "1 candidate group" in result.stdout
+    assert "openkos duplicates" in result.stdout
+    assert "Nothing needs attention." not in result.stdout
+
+
+def test_status_duplicate_line_has_no_tier_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The duplicate-groups line never prints `HIGH`, `LOW`, `exact`, or
+    `near` (status spec: "MUST NOT use the words HIGH, LOW, exact, or
+    near")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    duplicate_line = next(
+        line for line in result.stdout.splitlines() if "candidate group" in line
+    )
+    assert "HIGH" not in duplicate_line
+    assert "LOW" not in duplicate_line
+    assert "exact" not in duplicate_line
+    assert "near" not in duplicate_line
+
+
+def test_status_near_match_only_duplicates_still_all_clear(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A near-match-only candidate group (Tier.LOW, no exact-title-match
+    group) does NOT surface a duplicate-groups entry, and `status` still
+    prints "Nothing needs attention." (status spec: "Only near-match groups
+    still means nothing needs attention"). This is the sole pin on the
+    HIGH-only decision and the sole cover for the tier filter's false arm --
+    it must not be folded into any other test."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Stoic Philosophy")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "candidate group" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
+
+
+def test_status_no_duplicate_groups_no_new_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A fresh bundle with no near/exact-title candidate groups adds no
+    duplicate-groups entry, and `status` still prints "Nothing needs
+    attention." (status spec: "No duplicate groups"; covers the
+    `if exact_title_groups:` false arm)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "candidate group" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
+
+
+def test_status_deprecated_only_duplicate_group_excluded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """An exact-title-match group whose members are ALL deprecated is
+    excluded by `find_candidates`'s default `include_deprecated=False`, so
+    no duplicate-groups entry appears (status spec: "Deprecated-only
+    duplicate group is excluded by default")."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\nstatus: deprecated\n---\n# Stoicism\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: STOICISM\nstatus: deprecated\n---\n# STOICISM\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "candidate group" not in result.stdout
+
+
+def test_status_duplicate_line_plural_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two distinct exact-title-match groups pluralize the count (status
+    spec: "MUST report the exact-title group count with correct
+    singular/plural wording")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="STOICISM")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Epicureanism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="EPICUREANISM")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "2 candidate groups" in result.stdout
