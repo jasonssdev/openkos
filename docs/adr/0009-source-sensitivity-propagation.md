@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0009: Source sensitivity propagates to provenance descendants, raise-only"
 description: set-sensitivity on a Source raises its provenance descendants via combine_sensitivity; ADR-0008's downgrade gate is unchanged.
-status: Proposed
+status: Accepted
 date: 2026-07-28
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0009: Source sensitivity propagates to provenance descendants, raise-only
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-28
 
 ## Context

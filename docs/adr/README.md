@@ -44,4 +44,4 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0006](0006-default-embedding-model.md) | Default embedding model -- bge-m3, reliability as the prior filter | Accepted | 2026-07-22 |
 | [0007](0007-volatility-taxonomy.md) | Volatility taxonomy and volatility-aware freshness windows | Accepted | 2026-07-22 |
 | [0008](0008-human-sensitivity-override.md) | Human sensitivity override, and where lowering needs a flag | Accepted | 2026-07-27 |
-| [0009](0009-source-sensitivity-propagation.md) | Source sensitivity propagates to provenance descendants, raise-only | Proposed | 2026-07-28 |
+| [0009](0009-source-sensitivity-propagation.md) | Source sensitivity propagates to provenance descendants, raise-only | Accepted | 2026-07-28 |
