@@ -215,8 +215,8 @@ def test_lowering_under_review_false_without_allow_downgrade_refuses(
 
 @pytest.mark.parametrize(
     "dirty_current",
-    [None, "", "top-secret"],
-    ids=["missing", "blank", "malformed"],
+    [None, "", "   ", "top-secret", "confidential "],
+    ids=["missing", "blank", "whitespace", "malformed", "padded"],
 )
 def test_dirty_current_classified_as_lowering_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dirty_current: object
@@ -459,3 +459,26 @@ def test_dirty_current_of_equal_rank_normalizes_and_writes(
     assert result.exit_code == 0
     assert "normalizing 'CONFIDENTIAL' -> confidential" in result.stdout
     assert _sensitivity_of(tmp_path, source_id) == "confidential"
+
+
+def test_padded_current_equal_to_target_is_not_a_no_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Idempotence compares raw bytes, so `'public '` is NOT `'public'`.
+
+    This is the only case that can falsify a `current.strip() == level`
+    regression. A stripping comparison would short-circuit here and leave
+    the padded value on disk; the exact one does not, so the command
+    proceeds and canonicalizes the field. The dirty-value tests cannot
+    catch this -- their target never equals their current value under any
+    comparison.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    _write_raw_sensitivity(tmp_path, source_id, "public ")
+
+    result = runner.invoke(app, ["set-sensitivity", source_id, "public", "--auto"])
+
+    assert result.exit_code == 0
+    assert "no change made" not in result.stdout
+    assert _sensitivity_of(tmp_path, source_id) == "public"
