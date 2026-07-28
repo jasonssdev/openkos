@@ -1180,7 +1180,8 @@ def _stage_derived_objects(
     raw_content: str | None,
     source_title: str,
     source_slug: str,
-    sensitivity: str,
+    workspace_floor: str,
+    stamp_sensitivity: str,
     timestamp: str,
     bundle_dir: Path,
     llm: LLMBackend,
@@ -1236,9 +1237,10 @@ def _stage_derived_objects(
     validation stays silent there, unchanged from today.
 
     sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
-    `True`, `extract` gates on the WORKSPACE floor rather than a per-doc
-    value (a raw source has no per-doc `sensitivity` yet, unlike the other
-    five `llm.chat` seams): when `sensitivity.blocks_llm_send(sensitivity)`
+    `True`, `extract` gates on the WORKSPACE floor (`workspace_floor`,
+    always `cfg.default_sensitivity`) rather than any per-doc value (a raw
+    source has no per-doc `sensitivity` yet, unlike the other five
+    `llm.chat` seams): when `sensitivity.blocks_llm_send(workspace_floor)`
     -- i.e. the workspace's `default_sensitivity` floor is confidential (or
     absent/blank, correction batch post-4R-review FIX 1) -- this returns `[]`
     WITHOUT calling `extract_concept` at all, so `llm.chat` is never invoked,
@@ -1246,11 +1248,22 @@ def _stage_derived_objects(
     blank-content case above. `include_confidential=True` bypasses this gate
     entirely. This delegates to the SAME shared `blocks_llm_send` authority
     `sensitivity.sensitive_concept_ids` uses per-doc, rather than calling
-    `okf._rank` directly on `sensitivity` -- a bare `okf._rank` call would
+    `okf._rank` directly on `workspace_floor` -- a bare `okf._rank` call would
     wrongly resolve a blank/whitespace `default_sensitivity: ""` to
     `"private"` (never tripping this gate), because `okf._rank(None)`/
     `okf._rank("")` both fall back to `"private"` for the unrelated
     `combine_sensitivity` merge-floor use case, not this fail-closed one.
+
+    `stamp_sensitivity` -- the built Source document's OWN resolved
+    `sensitivity` value, read back from its rendered frontmatter by the
+    caller -- is the value every validated derived object is stamped with
+    (`okf.build_concept` below), so a derived object provably inherits its
+    Source's actual value rather than merely sharing the same config
+    constant (design: "Read the Source document back, and split the two
+    `sensitivity` roles"). This is deliberately a SEPARATE parameter from
+    `workspace_floor`: the extraction gate above MUST keep reading the
+    workspace floor (`sensitivity-aware-llm` Requirement 4, unchanged by
+    this change), never the Source's own value, even when the two differ.
     """
     if raw_content is None or not raw_content.strip():
         typer.echo(
@@ -1259,7 +1272,7 @@ def _stage_derived_objects(
         )
         return []
 
-    if not include_confidential and blocks_llm_send(sensitivity):
+    if not include_confidential and blocks_llm_send(workspace_floor):
         typer.echo(
             "openkos ingest: workspace default_sensitivity floor is confidential; "
             "skipping concept extraction, keeping the Source only. The Source "
@@ -1354,7 +1367,7 @@ def _stage_derived_objects(
                 description=extraction.description,
                 body=extraction.body,
                 provenance=[f"sources/{source_slug}"],
-                sensitivity=sensitivity,
+                sensitivity=stamp_sensitivity,
                 timestamp=timestamp,
             )
         except ValueError as exc:
@@ -1667,11 +1680,14 @@ def ingest(
         # `derived_plans` is the FULL, already-reconciled Phase A write set
         # (design D5 pinned ordering) -- zero or more entries, in reply
         # order.
+        source_metadata, _ = okf.load_frontmatter(concept_content)
+        source_sensitivity = str(source_metadata["sensitivity"])
         derived_plans = _stage_derived_objects(
             raw_content=raw_content,
             source_title=title,
             source_slug=slug,
-            sensitivity=cfg.default_sensitivity,
+            workspace_floor=cfg.default_sensitivity,
+            stamp_sensitivity=source_sensitivity,
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             bundle_dir=layout.bundle_dir,
             llm=OllamaClient(model=cfg.model),

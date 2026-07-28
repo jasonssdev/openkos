@@ -1824,13 +1824,22 @@ def test_reingest_of_identical_source_can_still_stage_a_new_derived_object(
 def test_derived_object_inherits_source_sensitivity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The derived object's `sensitivity` equals the Source's configured
-    `default_sensitivity` (scenario: provenance and sensitivity inherited).
-    Uses `public`, not `confidential` -- since sensitivity-fail-closed-filter
-    S3b, a `confidential` floor short-circuits extraction entirely (see
+    """Same-value baseline: the derived object's `sensitivity` equals the
+    Source's configured `default_sensitivity` (scenario: provenance and
+    sensitivity inherited). Uses `public`, not `confidential` -- since
+    sensitivity-fail-closed-filter S3b, a `confidential` floor short-circuits
+    extraction entirely (see
     `test_confidential_default_sensitivity_floor_skips_extraction`), so
     `public` is the non-default value that still proves genuine inheritance
-    rather than merely matching the packaged default."""
+    rather than merely matching the packaged default.
+
+    This test ALONE no longer proves real inheritance: the Source and its
+    derived object both receive the SAME `cfg.default_sensitivity` constant
+    here, so it would pass identically whether the derived object's value
+    is genuinely read back from the built Source document or merely shares
+    the same config constant by coincidence. See
+    `test_derived_object_inherits_source_document_value_not_config` below
+    for the test that distinguishes the two."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: public"
@@ -1845,6 +1854,88 @@ def test_derived_object_inherits_source_sensitivity(
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
     assert metadata["sensitivity"] == "public"
+
+
+def test_derived_object_inherits_source_document_value_not_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The derived object's `sensitivity` MUST be read back from the built
+    Source document's own resolved value, not merely share
+    `cfg.default_sensitivity` with it. The Source's built content is forged
+    (via `okf.build_source_concept`) to carry `confidential` while the
+    config default stays `public` -- an implementation that stamps derived
+    objects from the config constant instead of the Source's own value gets
+    `public` here and fails (spec: ingestion, "Inheritance tracks the
+    Source's resolved value, not the config default")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    _patch_llm(monkeypatch, _concept_reply())
+
+    real_build_source_concept = okf.build_source_concept
+
+    def _forged_build_source_concept(**kwargs: object) -> str:
+        kwargs["sensitivity"] = "confidential"
+        return real_build_source_concept(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "openkos.cli.main.okf.build_source_concept", _forged_build_source_concept
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    source_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert source_metadata["sensitivity"] == "confidential"
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+
+
+def test_extract_gate_still_reads_workspace_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reading the Source's own resolved `sensitivity` back for the derived-
+    object STAMP must not change what the fail-closed `extract` gate reads:
+    the gate stays pinned to the WORKSPACE floor (`cfg.default_sensitivity`),
+    never the Source's own resolved value, even when the two differ
+    (`sensitivity-aware-llm` Requirement 4, declared unchanged by this
+    change). The Source's built content is forged to `public` while the
+    config floor stays `confidential` -- an implementation that (incorrectly)
+    fed the Source's own value into the `extract` gate instead of the
+    workspace floor would let extraction proceed here and fail this test."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    fake = _patch_llm(monkeypatch, _concept_reply())
+
+    real_build_source_concept = okf.build_source_concept
+
+    def _forged_build_source_concept(**kwargs: object) -> str:
+        kwargs["sensitivity"] = "public"
+        return real_build_source_concept(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "openkos.cli.main.okf.build_source_concept", _forged_build_source_concept
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "keeping the Source only" in result.stderr
+    assert fake.calls == []
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert not concept_path.exists()
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    source_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
+    assert source_metadata["sensitivity"] == "public"
 
 
 def test_symbol_only_title_slugifies_empty_degrades_to_source_only(
