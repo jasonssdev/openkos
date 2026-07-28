@@ -1135,6 +1135,36 @@ def _family_owns_source(family: list[Path], source_slug: str) -> bool:
     return False
 
 
+def _read_source_sensitivity(concept_path: Path) -> object:
+    """Raw `sensitivity` from an EXISTING Source concept, unranked.
+
+    Returns the raw frontmatter value (possibly missing, blank, non-string)
+    for `okf.combine_sensitivity` to rank fail-closed per ADR-0003.
+    Raises `ValueError` when the file cannot be read or its frontmatter
+    cannot be parsed -- a re-ingest MUST NOT degrade an unreadable
+    classification to the config default (design: "Where the on-disk read
+    happens, and how it fails"). This deliberately diverges from
+    `_family_owns_source`'s degrade-and-continue pattern (`:1130`), which
+    is a best-effort scan; this is a security field."""
+    try:
+        text = concept_path.read_text(encoding="utf-8")
+        metadata, _ = okf.load_frontmatter(text)
+    except OSError as exc:
+        raise ValueError(
+            f"refusing to ingest -- '{concept_path}' could not be read to "
+            f"resolve its existing sensitivity: {exc}"
+        ) from exc
+    except Exception as exc:
+        # `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
+        # which is neither `OSError` nor `ValueError` -- translate rather
+        # than degrade (design gotcha).
+        raise ValueError(
+            f"refusing to ingest -- '{concept_path}' frontmatter could not "
+            f"be parsed to resolve its existing sensitivity: {exc}"
+        ) from exc
+    return metadata.get("sensitivity")
+
+
 def _first_free_disambiguated_slug(
     family: list[Path], base_slug: str, reserved: set[str]
 ) -> str:
@@ -1664,13 +1694,33 @@ def ingest(
                 "embedded verbatim below, not yet extracted into concepts."
             )
         cfg = config.read_config(root)
+        # Re-ingest must never lower a Source's sensitivity (issue #229):
+        # when an existing Source is being regenerated, resolve as the
+        # high-water mark of its on-disk value and the config default,
+        # BEFORE the document is built, so the single resolved value flows
+        # through both the bytes written to `concept_path` and the
+        # `stamp_sensitivity` read back below (design: "Resolve before
+        # build, not merge after build"). A concept-absent regenerate
+        # (post-`forget`) resolves directly to `cfg.default_sensitivity` --
+        # `None` must never reach `combine_sensitivity`, or a `public`
+        # workspace would be wrongly raised to `private` (`okf._rank(None)`
+        # floors at `private`).
+        had_prior_source = regenerate and concept_path.exists()
+        if had_prior_source:
+            on_disk_sensitivity = _read_source_sensitivity(concept_path)
+            resolved_sensitivity = okf.combine_sensitivity(
+                on_disk_sensitivity, cfg.default_sensitivity
+            )
+        else:
+            on_disk_sensitivity = None
+            resolved_sensitivity = cfg.default_sensitivity
         concept_content = okf.build_source_concept(
             title=title,
             description=description,
             resource=resource,
             tags=[],
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            sensitivity=cfg.default_sensitivity,
+            sensitivity=resolved_sensitivity,
             provenance=[resource],
             raw_content=raw_content,
         )
@@ -1760,7 +1810,28 @@ def ingest(
             "already present):"
         )
         typer.echo(f"  ~ raw/{name} (existing copy reused -- not rewritten)")
-        typer.echo(f"  ~ bundle/sources/{slug}.md (regenerated)")
+        # The resolved level is always named; the trailing clause
+        # distinguishes the three re-ingest causes, selected with
+        # `okf.sensitivity_direction(on_disk, cfg.default_sensitivity)`
+        # (design: preview wording table). `had_prior_source` is `False`
+        # only for the post-forget case (no prior Source to read), which
+        # reports "from the workspace default" instead.
+        if had_prior_source:
+            direction = okf.sensitivity_direction(
+                on_disk_sensitivity, cfg.default_sensitivity
+            )
+            if direction == "lower":
+                sensitivity_clause = "preserved from the existing Source"
+            elif direction == "raise":
+                sensitivity_clause = "raised by the workspace default"
+            else:
+                sensitivity_clause = "unchanged"
+        else:
+            sensitivity_clause = "from the workspace default"
+        typer.echo(
+            f"  ~ bundle/sources/{slug}.md (regenerated -- sensitivity "
+            f"{resolved_sensitivity} {sensitivity_clause})"
+        )
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
         typer.echo(f"  ~ {index_path.name} (Source entry refreshed)")

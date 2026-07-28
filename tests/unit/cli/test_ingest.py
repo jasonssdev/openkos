@@ -14,7 +14,7 @@ import json
 import os
 import stat
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -1936,6 +1936,383 @@ def test_extract_gate_still_reads_workspace_floor(
     source_path = tmp_path / "bundle" / "sources" / "notes.md"
     source_metadata, _ = okf.load_frontmatter(source_path.read_text(encoding="utf-8"))
     assert source_metadata["sensitivity"] == "public"
+
+
+# --- issue #229: re-ingest must not lower a Source's sensitivity ---------
+
+
+def _set_source_sensitivity(tmp_path: Path, slug: str, value: object) -> None:
+    """Directly rewrite an existing Source concept's on-disk `sensitivity`
+    frontmatter field to `value`, bypassing `set-sensitivity`'s CLI/gate
+    machinery (git identity, autocommit, downgrade prompt) so these tests
+    exercise `ingest`'s own resolution logic in isolation. `value` may be
+    non-canonical (blank, unrecognized, non-string) to exercise fail-closed
+    ranking."""
+    concept_path = tmp_path / "bundle" / "sources" / f"{slug}.md"
+    text = concept_path.read_text(encoding="utf-8")
+    metadata, body = okf.load_frontmatter(text)
+    metadata["sensitivity"] = value
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+
+def test_reingest_does_not_downgrade_the_source_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The half issue #229 did not describe: a Source raised to
+    `confidential` on disk, with `default_sensitivity: private` in config,
+    stays `confidential` after a `regenerate=True` re-ingest.
+    `write_atomic(concept_path, concept_content)` (`main.py:1794`) used to
+    overwrite the on-disk Source with a freshly built document stamped
+    `cfg.default_sensitivity`, silently declassifying it -- with no
+    `--allow-downgrade` and no prompt, routing around ADR-0008's gate
+    (design: "Resolve before build, not merge after build")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+
+
+def test_reingest_stamps_new_derived_objects_with_the_preserved_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A derived object newly extracted on the SAME re-ingest that
+    preserves a raised Source sensitivity is stamped with that preserved
+    level, not the (lower) config default (design: "one resolved value
+    flows through every downstream consumer unchanged")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+    _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+
+
+def test_reingest_raises_when_workspace_default_exceeds_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raised `default_sensitivity` still raises a Source on re-ingest
+    when it exceeds the on-disk value -- the high-water-mark, not a frozen
+    read-and-reuse (design: "(b) dominates (a)")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "public"
+    _set_config_field(
+        tmp_path, "default_sensitivity: public", "default_sensitivity: private"
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "private"
+
+
+def test_reingest_still_refreshes_timestamp_and_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only `sensitivity` carries across a re-ingest's merge; `timestamp`
+    keeps refreshing to the current build's clock value exactly as before
+    this change -- a merge into the freshly built metadata, never a
+    restore of the prior document (design: "Refresh semantics")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    first_metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    first_timestamp = first_metadata["timestamp"]
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+
+    class _FixedClock:
+        @staticmethod
+        def now(tz: object = None) -> datetime:
+            return datetime(2099, 1, 1, tzinfo=UTC)
+
+    monkeypatch.setattr("openkos.cli.main.datetime", _FixedClock)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+    assert metadata["timestamp"] != first_timestamp
+    assert metadata["timestamp"] == "2099-01-01T00:00:00Z"
+
+
+def test_reingest_with_equal_values_writes_byte_identical_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the on-disk `sensitivity` already equals `cfg.default_sensitivity`
+    the resolved value is unchanged, and every OTHER line of the rewritten
+    Source is unchanged too except the always-refreshing `timestamp` --
+    byte-identical to the pre-existing regenerate behavior for the
+    `sensitivity` field (spec: "Re-ingest with equal values is
+    byte-identical to today")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    before = concept_path.read_text(encoding="utf-8")
+
+    class _FixedClock:
+        @staticmethod
+        def now(tz: object = None) -> datetime:
+            return datetime(2099, 1, 1, tzinfo=UTC)
+
+    monkeypatch.setattr("openkos.cli.main.datetime", _FixedClock)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    after = concept_path.read_text(encoding="utf-8")
+    metadata, _ = okf.load_frontmatter(after)
+    assert metadata["sensitivity"] == "private"
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    changed = [(b, a) for b, a in zip(before_lines, after_lines, strict=True) if b != a]
+    assert changed
+    assert all("timestamp" in b for b, _ in changed)
+
+
+def test_reingest_leaves_existing_derived_objects_byte_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-existing derived object's file, including its own `sensitivity`
+    field, is left byte-unchanged by a re-ingest that raises the Source's
+    resolved sensitivity -- create-only stays create-only, out of scope for
+    this change (spec: "Existing derived objects are untouched by
+    re-ingest regardless of resolved level")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    original = concept_path.read_text(encoding="utf-8")
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert concept_path.read_text(encoding="utf-8") == original
+
+
+def test_reingest_after_forget_uses_the_config_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concept absent (post-`forget`, `main.py:1791-1793`) on the
+    regenerate path resolves directly to `cfg.default_sensitivity` --
+    feeding `None` into `combine_sensitivity` would wrongly rank as
+    `private` (`okf._rank(None)`), silently raising a `public` workspace
+    above its own config default (design: "Do not pass `None` into
+    `combine_sensitivity`")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    forgotten = runner.invoke(app, ["forget", "sources/notes", "--auto"])
+    assert forgotten.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert not concept_path.exists()
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "public"
+
+
+def test_reingest_with_unparseable_source_frontmatter_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing Source whose on-disk frontmatter fails to parse (YAML
+    syntax error, not `OSError`/`ValueError`) aborts the re-ingest with
+    exit 1 and leaves the on-disk bytes unchanged -- degrading to the
+    config default would silently write a LOWER level over an unreadable
+    classification, the exact declassification this change removes
+    (design: "Abort, exit 1")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    before = concept_path.read_bytes()
+    concept_path.write_text(
+        "---\nsensitivity: [unterminated\n---\nbroken body\n", encoding="utf-8"
+    )
+    corrupted = concept_path.read_bytes()
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to ingest" in result.stderr
+    assert concept_path.read_bytes() == corrupted
+    assert concept_path.read_bytes() != before
+
+
+def test_reingest_with_unknown_on_disk_sensitivity_fails_closed_to_confidential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unrecognized on-disk `sensitivity` string (`"secret"`) ranks
+    `confidential` under `okf._rank`'s fail-closed fallback, and THAT
+    resolved value is what gets written and staged (spec: "Malformed
+    on-disk sensitivity fails closed to confidential")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "secret")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+
+
+def test_reingest_resolved_sensitivity_does_not_leak_into_workspace_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invariant guard (design "Testing Strategy" #11): re-ingest with a
+    Source raised to `confidential` on disk, config `default_sensitivity:
+    public`, and a NEW-slug LLM reply must still call the LLM and write the
+    new derived object -- `blocks_llm_send` gates on the LITERAL
+    `cfg.default_sensitivity` (`public`), never the resolved value. Feeding
+    `resolved` into `workspace_floor` would short-circuit extraction here
+    and fail this test. Complements
+    `test_extract_gate_still_reads_workspace_floor` (above), which must
+    pass unmodified."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+    fake = _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls != []
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+    assert "workspace default_sensitivity floor is confidential" not in result.stderr
+
+
+def test_reingest_preview_reports_preserved_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the on-disk value exceeds the config default, the re-ingest
+    preview names the resolved level with the "preserved from the existing
+    Source" clause -- the preserved level is reported, never presented
+    silently as the config default (spec: "Preview reports a preserved
+    level")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert (
+        "~ bundle/sources/notes.md (regenerated -- sensitivity confidential "
+        "preserved from the existing Source)" in result.stdout
+    )
+
+
+def test_reingest_preview_reports_raised_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the config default exceeds the on-disk value, the re-ingest
+    preview names the resolved level with the "raised by the workspace
+    default" clause (spec: "Preview reports a raised level")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_config_field(
+        tmp_path, "default_sensitivity: public", "default_sensitivity: private"
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert (
+        "~ bundle/sources/notes.md (regenerated -- sensitivity private "
+        "raised by the workspace default)" in result.stdout
+    )
+
+
+def test_reingest_preview_reports_unchanged_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the on-disk value already equals the config default, the
+    re-ingest preview names the resolved level with the "unchanged" clause
+    (spec: "Preview reports an unchanged level")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert (
+        "~ bundle/sources/notes.md (regenerated -- sensitivity private "
+        "unchanged)" in result.stdout
+    )
 
 
 def test_symbol_only_title_slugifies_empty_degrades_to_source_only(
