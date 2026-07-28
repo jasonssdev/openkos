@@ -50,9 +50,10 @@ We adopt raise-only propagation from a Source-typed concept to its
 provenance descendants, computed via `okf.combine_sensitivity` (ADR-0003).
 
 The write set for `set-sensitivity <concept-id> <level>` becomes: the named
-concept, plus — when `<concept-id>` resolves to a `type: Source` concept —
-every concept reachable via `bundle.provenance.find_provenance_descendants`
-starting from it. For each descendant, the new value is
+concept, plus — when `<concept-id>` resolves to a `type: Source` concept AND
+the Source's own assignment is itself a raise — every concept reachable via
+`bundle.provenance.find_provenance_descendants` starting from it. For each
+descendant, the new value is
 `okf.combine_sensitivity(descendant_current, level)`; a write is staged only
 when that is a strict raise over the descendant's current value. ADR-0008's
 rejection of `combine_sensitivity` is preserved for the *human-assigned*
@@ -60,9 +61,15 @@ target value — this ADR applies `combine_sensitivity` only to the
 *machine-derived* descendant values, which is exactly ADR-0003's own domain,
 not the case ADR-0008 declined.
 
-Raise-only falls out of the combine rule with no direction special-casing: on
-a Source downgrade, `combine_sensitivity(descendant_current, level)` returns
-`descendant_current` unchanged, so the staged descendant set is empty. A
+Raise-only needs one direction special-case, not zero: the whole-bundle scan
+runs only when the Source's OWN assignment is itself a raise
+(`okf.sensitivity_direction(current, level) == "raise"`). Combine alone does
+not guarantee an empty staged set on a downgrade — `combine_sensitivity
+(descendant_current, level)` can still return a strict raise for a
+descendant already sitting *below* the new, lower `level` (e.g. a Source
+going `confidential` -> `private` with a `public` descendant). Gating the
+scan on the Source's own direction keeps a downgrade run's write set to
+exactly the named concept, matching "Cascading downgrades" rejected below. A
 provenance reference that cannot be resolved to an existing concept in the
 bundle snapshot emits a stderr warning naming it and is excluded from
 propagation — fail closed, never treated as absent, never lowered. Every

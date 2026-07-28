@@ -3140,16 +3140,19 @@ def set_sensitivity_cmd(
     (non-TTY, no `--auto`) this refuses to write.
 
     When `<concept-id>` resolves to a Source-typed concept (`metadata.get
-    ("type") == "Source"`), Phase A additionally reads a whole-bundle
-    snapshot, resolves its provenance descendants, and computes `okf
-    .combine_sensitivity(descendant_current, level)` per descendant --
-    staging a write only when that is a strict raise over the descendant's
-    current value. Every staged raise appears in the preview and the
-    success message. A provenance reference that resolves to no file in
-    the snapshot emits a stderr WARNING naming it and is excluded --
-    fail-closed, never lowered, never blocking the Source's own write. A
-    non-Source target skips this scan entirely and behaves byte-identically
-    to today.
+    ("type") == "Source"`) AND the assignment itself raises (`direction ==
+    "raise"`), Phase A additionally reads a whole-bundle snapshot, resolves
+    its provenance descendants, and computes `okf.combine_sensitivity
+    (descendant_current, level)` per descendant -- staging a write only
+    when that is a strict raise over the descendant's current value. Every
+    staged raise appears in the preview and the success message. A
+    provenance reference that resolves to no file in the snapshot emits a
+    stderr WARNING naming it and is excluded -- fail-closed, never lowered,
+    never blocking the Source's own write. A non-Source target, or a
+    Source assignment that is a lowering or a same-rank normalization,
+    skips this scan entirely -- a downgrade must never cascade even when
+    `combine_sensitivity` would compute a raise for some individual
+    descendant sitting below the new (lower) level.
 
     A confirmed write re-renders the frontmatter (`okf.dump_frontmatter`,
     changing only `sensitivity`), appends a `log.md` entry (no
@@ -3225,8 +3228,12 @@ def set_sensitivity_cmd(
     # propagation"; ADR-0009). Source detection is the OKF `type` field of
     # record, never a path convention -- a non-Source target skips this
     # whole-bundle scan entirely and behaves byte-identically to today.
+    # Propagation ALSO requires the Source's own assignment to be a raise
+    # (`direction`, computed above) so a downgrade never cascades, even
+    # when `combine_sensitivity` would compute a raise for some individual
+    # descendant below the new (lower) level.
     descendant_raises: list[_DescendantRaise] = []
-    if metadata.get("type") == "Source":
+    if metadata.get("type") == "Source" and direction == "raise":
         try:
             bundle_snapshot: dict[str, str] = {}
             for path in sorted(layout.bundle_dir.rglob("*.md")):

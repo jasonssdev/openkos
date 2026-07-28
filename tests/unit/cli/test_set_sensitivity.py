@@ -58,6 +58,15 @@ def _init_workspace_git(
     assert result.exit_code == 0
 
 
+def _set_config_field(tmp_path: Path, old: str, new: str) -> None:
+    """Rewrite one `openkos.yaml` line in place (mirrors
+    `test_ingest.py::_set_config_field`)."""
+    config_path = tmp_path / "openkos.yaml"
+    content = config_path.read_text(encoding="utf-8")
+    assert old in content
+    config_path.write_text(content.replace(old, new), encoding="utf-8")
+
+
 def _ingest_source(tmp_path: Path, name: str) -> str:
     """Ingest one Source concept via `ingest --auto`, returning its concept-id."""
     source = tmp_path / name
@@ -601,15 +610,64 @@ def test_lowering_source_never_lowers_derived(
     )
 
 
+def test_downgrade_does_not_propagate_even_when_result_would_be_a_raise(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Propagation is gated on the Source's OWN assignment being a raise,
+    not merely on the Source type: `combine_sensitivity` alone can still
+    compute a raise for a descendant below the new (lower) target, but a
+    Source downgrade must never cascade (spec "Raise-Only Propagation to
+    Provenance Descendants"; ADR-0009)."""
+    _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    source_id = _ingest_source(tmp_path, "a.txt")
+    _write_raw_sensitivity(tmp_path, source_id, "confidential")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id], sensitivity="public"
+    )
+    derived_before = (tmp_path / "bundle" / f"{derived_id}.md").read_bytes()
+
+    result = runner.invoke(
+        app,
+        [
+            "set-sensitivity",
+            source_id,
+            "private",
+            "--auto",
+            "--allow-downgrade",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, source_id) == "private"
+    assert _sensitivity_of(tmp_path, derived_id) == "public"
+    assert (tmp_path / "bundle" / f"{derived_id}.md").read_bytes() == derived_before
+    assert derived_id not in result.stdout
+    assert _last_commit_files(tmp_path) == {
+        f"bundle/{source_id}.md",
+        "bundle/log.md",
+    }
+
+
 def test_descendant_already_higher_is_not_lowered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A derived concept already at a higher `sensitivity` than the
     Source's new target level is not staged for write and stays unchanged
     (spec scenario "A derived object already at a higher level is not
-    lowered")."""
+    lowered"). The Source must genuinely change level (`public` ->
+    `private`) so the `current == level` short-circuit doesn't skip the
+    propagation branch and make this test vacuous."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
     source_id = _ingest_source(tmp_path, "a.txt")
+    assert _sensitivity_of(tmp_path, source_id) == "public"
     derived_id = _write_derived_concept(
         tmp_path,
         slug="stoic-dichotomy",
@@ -621,6 +679,8 @@ def test_descendant_already_higher_is_not_lowered(
     result = runner.invoke(app, ["set-sensitivity", source_id, "private", "--auto"])
 
     assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, source_id) == "private"
+    assert f"{derived_id}" not in result.stdout
     assert (tmp_path / "bundle" / f"{derived_id}.md").read_bytes() == before
 
 
