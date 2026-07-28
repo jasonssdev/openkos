@@ -3040,6 +3040,180 @@ def relate(
     )
 
 
+@app.command("set-sensitivity")
+def set_sensitivity_cmd(
+    concept_id: str = typer.Argument(
+        ...,
+        help="Bundle-relative concept id (path minus '.md') to update.",
+    ),
+    level: str = typer.Argument(
+        ...,
+        help="New sensitivity level: one of 'public', 'private', 'confidential'.",
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+    allow_downgrade: bool = typer.Option(
+        False,
+        "--allow-downgrade",
+        help=(
+            "Permit a lowering assignment on a path where the confirm "
+            "prompt does not run (--auto, or config review: false)."
+        ),
+    ),
+) -> None:
+    """Set exactly one existing concept's `sensitivity` field directly --
+    the write layer of the sensitivity-config domain (write-verb #185).
+    Touches ONLY `<concept-id>`'s own frontmatter: no sibling and no
+    derived object is read for propagation or written.
+
+    Vocabulary validation happens FIRST, before any read of the concept
+    file or the workspace: `level` must exact-match one of
+    `okf.SENSITIVITY_ORDER`. `config.require_workspace` and
+    `config.read_config` run next, then `concept_id` is resolved via the
+    same `_resolve_concept_path` `forget`/`relate` use -- rejecting an
+    absolute id, any `..` segment, a reserved basename, or a nonexistent
+    concept file, all as `ValueError`, all before any write.
+
+    Idempotence is checked by EXACT equality against the raw, unstripped
+    current `sensitivity` value: if it already equals `level`, this is a
+    no-op -- a message is printed, exit 0, no write, no commit. A dirty
+    value (missing, blank, or unrecognized) never short-circuits here, so
+    it always reaches `okf.sensitivity_direction`'s fail-closed ranking.
+
+    The downgrade gate runs next, BEFORE the preview: `okf
+    .sensitivity_direction(current, level) == "lower"` is permitted
+    whenever the confirm prompt will actually run (interactive TTY,
+    `--auto` not passed, and config `review` not `false`). On every path
+    where the prompt does NOT run -- `--auto`, or workspace config
+    `review: false`, which silences the prompt for every verb -- a
+    lowering additionally requires `--allow-downgrade`; without it this
+    refuses in Phase A (exit 1, no write, no commit, no preview), naming
+    the required flag on stderr (ADR-0008).
+
+    The preview line shows the concept file, the direction (raising/
+    lowering/normalizing), the raw current value (`!r`), and the new
+    level. The confirm gate mirrors `relate`'s exact precedence: `--auto`
+    skips it; otherwise config `review: false` skips it; otherwise a TTY
+    prompts via `typer.confirm` and aborts on decline; otherwise
+    (non-TTY, no `--auto`) this refuses to write.
+
+    A confirmed write re-renders the frontmatter (`okf.dump_frontmatter`,
+    changing only `sensitivity`), appends a `log.md` entry (no
+    `index.md` change -- editing an existing catalog entry, not a new
+    one), writes both via `fsio.write_atomic`, then auto-commits via
+    `_autocommit` with message `openkos: set-sensitivity <id> -> <level>`.
+    Any failure, Phase A or Phase B, is caught (`OSError`/`ValueError`)
+    and reported on stderr (exit 1), never a raw traceback.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        if level not in okf.SENSITIVITY_ORDER:
+            raise ValueError(
+                f"{level!r} is not a valid sensitivity level (expected one "
+                f"of {sorted(okf.SENSITIVITY_ORDER)})"
+            )
+
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            raise ValueError(workspace_reason)
+        cfg = config.read_config(root)
+
+        concept_path, canonical_id = _resolve_concept_path(
+            layout.bundle_dir, concept_id
+        )
+        concept_text = concept_path.read_text(encoding="utf-8")
+        metadata, body = okf.load_frontmatter(concept_text)
+        current = metadata.get("sensitivity")
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos set-sensitivity: refusing to set -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if current == level:
+        typer.echo(
+            f"openkos set-sensitivity: {canonical_id!r} already has "
+            f"sensitivity {level!r}; no change made."
+        )
+        return
+
+    direction = okf.sensitivity_direction(current, level)
+    prompt_will_run = not auto and cfg.review
+
+    if direction == "lower" and not prompt_will_run and not allow_downgrade:
+        typer.echo(
+            "openkos set-sensitivity: refusing to lower "
+            f"{canonical_id} from {current!r} to {level} without "
+            "confirmation -- the confirm prompt is disabled (--auto, or "
+            "config review: false); re-run with --allow-downgrade.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    now = datetime.now(UTC)
+
+    try:
+        log_text = log_path.read_text(encoding="utf-8")
+        metadata["sensitivity"] = level
+        new_concept_text = okf.dump_frontmatter(metadata, body)
+        log_line = (
+            f"**Set-sensitivity**: Set [{canonical_id}](/{canonical_id}.md) "
+            f"sensitivity to {level!r} (was {current!r})."
+        )
+        new_log_text = bundle_log.insert_log_entry(
+            log_text, now.astimezone().date(), log_line
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos set-sensitivity: refusing to set -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    direction_word = {
+        "raise": "raising",
+        "lower": "lowering",
+        "same": "normalizing",
+    }[direction]
+    typer.echo("openkos set-sensitivity: proposed changes:")
+    typer.echo(
+        f"  ~ bundle/{canonical_id}.md (sensitivity: {direction_word} "
+        f"{current!r} -> {level})"
+    )
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos set-sensitivity: refusing to write without "
+                "confirmation -- stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        fsio.write_atomic(concept_path, new_concept_text)
+        fsio.write_atomic(log_path, new_log_text)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos set-sensitivity: refusing to set -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos set-sensitivity: set 'bundle/{canonical_id}.md' "
+        f"sensitivity to {level} ({log_path.name} updated). Only this "
+        "concept was changed; no sibling or derived object was touched."
+    )
+
+    _autocommit(
+        root,
+        [f"bundle/{canonical_id}.md", "bundle/log.md"],
+        f"openkos: set-sensitivity {canonical_id} -> {level}",
+    )
+
+
 @app.command("set-volatility")
 def set_volatility_cmd(
     concept_type: str = typer.Argument(

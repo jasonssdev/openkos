@@ -505,6 +505,22 @@ def _mk_unmerge(tmp_path: Path) -> _VerbSpec:
     )
 
 
+def _mk_set_sensitivity(tmp_path: Path) -> _VerbSpec:
+    """`ingest` seeds `sensitivity: private` (workspace default); raising
+    to `confidential` needs no `--allow-downgrade`, so this is a plain
+    raise -- the shared-contract cases below don't need the downgrade gate,
+    which is exercised on its own in `test_set_sensitivity.py`."""
+    source_id = _ingest_source(tmp_path, "note.txt")
+    return _VerbSpec(
+        name="set-sensitivity",
+        success_args=["set-sensitivity", source_id, "confidential", "--auto"],
+        decline_args=["set-sensitivity", source_id, "confidential"],
+        message_re=re.compile(
+            rf"^openkos: set-sensitivity {re.escape(source_id)} -> confidential$"
+        ),
+    )
+
+
 def _mk_reconcile(tmp_path: Path) -> _VerbSpec:
     id_a = _ingest_source(tmp_path, "a.txt")
     id_b = _ingest_source(tmp_path, "b.txt")
@@ -525,6 +541,7 @@ _VERB_BUILDERS: list[Callable[[Path], _VerbSpec]] = [
     _mk_merge,
     _mk_unmerge,
     _mk_reconcile,
+    _mk_set_sensitivity,
 ]
 
 
@@ -756,7 +773,15 @@ def test_no_cli_flag_or_config_option_disables_autocommit(
     (spec "No opt-out exists") -- every mutating verb's `--help` output
     carries no autocommit-disabling flag, and `config.read_config`'s
     parsed fields carry no such switch either."""
-    for verb in ("ingest", "forget", "relate", "merge", "unmerge", "reconcile"):
+    for verb in (
+        "ingest",
+        "forget",
+        "relate",
+        "merge",
+        "unmerge",
+        "reconcile",
+        "set-sensitivity",
+    ):
         result = runner.invoke(app, [verb, "--help"])
         assert result.exit_code == 0
         lowered = result.stdout.lower()
