@@ -2206,6 +2206,45 @@ def test_reingest_with_unknown_on_disk_sensitivity_fails_closed_to_confidential(
     assert metadata["sensitivity"] == "confidential"
 
 
+def _delete_source_sensitivity(tmp_path: Path, slug: str) -> None:
+    """Directly rewrite an existing Source concept's frontmatter to drop the
+    `sensitivity` key entirely, simulating a genuinely MISSING key -- as
+    opposed to `_set_source_sensitivity`'s non-canonical VALUES -- so this
+    exercises `okf._rank`'s `None`-input branch (floors at `private`), not
+    its unrecognized-string-or-non-string branch (fails closed to
+    `confidential`)."""
+    concept_path = tmp_path / "bundle" / "sources" / f"{slug}.md"
+    text = concept_path.read_text(encoding="utf-8")
+    metadata, body = okf.load_frontmatter(text)
+    del metadata["sensitivity"]
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+
+def test_reingest_with_missing_on_disk_sensitivity_resolves_to_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source whose on-disk `sensitivity` key is missing entirely -- not
+    merely unrecognized -- ranks `private` under `okf._rank`'s `None`-input
+    handling (the config default floor), NOT `confidential`. The spec used
+    to lump `missing, non-string, or otherwise unrecognized` together as all
+    failing closed to `confidential`; `_rank(None)` (`okf.py`) actually
+    floors at `private` (spec: "Missing on-disk sensitivity floors to
+    private")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _delete_source_sensitivity(tmp_path, "notes")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "private"
+
+
 def test_reingest_resolved_sensitivity_does_not_leak_into_workspace_floor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2312,6 +2351,36 @@ def test_reingest_preview_reports_unchanged_level(
     assert (
         "~ bundle/sources/notes.md (regenerated -- sensitivity private "
         "unchanged)" in result.stdout
+    )
+
+
+def test_reingest_after_forget_preview_reports_workspace_default_clause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The post-`forget` regenerate path -- raw copy reused, but no prior
+    Source to read (`had_prior_source is False`) -- reports the resolved
+    level with the "from the workspace default" clause, distinct from the
+    on-disk-Source clauses ("preserved from the existing Source" / "raised
+    by the workspace default" / "unchanged"). Implemented at `main.py`'s
+    `else: sensitivity_clause = "from the workspace default"` branch, but
+    pinned by no test before this one."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    forgotten = runner.invoke(app, ["forget", "sources/notes", "--auto"])
+    assert forgotten.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert not concept_path.exists()
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 0
+    assert (
+        "~ bundle/sources/notes.md (regenerated -- sensitivity private "
+        "from the workspace default)" in result.stdout
     )
 
 

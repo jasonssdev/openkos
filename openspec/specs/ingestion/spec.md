@@ -670,9 +670,12 @@ or preserve a Source's sensitivity, never lower it. The only sanctioned
 downgrade path remains `set-sensitivity --allow-downgrade`. The extraction
 gate's `workspace_floor` parameter MUST keep tracking `cfg.default_sensitivity`
 literally, unrelated to the resolved or on-disk value (`sensitivity-aware-llm`
-Requirement 4 is unaffected). A malformed or non-string on-disk `sensitivity`
-value MUST rank as `confidential` under the existing `_rank` fallback, so
-resolution fails closed rather than escalating silently. `timestamp`,
+Requirement 4 is unaffected). An on-disk `sensitivity` value that is
+unrecognized or non-string MUST rank as `confidential` under the existing
+`_rank` fallback, so resolution fails closed toward the MORE restrictive
+level rather than escalating silently; a missing key or a blank/whitespace-only
+string instead ranks as `private` -- the config default floor -- per `_rank`'s
+existing behavior, never `confidential`. `timestamp`,
 `description`, `resource`, `provenance`, and the body MUST continue to
 refresh exactly as before this change; only the `sensitivity` field is
 carried forward, as a merge into the freshly built metadata, never a
@@ -697,7 +700,7 @@ for that Source MUST name the preserved level.
 
 #### Scenario: Re-ingest raises to a config default above the on-disk value
 
-- GIVEN a Source on disk at `internal`, and config `default_sensitivity`
+- GIVEN a Source on disk at `public`, and config `default_sensitivity`
   raised to `confidential`
 - WHEN `openkos ingest <path>` re-ingests that same source
 - THEN the Source's `sensitivity` is raised to `confidential`
@@ -718,10 +721,29 @@ for that Source MUST name the preserved level.
 - THEN the existing derived object's file, including its `sensitivity`
   field, is left byte-unchanged (create-only reconciliation still applies)
 
-#### Scenario: Malformed on-disk sensitivity fails closed to confidential
+#### Scenario: Missing on-disk sensitivity floors to private
 
-- GIVEN a Source's on-disk `sensitivity` frontmatter value is missing,
-  non-string, or otherwise unrecognized
+- GIVEN a Source's on-disk `sensitivity` frontmatter key is missing
+  entirely, and config `default_sensitivity: private`
+- WHEN `openkos ingest <path>` re-ingests that source
+- THEN the on-disk value ranks as `private` under `_rank`'s missing-key
+  handling, and the resolved `sensitivity` that gets written and staged is
+  `private`
+
+#### Scenario: Blank on-disk sensitivity floors to private
+
+- GIVEN a Source's on-disk `sensitivity` frontmatter value is a blank or
+  whitespace-only string, and config `default_sensitivity: private`
+- WHEN `openkos ingest <path>` re-ingests that source
+- THEN the on-disk value ranks as `private` under `_rank`'s blank-string
+  handling, and the resolved `sensitivity` that gets written and staged is
+  `private`
+
+#### Scenario: Unrecognized or non-string on-disk sensitivity fails closed to confidential
+
+- GIVEN a Source's on-disk `sensitivity` frontmatter value is either
+  non-string (e.g. an `int` or `list`) or a string that does not match any
+  `SENSITIVITY_ORDER` member
 - WHEN `openkos ingest <path>` re-ingests that source
 - THEN the resolved `sensitivity` ranks as `confidential` under the
   existing `_rank` fallback, and that value is what gets written and staged
