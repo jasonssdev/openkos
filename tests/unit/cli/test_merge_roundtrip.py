@@ -126,6 +126,44 @@ def _write_concept_with_relations(
     index_path.write_text(new_index_text, encoding="utf-8")
 
 
+def _write_concept_with_provenance(
+    tmp_path: Path,
+    concept_id: str,
+    *,
+    title: str,
+    provenance: list[str] | None = None,
+    relations: list[dict[str, str]] | None = None,
+    body: str = "Body.",
+) -> None:
+    """Same shape as `_write_concept_with_relations`, but also (or instead)
+    carries a `provenance:` frontmatter list -- registered in `index.md`
+    like every other concept here, so byte-parity comparisons cover it the
+    same way."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {"type": "Concept", "title": title}
+    if provenance is not None:
+        metadata["provenance"] = provenance
+    if relations is not None:
+        metadata["relations"] = relations
+    concept_path.write_text(
+        okf.dump_frontmatter(metadata, f"# {title}\n\n{body}\n"), encoding="utf-8"
+    )
+
+    link_dir, slug = concept_id.rsplit("/", 1)
+    index_path = tmp_path / "bundle" / "index.md"
+    index_text = index_path.read_text(encoding="utf-8")
+    new_index_text = bundle_index.insert_index_entry(
+        index_text,
+        section="Concepts",
+        link_dir=link_dir,
+        title=title,
+        slug=slug,
+        description=f"{title}.",
+    )
+    index_path.write_text(new_index_text, encoding="utf-8")
+
+
 def _assert_byte_parity_except_log(root: Path, pre_snapshot: dict[Path, bytes]) -> None:
     """Assert the CURRENT bundle is byte-identical to `pre_snapshot` for
     every path except `bundle/log.md` -- the append-only audit trail is the
@@ -413,3 +451,73 @@ def test_unmerge_decline_at_prompt_writes_nothing_bytes_and_mtimes(
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert _snapshot(tmp_path) == before
+
+
+def test_merge_then_unmerge_round_trip_covers_all_three_rewrite_kinds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T8: merge -> unmerge is byte-identical (modulo `log.md`) for a file
+    carrying all three rewrite kinds, AND separately for provenance-only,
+    relations-only, and links-only files -- the round-trip parity contract
+    extended to the third pass (spec: "Unmerge restores the pre-merge
+    provenance exactly")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        sensitivity="private",
+        body="Survivor body.",
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        sensitivity="confidential",
+        body="Absorbed body.",
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/all_three",
+        title="AllThree",
+        provenance=["concepts/absorbed"],
+        relations=[{"target": "concepts/absorbed", "type": "depends_on"}],
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/provenance_only",
+        title="ProvenanceOnly",
+        provenance=["concepts/absorbed"],
+    )
+    _write_concept_with_relations(
+        tmp_path,
+        "concepts/relations_only",
+        title="RelationsOnly",
+        relations=[{"target": "concepts/absorbed", "type": "references"}],
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/links_only",
+        title="LinksOnly",
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+
+    pre_snapshot = _bundle_bytes_snapshot(tmp_path)
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    all_three_after_merge = (
+        tmp_path / "bundle" / "concepts" / "all_three.md"
+    ).read_text(encoding="utf-8")
+    assert "concepts/absorbed" not in all_three_after_merge
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+
+    _assert_byte_parity_except_log(tmp_path, pre_snapshot)

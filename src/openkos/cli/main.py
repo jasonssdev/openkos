@@ -3751,8 +3751,10 @@ class PreparedMerge:
     other_files: dict[str, str]
     link_rewrites: list[okf.LinkRewrite]
     relation_rewrites: list[okf.RelationRewrite]
+    provenance_rewrites: list[okf.ProvenanceRewrite]
     rewritten_files: list[str]
     relation_rewritten_files: list[str]
+    provenance_rewritten_files: list[str]
     touched_files: list[str]
     removed: int
     dropped_self_loops: list[okf.Relation]
@@ -3822,6 +3824,16 @@ def prepare_merge(
         absorbed_id=absorbed_canonical,
         survivor_id=survivor_canonical,
     )
+    # Same `other_files` whole-bundle snapshot, captured ONCE above BEFORE
+    # any write -- all three scans see identical pre-merge bytes (design:
+    # rewrite-provenance-on-merge, "no additional bundle walk"). NOT gated
+    # on the absorbed concept's `type` (spec: "A merge absorbing a
+    # NON-Source concept also retargets third-party provenance").
+    provenance_rewrites = bundle_provenance.find_inbound_provenance_rewrites(
+        other_files,
+        absorbed_id=absorbed_canonical,
+        survivor_id=survivor_canonical,
+    )
 
     plan = bundle_merge.plan_merge(
         survivor_id=survivor_canonical,
@@ -3833,6 +3845,7 @@ def prepare_merge(
         merged_at=now.isoformat(),
         link_rewrites=link_rewrites,
         relation_rewrites=relation_rewrites,
+        provenance_rewrites=provenance_rewrites,
     )
 
     # The OUTBOUND merge_relations report (dropped self-loops, deduped
@@ -3863,7 +3876,14 @@ def prepare_merge(
 
     rewritten_files = sorted({rewrite.file for rewrite in link_rewrites})
     relation_rewritten_files = sorted({rewrite.file for rewrite in relation_rewrites})
-    touched_files = sorted(set(rewritten_files) | set(relation_rewritten_files))
+    provenance_rewritten_files = sorted(
+        {rewrite.file for rewrite in provenance_rewrites}
+    )
+    touched_files = sorted(
+        set(rewritten_files)
+        | set(relation_rewritten_files)
+        | set(provenance_rewritten_files)
+    )
     sensitivity_before = plan.ledger_entry.sensitivity_before or "(none)"
     sensitivity_after = plan.ledger_entry.sensitivity_after
 
@@ -3876,8 +3896,10 @@ def prepare_merge(
         other_files=other_files,
         link_rewrites=link_rewrites,
         relation_rewrites=relation_rewrites,
+        provenance_rewrites=provenance_rewrites,
         rewritten_files=rewritten_files,
         relation_rewritten_files=relation_rewritten_files,
+        provenance_rewritten_files=provenance_rewritten_files,
         touched_files=touched_files,
         removed=removed,
         dropped_self_loops=dropped_self_loops,
@@ -3918,14 +3940,22 @@ def merge_core(
     survivor_canonical = prepared.survivor_canonical
     absorbed_canonical = prepared.absorbed_canonical
     rewritten_texts = {
-        rel: bundle_relations.apply_relation_rewrites(
-            _apply_link_rewrite_idempotently(
-                prepared.other_files[rel], file=rel, rewrites=prepared.link_rewrites
+        rel: bundle_provenance.apply_provenance_rewrites(
+            bundle_relations.apply_relation_rewrites(
+                _apply_link_rewrite_idempotently(
+                    prepared.other_files[rel],
+                    file=rel,
+                    rewrites=prepared.link_rewrites,
+                ),
+                file=rel,
+                survivor_id=survivor_canonical,
+                absorbed_id=absorbed_canonical,
+                rewrites=prepared.relation_rewrites,
             ),
             file=rel,
             survivor_id=survivor_canonical,
             absorbed_id=absorbed_canonical,
-            rewrites=prepared.relation_rewrites,
+            rewrites=prepared.provenance_rewrites,
         )
         for rel in prepared.touched_files
     }
@@ -4121,6 +4151,8 @@ def merge(
         typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
     for rel in prepared.relation_rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (retarget relation to survivor)")
+    for rel in prepared.provenance_rewritten_files:
+        typer.echo(f"  ~ bundle/{rel} (retarget provenance to survivor)")
     if prepared.removed >= 1:
         typer.echo(f"  ~ {index_path.name} (remove entry)")
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
@@ -4327,17 +4359,44 @@ def unmerge(
             or current_log_text != expected_log_text
         )
 
-        # D5: a file present in BOTH `link_rewrites` and `relation_rewrites`
-        # is reversed EXCLUSIVELY via its `relation_rewrites` whole-file
-        # snapshot below -- excluded here so `reverse_link_rewrites` is
-        # never attempted on it (see this command's docstring).
+        # Precedence, generalized to three rewrite kinds (provenance >
+        # relations > links): a file present in `provenance_rewrites` is
+        # reversed EXCLUSIVELY via its provenance whole-file snapshot below
+        # -- excluded from BOTH the relation and link partitions. D5's
+        # original two-way rule still holds for the remaining files: a file
+        # present in BOTH `link_rewrites` and `relation_rewrites` (and NOT
+        # in `provenance_rewrites`) is reversed EXCLUSIVELY via its
+        # `relation_rewrites` whole-file snapshot -- excluded here so
+        # `reverse_link_rewrites` is never attempted on it (see this
+        # command's docstring).
+        provenance_rewrite_files = sorted(
+            {rewrite.file for rewrite in plan.provenance_rewrites}
+        )
         relation_rewrite_files = sorted(
             {rewrite.file for rewrite in plan.relation_rewrites}
+            - set(provenance_rewrite_files)
         )
         rewritten_files = sorted(
             {rewrite.file for rewrite in plan.link_rewrites}
+            - set(provenance_rewrite_files)
             - set(relation_rewrite_files)
         )
+        provenance_texts = {
+            rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
+            for rel in provenance_rewrite_files
+        }
+        provenance_reversed_texts = {
+            rel: bundle_provenance.reverse_provenance_rewrites(
+                provenance_texts[rel],
+                file=rel,
+                survivor_id=survivor_canonical,
+                absorbed_id=absorbed_canonical,
+                rewrites=plan.provenance_rewrites,
+                link_rewrites=plan.link_rewrites,
+                relation_rewrites=plan.relation_rewrites,
+            )
+            for rel in provenance_rewrite_files
+        }
         other_texts = {
             rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
             for rel in rewritten_files
@@ -4390,6 +4449,8 @@ def unmerge(
         typer.echo(f"  ~ bundle/{rel} (reverse inbound link rewrite)")
     for rel in relation_rewrite_files:
         typer.echo(f"  ~ bundle/{rel} (restore pre-merge relations snapshot)")
+    for rel in provenance_rewrite_files:
+        typer.echo(f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)")
     typer.echo(f"  ~ {index_path.name} (restore pre-merge contents)")
     typer.echo(
         f"  ~ {log_path.name} (restore pre-merge contents, append unmerge entry)"
@@ -4425,6 +4486,8 @@ def unmerge(
             fsio.write_atomic(layout.bundle_dir / rel, reversed_texts[rel])
         for rel in relation_rewrite_files:
             fsio.write_atomic(layout.bundle_dir / rel, relation_reversed_texts[rel])
+        for rel in provenance_rewrite_files:
+            fsio.write_atomic(layout.bundle_dir / rel, provenance_reversed_texts[rel])
 
         # The absorbed file is recreated BEFORE the survivor is restored:
         # the survivor's `merged_from` ledger entry (the only record of
@@ -4459,6 +4522,7 @@ def unmerge(
             "bundle/log.md",
             *(f"bundle/{rel}" for rel in rewritten_files),
             *(f"bundle/{rel}" for rel in relation_rewrite_files),
+            *(f"bundle/{rel}" for rel in provenance_rewrite_files),
             f"bundle/{absorbed_canonical}.md",
             f"bundle/{survivor_canonical}.md",
         ],
