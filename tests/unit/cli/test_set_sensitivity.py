@@ -10,6 +10,8 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.bundle import log as bundle_log
+from openkos.bundle import provenance as bundle_provenance
 from openkos.cli.main import app
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
@@ -940,3 +942,89 @@ def test_auto_propagates_without_prompting(
     assert result.exit_code == 0
     assert _sensitivity_of(tmp_path, derived_id) == "confidential"
     assert derived_id in result.output
+
+
+# -- #234: each preparation phase names itself on failure -------------------
+
+
+def test_descendant_scan_failure_names_its_own_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Source-branch descendant resolution must not borrow the generic
+    preparation wording: an operator reading stderr has to be able to tell
+    the bundle scan apart from the target document's own rendering (#234)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise ValueError("snapshot unreadable")
+
+    monkeypatch.setattr(bundle_provenance, "resolve_source_raises", _boom)
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert "descendant" in result.output
+    assert "failed while preparing the set-sensitivity --" not in result.output
+
+
+def test_render_failure_names_its_own_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The log-entry/frontmatter rendering block keeps its own distinct
+    wording, so the two phases never read identically (#234)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="derived-one", provenance=[source_id], sensitivity="public"
+    )
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise ValueError("log entry unrenderable")
+
+    monkeypatch.setattr(bundle_log, "insert_log_entry", _boom)
+
+    result = runner.invoke(app, ["set-sensitivity", derived_id, "private", "--auto"])
+
+    assert result.exit_code == 1
+    assert "descendant" not in result.output
+
+
+def test_the_two_preparation_phases_do_not_share_a_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the actual defect: both blocks used to emit a byte-identical
+    line, so a bug report quoting it could not be routed (#234)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="derived-one", provenance=[source_id], sensitivity="public"
+    )
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise ValueError("boom")
+
+    # Scope each patch instead of `monkeypatch.undo()`, which would also
+    # revert `_init_workspace`'s chdir and make the second invocation fail
+    # for an unrelated reason -- passing this test for the wrong cause.
+    with monkeypatch.context() as patched:
+        patched.setattr(bundle_provenance, "resolve_source_raises", _boom)
+        scan = runner.invoke(
+            app, ["set-sensitivity", source_id, "confidential", "--auto"]
+        )
+
+    with monkeypatch.context() as patched:
+        patched.setattr(bundle_log, "insert_log_entry", _boom)
+        render = runner.invoke(
+            app, ["set-sensitivity", derived_id, "private", "--auto"]
+        )
+
+    assert scan.exit_code == 1
+    assert render.exit_code == 1
+    scan_line = [ln for ln in scan.output.splitlines() if "set-sensitivity:" in ln]
+    render_line = [ln for ln in render.output.splitlines() if "set-sensitivity:" in ln]
+    assert scan_line
+    assert render_line
+    assert scan_line[-1] != render_line[-1]

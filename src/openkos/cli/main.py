@@ -3355,8 +3355,8 @@ def set_sensitivity_cmd(
             )
         except (OSError, ValueError) as exc:
             typer.echo(
-                f"openkos set-sensitivity: failed while preparing the "
-                f"set-sensitivity -- {exc}.",
+                f"openkos set-sensitivity: failed while resolving the "
+                f"descendant closure of {canonical_id!r} -- {exc}.",
                 err=True,
             )
             raise typer.Exit(code=1) from exc
@@ -5184,7 +5184,7 @@ def status() -> None:
 
     On a workspace, sequences several reads and renders their result as
     plain text via `typer.echo`, always exiting 0. Note that these reads
-    perform FOUR independent `bundle/**/*.md` walks, not one:
+    perform FIVE independent `bundle/**/*.md` walks, not one:
     `okf.survey_bundle` (source/concept counts and §9 findings, D2) --
     counts always reflect the disk scan, never `index.md` alone, so catalog
     drift after an interrupted `ingest` is still visible;
@@ -5193,12 +5193,14 @@ def status() -> None:
     `resolution.find_candidates` (exact-title candidate groups, #186), run
     UNCONDITIONALLY -- unlike the edge-count line below, it is never gated
     on `vectors_missing`, because its similarity path is stdlib `difflib`
-    (`similarity.py`) and never touches embeddings; with the default
-    `include_deprecated=False` it also evaluates
-    `lifecycle.deprecated_concept_ids`; and -- only when `vectors.db` is
-    non-empty -- `build_graph`'s walk behind the informational edge-count
-    line. Consolidating them is deliberately out of scope (issue #195);
-    what IS guaranteed is that `status` calls `build_graph` exactly once.
+    (`similarity.py`) and never touches embeddings -- which is TWO walks by
+    itself, not one: `_iter_eligible`, plus `lifecycle.deprecated_concept_ids`
+    under the default `include_deprecated=False` (`candidates.py:148-150`);
+    and -- only when `vectors.db` is non-empty -- `build_graph`'s walk behind
+    the informational edge-count line. Consolidating the remaining walks has
+    no open owner: #195 already landed, and what it guaranteed is that
+    `status` calls `build_graph` exactly once; #216 covers the cost of
+    `find_candidates`'s own pair of walks.
     `log.md` is read and passed through `bundle_log.read_recent_entries` for
     the most recent `RECENT_ACTIVITY_LIMIT` entries, newest-first -- an
     unreadable or malformed `log.md` degrades to a notice (`except (OSError,
@@ -5262,12 +5264,14 @@ def status() -> None:
     # third `collect_docs()` call (design D3's no-fifth-walk guard).
     sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
     needs_attention: list[str] = [*survey.findings]
-    needs_attention.extend(f"{finding.path}: {finding.detail}" for finding in dangling)
     needs_attention.extend(
-        f"{finding.path}: {finding.detail}" for finding in unextracted
+        f"{finding.concept_id}: {finding.detail}" for finding in dangling
     )
     needs_attention.extend(
-        f"{finding.path}: [{finding.kind}] {finding.detail}"
+        f"{finding.concept_id}: {finding.detail}" for finding in unextracted
+    )
+    needs_attention.extend(
+        f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
         for finding in sensitivity_findings
     )
     # #186: pending duplicate groups are ACTIONABLE -- name `duplicates` as
@@ -5552,42 +5556,42 @@ def lint() -> None:
         typer.echo("  No stale stamps.")
     else:
         for finding in report.stale:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Orphan pages:")
     if not report.orphans:
         typer.echo("  No orphan pages.")
     else:
         for finding in report.orphans:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Dangling references:")
     if not report.dangling:
         typer.echo("  No dangling references.")
     else:
         for finding in report.dangling:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Unextracted sources:")
     if not report.unextracted:
         typer.echo("  No unextracted sources.")
     else:
         for finding in report.unextracted:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Below-source sensitivity:")
     if not report.below_source:
         typer.echo("  No below-source sensitivity findings.")
     else:
         for finding in report.below_source:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Multi-source uncovered:")
     if not report.multi_source_uncovered:
         typer.echo("  No multi-source uncovered findings.")
     else:
         for finding in report.multi_source_uncovered:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
 
 
 @app.command()
@@ -5608,11 +5612,14 @@ def duplicates(
 
     On a workspace, `resolution.find_candidates` performs one read-only,
     whole-bundle pass and returns candidate groups: same-type OKF objects
-    that MIGHT be the same real-world entity, at a HIGH (exact normalized
-    title) or LOW (near-match) confidence tier. This is a REPORT ONLY --
-    `duplicates` never merges, deletes, or otherwise adjudicates a
-    candidate; that is reserved for a later, explicitly-named `resolve`/
-    `merge` verb (spec: Read-Only CLI Candidate Report Verb).
+    that MIGHT be the same real-world entity, tiered by HOW they matched --
+    HIGH (an exact normalized title) or LOW (a near-match). The tier records
+    the match METHOD, never a strength ranking, which is why a LOW group can carry
+    a similarity score of 1.000 without contradiction (issue #192). This is
+    a REPORT ONLY -- `duplicates` never merges, deletes, or otherwise
+    adjudicates a candidate; it points at the SHIPPED `merge` verb
+    (`cli/main.py:3957`) through its trailing hint instead (spec: Read-Only
+    CLI Candidate Report Verb).
 
     Output is grouped by OKF `type`, then by tier, mirroring
     `find_candidates`'s own stable ordering: each group renders its type,
@@ -5649,8 +5656,9 @@ def duplicates(
     low_count = len(groups) - high_count
     typer.echo(_format_group_tally(high_count, low_count))
     typer.echo(
-        "Legend: [tier] type -- trigger "
-        "(HIGH = exact normalized key, LOW = near-match score)"
+        "Legend: [tier] type -- trigger. The tier is the MATCH METHOD, "
+        "not a strength ranking: HIGH = exact normalized key, "
+        "LOW = near-match similarity score."
     )
     for group in groups:
         tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
@@ -5707,17 +5715,19 @@ def adjudicate(
         ),
     ),
 ) -> None:
-    """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
+    """LLM-adjudicate cross-source candidate duplicates: read-only by default.
 
     A FOURTH read command, mirroring `query`'s wiring exactly: the shared
     `config.require_workspace` gate (D1), then a Phase-A `read_config` guard
     (`except (OSError, ValueError)`, lint parity), then a real
     `OllamaClient(model=cfg.model)` is built and injected -- as the
     `LLMBackend` -- into `resolution.find_candidates` followed by
-    `resolution.adjudication.adjudicate_candidates`. Distinct from the
-    reserved `resolve`/`merge` verbs (slice 3): `adjudicate` never merges,
-    writes, or decides -- it only prints a verdict for human review. No
-    `--auto`, no confirmation gate.
+    `resolution.adjudication.adjudicate_candidates`. Invoked WITHOUT
+    `--apply`/`--apply-same` it never merges, writes, or decides -- it only
+    prints a verdict for human review and points at the SHIPPED `merge` verb
+    (`cli/main.py:3957`) through its own `Next:` hint, exactly as
+    `duplicates` does. Those two flags are the only paths that write, and
+    both are gated on an explicit confirmation; see their paragraphs below.
 
     `--json` emits the adjudication results as a single pretty-printed JSON
     array on stdout and fully suppresses all human output (tally, legend,
@@ -5754,8 +5764,9 @@ def adjudicate(
     a confidential member is dropped from a group's `member_ids` before its
     content is ever read, rather than dropping the whole group upstream.
 
-    No file under the workspace is ever created, modified, or deleted (spec:
-    Verb renders verdicts with zero writes).
+    Without `--apply`/`--apply-same`, no file under the workspace is ever
+    created, modified, or deleted (spec: Verb renders verdicts with zero
+    writes, whose scenario is scoped to the flagless invocation).
 
     `--apply` switches to an INTERACTIVE merge walk over the same
     adjudication results (issue #137 Slice 2b-ii): mutually exclusive with
@@ -5883,7 +5894,11 @@ def adjudicate(
             verdict_counts[Verdict.UNCERTAIN],
         )
     )
-    typer.echo("Legend: [tier] type -- trigger, then verdict and rationale")
+    typer.echo(
+        "Legend: [tier] type -- trigger, then verdict and rationale. "
+        "The tier is the MATCH METHOD, not a strength ranking: "
+        "HIGH = exact normalized key, LOW = near-match similarity score."
+    )
     for result in displayed:
         group = result.candidate
         tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"

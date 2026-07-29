@@ -682,6 +682,10 @@ carried forward, as a merge into the freshly built metadata, never a
 restore of the prior document. WHEN a regenerated Source's resolved
 `sensitivity` exceeds `cfg.default_sensitivity`, the re-ingest preview line
 for that Source MUST name the preserved level.
+(Previously: stated unconditionally that the Source's `sensitivity` equals
+`cfg.default_sensitivity`, with no distinction between a fresh ingest and a
+re-ingest, so a re-ingest silently reset any level a human had raised via
+`set-sensitivity`.)
 
 #### Scenario: Fresh ingest still stamps the config default
 
