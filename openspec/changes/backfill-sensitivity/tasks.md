@@ -101,29 +101,29 @@ Chain strategy: stacked-to-main
 
 ## Phase 14: RED — backfill-sensitivity CLI tests (PR3b)
 
-- [ ] 14.1 Create `tests/unit/cli/test_backfill_sensitivity.py`: raise-all-below-Sources scenario; never-lowers scenario; idempotent second run (zero writes, no empty commit); `--auto` skips only the prompt; non-TTY without `--auto` refuses; declining the prompt writes nothing; explicit no-op line on zero staged raises
-- [ ] 14.2 Add Phase-B partial-write scenario: patch `fsio.write_atomic` to fail after 2 of 3 descendant writes; assert non-zero exit, first two files raised on disk, failure message names both landed paths (D9, mirrors PR1 Phase 3-4)
-- [ ] 14.3 Confirm 14.1-14.2 fail RED (verb does not exist yet)
+- [x] 14.1 Create `tests/unit/cli/test_backfill_sensitivity.py`: raise-all-below-Sources scenario; never-lowers scenario; idempotent second run (zero writes, no empty commit); `--auto` skips only the prompt; non-TTY without `--auto` refuses; declining the prompt writes nothing; explicit no-op line on zero staged raises
+- [x] 14.2 Add Phase-B partial-write scenario: patch `fsio.write_atomic` to fail after 2 of 3 descendant writes; assert non-zero exit, first two files raised on disk, failure message names both landed paths (D9, mirrors PR1 Phase 3-4)
+- [x] 14.3 Confirm 14.1-14.2 fail RED (verb does not exist yet) — all 11 tests fail with Typer exit code 2 ("No such command 'backfill-sensitivity'")
 
 ## Phase 15: GREEN — implement backfill-sensitivity verb (PR3b)
 
-- [ ] 15.1 Implement `backfill_sensitivity_cmd` in `main.py`, Phase A: `require_workspace` -> `read_config` -> one `rglob` bundle snapshot (reserved names skipped) -> call `bundle_provenance.resolve_backfill_raises(snapshot)` (PR3a) -> explicit no-op line + exit 0 + no log/commit when empty -> sorted preview -> confirm ladder (`--auto` > `cfg.review` > TTY confirm > refuse)
-- [ ] 15.2 Implement Phase B: write every merged raise (sorted by `concept_id`), append one `log.md` entry, one `_autocommit`; track `landed` paths and name them verbatim on partial failure (D9), mirroring PR1's message shape
-- [ ] 15.3 Do NOT call `find_unresolvable_provenance` anywhere in this verb (D8) — its signal is the existing `dangling` lint finding
-- [ ] 15.4 Add commit-state threat-matrix RED test `test_backfill_second_run_stages_nothing_and_creates_no_commit` if not already covered by 14.1's idempotency scenario
-- [ ] 15.5 Run `uv run pytest tests/unit/cli/test_backfill_sensitivity.py` — all GREEN
+- [x] 15.1 Implement `backfill_sensitivity_cmd` in `main.py`, Phase A: `require_workspace` -> `read_config` -> one `rglob` bundle snapshot (reserved names skipped) -> call `bundle_provenance.resolve_backfill_raises(snapshot)` (PR3a) -> explicit no-op line + exit 0 + no log/commit when empty -> sorted preview -> confirm ladder (`--auto` > `cfg.review` > TTY confirm > refuse)
+- [x] 15.2 Implement Phase B: write every merged raise (sorted by `concept_id`), append one `log.md` entry, one `_autocommit`; track `landed` paths and name them verbatim on partial failure (D9), mirroring PR1's message shape
+- [x] 15.3 Do NOT call `find_unresolvable_provenance` anywhere in this verb (D8) — its signal is the existing `dangling` lint finding
+- [x] 15.4 Commit-state threat-matrix scenario covered by `test_immediate_rerun_after_a_successful_sweep_is_a_no_op` (14.1's idempotency scenario, asserting `_commit_count` is unchanged after the no-op second run) — a separate `test_backfill_second_run_stages_nothing_and_creates_no_commit` was not needed
+- [x] 15.5 Run `uv run pytest tests/unit/cli/test_backfill_sensitivity.py` — all GREEN (11 passed)
 
 ## Phase 16: Docs — ADR-0012 (PR3b, split into its own docs PR if budget exceeded)
 
-- [ ] 16.1 Create `docs/adr/0012-sensitivity-backfill-per-source-sweep.md`: per-Source sweep, multi-source closures reported not combined, no `type` filter on descendants, no unresolvable-provenance scan in this verb
-- [ ] 16.2 Add ADR-0012's row to `docs/adr/README.md` (index currently ends at 0011)
-- [ ] 16.3 Update `docs/cli.md` with the new `backfill-sensitivity` verb and its confirm ladder/no-op behavior
+- [x] 16.1 Create `docs/adr/0012-sensitivity-backfill-per-source-sweep.md`: per-Source sweep, multi-source closures reported not combined, no `type` filter on descendants, no unresolvable-provenance scan in this verb
+- [x] 16.2 Add ADR-0012's row to `docs/adr/README.md` (index currently ends at 0011)
+- [x] 16.3 Update `docs/cli.md` with the new `backfill-sensitivity` verb and its confirm ladder/no-op behavior
 
 ## Phase 17: PR3b checkpoint
 
-- [ ] 17.1 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean on touched files
-- [ ] 17.2 Full suite: `uv run pytest tests/unit/cli/test_backfill_sensitivity.py tests/unit/bundle/test_resolve_backfill_raises.py tests/unit/cli/test_set_sensitivity.py tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py tests/unit/cli/test_status.py --cov` — all GREEN, coverage holds on touched files
-- [ ] 17.3 Confirm issues #231, #235, #233 closable; #232 and #234 remain untouched (Explicitly Not Changed)
+- [x] 17.1 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean on touched files
+- [x] 17.2 Full suite: `uv run pytest tests/unit/cli/test_backfill_sensitivity.py tests/unit/bundle/test_resolve_backfill_raises.py tests/unit/cli/test_set_sensitivity.py tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py tests/unit/cli/test_status.py` — 113 passed (11 + 11 + 38 collected + 9 + 6 + 6 + ... see Work Unit Evidence for exact composition); full repo suite: 2604 -> 2615
+- [x] 17.3 Issues #231, #235, #233 all closable after PR1+PR2+PR3a+PR3b; #232 (bundle-wide unresolvable-provenance WARNING scope) and #234 (ambiguous "failed while preparing" message) remain untouched, matching design's Explicitly Not Changed section
 
 ## Known Follow-Ups (out of scope for this change)
 
