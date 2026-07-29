@@ -3355,8 +3355,8 @@ def set_sensitivity_cmd(
             )
         except (OSError, ValueError) as exc:
             typer.echo(
-                f"openkos set-sensitivity: failed while preparing the "
-                f"set-sensitivity -- {exc}.",
+                f"openkos set-sensitivity: failed while resolving the "
+                f"descendant closure of {canonical_id!r} -- {exc}.",
                 err=True,
             )
             raise typer.Exit(code=1) from exc
