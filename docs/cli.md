@@ -252,6 +252,22 @@ Like `merge`'s Phase B below, the write is **not transactional as a whole**: the
 | `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
 | `--allow-downgrade` | Permit lowering the level on a path where no confirm prompt will run. Has no effect when raising, and none when the prompt does run. |
 
+### `openkos backfill-sensitivity`
+
+Dedicated, raise-only, bundle-wide sweep that closes the sensitivity gap left by bundles or descendants created before Source-to-descendant propagation existed (issue #219). Unlike `set-sensitivity` above, it takes **no concept-id argument**: every `type: Source` concept in the bundle is treated as an independent provenance-closure root in one pass, and each descendant's new value is computed the same way — `okf.combine_sensitivity(existing, source_level)` — staging a write only when that computation is a strict raise. There is no per-Source scoping flag; `set-sensitivity` already covers the single-Source case. There is no `--allow-downgrade` equivalent either: the sweep never lowers anything, by construction. There is no `--dry-run` flag: the preview shown before confirmation, or declining the prompt, already serves as the dry run.
+
+A concept that is a member of no single Source's provenance closure is skipped — never written — even if it cites two or more ids, as long as those ids together span more than one Source's closure. A concept citing two or more ids that all fall inside **one** Source's closure is covered and is raised normally. Skipped concepts surface only through `lint`'s `multi-source-uncovered` finding and `status`'s "needs attention" section, never silently.
+
+Before writing, the command prints one bundle-wide preview listing every staged `(concept_id, current -> new_level)` raise across every Source, then the same confirm-gate precedence every other mutating verb shares: `--auto` skips it; otherwise config `review: false` skips it; otherwise an interactive TTY prompts via `typer.confirm` and aborts on decline; otherwise (non-TTY, no `--auto`) the command refuses to write. When the sweep stages zero raises — an already-clean bundle, or an immediate re-run after a prior successful sweep — it prints an explicit "nothing to backfill" message, writes nothing, creates no commit, and exits 0.
+
+A confirmed write lands every staged descendant raise, then appends exactly **one** dated `**Backfill-sensitivity**` entry to `log.md` summarizing the whole sweep, then issues exactly **one** `_autocommit` covering every changed path. No Source's own frontmatter is ever written as its own closure root; a Source that is a genuine provenance descendant of another Source is raised like any other descendant. Like `set-sensitivity`, there is no cross-file rollback: a mid-sweep write failure leaves the bundle over-classified, never under-classified, and the failure message names every path that already landed before the failure (ADR-0012).
+
+`backfill-sensitivity` deliberately does not run the unresolvable-provenance scan `set-sensitivity` runs: every Source cites its raw ingest `resource`, which never resolves to a bundle id, so a bundle-wide run would emit one WARNING per Source on every invocation, including the no-op path. That signal is delivered by `lint`'s existing `dangling` finding instead.
+
+| Flag | Meaning |
+| --- | --- |
+| `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+
 ### `openkos merge <survivor-id> <absorbed-id>`
 
 Fuses two distinct concept-ids a human has confirmed are the same real-world entity — the first DESTRUCTIVE entity-resolution write. `survivor-id`'s id survives; `absorbed-id`'s file is removed. This is the verb `duplicates` and `adjudicate` forward-reference: a candidate pair still needs an explicit `merge` to actually be fused — invoked directly, or per accepted pair through `adjudicate`'s `--apply`/`--apply-same` modes, which run this same merge path.
