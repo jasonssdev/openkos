@@ -784,7 +784,18 @@ def test_raising_one_source_never_warns_about_another_sources_lineage(
     No prior test in this file built a multi-Source bundle at all, which is
     why the bug survived: this fixture is the point of the change. Source
     A's own write and its descendant's raise must still happen exactly as
-    before, and Source B's whole lineage must stay byte-identical."""
+    before, and Source B's whole lineage must stay byte-identical.
+
+    The negative assertion names the unresolvable-provenance message
+    specifically rather than the bare word `WARNING`. `_init_workspace`
+    leaves the git identity unset, so `_autocommit` emits its own unrelated
+    "git identity unset; skipped auto-commit" WARNING on any host without a
+    global `user.email` -- a blanket `"WARNING" not in stderr` therefore
+    passes or fails on the developer's `~/.gitconfig` rather than on the
+    behaviour under test. Scoping the assertion keeps it strict where it
+    matters: `sources/b`, its derived concept, its raw resource, and the
+    exact stderr wording this scan emits are each asserted absent, all four
+    of which the pre-fix bundle-wide scan produced."""
     _init_workspace(tmp_path, monkeypatch)
     source_a = _ingest_source(tmp_path, "a.txt")
     source_b = _ingest_source(tmp_path, "b.txt")
@@ -800,7 +811,7 @@ def test_raising_one_source_never_warns_about_another_sources_lineage(
     result = runner.invoke(app, ["set-sensitivity", source_a, "confidential", "--auto"])
 
     assert result.exit_code == 0
-    assert "WARNING" not in result.stderr
+    assert "cites unresolvable provenance" not in result.stderr
     assert source_b not in result.stderr
     assert derived_b not in result.stderr
     assert "b.txt" not in result.stderr
