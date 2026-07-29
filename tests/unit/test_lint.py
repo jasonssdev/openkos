@@ -27,6 +27,8 @@ def _write_doc(
     body: str = "",
     volatility: str | None = None,
     sensitivity_value: str | None = None,
+    extraction_status: str | None = None,
+    resource: str | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frontmatter = f"---\ntype: {doc_type}\ntitle: Stub\n"
@@ -34,6 +36,10 @@ def _write_doc(
         frontmatter += f"volatility: {volatility}\n"
     if sensitivity_value is not None:
         frontmatter += f"sensitivity: {sensitivity_value}\n"
+    if extraction_status is not None:
+        frontmatter += f"extraction_status: {extraction_status}\n"
+    if resource is not None:
+        frontmatter += f"resource: {resource}\n"
     frontmatter += "---\n"
     path.write_text(f"{frontmatter}{body}", encoding="utf-8")
 
@@ -256,6 +262,39 @@ def test_collect_docs_defaults_relations_to_empty_tuple_when_absent(
     assert docs[0].relations == ()
 
 
+def test_collect_docs_reads_extraction_status_and_resource(tmp_path: Path) -> None:
+    """`collect_docs` populates `LintDoc.extraction_status`/`.resource` from
+    the SAME `metadata` dict already read for `freshness`/`type`/
+    `volatility` -- no new read (issue #187, design's "Two fields, two
+    lines" note)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "sources" / "notes.md",
+        doc_type="Source",
+        extraction_status="failed",
+        resource="raw/notes.txt",
+    )
+
+    docs, skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].extraction_status == "failed"
+    assert docs[0].resource == "raw/notes.txt"
+    assert skipped == []
+
+
+def test_collect_docs_defaults_both_fields_when_absent(tmp_path: Path) -> None:
+    """A doc with neither `extraction_status:` nor `resource:` decodes both
+    fields to `""` (the same `.get(..., "")` idiom as `freshness`/`type`/
+    `volatility`)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "stoicism.md")
+
+    docs, _skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].extraction_status == ""
+    assert docs[0].resource == ""
+
+
 def test_collect_docs_skips_doc_with_corrupt_relations_key(tmp_path: Path) -> None:
     """A `relations:` value that is not a list (`okf.decode_relations`
     raises `ValueError`) is skipped, not raised, with a skip notice --
@@ -349,6 +388,8 @@ def _doc(
     type: str = "",
     volatility: str = "",
     relations: tuple[str, ...] = (),
+    extraction_status: str = "",
+    resource: str = "",
 ) -> lint.LintDoc:
     rel_dir = str(PurePosixPath(identity).parent)
     if rel_dir == ".":
@@ -362,6 +403,8 @@ def _doc(
         type=type,
         volatility=volatility,
         relations=relations,
+        extraction_status=extraction_status,
+        resource=resource,
     )
 
 
@@ -941,6 +984,93 @@ def test_check_dangling_targets_multiple_missing_targets_yield_multiple_findings
     missing_ids = {f.detail for f in findings}
     assert any("ghost-one" in detail for detail in missing_ids)
     assert any("ghost-two" in detail for detail in missing_ids)
+
+
+# --- issue #187: check_unextracted(docs) (no-fifth-walk guard) ------------
+
+
+def test_check_unextracted_flags_failed_sources() -> None:
+    """A `LintDoc` with `extraction_status == "failed"` produces exactly one
+    `unextracted` finding (lint spec: "failed Source produces an
+    unextracted finding")."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_status="failed",
+            resource="raw/notes.txt",
+        )
+    ]
+
+    findings = lint.check_unextracted(docs)
+
+    assert len(findings) == 1
+    assert findings[0].kind == "unextracted"
+    assert findings[0].path == "sources/notes.md"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "no-extractable-text",
+        "blocked-by-sensitivity",
+        "no-concepts-found",
+        "",
+        "some-unrecognized-value",
+    ],
+)
+def test_check_unextracted_ignores_non_failed_values(value: str) -> None:
+    """Every `extraction_status` value other than `failed` -- including an
+    unrecognized, out-of-vocabulary token -- produces NO `unextracted`
+    finding. `blocked-by-sensitivity` in particular MUST NEVER appear in
+    any retry prompt (lint spec: "blocked-by-sensitivity produces no
+    finding"; design's write-side-typed/read-side-fail-silent policy)."""
+    docs = [_doc("sources/notes", "Body.", extraction_status=value)]
+
+    findings = lint.check_unextracted(docs)
+
+    assert findings == []
+
+
+def test_check_unextracted_names_exact_retry_command() -> None:
+    """The finding's detail names the literal retry command built from the
+    Source's own `resource` frontmatter value (lint spec: "Detail names the
+    exact retry command")."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_status="failed",
+            resource="raw/foo.md",
+        )
+    ]
+
+    findings = lint.check_unextracted(docs)
+
+    assert "openkos ingest raw/foo.md" in findings[0].detail
+
+
+def test_check_unextracted_falls_back_when_resource_is_missing() -> None:
+    """An empty `resource` falls back to a generic re-ingest hint rather
+    than naming a broken command."""
+    docs = [_doc("sources/notes", "Body.", extraction_status="failed", resource="")]
+
+    findings = lint.check_unextracted(docs)
+
+    assert "openkos ingest" in findings[0].detail
+    assert "raw/" not in findings[0].detail
+
+
+def test_check_unextracted_signature_has_no_bundle_dir_param() -> None:
+    """`check_unextracted` takes exactly ONE parameter, `docs` -- the
+    structural no-fifth-walk guard (design: "structural, not procedural").
+    A future edit cannot add a `bundle_dir` parameter without changing this
+    pinned signature."""
+    import inspect
+
+    params = list(inspect.signature(lint.check_unextracted).parameters)
+
+    assert params == ["docs"]
 
 
 # --- freshness-lint-v1: resolve_windows(cfg) (load-bearing, never-raising) ---

@@ -85,12 +85,105 @@ for this work unit; no new decision needed, but noted for the reviewer.
 - `uv run ruff format --check .` -> `146 files already formatted`
 - `uv run mypy .` -> `Success: no issues found in 146 source files`
 
-### Remaining Tasks (PR2, out of scope for this run — separate branch)
-- [ ] Phase 4: PR2 — Lint Detection (`lint.py`)
-- [ ] Phase 5: PR2 — CLI Wiring (`cli/main.py`, lint/status)
-- [ ] Phase 6: PR2 — Docs and Verification
-
-### Status
+### Status (Batch 1)
 21/21 tasks complete for PR1 (Phases 1-3). Ready for verify / PR1 delivery.
 PR2 (Phases 4-6) starts fresh on a new branch off this one, per
 `stacked-to-main`.
+
+## Batch 2 (this run) — PR2: Phases 4-6 (20 tasks)
+
+**Mode**: Strict TDD (RED -> GREEN per task; existing tests run as safety
+net before edits; all stayed green throughout).
+
+**Branch**: `feat/surface-unextracted-sources` (branches from PR1's HEAD,
+targets PR1's branch `feat/record-extraction-status`, per `stacked-to-main`
+chain strategy). PR1's `okf.py` constants and `_stage_derived_objects`
+tuple-return were consumed as-is; `okf.py` and the ingest write path were
+NOT modified in this batch.
+
+### Completed Tasks
+- [x] 4.1-4.9 — `LintDoc` gained `extraction_status: str = ""` and
+  `resource: str = ""`, populated in `collect_docs`'s existing single walk
+  (two dict lookups added, no new read). `check_unextracted(docs: list[LintDoc])
+  -> list[LintFinding]` implemented with the STRUCTURAL no-`bundle_dir`-param
+  guard (pinned by a signature-introspection test); matches ONLY
+  `extraction_status == "failed"`; detail names the exact retry command
+  from `doc.resource`, falling back to a generic hint when empty.
+  `LintReport.unextracted` added. `lint`'s Non-Gating Exit Contract
+  confirmed unchanged (exit 0 with findings present).
+- [x] 5.1-5.7 — `lint`'s CLI rendering gained an `Unextracted sources:`
+  section (after `Dangling references:`), with its own empty-state line.
+  `status` folds `unextracted` findings into `needs_attention` at the
+  existing call site, reusing the SAME `docs` list already bound for
+  dangling-reference findings — proved by a plain-function counting-spy
+  test on `lint_check.collect_docs` (`calls == 1`), not a `yield from`
+  generator (which would record the call at first `next()` instead of call
+  time). `blocked-by-sensitivity` proven absent from both `lint`'s and
+  `status`'s output by dedicated tests.
+- [x] 6.1-6.4 — `docs/cli.md` updated: `lint` section gained "Dangling
+  references" (previously undocumented, added for section-list accuracy)
+  and "Unextracted sources" bullets; `status` section documents the
+  needs-attention fold-in and the `blocked-by-sensitivity` exclusion. Spec
+  deltas (`specs/lint/spec.md`, `specs/status/spec.md`) verified to already
+  match implemented behavior — no edit needed (already committed in
+  `a381e83`). Full PR2-scope and full-repo gates green (see below).
+
+### Files Changed
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `src/openkos/lint.py` | Modified | `LintDoc.extraction_status`/`.resource` fields; populated in `collect_docs`; `LintReport.unextracted`; new `check_unextracted(docs)` function |
+| `src/openkos/cli/main.py` | Modified | `lint` command renders `Unextracted sources:` section; `status` folds `check_unextracted` findings into `needs_attention` (same `docs` list, no new walk); both docstrings updated |
+| `tests/unit/test_lint.py` | Modified | `_write_doc`/`_doc` helpers gained `extraction_status`/`resource` params; 2 `collect_docs` field tests; 6 `check_unextracted` tests (flags-failed, ignores-non-failed x5 parametrized, names-retry-command, falls-back-when-missing, signature-guard) |
+| `tests/unit/cli/test_lint.py` | Modified | 3 tests: empty-state render, flags-a-failed-extraction (retry command in stdout), ignores-blocked-by-sensitivity |
+| `tests/unit/cli/test_status.py` | Modified | 3 tests: lists-unextracted-under-needs-attention, blocked-by-sensitivity-never-in-retry-prompt, unextracted-reuses-the-single-collect_docs-call (counting-spy, no-fifth-walk proof) |
+| `docs/cli.md` | Modified | `lint`/`status` sections document the new finding, retry-command format, and the `blocked-by-sensitivity` exclusion |
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 4.1-4.2 | `test_lint.py::test_collect_docs_reads_extraction_status_and_resource`, `..._defaults_both_fields_when_absent` | Unit | 163/163 baseline | Written | Passed | 2 cases (present/absent) | Clean |
+| 4.3-4.7 | `test_lint.py::test_check_unextracted_*` (6 tests) | Unit | 163/163 | Written | Passed | 5 non-failed values parametrized + signature guard | Clean |
+| 4.8-4.9 | `test_lint.py::cli::test_lint_flags_a_failed_extraction`, `test_lint_renders_empty_unextracted_section` | Unit (CLI) | 18/18 (test_lint.py CLI) | Written | Passed | empty-state + finding-present, both exit 0 | Clean |
+| 5.1-5.2 | `test_lint.py::cli` (same as above) | Unit (CLI) | 18/18 | Written | Passed | N/A | Clean |
+| 5.3-5.7 | `test_status.py::test_status_lists_unextracted_under_needs_attention`, `..._blocked_by_sensitivity_never_in_retry_prompt`, `..._unextracted_reuses_the_single_collect_docs_call` | Unit (CLI) | 28/28 (test_status.py) | Written | Passed | failed / blocked-by-sensitivity / walk-count | Clean |
+
+### Test Summary
+- **Total tests written**: 14 (8 in `test_lint.py`, 3 in `tests/unit/cli/test_lint.py`, 3 in `tests/unit/cli/test_status.py`)
+- **Total tests passing**: 180/180 in PR2 scope (`test_lint.py` + `tests/unit/cli/test_lint.py` + `tests/unit/cli/test_status.py`); 2518/2518 full suite
+- **Layers used**: Unit (14)
+- **Approval tests**: none new (structural signature-introspection test used instead for the no-fifth-walk guard)
+- **Pure functions created**: 1 (`check_unextracted`)
+
+### Work Unit Evidence
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/cli/test_lint.py tests/unit/cli/test_status.py tests/unit/test_lint.py -q` -> `180 passed` |
+| Runtime harness command/scenario and exact result | `openkos lint <bundle>` / `openkos status <bundle>` against a fixture bundle with a `failed` Source — exercised via `CliRunner.invoke(app, ["lint"])`/`invoke(app, ["status"])` end-to-end in `test_lint_flags_a_failed_extraction` and `test_status_lists_unextracted_under_needs_attention`; both pass |
+| Rollback boundary | Revert `src/openkos/lint.py`, `src/openkos/cli/main.py`, `tests/unit/test_lint.py`, `tests/unit/cli/test_lint.py`, `tests/unit/cli/test_status.py`, `docs/cli.md` — pure, read-only, no data changes; PR1's `okf.py`/ingest write path is untouched and unaffected by this revert |
+
+### Deviations from Design
+None — implementation matches design exactly: `LintDoc` two-field addition
+inside the existing walk, `check_unextracted(docs)` with no `bundle_dir`
+parameter (structural guard), write-side-typed/read-side-fail-silent
+matching only `EXTRACTION_STATUS_FAILED`, `status` reusing the same
+in-memory `docs` list via a plain-function counting spy (not a generator).
+One additive doc improvement beyond the literal task text: `docs/cli.md`'s
+`lint` section previously never documented the pre-existing "Dangling
+references" bullet at all — added it alongside "Unextracted sources" so
+the section list is complete and accurate; this is documentation-only, no
+behavior change.
+
+### Issues Found
+None.
+
+### Quality Gates (PR2 scope + full repo)
+- `uv run pytest -q` -> `2518 passed`
+- `uv run pytest --cov=openkos --cov-branch -q` -> `Total coverage: 97.58%` (gate: 90%)
+- `uv run ruff check .` -> `All checks passed!`
+- `uv run ruff format --check .` -> `146 files already formatted`
+- `uv run mypy .` -> `Success: no issues found in 146 source files`
+
+### Status (cumulative)
+41/41 tasks complete across PR1 (Phases 1-3, 21 tasks) and PR2 (Phases 4-6,
+20 tasks). Ready for verify / PR2 delivery, stacked onto
+`feat/record-extraction-status`.

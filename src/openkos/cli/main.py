@@ -4977,7 +4977,8 @@ def status() -> None:
     `okf.survey_bundle` (source/concept counts and §9 findings, D2) --
     counts always reflect the disk scan, never `index.md` alone, so catalog
     drift after an interrupted `ingest` is still visible;
-    `lint_check.collect_docs` (dangling-reference findings, #141);
+    `lint_check.collect_docs` (dangling-reference AND unextracted-source
+    findings, #141/#187 -- both reuse this SAME `docs` list, no extra walk);
     `resolution.find_candidates` (exact-title candidate groups, #186), run
     UNCONDITIONALLY -- unlike the edge-count line below, it is never gated
     on `vectors_missing`, because its similarity path is stdlib `difflib`
@@ -5042,8 +5043,15 @@ def status() -> None:
     # check below. Still read-only, still exits 0.
     docs, _skip_notices = lint_check.collect_docs(layout.bundle_dir)
     dangling = lint_check.check_dangling_targets(docs)
+    # issue #187: `unextracted` reuses this SAME in-memory `docs` list --
+    # no second `collect_docs()` call, no new walk (status spec: "No new
+    # bundle walk is introduced").
+    unextracted = lint_check.check_unextracted(docs)
     needs_attention: list[str] = [*survey.findings]
     needs_attention.extend(f"{finding.path}: {finding.detail}" for finding in dangling)
+    needs_attention.extend(
+        f"{finding.path}: {finding.detail}" for finding in unextracted
+    )
     # #186: pending duplicate groups are ACTIONABLE -- name `duplicates` as
     # the next step. Exact-title matches only (Tier.HIGH); near-match (LOW)
     # is a deliberate high-recall review queue, not an alert (similarity.py).
@@ -5257,8 +5265,10 @@ def lint() -> None:
     doc body (never `log.md` -- see its docstring for why).
 
     The volatility-window and skip notices feed one `lint.LintReport`, rendered
-    under two sections, `Stale stamps:` and `Orphan pages:`, each with its
-    own empty-state line when there is nothing to report. Every
+    under `Stale stamps:`, `Orphan pages:`, `Dangling references:`, and
+    `Unextracted sources:` (issue #187: `lint_check.check_unextracted`,
+    reusing this SAME `docs` list -- no new walk), each with its own
+    empty-state line when there is nothing to report. Every
     successful read exits 0, whether the bundle is clean or
     has findings (spec: Non-Gating Exit Contract) -- `lint` is NOT a CI
     gate in MVP-1. No file under the workspace is ever created, modified,
@@ -5287,9 +5297,14 @@ def lint() -> None:
     stale = lint_check.check_stale_stamps(docs, today=today, windows=windows)
     orphans = lint_check.check_orphans(docs, index_text=index_text)
     dangling = lint_check.check_dangling_targets(docs)
+    unextracted = lint_check.check_unextracted(docs)
     notices = window_notices + skip_notices
     report = lint_check.LintReport(
-        stale=stale, orphans=orphans, dangling=dangling, notices=notices
+        stale=stale,
+        orphans=orphans,
+        dangling=dangling,
+        unextracted=unextracted,
+        notices=notices,
     )
 
     typer.echo(f"openkos lint: workspace at {root}")
@@ -5315,6 +5330,13 @@ def lint() -> None:
         typer.echo("  No dangling references.")
     else:
         for finding in report.dangling:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("Unextracted sources:")
+    if not report.unextracted:
+        typer.echo("  No unextracted sources.")
+    else:
+        for finding in report.unextracted:
             typer.echo(f"  {finding.path}: {finding.detail}")
 
 

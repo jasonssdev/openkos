@@ -65,6 +65,20 @@ class LintDoc:
     omits it is unaffected. Feeds `check_dangling_targets` as one of its two
     outbound-reference sources."""
 
+    extraction_status: str = ""
+    """The doc's frontmatter `extraction_status` field, or `""` if absent
+    (issue #187). Only a Source can carry this key
+    (`okf.build_source_concept`); every other doc type simply defaults to
+    `""`, same as `freshness`/`type`/`volatility`. Feeds
+    `check_unextracted`, which matches ONLY the literal `"failed"` value --
+    any other token, including an unrecognized one, is ignored fail-silent
+    (design's write-side-typed/read-side-fail-silent policy)."""
+
+    resource: str = ""
+    """The doc's frontmatter `resource` field, or `""` if absent (issue
+    #187). `openkos ingest` sets this to `raw/<name>` on every Source; it
+    is the input `check_unextracted` names in its retry command detail."""
+
 
 @dataclass(frozen=True)
 class LintFinding:
@@ -86,6 +100,7 @@ class LintReport:
     stale: list[LintFinding]
     orphans: list[LintFinding]
     dangling: list[LintFinding] = field(default_factory=list)
+    unextracted: list[LintFinding] = field(default_factory=list)
     notices: list[str] = field(default_factory=list)
 
 
@@ -143,6 +158,8 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
                 type=str(metadata.get("type", "")),
                 volatility=str(metadata.get("volatility", "")),
                 relations=relations,
+                extraction_status=str(metadata.get("extraction_status", "")),
+                resource=str(metadata.get("resource", "")),
             )
         )
     return docs, skip_notices
@@ -521,4 +538,44 @@ def check_dangling_targets(docs: list[LintDoc]) -> list[LintFinding]:
                     detail=f"references missing concept '{target}'",
                 )
             )
+    return findings
+
+
+def check_unextracted(docs: list[LintDoc]) -> list[LintFinding]:
+    """Flag each Source whose extraction was skipped for a RETRYABLE reason
+    (issue #187).
+
+    Matches ONLY `doc.extraction_status == "failed"` -- the other three
+    `okf.ExtractionStatus` values (`no-extractable-text`,
+    `blocked-by-sensitivity`, `no-concepts-found`), and any unrecognized,
+    out-of-vocabulary token, are ignored fail-silent (design's
+    write-side-typed/read-side-fail-silent policy). `blocked-by-sensitivity`
+    in particular is a deliberate policy outcome, never debt, and MUST NEVER
+    appear as something to retry.
+
+    The signature takes ONLY `docs` -- no `bundle_dir` parameter, exactly
+    like `check_dangling_targets`. This is the STRUCTURAL no-fifth-walk
+    guard (design: "structural, not procedural"): a function that never
+    receives a directory is incapable of opening a walk, so a future edit
+    cannot add one without changing this pinned signature.
+
+    The finding's detail names the literal retry command built from the
+    Source's own `resource` frontmatter value (`openkos ingest <resource>`),
+    falling back to a generic re-ingest hint when `resource` is empty.
+    """
+    findings: list[LintFinding] = []
+    for doc in docs:
+        if doc.extraction_status != okf.EXTRACTION_STATUS_FAILED:
+            continue
+        if doc.resource:
+            retry_hint = f"retry with `openkos ingest {doc.resource}`"
+        else:
+            retry_hint = "re-run `openkos ingest` on this source's raw file"
+        findings.append(
+            LintFinding(
+                kind="unextracted",
+                path=f"{doc.identity}.md",
+                detail=f"concept extraction failed during ingest — {retry_hint}",
+            )
+        )
     return findings

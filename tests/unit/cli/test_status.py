@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos import lint as lint_check
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
@@ -343,6 +344,91 @@ def test_status_no_dangling_references_no_new_entries(
 
     assert result.exit_code == 0
     assert "references missing concept" not in result.stdout
+
+
+# --- issue #187: unextracted-source fold-in (no-fifth-walk guard) ---------
+
+
+def test_status_lists_unextracted_under_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_status: failed` is listed under "needs
+    attention", naming the same retry command `lint` computes, and `status`
+    still exits 0 (status spec: "Unextracted source surfaced under needs
+    attention")."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_status: failed\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "openkos ingest raw/notes.txt" in result.stdout
+
+
+def test_status_blocked_by_sensitivity_never_in_retry_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle containing only a Source with `extraction_status:
+    blocked-by-sensitivity` adds no unextracted-source entry under "needs
+    attention" -- a deliberate policy outcome, never debt (status spec:
+    "blocked-by-sensitivity never appears in the retry prompt")."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_status: blocked-by-sensitivity\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "openkos ingest" not in result.stdout
+
+
+def test_status_unextracted_reuses_the_single_collect_docs_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`status` calls `lint_check.collect_docs` exactly ONCE -- the
+    unextracted-source check reuses the SAME in-memory `docs` list already
+    bound for dangling-reference findings, never a second walk (status
+    spec: "No new bundle walk is introduced"; design's no-fifth-walk
+    guard). A plain-function counting wrapper is used, not a `yield from`
+    generator -- a generator would record the call at first `next()`
+    rather than at call time, hiding a real regression."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_status: failed\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    calls = {"n": 0}
+    real = lint_check.collect_docs
+
+    def _counting_collect_docs(
+        bundle_dir: Path,
+    ) -> tuple[list[lint_check.LintDoc], list[str]]:
+        calls["n"] += 1
+        return real(bundle_dir)
+
+    monkeypatch.setattr(
+        "openkos.cli.main.lint_check.collect_docs", _counting_collect_docs
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert calls["n"] == 1
+    assert "openkos ingest raw/notes.txt" in result.stdout
 
 
 def test_status_surfaces_missing_vectors_db(
