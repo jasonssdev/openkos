@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0011: Third-party provenance retargets on merge; v3 reversibility ledger"
 description: Merge rewrites inbound provenance to the survivor and records it in a v3 merged_from entry.
-status: Proposed
+status: Accepted
 date: 2026-07-29
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0011: Third-party provenance retargets on merge; v3 reversibility ledger
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-29
 
 ## Context

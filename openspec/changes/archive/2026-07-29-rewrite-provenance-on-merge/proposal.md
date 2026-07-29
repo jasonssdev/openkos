@@ -69,9 +69,9 @@ None. Builds on the v1→v2 relations work (ADR-0005).
 
 ## Success Criteria
 
-- [ ] Merging away a concept leaves zero dangling provenance entries anywhere in the bundle.
-- [ ] A non-Source absorbed concept's inbound provenance retargets identically.
-- [ ] A third-party file naming both ids ends with one survivor entry, no duplicate, order preserved.
-- [ ] merge → unmerge restores byte-identical pre-merge bundle, including files touched by all three rewrite kinds.
-- [ ] v1 and v2 ledger entries still unmerge exactly.
-- [ ] `uv run pytest`, `ruff`, `mypy --strict` clean; coverage ≥ 90.
+- [x] Merging away a concept leaves zero dangling provenance entries anywhere in the bundle.
+- [x] A non-Source absorbed concept's inbound provenance retargets identically.
+- [x] A third-party file naming both ids ends with one survivor entry, no duplicate, order preserved.
+- [x] merge → unmerge restores byte-identical pre-merge bundle, including files touched by all three rewrite kinds.
+- [x] v1 and v2 ledger entries still unmerge exactly.
+- [x] `uv run pytest`, `ruff`, `mypy --strict` clean; coverage ≥ 90.

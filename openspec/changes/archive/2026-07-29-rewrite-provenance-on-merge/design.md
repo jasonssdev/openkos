@@ -13,7 +13,7 @@ readable. Merge and unmerge ship as one design because the ledger schema and the
 plan dataclasses are shared by both directions.
 
 **ADR gate: MET.** Recorded as [ADR-0011](../../../docs/adr/0011-provenance-retarget-on-merge.md)
-(status `Proposed`). Condition 1 — this decides an interface (the v3 on-disk
+(status `Accepted` — flipped during archive phase). Condition 1 — this decides an interface (the v3 on-disk
 ledger contract) and a trade-off (referential integrity vs. literal
 provenance history). Condition 2 — hard to reverse: the ledger is a durable
 on-disk contract (ADR-0002), and a v3 entry written into a user's survivor
@@ -202,7 +202,7 @@ is asserted, not assumed — see T4.
 | `src/openkos/cli/main.py` | Modify | `prepare_merge` third scanner + `PreparedMerge` field + preview; `merge_core` third transform; `unmerge` precedence + reversal + preview | PR2 |
 | `docs/cli.md` | Modify | Merge/unmerge provenance behaviour, v3 note, rollback caveat | PR2 |
 | `tests/unit/cli/test_merge.py`, `test_merge_core.py`, `test_merge_roundtrip.py`, `test_unmerge.py` | Modify | CLI wiring, walk-count, byte-identity, round-trip | PR2 |
-| `docs/adr/0011-provenance-retarget-on-merge.md` | Create | ADR (`Proposed`) | PR1 |
+| `docs/adr/0011-provenance-retarget-on-merge.md` | Create | ADR (status Accepted as of archive phase) | PR1 |
 | `docs/adr/README.md` | Modify | Index row | PR1 |
 
 `src/openkos/bundle/references.py`, `src/openkos/lint.py`, and
