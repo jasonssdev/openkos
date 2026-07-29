@@ -346,6 +346,68 @@ def test_lint_flags_a_dangling_relations_target(
     assert "concepts/ghost" in result.stdout
 
 
+# --- issue #187: Unextracted sources section -------------------------------
+
+
+def test_lint_renders_empty_unextracted_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the `Unextracted sources:` section with
+    its own empty-state line."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Unextracted sources:" in result.stdout
+    assert "  No unextracted sources." in result.stdout
+
+
+def test_lint_flags_a_failed_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_status: failed` is reported under
+    `Unextracted sources:`, naming the exact retry command, and the command
+    still exits 0 (lint spec: "failed Source produces an unextracted
+    finding"; "lint exits 0 with unextracted findings present")."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_status: failed\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "sources/notes.md" in result.stdout
+    assert "openkos ingest raw/notes.txt" in result.stdout
+
+
+def test_lint_ignores_blocked_by_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source with `extraction_status: blocked-by-sensitivity` produces no
+    `unextracted` finding -- a deliberate policy outcome, never debt (lint
+    spec: "blocked-by-sensitivity produces no finding")."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n"
+        "extraction_status: blocked-by-sensitivity\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "  No unextracted sources." in result.stdout
+    assert "openkos ingest" not in result.stdout
+
+
 def test_lint_never_writes_to_the_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
