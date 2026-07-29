@@ -20,7 +20,7 @@ from rich.console import Console
 
 from openkos import config, fsio
 from openkos import lint as lint_check
-from openkos.bundle import bundle
+from openkos.bundle import bundle, listing
 from openkos.bundle import index as bundle_index
 from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
@@ -5051,6 +5051,145 @@ def status() -> None:
             typer.echo("  No concept relationships yet.")
         else:
             typer.echo(f"  {total} concept-to-concept edge(s) ({typed} typed).")
+
+
+@app.command("list")
+def list_objects_cmd(
+    concept_type: str | None = typer.Argument(
+        None,
+        help=(
+            "Optional type filter: a canonical link_dir (e.g. 'people') or a "
+            "REGISTRY.name alias (e.g. 'Person', case-sensitive). Omit to "
+            "list every object."
+        ),
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        help="Print at most this many rows (must be positive unless --all is given).",
+    ),
+    all_objects: bool = typer.Option(
+        False,
+        "--all",
+        help="Print every matching row, ignoring --limit, with no truncation footer.",
+    ),
+) -> None:
+    """List every bundle object's id, sensitivity, lifecycle status, and
+    title -- the read-only discovery counterpart to the id-taking write
+    verbs (`forget`, `relate`, `merge`, `unmerge`, `set-sensitivity`)
+    (issue #184, `openspec/changes/discover-concept-ids/`).
+
+    **Exit ladder, in this exact order (spec: Workspace Presence Check).**
+    An unrecognized `TYPE` filter or an out-of-range `--limit` refuses
+    (exit 1) BEFORE any workspace or disk access is attempted -- mirroring
+    `set-volatility`'s vocabulary-then-workspace precedent
+    (`cli/main.py` `set_volatility_cmd`). Only after both usage checks pass
+    does `config.require_workspace` run; its failure is the only remaining
+    non-zero path. Once past both refusals, no bundle content -- however
+    malformed -- can make `list` fail.
+
+    `TYPE` resolves via `listing.resolve_link_dir`: a canonical `link_dir`
+    exact match first, then a case-sensitive `REGISTRY.name` alias. An
+    unresolved value refuses with a message enumerating only canonical
+    `link_dir` names, never the `REGISTRY.name` aliases (spec: Type Filter
+    Vocabulary).
+
+    **Exactly one bundle walk.** The single call to
+    `listing.list_objects(layout.bundle_dir)` below is the ONLY
+    disk-reading call this command makes -- filtering by resolved
+    `link_dir` and slicing to the limit both happen on its in-memory
+    result. `lifecycle.deprecated_concept_ids` is never called: status is
+    already derived inside `listing.list_objects`'s own single pass
+    (spec: Exactly One Bundle Walk; design D3).
+
+    Rows are `ID  SENSITIVITY  STATUS  TITLE`, `ljust`-aligned over the
+    header labels and the rows actually shown (post-filter,
+    post-truncation) -- the same pattern `status`'s bundle-contents
+    section uses (`cli/main.py:4989-4992`, design D6). A title is rendered
+    `(unreadable)` when the underlying document failed to read/parse, or
+    `(untitled)` when it read fine but declared no title -- two distinct
+    markers for two distinct follow-ups. Deprecated and superseded objects
+    are shown by default, marked via `STATUS`, with no flag to hide them
+    (spec: Deprecated and Superseded Visibility).
+
+    **Confidential titles print in full.** `sensitivity` is a column, not a
+    gate: there is no redaction, no flag, and no omitted row based on
+    sensitivity level -- output is byte-identical in shape regardless of
+    it (spec: Confidential Titles Are Printed in Full). `sensitivity`
+    governs what LEAVES the machine via `--include-confidential`
+    (`sensitivity.py:78-99`), an LLM-send gate this command never touches
+    -- `list` performs no LLM send at all.
+
+    Default `--limit` is 50; a truncated result prints a footer reporting
+    how many rows were shown out of the total match count. `--all` prints
+    every matching row with no footer. `--limit 0` or any negative
+    `--limit` is a usage refusal, not a bundle result (spec: Output
+    Bounding). An empty bundle, or a filter matching nothing, prints a
+    friendly empty-state line and exits 0 (spec: Empty Bundle and
+    Unparseable Document Handling).
+
+    Read-only: no file under the workspace is ever created, modified, or
+    deleted, and no `--json` or other structured output mode is offered
+    (spec: Read-Only, No Structured Output; deferred, not banned -- issue
+    #240).
+    """
+    resolved_type: str | None = None
+    if concept_type is not None:
+        resolved_type = listing.resolve_link_dir(concept_type)
+        if resolved_type is None:
+            valid_link_dirs = sorted(
+                ot.link_dir for ot in types.REGISTRY if ot.link_dir
+            )
+            typer.echo(
+                f"openkos list: refusing to list -- {concept_type!r} is not a "
+                f"known object type (expected one of {valid_link_dirs}).",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    if not all_objects and limit <= 0:
+        typer.echo(
+            f"openkos list: refusing to list -- --limit must be positive "
+            f"(got {limit}); use --all to print every row instead.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos list: refusing to list -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    rows = listing.list_objects(layout.bundle_dir)
+
+    if resolved_type is not None:
+        rows = [row for row in rows if row.link_dir == resolved_type]
+
+    if not rows:
+        typer.echo("No objects found.")
+        return
+
+    total = len(rows)
+    shown = rows if all_objects else rows[:limit]
+
+    id_w = max(len("ID"), *(len(row.concept_id) for row in shown))
+    sens_w = max(len("SENSITIVITY"), *(len(row.sensitivity) for row in shown))
+    stat_w = max(len("STATUS"), *(len(row.status) for row in shown))
+
+    typer.echo(
+        f"{'ID'.ljust(id_w)}  {'SENSITIVITY'.ljust(sens_w)}  {'STATUS'.ljust(stat_w)}  TITLE"
+    )
+    for row in shown:
+        title = row.title or ("(unreadable)" if not row.readable else "(untitled)")
+        typer.echo(
+            f"{row.concept_id.ljust(id_w)}  {row.sensitivity.ljust(sens_w)}  "
+            f"{row.status.ljust(stat_w)}  {title}"
+        )
+
+    if not all_objects and total > len(shown):
+        typer.echo(f"Showing {len(shown)} of {total} — use --all to see the rest.")
 
 
 @app.command()
