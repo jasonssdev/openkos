@@ -72,21 +72,17 @@ def _normalize_id(raw_id: str) -> str:
     return raw_id.removesuffix(".md")
 
 
-def find_provenance_descendants(
-    files: Mapping[str, str], *, root_ids: Collection[str]
+def provenance_closure(
+    provenance_by_id: Mapping[str, frozenset[str]], *, root_ids: Collection[str]
 ) -> list[str]:
-    """Return the sorted orphan-closure purge set (roots + descendants).
+    """Return the sorted fixpoint closure set (roots + descendants) over an
+    already-parsed `id -> frozenset(provenance ids)` map -- the extracted
+    core `find_provenance_descendants` and `resolve_source_raises` both
+    build on (design D1; moved verbatim from the prior inline loop below).
 
-    Algorithm: seed `purge` with the normalized `root_ids`. Parse every
-    file's `provenance` frontmatter list ONCE into `id -> frozenset(...)`
-    (canonical, `.md`-stripped ids on both sides); a file whose frontmatter
-    fails to parse, or whose `provenance` is not a list, is SKIPPED -- it
-    can then never be added to `purge`, which is fail-safe against
-    over-deletion (mirroring `bundle/references.py`'s "malformed file is
-    skipped rather than surfaced" contract, here applied to preservation
-    instead of detection). Then iterate to a fixed point: a candidate `C`
-    not yet in `purge` joins iff its provenance set is NON-EMPTY and a
-    subset of `purge`.
+    Algorithm: seed `purge` with the normalized `root_ids`, then iterate to
+    a fixed point: a candidate `C` not yet in `purge` joins iff its
+    provenance set is NON-EMPTY and a subset of `purge`.
 
     THE CRITICAL over-deletion barrier is that non-empty guard. An empty
     (or absent) `provenance` is vacuously a subset of ANY set, including
@@ -103,27 +99,9 @@ def find_provenance_descendants(
     never be a subset of `purge` before it is already a member of it).
 
     Determinism: the returned list is `sorted()`; the fixpoint set itself is
-    order-independent of both `files` iteration order and `root_ids` order.
+    order-independent of both `provenance_by_id` iteration order and
+    `root_ids` order.
     """
-    provenance_by_id: dict[str, frozenset[str]] = {}
-    for path, text in files.items():
-        concept_id = _normalize_id(path)
-        metadata: dict[str, object] | None
-        try:
-            metadata, _ = okf.load_frontmatter(text)
-        except Exception:  # broad: malformed frontmatter is preserved
-            # rather than swallowed into the purge set, see docstring's
-            # "critical over-deletion barrier"
-            metadata = None
-        if metadata is None:
-            continue
-        raw_provenance = metadata.get("provenance")
-        if not isinstance(raw_provenance, list):
-            continue
-        provenance_by_id[concept_id] = frozenset(
-            _normalize_id(str(entry)) for entry in raw_provenance
-        )
-
     purge = {_normalize_id(root_id) for root_id in root_ids}
 
     changed = True
@@ -137,6 +115,158 @@ def find_provenance_descendants(
                 changed = True
 
     return sorted(purge)
+
+
+def _parse_provenance_by_id(files: Mapping[str, str]) -> dict[str, frozenset[str]]:
+    """Parse every file's `provenance` frontmatter list ONCE into
+    `id -> frozenset(...)` (canonical, `.md`-stripped ids on both sides); a
+    file whose frontmatter fails to parse, or whose `provenance` is not a
+    list, is SKIPPED -- it can then never join a `provenance_closure` purge
+    set, which is fail-safe against over-deletion (mirroring
+    `bundle/references.py`'s "malformed file is skipped rather than
+    surfaced" contract, here applied to preservation instead of
+    detection)."""
+    provenance_by_id: dict[str, frozenset[str]] = {}
+    for path, text in files.items():
+        concept_id = _normalize_id(path)
+        metadata: dict[str, object] | None
+        try:
+            metadata, _ = okf.load_frontmatter(text)
+        except Exception:  # broad: malformed frontmatter is preserved
+            # rather than swallowed into the purge set, see
+            # `provenance_closure`'s "critical over-deletion barrier"
+            metadata = None
+        if metadata is None:
+            continue
+        raw_provenance = metadata.get("provenance")
+        if not isinstance(raw_provenance, list):
+            continue
+        provenance_by_id[concept_id] = frozenset(
+            _normalize_id(str(entry)) for entry in raw_provenance
+        )
+    return provenance_by_id
+
+
+def find_provenance_descendants(
+    files: Mapping[str, str], *, root_ids: Collection[str]
+) -> list[str]:
+    """Return the sorted orphan-closure purge set (roots + descendants).
+
+    Parse every file's `provenance` frontmatter list once
+    (`_parse_provenance_by_id`), then delegate the fixpoint walk to
+    `provenance_closure` -- see its docstring for the algorithm, the
+    over-deletion barrier, termination, and determinism guarantees, all
+    unchanged by this extraction."""
+    provenance_by_id = _parse_provenance_by_id(files)
+    return provenance_closure(provenance_by_id, root_ids=root_ids)
+
+
+def resolve_source_raises(
+    files: Mapping[str, str], *, source_id: str, level: str
+) -> list[okf.DescendantRaise]:
+    """Pure per-Source raise resolver, extracted verbatim from
+    `set_sensitivity_cmd`'s Phase-A inline scan (design D1; formerly
+    `main.py:3339-3411`'s `_DescendantRaise` staging loop).
+
+    `files` is a whole-bundle snapshot (bundle-relative path, INCLUDING the
+    `.md` suffix, -> full file text); `source_id` is the canonical
+    (`.md`-stripped) id of the Source concept whose provenance descendants
+    are being raised; `level` is the Source's own new (already-validated)
+    sensitivity level.
+
+    Resolves `source_id`'s provenance closure via `find_provenance_descendants`
+    (the conservative non-empty-subset rule, unchanged), excludes `source_id`
+    itself (a root is never its own descendant -- design D6), then for each
+    remaining closure member computes `okf.combine_sensitivity(current,
+    level)`: a member whose combined result equals its current value is
+    NOT staged (this is a raise-only propagator, never a lowering or a
+    same-rank rewrite). The result is `sorted()` by `concept_id` (design
+    D7), each entry's `content` a full `okf.dump_frontmatter` re-render of
+    the member's ORIGINAL metadata with only `sensitivity` replaced.
+    """
+    descendant_ids = [
+        member
+        for member in find_provenance_descendants(files, root_ids={source_id})
+        if member != _normalize_id(source_id)
+    ]
+
+    raises: list[okf.DescendantRaise] = []
+    for member in descendant_ids:
+        member_text = files[f"{member}.md"]
+        member_metadata, member_body = okf.load_frontmatter(member_text)
+        member_current = member_metadata.get("sensitivity")
+        new_level = okf.combine_sensitivity(member_current, level)
+        if new_level == member_current:
+            continue
+        member_metadata["sensitivity"] = new_level
+        raises.append(
+            okf.DescendantRaise(
+                concept_id=member,
+                current=member_current,
+                new_level=new_level,
+                content=okf.dump_frontmatter(member_metadata, member_body),
+            )
+        )
+    return raises
+
+
+def find_unresolvable_provenance(
+    files: Mapping[str, str], *, known_extra_ids: Collection[str] = ()
+) -> list[tuple[str, str]]:
+    """Pure bundle-wide unresolvable-provenance scan, extracted from
+    `set_sensitivity_cmd`'s Phase-A inline warning loop (design D1/D7;
+    formerly `main.py:3369-3386`).
+
+    Scans every file's parsed `provenance` list for an entry naming an id
+    with no corresponding file in `files` and no membership in
+    `known_extra_ids` -- returning `(citing_id, unresolved_entry_id)` for
+    each. `known_extra_ids` exists SOLELY to let a caller reproduce
+    `set_sensitivity_cmd`'s exact historical pairing: passing a
+    target-EXCLUDING snapshot together with `known_extra_ids={target_id}`
+    (design D7) -- it is not a general-purpose escape hatch.
+
+    Ordering is pinned byte-identical to the original inline loop: `files`
+    iteration order, then each file's `provenance:` list order, with NO
+    dedupe -- one tuple per occurrence, including a duplicate entry. A raw
+    resource-shaped entry (e.g. `raw/<resource>`) never normalizes to a
+    bundle id and therefore always reports (design D6/D8) -- this is
+    reporting only, never a write gate; `find_provenance_descendants`'s own
+    non-empty-subset rule already keeps a citing concept fail-closed
+    excluded from any purge/raise set.
+
+    **Deliberate behaviour change, NOT a byte-identical move**: the
+    original inline loop caught only `except (OSError, ValueError)` around
+    `okf.load_frontmatter`; this function catches broad `except Exception`
+    (mirroring `_parse_provenance_by_id`'s identical broad catch just
+    above). `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
+    which is neither an `OSError` nor a `ValueError`, so on `main` a
+    sibling file with malformed frontmatter crashes `set-sensitivity` with
+    an uncaught traceback; here it is silently skipped, same as any other
+    file whose frontmatter fails to parse. See
+    `tests/unit/bundle/test_provenance_source_raises.py::TestFindUnresolvableProvenance::test_malformed_frontmatter_sibling_is_skipped_not_raised`."""
+    known_ids = {_normalize_id(extra_id) for extra_id in known_extra_ids} | {
+        _normalize_id(path) for path in files
+    }
+
+    unresolvable: list[tuple[str, str]] = []
+    for path, text in files.items():
+        member_id = _normalize_id(path)
+        metadata: dict[str, object] | None
+        try:
+            metadata, _ = okf.load_frontmatter(text)
+        except Exception:  # broad: malformed frontmatter is skipped rather
+            # than surfaced, mirroring `_parse_provenance_by_id`
+            metadata = None
+        if metadata is None:
+            continue
+        raw_provenance = metadata.get("provenance")
+        if not isinstance(raw_provenance, list):
+            continue
+        for entry in raw_provenance:
+            entry_id = _normalize_id(str(entry))
+            if entry_id not in known_ids:
+                unresolvable.append((member_id, entry_id))
+    return unresolvable
 
 
 def find_inbound_provenance_rewrites(

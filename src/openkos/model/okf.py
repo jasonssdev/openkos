@@ -385,6 +385,28 @@ class ProvenanceRewrite:
 
 
 @dataclass(frozen=True)
+class DescendantRaise:
+    """One staged raise-only descendant write, computed by
+    `bundle.provenance.resolve_source_raises` (design: "Set-time propagation,
+    Interfaces / Contracts"). `current` is the descendant's raw, possibly
+    dirty `sensitivity` value (fail-closed ranked by `combine_sensitivity`,
+    ADR-0003); `new_level` is always a strict raise over it -- a member with
+    `combine_sensitivity(current, level) == current` is never staged.
+    `content` is the descendant's full frontmatter-plus-body text, already
+    re-rendered via `dump_frontmatter`, ready to write as-is.
+
+    Deliberately WITHOUT a `path` field: `Path` is a filesystem concern, and
+    this dataclass lives in the pure, `Path`-free model layer. Every caller
+    derives its own write target as `layout.bundle_dir / f"{concept_id}.md"`.
+    """
+
+    concept_id: str
+    current: object
+    new_level: str
+    content: str
+
+
+@dataclass(frozen=True)
 class MergeLedgerEntry:
     """One `merged_from` list entry: the FULL pre-merge snapshot set for one
     absorbed object (spec: Reversibility Ledger; ADR-0002).
