@@ -160,7 +160,8 @@ approach):
 ## Remaining Tasks (NOT in PR1's scope, see PR2 section below)
 
 - [x] Phase 6-10 (PR2): lint/status wiring — `LintDoc.sensitivity`/`.provenance`, `check_below_source_sensitivity`
-- [ ] Phase 11-14 (PR3): `backfill-sensitivity` verb + ADR-0012
+- [x] Phase 11-13 (PR3a): `resolve_backfill_raises` pure sweep core
+- [ ] Phase 14-17 (PR3b): `backfill-sensitivity` Typer command + ADR-0012
 
 ## Workload / PR Boundary (PR1)
 
@@ -357,7 +358,8 @@ no-fifth-walk guard all match `design.md` D2/D3 exactly as specified.
 
 ## Remaining Tasks (NOT in this run's scope)
 
-- [ ] Phase 11-14 (PR3): `backfill-sensitivity` verb + ADR-0012
+- [x] Phase 11-13 (PR3a): `resolve_backfill_raises` pure sweep core — see PR3a section below
+- [ ] Phase 14-17 (PR3b): `backfill-sensitivity` Typer command + ADR-0012
 
 ## Workload / PR Boundary (PR2)
 
@@ -380,3 +382,116 @@ suite: **2596 passed** (2579 PR1 baseline + 17 new PR2 tests, 14 as first
 written plus 3 from the bounded review correction). `ruff
 check`/`ruff format --check`/`mypy` all clean. Ready for `sdd-verify` on
 PR2's scope. PR3 (Phases 11-14) remains untouched, as instructed.
+
+---
+
+# PR3a: resolve_backfill_raises pure sweep core (Phases 11-13)
+
+## Scope of this run
+
+PR3a only (Phases 11-13, re-sliced from the original PR3): the PURE,
+bundle-wide sweep core `backfill-sensitivity` needs — no Typer command, no
+`Path`, no `openkos.graph` import, no writes, no output. The original PR3
+was re-sliced into PR3a (this run, pure core) and PR3b (Typer command +
+ADR-0012, not started) after PR1 and PR2 both landed ~2.5x over their
+original estimates (593 and 621 changed lines vs ~130-200/~150-250). Do
+NOT implement the Typer command; do NOT write ADR-0012 — both explicitly
+out of scope for this run.
+
+## Branch
+
+`feat/backfill-sensitivity-core`, created off PR2's tip (`02161b2` on
+`feat/lint-below-source-sensitivity`) per this session's explicit branch
+instruction. Verified with `git branch -v` before the first commit.
+
+## Mode
+
+Strict TDD (RED -> GREEN).
+
+## Commits (in order, continuing from PR2's `02161b2`)
+
+| # | SHA | Message | Type |
+|---|-----|---------|------|
+| 1 | `a93c02d` | `test(bundle): RED characterization for resolve_backfill_raises sweep core` | RED |
+| 2 | `9aec787` | `feat(bundle): add resolve_backfill_raises pure sweep core` | GREEN |
+
+## TDD Cycle Evidence
+
+| Task | RED | GREEN | REFACTOR |
+|------|-----|-------|----------|
+| 11.1/11.2 — pure sweep core characterization | `a93c02d`: all 11 new tests in `tests/unit/bundle/test_resolve_backfill_raises.py` fail with `AttributeError: module 'openkos.bundle.provenance' has no attribute 'resolve_backfill_raises'` (function does not exist) | `9aec787`: all 11 pass | N/A — first implementation, no further refactor needed |
+| 12.1-12.4 — `_source_levels` helper + `resolve_backfill_raises` implementation | (covered by 11.1/11.2's RED) | `9aec787`: `tests/unit/bundle/test_resolve_backfill_raises.py` (11) GREEN; full suite 2593 -> 2604 GREEN; `ruff check`/`ruff format --check`/`mypy` clean | None needed |
+
+## Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and result | `uv run pytest tests/unit/bundle/test_resolve_backfill_raises.py` -> 11 passed |
+| Full suite | `uv run pytest -q` -> baseline (PR2 tip, `02161b2`): 2593 passed; after PR3a: **2604 passed** (2593 + 11 new characterization tests) |
+| Runtime harness | N/A — `resolve_backfill_raises` is a pure `Mapping[str, str]` -> `list[okf.DescendantRaise]` function with no filesystem, CLI, or `openkos.graph` boundary in this slice; it is exercised end-to-end only once PR3b wires it into the Typer command and a real bundle fixture |
+| Rollback boundary | `git revert` the 2 PR3a commits (`a93c02d`..`9aec787`) on `feat/backfill-sensitivity-core` (or reset to `02161b2`) removes `resolve_backfill_raises`/`_source_levels` entirely; the function is not yet referenced by any command, so no other file or behavior is touched |
+
+## Lint / Typecheck
+
+- `uv run ruff check .` -> All checks passed
+- `uv run ruff format --check .` -> 149 files already formatted (one file, `tests/unit/bundle/test_resolve_backfill_raises.py`, needed one `ruff format` pass before the check was clean — applied before the GREEN commit's follow-up formatting pass)
+- `uv run mypy .` -> Success: no issues found in 149 source files
+
+## Files Changed
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `src/openkos/bundle/provenance.py` | Modified | Added `_source_levels(files)` helper (parses every `type: Source` concept's own `sensitivity`, coerced to `str` while preserving `okf._rank`'s exact fail-closed semantics) and `resolve_backfill_raises(files) -> list[okf.DescendantRaise]` (iterates every Source in sorted order, calls `resolve_source_raises` per Source, merges by `concept_id` keeping the highest-ranked `new_level` via `okf.SENSITIVITY_ORDER.index(...)`, ties to the first sorted Source; never calls `okf._rank` or `find_unresolvable_provenance`) |
+| `tests/unit/bundle/test_resolve_backfill_raises.py` | Created | 11 pure-function tests: raise-all-below-Source; never-lowers; idempotent second sweep; Source never written as its own root; `extraction_status: failed` Source still a valid root; Source-as-descendant-of-another-Source raised (D6); same-Source multi-cite closure membership raised; two-unrelated-Sources citation never raised (D3); merge-by-max via nested closures; deterministic sorted output; missing-`sensitivity` Source ranks fail-closed as `private` |
+
+## Changed-Line Totals (PR3a, via `git diff --numstat`)
+
+| File | + | - |
+|---|---|---|
+| `src/openkos/bundle/provenance.py` | 99 | 0 |
+| `tests/unit/bundle/test_resolve_backfill_raises.py` | 222 | 0 |
+| **Total** | **321** | **0** |
+
+**Total changed lines: 321**, comfortably under the 400-line single-PR
+budget and the tasks doc's re-sliced ~250-400 estimate for PR3a.
+
+## Deviations from Design
+
+None. `design.md` describes the merge-by-max sweep inline as part of the
+Typer verb's "Phase A" (D4/D5); this run extracts that exact logic into a
+standalone pure function (`resolve_backfill_raises`) so PR3b's Typer
+command can call it directly rather than re-implementing the sweep+merge
+loop in `main.py`. This is a PR-slicing decision, not a functional
+deviation — the merge rule (highest `SENSITIVITY_ORDER.index(new_level)`,
+ties to first sorted Source), the no-`type`-filter rule (D6), and the
+explicit non-call of `find_unresolvable_provenance` (D8) all match
+`design.md` exactly.
+
+## Issues Found
+
+None. Changed-line estimate held well under budget this run (321 vs the
+re-sliced ~250-400 estimate), unlike PR1/PR2's ~2.5x overages.
+
+## Remaining Tasks (NOT in this run's scope)
+
+- [ ] Phase 14-17 (PR3b): `backfill-sensitivity` Typer command (Phase A/B
+  wiring `resolve_backfill_raises` into preview/confirm/write/log/commit)
+  + ADR-0012, off `feat/backfill-sensitivity-core`
+
+## Workload / PR Boundary (PR3a)
+
+- Mode: stacked PR slice (chain strategy: `stacked-to-main`)
+- Current work unit: PR3a — `resolve_backfill_raises` pure sweep core
+- Boundary: starts at PR2's tip (`02161b2`) on
+  `feat/lint-below-source-sensitivity`; ends at commit `9aec787` on
+  `feat/backfill-sensitivity-core`. PR3b targets this branch next.
+- Estimated review budget impact: 321 changed lines — well under the
+  400-line single-PR default guard.
+
+## Status (PR3a)
+
+5/5 PR3a tasks complete (Phases 11-13, tasks 11.1 through 13.3). Full
+suite: **2604 passed** (2593 PR2 baseline + 11 new PR3a tests). `ruff
+check`/`ruff format --check`/`mypy` all clean. Ready for `sdd-verify` on
+PR3a's scope. PR3b (Phases 14-17, the Typer command + ADR-0012) remains
+untouched, as instructed.

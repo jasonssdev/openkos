@@ -210,6 +210,105 @@ def resolve_source_raises(
     return raises
 
 
+def _source_levels(files: Mapping[str, str]) -> dict[str, str]:
+    """Parse every file once, returning `id -> sensitivity` for every
+    `type: Source` concept (design: "for source_id in sorted(ids where type
+    == 'Source')", Phase A of the bundle-wide sweep).
+
+    The `sensitivity` value is coerced to `str` only to satisfy
+    `resolve_source_raises`'s `level: str` parameter -- the coercion
+    preserves `okf._rank`'s exact fail-closed ranking (ADR-0003): a missing
+    (`None`) value becomes `""`, which `_rank` floors at `private`,
+    identically to `_rank(None)`; any other non-`str` value (e.g. a dirty
+    `int`/`list` from hand-edited frontmatter) is stringified, which still
+    fails closed to `confidential` unless the stringified form happens to
+    already be a canonical member of `okf.SENSITIVITY_ORDER`. A file whose
+    frontmatter fails to parse is SKIPPED, mirroring this module's other
+    broad-except conventions (`provenance.py:135`, `:257`)."""
+    source_levels: dict[str, str] = {}
+    for path, text in files.items():
+        metadata: dict[str, object] | None
+        try:
+            metadata, _ = okf.load_frontmatter(text)
+        except Exception:  # broad: malformed frontmatter is skipped rather
+            # than surfaced, mirroring `_parse_provenance_by_id`
+            metadata = None
+        if metadata is None:
+            continue
+        if metadata.get("type") != "Source":
+            continue
+        raw_level = metadata.get("sensitivity")
+        if isinstance(raw_level, str):
+            level = raw_level
+        elif raw_level is None:
+            level = ""
+        else:
+            level = str(raw_level)
+        source_levels[_normalize_id(path)] = level
+    return source_levels
+
+
+def resolve_backfill_raises(files: Mapping[str, str]) -> list[okf.DescendantRaise]:
+    """Pure, bundle-wide sweep core `backfill-sensitivity` needs (design
+    D4/D5/D6) -- everything the verb requires that is NOT the Typer command:
+    no `Path`, no I/O, no confirmation, no write.
+
+    Treats every `type: Source` concept in `files` as an independent closure
+    root (design D4): for each Source, sorted by concept id,
+    `resolve_source_raises` computes that Source's own per-descendant raises
+    exactly as `set-sensitivity` does. Results are merged by `concept_id`,
+    keeping the record with the highest-ranked `new_level` -- ranked via the
+    public `okf.SENSITIVITY_ORDER.index(...)` (design D5), NEVER the private
+    `okf._rank` (ADR-0003, `okf.py:296-299`). Merge-by-max is exact, not an
+    approximation: `combine_sensitivity(current, ...)` is monotone in level
+    (`okf.py:323`), so the winning record's already-rendered `content` is
+    the correct final bytes -- no re-render.
+
+    Ties resolve to the FIRST Source in sorted order (design D5): Sources
+    are iterated in sorted order and a later Source only replaces an
+    earlier one's record for the same `concept_id` on a STRICTLY higher
+    rank, never on an equal one.
+
+    No `type` filter is applied to the descendant set (design D6, matching
+    `main.py:3389-3404`): a Source is never written as its OWN closure
+    root's output (`resolve_source_raises` already excludes `source_id`
+    from its own descendant set), but a Source that is a genuine provenance
+    descendant of ANOTHER Source IS raised like any other descendant. A
+    concept that is a member of NO single Source's closure is never staged
+    here -- `resolve_source_raises`'s own closure computation already
+    excludes it from every per-Source call, so no extra filtering is
+    needed at the merge step; that concept surfaces only through the `lint`/
+    `status` detection findings (design D3), never silently through this
+    sweep.
+
+    Determinism (design D7): Sources are iterated `sorted()` by concept id,
+    each per-Source `resolve_source_raises` call already returns its
+    results `sorted()` by `concept_id`, and this function's own return
+    value is `sorted()` by `concept_id` too.
+
+    Deliberately does NOT call `find_unresolvable_provenance` (design D8):
+    every Source cites its raw `resource`, which never resolves to a
+    bundle id, so a bundle-wide run would emit one WARNING per Source on
+    every invocation, including the no-op path. That signal belongs to
+    `lint`'s existing `dangling` finding, never this sweep.
+    """
+    source_levels = _source_levels(files)
+
+    best: dict[str, okf.DescendantRaise] = {}
+    best_rank: dict[str, int] = {}
+    for source_id in sorted(source_levels):
+        for descendant_raise in resolve_source_raises(
+            files, source_id=source_id, level=source_levels[source_id]
+        ):
+            concept_id = descendant_raise.concept_id
+            new_rank = okf.SENSITIVITY_ORDER.index(descendant_raise.new_level)
+            if concept_id not in best or new_rank > best_rank[concept_id]:
+                best[concept_id] = descendant_raise
+                best_rank[concept_id] = new_rank
+
+    return [best[concept_id] for concept_id in sorted(best)]
+
+
 def find_unresolvable_provenance(
     files: Mapping[str, str], *, known_extra_ids: Collection[str] = ()
 ) -> list[tuple[str, str]]:
