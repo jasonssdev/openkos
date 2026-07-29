@@ -1039,6 +1039,126 @@ def test_include_confidential_bypasses_the_confidential_floor_gate(
     assert concept_path.is_file()
 
 
+# --- `_stage_derived_objects` return-shape (issue #187, design: Stage/Build
+# Ordering) -------------------------------------------------------------
+
+
+def _stage_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "raw_content": "Some raw notes about self-control.",
+        "source_title": "Notes",
+        "source_slug": "notes",
+        "workspace_floor": "private",
+        "stamp_sensitivity": "private",
+        "timestamp": "2026-07-14T18:30:00Z",
+        "bundle_dir": tmp_path / "bundle",
+        "llm": _FakeLLM('{"extract": false}'),
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_stage_derived_objects_returns_no_extractable_text_reason(
+    tmp_path: Path,
+) -> None:
+    """`_stage_derived_objects` returns `([], "no-extractable-text")` when
+    `raw_content` is blank -- the tuple return shape carries the skip
+    reason alongside the (empty) plan list (design: `_stage_derived_objects`
+    return shape; spec: no-extractable-text is written)."""
+    plans, skip_reason = main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, raw_content="   ")  # type: ignore[arg-type]
+    )
+
+    assert plans == []
+    assert skip_reason == "no-extractable-text"
+
+
+def test_stage_derived_objects_returns_blocked_by_sensitivity_reason(
+    tmp_path: Path,
+) -> None:
+    """`_stage_derived_objects` returns `([], "blocked-by-sensitivity")` when
+    the workspace floor blocks the LLM send (spec: blocked-by-sensitivity is
+    written)."""
+    plans, skip_reason = main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, workspace_floor="confidential")  # type: ignore[arg-type]
+    )
+
+    assert plans == []
+    assert skip_reason == "blocked-by-sensitivity"
+
+
+def test_stage_derived_objects_returns_failed_reason(tmp_path: Path) -> None:
+    """`_stage_derived_objects` returns `([], "failed")` when `llm.chat`
+    raises `OllamaError` (spec: failed is written)."""
+    plans, skip_reason = main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path, llm=_FakeLLM(raises=OllamaUnavailable("boom"))
+        )
+    )
+
+    assert plans == []
+    assert skip_reason == "failed"
+
+
+def test_stage_derived_objects_returns_no_concepts_found_reason(
+    tmp_path: Path,
+) -> None:
+    """`_stage_derived_objects` returns `([], "no-concepts-found")` when
+    extraction succeeds with zero candidates (spec: no-concepts-found is
+    written)."""
+    plans, skip_reason = main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=_FakeLLM('{"extract": false}'))  # type: ignore[arg-type]
+    )
+
+    assert plans == []
+    assert skip_reason == "no-concepts-found"
+
+
+def test_stage_derived_objects_returns_none_reason_on_success(
+    tmp_path: Path,
+) -> None:
+    """`_stage_derived_objects` returns `(plans, None)` when at least one
+    candidate is staged -- `skip_reason` is `None` on the healthy path
+    (design: sequence diagram, terminal `return plans, None`)."""
+    plans, skip_reason = main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=_FakeLLM(_concept_reply()))  # type: ignore[arg-type]
+    )
+
+    assert len(plans) == 1
+    assert skip_reason is None
+
+
+def test_healthy_ingest_builds_the_source_document_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the healthy (successful-extraction) path, `ingest` calls
+    `okf.build_source_concept` exactly once -- the conditional re-render
+    only fires when `_stage_derived_objects` returns a `skip_reason`
+    (design: "The ordering conflict", conditional re-render; healthy path
+    stays byte-identical to before `extraction_status` existed)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    calls: list[dict[str, object]] = []
+    real_build = okf.build_source_concept
+
+    def _spy(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return real_build(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(okf, "build_source_concept", _spy)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    concept_text = (tmp_path / "bundle" / "sources" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    assert "extraction_status" not in concept_text
+
+
 # --- Extraction (WU4, Phase 5-6): LLM Concept/Entity extraction ------------
 
 
@@ -2002,6 +2122,203 @@ def test_reingest_stamps_new_derived_objects_with_the_preserved_level(
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
     assert metadata["sensitivity"] == "confidential"
+
+
+# --- `extraction_status` frontmatter stamping (issue #187, spec: Extraction
+# Status Frontmatter Key on Zero-Derived-Object Degrade) -------------------
+
+
+def test_no_extractable_text_writes_extraction_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty source writes `extraction_status: no-extractable-text` on
+    the Source concept (spec: no-extractable-text is written; path
+    main.py:1298)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("   \n  ", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "no-extractable-text"
+
+
+def test_blocked_by_sensitivity_writes_extraction_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `default_sensitivity: confidential` floor writes `extraction_status:
+    blocked-by-sensitivity` on the Source concept (spec: blocked-by-
+    sensitivity is written; path main.py:1305)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "blocked-by-sensitivity"
+
+
+def test_failed_extraction_writes_extraction_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaError`-raising LLM backend writes `extraction_status:
+    failed` on the Source concept, and the raw exception text never appears
+    in the frontmatter (spec: failed is written, MUST NOT write raw
+    exception text; path main.py:1316)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        raises=OllamaUnavailable("boom -- http://127.0.0.1:11434 model llama3"),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    concept_text = concept_path.read_text(encoding="utf-8")
+    metadata, _ = okf.load_frontmatter(concept_text)
+    assert metadata["extraction_status"] == "failed"
+    assert "boom" not in concept_text
+    assert "127.0.0.1" not in concept_text
+
+
+def test_no_concepts_found_writes_extraction_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful `llm.chat` call that declines extraction writes
+    `extraction_status: no-concepts-found` on the Source concept (spec:
+    no-concepts-found is written; path main.py:1329)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, '{"extract": false}')
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "no-concepts-found"
+
+
+def test_successful_extraction_writes_no_extraction_status_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful extraction (>=1 derived object written) leaves
+    `extraction_status` entirely absent from the Source concept's
+    frontmatter (spec: Successful extraction writes no key at all)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    concept_text = concept_path.read_text(encoding="utf-8")
+    assert "extraction_status" not in concept_text
+    derived_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert derived_path.is_file()
+
+
+def test_successful_reingest_clears_a_previous_failed_extraction_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source previously marked `extraction_status: failed` ends with the
+    key ABSENT after a re-ingest that succeeds (top functional risk, spec:
+    A previously failed Source self-clears on later success; design:
+    Self-clearing). The first assertion after the second run is the
+    anti-merge guard: any implementation that read the on-disk value and
+    merged it forward leaves the key present and fails here."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, raises=OllamaUnavailable("boom"))
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_status"] == "failed"
+
+    _patch_llm(monkeypatch, _concept_reply())
+
+    second = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert second.exit_code == 0
+    concept_text = concept_path.read_text(encoding="utf-8")
+    assert "extraction_status" not in concept_text
+    derived_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert derived_path.is_file()
+
+
+def test_unrecognized_extraction_status_value_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source whose on-disk `extraction_status` is outside the closed
+    vocabulary (e.g. a value from a future or reverted version) is read
+    without raising -- `extraction_status` is never read from disk by
+    `ingest` in the first place, so a re-ingest simply recomputes and
+    overwrites it silently (spec: Unrecognized value is ignored without
+    raising)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    metadata["extraction_status"] = "some-future-value"
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+    _patch_llm(monkeypatch, _concept_reply())
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_text = concept_path.read_text(encoding="utf-8")
+    assert "extraction_status" not in concept_text
+
+
+def test_sensitivity_and_extraction_status_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In ONE run, `sensitivity` IS read from disk and combined via
+    `okf.combine_sensitivity` (#229) while `extraction_status` is NEVER
+    read from disk, only freshly computed for this run (design: "Two
+    fields, two opposite rules", cross-guard test #10). An on-disk
+    `confidential` Source, config `default_sensitivity: private`, and an
+    `OllamaError`-raising LLM backend must end with BOTH `sensitivity ==
+    'confidential'` (preserved, never downgraded) AND `extraction_status ==
+    'failed'` (this run's own outcome) in the same rewritten document."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_sensitivity(tmp_path, "notes", "confidential")
+    _patch_llm(monkeypatch, raises=OllamaUnavailable("boom"))
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["sensitivity"] == "confidential"
+    assert metadata["extraction_status"] == "failed"
 
 
 def test_reingest_raises_when_workspace_default_exceeds_on_disk(
