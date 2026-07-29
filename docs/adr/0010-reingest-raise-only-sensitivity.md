@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0010: Re-ingest resolves sensitivity as a raise-only high-water mark"
 description: openkos ingest --regenerate resolves a Source's sensitivity as combine_sensitivity(on_disk, cfg.default_sensitivity); the resolved value feeds both the Source document and the derived-object stamp; an unreadable existing Source aborts the ingest.
-status: Proposed
+status: Accepted
 date: 2026-07-28
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0010: Re-ingest resolves sensitivity as a raise-only high-water mark
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-28
 
 ## Context
