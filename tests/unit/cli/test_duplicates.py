@@ -229,8 +229,9 @@ def test_duplicates_prints_legend_once_before_the_group_loop(
 
     assert result.exit_code == 0
     legend = (
-        "Legend: [tier] type -- trigger "
-        "(HIGH = exact normalized key, LOW = near-match score)"
+        "Legend: [tier] type -- trigger. The tier is the MATCH METHOD, "
+        "not a strength ranking: HIGH = exact normalized key, "
+        "LOW = near-match similarity score."
     )
     assert result.stdout.count(legend) == 1
     lines = result.stdout.splitlines()

@@ -5431,11 +5431,14 @@ def duplicates(
 
     On a workspace, `resolution.find_candidates` performs one read-only,
     whole-bundle pass and returns candidate groups: same-type OKF objects
-    that MIGHT be the same real-world entity, at a HIGH (exact normalized
-    title) or LOW (near-match) confidence tier. This is a REPORT ONLY --
-    `duplicates` never merges, deletes, or otherwise adjudicates a
-    candidate; that is reserved for a later, explicitly-named `resolve`/
-    `merge` verb (spec: Read-Only CLI Candidate Report Verb).
+    that MIGHT be the same real-world entity, tiered by HOW they matched --
+    HIGH (an exact normalized title) or LOW (a near-match). The tier records
+    the match METHOD, never a strength ranking, which is why a LOW group can carry
+    a similarity score of 1.000 without contradiction (issue #192). This is
+    a REPORT ONLY -- `duplicates` never merges, deletes, or otherwise
+    adjudicates a candidate; it points at the SHIPPED `merge` verb
+    (`cli/main.py:3957`) through its trailing hint instead (spec: Read-Only
+    CLI Candidate Report Verb).
 
     Output is grouped by OKF `type`, then by tier, mirroring
     `find_candidates`'s own stable ordering: each group renders its type,
@@ -5472,8 +5475,9 @@ def duplicates(
     low_count = len(groups) - high_count
     typer.echo(_format_group_tally(high_count, low_count))
     typer.echo(
-        "Legend: [tier] type -- trigger "
-        "(HIGH = exact normalized key, LOW = near-match score)"
+        "Legend: [tier] type -- trigger. The tier is the MATCH METHOD, "
+        "not a strength ranking: HIGH = exact normalized key, "
+        "LOW = near-match similarity score."
     )
     for group in groups:
         tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
@@ -5709,7 +5713,11 @@ def adjudicate(
             verdict_counts[Verdict.UNCERTAIN],
         )
     )
-    typer.echo("Legend: [tier] type -- trigger, then verdict and rationale")
+    typer.echo(
+        "Legend: [tier] type -- trigger, then verdict and rationale. "
+        "The tier is the MATCH METHOD, not a strength ranking: "
+        "HIGH = exact normalized key, LOW = near-match similarity score."
+    )
     for result in displayed:
         group = result.candidate
         tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
