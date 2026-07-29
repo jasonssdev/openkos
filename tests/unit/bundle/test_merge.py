@@ -458,3 +458,92 @@ def test_plan_unmerge_rejects_blank_ids() -> None:
             absorbed_id="concepts/absorbed",
             survivor_text=_survivor_text(),
         )
+
+
+# -- v3 ledger: provenance_rewrites threading (tasks 3.1-3.2) --------------
+
+
+def test_plan_merge_always_writes_v3_schema() -> None:
+    """`plan_merge` always writes `MERGE_LEDGER_SCHEMA_V3` (task 3.1)."""
+    plan = bundle_merge.plan_merge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        survivor_text=_survivor_text(),
+        absorbed_text=_absorbed_text(),
+        index_text=_INDEX_TEXT,
+        log_text=_LOG_TEXT,
+        merged_at="2026-07-20T00:00:00Z",
+    )
+
+    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V3
+
+
+def test_plan_merge_provenance_rewrites_default_to_empty_list() -> None:
+    """`provenance_rewrites` may be omitted at this layer -- the actual
+    bundle scan (`bundle/provenance.py`) and CLI wiring are PR2's concern --
+    and defaults to an empty, injectable list (task 3.1)."""
+    plan = bundle_merge.plan_merge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        survivor_text=_survivor_text(),
+        absorbed_text=_absorbed_text(),
+        index_text=_INDEX_TEXT,
+        log_text=_LOG_TEXT,
+        merged_at="2026-07-20T00:00:00Z",
+    )
+
+    assert plan.ledger_entry.provenance_rewrites == []
+
+
+def test_plan_merge_threads_provenance_rewrites_into_ledger_entry() -> None:
+    """A caller-injected `provenance_rewrites` list is threaded into the new
+    ledger entry exactly as `relation_rewrites` was threaded (task 3.2)."""
+    provenance_rewrite = okf.ProvenanceRewrite(
+        file="concepts/other.md",
+        snapshot="---\ntype: Concept\nprovenance:\n- concepts/absorbed\n---\nBody.\n",
+    )
+
+    plan = bundle_merge.plan_merge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        survivor_text=_survivor_text(),
+        absorbed_text=_absorbed_text(),
+        index_text=_INDEX_TEXT,
+        log_text=_LOG_TEXT,
+        merged_at="2026-07-20T00:00:00Z",
+        provenance_rewrites=[provenance_rewrite],
+    )
+
+    assert plan.ledger_entry.provenance_rewrites == [provenance_rewrite]
+    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V3
+
+    metadata, _ = okf.load_frontmatter(plan.merged_survivor)
+    decoded = okf.decode_merged_from(metadata)
+    assert decoded == [plan.ledger_entry]
+
+
+def test_plan_unmerge_provenance_rewrites_round_trip() -> None:
+    """`UnmergePlan` carries `provenance_rewrites`, threaded through exactly
+    like `relation_rewrites` (task 3.1-3.2)."""
+    provenance_rewrite = okf.ProvenanceRewrite(
+        file="concepts/other.md",
+        snapshot="---\ntype: Concept\nprovenance:\n- concepts/absorbed\n---\nBody.\n",
+    )
+    plan = bundle_merge.plan_merge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        survivor_text=_survivor_text(),
+        absorbed_text=_absorbed_text(),
+        index_text=_INDEX_TEXT,
+        log_text=_LOG_TEXT,
+        merged_at="2026-07-20T00:00:00Z",
+        provenance_rewrites=[provenance_rewrite],
+    )
+
+    unmerge_plan = bundle_merge.plan_unmerge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        survivor_text=plan.merged_survivor,
+    )
+
+    assert unmerge_plan.provenance_rewrites == [provenance_rewrite]

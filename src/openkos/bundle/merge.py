@@ -36,8 +36,12 @@ class UnmergePlan:
     exact-substring substitution (never a blind replace-all);
     `relation_rewrites` (design D1, v2) are the recorded third-party
     whole-file snapshots that same unit must reverse by ABSOLUTE overwrite
-    (`bundle/relations.py::reverse_relation_rewrites`, PR3) -- `[]` for a
-    v1 (pre-slice-2a) ledger entry."""
+    (`bundle/relations.py::reverse_relation_rewrites`) -- `[]` for a v1
+    (pre-slice-2a) ledger entry; `provenance_rewrites` (v3,
+    rewrite-provenance-on-merge) are the analogous third-party whole-file
+    snapshots for `provenance:` retargets, reversed by
+    `bundle/provenance.py::reverse_provenance_rewrites` -- `[]` for a v1 or
+    v2 ledger entry."""
 
     restored_survivor: str
     restored_absorbed: str
@@ -45,6 +49,7 @@ class UnmergePlan:
     restored_log: str
     link_rewrites: list[okf.LinkRewrite]
     relation_rewrites: list[okf.RelationRewrite]
+    provenance_rewrites: list[okf.ProvenanceRewrite]
     entry: okf.MergeLedgerEntry
 
 
@@ -83,6 +88,7 @@ def plan_merge(
     merged_at: str,
     link_rewrites: list[okf.LinkRewrite] | None = None,
     relation_rewrites: list[okf.RelationRewrite] | None = None,
+    provenance_rewrites: list[okf.ProvenanceRewrite] | None = None,
 ) -> MergePlan:
     """Pure Phase-A planning: compute the merged survivor's full text and
     the new `merged_from` ledger entry, without writing anything.
@@ -93,13 +99,16 @@ def plan_merge(
     contents, captured ONLY to be embedded in the ledger entry's
     `index_before`/`log_before` -- this layer never computes an updated
     catalog/log (that composition is a later unit's concern). `link_rewrites`
-    defaults to `[]`; the actual bundle-wide link scan is U3.
+    defaults to `[]`; the actual bundle-wide link scan is a later unit.
     `relation_rewrites` (design D1, v2) similarly defaults to `[]`; the
     actual third-party inbound scan (`bundle/relations.py`) and CLI wiring
-    are PR3's concern -- this layer only carries whatever the caller
-    injects into the new ledger entry, and ALWAYS writes
-    `MERGE_LEDGER_SCHEMA_V2` (the reader still accepts v1 entries already
-    on disk from before this merge).
+    are a later unit's concern. `provenance_rewrites` (v3,
+    rewrite-provenance-on-merge) likewise defaults to `[]`; the actual
+    third-party inbound scan (`bundle/provenance.py`) and CLI wiring are
+    PR2's concern -- this layer only carries whatever the caller injects
+    into the new ledger entry, and ALWAYS writes `MERGE_LEDGER_SCHEMA_V3`
+    (the reader still accepts v1 and v2 entries already on disk from before
+    this merge).
 
     The new entry is appended to the survivor's EXISTING `merged_from` list
     (decoded from `survivor_text`'s own frontmatter), so the returned
@@ -128,7 +137,7 @@ def plan_merge(
 
     sensitivity_before = survivor_metadata.get("sensitivity")
     entry = okf.MergeLedgerEntry(
-        schema=okf.MERGE_LEDGER_SCHEMA_V2,
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
         merged_at=merged_at,
         absorbed_id=absorbed_id,
         absorbed_snapshot=absorbed_text,
@@ -142,6 +151,9 @@ def plan_merge(
         sensitivity_after=str(merged_metadata.get("sensitivity")),
         relation_rewrites=list(relation_rewrites)
         if relation_rewrites is not None
+        else [],
+        provenance_rewrites=list(provenance_rewrites)
+        if provenance_rewrites is not None
         else [],
     )
 
@@ -191,5 +203,6 @@ def plan_unmerge(
         restored_log=tail.log_before,
         link_rewrites=list(tail.link_rewrites),
         relation_rewrites=list(tail.relation_rewrites),
+        provenance_rewrites=list(tail.provenance_rewrites),
         entry=tail,
     )
