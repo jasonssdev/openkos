@@ -5079,10 +5079,17 @@ def status() -> None:
     # no second `collect_docs()` call, no new walk (status spec: "No new
     # bundle walk is introduced").
     unextracted = lint_check.check_unextracted(docs)
+    # issue #231 (PR2): reuses this SAME in-memory `docs` list too -- no
+    # third `collect_docs()` call (design D3's no-fifth-walk guard).
+    sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
     needs_attention: list[str] = [*survey.findings]
     needs_attention.extend(f"{finding.path}: {finding.detail}" for finding in dangling)
     needs_attention.extend(
         f"{finding.path}: {finding.detail}" for finding in unextracted
+    )
+    needs_attention.extend(
+        f"{finding.path}: [{finding.kind}] {finding.detail}"
+        for finding in sensitivity_findings
     )
     # #186: pending duplicate groups are ACTIONABLE -- name `duplicates` as
     # the next step. Exact-title matches only (Tier.HIGH); near-match (LOW)
@@ -5297,9 +5304,12 @@ def lint() -> None:
     doc body (never `log.md` -- see its docstring for why).
 
     The volatility-window and skip notices feed one `lint.LintReport`, rendered
-    under `Stale stamps:`, `Orphan pages:`, `Dangling references:`, and
+    under `Stale stamps:`, `Orphan pages:`, `Dangling references:`,
     `Unextracted sources:` (issue #187: `lint_check.check_unextracted`,
-    reusing this SAME `docs` list -- no new walk), each with its own
+    reusing this SAME `docs` list -- no new walk), `Below-source
+    sensitivity:`, and `Multi-source uncovered:` (issue #231, PR2:
+    `lint_check.check_below_source_sensitivity`, reusing this SAME `docs`
+    list too -- design D3's no-fifth-walk guard), each with its own
     empty-state line when there is nothing to report. Every
     successful read exits 0, whether the bundle is clean or
     has findings (spec: Non-Gating Exit Contract) -- `lint` is NOT a CI
@@ -5330,12 +5340,27 @@ def lint() -> None:
     orphans = lint_check.check_orphans(docs, index_text=index_text)
     dangling = lint_check.check_dangling_targets(docs)
     unextracted = lint_check.check_unextracted(docs)
+    # #231 (PR2): reuses this SAME `docs` list -- no new bundle walk
+    # (design D3's no-fifth-walk guard).
+    sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
+    below_source = [
+        finding
+        for finding in sensitivity_findings
+        if finding.kind == "below-source-sensitivity"
+    ]
+    multi_source_uncovered = [
+        finding
+        for finding in sensitivity_findings
+        if finding.kind == "multi-source-uncovered"
+    ]
     notices = window_notices + skip_notices
     report = lint_check.LintReport(
         stale=stale,
         orphans=orphans,
         dangling=dangling,
         unextracted=unextracted,
+        below_source=below_source,
+        multi_source_uncovered=multi_source_uncovered,
         notices=notices,
     )
 
@@ -5369,6 +5394,20 @@ def lint() -> None:
         typer.echo("  No unextracted sources.")
     else:
         for finding in report.unextracted:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("Below-source sensitivity:")
+    if not report.below_source:
+        typer.echo("  No below-source sensitivity findings.")
+    else:
+        for finding in report.below_source:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("Multi-source uncovered:")
+    if not report.multi_source_uncovered:
+        typer.echo("  No multi-source uncovered findings.")
+    else:
+        for finding in report.multi_source_uncovered:
             typer.echo(f"  {finding.path}: {finding.detail}")
 
 
