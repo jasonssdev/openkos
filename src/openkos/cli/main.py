@@ -1216,7 +1216,7 @@ def _stage_derived_objects(
     bundle_dir: Path,
     llm: LLMBackend,
     include_confidential: bool = False,
-) -> list[_DerivedPlan]:
+) -> tuple[list[_DerivedPlan], okf.ExtractionStatus | None]:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
     B (`ingest` owns slug/path derivation and per-candidate drop wording;
@@ -1229,16 +1229,26 @@ def _stage_derived_objects(
     dedup left there (design D5 pinned ordering), so a failure partway
     through Phase B never leaves a partially-reconciled state.
 
-    Returns `[]` -- always a Source-only degrade for this batch, never a
-    raised error -- when: `raw_content` is `None` or blank (a
-    binary/undecodable or empty source has no text to extract from, so the
-    LLM is never called); `llm.chat` raises any `OllamaError`-family
-    exception (caught HERE, per design's "Degrade seam" --
-    `extraction/concept.py` lets it propagate unswallowed); or
-    `extract_concept` itself returns `[]` (`[]`, never `None`, is
-    `extract_concept`'s contract -- design D4 -- meaning either nothing was
-    worth extracting, or every candidate failed ITS OWN fail-closed
-    validation; this layer does not distinguish the two).
+    Returns a `(plans, skip_reason)` tuple (issue #187, design:
+    `_stage_derived_objects` return shape). `skip_reason` carries WHY this
+    batch produced zero derived objects, for the caller to stamp onto the
+    Source's `extraction_status` frontmatter key -- `None` on the healthy
+    path (`plans` non-empty). Returns `([], "no-extractable-text")` -- always
+    a Source-only degrade for this batch, never a raised error -- when
+    `raw_content` is `None` or blank (a binary/undecodable or empty source
+    has no text to extract from, so the LLM is never called); returns
+    `([], "blocked-by-sensitivity")` when the workspace floor blocks the LLM
+    send; returns `([], "failed")` when `llm.chat` raises any
+    `OllamaError`-family exception (caught HERE, per design's "Degrade seam"
+    -- `extraction/concept.py` lets it propagate unswallowed); returns
+    `([], "no-concepts-found")` when `extract_concept` itself returns `[]`
+    (`[]`, never `None`, is `extract_concept`'s contract -- design D4 --
+    meaning either nothing was worth extracting, or every candidate failed
+    ITS OWN fail-closed validation; this layer does not distinguish the
+    two). `plans == [] and skip_reason is None` is also possible (every
+    candidate dropped individually below) -- that state deliberately writes
+    no `extraction_status` key (design: Sequence, "a real, deliberate
+    state").
 
     Each item in a non-empty `extract_concept` result is then staged
     independently, in reply order, per design's pinned Phase A sequence:
@@ -1300,7 +1310,7 @@ def _stage_derived_objects(
             "openkos ingest: source has no extractable text; keeping the Source only.",
             err=True,
         )
-        return []
+        return [], "no-extractable-text"
 
     if not include_confidential and blocks_llm_send(workspace_floor):
         typer.echo(
@@ -1311,7 +1321,7 @@ def _stage_derived_objects(
             "`llm.chat`, not embeddings.",
             err=True,
         )
-        return []
+        return [], "blocked-by-sensitivity"
 
     try:
         with Console(stderr=True).status("openkos ingest: extracting concepts…"):
@@ -1324,7 +1334,7 @@ def _stage_derived_objects(
             "keeping the Source only.",
             err=True,
         )
-        return []
+        return [], "failed"
 
     if not extractions:
         typer.echo(
@@ -1332,7 +1342,7 @@ def _stage_derived_objects(
             "keeping the Source only.",
             err=True,
         )
-        return []
+        return [], "no-concepts-found"
 
     plans: list[_DerivedPlan] = []
     seen_slugs: set[str] = set()
@@ -1423,7 +1433,7 @@ def _stage_derived_objects(
             )
         )
 
-    return plans
+    return plans, None
 
 
 def _embed_after_ingest(
@@ -1714,25 +1724,41 @@ def ingest(
         else:
             on_disk_sensitivity = None
             resolved_sensitivity = cfg.default_sensitivity
-        concept_content = okf.build_source_concept(
-            title=title,
-            description=description,
-            resource=resource,
-            tags=[],
-            timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            sensitivity=resolved_sensitivity,
-            provenance=[resource],
-            raw_content=raw_content,
-        )
+
+        def _build_source_document(
+            extraction_status: okf.ExtractionStatus | None,
+        ) -> str:
+            """Bound immediately before the first build (design: "The
+            ordering conflict"). Builds the Source document from-scratch
+            from this run's trusted local inputs -- called once with `None`
+            before staging (`:1717` today), and, ONLY when staging produces
+            a `skip_reason`, called a SECOND time with that reason so the
+            key is stamped onto freshly built content, never merged onto
+            on-disk frontmatter. The healthy path calls this exactly once,
+            so its output stays byte-identical to before this parameter
+            existed."""
+            return okf.build_source_concept(
+                title=title,
+                description=description,
+                resource=resource,
+                tags=[],
+                timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                sensitivity=resolved_sensitivity,
+                provenance=[resource],
+                raw_content=raw_content,
+                extraction_status=extraction_status,
+            )
+
+        concept_content = _build_source_document(None)
         # Extraction runs AFTER the Source concept is built, BEFORE the
         # preview (design: Technical Approach) -- always attempted, even
         # under `--auto`; only the confirm PROMPT is skipped by `--auto`.
         # `derived_plans` is the FULL, already-reconciled Phase A write set
         # (design D5 pinned ordering) -- zero or more entries, in reply
-        # order.
+        # order. `skip_reason` (issue #187) is `None` on the healthy path.
         source_metadata, _ = okf.load_frontmatter(concept_content)
         source_sensitivity = str(source_metadata["sensitivity"])
-        derived_plans = _stage_derived_objects(
+        derived_plans, skip_reason = _stage_derived_objects(
             raw_content=raw_content,
             source_title=title,
             source_slug=slug,
@@ -1743,6 +1769,13 @@ def ingest(
             llm=OllamaClient(model=cfg.model),
             include_confidential=include_confidential,
         )
+        if skip_reason is not None:
+            # Re-render from scratch with the discovered reason stamped in
+            # (design: "The ordering conflict", conditional re-render) --
+            # never patch the already-built bytes, and never read
+            # `extraction_status` off disk (unlike `sensitivity` above):
+            # this key is always recomputed fresh for THIS run alone.
+            concept_content = _build_source_document(skip_reason)
         index_text = index_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
         if regenerate:

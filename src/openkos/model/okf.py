@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal
+from typing import Final, Literal, get_args
 
 import frontmatter
 
@@ -51,6 +51,36 @@ always re-sorts keys alphabetically regardless of that insertion order."""
 MERGED_FROM_KEY: Final = "merged_from"
 """The survivor frontmatter key holding the reversibility ledger (ADR-0002):
 an ordinary OKF data key, not a new file type, per §4.1 tolerance."""
+
+EXTRACTION_STATUS_KEY: Final = "extraction_status"
+"""The optional frontmatter key a Source concept carries WHEN a single
+`ingest` run wrote zero derived objects (issue #187); ABSENT when at least
+one derived object was written -- no `ok`/`none` sentinel, so absence means
+exactly one thing: healthy. Stamped onto freshly built content only, never
+merged onto on-disk frontmatter (a merge would make a stale marker sticky
+forever); never read back from disk by any writer, unlike `sensitivity`
+(#229)."""
+
+ExtractionStatus = Literal[
+    "no-extractable-text", "blocked-by-sensitivity", "failed", "no-concepts-found"
+]
+"""The closed four-token vocabulary for `EXTRACTION_STATUS_KEY`, keyed on
+WHY extraction produced nothing rather than on which gate condition fired.
+Only `"failed"` is retryable debt; the other three are deliberate policy or
+simply nothing to extract."""
+
+EXTRACTION_STATUS_VALUES: Final[tuple[ExtractionStatus, ...]] = get_args(
+    ExtractionStatus
+)
+"""For specs and tests, not a runtime validation gate -- the writer is typed
+via `ExtractionStatus`/mypy-strict, and readers match a single literal
+(`== EXTRACTION_STATUS_FAILED`) rather than membership-testing this tuple,
+so an unrecognized on-disk value is structurally ignored."""
+
+EXTRACTION_STATUS_FAILED: Final[ExtractionStatus] = "failed"
+"""The one `EXTRACTION_STATUS_VALUES` member that represents retryable
+debt (an LLM backend error) -- the only value `lint`'s `check_unextracted`
+flags."""
 
 MERGE_LEDGER_SCHEMA_V1: Final = "openkos.merge_ledger/v1"
 """The `schema` value every pre-slice-2a `merged_from` entry carries -- a
@@ -91,6 +121,7 @@ def build_source_concept(
     sensitivity: str,
     provenance: list[str],
     raw_content: str | None = None,
+    extraction_status: ExtractionStatus | None = None,
 ) -> str:
     """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
 
@@ -110,6 +141,13 @@ def build_source_concept(
     `None` (a decode failure) renders a short note that the content could
     not be embedded as text; blank/whitespace-only text renders a distinct
     "source is empty" note. All three end with `# Citations`.
+
+    `extraction_status` (issue #187) is emitted as `EXTRACTION_STATUS_KEY`
+    ONLY when not `None`; the default `None` keeps a healthy Source's
+    frontmatter byte-identical to before this parameter existed. Callers
+    stamp this onto freshly built content -- never merge it onto an
+    already-built document's frontmatter (that would make a stale marker
+    sticky forever).
     """
     metadata: dict[str, object] = {
         "type": "Source",
@@ -124,6 +162,8 @@ def build_source_concept(
         "sensitivity": sensitivity,
         "provenance": provenance,
     }
+    if extraction_status is not None:
+        metadata[EXTRACTION_STATUS_KEY] = extraction_status
     if raw_content is None:
         section = (
             "_Source content could not be embedded as text "

@@ -616,6 +616,42 @@ def test_build_source_concept_empty_source_note() -> None:
     assert "could not be embedded as text" not in body
 
 
+def test_extraction_status_vocabulary_constants() -> None:
+    """`EXTRACTION_STATUS_KEY`, `ExtractionStatus`, `EXTRACTION_STATUS_VALUES`,
+    and `EXTRACTION_STATUS_FAILED` exist with the closed four-token
+    vocabulary (design: Vocabulary placement)."""
+    assert okf.EXTRACTION_STATUS_KEY == "extraction_status"
+    assert okf.EXTRACTION_STATUS_VALUES == (
+        "no-extractable-text",
+        "blocked-by-sensitivity",
+        "failed",
+        "no-concepts-found",
+    )
+    assert okf.EXTRACTION_STATUS_FAILED == "failed"
+
+
+def test_build_source_concept_omits_extraction_status_by_default() -> None:
+    """`extraction_status` defaults to `None`, and the key is entirely
+    absent from the emitted frontmatter -- the healthy-path output stays
+    byte-identical to before this key existed (design: write-side typed,
+    absence means healthy)."""
+    text = _build_call_source()
+
+    assert "extraction_status" not in text
+
+
+def test_build_source_concept_emits_each_extraction_status() -> None:
+    """Passing a non-`None` `extraction_status` stamps the exact token onto
+    the emitted frontmatter, for every value in the closed vocabulary
+    (design: Vocabulary placement, parametrized x4)."""
+    for value in okf.EXTRACTION_STATUS_VALUES:
+        text = _build_call_source(extraction_status=value)
+
+        metadata, _ = okf.load_frontmatter(text)
+
+        assert metadata["extraction_status"] == value
+
+
 def _build_call_concept(**overrides: object) -> str:
     """Build a derived Concept/Entity document with realistic defaults,
     letting tests override individual keyword arguments -- mirrors
