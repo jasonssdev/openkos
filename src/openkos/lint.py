@@ -19,6 +19,7 @@ from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
 
 from openkos import config
+from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf, types
 
 
@@ -79,6 +80,23 @@ class LintDoc:
     #187). `openkos ingest` sets this to `raw/<name>` on every Source; it
     is the input `check_unextracted` names in its retry command detail."""
 
+    sensitivity: str = ""
+    """The doc's frontmatter `sensitivity` field, or `""` if absent
+    (#231, PR2). Defaulted like `extraction_status`/`resource` (#187):
+    `tests/unit/resolution/test_volatility_typing.py:612` constructs
+    `LintDoc` with only the seven non-defaulted fields above. Feeds
+    `check_below_source_sensitivity`'s `okf.combine_sensitivity` comparison
+    -- a missing/blank value ranks fail-closed (ADR-0003), never crashes."""
+
+    provenance: tuple[str, ...] = ()
+    """This doc's `provenance:` frontmatter list, `.md`-stripped to the
+    same canonical shape as `identity`/`relations` (#231, PR2). Defaults to
+    `()` for the same reason `relations` does. Feeds
+    `check_below_source_sensitivity`'s closure-membership computation via
+    `bundle.provenance.provenance_closure` -- never rendered into
+    write-ready content (design D2: `LintDoc` keeps `body` only, not the
+    full file text `resolve_source_raises` would need)."""
+
 
 @dataclass(frozen=True)
 class LintFinding:
@@ -101,6 +119,16 @@ class LintReport:
     orphans: list[LintFinding]
     dangling: list[LintFinding] = field(default_factory=list)
     unextracted: list[LintFinding] = field(default_factory=list)
+    below_source: list[LintFinding] = field(default_factory=list)
+    """`"below-source-sensitivity"` findings (#231, PR2): a descendant
+    inside exactly one `type: Source` closure whose `sensitivity` differs
+    from `okf.combine_sensitivity(descendant, source_level)` -- exactly
+    what `backfill-sensitivity` would stage as a write."""
+    multi_source_uncovered: list[LintFinding] = field(default_factory=list)
+    """`"multi-source-uncovered"` findings (#231, PR2): a doc with
+    non-empty `provenance` that is a member of no single-Source closure and
+    whose `sensitivity` sits below the high-water-mark of its cited
+    concepts' levels -- explicitly NOT covered by `backfill-sensitivity`."""
     notices: list[str] = field(default_factory=list)
 
 
@@ -148,6 +176,12 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
         except ValueError:
             skip_notices.append(f"{identity}.md: skipped (invalid relations)")
             continue
+        raw_provenance = metadata.get("provenance")
+        provenance = (
+            tuple(str(entry).removesuffix(".md") for entry in raw_provenance)
+            if isinstance(raw_provenance, list)
+            else ()
+        )
         docs.append(
             LintDoc(
                 path=scan.path,
@@ -160,6 +194,8 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
                 relations=relations,
                 extraction_status=str(metadata.get("extraction_status", "")),
                 resource=str(metadata.get("resource", "")),
+                sensitivity=str(metadata.get("sensitivity", "")),
+                provenance=provenance,
             )
         )
     return docs, skip_notices
@@ -578,4 +614,131 @@ def check_unextracted(docs: list[LintDoc]) -> list[LintFinding]:
                 detail=f"concept extraction failed during ingest — {retry_hint}",
             )
         )
+    return findings
+
+
+def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
+    """Flag descendants a `backfill-sensitivity` sweep would raise, and docs
+    its per-Source closure basis cannot reach (#231, PR2, design D2/D3).
+
+    Takes ONLY `docs` -- no `bundle_dir` parameter -- the SAME structural
+    no-fifth-walk guard `check_dangling_targets`/`check_unextracted` follow
+    (`lint.py:556-560`): a function that never receives a directory is
+    incapable of opening a walk. Reuses the SAME closure algorithm and rank
+    comparator the sweep uses,
+    `bundle.provenance.provenance_closure` plus `okf.combine_sensitivity`
+    -- NEVER `bundle.provenance.resolve_source_raises`, which returns
+    `okf.DescendantRaise.content`, requiring the full file text plus a
+    metadata dict that `LintDoc` does not keep (design D2; `LintDoc` keeps
+    `body` only).
+
+    Both finding kinds share one basis: CLOSURE MEMBERSHIP, computed once
+    from every `type: Source` doc's `provenance_closure` over a map built
+    from `LintDoc.provenance` alone.
+
+    - `"below-source-sensitivity"`: `doc.identity` is in the closure of
+      EXACTLY ONE Source root, and `okf.combine_sensitivity(doc.sensitivity,
+      source.sensitivity)` differs from `doc.sensitivity` -- the identical
+      test the sweep uses to stage a write, so a missing, blank, or
+      unrecognized `sensitivity` is ranked fail-closed (ADR-0003) and IS
+      flagged even though it does not "strictly rank below".
+    - `"multi-source-uncovered"`: `doc.provenance` is non-empty, every cited
+      id resolves to a doc in `docs`, `doc.identity` is a member of NO
+      single-Source closure, and `doc.sensitivity` sits strictly below the
+      high-water-mark of its cited concepts' levels (folded via repeated
+      `okf.combine_sensitivity`, never `okf._rank` -- ADR-0003 keeps that
+      helper private). Its detail names the descendant, its current level,
+      and every cited concept id with that concept's level, and marks the
+      finding as not covered by `backfill-sensitivity`.
+
+    A doc citing 2+ concepts that all fall inside ONE Source's closure is a
+    member of that single closure and is therefore
+    `"below-source-sensitivity"`, never `"multi-source-uncovered"` (design
+    D3 exclusion -- `query --save`'s two-output rule writes such docs
+    routinely). A doc citing any unresolvable id falls into NEITHER
+    category (fail-safe; it already surfaces separately as the `dangling`
+    finding).
+    """
+    docs_by_id = {doc.identity: doc for doc in docs}
+    provenance_by_id = {
+        doc.identity: frozenset(doc.provenance) for doc in docs if doc.provenance
+    }
+    sources = [doc for doc in docs if doc.type == "Source"]
+
+    # `membership[descendant_id]` collects every Source id whose closure
+    # contains `descendant_id` (the root itself excluded from its own
+    # closure, matching `resolve_source_raises`'s "a root is never its own
+    # descendant" rule -- design D6).
+    membership: dict[str, set[str]] = {}
+    for source in sources:
+        closure = bundle_provenance.provenance_closure(
+            provenance_by_id, root_ids={source.identity}
+        )
+        for member_id in closure:
+            if member_id == source.identity:
+                continue
+            membership.setdefault(member_id, set()).add(source.identity)
+
+    findings: list[LintFinding] = []
+
+    for member_id in sorted(membership):
+        source_ids = membership[member_id]
+        if len(source_ids) != 1:
+            continue  # not a member of exactly one Source's closure
+        doc = docs_by_id[member_id]
+        (source_id,) = source_ids
+        source_level = docs_by_id[source_id].sensitivity
+        new_level = okf.combine_sensitivity(doc.sensitivity, source_level)
+        if new_level == doc.sensitivity:
+            continue  # already covered -- nothing the sweep would stage
+        findings.append(
+            LintFinding(
+                kind="below-source-sensitivity",
+                path=f"{doc.identity}.md",
+                detail=(
+                    f"sensitivity {doc.sensitivity!r} is below Source "
+                    f"'{source_id}' ({source_level!r}); `openkos "
+                    f"backfill-sensitivity` would raise it to {new_level!r}"
+                ),
+            )
+        )
+
+    for doc in docs:
+        if not doc.provenance:
+            continue
+        source_ids = membership.get(doc.identity, set())
+        if len(source_ids) == 1:
+            continue  # covered by below-source-sensitivity above
+
+        cited_levels: list[tuple[str, str]] = []
+        for cited_id in doc.provenance:
+            cited_doc = docs_by_id.get(cited_id)
+            if cited_doc is None:
+                cited_levels = []
+                break
+            cited_levels.append((cited_id, cited_doc.sensitivity))
+        if not cited_levels:
+            continue  # an unresolvable cite falls into neither category
+
+        high_water = cited_levels[0][1]
+        for _, level in cited_levels[1:]:
+            high_water = okf.combine_sensitivity(high_water, level)
+        if okf.combine_sensitivity(doc.sensitivity, high_water) == doc.sensitivity:
+            continue  # already at or above the high-water-mark
+
+        cited_detail = ", ".join(
+            f"{cited_id!r} ({level!r})" for cited_id, level in cited_levels
+        )
+        findings.append(
+            LintFinding(
+                kind="multi-source-uncovered",
+                path=f"{doc.identity}.md",
+                detail=(
+                    f"sensitivity {doc.sensitivity!r} is not covered by "
+                    f"`openkos backfill-sensitivity` (member of no single "
+                    f"Source's closure); cites: {cited_detail}"
+                ),
+            )
+        )
+
     return findings
