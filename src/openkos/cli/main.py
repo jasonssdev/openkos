@@ -3484,6 +3484,185 @@ def set_sensitivity_cmd(
     )
 
 
+@app.command("backfill-sensitivity")
+def backfill_sensitivity_cmd(
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Dedicated, raise-only, bundle-wide sweep that closes the sensitivity
+    gap left by bundles or descendants created before Source-to-descendant
+    propagation existed (issue #219/#231). Wires the pure
+    `bundle.provenance.resolve_backfill_raises` sweep core (design D4/D5)
+    into Typer's confirm-gate and write scaffold, mirroring
+    `set_sensitivity_cmd`'s Phase A/Phase B shape exactly.
+
+    Unlike `set-sensitivity`, this command takes no `<concept-id>`
+    argument -- it treats every `type: Source` concept in the bundle as an
+    independent closure root in a single pass. It is bundle-wide only;
+    `set-sensitivity` already covers the single-Source case. There is no
+    `--allow-downgrade` equivalent: the sweep is raise-only by construction
+    and never lowers a descendant. There is no `--dry-run` flag either --
+    the preview shown before confirmation, or declining the prompt, already
+    serves as the dry run (spec Non-Goals).
+
+    Phase A: `require_workspace` -> `read_config` -> one `sorted(rglob)`
+    bundle snapshot (reserved filenames skipped) -> `resolve_backfill_raises`
+    computes every merged-by-max raise across every Source (design D4/D5).
+    When the result is empty, this prints an explicit "nothing to
+    backfill" message, writes nothing, creates no commit, and exits 0 --
+    idempotent by construction, since a second run over an already-swept
+    bundle recomputes zero raises. Otherwise, one preview lists every
+    staged `(concept_id, current -> new_level)` raise (sorted by
+    `concept_id`, matching `resolve_backfill_raises`'s own order), then the
+    confirm gate mirrors `set_sensitivity_cmd`'s exact precedence: `--auto`
+    skips it; otherwise config `review: false` skips it; otherwise a TTY
+    prompts via `typer.confirm` and aborts on decline; otherwise (non-TTY,
+    no `--auto`) this refuses to write.
+
+    Deliberately does NOT call `find_unresolvable_provenance` (design D8):
+    every Source cites its raw `resource`, which never resolves to a bundle
+    id, so a bundle-wide run would emit one WARNING per Source on every
+    invocation, including the no-op path above. That signal is delivered by
+    `lint`'s existing `dangling` finding, never this sweep.
+
+    Phase B writes every merged raise (sorted by `concept_id`), then
+    appends exactly one dated `log.md` entry summarizing the whole sweep,
+    then issues exactly one `_autocommit` covering every changed path.
+    There is no cross-file rollback (matching `set-sensitivity`/`relate`/
+    `merge`): a mid-way failure leaves the bundle over-classified, never
+    under-classified, and the failure message names every path already
+    written before the failure (design D9, mirrors the #233 fix). Any
+    failure, Phase A or Phase B, is caught (`OSError`/`ValueError`) and
+    reported on stderr (exit 1), never a raw traceback.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            raise ValueError(workspace_reason)
+        cfg = config.read_config(root)
+
+        bundle_snapshot: dict[str, str] = {}
+        for path in sorted(layout.bundle_dir.rglob("*.md")):
+            if path.name in okf.RESERVED_FILENAMES:
+                continue
+            rel = path.relative_to(layout.bundle_dir).as_posix()
+            bundle_snapshot[rel] = path.read_text(encoding="utf-8")
+
+        descendant_raises = bundle_provenance.resolve_backfill_raises(bundle_snapshot)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos backfill-sensitivity: refusing to run -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if not descendant_raises:
+        typer.echo(
+            "openkos backfill-sensitivity: nothing to backfill -- every "
+            "provenance descendant already meets or exceeds its Source's "
+            "sensitivity."
+        )
+        return
+
+    confirm_enabled = not auto and cfg.review
+    prompt_will_run = confirm_enabled and sys.stdin.isatty()
+
+    now = datetime.now(UTC)
+    try:
+        log_text = log_path.read_text(encoding="utf-8")
+        propagated = ", ".join(
+            f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
+            for descendant_raise in descendant_raises
+        )
+        log_line = (
+            f"**Backfill-sensitivity**: Raised {len(descendant_raises)} "
+            f"provenance descendant(s) to match their Source's sensitivity: "
+            f"{propagated}."
+        )
+        new_log_text = bundle_log.insert_log_entry(
+            log_text, now.astimezone().date(), log_line
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos backfill-sensitivity: failed while preparing the "
+            f"backfill-sensitivity -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos backfill-sensitivity: proposed changes:")
+    for descendant_raise in descendant_raises:
+        typer.echo(
+            f"  ~ bundle/{descendant_raise.concept_id}.md (sensitivity: "
+            f"raising {descendant_raise.current!r} -> "
+            f"{descendant_raise.new_level})"
+        )
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+
+    if confirm_enabled:
+        if prompt_will_run:
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos backfill-sensitivity: refusing to write without "
+                "confirmation -- stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    landed: list[str] = []
+    try:
+        # Write order: every staged descendant raise, then `log.md`
+        # (design D4 Phase B). `landed` records each path only AFTER its
+        # `write_atomic` call returns, so a failure names exactly the
+        # paths already on disk (design D9, mirrors #233).
+        for descendant_raise in descendant_raises:
+            descendant_path = f"bundle/{descendant_raise.concept_id}.md"
+            fsio.write_atomic(
+                layout.bundle_dir / f"{descendant_raise.concept_id}.md",
+                descendant_raise.content,
+            )
+            landed.append(descendant_path)
+        fsio.write_atomic(log_path, new_log_text)
+        landed.append("bundle/log.md")
+    except (OSError, ValueError) as exc:
+        landed_suffix = (
+            f"Already written (left over-classified, not rolled back): "
+            f"{', '.join(landed)}."
+            if landed
+            else "No path was written."
+        )
+        typer.echo(
+            f"openkos backfill-sensitivity: failed while writing the "
+            f"backfill-sensitivity -- {exc}. {landed_suffix}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    propagated = ", ".join(
+        f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
+        for descendant_raise in descendant_raises
+    )
+    typer.echo(
+        f"openkos backfill-sensitivity: raised {len(descendant_raises)} "
+        f"provenance descendant(s) ({log_path.name} updated): {propagated}."
+    )
+
+    _autocommit(
+        root,
+        [
+            f"bundle/{descendant_raise.concept_id}.md"
+            for descendant_raise in descendant_raises
+        ]
+        + ["bundle/log.md"],
+        "openkos: backfill-sensitivity",
+    )
+
+
 @app.command("set-volatility")
 def set_volatility_cmd(
     concept_type: str = typer.Argument(
