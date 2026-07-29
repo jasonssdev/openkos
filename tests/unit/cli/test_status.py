@@ -431,6 +431,124 @@ def test_status_unextracted_reuses_the_single_collect_docs_call(
     assert "openkos ingest raw/notes.txt" in result.stdout
 
 
+# --- issue #231 (PR2): below-source-sensitivity / multi-source-uncovered ---
+
+
+def test_status_lists_below_source_sensitivity_under_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A descendant the `backfill-sensitivity` sweep would raise is listed
+    under "needs attention", labeled `below-source-sensitivity` distinctly,
+    and `status` still exits 0 (design D3; #231)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Needs attention:", 1)[1]
+    assert "concepts/derived.md" in section
+    assert "below-source-sensitivity" in section
+
+
+def test_status_marks_multi_source_uncovered_as_not_covered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A doc that is a member of no single-Source closure is listed under
+    "needs attention", labeled `multi-source-uncovered` and explicitly
+    marked as not covered by `backfill-sensitivity`, and `status` still
+    exits 0 (design D3; #231)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: public\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "c.md").write_text(
+        "---\ntype: Source\ntitle: C\nresource: raw/c.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "from-c.md").write_text(
+        "---\ntype: Concept\ntitle: From C\nsensitivity: confidential\n"
+        "provenance:\n  - sources/c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "mixed.md").write_text(
+        "---\ntype: Concept\ntitle: Mixed\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n  - concepts/from-c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Needs attention:", 1)[1]
+    assert "concepts/mixed.md" in section
+    assert "multi-source-uncovered" in section
+    assert "not covered by" in section
+
+
+def test_status_below_source_reuses_the_single_collect_docs_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`status` calls `lint_check.collect_docs` exactly ONCE even with the
+    below-source-sensitivity / multi-source-uncovered checks wired in --
+    they reuse the SAME in-memory `docs` list already bound for
+    dangling-reference/unextracted findings (design D3: "No new bundle walk
+    is introduced")."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    calls = {"n": 0}
+    real = lint_check.collect_docs
+
+    def _counting_collect_docs(
+        bundle_dir: Path,
+    ) -> tuple[list[lint_check.LintDoc], list[str]]:
+        calls["n"] += 1
+        return real(bundle_dir)
+
+    monkeypatch.setattr(
+        "openkos.cli.main.lint_check.collect_docs", _counting_collect_docs
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert calls["n"] == 1
+    assert "concepts/derived.md" in result.stdout
+
+
 def test_status_surfaces_missing_vectors_db(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

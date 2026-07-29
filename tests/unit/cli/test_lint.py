@@ -408,6 +408,105 @@ def test_lint_ignores_blocked_by_sensitivity(
     assert "openkos ingest" not in result.stdout
 
 
+# --- issue #231 (PR2): below-source-sensitivity / multi-source-uncovered ---
+
+
+def test_lint_flags_below_source_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A descendant whose `sensitivity` the `backfill-sensitivity` sweep
+    would raise (per `okf.combine_sensitivity`) is reported under a
+    distinct below-source-sensitivity section, and `lint` still exits 0
+    (design D3; #231)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Below-source sensitivity:" in result.stdout
+    section = result.stdout.split("Below-source sensitivity:", 1)[1]
+    section = section.split("Multi-source uncovered:", 1)[0]
+    assert "concepts/derived.md" in section
+
+
+def test_lint_flags_multi_source_uncovered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A doc citing one Source plus a concept derived from a DIFFERENT
+    Source is a member of no single-Source closure and is reported as
+    `multi-source-uncovered`, marked as not covered by
+    `backfill-sensitivity` (design D3; #231)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: public\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "c.md").write_text(
+        "---\ntype: Source\ntitle: C\nresource: raw/c.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "from-c.md").write_text(
+        "---\ntype: Concept\ntitle: From C\nsensitivity: confidential\n"
+        "provenance:\n  - sources/c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "mixed.md").write_text(
+        "---\ntype: Concept\ntitle: Mixed\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n  - concepts/from-c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Multi-source uncovered:" in result.stdout
+    section = result.stdout.split("Multi-source uncovered:", 1)[1]
+    assert "concepts/mixed.md" in section
+    assert "not covered by" in section
+    # `concepts/from-c` is below-source-sensitivity (single-Source closure
+    # member), not multi-source-uncovered -- it must not appear here.
+    assert "concepts/from-c.md" not in section
+
+
+def test_lint_clean_bundle_reports_zero_below_source_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle reports zero below-source-sensitivity /
+    multi-source-uncovered findings; `lint` still exits 0 and creates no
+    file (design D3; #231)."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Below-source sensitivity:" in result.stdout
+    assert "  No below-source sensitivity findings." in result.stdout
+    assert "Multi-source uncovered:" in result.stdout
+    assert "  No multi-source uncovered findings." in result.stdout
+    assert _snapshot(tmp_path) == before
+
+
 def test_lint_never_writes_to_the_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
