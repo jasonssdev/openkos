@@ -238,7 +238,12 @@ post-write success message. `--auto` MUST still perform propagation; it
 MUST only skip the confirmation prompt. A provenance reference that cannot
 be resolved to an existing concept MUST emit a warning, MUST be excluded
 from propagation, and MUST NOT abort or block the write to the named
-Source concept itself.
+Source concept itself. WHEN a partial write failure occurs after one or
+more descendant raises have already landed, the command MUST NOT roll back
+any already-written file and its failure message MUST name every path that
+already landed before the failure.
+(Previously: the partial-write-failure message named none of the paths that
+already landed.)
 
 #### Scenario: Raising a Source raises every derived object in the same run
 
@@ -287,3 +292,13 @@ Source concept itself.
 - WHEN `set-sensitivity <source-id> <higher-level> --auto` runs
 - THEN both concepts are written without any confirmation prompt, and both
   appear in the success message
+
+#### Scenario: Partial write failure names every path that already landed (#233)
+
+- GIVEN a Source raise staging writes for three derived concepts, where the
+  write fails after the first two land but before the third
+- WHEN `set-sensitivity <source-id> <higher-level>` runs and the failure
+  occurs
+- THEN the command exits non-zero, the first two derived concept files
+  remain raised on disk, and the failure message names both of their paths
+  explicitly
