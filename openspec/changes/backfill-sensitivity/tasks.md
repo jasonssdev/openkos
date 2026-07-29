@@ -53,32 +53,32 @@ Chain strategy: stacked-to-main
 
 ## Phase 6: RED — pure detection function (PR2)
 
-- [ ] 6.1 Create `tests/unit/test_lint_below_source.py`: hand-built `LintDoc` lists for both categories — single-Source below trigger via `combine_sensitivity` inequality (incl. missing/dirty `sensitivity` fail-closed under a `public` Source); same-Source multi-cite is covered (`below-source-sensitivity`, not uncovered); Source-plus-foreign-derived cite is `multi-source-uncovered`; unresolvable cite falls into neither category
-- [ ] 6.2 Add a construction test asserting `LintDoc(*seven_non_defaulted_fields)` still constructs without `sensitivity`/`provenance` (guards `tests/unit/resolution/test_volatility_typing.py:612`)
-- [ ] 6.3 Confirm 6.1/6.2 fail RED (fields/function do not exist yet)
+- [x] 6.1 Create `tests/unit/test_lint_below_source.py`: hand-built `LintDoc` lists for both categories — single-Source below trigger via `combine_sensitivity` inequality (incl. missing/dirty `sensitivity` fail-closed under a `public` Source); same-Source multi-cite is covered (`below-source-sensitivity`, not uncovered); Source-plus-foreign-derived cite is `multi-source-uncovered`; unresolvable cite falls into neither category
+- [x] 6.2 Add a construction test asserting `LintDoc(*seven_non_defaulted_fields)` still constructs without `sensitivity`/`provenance` (guards `tests/unit/resolution/test_volatility_typing.py:612`)
+- [x] 6.3 Confirm 6.1/6.2 fail RED (fields/function do not exist yet)
 
 ## Phase 7: GREEN — LintDoc fields + check_below_source_sensitivity (PR2)
 
-- [ ] 7.1 Add `sensitivity: str = ""` and `provenance: tuple[str, ...] = ()` (`.md`-stripped) to `LintDoc`, defaulted like `extraction_status`/`resource`; fill both in `collect_docs` (`lint.py:140-164`) from already-parsed frontmatter
-- [ ] 7.2 Add `below_source: list[LintFinding]` and `multi_source_uncovered: list[LintFinding]` fields to `LintReport`
-- [ ] 7.3 Implement `check_below_source_sensitivity(docs) -> list[LintFinding]` in `lint.py`, taking only `docs` (no-fifth-walk guard, `lint.py:556-560`): builds the closure map from `LintDoc.provenance`, calls `bundle.provenance.provenance_closure` and `okf.combine_sensitivity`; emits `below-source-sensitivity` (single-Source closure member, `combine_sensitivity` inequality) and `multi-source-uncovered` (non-empty provenance, all cited ids resolve, no single-Source closure membership, sensitivity below cited high-water-mark)
-- [ ] 7.4 Run `uv run pytest tests/unit/test_lint_below_source.py` — GREEN
+- [x] 7.1 Add `sensitivity: str = ""` and `provenance: tuple[str, ...] = ()` (`.md`-stripped) to `LintDoc`, defaulted like `extraction_status`/`resource`; fill both in `collect_docs` (`lint.py:140-164`) from already-parsed frontmatter
+- [x] 7.2 Add `below_source: list[LintFinding]` and `multi_source_uncovered: list[LintFinding]` fields to `LintReport`
+- [x] 7.3 Implement `check_below_source_sensitivity(docs) -> list[LintFinding]` in `lint.py`, taking only `docs` (no-fifth-walk guard, `lint.py:556-560`): builds the closure map from `LintDoc.provenance`, calls `bundle.provenance.provenance_closure` and `okf.combine_sensitivity`; emits `below-source-sensitivity` (single-Source closure member, `combine_sensitivity` inequality) and `multi-source-uncovered` (non-empty provenance, all cited ids resolve, no single-Source closure membership, sensitivity below cited high-water-mark)
+- [x] 7.4 Run `uv run pytest tests/unit/test_lint_below_source.py` — GREEN
 
 ## Phase 8: RED — lint/status wiring (PR2)
 
-- [ ] 8.1 Add scenarios to `tests/unit/test_lint.py`: `below-source-sensitivity`/`multi-source-uncovered` findings surface via `openkos lint`; exit code stays 0; clean bundle reports zero findings; no bundle file created/modified/deleted
-- [ ] 8.2 Add scenarios to `tests/unit/test_status.py`: both categories surface under "needs attention", labeled distinctly, `multi-source-uncovered` marked not covered by `backfill-sensitivity`; still exits 0; no second `collect_docs()` call (reuse the existing `docs` list)
-- [ ] 8.3 Confirm 8.1/8.2 fail RED (wiring not present)
+- [x] 8.1 Add scenarios to `tests/unit/cli/test_lint.py` (actual CLI-wiring test file; see Deviations from Design): `below-source-sensitivity`/`multi-source-uncovered` findings surface via `openkos lint`; exit code stays 0; clean bundle reports zero findings; no bundle file created/modified/deleted
+- [x] 8.2 Add scenarios to `tests/unit/cli/test_status.py` (actual CLI-wiring test file; see Deviations from Design): both categories surface under "needs attention", labeled distinctly, `multi-source-uncovered` marked not covered by `backfill-sensitivity`; still exits 0; no second `collect_docs()` call (reuse the existing `docs` list)
+- [x] 8.3 Confirm 8.1/8.2 fail RED (wiring not present)
 
 ## Phase 9: GREEN — wire into lint/status (PR2)
 
-- [ ] 9.1 Call `check_below_source_sensitivity(docs)` in `lint` (`main.py:5352`), split its results into `LintReport.below_source`/`.multi_source_uncovered`, render findings, exit code unchanged
-- [ ] 9.2 Reuse the same `docs` list in `status` (`main.py:5108`) to surface both categories under "needs attention"
-- [ ] 9.3 Run `uv run pytest tests/unit/test_lint_below_source.py tests/unit/test_lint.py tests/unit/test_status.py` — all GREEN
+- [x] 9.1 Call `check_below_source_sensitivity(docs)` in `lint` (`main.py:5352`), split its results into `LintReport.below_source`/`.multi_source_uncovered`, render findings, exit code unchanged
+- [x] 9.2 Reuse the same `docs` list in `status` (`main.py:5108`) to surface both categories under "needs attention"
+- [x] 9.3 Run `uv run pytest tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py tests/unit/cli/test_status.py` — all GREEN
 
 ## Phase 10: PR2 checkpoint
 
-- [ ] 10.1 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean on touched files
+- [x] 10.1 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean on touched files
 
 ## Phase 11: RED — backfill-sensitivity CLI tests (PR3)
 
