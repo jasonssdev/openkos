@@ -93,9 +93,18 @@ MERGE_LEDGER_SCHEMA_V2: Final = "openkos.merge_ledger/v2"
 """The `schema` value every `merged_from` entry written from slice 2a
 onward carries (design D1; ADR-0005): the ONLY additive change from V1 is
 the REQUIRED `relation_rewrites` key (whole-file third-party snapshots for
-inbound typed-relation retargets). `plan_merge` always writes V2; the
-reader accepts both V1 and V2 (spec: "Pre-slice-2a v1 ledger entry still
-unmerges exactly")."""
+inbound typed-relation retargets). Superseded by `MERGE_LEDGER_SCHEMA_V3`;
+the reader still accepts V1 and V2 (spec: "Pre-slice-2a v1 ledger entry
+still unmerges exactly")."""
+
+MERGE_LEDGER_SCHEMA_V3: Final = "openkos.merge_ledger/v3"
+"""The `schema` value every `merged_from` entry written from
+rewrite-provenance-on-merge onward carries (design; ADR-0011): the ONLY
+additive change from V2 is the REQUIRED `provenance_rewrites` key
+(whole-file third-party snapshots for inbound `provenance:` retargets/
+dedupes). `plan_merge` always writes V3; the reader accepts V1, V2, and V3
+(spec: "A v1 and a v2 ledger entry are still readable after the v3
+bump")."""
 
 
 def dump_frontmatter(metadata: dict[str, object], body: str = "") -> str:
@@ -359,6 +368,23 @@ class RelationRewrite:
 
 
 @dataclass(frozen=True)
+class ProvenanceRewrite:
+    """One third-party file's whole-file pre-merge snapshot, recorded when
+    that file's `provenance:` targeted the absorbed id (design;
+    rewrite-provenance-on-merge; spec: "Reversible Inbound-Provenance
+    Rewiring").
+
+    Mirrors `RelationRewrite` exactly: `snapshot` is the file's FULL
+    verbatim bytes immediately BEFORE this merge -- `provenance:` is a YAML
+    list field with no stable disambiguating position analogous to a link
+    occurrence, so `bundle/provenance.py::reverse_provenance_rewrites`
+    always restores by ABSOLUTE whole-file overwrite, never offset math."""
+
+    file: str
+    snapshot: str
+
+
+@dataclass(frozen=True)
 class MergeLedgerEntry:
     """One `merged_from` list entry: the FULL pre-merge snapshot set for one
     absorbed object (spec: Reversibility Ledger; ADR-0002).
@@ -383,8 +409,14 @@ class MergeLedgerEntry:
     dropped as a self-loop, or deduped by this merge. It defaults to `[]`
     so every pre-slice-2a (v1) construction of this dataclass -- including
     every existing test helper -- keeps working unchanged; `plan_merge`
-    (task 2.10) always populates it explicitly and always writes
-    `MERGE_LEDGER_SCHEMA_V2`."""
+    always populates it explicitly.
+
+    `provenance_rewrites` (v3 addition, rewrite-provenance-on-merge) holds
+    one whole-file snapshot per third-party file whose `provenance:` was
+    retargeted or deduped by this merge. It defaults to `[]` for the same
+    backward-compatibility reason as `relation_rewrites`; `plan_merge`
+    always populates it explicitly and always writes
+    `MERGE_LEDGER_SCHEMA_V3`."""
 
     schema: str
     merged_at: str
@@ -397,6 +429,7 @@ class MergeLedgerEntry:
     sensitivity_before: str
     sensitivity_after: str
     relation_rewrites: list[RelationRewrite] = field(default_factory=list)
+    provenance_rewrites: list[ProvenanceRewrite] = field(default_factory=list)
 
 
 def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
@@ -412,11 +445,22 @@ def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
     key, so silently encoding it here would let it round-trip to `[]`
     without any signal. Raising here, rather than silently dropping the
     field to match, surfaces the construction bug at its source instead of
-    at a much later, harder-to-trace decode."""
+    at a much later, harder-to-trace decode.
+
+    A SECOND, mirrored guard (rewrite-provenance-on-merge) fails closed when
+    `entry.schema` is V1 OR V2 and `entry.provenance_rewrites` is non-empty:
+    neither schema's decoder reads `provenance_rewrites` (only V3 does), so
+    the same silent-round-trip-loss risk applies -- only V3 may carry a
+    non-empty `provenance_rewrites`."""
     if entry.schema == MERGE_LEDGER_SCHEMA_V1 and entry.relation_rewrites:
         raise ValueError(
             "a MERGE_LEDGER_SCHEMA_V1 entry must not carry relation_rewrites"
         )
+    if (
+        entry.schema in (MERGE_LEDGER_SCHEMA_V1, MERGE_LEDGER_SCHEMA_V2)
+        and entry.provenance_rewrites
+    ):
+        raise ValueError(f"a {entry.schema} entry must not carry provenance_rewrites")
     return {
         "schema": entry.schema,
         "merged_at": entry.merged_at,
@@ -438,6 +482,10 @@ def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
         "sensitivity_after": entry.sensitivity_after,
         "relation_rewrites": [
             {"file": rr.file, "snapshot": rr.snapshot} for rr in entry.relation_rewrites
+        ],
+        "provenance_rewrites": [
+            {"file": pr.file, "snapshot": pr.snapshot}
+            for pr in entry.provenance_rewrites
         ],
     }
 
@@ -483,19 +531,36 @@ def _decode_relation_rewrite(raw: object) -> RelationRewrite:
         raise ValueError(f"relation_rewrites entry missing field {exc}") from exc
 
 
+def _decode_provenance_rewrite(raw: object) -> ProvenanceRewrite:
+    """Parse one `provenance_rewrites` list item back into a
+    `ProvenanceRewrite`, failing closed (`ValueError`) on anything malformed
+    -- mirrors `_decode_relation_rewrite`."""
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"provenance_rewrites entry must be a mapping, got {type(raw).__name__}"
+        )
+    try:
+        return ProvenanceRewrite(file=str(raw["file"]), snapshot=str(raw["snapshot"]))
+    except KeyError as exc:
+        raise ValueError(f"provenance_rewrites entry missing field {exc}") from exc
+
+
 def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
     """Parse one `merged_from` list item back into a `MergeLedgerEntry`,
     failing closed (`ValueError`) on any malformed or missing field -- a
     corrupt ledger entry must never be silently misread, since `unmerge`
     trusts it for byte-for-byte restoration.
 
-    `schema` branches (design D1): V1 -> `relation_rewrites` defaults to
-    `[]` regardless of whether the raw dict happens to carry that key (a
-    genuine pre-slice-2a entry never has it at all -- spec: "Pre-slice-2a
-    v1 ledger entry still unmerges exactly"); V2 -> the `relation_rewrites`
-    key is REQUIRED, and its absence (or a malformed item within it) fails
-    closed exactly like any other required V2 field; any other schema
-    string is unsupported and rejected outright."""
+    `schema` branches (design D1, extended for v3): V1 -> `relation_rewrites`
+    and `provenance_rewrites` both default to `[]` regardless of whether the
+    raw dict happens to carry either key (a genuine pre-slice-2a entry never
+    has them at all -- spec: "Pre-slice-2a v1 ledger entry still unmerges
+    exactly"); V2 -> the `relation_rewrites` key is REQUIRED, and
+    `provenance_rewrites` defaults to `[]` (V2 entries predate that field);
+    V3 -> BOTH `relation_rewrites` and `provenance_rewrites` keys are
+    REQUIRED, and a missing key (or a malformed item within either) fails
+    closed exactly like any other required field; any other schema string is
+    unsupported and rejected outright."""
     if not isinstance(raw, dict):
         raise ValueError(
             f"merged_from entry must be a mapping, got {type(raw).__name__}"
@@ -503,11 +568,21 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
     try:
         schema = str(raw["schema"])
         relation_rewrites: list[RelationRewrite]
+        provenance_rewrites: list[ProvenanceRewrite]
         if schema == MERGE_LEDGER_SCHEMA_V1:
             relation_rewrites = []
+            provenance_rewrites = []
         elif schema == MERGE_LEDGER_SCHEMA_V2:
             relation_rewrites = [
                 _decode_relation_rewrite(item) for item in raw["relation_rewrites"]
+            ]
+            provenance_rewrites = []
+        elif schema == MERGE_LEDGER_SCHEMA_V3:
+            relation_rewrites = [
+                _decode_relation_rewrite(item) for item in raw["relation_rewrites"]
+            ]
+            provenance_rewrites = [
+                _decode_provenance_rewrite(item) for item in raw["provenance_rewrites"]
             ]
         else:
             raise ValueError(f"unsupported merged_from schema version: {schema!r}")
@@ -524,6 +599,7 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
             sensitivity_before=str(raw["sensitivity_before"]),
             sensitivity_after=str(raw["sensitivity_after"]),
             relation_rewrites=relation_rewrites,
+            provenance_rewrites=provenance_rewrites,
         )
     except KeyError as exc:
         raise ValueError(f"merged_from entry missing field {exc}") from exc

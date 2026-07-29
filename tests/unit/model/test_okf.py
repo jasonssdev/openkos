@@ -1525,12 +1525,12 @@ def test_merge_ledger_entry_round_trips_adversarial_snapshot_content(
 
 
 def test_decode_merge_ledger_entry_rejects_unsupported_schema_version() -> None:
-    """A `schema` value other than `MERGE_LEDGER_SCHEMA_V1`/`_V2` must be
-    rejected rather than silently reinterpreted as either -- ADR-0002's
-    "migrate rather than silently reinterpret" promise. (`v2` is now a
-    genuinely supported schema -- design D1/task 2.4 -- so this uses a
-    still-unsupported `v3` literal instead.)"""
-    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v3")
+    """A `schema` value other than `MERGE_LEDGER_SCHEMA_V1`/`_V2`/`_V3` must
+    be rejected rather than silently reinterpreted as any of them --
+    ADR-0002's "migrate rather than silently reinterpret" promise. (`v3` is
+    now a genuinely supported schema -- design D1/rewrite-provenance-on-merge
+    -- so this uses a still-unsupported `v4` literal instead.)"""
+    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v4")
 
     with pytest.raises(ValueError, match="unsupported merged_from schema version"):
         okf.decode_merged_from({"merged_from": [entry]})
@@ -1649,6 +1649,182 @@ def test_relation_rewrite_round_trips_through_frontmatter_losslessly() -> None:
 
     assert decoded == [entry]
     assert decoded[0].relation_rewrites == entry.relation_rewrites
+
+
+# -- Ledger v3: `provenance_rewrites` (rewrite-provenance-on-merge, tasks
+# 1.1-1.8) -------------------------------------------------------------
+
+
+def test_provenance_rewrite_round_trips_file_and_snapshot() -> None:
+    """`ProvenanceRewrite(file, snapshot)` round-trips through equality --
+    mirrors `RelationRewrite` (task 1.1)."""
+    rewrite = okf.ProvenanceRewrite(
+        file="concepts/other.md",
+        snapshot="---\ntype: Concept\nprovenance:\n- sources/absorbed\n---\nBody.\n",
+    )
+
+    assert rewrite.file == "concepts/other.md"
+    assert rewrite.snapshot == (
+        "---\ntype: Concept\nprovenance:\n- sources/absorbed\n---\nBody.\n"
+    )
+    assert rewrite == okf.ProvenanceRewrite(
+        file="concepts/other.md",
+        snapshot="---\ntype: Concept\nprovenance:\n- sources/absorbed\n---\nBody.\n",
+    )
+
+
+def test_merge_ledger_schema_v3_constant() -> None:
+    """`MERGE_LEDGER_SCHEMA_V3` exists as the schema value `plan_merge`
+    always writes going forward (task 1.1)."""
+    assert okf.MERGE_LEDGER_SCHEMA_V3 == "openkos.merge_ledger/v3"
+
+
+def test_encode_merge_ledger_entry_v1_schema_rejects_provenance_rewrites() -> None:
+    """The encode guard extends to `provenance_rewrites`: a V1 entry with a
+    non-empty `provenance_rewrites` must fail loudly at encode time (task
+    1.3), mirroring the existing V1 `relation_rewrites` guard."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V1,
+        provenance_rewrites=[
+            okf.ProvenanceRewrite(file="concepts/other.md", snapshot="text\n")
+        ],
+    )
+
+    with pytest.raises(ValueError, match="provenance_rewrites"):
+        okf.encode_merge_ledger_entry(entry)
+
+
+def test_encode_merge_ledger_entry_v2_schema_rejects_provenance_rewrites() -> None:
+    """The same guard applies to V2: a V2 entry must not carry
+    `provenance_rewrites` either -- only V3 introduces that field (task
+    1.3)."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V2,
+        relation_rewrites=[],
+        provenance_rewrites=[
+            okf.ProvenanceRewrite(file="concepts/other.md", snapshot="text\n")
+        ],
+    )
+
+    with pytest.raises(ValueError, match="provenance_rewrites"):
+        okf.encode_merge_ledger_entry(entry)
+
+
+def test_provenance_rewrite_round_trips_through_frontmatter_losslessly() -> None:
+    """A V3 ledger entry's `provenance_rewrites` round-trips losslessly
+    through `encode_merge_ledger_entry`/`encode_merged_from` ->
+    `dump_frontmatter` -> `load_frontmatter` -> `decode_merged_from` (task
+    1.5-1.6)."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        relation_rewrites=[],
+        provenance_rewrites=[
+            okf.ProvenanceRewrite(
+                file="concepts/other.md",
+                snapshot="---\ntype: Concept\n---\nOther body.\n",
+            ),
+            okf.ProvenanceRewrite(
+                file="concepts/third.md",
+                snapshot="---\ntype: Concept\nprovenance:\n"
+                "- absorbed-id\n---\nThird body.\n",
+            ),
+        ],
+    )
+
+    metadata: dict[str, object] = {"type": "Concept"}
+    metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter(metadata, "Survivor body.")
+
+    loaded_metadata, _ = okf.load_frontmatter(text)
+    decoded = okf.decode_merged_from(loaded_metadata)
+
+    assert decoded == [entry]
+    assert decoded[0].provenance_rewrites == entry.provenance_rewrites
+
+
+def test_decode_merge_ledger_entry_v3_schema_requires_provenance_rewrites_key() -> None:
+    """A V3-schema entry MUST carry the `provenance_rewrites` key --
+    omitting it fails closed, mirroring V2's `relation_rewrites` requirement
+    (task 1.5)."""
+    entry = _valid_encoded_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3, relation_rewrites=[]
+    )
+    del entry["provenance_rewrites"]
+
+    with pytest.raises(ValueError, match="missing field"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_decode_merge_ledger_entry_v3_schema_also_requires_relation_rewrites_key() -> (
+    None
+):
+    """V3 is additive over V2: `relation_rewrites` is STILL required on a V3
+    entry alongside `provenance_rewrites` (task 1.5)."""
+    entry = _valid_encoded_entry(schema=okf.MERGE_LEDGER_SCHEMA_V3)
+    del entry["relation_rewrites"]
+
+    with pytest.raises(ValueError, match="missing field"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_decode_merge_ledger_entry_v3_schema_rejects_malformed_provenance_rewrite_item() -> (
+    None
+):
+    """A malformed `provenance_rewrites` list item on a V3 entry fails
+    closed, mirroring `relation_rewrites`'s malformed-item guard (task
+    1.5)."""
+    entry = _valid_encoded_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        relation_rewrites=[],
+        provenance_rewrites=["not-a-dict"],
+    )
+
+    with pytest.raises(ValueError, match="provenance_rewrites entry must be a mapping"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_decode_merge_ledger_entry_v3_schema_rejects_provenance_rewrite_missing_field() -> (
+    None
+):
+    """A `provenance_rewrites` list item missing a required field fails
+    closed (task 1.5)."""
+    entry = _valid_encoded_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        relation_rewrites=[],
+        provenance_rewrites=[{"file": "concepts/other.md"}],
+    )
+
+    with pytest.raises(ValueError, match="provenance_rewrites entry missing field"):
+        okf.decode_merged_from({"merged_from": [entry]})
+
+
+def test_decode_merge_ledger_entry_v1_schema_absent_provenance_rewrites_defaults_empty() -> (
+    None
+):
+    """A v1 entry (no `relation_rewrites`, no `provenance_rewrites`) still
+    decodes, defaulting both to `[]` (task 1.7)."""
+    entry = _valid_encoded_entry()
+    del entry["relation_rewrites"]
+    del entry["provenance_rewrites"]
+
+    decoded = okf.decode_merged_from({"merged_from": [entry]})
+
+    assert decoded[0].relation_rewrites == []
+    assert decoded[0].provenance_rewrites == []
+
+
+def test_decode_merge_ledger_entry_v2_schema_absent_provenance_rewrites_defaults_empty() -> (
+    None
+):
+    """A v2 entry (`relation_rewrites` present, no `provenance_rewrites`)
+    still decodes, defaulting `provenance_rewrites` to `[]` (task 1.7)."""
+    entry = _valid_encoded_entry(schema=okf.MERGE_LEDGER_SCHEMA_V2)
+    del entry["provenance_rewrites"]
+
+    decoded = okf.decode_merged_from({"merged_from": [entry]})
+
+    assert decoded[0].relation_rewrites == _sample_ledger_entry().relation_rewrites
+    assert decoded[0].provenance_rewrites == []
 
 
 # -- U3: `relations:` codec (Phase 1, tasks 1.3-1.6) -----------------------
