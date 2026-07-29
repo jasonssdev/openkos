@@ -292,6 +292,21 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 **Not in this slice:** `--json` or any other structured output mode; a non-zero exit for findings or CI-gate behavior. Freshness and orphan-link checks are `lint`'s job, not `status`'s.
 
+### `openkos list [TYPE]`
+
+**Read-only.** Enumerates bundle objects with their id, sensitivity, lifecycle status, and title — the discovery counterpart to the id-taking write verbs (`forget`, `relate`, `merge`, `unmerge`, `set-sensitivity`), which all require an id you first have to know. One read-only bundle walk backs every invocation; id, sensitivity, status, and title are all derived in that same pass.
+
+`[TYPE]` is an optional positional filter. It accepts a canonical `link_dir` (`concepts`, `decisions`, `entities`, `events`, `organizations`, `people`, `places`, `procedures`, `projects`, `sources`) or a case-sensitive `REGISTRY.name` alias (e.g. `Person`) resolving to the same type; both forms print identical rows. Help and error text enumerate only the canonical `link_dir` names.
+
+Each row prints exactly `ID  SENSITIVITY  STATUS  TITLE`, `ljust`-aligned over the header labels and the rows actually shown, matching `status`'s bundle-contents alignment. Deprecated and superseded objects are shown by default, marked via `STATUS`, with no flag to hide them; an object removed from disk by `merge` never appears. A confidential concept's title prints **unredacted and in full** — there is no display gate: `sensitivity` here is a column reporting what the document declares, never a filter on what you, the owner, can see on your own terminal (`--include-confidential` is exclusively an LLM-send gate elsewhere and has no effect here). A document that fails to read or parse is still listed, with its id and `(unreadable)` in place of a title; a readable document with no title shows `(untitled)` instead — two distinct markers for two distinct follow-ups. An empty bundle, or a filter matching nothing, prints a friendly "no objects" message and exits 0.
+
+| Flag | Meaning |
+| --- | --- |
+| `--limit N` | Print at most `N` rows (default 50). Truncation prints a footer reporting how many rows were shown out of the total match count. `0` or a negative value refuses (exit 1) before any workspace or disk access. |
+| `--all` | Print every matching row, ignoring `--limit`, with no truncation footer. |
+
+**Exit ladder, in this exact order:** an unrecognized `TYPE` or an out-of-range `--limit` refuses (exit 1) before the workspace is even consulted — mirroring `set-volatility`'s vocabulary-before-workspace precedent, so a typo is reported as itself, not as a missing workspace. Only then does the shared `require_workspace` check run; its failure is the only remaining non-zero path. Once past both refusals, no bundle content — however malformed — can make `list` fail; it always exits 0. No file under the workspace is ever created, modified, or deleted, and no `--json` or other structured output mode is offered (deferred, not banned — issue #240).
+
 ### `openkos forget <concept-id>`
 
 Removes knowledge. It removes the concept document, drops its entry from `index.md`, and records the removal as a dated tombstone line in `log.md`. The target is named by its concept ID — the path with `.md` removed, which is what OKF already defines identity to be (`openkos forget people/maria-salazar`). `forget` is **reference-aware**: a surviving inbound link or typed relation to the target refuses (exit 1) unless you pass `--force`, and `--scope source` cascades the delete to the target plus every concept whose *entire* provenance resolves back to it (the orphan-after-delete closure). It is recoverable through plain git; the irreversible, history-scrubbing counterpart is `purge`, below.
