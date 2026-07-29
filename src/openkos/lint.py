@@ -665,8 +665,14 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
     `"below-source-sensitivity"`, never `"multi-source-uncovered"` (design
     D3 exclusion -- `query --save`'s two-output rule writes such docs
     routinely). A doc citing any unresolvable id falls into NEITHER
-    category (fail-safe; it already surfaces separately as the `dangling`
-    finding).
+    category, because the sweep cannot reach it either.
+
+    That last case is currently REPORTED BY NOTHING. `check_dangling_targets`
+    does not close the gap: it scans `doc.relations` and the body's markdown
+    links only, never `doc.provenance`, so a doc whose provenance cites a
+    mistyped or since-removed id is silent in every check. It may still sit
+    below its Source. Surfacing it needs its own finding and is tracked as a
+    follow-up rather than smuggled into this change's two categories.
     """
     docs_by_id = {doc.identity: doc for doc in docs}
     provenance_by_id = {

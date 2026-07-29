@@ -244,7 +244,7 @@ and the tightened version was re-confirmed RED prior to the GREEN commit.
 | Evidence | Value |
 |---|---|
 | Focused test command and result | `uv run pytest tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py tests/unit/cli/test_status.py` -> 63 passed |
-| Full suite | `uv run pytest -q` -> baseline (PR1 tip, `cb5a450`): 2579 passed; after PR2: **2593 passed** (2579 + 8 pure-function + 3 lint-CLI + 3 status-CLI = 2579 + 14) |
+| Full suite | `uv run pytest -q` -> baseline (PR1 tip, `cb5a450`): 2579 passed; after PR2: **2596 passed** (2579 + 8 pure-function + 3 lint-CLI + 3 status-CLI = 2593, then + 3 more from the bounded review correction = 2596) |
 | Runtime harness | `uv run python -m openkos.cli.main lint` / `status` exercised indirectly through the full `CliRunner`-based `tests/unit/cli/test_lint.py`/`test_status.py` suites (init workspace, hand-write a Source + a below-Source descendant + a Source-plus-foreign-derived-cite doc, run `lint`/`status`, inspect rendered sections and exit code) — no separate manual run needed since the CLI test suite already drives the real Typer app end-to-end against a tmp workspace |
 | Rollback boundary | `git revert` the 5 PR2 commits (`5f730f6`..`ebc801d`) on `feat/extract-descendant-scan` (or reset to `cb5a450`) restores `LintDoc` to its PR1 shape (no `sensitivity`/`provenance` fields), removes `check_below_source_sensitivity` and both new `lint`/`status` sections; `lint`/`status` are read-only, so no bundle data is ever at risk regardless |
 
@@ -260,7 +260,7 @@ and the tightened version was re-confirmed RED prior to the GREEN commit.
 |------|--------|----------------|
 | `src/openkos/lint.py` | Modified | Added `LintDoc.sensitivity: str = ""` / `.provenance: tuple[str, ...] = ()` (defaulted, filled in `collect_docs` from already-parsed frontmatter); added `LintReport.below_source`/`.multi_source_uncovered`; added `check_below_source_sensitivity(docs) -> list[LintFinding]`, importing `openkos.bundle.provenance` for `provenance_closure` (never `resolve_source_raises`) |
 | `src/openkos/cli/main.py` | Modified | `lint` calls `check_below_source_sensitivity(docs)` once, splits results by `finding.kind`, renders two new sections (`Below-source sensitivity:`, `Multi-source uncovered:`) with their own empty-state lines; `status` folds the same findings into `Needs attention:`, labeled `[below-source-sensitivity]`/`[multi-source-uncovered]`; both reuse their existing single `docs` list — no new bundle walk in either command |
-| `tests/unit/test_lint_below_source.py` | Created | 8 pure-function tests: seven-field construction guard, dirty-value fail-closed flag, already-covered no-flag, same-Source multi-cite exclusion, Source-plus-foreign-derived uncovered, unresolvable-cite neither-category, no-Sources clean bundle, already-at-high-water-mark no-flag |
+| `tests/unit/test_lint_below_source.py` | Created | 11 tests. Eight pure-function: seven-field construction guard, dirty-value fail-closed flag, already-covered no-flag, same-Source multi-cite exclusion, Source-plus-foreign-derived uncovered, unresolvable-cite neither-category, no-Sources clean bundle, already-at-high-water-mark no-flag. Three added by the bounded review correction, covering `collect_docs`' provenance decoding: corrupt-key skip with notice, absent-key default, and the regression that a corrupt descendant under a Source is surfaced by the notice rather than silently dropped |
 | `tests/unit/cli/test_lint.py` | Modified | Added 3 CliRunner scenarios: below-source-sensitivity section rendering, multi-source-uncovered section rendering (with the same-Source-closure member correctly excluded), clean-bundle zero-findings + no file mutation |
 | `tests/unit/cli/test_status.py` | Modified | Added 3 CliRunner scenarios: below-source-sensitivity under "needs attention", multi-source-uncovered marked not covered by `backfill-sensitivity`, and a counting-wrapper regression guard confirming `collect_docs` is still called exactly once |
 
@@ -268,12 +268,16 @@ and the tightened version was re-confirmed RED prior to the GREEN commit.
 
 | File | + | - |
 |---|---|---|
-| `src/openkos/lint.py` | 163 | 0 |
+| `src/openkos/lint.py` | 177 | 5 |
 | `src/openkos/cli/main.py` | 41 | 2 |
-| `tests/unit/test_lint_below_source.py` | 198 | 0 |
+| `tests/unit/test_lint_below_source.py` | 264 | 0 |
 | `tests/unit/cli/test_lint.py` | 99 | 0 |
 | `tests/unit/cli/test_status.py` | 118 | 0 |
-| **Total** | **619** | **2** |
+| **Total** | **699** | **7** |
+
+The `lint.py` and `test_lint_below_source.py` rows include the bounded review
+correction (the invalid-`provenance:` skip and its three tests), which is why
+they exceed the figures quoted in the pre-correction narrative above.
 
 **Total changed lines: 621**, against the tasks doc's ~150-250 estimate for
 PR2 — a significant overage, flagged plainly below (see Issues Found). No
