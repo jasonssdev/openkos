@@ -252,7 +252,7 @@ and the tightened version was re-confirmed RED prior to the GREEN commit.
 
 | Evidence | Value |
 |---|---|
-| Focused test command and result | `uv run pytest tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py tests/unit/cli/test_status.py` -> 63 passed |
+| Focused test command and result | `uv run pytest tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py tests/unit/cli/test_status.py` -> 66 passed (63 as first written, plus the 3 the bounded review correction added to `test_lint_below_source.py`) |
 | Full suite | `uv run pytest -q` -> baseline (PR1 tip, `cb5a450`): 2579 passed; after PR2: **2596 passed** (2579 + 8 pure-function + 3 lint-CLI + 3 status-CLI = 2593, then + 3 more from the bounded review correction = 2596) |
 | Runtime harness | `uv run python -m openkos.cli.main lint` / `status` exercised indirectly through the full `CliRunner`-based `tests/unit/cli/test_lint.py`/`test_status.py` suites (init workspace, hand-write a Source + a below-Source descendant + a Source-plus-foreign-derived-cite doc, run `lint`/`status`, inspect rendered sections and exit code) — no separate manual run needed since the CLI test suite already drives the real Typer app end-to-end against a tmp workspace |
 | Rollback boundary | `git revert` the 5 PR2 commits (`5f730f6`..`ebc801d`) on `feat/extract-descendant-scan` (or reset to `cb5a450`) restores `LintDoc` to its PR1 shape (no `sensitivity`/`provenance` fields), removes `check_below_source_sensitivity` and both new `lint`/`status` sections; `lint`/`status` are read-only, so no bundle data is ever at risk regardless |

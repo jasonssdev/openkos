@@ -92,7 +92,7 @@ Chain strategy: stacked-to-main
 
 - [ ] 12.1 Implement `backfill_sensitivity_cmd` in `main.py`, Phase A: `require_workspace` -> `read_config` -> one `rglob` bundle snapshot (reserved names skipped) -> for each `sorted(Source ids)` call `resolve_source_raises` -> merge by `concept_id` keeping the highest `okf.SENSITIVITY_ORDER.index(new_level)` (ties: first Source in sorted order) -> explicit no-op line + exit 0 + no log/commit when empty -> sorted preview -> confirm ladder (`--auto` > `cfg.review` > TTY confirm > refuse)
 - [ ] 12.2 Implement Phase B: write every merged raise (sorted by `concept_id`), append one `log.md` entry, one `_autocommit`; track `landed` paths and name them verbatim on partial failure (D9), mirroring PR1's message shape
-- [ ] 12.3 Do NOT call `find_unresolvable_provenance` anywhere in this verb (D8) — its signal is the existing `dangling` lint finding
+- [ ] 12.3 Do NOT call `find_unresolvable_provenance` anywhere in this verb (D8) — a bundle-wide run would emit one WARNING per Source on every invocation, including the no-op path. Note: the `dangling` lint finding does NOT cover `provenance:` (it scans `relations:` and body links only), so an unresolvable provenance cite stays unreported — see Known Follow-Ups
 - [ ] 12.4 Add commit-state threat-matrix RED test `test_backfill_second_run_stages_nothing_and_creates_no_commit` if not already covered by 11.1's idempotency scenario
 - [ ] 12.5 Run `uv run pytest tests/unit/cli/test_backfill_sensitivity.py` — all GREEN
 
