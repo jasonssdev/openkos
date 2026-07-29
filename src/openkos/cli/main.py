@@ -3416,27 +3416,41 @@ def set_sensitivity_cmd(
             )
             raise typer.Exit(code=1)
 
+    landed: list[str] = []
     try:
         # Write order: descendants BEFORE the target concept BEFORE
         # `log.md` (design: "Descendants are written BEFORE the target
         # concept"). A mid-way failure then leaves the bundle
         # over-classified, never under-classified -- there is no
-        # cross-file rollback, matching `relate`/`merge`.
+        # cross-file rollback, matching `relate`/`merge`. `landed` records
+        # each path only AFTER its `write_atomic` call returns, so a
+        # failure names exactly the paths already on disk (design D9,
+        # issue #233).
         for descendant_raise in descendant_raises:
+            descendant_path = f"bundle/{descendant_raise.concept_id}.md"
             fsio.write_atomic(
                 layout.bundle_dir / f"{descendant_raise.concept_id}.md",
                 descendant_raise.content,
             )
+            landed.append(descendant_path)
         fsio.write_atomic(concept_path, new_concept_text)
+        landed.append(f"bundle/{canonical_id}.md")
         fsio.write_atomic(log_path, new_log_text)
+        landed.append("bundle/log.md")
     except (OSError, ValueError) as exc:
         # Distinct from the two phases above on purpose: this one is
         # reached only after the write phase began, so the concept file may
         # already be on disk while `log.md` is not. "refusing" would tell an
         # operator nothing happened, which is exactly wrong here.
+        landed_suffix = (
+            f"Already written (left over-classified, not rolled back): "
+            f"{', '.join(landed)}."
+            if landed
+            else "No path was written."
+        )
         typer.echo(
             f"openkos set-sensitivity: failed while writing the "
-            f"set-sensitivity -- {exc}.",
+            f"set-sensitivity -- {exc}. {landed_suffix}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
