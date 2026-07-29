@@ -4,10 +4,10 @@
 
 | Field | Value |
 |-------|-------|
-| Estimated changed lines | PR1 ~130-200, PR2 ~150-250, PR3 ~250-400 (total ~530-850) |
-| 400-line budget risk | Low per PR (against 800-line session budget); PR3 alone approaches 400 |
+| Estimated changed lines | PR1 593 (landed), PR2 621 (landed), PR3a ~250-400, PR3b ~250-400 (re-sliced after PR1/PR2 landed ~2.5x over original per-PR estimate) |
+| 400-line budget risk | Low per PR (against 800-line session budget) |
 | Chained PRs recommended | Yes |
-| Suggested split | PR1 extract+message (#235/#233) -> PR2 lint/status detection -> PR3 backfill verb + ADR-0012 |
+| Suggested split | PR1 extract+message (#235/#233) -> PR2 lint/status detection -> PR3a backfill pure sweep core -> PR3b backfill Typer command + ADR-0012 |
 | Delivery strategy | auto-chain |
 | Chain strategy | stacked-to-main |
 
@@ -21,8 +21,9 @@ Chain strategy: stacked-to-main
 | Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
 |------|------|-----------|----------------------|-----------------|-------------------|
 | 1 | Extract `resolve_source_raises`/`find_unresolvable_provenance` into `bundle/provenance.py`, rewire `set_sensitivity_cmd`, name landed paths on Phase-B failure (#235, #233) | PR 1 | `uv run pytest tests/unit/bundle/test_provenance_source_raises.py tests/unit/cli/test_set_sensitivity.py` | `uv run python -m openkos.cli.main set-sensitivity <source-id> <level>` against a temp bundle fixture | Revert PR1 branch; `set_sensitivity_cmd` returns to its inline block, no data touched |
-| 2 | `LintDoc.sensitivity`/`.provenance` + `check_below_source_sensitivity`, wired into `lint`/`status` | PR 2 | `uv run pytest tests/unit/test_lint_below_source.py tests/unit/test_lint.py tests/unit/test_status.py` | `uv run python -m openkos.cli.main lint` / `status` against a fixture bundle with a below-Source and a multi-source-uncovered doc | Revert PR2 branch; findings disappear, nothing was ever written |
-| 3 | `backfill-sensitivity` verb + ADR-0012 | PR 3 | `uv run pytest tests/unit/cli/test_backfill_sensitivity.py` | `uv run python -m openkos.cli.main backfill-sensitivity` against a temp bundle with pre-#219 gaps | Revert PR3 branch; already-backfilled bundles keep raised values (raise-only); each sweep is one revertable `_autocommit` |
+| 2 | `LintDoc.sensitivity`/`.provenance` + `check_below_source_sensitivity`, wired into `lint`/`status` | PR 2 | `uv run pytest tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py tests/unit/cli/test_status.py` | `uv run python -m openkos.cli.main lint` / `status` against a fixture bundle with a below-Source and a multi-source-uncovered doc | Revert PR2 branch; findings disappear, nothing was ever written |
+| 3a | `resolve_backfill_raises` pure bundle-wide sweep core (merge-by-max over every Source) | PR 3a | `uv run pytest tests/unit/bundle/test_resolve_backfill_raises.py` | N/A -- pure function, no filesystem/CLI boundary; exercised end-to-end once PR3b wires it in | Revert PR3a branch; `resolve_backfill_raises` never referenced by any command yet, no data touched |
+| 3b | `backfill-sensitivity` Typer command (wires `resolve_backfill_raises` into confirm/write/log/commit) + ADR-0012 | PR 3b | `uv run pytest tests/unit/cli/test_backfill_sensitivity.py` | `uv run python -m openkos.cli.main backfill-sensitivity` against a temp bundle with pre-#219 gaps | Revert PR3b branch; already-backfilled bundles keep raised values (raise-only); each sweep is one revertable `_autocommit` |
 
 ## Phase 1: RED — characterization tests (PR1)
 
@@ -80,33 +81,49 @@ Chain strategy: stacked-to-main
 
 - [x] 10.1 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean on touched files
 
-## Phase 11: RED — backfill-sensitivity CLI tests (PR3)
+## Phase 11: RED — pure sweep core characterization (PR3a)
 
-- [ ] 11.1 Create `tests/unit/cli/test_backfill_sensitivity.py`: raise-all-below-Sources scenario; never-lowers scenario; idempotent second run (zero writes, no empty commit); `--auto` skips only the prompt; non-TTY without `--auto` refuses; declining the prompt writes nothing; explicit no-op line on zero staged raises
-- [ ] 11.2 Add: `extraction_status: failed` Source still a valid closure root; a Source that is itself a provenance descendant of another Source is raised (D6 scenario); a descendant citing two ids inside the same Source's closure is raised; a descendant citing two unrelated Sources is never raised (skip-and-report, D3)
-- [ ] 11.3 Add Phase-B partial-write scenario: patch `fsio.write_atomic` to fail after 2 of 3 descendant writes; assert non-zero exit, first two files raised on disk, failure message names both landed paths (D9, mirrors PR1 Phase 3-4)
-- [ ] 11.4 Add merge-by-max scenario: two Sources both cite the same descendant via chained closures; assert the merged raise picks the highest `SENSITIVITY_ORDER.index(new_level)`, never calling `okf._rank`
-- [ ] 11.5 Confirm all of 11.1-11.4 fail RED (verb does not exist yet)
+- [x] 11.1 Create `tests/unit/bundle/test_resolve_backfill_raises.py`: raise-all-below-Sources; never-lowers; idempotent second sweep (zero raises on an already-propagated bundle); Source never written as its own closure root; `extraction_status: failed` Source still a valid closure root; a Source that is itself a provenance descendant of another Source is raised (D6 scenario); a descendant citing two ids inside the same Source's closure is raised; a descendant citing two unrelated Sources is never raised (D3); merge-by-max scenario (two Sources chained via nested closures both claim the same descendant, merged raise picks the highest `SENSITIVITY_ORDER.index(new_level)`, never `okf._rank`); deterministic sorted-by-`concept_id` output; a Source with missing `sensitivity` ranks fail-closed as `private`
+- [x] 11.2 Confirm all 11 tests fail RED (`resolve_backfill_raises` does not exist yet)
 
-## Phase 12: GREEN — implement backfill-sensitivity verb (PR3)
+## Phase 12: GREEN — implement resolve_backfill_raises pure sweep core (PR3a)
 
-- [ ] 12.1 Implement `backfill_sensitivity_cmd` in `main.py`, Phase A: `require_workspace` -> `read_config` -> one `rglob` bundle snapshot (reserved names skipped) -> for each `sorted(Source ids)` call `resolve_source_raises` -> merge by `concept_id` keeping the highest `okf.SENSITIVITY_ORDER.index(new_level)` (ties: first Source in sorted order) -> explicit no-op line + exit 0 + no log/commit when empty -> sorted preview -> confirm ladder (`--auto` > `cfg.review` > TTY confirm > refuse)
-- [ ] 12.2 Implement Phase B: write every merged raise (sorted by `concept_id`), append one `log.md` entry, one `_autocommit`; track `landed` paths and name them verbatim on partial failure (D9), mirroring PR1's message shape
-- [ ] 12.3 Do NOT call `find_unresolvable_provenance` anywhere in this verb (D8) — a bundle-wide run would emit one WARNING per Source on every invocation, including the no-op path. Note: the `dangling` lint finding does NOT cover `provenance:` (it scans `relations:` and body links only), so an unresolvable provenance cite stays unreported — see Known Follow-Ups
-- [ ] 12.4 Add commit-state threat-matrix RED test `test_backfill_second_run_stages_nothing_and_creates_no_commit` if not already covered by 11.1's idempotency scenario
-- [ ] 12.5 Run `uv run pytest tests/unit/cli/test_backfill_sensitivity.py` — all GREEN
+- [x] 12.1 Implement `_source_levels(files)` helper and `resolve_backfill_raises(files) -> list[okf.DescendantRaise]` in `src/openkos/bundle/provenance.py`: for each `sorted(Source ids)` call `resolve_source_raises` -> merge by `concept_id` keeping the highest `okf.SENSITIVITY_ORDER.index(new_level)` (ties: first Source in sorted order) -> return `sorted()` by `concept_id`
+- [x] 12.2 Do NOT call `find_unresolvable_provenance` anywhere in this function (D8) — a bundle-wide run would emit one WARNING per Source on every invocation. Note: the `dangling` lint finding does NOT cover `provenance:` (it scans `relations:` and body links only), so an unresolvable provenance cite stays unreported — see Known Follow-Ups
+- [x] 12.3 Run `uv run pytest tests/unit/bundle/test_resolve_backfill_raises.py` — all GREEN
+- [x] 12.4 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean; full suite green (2593 -> 2604)
 
-## Phase 13: Docs — ADR-0012 (PR3, split into its own docs PR if budget exceeded)
+## Phase 13: PR3a checkpoint
 
-- [ ] 13.1 Create `docs/adr/0012-sensitivity-backfill-per-source-sweep.md`: per-Source sweep, multi-source closures reported not combined, no `type` filter on descendants, no unresolvable-provenance scan in this verb
-- [ ] 13.2 Add ADR-0012's row to `docs/adr/README.md` (index currently ends at 0011)
-- [ ] 13.3 Update `docs/cli.md` with the new `backfill-sensitivity` verb and its confirm ladder/no-op behavior
+- [x] 13.1 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean on touched files
+- [x] 13.2 Full suite: `uv run pytest -q` — 2604 passed (baseline 2593 + 11 new)
+- [x] 13.3 Changed lines: 321 (222 test + 99 implementation), comfortably under the 400-line budget
 
-## Phase 14: PR3 checkpoint
+## Phase 14: RED — backfill-sensitivity CLI tests (PR3b)
 
-- [ ] 14.1 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean on touched files
-- [ ] 14.2 Full suite: `uv run pytest tests/unit/cli/test_backfill_sensitivity.py tests/unit/cli/test_set_sensitivity.py tests/unit/test_lint_below_source.py tests/unit/test_lint.py tests/unit/test_status.py --cov` — all GREEN, coverage holds on touched files
-- [ ] 14.3 Confirm issues #231, #235, #233 closable; #232 and #234 remain untouched (Explicitly Not Changed)
+- [ ] 14.1 Create `tests/unit/cli/test_backfill_sensitivity.py`: raise-all-below-Sources scenario; never-lowers scenario; idempotent second run (zero writes, no empty commit); `--auto` skips only the prompt; non-TTY without `--auto` refuses; declining the prompt writes nothing; explicit no-op line on zero staged raises
+- [ ] 14.2 Add Phase-B partial-write scenario: patch `fsio.write_atomic` to fail after 2 of 3 descendant writes; assert non-zero exit, first two files raised on disk, failure message names both landed paths (D9, mirrors PR1 Phase 3-4)
+- [ ] 14.3 Confirm 14.1-14.2 fail RED (verb does not exist yet)
+
+## Phase 15: GREEN — implement backfill-sensitivity verb (PR3b)
+
+- [ ] 15.1 Implement `backfill_sensitivity_cmd` in `main.py`, Phase A: `require_workspace` -> `read_config` -> one `rglob` bundle snapshot (reserved names skipped) -> call `bundle_provenance.resolve_backfill_raises(snapshot)` (PR3a) -> explicit no-op line + exit 0 + no log/commit when empty -> sorted preview -> confirm ladder (`--auto` > `cfg.review` > TTY confirm > refuse)
+- [ ] 15.2 Implement Phase B: write every merged raise (sorted by `concept_id`), append one `log.md` entry, one `_autocommit`; track `landed` paths and name them verbatim on partial failure (D9), mirroring PR1's message shape
+- [ ] 15.3 Do NOT call `find_unresolvable_provenance` anywhere in this verb (D8) — its signal is the existing `dangling` lint finding
+- [ ] 15.4 Add commit-state threat-matrix RED test `test_backfill_second_run_stages_nothing_and_creates_no_commit` if not already covered by 14.1's idempotency scenario
+- [ ] 15.5 Run `uv run pytest tests/unit/cli/test_backfill_sensitivity.py` — all GREEN
+
+## Phase 16: Docs — ADR-0012 (PR3b, split into its own docs PR if budget exceeded)
+
+- [ ] 16.1 Create `docs/adr/0012-sensitivity-backfill-per-source-sweep.md`: per-Source sweep, multi-source closures reported not combined, no `type` filter on descendants, no unresolvable-provenance scan in this verb
+- [ ] 16.2 Add ADR-0012's row to `docs/adr/README.md` (index currently ends at 0011)
+- [ ] 16.3 Update `docs/cli.md` with the new `backfill-sensitivity` verb and its confirm ladder/no-op behavior
+
+## Phase 17: PR3b checkpoint
+
+- [ ] 17.1 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean on touched files
+- [ ] 17.2 Full suite: `uv run pytest tests/unit/cli/test_backfill_sensitivity.py tests/unit/bundle/test_resolve_backfill_raises.py tests/unit/cli/test_set_sensitivity.py tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py tests/unit/cli/test_status.py --cov` — all GREEN, coverage holds on touched files
+- [ ] 17.3 Confirm issues #231, #235, #233 closable; #232 and #234 remain untouched (Explicitly Not Changed)
 
 ## Known Follow-Ups (out of scope for this change)
 
@@ -121,5 +138,6 @@ Chain strategy: stacked-to-main
 ## PR Assignment
 
 - **PR1** (`feat/extract-descendant-scan` -> `main`): Phases 1-5 — closes #235, #233
-- **PR2** (`feat/lint-below-source-sensitivity` -> `feat/extract-descendant-scan`): Phases 6-10
-- **PR3** (`feat/backfill-sensitivity-verb` -> `feat/extract-descendant-scan`, independent of PR2): Phases 11-14 — closes #231
+- **PR2** (`feat/lint-below-source-sensitivity` -> `feat/extract-descendant-scan`): Phases 6-10 — landed as 5 commits directly on `feat/extract-descendant-scan` (see apply-progress)
+- **PR3a** (`feat/backfill-sensitivity-core` -> `feat/lint-below-source-sensitivity`): Phases 11-13 — pure sweep core only, no Typer command, no ADR
+- **PR3b** (off `feat/backfill-sensitivity-core`): Phases 14-17 — closes #231; the `backfill-sensitivity` Typer command plus ADR-0012
