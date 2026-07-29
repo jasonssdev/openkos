@@ -3160,24 +3160,6 @@ def relate(
     )
 
 
-@dataclass(frozen=True)
-class _DescendantRaise:
-    """One staged raise-only descendant write, computed in Phase A of
-    `set_sensitivity_cmd` (design: "Set-time propagation, Interfaces /
-    Contracts"). `current` is the descendant's raw, possibly dirty
-    `sensitivity` value (fail-closed ranked by `okf.combine_sensitivity`,
-    ADR-0003); `new_level` is always a strict raise over it -- a member
-    with `combine_sensitivity(current, level) == current` is never staged.
-    `content` is the descendant's full frontmatter-plus-body text,
-    already re-rendered via `okf.dump_frontmatter`, ready to write as-is."""
-
-    concept_id: str
-    path: Path
-    current: object
-    new_level: str
-    content: str
-
-
 @app.command("set-sensitivity")
 def set_sensitivity_cmd(
     concept_id: str = typer.Argument(
@@ -3336,7 +3318,7 @@ def set_sensitivity_cmd(
     # (`direction`, computed above) so a downgrade never cascades, even
     # when `combine_sensitivity` would compute a raise for some individual
     # descendant below the new (lower) level.
-    descendant_raises: list[_DescendantRaise] = []
+    descendant_raises: list[okf.DescendantRaise] = []
     if metadata.get("type") == "Source" and direction == "raise":
         try:
             bundle_snapshot: dict[str, str] = {}
@@ -3348,60 +3330,29 @@ def set_sensitivity_cmd(
                 rel = path.relative_to(layout.bundle_dir).as_posix()
                 bundle_snapshot[rel] = path.read_text(encoding="utf-8")
 
-            descendant_ids = [
-                member
-                for member in bundle_provenance.find_provenance_descendants(
-                    bundle_snapshot, root_ids={canonical_id}
-                )
-                if member != canonical_id
-            ]
-
             # Unresolvable provenance (design: "Unresolvable provenance"):
-            # scan every file's parsed `provenance` list for an entry
-            # naming an id with no file in the snapshot. Each one is
-            # reported on stderr; the citing concept is fail-closed
-            # excluded -- `find_provenance_descendants`'s own non-empty-
-            # subset rule already keeps it out of `descendant_ids` above,
-            # so this is purely reporting, never an extra write gate.
-            known_ids = {canonical_id} | {
-                rel.removesuffix(".md") for rel in bundle_snapshot
-            }
-            for rel, text in bundle_snapshot.items():
-                try:
-                    member_metadata, _ = okf.load_frontmatter(text)
-                except (OSError, ValueError):
-                    continue
-                raw_provenance = member_metadata.get("provenance")
-                if not isinstance(raw_provenance, list):
-                    continue
-                member_id = rel.removesuffix(".md")
-                for entry in raw_provenance:
-                    entry_id = str(entry).removesuffix(".md")
-                    if entry_id not in known_ids:
-                        typer.echo(
-                            "openkos set-sensitivity: WARNING -- "
-                            f"{member_id!r} cites unresolvable provenance "
-                            f"{entry_id!r}; excluded from propagation.",
-                            err=True,
-                        )
-
-            for member in descendant_ids:
-                member_text = bundle_snapshot[f"{member}.md"]
-                member_metadata, member_body = okf.load_frontmatter(member_text)
-                member_current = member_metadata.get("sensitivity")
-                new_level = okf.combine_sensitivity(member_current, level)
-                if new_level == member_current:
-                    continue
-                member_metadata["sensitivity"] = new_level
-                descendant_raises.append(
-                    _DescendantRaise(
-                        concept_id=member,
-                        path=layout.bundle_dir / f"{member}.md",
-                        current=member_current,
-                        new_level=new_level,
-                        content=okf.dump_frontmatter(member_metadata, member_body),
-                    )
+            # `known_extra_ids={canonical_id}` paired with the
+            # target-excluding `bundle_snapshot` above reproduces the exact
+            # historical pairing (design D7) that keeps the target's own
+            # `provenance` from ever being warned about. Each unresolvable
+            # entry is reported on stderr; the citing concept is
+            # fail-closed excluded -- `resolve_source_raises`'s own
+            # non-empty-subset rule already keeps it out of the raises
+            # below, so this is purely reporting, never an extra write
+            # gate.
+            for member_id, entry_id in bundle_provenance.find_unresolvable_provenance(
+                bundle_snapshot, known_extra_ids={canonical_id}
+            ):
+                typer.echo(
+                    "openkos set-sensitivity: WARNING -- "
+                    f"{member_id!r} cites unresolvable provenance "
+                    f"{entry_id!r}; excluded from propagation.",
+                    err=True,
                 )
+
+            descendant_raises = bundle_provenance.resolve_source_raises(
+                bundle_snapshot, source_id=canonical_id, level=level
+            )
         except (OSError, ValueError) as exc:
             typer.echo(
                 f"openkos set-sensitivity: failed while preparing the "
@@ -3472,7 +3423,10 @@ def set_sensitivity_cmd(
         # over-classified, never under-classified -- there is no
         # cross-file rollback, matching `relate`/`merge`.
         for descendant_raise in descendant_raises:
-            fsio.write_atomic(descendant_raise.path, descendant_raise.content)
+            fsio.write_atomic(
+                layout.bundle_dir / f"{descendant_raise.concept_id}.md",
+                descendant_raise.content,
+            )
         fsio.write_atomic(concept_path, new_concept_text)
         fsio.write_atomic(log_path, new_log_text)
     except (OSError, ValueError) as exc:
