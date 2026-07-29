@@ -144,6 +144,11 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
     #141); a corrupt `relations:` value (e.g. hand-edited to a non-list)
     raises `ValueError` there, caught here and surfaced as a skip notice --
     read-only-never-fail, matching every other guard in this function.
+    `provenance:` follows the SAME convention (#231, PR2): an absent key is
+    valid and decodes to an empty tuple with no notice, but a present
+    non-list value (e.g. hand-edited to a scalar) is skipped with a notice
+    rather than coerced to empty -- a silent coercion would hide the doc
+    from every provenance-based check and read as a false clean scan.
     Returns `(docs, skip_notices)` in walk order.
     """
     docs: list[LintDoc] = []
@@ -177,11 +182,15 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
             skip_notices.append(f"{identity}.md: skipped (invalid relations)")
             continue
         raw_provenance = metadata.get("provenance")
-        provenance = (
-            tuple(str(entry).removesuffix(".md") for entry in raw_provenance)
-            if isinstance(raw_provenance, list)
-            else ()
-        )
+        if raw_provenance is None:
+            provenance: tuple[str, ...] = ()
+        elif isinstance(raw_provenance, list):
+            provenance = tuple(
+                str(entry).removesuffix(".md") for entry in raw_provenance
+            )
+        else:
+            skip_notices.append(f"{identity}.md: skipped (invalid provenance)")
+            continue
         docs.append(
             LintDoc(
                 path=scan.path,
