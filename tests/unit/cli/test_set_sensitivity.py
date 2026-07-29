@@ -739,13 +739,23 @@ def test_dangling_provenance_warns_and_never_lowers(
     existing concept emits a warning naming the dangling reference, is
     excluded from propagation, and never blocks the Source's own write
     (spec scenario "Unresolvable provenance warns, is excluded, and does
-    not abort")."""
+    not abort").
+
+    The fixture cites BOTH the invoked Source and the dangling id (#232):
+    the warning is scoped to what is reachable from the invoked Source, and
+    this shape is exactly the case that matters -- the mixed citation is
+    fail-closed EXCLUDED from the subset closure that gates the writes (so
+    it is never raised), while still being reachable for reporting. Citing
+    the dangling id ALONE would make this concept unreachable and the
+    warning deliberately silent -- a case NOTHING reports today; `lint` is
+    the INTENDED FUTURE owner of that bundle-wide detection, tracked as
+    issue #257."""
     _init_workspace(tmp_path, monkeypatch)
     source_id = _ingest_source(tmp_path, "a.txt")
     dangling_id = _write_derived_concept(
         tmp_path,
         slug="orphaned-derived",
-        provenance=["sources/does-not-exist"],
+        provenance=[source_id, "sources/does-not-exist"],
         sensitivity="public",
     )
 
@@ -758,6 +768,46 @@ def test_dangling_provenance_warns_and_never_lowers(
     assert "does-not-exist" in result.stderr
     assert _sensitivity_of(tmp_path, dangling_id) == "public"
     assert _sensitivity_of(tmp_path, source_id) == "confidential"
+
+
+def test_raising_one_source_never_warns_about_another_sources_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REGRESSION (#232): the unresolvable-provenance WARNING is scoped to
+    what is reachable from the INVOKED Source, not to the whole bundle
+    snapshot. Every Source is built with `provenance=[resource]`, and a raw
+    resource path never normalizes to a bundle concept id -- so before this
+    fix, a bundle with Sources a and b emitted a bogus WARNING naming
+    `sources/b` on every single `set-sensitivity sources/a` run (the invoked
+    Source was spared only because the snapshot excludes its own file).
+
+    No prior test in this file built a multi-Source bundle at all, which is
+    why the bug survived: this fixture is the point of the change. Source
+    A's own write and its descendant's raise must still happen exactly as
+    before, and Source B's whole lineage must stay byte-identical."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_a = _ingest_source(tmp_path, "a.txt")
+    source_b = _ingest_source(tmp_path, "b.txt")
+    derived_a = _write_derived_concept(
+        tmp_path, slug="derived-of-a", provenance=[source_a], sensitivity="public"
+    )
+    derived_b = _write_derived_concept(
+        tmp_path, slug="derived-of-b", provenance=[source_b], sensitivity="public"
+    )
+    source_b_before = (tmp_path / "bundle" / f"{source_b}.md").read_bytes()
+    derived_b_before = (tmp_path / "bundle" / f"{derived_b}.md").read_bytes()
+
+    result = runner.invoke(app, ["set-sensitivity", source_a, "confidential", "--auto"])
+
+    assert result.exit_code == 0
+    assert "WARNING" not in result.stderr
+    assert source_b not in result.stderr
+    assert derived_b not in result.stderr
+    assert "b.txt" not in result.stderr
+    assert _sensitivity_of(tmp_path, source_a) == "confidential"
+    assert _sensitivity_of(tmp_path, derived_a) == "confidential"
+    assert (tmp_path / "bundle" / f"{source_b}.md").read_bytes() == source_b_before
+    assert (tmp_path / "bundle" / f"{derived_b}.md").read_bytes() == derived_b_before
 
 
 def test_descendants_written_before_target_on_failure(

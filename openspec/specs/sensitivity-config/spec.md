@@ -279,6 +279,16 @@ already landed.)
   excluded from propagation, and the Source concept's own write still
   succeeds
 
+#### Scenario: Unresolvable-provenance warnings are scoped to the invoked Source (#232)
+
+- GIVEN a bundle with two independent Source concepts, each with its own
+  derived concept, where every Source cites its own unresolvable raw
+  resource
+- WHEN `set-sensitivity <source-a-id> <higher-level>` runs
+- THEN no warning naming the other Source or anything in its lineage is
+  emitted, while Source A's own write and its descendants' raises still
+  occur
+
 #### Scenario: A Source with zero derived objects behaves exactly as today
 
 - GIVEN a Source concept with no provenance descendants
