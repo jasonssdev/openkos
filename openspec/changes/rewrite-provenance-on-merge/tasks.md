@@ -59,44 +59,44 @@ Chain strategy: stacked-to-main
 
 ## Phase 5: `prepare_merge` third scanner (`cli/main.py`) — PR2
 
-- [ ] 5.1 RED: `tests/unit/cli/test_merge.py` — `prepare_merge` returns provenance rewrites for a third-party file citing the absorbed id; `PreparedMerge` gains a `provenance_rewrites` field
-- [ ] 5.2 GREEN: wire `find_inbound_provenance_rewrites` as the third scanner in `prepare_merge`, reading the SAME `other_files` snapshot already built for link/relation scanners; add `provenance_rewrites` to `PreparedMerge`; extend the merge preview to mention provenance retargets
-- [ ] 5.3 RED: **zero-extra-walk test** — plain-function counting wrapper around `Path.rglob` (NOT a generator/`yield from`, per design.md's precedent at `tests/unit/cli/test_contradictions.py:1041`'s `_counting_build_graph`); assert `rglob(bundle_dir, "*.md")` called exactly once after adding the third scanner
-- [ ] 5.4 GREEN: confirm `prepare_merge` reuses the existing `other_files` dict for the provenance scan; no new `rglob` call
-- [ ] 5.5 RED: `touched_files` is the sorted union of link, relation, AND provenance rewrite file sets (three-way union, not two)
-- [ ] 5.6 GREEN: update `touched_files` computation in `prepare_merge`
+- [x] 5.1 RED: `tests/unit/cli/test_merge.py` — `prepare_merge` returns provenance rewrites for a third-party file citing the absorbed id; `PreparedMerge` gains a `provenance_rewrites` field
+- [x] 5.2 GREEN: wire `find_inbound_provenance_rewrites` as the third scanner in `prepare_merge`, reading the SAME `other_files` snapshot already built for link/relation scanners; add `provenance_rewrites` to `PreparedMerge`; extend the merge preview to mention provenance retargets
+- [x] 5.3 RED: **zero-extra-walk test** — plain-function counting wrapper around `Path.rglob` (NOT a generator/`yield from`, per design.md's precedent at `tests/unit/cli/test_contradictions.py:1041`'s `_counting_build_graph`); assert `rglob(bundle_dir, "*.md")` called exactly once after adding the third scanner
+- [x] 5.4 GREEN: confirm `prepare_merge` reuses the existing `other_files` dict for the provenance scan; no new `rglob` call
+- [x] 5.5 RED: `touched_files` is the sorted union of link, relation, AND provenance rewrite file sets (three-way union, not two)
+- [x] 5.6 GREEN: update `touched_files` computation in `prepare_merge`
 
 ## Phase 6: `merge_core` third transform — PR2
 
-- [ ] 6.1 RED: `tests/unit/cli/test_merge_core.py` — for a file in `touched_files`, `merge_core` writes bytes reflecting `apply_link_rewrites` -> `apply_relation_rewrites` -> `apply_provenance_rewrites` chained in that order, single atomic write per file
-- [ ] 6.2 GREEN: add `apply_provenance_rewrites` as the third link in `merge_core`'s per-file transform chain
-- [ ] 6.3 RED: **snapshot byte-identity (T4)** — a third-party file with an inbound link, a `relations:` entry, AND a `provenance:` entry all pointing to the absorbed id; after merge, read the survivor's `merged_from` tail off disk and assert `entry.provenance_rewrites[0].snapshot == entry.relation_rewrites[0].snapshot`, both equal to the file's captured pre-merge bytes (real temp workspace, not a mocked snapshot)
-- [ ] 6.4 GREEN: confirm merge_core writes the shared pre-merge snapshot into both `provenance_rewrites` and `relation_rewrites` entries for that file (implementation should already satisfy this from the single-snapshot design; test closes the gap)
+- [x] 6.1 RED: `tests/unit/cli/test_merge_core.py` — for a file in `touched_files`, `merge_core` writes bytes reflecting `apply_link_rewrites` -> `apply_relation_rewrites` -> `apply_provenance_rewrites` chained in that order, single atomic write per file
+- [x] 6.2 GREEN: add `apply_provenance_rewrites` as the third link in `merge_core`'s per-file transform chain
+- [x] 6.3 RED: **snapshot byte-identity (T4)** — a third-party file with an inbound link, a `relations:` entry, AND a `provenance:` entry all pointing to the absorbed id; after merge, read the survivor's `merged_from` tail off disk and assert `entry.provenance_rewrites[0].snapshot == entry.relation_rewrites[0].snapshot`, both equal to the file's captured pre-merge bytes (real temp workspace, not a mocked snapshot)
+- [x] 6.4 GREEN: confirm merge_core writes the shared pre-merge snapshot into both `provenance_rewrites` and `relation_rewrites` entries for that file (implementation should already satisfy this from the single-snapshot design; test closes the gap)
 
 ## Phase 7: `unmerge` precedence and reversal — PR2
 
-- [ ] 7.1 RED: `tests/unit/cli/test_unmerge.py` — a file present ONLY in `provenance_rewrites` restores exclusively via `reverse_provenance_rewrites`
-- [ ] 7.2 RED: **three-way precedence (provenance > relations > links)** — a file touched by all three rewrite kinds reverses exclusively from its `provenance_rewrites` snapshot, byte-identical to pre-merge; a file in `relation_rewrites` but not `provenance_rewrites` reverses via relation rule; a file in neither reverses via link rule
-- [ ] 7.3 GREEN: implement precedence partitioning in `unmerge` — `provenance_files = {r.file for r in provenance_rewrites}`; `relation_files = relations - provenance_files`; `link_files = links - provenance_files - relation_files`; call `reverse_provenance_rewrites` with BOTH `link_rewrites` and `relation_rewrites` args for `provenance_files`
-- [ ] 7.4 RED: **unmerge refuses on drift (T10)** — edit a provenance-rewritten file post-merge, then `unmerge` exits non-zero, no write, bundle snapshot unchanged
-- [ ] 7.5 GREEN: confirm `reverse_provenance_rewrites`'s drift check (from 2.9) propagates as a clean CLI failure before any write in `unmerge`
-- [ ] 7.6 RED: **v1/v2 backward compat (T9)** — a hand-built fixture survivor with a v1 entry and one with a v2 entry both unmerge exactly (no regression)
-- [ ] 7.7 GREEN: confirm `unmerge` reading a decoded v1/v2 entry (empty `provenance_rewrites`) skips the provenance-precedence branch entirely and falls through to existing relation/link reversal
+- [x] 7.1 RED: `tests/unit/cli/test_unmerge.py` — a file present ONLY in `provenance_rewrites` restores exclusively via `reverse_provenance_rewrites`
+- [x] 7.2 RED: **three-way precedence (provenance > relations > links)** — a file touched by all three rewrite kinds reverses exclusively from its `provenance_rewrites` snapshot, byte-identical to pre-merge; a file in `relation_rewrites` but not `provenance_rewrites` reverses via relation rule; a file in neither reverses via link rule
+- [x] 7.3 GREEN: implement precedence partitioning in `unmerge` — `provenance_files = {r.file for r in provenance_rewrites}`; `relation_files = relations - provenance_files`; `link_files = links - provenance_files - relation_files`; call `reverse_provenance_rewrites` with BOTH `link_rewrites` and `relation_rewrites` args for `provenance_files`
+- [x] 7.4 RED: **unmerge refuses on drift (T10)** — edit a provenance-rewritten file post-merge, then `unmerge` exits non-zero, no write, bundle snapshot unchanged
+- [x] 7.5 GREEN: confirm `reverse_provenance_rewrites`'s drift check (from 2.9) propagates as a clean CLI failure before any write in `unmerge`
+- [x] 7.6 RED: **v1/v2 backward compat (T9)** — a hand-built fixture survivor with a v1 entry and one with a v2 entry both unmerge exactly (no regression)
+- [x] 7.7 GREEN: confirm `unmerge` reading a decoded v1/v2 entry (empty `provenance_rewrites`) skips the provenance-precedence branch entirely and falls through to existing relation/link reversal
 
 ## Phase 8: End-to-end round-trip and functional proof — PR2
 
-- [ ] 8.1 RED: `tests/unit/cli/test_merge_roundtrip.py` — merge -> unmerge is byte-identical for a file carrying all three rewrite kinds, AND separately for provenance-only, relations-only, links-only files
-- [ ] 8.2 GREEN: confirm round-trip parity holds given Phases 5-7 (should require no new production code — this test closes the E2E gap)
-- [ ] 8.3 RED: **functional defect #230 proof** — after a merge retargets a third party's `provenance` from absorbed to survivor, a later `set-sensitivity <survivor> <higher-level>` (confirmed) resolves that object as a provenance descendant, raises it via `combine_sensitivity`, and lists it in the preview/success message
-- [ ] 8.4 GREEN: confirm this passes with no `set_sensitivity_cmd` changes (design states it is untouched) — the fix is purely that `provenance` now correctly names the survivor, so existing `find_provenance_descendants` reaches it
+- [x] 8.1 RED: `tests/unit/cli/test_merge_roundtrip.py` — merge -> unmerge is byte-identical for a file carrying all three rewrite kinds, AND separately for provenance-only, relations-only, links-only files
+- [x] 8.2 GREEN: confirm round-trip parity holds given Phases 5-7 (should require no new production code — this test closes the E2E gap)
+- [x] 8.3 RED: **functional defect #230 proof** — after a merge retargets a third party's `provenance` from absorbed to survivor, a later `set-sensitivity <survivor> <higher-level>` (confirmed) resolves that object as a provenance descendant, raises it via `combine_sensitivity`, and lists it in the preview/success message
+- [x] 8.4 GREEN: confirm this passes with no `set_sensitivity_cmd` changes (design states it is untouched) — the fix is purely that `provenance` now correctly names the survivor, so existing `find_provenance_descendants` reaches it
 
 ## Phase 9: Docs and PR2 checkpoint
 
-- [ ] 9.1 Update `docs/cli.md`: merge now retargets `provenance:` third pass (type-ungated), retarget-then-dedupe behavior, unmerge precedence rule
-- [ ] 9.2 Update `docs/cli.md` with the **documented rollback failure mode**: a reverted v2 reader meeting a v3 ledger entry raises `unsupported merged_from schema version`; recovery is `unmerge` before revert, or hand-edit `schema` to v2 and drop `provenance_rewrites` after revert
-- [ ] 9.3 Confirm `docs/adr/0011-provenance-retarget-on-merge.md` status stays `Proposed` (frontmatter and body) — do NOT flip to Accepted; that is the archive phase's exclusive responsibility
-- [ ] 9.4 Run `uv run pytest tests/unit/cli/test_merge.py tests/unit/cli/test_merge_core.py tests/unit/cli/test_merge_roundtrip.py tests/unit/cli/test_unmerge.py` — all GREEN
-- [ ] 9.5 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean; `uv run pytest --cov` >= 90% branch coverage on touched files
+- [x] 9.1 Update `docs/cli.md`: merge now retargets `provenance:` third pass (type-ungated), retarget-then-dedupe behavior, unmerge precedence rule
+- [x] 9.2 Update `docs/cli.md` with the **documented rollback failure mode**: a reverted v2 reader meeting a v3 ledger entry raises `unsupported merged_from schema version`; recovery is `unmerge` before revert, or hand-edit `schema` to v2 and drop `provenance_rewrites` after revert
+- [x] 9.3 Confirm `docs/adr/0011-provenance-retarget-on-merge.md` status stays `Proposed` (frontmatter and body) — do NOT flip to Accepted; that is the archive phase's exclusive responsibility
+- [x] 9.4 Run `uv run pytest tests/unit/cli/test_merge.py tests/unit/cli/test_merge_core.py tests/unit/cli/test_merge_roundtrip.py tests/unit/cli/test_unmerge.py` — all GREEN
+- [x] 9.5 `uv run ruff check . && uv run ruff format --check .` and `uv run mypy .` clean; `uv run pytest --cov` >= 90% branch coverage on touched files
 
 ## PR Assignment
 
