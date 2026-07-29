@@ -57,29 +57,29 @@ Dependency: PR2 branches from PR1's HEAD and targets PR1's branch; PR1 targets `
 
 ## Phase 4: PR2 — Lint Detection (`lint.py`)
 
-- [ ] 4.1 RED: write `test_lint.py` test asserting `LintDoc` gains `extraction_status: str = ""` and `resource: str = ""`, populated from the existing `metadata` dict at `lint.py:125` (no new read).
-- [ ] 4.2 GREEN: add the two fields to `LintDoc` and populate them in the existing walk.
-- [ ] 4.3 RED: write `test_check_unextracted_flags_failed_sources` — a `LintDoc` with `extraction_status == "failed"` produces one `unextracted` finding.
-- [ ] 4.4 RED: write `test_check_unextracted_ignores_non_failed_values` (parametrized over `no-extractable-text`, `blocked-by-sensitivity`, `no-concepts-found`, and unrecognized values) — no `unextracted` finding, and `blocked-by-sensitivity` never appears in any retry prompt.
-- [ ] 4.5 RED: write `test_check_unextracted_names_exact_retry_command` — detail text is `openkos ingest <resource>` built from the Source's own `resource` field; generic fallback when `resource` is missing/empty.
-- [ ] 4.6 RED: write `test_check_unextracted_signature_has_no_bundle_dir_param` — asserts `check_unextracted(docs: list[LintDoc])` has exactly one parameter (structural no-fifth-walk guard).
-- [ ] 4.7 GREEN: implement `check_unextracted(docs: list[LintDoc]) -> list[LintFinding]` in `lint.py`, add `LintReport.unextracted`, and wire it into the existing `collect_docs` walk (no new walk).
-- [ ] 4.8 RED: write `test_lint_exits_zero_with_unextracted_findings_present`.
-- [ ] 4.9 GREEN: confirm/adjust `lint`'s exit-code path so `unextracted` stays non-gating like `stale`/`orphan`/`dangling`.
+- [x] 4.1 RED: write `test_lint.py` test asserting `LintDoc` gains `extraction_status: str = ""` and `resource: str = ""`, populated from the existing `metadata` dict at `lint.py:125` (no new read).
+- [x] 4.2 GREEN: add the two fields to `LintDoc` and populate them in the existing walk.
+- [x] 4.3 RED: write `test_check_unextracted_flags_failed_sources` — a `LintDoc` with `extraction_status == "failed"` produces one `unextracted` finding.
+- [x] 4.4 RED: write `test_check_unextracted_ignores_non_failed_values` (parametrized over `no-extractable-text`, `blocked-by-sensitivity`, `no-concepts-found`, and unrecognized values) — no `unextracted` finding, and `blocked-by-sensitivity` never appears in any retry prompt.
+- [x] 4.5 RED: write `test_check_unextracted_names_exact_retry_command` — detail text is `openkos ingest <resource>` built from the Source's own `resource` field; generic fallback when `resource` is missing/empty.
+- [x] 4.6 RED: write `test_check_unextracted_signature_has_no_bundle_dir_param` — asserts `check_unextracted(docs: list[LintDoc])` has exactly one parameter (structural no-fifth-walk guard).
+- [x] 4.7 GREEN: implement `check_unextracted(docs: list[LintDoc]) -> list[LintFinding]` in `lint.py`, add `LintReport.unextracted`, and wire it into the existing `collect_docs` walk (no new walk).
+- [x] 4.8 RED: write `test_lint_exits_zero_with_unextracted_findings_present`.
+- [x] 4.9 GREEN: confirm/adjust `lint`'s exit-code path so `unextracted` stays non-gating like `stale`/`orphan`/`dangling`.
 
 ## Phase 5: PR2 — CLI Wiring (`cli/main.py`)
 
-- [ ] 5.1 RED: write test asserting `lint` CLI output includes an `Unextracted sources:` section when findings are present.
-- [ ] 5.2 GREEN: wire `LintReport.unextracted` into the `lint` command's rendering in `main.py`.
-- [ ] 5.3 RED: write `test_status.py` test asserting `status` folds `lint`'s `unextracted` findings into `needs_attention`, naming the same retry command.
-- [ ] 5.4 RED: write `test_status_consumes_same_docs_list_no_new_walk` — spy on `lint_check.collect_docs` and assert call count == 1 during a `status` run (reuses the in-memory `docs` list already bound at main.py:5010).
-- [ ] 5.5 GREEN: fold `unextracted` findings into `needs_attention` at the existing `status` call site, only for `failed`-sourced findings.
-- [ ] 5.6 RED: write `test_status_blocked_by_sensitivity_never_in_retry_prompt`.
-- [ ] 5.7 GREEN: confirm 5.6 passes (no separate code path expected — `check_unextracted` already excludes non-`failed` values).
+- [x] 5.1 RED: write test asserting `lint` CLI output includes an `Unextracted sources:` section when findings are present.
+- [x] 5.2 GREEN: wire `LintReport.unextracted` into the `lint` command's rendering in `main.py`.
+- [x] 5.3 RED: write `test_status.py` test asserting `status` folds `lint`'s `unextracted` findings into `needs_attention`, naming the same retry command.
+- [x] 5.4 RED: write `test_status_consumes_same_docs_list_no_new_walk` — spy on `lint_check.collect_docs` and assert call count == 1 during a `status` run (reuses the in-memory `docs` list already bound at main.py:5010).
+- [x] 5.5 GREEN: fold `unextracted` findings into `needs_attention` at the existing `status` call site, only for `failed`-sourced findings.
+- [x] 5.6 RED: write `test_status_blocked_by_sensitivity_never_in_retry_prompt`.
+- [x] 5.7 GREEN: confirm 5.6 passes (no separate code path expected — `check_unextracted` already excludes non-`failed` values).
 
 ## Phase 6: PR2 — Docs and Verification
 
-- [ ] 6.1 Update `docs/cli.md` to document the `unextracted` lint finding and the `needs_attention` surfacing in `status`, including the example retry command format.
-- [ ] 6.2 Update `openspec/changes/surface-skipped-extractions/specs/lint/spec.md` and `specs/status/spec.md` scenarios to match implemented behavior (verify text already covers all cases).
-- [ ] 6.3 Run `uv run pytest tests/unit/cli/test_lint.py tests/unit/cli/test_status.py`, `uv run mypy .`, `uv run ruff check . && uv run ruff format --check .` for PR2 scope; confirm all Phase 4-6 tests green.
-- [ ] 6.4 Run full suite `uv run pytest --cov` to confirm the 90% branch-coverage threshold holds across both PRs combined.
+- [x] 6.1 Update `docs/cli.md` to document the `unextracted` lint finding and the `needs_attention` surfacing in `status`, including the example retry command format.
+- [x] 6.2 Update `openspec/changes/surface-skipped-extractions/specs/lint/spec.md` and `specs/status/spec.md` scenarios to match implemented behavior (verify text already covers all cases).
+- [x] 6.3 Run `uv run pytest tests/unit/cli/test_lint.py tests/unit/cli/test_status.py`, `uv run mypy .`, `uv run ruff check . && uv run ruff format --check .` for PR2 scope; confirm all Phase 4-6 tests green.
+- [x] 6.4 Run full suite `uv run pytest --cov` to confirm the 90% branch-coverage threshold holds across both PRs combined.
