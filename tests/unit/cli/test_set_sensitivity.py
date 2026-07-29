@@ -792,6 +792,79 @@ def test_descendants_written_before_target_on_failure(
     assert _sensitivity_of(tmp_path, source_id) == "private"
 
 
+def test_phase_b_failure_names_the_landed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Phase-B write failure names every path already written before the
+    failing call, appended to the existing first-sentence message
+    (design D9; issue #233). The existing first sentence
+    ('failed while writing the set-sensitivity') stays byte-identical --
+    this test pins it verbatim, since no prior test in this file exercised
+    a Phase-B write failure at all."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    first = _write_derived_concept(
+        tmp_path, slug="first-derived", provenance=[source_id], sensitivity="public"
+    )
+    second = _write_derived_concept(
+        tmp_path, slug="second-derived", provenance=[source_id], sensitivity="public"
+    )
+
+    real_write_atomic = fsio.write_atomic
+    call_count = 0
+
+    def _failing_on_nth_call(path: Path, content: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 3:  # first, second descendant writes land; 3rd fails
+            raise OSError("simulated disk failure")
+        real_write_atomic(path, content)
+
+    monkeypatch.setattr("openkos.cli.main.fsio.write_atomic", _failing_on_nth_call)
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos set-sensitivity: failed while writing the set-sensitivity" in (
+        result.stderr
+    )
+    assert (
+        "Already written (left over-classified, not rolled back): "
+        f"bundle/{first}.md, bundle/{second}.md."
+    ) in result.stderr
+    assert _sensitivity_of(tmp_path, first) == "confidential"
+    assert _sensitivity_of(tmp_path, second) == "confidential"
+    assert _sensitivity_of(tmp_path, source_id) == "private"
+
+
+def test_phase_b_failure_with_zero_landed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the very first Phase-B write fails, the message names no
+    landed paths at all (design D9's `No path was written.` branch)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+
+    def _always_fails(path: Path, content: str) -> None:
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr("openkos.cli.main.fsio.write_atomic", _always_fails)
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos set-sensitivity: failed while writing the set-sensitivity" in (
+        result.stderr
+    )
+    assert "No path was written." in result.stderr
+
+
 def test_commit_stages_every_changed_path(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
