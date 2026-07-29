@@ -34,7 +34,7 @@ Chain strategy: stacked-to-main
 - [x] 2.1 Add `okf.DescendantRaise` frozen dataclass (`concept_id`, `current`, `new_level`, `content`; no `path`) next to `ProvenanceRewrite` in `src/openkos/model/okf.py`
 - [x] 2.2 Add `resolve_source_raises(files, *, source_id, level) -> list[okf.DescendantRaise]` and `find_unresolvable_provenance(files, *, known_extra_ids=()) -> list[tuple[str,str]]` to `src/openkos/bundle/provenance.py`; extract `provenance_closure` as the fixpoint core (`provenance.py:129-137` moves verbatim), `find_provenance_descendants` delegates to it
 - [x] 2.3 Rewire `set_sensitivity_cmd` (`main.py:3339-3411`) to call `resolve_source_raises`/`find_unresolvable_provenance`; drop `_DescendantRaise`; zero edits to `tests/unit/cli/test_set_sensitivity.py`
-- [x] 2.4 Run `uv run pytest tests/unit/bundle/test_provenance_source_raises.py tests/unit/cli/test_set_sensitivity.py` — 1.1's file and all 36 existing tests GREEN, byte-identical behavior (task doc estimated 29; the file actually holds 36 test functions)
+- [x] 2.4 Run `uv run pytest tests/unit/bundle/test_provenance_source_raises.py tests/unit/cli/test_set_sensitivity.py` — 1.1's file and all pre-existing tests GREEN, byte-identical behavior. `test_set_sensitivity.py` has 29 test FUNCTIONS on `main` (matching this doc's original estimate) which collect as 36 test CASES once `@pytest.mark.parametrize` (`:159`, `:252`) is expanded; the design's "29 existing tests" was correct all along and referred to function count
 
 ## Phase 3: RED — Phase-B landed-path guard (PR1, #233)
 
@@ -44,7 +44,7 @@ Chain strategy: stacked-to-main
 ## Phase 4: GREEN — landed-path message (PR1, #233)
 
 - [x] 4.1 In `set_sensitivity_cmd`'s Phase-B write loop, append each path to a `landed: list[str]` after its `write_atomic` returns; on failure append `Already written (left over-classified, not rolled back): bundle/a.md, bundle/b.md.` or `No path was written.` to the existing first sentence
-- [x] 4.2 Run `uv run pytest tests/unit/cli/test_set_sensitivity.py` — all 36 plus the 2 new landed-path tests GREEN (38 total)
+- [x] 4.2 Run `uv run pytest tests/unit/cli/test_set_sensitivity.py` — all pre-existing tests plus the 2 new landed-path tests GREEN: 31 test functions collecting as 38 test cases
 
 ## Phase 5: PR1 checkpoint
 
@@ -110,6 +110,6 @@ Chain strategy: stacked-to-main
 
 ## PR Assignment
 
-- **PR1** (`feat/extract-source-raises` -> `main`): Phases 1-5 — closes #235, #233
-- **PR2** (`feat/lint-below-source-sensitivity` -> PR1 branch): Phases 6-10
-- **PR3** (`feat/backfill-sensitivity-verb` -> PR1 branch, independent of PR2): Phases 11-14 — closes #231
+- **PR1** (`feat/extract-descendant-scan` -> `main`): Phases 1-5 — closes #235, #233
+- **PR2** (`feat/lint-below-source-sensitivity` -> `feat/extract-descendant-scan`): Phases 6-10
+- **PR3** (`feat/backfill-sensitivity-verb` -> `feat/extract-descendant-scan`, independent of PR2): Phases 11-14 — closes #231
