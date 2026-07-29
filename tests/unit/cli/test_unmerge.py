@@ -85,6 +85,30 @@ def _write_concept(
     index_path.write_text(new_index_text, encoding="utf-8")
 
 
+def _write_concept_with_provenance(
+    tmp_path: Path,
+    concept_id: str,
+    *,
+    title: str,
+    provenance: list[str] | None = None,
+    relations: list[dict[str, str]] | None = None,
+    body: str = "Body.",
+) -> None:
+    """Write a concept file directly, optionally carrying `provenance:`
+    and/or `relations:` -- mirrors `test_merge_core.py`'s helper of the
+    same name, for `unmerge`'s precedence tests."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {"type": "Concept", "title": title}
+    if provenance is not None:
+        metadata["provenance"] = provenance
+    if relations is not None:
+        metadata["relations"] = relations
+    concept_path.write_text(
+        okf.dump_frontmatter(metadata, f"# {title}\n\n{body}\n"), encoding="utf-8"
+    )
+
+
 def test_unmerge_restores_survivor_absorbed_index_log_and_reverses_links(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -296,6 +320,247 @@ def test_unmerge_relation_drift_fails_closed_no_write(
     assert isinstance(result.exception, SystemExit)
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_restores_provenance_only_file_exclusively_via_reverse_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file present ONLY in `provenance_rewrites` (no link, no relation)
+    restores exclusively via `reverse_provenance_rewrites`, byte-identical
+    to its pre-merge state."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["concepts/absorbed"],
+    )
+    derived_path = tmp_path / "bundle" / "concepts" / "derived.md"
+    pre_merge_derived = derived_path.read_bytes()
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+    assert derived_path.read_bytes() != pre_merge_derived
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+    assert derived_path.read_bytes() == pre_merge_derived
+
+
+def test_unmerge_three_way_precedence_provenance_over_relations_over_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file touched by ALL THREE rewrite kinds reverses exclusively from
+    its `provenance_rewrites` snapshot, byte-identical to pre-merge; a file
+    in `relation_rewrites` but not `provenance_rewrites` reverses via the
+    relation rule; a file in neither reverses via the link rule (spec:
+    "A file touched by all three rewrite kinds reverses correctly under
+    precedence")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+
+    all_three_path = tmp_path / "bundle" / "concepts" / "all_three.md"
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/all_three",
+        title="AllThree",
+        provenance=["concepts/absorbed"],
+        relations=[{"target": "concepts/absorbed", "type": "depends_on"}],
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+    pre_all_three = all_three_path.read_bytes()
+
+    relation_only_path = tmp_path / "bundle" / "concepts" / "relation_only.md"
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/relation_only",
+        title="RelationOnly",
+        relations=[{"target": "concepts/absorbed", "type": "depends_on"}],
+    )
+    pre_relation_only = relation_only_path.read_bytes()
+
+    link_only_path = tmp_path / "bundle" / "concepts" / "link_only.md"
+    _write_concept(
+        tmp_path,
+        "concepts/link_only",
+        title="LinkOnly",
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+    pre_link_only = link_only_path.read_bytes()
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+    assert all_three_path.read_bytes() != pre_all_three
+    assert relation_only_path.read_bytes() != pre_relation_only
+    assert link_only_path.read_bytes() != pre_link_only
+
+    unmerge_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert unmerge_result.exit_code == 0, unmerge_result.stderr
+    assert all_three_path.read_bytes() == pre_all_three
+    assert relation_only_path.read_bytes() == pre_relation_only
+    assert link_only_path.read_bytes() == pre_link_only
+
+
+def test_unmerge_provenance_drift_fails_closed_no_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T10: a provenance-retargeted file edited AFTER the merge and BEFORE
+    `unmerge` must degrade cleanly (exit 1) instead of being silently
+    clobbered with the stale pre-merge snapshot -- symmetric with the link
+    and relation drift-detection tests."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["concepts/absorbed"],
+    )
+    derived_path = tmp_path / "bundle" / "concepts" / "derived.md"
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    post_merge_text = derived_path.read_text(encoding="utf-8")
+    assert "concepts/survivor" in post_merge_text
+
+    # A legitimate edit to the retargeted provenance file, made AFTER the
+    # merge and BEFORE unmerge -- must NOT be silently lost.
+    drifted_metadata, drifted_body = okf.load_frontmatter(post_merge_text)
+    existing_provenance = drifted_metadata["provenance"]
+    assert isinstance(existing_provenance, list)
+    drifted_metadata["provenance"] = [*existing_provenance, "concepts/elsewhere"]
+    drifted_text = okf.dump_frontmatter(drifted_metadata, drifted_body)
+    derived_path.write_text(drifted_text, encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_v1_and_v2_ledger_entries_still_unmerge_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T9: a pre-slice-2a v1 ledger entry (no `relation_rewrites`, no
+    `provenance_rewrites` key) and a pre-provenance v2 ledger entry
+    (`relation_rewrites` present, no `provenance_rewrites` key) both
+    unmerge exactly -- no regression from the v3 bump (spec: "A v1 and a
+    v2 ledger entry are still readable after the v3 bump")."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    pre_index = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    pre_log = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+
+    # v1 entry: survivor-a / absorbed-a.
+    absorbed_a_snapshot = okf.dump_frontmatter(
+        {"type": "Concept", "title": "AbsorbedA"}, "# AbsorbedA\n\nBody.\n"
+    )
+    survivor_a_before = okf.dump_frontmatter(
+        {"type": "Concept", "title": "SurvivorA"}, "# SurvivorA\n\nBody.\n"
+    )
+    v1_entry: dict[str, object] = {
+        "schema": "openkos.merge_ledger/v1",
+        "merged_at": "2026-01-01T00:00:00+00:00",
+        "absorbed_id": "concepts/absorbed-a",
+        "absorbed_snapshot": absorbed_a_snapshot,
+        "survivor_before": survivor_a_before,
+        "index_before": pre_index,
+        "log_before": pre_log,
+        "link_rewrites": [],
+        "sensitivity_before": "",
+        "sensitivity_after": "public",
+        # deliberately NO "relation_rewrites"/"provenance_rewrites" keys.
+    }
+    survivor_a_path = tmp_path / "bundle" / "concepts" / "survivor-a.md"
+    survivor_a_path.parent.mkdir(parents=True, exist_ok=True)
+    survivor_a_path.write_text(
+        okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                "title": "SurvivorA",
+                "sensitivity": "public",
+                "merged_from": [v1_entry],
+            },
+            "# SurvivorA\n\nBody.\n",
+        ),
+        encoding="utf-8",
+    )
+
+    v1_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor-a", "concepts/absorbed-a", "--auto"]
+    )
+    assert v1_result.exit_code == 0, v1_result.stderr
+    assert survivor_a_path.read_text(encoding="utf-8") == survivor_a_before
+    assert (tmp_path / "bundle" / "concepts" / "absorbed-a.md").read_text(
+        encoding="utf-8"
+    ) == absorbed_a_snapshot
+
+    # v2 entry: survivor-b / absorbed-b, carrying relation_rewrites but no
+    # provenance_rewrites key.
+    absorbed_b_snapshot = okf.dump_frontmatter(
+        {"type": "Concept", "title": "AbsorbedB"}, "# AbsorbedB\n\nBody.\n"
+    )
+    survivor_b_before = okf.dump_frontmatter(
+        {"type": "Concept", "title": "SurvivorB"}, "# SurvivorB\n\nBody.\n"
+    )
+    v2_entry: dict[str, object] = {
+        "schema": "openkos.merge_ledger/v2",
+        "merged_at": "2026-01-01T00:00:00+00:00",
+        "absorbed_id": "concepts/absorbed-b",
+        "absorbed_snapshot": absorbed_b_snapshot,
+        "survivor_before": survivor_b_before,
+        "index_before": pre_index,
+        "log_before": pre_log,
+        "link_rewrites": [],
+        "sensitivity_before": "",
+        "sensitivity_after": "public",
+        "relation_rewrites": [],
+        # deliberately NO "provenance_rewrites" key.
+    }
+    survivor_b_path = tmp_path / "bundle" / "concepts" / "survivor-b.md"
+    survivor_b_path.write_text(
+        okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                "title": "SurvivorB",
+                "sensitivity": "public",
+                "merged_from": [v2_entry],
+            },
+            "# SurvivorB\n\nBody.\n",
+        ),
+        encoding="utf-8",
+    )
+
+    v2_result = runner.invoke(
+        app, ["unmerge", "concepts/survivor-b", "concepts/absorbed-b", "--auto"]
+    )
+    assert v2_result.exit_code == 0, v2_result.stderr
+    assert survivor_b_path.read_text(encoding="utf-8") == survivor_b_before
+    assert (tmp_path / "bundle" / "concepts" / "absorbed-b.md").read_text(
+        encoding="utf-8"
+    ) == absorbed_b_snapshot
 
 
 def test_unmerge_auto_bypasses_the_prompt(

@@ -105,6 +105,28 @@ def _write_concept_with_relations(
     )
 
 
+def _write_concept_with_provenance(
+    tmp_path: Path,
+    concept_id: str,
+    *,
+    title: str,
+    concept_type: str = "Concept",
+    provenance: list[str] | None = None,
+) -> None:
+    """Same shape as `_write_concept_with_relations`, but carries a
+    `provenance:` frontmatter list -- deliberately NOT registered in
+    `index.md` (unneeded: the provenance-scan tests below don't exercise
+    `index.md`)."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {"type": concept_type, "title": title}
+    if provenance is not None:
+        metadata["provenance"] = provenance
+    concept_path.write_text(
+        okf.dump_frontmatter(metadata, f"# {title}\n\nBody.\n"), encoding="utf-8"
+    )
+
+
 def test_successful_merge_writes_ledger_rewrites_links_removes_absorbed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -820,3 +842,175 @@ def test_merge_succeeds_despite_unrelated_file_with_malformed_frontmatter(
     assert result.exit_code == 0, result.stderr
     assert result.exception is None
     assert not (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()
+
+
+def test_merge_retargets_inbound_provenance_and_previews_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A third-party file whose `provenance:` names the absorbed id is
+    retargeted to the survivor id, and the Phase A preview surfaces it
+    before the confirm gate (spec: Reversible Inbound-Provenance Rewiring)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["concepts/absorbed"],
+    )
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "bundle/concepts/derived.md (retarget provenance to survivor)" in (
+        result.output
+    )
+
+    derived_text = (tmp_path / "bundle" / "concepts" / "derived.md").read_text(
+        encoding="utf-8"
+    )
+    derived_metadata, _ = okf.load_frontmatter(derived_text)
+    assert derived_metadata["provenance"] == ["concepts/survivor"]
+
+
+def test_merge_absorbing_non_source_concept_still_retargets_third_party_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P3 / spec scenario: the provenance scan is NOT gated on the absorbed
+    concept's `type` -- absorbing a non-Source `Decision` still retargets a
+    third party's `provenance` entry naming it, since `query --save` can
+    file any cited concept id as another object's provenance."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        concept_type="Decision",
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["concepts/absorbed"],
+    )
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    derived_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "concepts" / "derived.md").read_text(encoding="utf-8")
+    )
+    assert derived_metadata["provenance"] == ["concepts/survivor"]
+
+
+def test_merge_scans_bundle_exactly_once_via_rglob_when_scanning_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T5 -- zero extra bundle walks: `prepare_merge` calls
+    `Path.rglob(bundle_dir, "*.md")` exactly once even with the provenance
+    scanner added as a third pass. Uses a PLAIN-FUNCTION counting wrapper
+    (never a generator/`yield from`), mirroring
+    `test_contradictions.py:1041`'s `_counting_build_graph` precedent: a
+    generator body would defer the count to the first `next()`, measuring
+    iteration rather than invocation, and would prove nothing."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["concepts/absorbed"],
+    )
+
+    calls: list[tuple[Path, str]] = []
+    original = Path.rglob
+
+    def _counting_rglob(self: Path, pattern: str, **kwargs: object) -> object:
+        calls.append((self, pattern))
+        return original(self, pattern, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "rglob", _counting_rglob)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    bundle_dir = tmp_path / "bundle"
+    matching_calls = [call for call in calls if call == (bundle_dir, "*.md")]
+    assert matching_calls == [(bundle_dir, "*.md")]
+
+
+def test_merge_retarget_then_later_set_sensitivity_raise_reaches_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The functional defect #230 proof: after `merge` retargets a
+    third-party object's `provenance` from absorbed to survivor, a LATER
+    `set-sensitivity <survivor> <higher-level>` (confirmed) resolves that
+    object as a provenance descendant, raises its sensitivity via
+    `combine_sensitivity`, and names it in the preview/success message.
+    Before the fix, the object's `provenance` still named the removed
+    absorbed id, so it was unreachable and silently skipped by
+    `find_provenance_descendants` (spec: Retargeted Provenance Reaches
+    Later Sensitivity Propagation)."""
+    _init_workspace(tmp_path, monkeypatch)
+    survivor_path = tmp_path / "bundle" / "sources" / "survivor.md"
+    survivor_path.parent.mkdir(parents=True, exist_ok=True)
+    survivor_path.write_text(
+        okf.dump_frontmatter(
+            {"type": "Source", "title": "Survivor", "sensitivity": "private"},
+            "# Survivor\n\nBody.\n",
+        ),
+        encoding="utf-8",
+    )
+    absorbed_path = tmp_path / "bundle" / "sources" / "absorbed.md"
+    absorbed_path.write_text(
+        okf.dump_frontmatter(
+            {"type": "Source", "title": "Absorbed", "sensitivity": "private"},
+            "# Absorbed\n\nBody.\n",
+        ),
+        encoding="utf-8",
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["sources/absorbed"],
+    )
+    derived_path = tmp_path / "bundle" / "concepts" / "derived.md"
+    derived_metadata, derived_body = okf.load_frontmatter(
+        derived_path.read_text(encoding="utf-8")
+    )
+    derived_metadata["sensitivity"] = "private"
+    derived_path.write_text(
+        okf.dump_frontmatter(derived_metadata, derived_body), encoding="utf-8"
+    )
+
+    merge_result = runner.invoke(
+        app, ["merge", "sources/survivor", "sources/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.stderr
+
+    derived_metadata_after_merge, _ = okf.load_frontmatter(
+        derived_path.read_text(encoding="utf-8")
+    )
+    assert derived_metadata_after_merge["provenance"] == ["sources/survivor"]
+
+    set_sensitivity_result = runner.invoke(
+        app, ["set-sensitivity", "sources/survivor", "confidential", "--auto"]
+    )
+
+    assert set_sensitivity_result.exit_code == 0, set_sensitivity_result.stderr
+    assert "concepts/derived.md" in set_sensitivity_result.output
+
+    derived_metadata_final, _ = okf.load_frontmatter(
+        derived_path.read_text(encoding="utf-8")
+    )
+    assert derived_metadata_final["sensitivity"] == "confidential"

@@ -12,6 +12,9 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.bundle import index as bundle_index
+from openkos.bundle import links as bundle_links
+from openkos.bundle import provenance as bundle_provenance
+from openkos.bundle import relations as bundle_relations
 from openkos.cli.main import (
     MergeResult,
     PreparedMerge,
@@ -20,6 +23,7 @@ from openkos.cli.main import (
     merge_core,
     prepare_merge,
 )
+from openkos.model import okf
 from openkos.vcs import git as vcs_git
 
 runner = CliRunner()
@@ -65,6 +69,31 @@ def _write_concept(
         description=f"{title}.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+
+
+def _write_concept_with_provenance(
+    tmp_path: Path,
+    concept_id: str,
+    *,
+    title: str,
+    provenance: list[str] | None = None,
+    relations: list[dict[str, str]] | None = None,
+    body: str = "Body.",
+) -> None:
+    """Write a concept file directly to the bundle, optionally carrying a
+    `provenance:` and/or `relations:` frontmatter list -- deliberately NOT
+    registered in `index.md` (mirrors `test_merge.py::_write_concept_with_relations`,
+    extended with `provenance` for the third-scanner tests)."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {"type": "Concept", "title": title}
+    if provenance is not None:
+        metadata["provenance"] = provenance
+    if relations is not None:
+        metadata["relations"] = relations
+    concept_path.write_text(
+        okf.dump_frontmatter(metadata, f"# {title}\n\n{body}\n"), encoding="utf-8"
+    )
 
 
 def _resolve(
@@ -330,3 +359,229 @@ def test_merge_core_makes_zero_vcs_side_effect_and_is_unmerge_reversible(
     assert result.exit_code == 0, result.stderr
     assert absorbed_path.exists()
     assert "merged_from" not in survivor_path.read_text(encoding="utf-8")
+
+
+def test_prepare_merge_returns_provenance_rewrites_for_third_party_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`prepare_merge` runs `find_inbound_provenance_rewrites` as a THIRD
+    scanner over the SAME `other_files` snapshot -- a third-party file whose
+    `provenance:` names the absorbed id is recorded in
+    `PreparedMerge.provenance_rewrites` (spec: Reversible Inbound-Provenance
+    Rewiring)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["concepts/absorbed"],
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    derived_text_before = (bundle_dir / "concepts" / "derived.md").read_text(
+        encoding="utf-8"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    assert prepared.provenance_rewrites == [
+        okf.ProvenanceRewrite(file="concepts/derived.md", snapshot=derived_text_before)
+    ]
+    assert (
+        prepared.plan.ledger_entry.provenance_rewrites == prepared.provenance_rewrites
+    )
+    # Phase A writes nothing.
+    assert (bundle_dir / "concepts" / "derived.md").read_text(
+        encoding="utf-8"
+    ) == derived_text_before
+
+
+def test_prepare_merge_touched_files_is_three_way_union(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`touched_files` is the sorted union of link, relation, AND provenance
+    rewrite file sets -- a file touched ONLY by the provenance scanner (no
+    link, no relation) must still appear."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept(
+        tmp_path,
+        "concepts/linker",
+        title="Linker",
+        body="See [Absorbed](/concepts/absorbed.md).",
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/relator",
+        title="Relator",
+        relations=[{"target": "concepts/absorbed", "type": "depends_on"}],
+    )
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["concepts/absorbed"],
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    assert prepared.touched_files == [
+        "concepts/derived.md",
+        "concepts/linker.md",
+        "concepts/relator.md",
+    ]
+
+
+def test_merge_core_chains_link_relation_provenance_transforms_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file touched by all three rewrite kinds is written once, with
+    `apply_link_rewrites` -> `apply_relation_rewrites` ->
+    `apply_provenance_rewrites` chained, in that exact order, on the same
+    in-memory text (design D5 extended to three passes)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/all_three",
+        title="AllThree",
+        provenance=["concepts/absorbed"],
+        relations=[{"target": "concepts/absorbed", "type": "depends_on"}],
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    pre_merge_text = (bundle_dir / "concepts" / "all_three.md").read_text(
+        encoding="utf-8"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+    merge_core(bundle_dir, index_path, log_path, prepared)
+
+    expected = bundle_links.apply_link_rewrites(
+        pre_merge_text, file="concepts/all_three.md", rewrites=prepared.link_rewrites
+    )
+    expected = bundle_relations.apply_relation_rewrites(
+        expected,
+        file="concepts/all_three.md",
+        survivor_id=survivor_canonical,
+        absorbed_id=absorbed_canonical,
+        rewrites=prepared.relation_rewrites,
+    )
+    expected = bundle_provenance.apply_provenance_rewrites(
+        expected,
+        file="concepts/all_three.md",
+        survivor_id=survivor_canonical,
+        absorbed_id=absorbed_canonical,
+        rewrites=prepared.provenance_rewrites,
+    )
+
+    actual = (bundle_dir / "concepts" / "all_three.md").read_text(encoding="utf-8")
+    assert actual == expected
+
+
+def test_merge_core_provenance_and_relation_snapshots_byte_identical_to_pre_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T4 -- snapshot byte-identity: a third-party file with an inbound
+    link, a `relations:` entry, AND a `provenance:` entry all pointing to
+    the absorbed id gets the SAME shared pre-merge snapshot recorded in both
+    `provenance_rewrites` and `relation_rewrites` -- asserted against the
+    on-disk ledger, not merely trusted (design's "Correctness rests on ...
+    being byte-identical")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/all_three",
+        title="AllThree",
+        provenance=["concepts/absorbed"],
+        relations=[{"target": "concepts/absorbed", "type": "depends_on"}],
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    pre_merge_text = (bundle_dir / "concepts" / "all_three.md").read_text(
+        encoding="utf-8"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+    merge_core(bundle_dir, index_path, log_path, prepared)
+
+    survivor_text = survivor_path.read_text(encoding="utf-8")
+    metadata, _ = okf.load_frontmatter(survivor_text)
+    entry = okf.decode_merged_from(metadata)[-1]
+
+    assert len(entry.provenance_rewrites) == 1
+    assert len(entry.relation_rewrites) == 1
+    assert entry.provenance_rewrites[0].file == "concepts/all_three.md"
+    assert entry.relation_rewrites[0].file == "concepts/all_three.md"
+    assert entry.provenance_rewrites[0].snapshot == entry.relation_rewrites[0].snapshot
+    assert entry.provenance_rewrites[0].snapshot == pre_merge_text
