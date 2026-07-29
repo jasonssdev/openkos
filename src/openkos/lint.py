@@ -105,9 +105,23 @@ class LintFinding:
     kind: str
     """`"stale"`, `"orphan"`, or `"dangling"`."""
     path: str
-    """The finding's bundle-relative `.md` path, for display."""
+    """The finding's bundle-relative `.md` path."""
     detail: str
-    """Human-readable detail text, rendered verbatim after `path`."""
+    """Human-readable detail text, rendered verbatim after the subject."""
+
+    @property
+    def concept_id(self) -> str:
+        """`path` minus its `.md` extension -- the OKF Concept ID (SPEC §2),
+        which is how `list`, `set-sensitivity`, and every other verb spell
+        this object. Prefer this over `path` when DISPLAYING a finding, so
+        one object never reads two ways depending on the verb (issue #247).
+
+        Exact, never a guess: every construction site in this module builds
+        `path` as `f"{doc.identity}.md"`, and `doc.identity` IS the concept
+        id. Skip notices are deliberately NOT covered -- they name a file
+        that failed to become an object, so a path is the honest spelling
+        there."""
+        return self.path.removesuffix(".md")
 
 
 @dataclass(frozen=True)

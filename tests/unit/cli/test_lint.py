@@ -128,7 +128,7 @@ def test_lint_flags_a_stale_stamp(
     result = runner.invoke(app, ["lint"])
 
     assert result.exit_code == 0
-    assert "concepts/old.md" in result.stdout
+    assert "concepts/old: " in result.stdout
     assert "2000-01-01" in result.stdout
 
 
@@ -149,7 +149,7 @@ def test_lint_flags_an_orphan_page(
     result = runner.invoke(app, ["lint"])
 
     assert result.exit_code == 0
-    assert "concepts/orphan.md" in result.stdout
+    assert "concepts/orphan: " in result.stdout
     assert "not referenced by index.md or any concept" in result.stdout
 
 
@@ -342,7 +342,7 @@ def test_lint_flags_a_dangling_relations_target(
     result = runner.invoke(app, ["lint"])
 
     assert result.exit_code == 0
-    assert "concepts/stoicism.md" in result.stdout
+    assert "concepts/stoicism: " in result.stdout
     assert "concepts/ghost" in result.stdout
 
 
@@ -382,8 +382,12 @@ def test_lint_flags_a_failed_extraction(
     result = runner.invoke(app, ["lint"])
 
     assert result.exit_code == 0
-    assert "sources/notes.md" in result.stdout
+    assert "sources/notes:" in result.stdout
     assert "openkos ingest raw/notes.txt" in result.stdout
+    # #247: findings name the object by its Concept ID, the same spelling
+    # `list` and `set-sensitivity` use -- never the `.md` file path. The
+    # retry hint still names a real raw file, which keeps its extension.
+    assert "sources/notes.md" not in result.stdout
 
 
 def test_lint_ignores_blocked_by_sensitivity(
@@ -440,7 +444,7 @@ def test_lint_flags_below_source_sensitivity(
     assert "Below-source sensitivity:" in result.stdout
     section = result.stdout.split("Below-source sensitivity:", 1)[1]
     section = section.split("Multi-source uncovered:", 1)[0]
-    assert "concepts/derived.md" in section
+    assert "concepts/derived: " in section
 
 
 def test_lint_flags_multi_source_uncovered(
@@ -481,11 +485,13 @@ def test_lint_flags_multi_source_uncovered(
     assert result.exit_code == 0
     assert "Multi-source uncovered:" in result.stdout
     section = result.stdout.split("Multi-source uncovered:", 1)[1]
-    assert "concepts/mixed.md" in section
+    assert "concepts/mixed: " in section
     assert "not covered by" in section
     # `concepts/from-c` is below-source-sensitivity (single-Source closure
     # member), not multi-source-uncovered -- it must not appear here.
-    assert "concepts/from-c.md" not in section
+    # Not a finding SUBJECT -- it may still be named inside another
+    # finding's `cites:` detail, so match the rendered "<id>: " prefix.
+    assert "concepts/from-c: " not in section
 
 
 def test_lint_clean_bundle_reports_zero_below_source_findings(

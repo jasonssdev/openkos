@@ -307,7 +307,7 @@ def test_status_surfaces_dangling_reference(
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0
-    assert "concepts/stoicism.md" in result.stdout
+    assert "concepts/stoicism: " in result.stdout
     assert "concepts/ghost" in result.stdout
 
 
@@ -460,7 +460,7 @@ def test_status_lists_below_source_sensitivity_under_needs_attention(
 
     assert result.exit_code == 0
     section = result.stdout.split("Needs attention:", 1)[1]
-    assert "concepts/derived.md" in section
+    assert "concepts/derived: " in section
     assert "below-source-sensitivity" in section
 
 
@@ -501,7 +501,7 @@ def test_status_marks_multi_source_uncovered_as_not_covered(
 
     assert result.exit_code == 0
     section = result.stdout.split("Needs attention:", 1)[1]
-    assert "concepts/mixed.md" in section
+    assert "concepts/mixed: " in section
     assert "multi-source-uncovered" in section
     assert "not covered by" in section
 
@@ -546,7 +546,7 @@ def test_status_below_source_reuses_the_single_collect_docs_call(
 
     assert result.exit_code == 0
     assert calls["n"] == 1
-    assert "concepts/derived.md" in result.stdout
+    assert "concepts/derived: " in result.stdout
 
 
 def test_status_surfaces_missing_vectors_db(

@@ -5085,12 +5085,14 @@ def status() -> None:
     # third `collect_docs()` call (design D3's no-fifth-walk guard).
     sensitivity_findings = lint_check.check_below_source_sensitivity(docs)
     needs_attention: list[str] = [*survey.findings]
-    needs_attention.extend(f"{finding.path}: {finding.detail}" for finding in dangling)
     needs_attention.extend(
-        f"{finding.path}: {finding.detail}" for finding in unextracted
+        f"{finding.concept_id}: {finding.detail}" for finding in dangling
     )
     needs_attention.extend(
-        f"{finding.path}: [{finding.kind}] {finding.detail}"
+        f"{finding.concept_id}: {finding.detail}" for finding in unextracted
+    )
+    needs_attention.extend(
+        f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
         for finding in sensitivity_findings
     )
     # #186: pending duplicate groups are ACTIONABLE -- name `duplicates` as
@@ -5375,42 +5377,42 @@ def lint() -> None:
         typer.echo("  No stale stamps.")
     else:
         for finding in report.stale:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Orphan pages:")
     if not report.orphans:
         typer.echo("  No orphan pages.")
     else:
         for finding in report.orphans:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Dangling references:")
     if not report.dangling:
         typer.echo("  No dangling references.")
     else:
         for finding in report.dangling:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Unextracted sources:")
     if not report.unextracted:
         typer.echo("  No unextracted sources.")
     else:
         for finding in report.unextracted:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Below-source sensitivity:")
     if not report.below_source:
         typer.echo("  No below-source sensitivity findings.")
     else:
         for finding in report.below_source:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
     typer.echo()
     typer.echo("Multi-source uncovered:")
     if not report.multi_source_uncovered:
         typer.echo("  No multi-source uncovered findings.")
     else:
         for finding in report.multi_source_uncovered:
-            typer.echo(f"  {finding.path}: {finding.detail}")
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
 
 
 @app.command()
