@@ -495,3 +495,173 @@ suite: **2604 passed** (2593 PR2 baseline + 11 new PR3a tests). `ruff
 check`/`ruff format --check`/`mypy` all clean. Ready for `sdd-verify` on
 PR3a's scope. PR3b (Phases 14-17, the Typer command + ADR-0012) remains
 untouched, as instructed.
+
+---
+
+# PR3b: backfill-sensitivity Typer command + ADR-0012 (Phases 14-17)
+
+## Scope of this run
+
+PR3b (Phases 14-17), the FINAL slice of change #231: the Typer
+`backfill-sensitivity` command wiring PR3a's pure `resolve_backfill_raises`
+sweep core into the CLI, plus ADR-0012. Bundle-wide only (no per-Source
+scoping argument -- `set-sensitivity` already covers the single-Source
+case); no `--dry-run` (the preview/decline path already serves as one);
+raise-only by construction (no `--allow-downgrade` equivalent); does NOT
+call `find_unresolvable_provenance` (design D8 -- that signal belongs to
+`lint`'s existing `dangling` finding).
+
+## Branch
+
+`feat/backfill-sensitivity-verb`, created off PR3a's tip (`a7f4ebc` on
+`feat/backfill-sensitivity-core`) per this session's explicit branch
+instruction. Verified with `git branch -v` before the first commit.
+
+## Mode
+
+Strict TDD (RED -> GREEN).
+
+## Commits (in order, continuing from PR3a's `a7f4ebc`)
+
+| # | SHA | Message | Type |
+|---|-----|---------|------|
+| 1 | `cc9835c` | `test(cli): pin backfill-sensitivity CLI scaffold (RED)` | RED |
+| 2 | `1dda7d9` | `feat(cli): add backfill-sensitivity command (GREEN)` | GREEN |
+| 3 | `9a05ae8` | `docs(adr): add ADR-0012 for the sensitivity backfill sweep` | docs |
+| 4 | `2468d65` | `chore(sdd): mark PR3b tasks complete for backfill-sensitivity` | docs |
+
+## TDD Cycle Evidence
+
+| Task | RED | GREEN | REFACTOR |
+|------|-----|-------|----------|
+| 14.1-14.3 -- backfill-sensitivity CLI characterization | `cc9835c`: all 11 new tests in `tests/unit/cli/test_backfill_sensitivity.py` fail with Typer exit code 2 (`No such command 'backfill-sensitivity'` -- the command does not exist yet, confirmed against PR3a's tip with `main.py` unmodified via `git stash push --keep-index`) | `1dda7d9`: all 11 pass | N/A -- first implementation, no further refactor needed |
+| 15.1-15.5 -- implement `backfill_sensitivity_cmd` Phase A/Phase B | (covered by 14.1-14.3's RED) | `1dda7d9`: `tests/unit/cli/test_backfill_sensitivity.py` (11) GREEN; full suite 2604 -> 2615 GREEN; `ruff check`/`ruff format --check`/`mypy` clean | None needed |
+| 16.1-16.3 -- ADR-0012 + README index + cli.md | N/A -- documentation, not test-driven | `9a05ae8`: ADR-0012 created (status `Proposed`, matching ADR-0011's introduction), `docs/adr/README.md` index row added, `docs/cli.md` gains a `backfill-sensitivity` section | N/A |
+| 17.1-17.3 -- PR3b checkpoint | N/A | `ruff check`/`ruff format --check`/`mypy` all clean; full suite 2615 passed; tasks.md checkpoint items marked `[x]` in `2468d65` | N/A |
+
+## Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and result | `uv run pytest tests/unit/cli/test_backfill_sensitivity.py` -> 11 passed |
+| Full suite | `uv run pytest -q` -> baseline (PR3a tip, `a7f4ebc`): 2604 passed; after PR3b: **2615 passed** (2604 + 11 new CLI tests) |
+| Runtime harness | `uv run python -m openkos.cli.main backfill-sensitivity [--auto]` exercised end-to-end through the full `CliRunner`-based `test_backfill_sensitivity.py` suite (init workspace, ingest two Sources with distinct sensitivity levels, hand-write derived concepts below/above/at their Source's level, run `backfill-sensitivity` with/without `--auto`, with a simulated TTY, with a declined prompt, and with patched `fsio.write_atomic` failures; inspect resulting bundle frontmatter, `log.md`, commit count, and commit file set) -- no separate manual run needed since the CLI test suite already drives the real Typer app end-to-end against a tmp workspace, including a real git repo for the commit-count/commit-files assertions |
+| Rollback boundary | `git revert` the 4 PR3b commits (`cc9835c`..`2468d65`) on `feat/backfill-sensitivity-verb` (or reset to `a7f4ebc`) removes the `backfill-sensitivity` command, ADR-0012, its README index row, and its `docs/cli.md` section entirely; the command is a new, additive Typer verb not referenced by any other command, so no other file or behavior is touched |
+
+## Lint / Typecheck
+
+- `uv run ruff check .` -> All checks passed
+- `uv run ruff format --check .` -> 2 files needed one `ruff format` pass before the check was clean (`src/openkos/cli/main.py`, `tests/unit/cli/test_backfill_sensitivity.py`) -- applied before the GREEN commit
+- `uv run mypy .` -> Success: no issues found in 150 source files
+
+## Files Changed
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `src/openkos/cli/main.py` | Modified | Added `backfill_sensitivity_cmd` (`@app.command("backfill-sensitivity")`): Phase A snapshots the bundle (sorted `rglob`, reserved names skipped), calls `bundle_provenance.resolve_backfill_raises`, prints an explicit no-op line and returns (exit 0, no log/commit) on zero raises, otherwise renders the sorted preview and applies the standard confirm-gate precedence (`--auto` > `cfg.review` > TTY confirm > refuse); Phase B writes every merged raise, appends one `log.md` entry, and issues one `_autocommit`, tracking `landed` paths and naming them verbatim on partial failure (mirrors `set_sensitivity_cmd`'s #233 fix) |
+| `tests/unit/cli/test_backfill_sensitivity.py` | Created | 11 CLI tests: raise-all-below-Sources across two Sources; descendant already above its Source's level untouched; multi-Source multi-descendant run produces one commit; `--auto` skips the prompt only; non-TTY without `--auto` refuses; declining the prompt performs no write; TTY prompts and shows the preview before confirming; already-clean bundle is a no-op on first run; immediate re-run after a successful sweep is a no-op (asserting `_commit_count` is unchanged, covering the Commit-state threat-matrix case); Phase-B failure names the landed paths; Phase-B failure with zero landed paths |
+| `docs/adr/0012-sensitivity-backfill-per-source-sweep.md` | Created | ADR-0012, status `Proposed`: records the decision to close the sensitivity gap via an explicit operator-run sweep (never an automatic silent migration), and to compensate the multi-Source coverage limit with the `lint`/`status` `multi-source-uncovered` detection signal rather than silently accepting it |
+| `docs/adr/README.md` | Modified | Added ADR-0012's index row |
+| `docs/cli.md` | Modified | Added a `backfill-sensitivity` section between `set-sensitivity` and `merge`, documenting the command's scope, confirm-gate precedence, no-op behavior, write order, and the deliberate omission of the unresolvable-provenance scan |
+| `openspec/changes/backfill-sensitivity/tasks.md` | Modified | Phases 14-17 (tasks 14.1 through 17.3) marked `[x]` -- every task in change #231 is now complete |
+
+## Changed-Line Totals (PR3b, via `git diff --numstat a7f4ebc`)
+
+| File | + | - |
+|---|---|---|
+| `src/openkos/cli/main.py` | 179 | 0 |
+| `tests/unit/cli/test_backfill_sensitivity.py` | 404 | 0 |
+| `docs/cli.md` | 16 | 0 |
+| `docs/adr/README.md` | 1 | 0 |
+| **Subtotal (excluding ADR-0012's own new-file text)** | **600** | **0** |
+| `docs/adr/0012-sensitivity-backfill-per-source-sweep.md` (new file, ADR text) | 117 | 0 |
+
+**Total changed lines excluding ADR text: 600**, against this run's
+~500-line target (and the tasks doc's re-sliced ~250-400 estimate for
+PR3b) -- see Issues Found below. Including the ADR: 717.
+
+## Deviations from Design
+
+None functional. `backfill_sensitivity_cmd` implements design D4/D5/D6/D8/D9
+exactly as specified: per-Source sweep via the PR3a pure core, merge-by-max
+via `resolve_backfill_raises` (already pinned in PR3a), no `type` filter
+on the descendant set, no call to `find_unresolvable_provenance`, and
+Phase-B landed-path naming mirroring `set_sensitivity_cmd`'s #233 fix
+byte-for-byte in message shape. One naming note: task 15.4 anticipated a
+possibly-separate `test_backfill_second_run_stages_nothing_and_creates_no_commit`
+test; the threat-matrix Commit-state case is instead covered by
+`test_immediate_rerun_after_a_successful_sweep_is_a_no_op`, which already
+asserts `_commit_count` is unchanged after the no-op second run -- a
+separate test would have duplicated the same assertion under a different
+name, so none was added. Recorded on 15.4 in `tasks.md`.
+
+## Issues Found
+
+- **Changed-line estimate miss**: actual PR3b diff (code + tests + non-ADR
+  docs) is 600 changed lines vs this run's ~500-line target (and the tasks
+  doc's re-sliced ~250-400 estimate) -- roughly 1.5-2.4x over, though
+  notably smaller than PR1's and PR2's ~2.5x overages and well within the
+  session's 800-line budget. The overage is concentrated in: (a)
+  `backfill_sensitivity_cmd`'s docstring, which follows this codebase's
+  exhaustive convention and mirrors `set_sensitivity_cmd`'s own
+  comparably-detailed docstring; and (b) test breadth -- 11 CLI scenarios
+  each with a multi-line docstring explaining the design/spec rule it
+  pins, plus the helper functions duplicated from `test_set_sensitivity.py`
+  (no shared conftest fixtures exist for these CLI-test helpers, matching
+  that file's own precedent of local, undeduplicated helpers). None of the
+  overage is control-flow complexity: `backfill_sensitivity_cmd`'s Phase
+  A/Phase B logic mirrors `set_sensitivity_cmd`'s existing shape closely.
+  No code was trimmed to force the estimate down; flagged for the
+  orchestrator/reviewer per this run's explicit instruction to stop and
+  report rather than silently continuing past target, though the overage
+  was identified only after implementation and full verification were
+  already complete and green, since the docstring/test-breadth pattern
+  causing it only became measurable at that point -- consistent with
+  PR1/PR2's identical post-hoc discovery.
+- **Pre-existing pytest arg-order artifact, unrelated to this PR's code**:
+  running the exact checkpoint command from `tasks.md` task 17.2
+  (`tests/unit/cli/test_backfill_sensitivity.py
+  tests/unit/bundle/test_resolve_backfill_raises.py
+  tests/unit/cli/test_set_sensitivity.py
+  tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py
+  tests/unit/cli/test_status.py`, in that literal order) produces 115
+  passed + 8 errors, all `fixture 'seed_vectors_db' not found` in
+  `tests/unit/cli/test_status.py`. This reproduces with ZERO files from
+  this PR in the command (e.g. `tests/unit/cli/test_set_sensitivity.py
+  tests/unit/test_lint_below_source.py tests/unit/cli/test_lint.py
+  tests/unit/cli/test_status.py`, none of which PR3b touches), and
+  disappears when the argument order is changed (e.g. `test_status.py`
+  listed first) or when any proper subset/pairing is run instead. The
+  full repository suite (`uv run pytest -q`, no explicit file list) passes
+  all 2615 tests including every `test_status.py` case, and every pairwise
+  combination tried passes cleanly -- this is a pytest conftest-registration
+  quirk tied to this SPECIFIC four-plus-file explicit-path ordering, not a
+  fixture or code defect introduced by this PR. Flagged for the
+  orchestrator/reviewer rather than silently substituting a different
+  command; the Definition of Done's actual requirement (`uv run pytest -q`
+  green) is satisfied at 2615/2615.
+
+## Remaining Tasks
+
+None. All phases of change #231 (Phases 1-17) are now complete.
+
+## Workload / PR Boundary (PR3b)
+
+- Mode: stacked PR slice (chain strategy: `stacked-to-main`)
+- Current work unit: PR3b -- `backfill-sensitivity` Typer command + ADR-0012
+  (final slice of #231)
+- Boundary: starts at PR3a's tip (`a7f4ebc`) on
+  `feat/backfill-sensitivity-core`; ends at commit `2468d65` on
+  `feat/backfill-sensitivity-verb`. No further PR depends on this one.
+- Estimated review budget impact: 600 changed lines excluding ADR text
+  (717 including it) -- above this run's ~500-line target, within the
+  800-line session budget (see Issues Found).
+
+## Status (PR3b)
+
+10/10 PR3b tasks complete (Phases 14-17, tasks 14.1 through 17.3). Full
+suite: **2615 passed** (2604 PR3a baseline + 11 new PR3b tests). `ruff
+check`/`ruff format --check`/`mypy` all clean. Every task across the
+entire `backfill-sensitivity` change (#231, Phases 1-17) is now `[x]`.
+Ready for `sdd-verify` on PR3b's scope, and for chain-wide review/delivery
+per the session's `stacked-to-main` chain strategy.
