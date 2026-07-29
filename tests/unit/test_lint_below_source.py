@@ -196,3 +196,69 @@ def test_multi_source_uncovered_not_flagged_when_already_at_high_water_mark() ->
     findings = lint.check_below_source_sensitivity([source_a, source_c, doc])
 
     assert findings == []
+
+
+# --- #231, PR2: `collect_docs` provenance decoding feeds both checks ---
+
+
+def test_collect_docs_skips_doc_with_corrupt_provenance_key(tmp_path: Path) -> None:
+    """A `provenance:` value that is present but not a list (e.g. hand-edited
+    to a scalar) is skipped with a notice, exactly like a corrupt
+    `relations:` -- never silently coerced to an empty tuple, which would
+    hide the doc from both finding kinds above."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "broken.md").write_text(
+        "---\ntype: Concept\ntitle: Broken\nprovenance: sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    docs, skipped = lint.collect_docs(bundle_dir)
+
+    assert docs == []
+    assert skipped == ["concepts/broken.md: skipped (invalid provenance)"]
+
+
+def test_collect_docs_defaults_provenance_to_empty_tuple_when_absent(
+    tmp_path: Path,
+) -> None:
+    """A doc with NO `provenance:` key is collected normally with an empty
+    tuple and no notice -- an absent key is the overwhelmingly common,
+    perfectly valid case, never an invalid one."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    docs, skipped = lint.collect_docs(bundle_dir)
+
+    assert docs[0].provenance == ()
+    assert skipped == []
+
+
+def test_collect_docs_surfaces_corrupt_provenance_below_a_source(
+    tmp_path: Path,
+) -> None:
+    """A descendant that would sit below its Source but whose `provenance:`
+    is corrupt must not read as a false clean scan: it is absent from
+    `check_below_source_sensitivity`'s input, so the skip notice is the ONLY
+    signal the operator gets."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "sources").mkdir(parents=True)
+    (bundle_dir / "sources" / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nsensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\nsensitivity: public\n"
+        "provenance: sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    docs, skipped = lint.collect_docs(bundle_dir)
+
+    assert lint.check_below_source_sensitivity(docs) == []
+    assert skipped == ["concepts/derived.md: skipped (invalid provenance)"]
