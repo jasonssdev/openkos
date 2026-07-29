@@ -213,8 +213,8 @@ def resolve_source_raises(
 def find_unresolvable_provenance(
     files: Mapping[str, str], *, known_extra_ids: Collection[str] = ()
 ) -> list[tuple[str, str]]:
-    """Pure bundle-wide unresolvable-provenance scan, extracted verbatim
-    from `set_sensitivity_cmd`'s Phase-A inline warning loop (design D1/D7;
+    """Pure bundle-wide unresolvable-provenance scan, extracted from
+    `set_sensitivity_cmd`'s Phase-A inline warning loop (design D1/D7;
     formerly `main.py:3369-3386`).
 
     Scans every file's parsed `provenance` list for an entry naming an id
@@ -232,7 +232,18 @@ def find_unresolvable_provenance(
     bundle id and therefore always reports (design D6/D8) -- this is
     reporting only, never a write gate; `find_provenance_descendants`'s own
     non-empty-subset rule already keeps a citing concept fail-closed
-    excluded from any purge/raise set."""
+    excluded from any purge/raise set.
+
+    **Deliberate behaviour change, NOT a byte-identical move**: the
+    original inline loop caught only `except (OSError, ValueError)` around
+    `okf.load_frontmatter`; this function catches broad `except Exception`
+    (mirroring `_parse_provenance_by_id`'s identical broad catch just
+    above). `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
+    which is neither an `OSError` nor a `ValueError`, so on `main` a
+    sibling file with malformed frontmatter crashes `set-sensitivity` with
+    an uncaught traceback; here it is silently skipped, same as any other
+    file whose frontmatter fails to parse. See
+    `tests/unit/bundle/test_provenance_source_raises.py::TestFindUnresolvableProvenance::test_malformed_frontmatter_sibling_is_skipped_not_raised`."""
     known_ids = {_normalize_id(extra_id) for extra_id in known_extra_ids} | {
         _normalize_id(path) for path in files
     }

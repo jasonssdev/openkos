@@ -176,3 +176,23 @@ class TestFindUnresolvableProvenance:
         result = bundle_provenance.find_unresolvable_provenance(files)
 
         assert result == []
+
+    def test_malformed_frontmatter_sibling_is_skipped_not_raised(self) -> None:
+        """A sibling file with malformed YAML frontmatter is SKIPPED by the
+        scan rather than crashing the command -- a deliberate WIDENING from
+        the original inline loop's narrow `except (OSError, ValueError)`
+        to `except Exception`, matching this module's other broad-except
+        conventions (`provenance.py:135`, `:297`). This is NOT a
+        byte-identical move: `frontmatter.loads` raises
+        `yaml.parser.ParserError` (a `yaml.YAMLError`, not a `ValueError`)
+        on malformed YAML, so on `main` a malformed sibling crashes
+        `set-sensitivity` with an uncaught traceback; here it is silently
+        skipped, same as any other file whose frontmatter fails to parse."""
+        files = {
+            "concepts/a.md": _doc(sensitivity="public", provenance=["sources/missing"]),
+            "concepts/malformed.md": "---\nkey: [unterminated\n---\nbody",
+        }
+
+        result = bundle_provenance.find_unresolvable_provenance(files)
+
+        assert result == [("concepts/a", "sources/missing")]
