@@ -153,14 +153,14 @@ anything), and each sweep is one `_autocommit` that can be reverted in Git indiv
 
 ## Success Criteria
 
-- [ ] `backfill-sensitivity` raises every descendant sitting below its Source, in one sweep,
+- [x] `backfill-sensitivity` raises every descendant sitting below its Source, in one sweep,
       one preview, one confirmation, one log entry, one commit.
-- [ ] No descendant is ever lowered by any path in this change.
-- [ ] A second run immediately after a successful one stages zero writes and creates no commit.
-- [ ] `lint` and `status` both report descendants below their Source **and** multi-source
+- [x] No descendant is ever lowered by any path in this change.
+- [x] A second run immediately after a successful one stages zero writes and creates no commit.
+- [x] `lint` and `status` both report descendants below their Source **and** multi-source
       descendants the sweep does not cover, as distinct categories.
-- [ ] `tests/unit/cli/test_set_sensitivity.py` (29 tests) stays green through slice 1.
-- [ ] On partial write failure the message names every path that already landed (#233).
-- [ ] `--auto` skips only the prompt; non-TTY without `--auto` refuses to write.
-- [ ] ADR-0012 accepted and indexed in `docs/adr/README.md`.
-- [ ] Issues #231, #235, #233 closed; #232 and #234 remain open and untouched.
+- [x] `tests/unit/cli/test_set_sensitivity.py` (29 tests) stays green through slice 1.
+- [x] On partial write failure the message names every path that already landed (#233).
+- [x] `--auto` skips only the prompt; non-TTY without `--auto` refuses to write.
+- [x] ADR-0012 accepted and indexed in `docs/adr/README.md`.
+- [x] Issues #231, #235, #233 closed; #232 and #234 remain open and untouched.
