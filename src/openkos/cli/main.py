@@ -5005,7 +5005,7 @@ def status() -> None:
 
     On a workspace, sequences several reads and renders their result as
     plain text via `typer.echo`, always exiting 0. Note that these reads
-    perform FOUR independent `bundle/**/*.md` walks, not one:
+    perform FIVE independent `bundle/**/*.md` walks, not one:
     `okf.survey_bundle` (source/concept counts and §9 findings, D2) --
     counts always reflect the disk scan, never `index.md` alone, so catalog
     drift after an interrupted `ingest` is still visible;
@@ -5014,12 +5014,14 @@ def status() -> None:
     `resolution.find_candidates` (exact-title candidate groups, #186), run
     UNCONDITIONALLY -- unlike the edge-count line below, it is never gated
     on `vectors_missing`, because its similarity path is stdlib `difflib`
-    (`similarity.py`) and never touches embeddings; with the default
-    `include_deprecated=False` it also evaluates
-    `lifecycle.deprecated_concept_ids`; and -- only when `vectors.db` is
-    non-empty -- `build_graph`'s walk behind the informational edge-count
-    line. Consolidating them is deliberately out of scope (issue #195);
-    what IS guaranteed is that `status` calls `build_graph` exactly once.
+    (`similarity.py`) and never touches embeddings -- which is TWO walks by
+    itself, not one: `_iter_eligible`, plus `lifecycle.deprecated_concept_ids`
+    under the default `include_deprecated=False` (`candidates.py:148-150`);
+    and -- only when `vectors.db` is non-empty -- `build_graph`'s walk behind
+    the informational edge-count line. Consolidating the remaining walks has
+    no open owner: #195 already landed, and what it guaranteed is that
+    `status` calls `build_graph` exactly once; #216 covers the cost of
+    `find_candidates`'s own pair of walks.
     `log.md` is read and passed through `bundle_log.read_recent_entries` for
     the most recent `RECENT_ACTIVITY_LIMIT` entries, newest-first -- an
     unreadable or malformed `log.md` degrades to a notice (`except (OSError,
@@ -5528,17 +5530,19 @@ def adjudicate(
         ),
     ),
 ) -> None:
-    """LLM-adjudicate cross-source candidate duplicates: read-only, like `query`.
+    """LLM-adjudicate cross-source candidate duplicates: read-only by default.
 
     A FOURTH read command, mirroring `query`'s wiring exactly: the shared
     `config.require_workspace` gate (D1), then a Phase-A `read_config` guard
     (`except (OSError, ValueError)`, lint parity), then a real
     `OllamaClient(model=cfg.model)` is built and injected -- as the
     `LLMBackend` -- into `resolution.find_candidates` followed by
-    `resolution.adjudication.adjudicate_candidates`. Distinct from the
-    reserved `resolve`/`merge` verbs (slice 3): `adjudicate` never merges,
-    writes, or decides -- it only prints a verdict for human review. No
-    `--auto`, no confirmation gate.
+    `resolution.adjudication.adjudicate_candidates`. Invoked WITHOUT
+    `--apply`/`--apply-same` it never merges, writes, or decides -- it only
+    prints a verdict for human review and points at the SHIPPED `merge` verb
+    (`cli/main.py:3957`) through its own `Next:` hint, exactly as
+    `duplicates` does. Those two flags are the only paths that write, and
+    both are gated on an explicit confirmation; see their paragraphs below.
 
     `--json` emits the adjudication results as a single pretty-printed JSON
     array on stdout and fully suppresses all human output (tally, legend,
@@ -5575,8 +5579,9 @@ def adjudicate(
     a confidential member is dropped from a group's `member_ids` before its
     content is ever read, rather than dropping the whole group upstream.
 
-    No file under the workspace is ever created, modified, or deleted (spec:
-    Verb renders verdicts with zero writes).
+    Without `--apply`/`--apply-same`, no file under the workspace is ever
+    created, modified, or deleted (spec: Verb renders verdicts with zero
+    writes, whose scenario is scoped to the flagless invocation).
 
     `--apply` switches to an INTERACTIVE merge walk over the same
     adjudication results (issue #137 Slice 2b-ii): mutually exclusive with
