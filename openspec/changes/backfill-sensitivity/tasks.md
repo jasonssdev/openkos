@@ -108,6 +108,16 @@ Chain strategy: stacked-to-main
 - [ ] 14.2 Full suite: `uv run pytest tests/unit/cli/test_backfill_sensitivity.py tests/unit/cli/test_set_sensitivity.py tests/unit/test_lint_below_source.py tests/unit/test_lint.py tests/unit/test_status.py --cov` — all GREEN, coverage holds on touched files
 - [ ] 14.3 Confirm issues #231, #235, #233 closable; #232 and #234 remain untouched (Explicitly Not Changed)
 
+## Known Follow-Ups (out of scope for this change)
+
+- **A doc whose `provenance:` cites an unresolvable id is reported by nothing.**
+  It falls into neither detection category, because the sweep cannot reach it
+  either, and `check_dangling_targets` does not cover it: that check scans
+  `relations:` and body markdown links only, never `provenance:`. Such a doc may
+  still sit below its Source. Surfacing it needs its own finding kind, which
+  would need a spec delta, so it is deliberately not smuggled into this change's
+  two categories. Raised by the R1 risk lens during the native review of PR2.
+
 ## PR Assignment
 
 - **PR1** (`feat/extract-descendant-scan` -> `main`): Phases 1-5 — closes #235, #233

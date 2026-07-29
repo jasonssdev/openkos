@@ -63,6 +63,15 @@ conflated two different units and was itself wrong — corrected here:
 | Runtime harness | `uv run python -m openkos.cli.main set-sensitivity <source-id> <level>` exercised indirectly through the full `CliRunner`-based `test_set_sensitivity.py` suite (init workspace, ingest a Source, set-sensitivity with `--auto`, inspect resulting bundle files and git commit) — no separate manual run needed since the CLI test suite already drives the real Typer app end-to-end against a tmp workspace |
 | Rollback boundary | `git revert` the 6 commits on `feat/extract-descendant-scan` (or reset the branch to `489672a`) restores `set_sensitivity_cmd`'s inline scan, `_DescendantRaise`, the unappended failure message, and the narrow `except (OSError, ValueError)` catch; no other verb or file is touched |
 
+> **Note on the commit SHAs quoted in this section.** Every SHA above predates
+> two later events: the rebase of this branch onto `main` after PR1 was squash
+> merged, and the review-driven rewrite of the correction commits so that no
+> commit in the publication range touched a path outside the frozen review
+> candidate. The narrative of what each step did still holds; the identifiers do
+> not. The branch's current history is authoritative — read it with
+> `git log --oneline main..HEAD`. The same caveat applies to the rollback
+> boundary above: reset to `main` rather than reverting the SHAs it names.
+
 ## Lint / Typecheck (re-run after correction)
 
 - `uv run ruff check .` -> All checks passed
@@ -248,6 +257,15 @@ and the tightened version was re-confirmed RED prior to the GREEN commit.
 | Runtime harness | `uv run python -m openkos.cli.main lint` / `status` exercised indirectly through the full `CliRunner`-based `tests/unit/cli/test_lint.py`/`test_status.py` suites (init workspace, hand-write a Source + a below-Source descendant + a Source-plus-foreign-derived-cite doc, run `lint`/`status`, inspect rendered sections and exit code) — no separate manual run needed since the CLI test suite already drives the real Typer app end-to-end against a tmp workspace |
 | Rollback boundary | `git revert` the 5 PR2 commits (`5f730f6`..`ebc801d`) on `feat/extract-descendant-scan` (or reset to `cb5a450`) restores `LintDoc` to its PR1 shape (no `sensitivity`/`provenance` fields), removes `check_below_source_sensitivity` and both new `lint`/`status` sections; `lint`/`status` are read-only, so no bundle data is ever at risk regardless |
 
+> **Note on the commit SHAs quoted in this section.** Every SHA above predates
+> two later events: the rebase of this branch onto `main` after PR1 was squash
+> merged, and the review-driven rewrite of the correction commits so that no
+> commit in the publication range touched a path outside the frozen review
+> candidate. The narrative of what each step did still holds; the identifiers do
+> not. The branch's current history is authoritative — read it with
+> `git log --oneline main..HEAD`. The same caveat applies to the rollback
+> boundary above: reset to `main` rather than reverting the SHAs it names.
+
 ## Lint / Typecheck
 
 - `uv run ruff check .` -> All checks passed
@@ -268,18 +286,19 @@ and the tightened version was re-confirmed RED prior to the GREEN commit.
 
 | File | + | - |
 |---|---|---|
-| `src/openkos/lint.py` | 177 | 5 |
+| `src/openkos/lint.py` | 178 | 0 |
 | `src/openkos/cli/main.py` | 41 | 2 |
 | `tests/unit/test_lint_below_source.py` | 264 | 0 |
 | `tests/unit/cli/test_lint.py` | 99 | 0 |
 | `tests/unit/cli/test_status.py` | 118 | 0 |
-| **Total** | **699** | **7** |
+| **Total** | **700** | **2** |
 
-The `lint.py` and `test_lint_below_source.py` rows include the bounded review
-correction (the invalid-`provenance:` skip and its three tests), which is why
-they exceed the figures quoted in the pre-correction narrative above.
+These rows are the branch's final state (`git diff --numstat main..HEAD -- src
+tests`). They exceed the figures quoted in the pre-correction narrative below
+because two bounded review corrections landed after it was written: the
+invalid-`provenance:` skip with its three tests, and a docstring/figures fix.
 
-**Total changed lines: 621**, against the tasks doc's ~150-250 estimate for
+**Total changed lines: 702**, against the tasks doc's ~150-250 estimate for
 PR2 — a significant overage, flagged plainly below (see Issues Found). No
 code was trimmed to force the estimate down.
 
@@ -318,7 +337,7 @@ no-fifth-walk guard all match `design.md` D2/D3 exactly as specified.
 
 ## Issues Found
 
-- **Changed-line estimate miss**: actual PR2 diff (code + tests) is 621
+- **Changed-line estimate miss**: actual PR2 diff (code + tests) is 702
   changed lines vs the tasks doc's ~150-250 estimate — roughly 2.5x. The
   overage is concentrated in: (a) this codebase's exhaustive docstring
   convention, applied to `check_below_source_sensitivity`'s multi-paragraph
@@ -328,7 +347,7 @@ no-fifth-walk guard all match `design.md` D2/D3 exactly as specified.
   multi-line docstring explaining the design rule it pins. None of the
   overage is control-flow complexity: `check_below_source_sensitivity`
   itself is under 60 lines of actual logic. Still within the session's
-  cached 800-line-per-PR budget (PR1's 593 + PR2's 621 = 1214 combined,
+  cached 800-line-per-PR budget (PR1's 593 + PR2's 702 = 1295 combined,
   but the forecast's "Low per PR (against 800-line session budget)"
   phrasing evaluates each PR independently against 800, not as a running
   sum — flagged for the orchestrator to confirm that reading is correct
@@ -350,13 +369,14 @@ no-fifth-walk guard all match `design.md` D2/D3 exactly as specified.
   #2 re: no separate branch cut this run). PR3
   (`feat/backfill-sensitivity-verb`) is independent of PR2 and also targets
   `feat/extract-descendant-scan` per `tasks.md`.
-- Estimated review budget impact: 621 changed lines (see Issues Found) —
+- Estimated review budget impact: 702 changed lines (see Issues Found) —
   above the 400-line single-PR default guard and above the tasks doc's own
   ~150-250 estimate, within the 800-line session budget evaluated per-PR.
 
 ## Status (PR2)
 
 10/10 PR2 tasks complete (Phases 6-10, tasks 6.1 through 10.1). Full
-suite: **2593 passed** (2579 PR1 baseline + 14 new PR2 tests). `ruff
+suite: **2596 passed** (2579 PR1 baseline + 17 new PR2 tests, 14 as first
+written plus 3 from the bounded review correction). `ruff
 check`/`ruff format --check`/`mypy` all clean. Ready for `sdd-verify` on
 PR2's scope. PR3 (Phases 11-14) remains untouched, as instructed.
