@@ -210,3 +210,83 @@ None. All 33/33 tasks across both PRs (Phases 1-14) are complete.
 ### Status
 
 33/33 total tasks complete (Phases 1-14). Ready for `sdd-verify`.
+
+## Batch 3 (Verify-remediation — three gaps from FAIL verdict)
+
+**Mode**: Strict TDD (RED → GREEN → REFACTOR)
+**Branch**: `feat/list-cli-verb` (PR2), unchanged.
+**Scope**: Exactly the three gaps named in `verify-report.md`
+(`sdd/discover-concept-ids/verify-report`, obs #2104). `bundle/listing.py`
+stayed frozen for PR1 review; only `cli/main.py`, `test_list.py`, and this
+change's own artifacts were touched.
+
+### Completed Tasks
+
+- [x] Runtime test proving "No mutation on any run" (CRITICAL #1): added
+  `_workspace_snapshot` helper plus
+  `test_list_mutates_nothing_on_a_run_that_produces_rows` and
+  `test_list_mutates_nothing_on_a_run_that_truncates_output` to
+  `tests/unit/cli/test_list.py`.
+- [x] `--json` rejection test (CRITICAL #2): added
+  `test_list_json_flag_is_rejected_as_unknown_option`, asserting Typer
+  rejects the unknown option with a non-zero exit.
+- [x] `--limit 0 --all` / `--limit -1 --all` spec alignment (WARNING #3):
+  changed the refusal condition in `cli/main.py` `list_objects_cmd` from
+  `not all_objects and limit <= 0` to `limit <= 0` — an out-of-range
+  `--limit` is now refused unconditionally, matching the spec's Output
+  Bounding requirement, which states the rejection with no `--all`
+  carve-out. Orchestrator resolution: spec is correct, implementation
+  changes to match; `specs/list-command/spec.md` was NOT edited. Added
+  `test_list_limit_zero_with_all_still_refuses` and
+  `test_list_limit_negative_with_all_still_refuses`, both run inside an
+  initialized workspace so a passing exit code can only mean the limit
+  check (not the workspace check) refused. `tasks.md` task 9.2 wording
+  updated to state the unconditional rule instead of contradicting the
+  spec.
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `src/openkos/cli/main.py` | Modified | `list_objects_cmd`'s `--limit` refusal condition changed from `not all_objects and limit <= 0` to `limit <= 0` (2 lines changed) |
+| `tests/unit/cli/test_list.py` | Modified | Added `_workspace_snapshot` helper; added 7 tests: 2 mutation-proof tests, 1 `--json` rejection test, 2 `--limit N --all` refusal tests (`0` and `-1`) |
+| `openspec/changes/discover-concept-ids/tasks.md` | Modified | Task 9.2 wording corrected to state the `--limit` refusal is unconditional, not `--all`-gated |
+| `openspec/changes/discover-concept-ids/apply-progress.md` | Modified | This batch appended (merge, not overwrite) |
+
+### TDD Cycle Evidence
+
+| Task group | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| No-mutation tests | Sanity-checked by temporarily inserting a probe write (`(Path.cwd() / "MUTATION_PROBE").write_text("x")`) into `list_objects_cmd`; both new tests failed with a set-difference on `MUTATION_PROBE`, confirming they detect a real mutation; probe then removed, restoring the exact pre-batch behavior (verified via `git diff` showing only the `--limit` condition change) | Both tests pass against the unmodified (already read-only) command — no production change was needed for this gap, consistent with the verify report's static-evidence finding | N/A |
+| `--json` rejection test | Not applicable — Typer has no `--json` option defined; the test exercises a genuine existing behavior (unknown-option rejection), not a code path this batch adds | Passed immediately | N/A |
+| `--limit N --all` alignment | Both new tests written first against the unmodified ladder (`not all_objects and limit <= 0`) inside an initialized workspace (so a false pass via the workspace check was ruled out); both failed with `exit_code == 0` (command succeeded when it should have refused) — genuine RED | Changed the condition to `limit <= 0`; both tests pass; full `test_list.py` (23 tests) and full suite (2484 tests) rerun GREEN | None needed — one-line condition change |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `uv run pytest tests/unit/cli/test_list.py -q` → `23 passed` |
+| Full-suite regression | `uv run pytest -q` → `2484 passed` (2479 baseline + 5 new tests) |
+| Branch coverage | `uv run pytest --cov=openkos --cov-branch -q` → `97.56%` total (gate 90%), `2484 passed` |
+| Lint/format/types | `uv run ruff check .` → all checks passed; `uv run ruff format --check .` → 146 files already formatted; `uv run mypy .` → no issues in 146 source files |
+| Runtime harness command/scenario and exact result | `CliRunner` end-to-end invocations against real `tmp_path` bundles, same harness pattern as Batch 2 — this IS the runtime harness for a CLI verb; the mutation tests additionally snapshot the real filesystem before/after the real invocation |
+| Rollback boundary | `git diff` shows exactly 1 line changed in `src/openkos/cli/main.py` (the refusal condition) and additive-only test code in `test_list.py`; revert is a 1-line condition change plus removing the 7 added tests, with no effect on `listing.py` (untouched) or any other command |
+
+### Deviations from Design
+
+None — this batch is a bounded remediation of the verify report's three
+named gaps, not new feature work. The `--limit` behavior change follows
+the orchestrator's explicit resolution (spec is correct, implementation
+conforms) rather than a design deviation.
+
+### Issues Found
+
+None.
+
+### Remaining Tasks
+
+None. All three verify-report gaps closed; 33/33 tasks remain complete.
+
+### Status
+
+Remediation complete. Ready for `sdd-verify` re-run.

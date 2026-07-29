@@ -5147,7 +5147,7 @@ def list_objects_cmd(
             )
             raise typer.Exit(code=1)
 
-    if not all_objects and limit <= 0:
+    if limit <= 0:
         typer.echo(
             f"openkos list: refusing to list -- --limit must be positive "
             f"(got {limit}); use --all to print every row instead.",

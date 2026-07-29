@@ -30,6 +30,24 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
 
 
+def _workspace_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
+    """Return a map of every file under `root` to its `(content, mtime_ns)`.
+
+    Used to prove `list` performs no mutation: comparing this snapshot
+    before and after a `list` invocation catches any file created,
+    modified, or deleted under the workspace, including content changes
+    that leave the file set unchanged (spec: Read-Only, No Structured
+    Output, Scenario "No mutation on any run")."""
+    return {
+        str(path.relative_to(root)): (
+            path.read_bytes(),
+            path.stat().st_mtime_ns,
+        )
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
 def _write_doc(
     path: Path,
     *,
@@ -98,6 +116,40 @@ def test_list_limit_negative_refuses_before_any_access(
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["list", "--limit", "-1"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stdout == ""
+
+
+def test_list_limit_zero_with_all_still_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--limit 0 --all` still refuses: the spec's Output Bounding
+    requirement rejects `--limit 0` unconditionally, with no `--all`
+    carve-out. A malformed `--limit` is invalid input regardless of which
+    other flags accompany it (spec: Invalid limit rejected). Run inside an
+    initialized workspace so a passing exit code could only mean the limit
+    check let it through, not that the workspace check also happened to
+    fail."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["list", "--limit", "0", "--all"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stdout == ""
+
+
+def test_list_limit_negative_with_all_still_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--limit -1 --all` still refuses, for the same reason as `--limit 0
+    --all` (spec: Invalid limit rejected). Run inside an initialized
+    workspace for the same reason as above."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["list", "--limit", "-1", "--all"])
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
@@ -423,3 +475,60 @@ def test_list_untitled_marker_distinct_from_unreadable(
     )
     assert "(untitled)" in row_line
     assert "(unreadable)" not in row_line
+
+
+# ---------------------------------------------------------------------------
+# Read-Only, No Structured Output (verify-report remediation)
+# ---------------------------------------------------------------------------
+
+
+def test_list_mutates_nothing_on_a_run_that_produces_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `list` run that prints rows leaves the workspace byte-identical:
+    same file set, same contents, same mtimes (spec: Read-Only, No
+    Structured Output, Scenario "No mutation on any run")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "people" / "jane.md", title="Jane")
+
+    before = _workspace_snapshot(tmp_path)
+    result = runner.invoke(app, ["list"])
+    after = _workspace_snapshot(tmp_path)
+
+    assert result.exit_code == 0
+    assert "people/jane" in result.stdout
+    assert before == after
+
+
+def test_list_mutates_nothing_on_a_run_that_truncates_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `list` run whose output is truncated by the default limit still
+    leaves the workspace byte-identical (spec: Read-Only, No Structured
+    Output, Scenario "No mutation on any run")."""
+    _init_workspace(tmp_path, monkeypatch)
+    for i in range(60):
+        _write_doc(tmp_path / "bundle" / "concepts" / f"c{i:03d}.md", title=f"C{i}")
+
+    before = _workspace_snapshot(tmp_path)
+    result = runner.invoke(app, ["list"])
+    after = _workspace_snapshot(tmp_path)
+
+    assert result.exit_code == 0
+    assert "Showing 50 of 60" in result.stdout
+    assert before == after
+
+
+def test_list_json_flag_is_rejected_as_unknown_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`openkos list --json` is rejected by Typer as an unknown option --
+    no structured output mode is offered (spec: Read-Only, No Structured
+    Output, Scenario "No mutation on any run")."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["list", "--json"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "no such option" in result.stderr.lower()

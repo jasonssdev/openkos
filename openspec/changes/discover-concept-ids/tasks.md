@@ -78,7 +78,7 @@ Branch plan (stacked-to-main): PR1 branch `feat/list-enumerator` → `main`. PR2
 ### Phase 9: CLI Command Skeleton (GREEN)
 
 - [x] 9.1 In `src/openkos/cli/main.py`, add `@app.command("list")` on `def list_objects_cmd(...)` (not named `list` — shadows the builtin, per `set-sensitivity`/`set-volatility` precedent) with optional positional `TYPE`, `--limit` (default 50), `--all` flags.
-- [x] 9.2 Implement the refusal ladder: `resolve_link_dir(TYPE)` first (unknown → stderr refusal, exit 1, no disk access), then `--limit` validation (`<= 0` and not `--all` → stderr refusal, exit 1), then `config.require_workspace(cwd)` (failure → stderr refusal, exit 1) — mirroring `set-volatility` (`cli/main.py:3545-3563`); run Phase 8 tests to GREEN.
+- [x] 9.2 Implement the refusal ladder: `resolve_link_dir(TYPE)` first (unknown → stderr refusal, exit 1, no disk access), then `--limit` validation (`<= 0`, unconditionally, regardless of `--all` — spec's Output Bounding requirement has no `--all` carve-out; see `sdd-verify` FAIL remediation → stderr refusal, exit 1), then `config.require_workspace(cwd)` (failure → stderr refusal, exit 1) — mirroring `set-volatility` (`cli/main.py:3545-3563`); run Phase 8 tests to GREEN.
 
 ### Phase 10: Single-Walk and Lifecycle-Isolation Guards (RED then GREEN)
 
