@@ -10,6 +10,13 @@ is NON-EMPTY and a subset of the current purge set. The non-empty guard is
 the CRITICAL over-deletion barrier -- see
 `test_find_provenance_descendants_empty_provenance_does_not_join` below.
 
+`provenance_reachable` is the deliberately WIDER reporting-scope sibling of
+that closure (issue #232): a candidate joins on a NON-EMPTY INTERSECTION
+with the accumulated set rather than being a subset of it, so the partial
+citer the subset rule fail-closed EXCLUDES is included. See
+`test_provenance_reachable_includes_a_citer_provenance_closure_excludes`,
+which asserts both relations on one input to pin the divergence.
+
 `find_inbound_provenance_rewrites`/`apply_provenance_rewrites`/
 `reverse_provenance_rewrites` mirror `bundle/relations.py`'s trio shape
 (whole-file snapshot, drift-checked absolute reversal), scanning `files`
@@ -281,6 +288,113 @@ def test_find_provenance_descendants_unparseable_file_skipped_and_preserved() ->
     result = provenance.find_provenance_descendants(files, root_ids=["sources/x"])
 
     assert result == ["sources/x"]
+
+
+# -- provenance_reachable: the REPORTING scope relation (#232) --------------
+
+
+def test_provenance_reachable_includes_a_citer_provenance_closure_excludes() -> None:
+    """THE contrast that motivates the second relation (#232): a citer of
+    `[sources/a, ghost]` is fail-closed EXCLUDED from `provenance_closure`
+    (the subset rule can never admit it, because `ghost` never enters the
+    set), yet it is exactly the concept whose dangling `ghost` entry must be
+    reported when `sources/a` is raised. Both functions are asserted on the
+    SAME input so the divergence is pinned, not implied."""
+    provenance_by_id = {
+        "sources/a": frozenset({"raw/a.txt"}),
+        "concepts/citer": frozenset({"sources/a", "ghost"}),
+    }
+
+    assert provenance.provenance_closure(provenance_by_id, root_ids=["sources/a"]) == [
+        "sources/a"
+    ]
+    assert provenance.provenance_reachable(
+        provenance_by_id, root_ids=["sources/a"]
+    ) == [
+        "concepts/citer",
+        "sources/a",
+    ]
+
+
+def test_provenance_reachable_is_transitive_through_an_excluded_citer() -> None:
+    """Reachability keeps walking THROUGH a fail-closed-excluded citer: the
+    citer's own descendant is in the reporting scope too, even though
+    neither joins `provenance_closure`."""
+    provenance_by_id = {
+        "concepts/citer": frozenset({"sources/a", "ghost"}),
+        "concepts/grandchild": frozenset({"concepts/citer"}),
+    }
+
+    assert provenance.provenance_reachable(
+        provenance_by_id, root_ids=["sources/a"]
+    ) == [
+        "concepts/citer",
+        "concepts/grandchild",
+        "sources/a",
+    ]
+
+
+def test_provenance_reachable_excludes_an_unrelated_sources_subtree() -> None:
+    """An unrelated Source cites its own raw resource -- disjoint from the
+    invoked Source's reachable set -- so neither it nor anything derived
+    from it enters the reporting scope (#232's whole point)."""
+    provenance_by_id = {
+        "sources/a": frozenset({"raw/a.txt"}),
+        "sources/b": frozenset({"raw/b.txt"}),
+        "concepts/only-b": frozenset({"sources/b", "ghost"}),
+    }
+
+    assert provenance.provenance_reachable(
+        provenance_by_id, root_ids=["sources/a"]
+    ) == ["sources/a"]
+
+
+def test_provenance_reachable_empty_provenance_never_joins() -> None:
+    """An empty provenance set has an empty intersection with ANY set, so
+    the non-empty-intersection rule keeps a provenance-less concept out --
+    the same barrier `provenance_closure`'s non-empty guard provides."""
+    provenance_by_id: dict[str, frozenset[str]] = {
+        "concepts/no-provenance": frozenset(),
+    }
+
+    assert provenance.provenance_reachable(
+        provenance_by_id, root_ids=["sources/a"]
+    ) == ["sources/a"]
+
+
+def test_provenance_reachable_normalizes_a_md_suffixed_root_id() -> None:
+    """A `.md`-suffixed `root_ids` entry compares on the canonical id,
+    exactly as `provenance_closure` normalizes its own roots (the
+    `provenance_by_id` values arrive already normalized from
+    `_parse_provenance_by_id`, so neither function re-normalizes them)."""
+    provenance_by_id = {
+        "concepts/child": frozenset({"sources/a"}),
+    }
+
+    assert provenance.provenance_reachable(
+        provenance_by_id, root_ids=["sources/a.md"]
+    ) == ["concepts/child", "sources/a"]
+
+
+def test_provenance_reachable_terminates_on_a_provenance_cycle() -> None:
+    """A cycle disjoint from every root never joins, and a cycle reachable
+    from a root joins once and stops -- the accumulated set only grows over
+    a finite universe, so the fixpoint always halts."""
+    provenance_by_id = {
+        "concepts/x": frozenset({"concepts/y"}),
+        "concepts/y": frozenset({"concepts/x", "sources/a"}),
+    }
+
+    assert provenance.provenance_reachable(
+        provenance_by_id, root_ids=["sources/a"]
+    ) == [
+        "concepts/x",
+        "concepts/y",
+        "sources/a",
+    ]
+    assert provenance.provenance_reachable(
+        provenance_by_id, root_ids=["sources/unrelated"]
+    ) == ["sources/unrelated"]
 
 
 # -- find_inbound_provenance_rewrites (tasks 2.1-2.4) -----------------------

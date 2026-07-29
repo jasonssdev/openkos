@@ -3234,11 +3234,30 @@ def set_sensitivity_cmd(
     staged raise appears in the preview and the success message. A
     provenance reference that resolves to no file in the snapshot emits a
     stderr WARNING naming it and is excluded -- fail-closed, never lowered,
-    never blocking the Source's own write. A non-Source target, or a
-    Source assignment that is a lowering or a same-rank normalization,
-    skips this scan entirely -- a downgrade must never cascade even when
-    `combine_sensitivity` would compute a raise for some individual
-    descendant sitting below the new (lower) level.
+    never blocking the Source's own write.
+
+    That WARNING is SCOPED to the invoked Source, not to the bundle (issue
+    #232): only a concept reachable from `<concept-id>` through provenance
+    is reported. The snapshot it reads stays whole-bundle -- an id existing
+    anywhere in the bundle is resolvable, and narrowing the snapshot would
+    invent warnings -- so only the reporting scope narrows. Without that
+    scope, every OTHER Source's own raw `resource` entry (never a bundle
+    id) produced a WARNING on every run. Reachability here is
+    `bundle.provenance.provenance_reachable`'s non-empty-INTERSECTION
+    relation, deliberately WIDER than the subset closure that gates the
+    writes: a descendant citing both `<concept-id>` and a dangling id is
+    excluded from that closure, and is precisely the case this WARNING
+    exists for. A concept citing ONLY an unresolvable id is unreachable and
+    therefore silent here -- and NOTHING in the toolchain reports that case
+    today: `lint`'s dangling check scans `relations:` and body links only,
+    never `provenance:`. `lint` is the INTENDED FUTURE owner of that
+    bundle-wide detection; the work is tracked as issue #257 and is not part
+    of this change.
+
+    A non-Source target, or a Source assignment that is a lowering or a
+    same-rank normalization, skips this scan entirely -- a downgrade must
+    never cascade even when `combine_sensitivity` would compute a raise for
+    some individual descendant sitting below the new (lower) level.
 
     A confirmed write re-renders the frontmatter (`okf.dump_frontmatter`,
     changing only `sensitivity`), appends a `log.md` entry (no
@@ -3340,8 +3359,22 @@ def set_sensitivity_cmd(
             # non-empty-subset rule already keeps it out of the raises
             # below, so this is purely reporting, never an extra write
             # gate.
+            #
+            # `root_ids={canonical_id}` narrows that REPORTING to what is
+            # reachable from the invoked Source (issue #232); the snapshot
+            # itself stays whole-bundle, because narrowing it would make an
+            # id that exists elsewhere look unresolvable. Every OTHER Source
+            # cites its own raw `resource` (`provenance=[resource]`, built
+            # above at the `ingest` call site), which never normalizes to a
+            # bundle id, so an unscoped scan emitted one bogus WARNING per
+            # unrelated Source on every run. See
+            # `find_unresolvable_provenance`'s docstring for why that scope
+            # is a reachability relation rather than the subset closure
+            # gating the writes.
             for member_id, entry_id in bundle_provenance.find_unresolvable_provenance(
-                bundle_snapshot, known_extra_ids={canonical_id}
+                bundle_snapshot,
+                known_extra_ids={canonical_id},
+                root_ids={canonical_id},
             ):
                 typer.echo(
                     "openkos set-sensitivity: WARNING -- "

@@ -117,6 +117,65 @@ def provenance_closure(
     return sorted(purge)
 
 
+def provenance_reachable(
+    provenance_by_id: Mapping[str, frozenset[str]], *, root_ids: Collection[str]
+) -> list[str]:
+    """Return the sorted fixpoint REACHABILITY set (roots + everything that
+    cites into them, however partially) over an already-parsed `id ->
+    frozenset(provenance ids)` map -- the reporting-scope sibling of
+    `provenance_closure` (issue #232).
+
+    Algorithm: seed `reachable` with the normalized `root_ids`, then iterate
+    to a fixed point: a candidate `C` not yet in `reachable` joins iff its
+    provenance set has a NON-EMPTY INTERSECTION with `reachable`.
+
+    WHY THIS IS NOT `provenance_closure`'s SUBSET RULE: that rule is a
+    conservative WRITE gate. `forget --scope source` deletes and
+    `set-sensitivity` re-classifies every member it returns, so a concept
+    still holding one surviving source must stay out -- admitting it would
+    over-delete or over-classify. THIS relation is a REPORTING scope, where
+    the fail-closed-excluded citer is the whole point: a concept citing
+    `[sources/a, ghost]` can NEVER join `sources/a`'s closure (`ghost` never
+    enters the set, so the subset test never passes), yet it is precisely
+    the concept whose dangling `ghost` entry a human needs to see. Scoping a
+    warning to closure members would therefore silence exactly the warning
+    that matters. The intersection rule returns a strict superset of the
+    closure: genuine closure members, PLUS every partial citer the subset
+    rule excludes, PLUS their own descendants -- while still excluding an
+    unrelated Source's entire tree, whose provenance (its raw `resource`) is
+    disjoint from the invoked Source's reachable set.
+
+    The non-empty requirement is inherent rather than an added guard here:
+    an empty provenance set intersects nothing, so a provenance-less concept
+    is never pulled in -- the same barrier `provenance_closure` needs its
+    explicit non-empty test for.
+
+    Termination: `reachable` only ever grows, and it is bounded by the
+    finite universe of `root_ids | provenance_by_id.keys()`, so the fixpoint
+    loop always halts -- including on a provenance cycle disjoint from any
+    root (those concepts never intersect the set and are never added) and on
+    self-referential provenance (a concept naming only itself cannot
+    intersect `reachable` before it is already a member of it).
+
+    Determinism: the returned list is `sorted()`; the fixpoint set itself is
+    order-independent of both `provenance_by_id` iteration order and
+    `root_ids` order.
+    """
+    reachable = {_normalize_id(root_id) for root_id in root_ids}
+
+    changed = True
+    while changed:
+        changed = False
+        for concept_id, entry_provenance in provenance_by_id.items():
+            if concept_id in reachable:
+                continue
+            if entry_provenance & reachable:
+                reachable.add(concept_id)
+                changed = True
+
+    return sorted(reachable)
+
+
 def _parse_provenance_by_id(files: Mapping[str, str]) -> dict[str, frozenset[str]]:
     """Parse every file's `provenance` frontmatter list ONCE into
     `id -> frozenset(...)` (canonical, `.md`-stripped ids on both sides); a
@@ -159,6 +218,29 @@ def find_provenance_descendants(
     unchanged by this extraction."""
     provenance_by_id = _parse_provenance_by_id(files)
     return provenance_closure(provenance_by_id, root_ids=root_ids)
+
+
+def _reachable_ids(
+    files: Mapping[str, str], *, root_ids: Collection[str]
+) -> frozenset[str]:
+    """Build `provenance_reachable`'s reporting scope straight from a
+    whole-bundle `files` snapshot, as a membership set (issue #232).
+
+    Mirrors `find_provenance_descendants`'s shape -- parse once via
+    `_parse_provenance_by_id`, then delegate the fixpoint walk -- but returns
+    a `frozenset` rather than a sorted list, because its only caller
+    (`find_unresolvable_provenance`) tests membership per file and must keep
+    its own `files` iteration order.
+
+    This costs one extra frontmatter pass on the scoped path only.
+    `_parse_provenance_by_id` collapses each `provenance:` list into a
+    `frozenset`, which discards exactly the list order and duplicate entries
+    that `find_unresolvable_provenance`'s pinned ordering contract reports,
+    so its scan loop cannot be folded into this parse and must keep reading
+    the raw list itself."""
+    return frozenset(
+        provenance_reachable(_parse_provenance_by_id(files), root_ids=root_ids)
+    )
 
 
 def resolve_source_raises(
@@ -224,7 +306,7 @@ def _source_levels(files: Mapping[str, str]) -> dict[str, str]:
     fails closed to `confidential` unless the stringified form happens to
     already be a canonical member of `okf.SENSITIVITY_ORDER`. A file whose
     frontmatter fails to parse is SKIPPED, mirroring this module's other
-    broad-except conventions (`provenance.py:135`, `:257`)."""
+    broad-except conventions (`provenance.py:194`, `:473`)."""
     source_levels: dict[str, str] = {}
     for path, text in files.items():
         metadata: dict[str, object] | None
@@ -310,9 +392,12 @@ def resolve_backfill_raises(files: Mapping[str, str]) -> list[okf.DescendantRais
 
 
 def find_unresolvable_provenance(
-    files: Mapping[str, str], *, known_extra_ids: Collection[str] = ()
+    files: Mapping[str, str],
+    *,
+    known_extra_ids: Collection[str] = (),
+    root_ids: Collection[str] | None = None,
 ) -> list[tuple[str, str]]:
-    """Pure bundle-wide unresolvable-provenance scan, extracted from
+    """Pure unresolvable-provenance scan, extracted from
     `set_sensitivity_cmd`'s Phase-A inline warning loop (design D1/D7;
     formerly `main.py:3369-3386`).
 
@@ -324,14 +409,43 @@ def find_unresolvable_provenance(
     target-EXCLUDING snapshot together with `known_extra_ids={target_id}`
     (design D7) -- it is not a general-purpose escape hatch.
 
-    Ordering is pinned byte-identical to the original inline loop: `files`
-    iteration order, then each file's `provenance:` list order, with NO
-    dedupe -- one tuple per occurrence, including a duplicate entry. A raw
-    resource-shaped entry (e.g. `raw/<resource>`) never normalizes to a
-    bundle id and therefore always reports (design D6/D8) -- this is
-    reporting only, never a write gate; `find_provenance_descendants`'s own
-    non-empty-subset rule already keeps a citing concept fail-closed
-    excluded from any purge/raise set.
+    `root_ids` scopes WHICH CONCEPTS MAY CITE (issue #232). The default
+    `None` scans bundle-wide, byte-identical to every prior release. When
+    given, only concepts inside `provenance_reachable(..., root_ids=
+    root_ids)` are reported -- see that function's docstring for why the
+    scope is the non-empty-INTERSECTION reachability relation and not
+    `provenance_closure`'s subset rule: the concept whose dangling entry
+    needs reporting is precisely the one the subset rule fail-closed
+    EXCLUDES, so scoping to closure members would silence it. `set-
+    sensitivity` passes the invoked Source as the sole root, so a
+    single-Source raise no longer warns about an unrelated Source's own
+    unresolvable raw `resource` (which every Source carries -- see
+    `resolve_backfill_raises`'s design-D8 note on the same trap).
+
+    The id-EXISTENCE set is deliberately built from the FULL `files`
+    mapping plus `known_extra_ids`, never from the scoped subset: an id that
+    exists anywhere in the bundle IS resolvable, and narrowing the snapshot
+    would invent false warnings for in-scope concepts citing out-of-scope
+    siblings. Only the set of CITING concepts narrows.
+
+    A scoped call therefore reports strictly fewer entries, and its blind
+    spot is deliberate: a concept citing ONLY an unresolvable id is
+    unreachable from any root and stays silent. NOTHING reports that case
+    today -- `lint.check_dangling_targets` scans `relations:` and body
+    markdown links only, never `provenance:`, and
+    `lint.check_below_source_sensitivity` explicitly skips a doc with an
+    unresolvable cite. Detecting it requires a bundle-wide sweep that
+    `lint` is the INTENDED FUTURE owner of, tracked as issue #257 and NOT
+    implemented here; it never belongs to a single-Source write verb.
+
+    Ordering is pinned byte-identical to the original inline loop, scoped or
+    not: `files` iteration order, then each file's `provenance:` list order,
+    with NO dedupe -- one tuple per occurrence, including a duplicate entry.
+    A raw resource-shaped entry (e.g. `raw/<resource>`) never normalizes to
+    a bundle id and therefore always reports when in scope (design D6/D8) --
+    this is reporting only, never a write gate;
+    `find_provenance_descendants`'s own non-empty-subset rule already keeps
+    a citing concept fail-closed excluded from any purge/raise set.
 
     **Deliberate behaviour change, NOT a byte-identical move**: the
     original inline loop caught only `except (OSError, ValueError)` around
@@ -346,10 +460,13 @@ def find_unresolvable_provenance(
     known_ids = {_normalize_id(extra_id) for extra_id in known_extra_ids} | {
         _normalize_id(path) for path in files
     }
+    in_scope = None if root_ids is None else _reachable_ids(files, root_ids=root_ids)
 
     unresolvable: list[tuple[str, str]] = []
     for path, text in files.items():
         member_id = _normalize_id(path)
+        if in_scope is not None and member_id not in in_scope:
+            continue
         metadata: dict[str, object] | None
         try:
             metadata, _ = okf.load_frontmatter(text)

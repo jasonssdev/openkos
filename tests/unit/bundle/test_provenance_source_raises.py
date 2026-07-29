@@ -182,7 +182,7 @@ class TestFindUnresolvableProvenance:
         scan rather than crashing the command -- a deliberate WIDENING from
         the original inline loop's narrow `except (OSError, ValueError)`
         to `except Exception`, matching this module's other broad-except
-        conventions (`provenance.py:135`, `:297`). This is NOT a
+        conventions (`provenance.py:194`, `:473`). This is NOT a
         byte-identical move: `frontmatter.loads` raises
         `yaml.parser.ParserError` (a `yaml.YAMLError`, not a `ValueError`)
         on malformed YAML, so on `main` a malformed sibling crashes
@@ -196,3 +196,124 @@ class TestFindUnresolvableProvenance:
         result = bundle_provenance.find_unresolvable_provenance(files)
 
         assert result == [("concepts/a", "sources/missing")]
+
+    def test_scoped_to_a_root_reports_a_reachable_citers_dangling_entry(self) -> None:
+        """A concept citing `[<invoked source>, ghost]` IS in the invoked
+        Source's reporting scope, so a scoped call still reports its dangling
+        entry -- the concept the fail-closed subset rule excludes from the
+        closure, and the one whose warning matters most (#232)."""
+        files = {
+            "concepts/citer.md": _doc(
+                sensitivity="public", provenance=["sources/a", "ghost"]
+            ),
+        }
+
+        result = bundle_provenance.find_unresolvable_provenance(
+            files, known_extra_ids={"sources/a"}, root_ids={"sources/a"}
+        )
+
+        assert result == [("concepts/citer", "ghost")]
+
+    def test_default_root_ids_stays_bundle_wide_but_a_scope_narrows_it(self) -> None:
+        """The `root_ids=None` default is byte-identical to the historical
+        bundle-wide scan (every citing concept, `files` order then list
+        order); passing a scope reports ONLY concepts reachable from that
+        root, dropping an unrelated Source's own unresolvable raw resource
+        and everything derived from it (#232)."""
+        files = {
+            "sources/b.md": _doc(sensitivity="public", provenance=["b.txt"]),
+            "concepts/only-b.md": _doc(
+                sensitivity="public", provenance=["sources/b", "ghost"]
+            ),
+            "concepts/citer.md": _doc(
+                sensitivity="public", provenance=["sources/a", "missing"]
+            ),
+        }
+
+        bundle_wide = bundle_provenance.find_unresolvable_provenance(
+            files, known_extra_ids={"sources/a"}
+        )
+        scoped = bundle_provenance.find_unresolvable_provenance(
+            files, known_extra_ids={"sources/a"}, root_ids={"sources/a"}
+        )
+
+        assert bundle_wide == [
+            ("sources/b", "b.txt"),
+            ("concepts/only-b", "ghost"),
+            ("concepts/citer", "missing"),
+        ]
+        assert bundle_wide == bundle_provenance.find_unresolvable_provenance(
+            files, known_extra_ids={"sources/a"}, root_ids=None
+        )
+        assert scoped == [("concepts/citer", "missing")]
+
+    def test_scoped_call_omits_a_concept_citing_only_an_unresolvable_id(self) -> None:
+        """DELIBERATE COVERAGE GAP (#232): a concept whose `provenance` names
+        ONLY an unresolvable id is not reachable from the invoked Source at
+        all, so a scoped call stays silent about it even though it is
+        genuinely broken. NOTHING reports this case today -- `lint`'s
+        dangling check scans `relations:` and body links only, never
+        `provenance:`. Catching it needs a bundle-wide sweep that `lint` is
+        the INTENDED FUTURE owner of, tracked as issue #257 and never
+        `set-sensitivity`'s job."""
+        files = {
+            "concepts/orphan.md": _doc(sensitivity="public", provenance=["ghost"]),
+        }
+
+        scoped = bundle_provenance.find_unresolvable_provenance(
+            files, known_extra_ids={"sources/a"}, root_ids={"sources/a"}
+        )
+
+        assert scoped == []
+        assert bundle_provenance.find_unresolvable_provenance(files) == [
+            ("concepts/orphan", "ghost")
+        ]
+
+    def test_known_ids_come_from_the_full_files_mapping_not_the_scope(self) -> None:
+        """Only the set of CITING concepts is scoped; the id-EXISTENCE set is
+        still computed from the FULL `files` mapping. An in-scope concept
+        citing an id that exists elsewhere in the bundle but OUTSIDE the
+        scope is resolvable and must stay silent -- filtering the snapshot
+        itself would invent a false warning (#232)."""
+        files = {
+            "concepts/citer.md": _doc(
+                sensitivity="public", provenance=["sources/a", "concepts/out-of-scope"]
+            ),
+            "concepts/out-of-scope.md": _doc(
+                sensitivity="public", provenance=["sources/b"]
+            ),
+        }
+
+        result = bundle_provenance.find_unresolvable_provenance(
+            files, known_extra_ids={"sources/a"}, root_ids={"sources/a"}
+        )
+
+        assert result == []
+
+    def test_scoped_order_is_files_order_then_list_order_no_dedupe(self) -> None:
+        """The pinned ordering contract holds on the SCOPED path too, not
+        only with `root_ids=None`: `files` iteration order, then each file's
+        `provenance:` list order, with NO dedupe -- one tuple per
+        occurrence, including the duplicate `ghost` entry. Every citing
+        concept here is reachable from `sources/a`, so the scope filter
+        removes nothing and only the ordering is under test (#232)."""
+        files = {
+            "concepts/b.md": _doc(
+                sensitivity="public",
+                provenance=["sources/a", "ghost", "ghost", "missing-1"],
+            ),
+            "concepts/a.md": _doc(
+                sensitivity="public", provenance=["concepts/b", "missing-2"]
+            ),
+        }
+
+        result = bundle_provenance.find_unresolvable_provenance(
+            files, known_extra_ids={"sources/a"}, root_ids={"sources/a"}
+        )
+
+        assert result == [
+            ("concepts/b", "ghost"),
+            ("concepts/b", "ghost"),
+            ("concepts/b", "missing-1"),
+            ("concepts/a", "missing-2"),
+        ]
