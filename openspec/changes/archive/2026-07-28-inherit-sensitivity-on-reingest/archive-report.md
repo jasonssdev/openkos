@@ -37,25 +37,30 @@ Two edges the design pinned:
 
 ### Review Quality: Two Rounds of Canonical 4R
 
-**Round 1 findings** (per verify-report ID #2090, section "Issues Found / WARNING"):
-- Test `test_reingest_with_missing_on_disk_sensitivity_resolves_to_private` could not discriminate fixed from unfixed (both landed on `private` because config default was `private`)
-- Test `test_reingest_with_blank_on_disk_sensitivity_resolves_to_private` did not exist
-- Spec Scenario 6 ("Malformed...") grouped missing/blank as resolving to `confidential`, contradicting the actual implementation and the design's own correction
+**Round 1 findings** (per verify-report ID #2090, section "Issues Found / WARNING", filed against the original delta spec and implementation):
+- WARNING-1: Spec Scenario 6 ("Malformed...") grouped missing/blank/non-string on-disk values as all resolving to `confidential`, contradicting `combine_sensitivity`'s actual behavior and the design's own correction; the missing-key disjunct was also untested at the `ingest` integration level.
+- WARNING-2: The post-`forget` "from the workspace default" preview clause was implemented but pinned by no delta-spec scenario and no test asserting the exact stdout string.
 
 **Round 1 correction** (commit `cf36e57`):
-- Split Scenario 6 into three separate scenarios (missing → private, blank → private, unrecognized/non-string → confidential)
-- Strengthened first test with `default_sensitivity: public` to make implementations diverge
-- Added second test for the blank-string case using the same technique
-- Added both scenarios to the delta and canonical spec files
+- Split Scenario 6 into three separate scenarios (missing → private, blank → private, unrecognized/non-string → confidential) and added both scenarios to the delta and canonical spec files
+- Added `test_reingest_with_missing_on_disk_sensitivity_resolves_to_private`, closing the missing-key integration-coverage gap
+- Added `test_reingest_after_forget_preview_reports_workspace_default_clause`, pinning the exact stdout string for WARNING-2
+
+**Follow-up review of the `cf36e57` correction** (same branch, before round 2):
+- Found that the new `test_reingest_with_missing_on_disk_sensitivity_resolves_to_private` could not discriminate fixed from unfixed implementations (both landed on `private` because the packaged config default was already `private`)
+- Strengthened it with `default_sensitivity: public` so the two implementations diverge
+- Added a sibling test, `test_reingest_with_blank_on_disk_sensitivity_resolves_to_private`, for the blank/whitespace-only disjunct using the same technique
 - Confirmed all three refined scenarios in the revised tests
 
 **Round 2 findings** (this archive round, current review):
-- Found that the initial round-1 correction assertion `test_reingest_raises_when_workspace_default_exceeds_on_disk` could pass by simply writing `cfg.default_sensitivity` unconditionally (not actually combining)
+- Found that the round-1 correction's assertion `test_reingest_raises_when_workspace_default_exceeds_on_disk` could pass by simply writing `cfg.default_sensitivity` unconditionally (not actually combining)
 - Discovered untested non-string disjunct in the specification
+- Found that this report's own earlier draft had incorrectly claimed the delta and canonical specs already carried a post-`forget` preview scenario ("the delta/canonical specs carry the corresponding scenario"); neither file had one at that point — `test_reingest_after_forget_preview_reports_workspace_default_clause` (added in `cf36e57`) pinned the stdout string but nothing pinned the spec-level requirement
 
 **Round 2 correction** (this round):
 - Strengthened `test_reingest_raises_when_workspace_default_exceeds_on_disk` with a final re-ingest step to force the combine to occur
 - Added `test_reingest_with_non_string_on_disk_sensitivity_fails_closed_to_confidential` to test the non-string disjunct
+- Added the missing "Preview reports the workspace default after `forget`" scenario to both the delta and canonical spec files, correcting the false claim rather than erasing it, and bringing the test and spec into agreement
 - Verified all tests discriminate the fixed implementation from the unfixed one via differential and mutation experiments
 
 ### Verification Evidence
@@ -80,7 +85,7 @@ Two edges the design pinned:
 
 ### Artifact State
 
-**Specs**: Delta spec merged into canonical `openspec/specs/ingestion/spec.md` **on the merged commit** (verified byte-identical). No manual re-application needed.
+**Specs**: Delta spec merged into canonical `openspec/specs/ingestion/spec.md` **on the merged commit**, matching in all requirement and scenario text except one gap: the delta's `(Previously: ...)` paragraph for "Default Sensitivity from Config" was not carried into the canonical file at merge time. The canonical file retains that annotation for its two other modified requirements, and the convention appears across other capability specs, so the omission is a real gap rather than a delta-only formatting difference. It is NOT fixed here: the canonical spec sits outside this archive commit's reviewed scope, and the review facade correctly refused a correction reaching into it. Tracked as a follow-up instead.
 
 **ADR-0010**:
 - Status flipped from Proposed → Accepted (per archive convention)
@@ -150,7 +155,7 @@ Filesystem archive: `openspec/changes/archive/2026-07-28-inherit-sensitivity-on-
 ## Archive Checklist
 
 - [x] Task Completion Gate: all 32 implementation tasks marked done
-- [x] Spec Sync: delta merged into canonical `openspec/specs/ingestion/spec.md`
+- [x] Spec Sync: delta merged into canonical `openspec/specs/ingestion/spec.md`, with one known gap — a missing `(Previously: ...)` annotation for "Default Sensitivity from Config", found during this correction round and left to a follow-up because the canonical spec is outside this commit's reviewed scope (see Delivery / Artifact State)
 - [x] ADR-0010: Status flipped Proposed → Accepted
 - [x] ADR README: Index updated
 - [x] Change folder moved to archive (filesystem): `openspec/changes/archive/2026-07-28-inherit-sensitivity-on-reingest/`
