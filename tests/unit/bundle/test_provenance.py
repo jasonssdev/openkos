@@ -1,15 +1,24 @@
-"""Unit tests for the pure orphan-closure helper (`bundle/provenance.py`),
+"""Unit tests for `bundle/provenance.py`: the pure orphan-closure helper
 used by `forget --scope source`'s Phase A resolution (spec: "Provenance
-Descendant Resolution").
+Descendant Resolution"), AND the find/apply/reverse inbound-provenance
+rewrite trio used by `merge`/`unmerge` (spec: "Reversible Inbound-Provenance
+Rewiring"; design: rewrite-provenance-on-merge).
 
 `find_provenance_descendants` computes the orphan-after-delete closure: a
 candidate concept joins the purge set iff its `provenance` frontmatter list
 is NON-EMPTY and a subset of the current purge set. The non-empty guard is
 the CRITICAL over-deletion barrier -- see
 `test_find_provenance_descendants_empty_provenance_does_not_join` below.
-"""
 
-from openkos.bundle import provenance
+`find_inbound_provenance_rewrites`/`apply_provenance_rewrites`/
+`reverse_provenance_rewrites` mirror `bundle/relations.py`'s trio shape
+(whole-file snapshot, drift-checked absolute reversal), scanning `files`
+already in memory."""
+
+import pytest
+
+from openkos.bundle import links as bundle_links
+from openkos.bundle import provenance, relations
 from openkos.model import okf
 
 
@@ -272,3 +281,368 @@ def test_find_provenance_descendants_unparseable_file_skipped_and_preserved() ->
     result = provenance.find_provenance_descendants(files, root_ids=["sources/x"])
 
     assert result == ["sources/x"]
+
+
+# -- find_inbound_provenance_rewrites (tasks 2.1-2.4) -----------------------
+
+
+def test_find_inbound_provenance_rewrites_records_whole_file_snapshot() -> None:
+    """Requirement: "Reversible Inbound-Provenance Rewiring" -- a file whose
+    `provenance:` names the absorbed id gets one `ProvenanceRewrite`
+    recording that file's ORIGINAL, pre-merge full text."""
+    text = _doc({"provenance": ["sources/absorbed"]}, "Other body.")
+    files = {"concepts/other.md": text}
+
+    rewrites = provenance.find_inbound_provenance_rewrites(
+        files, absorbed_id="sources/absorbed", survivor_id="sources/survivor"
+    )
+
+    assert rewrites == [okf.ProvenanceRewrite(file="concepts/other.md", snapshot=text)]
+
+
+def test_find_inbound_provenance_rewrites_ignores_non_matching_provenance() -> None:
+    """A file whose `provenance:` names an unrelated id is left out."""
+    text = _doc({"provenance": ["sources/unrelated"]}, "Other body.")
+    files = {"concepts/other.md": text}
+
+    rewrites = provenance.find_inbound_provenance_rewrites(
+        files, absorbed_id="sources/absorbed", survivor_id="sources/survivor"
+    )
+
+    assert rewrites == []
+
+
+def test_find_inbound_provenance_rewrites_excludes_survivor_and_absorbed_files() -> (
+    None
+):
+    """Neither merge participant's own `provenance:` is this scan's concern
+    -- the absorbed file is deleted, and the survivor's own provenance is
+    handled by `build_merged_document`'s generic list-union."""
+    survivor_doc = _doc({"provenance": ["sources/absorbed"]}, "Survivor body.")
+    absorbed_doc = _doc({"provenance": ["sources/absorbed"]}, "Absorbed body.")
+    third_party_doc = _doc({"provenance": ["sources/absorbed"]}, "Foo body.")
+    files = {
+        "concepts/survivor.md": survivor_doc,
+        "sources/absorbed.md": absorbed_doc,
+        "notes/foo.md": third_party_doc,
+    }
+
+    rewrites = provenance.find_inbound_provenance_rewrites(
+        files, absorbed_id="sources/absorbed", survivor_id="concepts/survivor"
+    )
+
+    assert [rw.file for rw in rewrites] == ["notes/foo.md"]
+
+
+def test_find_inbound_provenance_rewrites_skips_malformed_frontmatter() -> None:
+    """A file with malformed/unparseable frontmatter is SKIPPED rather than
+    crashing or refusing the scan (mirrors
+    `find_inbound_relation_rewrites`'s identical broad-except skip)."""
+    files = {
+        "concepts/broken.md": "---\nnot: [valid: yaml: at all\n---\nBody.\n",
+        "concepts/clean.md": _doc({"provenance": ["sources/absorbed"]}, "Clean body."),
+    }
+
+    rewrites = provenance.find_inbound_provenance_rewrites(
+        files, absorbed_id="sources/absorbed", survivor_id="sources/survivor"
+    )
+
+    assert [rw.file for rw in rewrites] == ["concepts/clean.md"]
+
+
+def test_find_inbound_provenance_rewrites_skips_malformed_provenance_shape() -> None:
+    """A file whose frontmatter parses but whose `provenance:` is not a list
+    is likewise skipped -- same broad-except rationale as above."""
+    files = {
+        "concepts/malformed-provenance.md": _doc({"provenance": "not-a-list"}, "Body.")
+    }
+
+    rewrites = provenance.find_inbound_provenance_rewrites(
+        files, absorbed_id="sources/absorbed", survivor_id="sources/survivor"
+    )
+
+    assert rewrites == []
+
+
+def test_find_inbound_provenance_rewrites_not_gated_on_absorbed_type() -> None:
+    """Requirement: "This scan MUST NOT be gated on the absorbed concept's
+    `type`" -- `query --save` can file ANY cited concept id, Source or not,
+    as another object's `provenance`. Absorbing a non-Source concept must
+    still retarget a third party's provenance entry naming it (dedicated
+    scenario, NOT a clause of the whole-file-snapshot test above)."""
+    text = _doc({"provenance": ["concepts/absorbed-decision"]}, "Other body.")
+    files = {
+        "concepts/absorbed-decision.md": _doc({"type": "Decision"}, "Absorbed."),
+        "concepts/other.md": text,
+    }
+
+    rewrites = provenance.find_inbound_provenance_rewrites(
+        files,
+        absorbed_id="concepts/absorbed-decision",
+        survivor_id="concepts/survivor",
+    )
+
+    assert [rw.file for rw in rewrites] == ["concepts/other.md"]
+
+
+# -- apply_provenance_rewrites: retarget-then-dedupe matrix (tasks 2.6-2.7) -
+
+
+def _make_provenance_doc(entries: list[str]) -> str:
+    return _doc({"provenance": entries}, "Other body.")
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        pytest.param(["sources/absorbed"], ["sources/survivor"], id="single-absorbed"),
+        pytest.param(
+            ["sources/absorbed", "x", "sources/survivor"],
+            ["sources/survivor", "x"],
+            id="absorbed-then-x-then-survivor",
+        ),
+        pytest.param(
+            ["sources/survivor", "x", "sources/absorbed"],
+            ["sources/survivor", "x"],
+            id="survivor-then-x-then-absorbed",
+        ),
+        pytest.param(
+            ["sources/absorbed", "x", "sources/absorbed.md"],
+            ["sources/survivor", "x"],
+            id="absorbed-repeated-with-md-suffix-variant",
+        ),
+        pytest.param(["x", "y"], ["x", "y"], id="no-rewrite-when-not-cited"),
+    ],
+)
+def test_apply_provenance_rewrites_retarget_then_dedupe_matrix(
+    before: list[str], after: list[str]
+) -> None:
+    """Design: retarget-then-dedupe, first-occurrence-wins, keyed on the
+    normalized id. A list naming both survivor and absorbed collapses to one
+    survivor entry at the EARLIER position; every other entry keeps its
+    relative order; the absorbed id repeated (including `.md`-suffixed)
+    collapses to one entry."""
+    text = _make_provenance_doc(before)
+    rewrite = okf.ProvenanceRewrite(file="concepts/other.md", snapshot=text)
+    rewrites = [rewrite] if before != ["x", "y"] else []
+
+    result = provenance.apply_provenance_rewrites(
+        text,
+        file="concepts/other.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=rewrites,
+    )
+
+    metadata, _ = okf.load_frontmatter(result)
+    assert metadata["provenance"] == after
+
+
+def test_apply_provenance_rewrites_no_op_when_file_not_in_rewrites() -> None:
+    """A file not recorded by `find_inbound_provenance_rewrites` is
+    returned byte-identical -- nothing to retarget."""
+    text = _make_provenance_doc(["sources/absorbed"])
+    other_rewrite = okf.ProvenanceRewrite(file="concepts/unrelated.md", snapshot=text)
+
+    result = provenance.apply_provenance_rewrites(
+        text,
+        file="concepts/other.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=[other_rewrite],
+    )
+
+    assert result == text
+
+
+def test_apply_provenance_rewrites_never_empty_no_pop_key_branch() -> None:
+    """Design: the result is provably never empty (find_* only records files
+    holding >= 1 absorbed entry), so there is no pop-the-key branch --
+    `provenance:` always stays present after a retarget."""
+    text = _make_provenance_doc(["sources/absorbed"])
+    rewrite = okf.ProvenanceRewrite(file="concepts/other.md", snapshot=text)
+
+    result = provenance.apply_provenance_rewrites(
+        text,
+        file="concepts/other.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=[rewrite],
+    )
+
+    metadata, _ = okf.load_frontmatter(result)
+    assert "provenance" in metadata
+    assert metadata["provenance"] == ["sources/survivor"]
+
+
+def test_apply_provenance_rewrites_retained_entries_keep_original_string_form() -> None:
+    """Retained (non-retargeted) entries keep their original string form --
+    e.g. a `.md`-suffixed unrelated entry is not normalized away."""
+    text = _make_provenance_doc(["sources/absorbed", "sources/other.md"])
+    rewrite = okf.ProvenanceRewrite(file="concepts/other.md", snapshot=text)
+
+    result = provenance.apply_provenance_rewrites(
+        text,
+        file="concepts/other.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=[rewrite],
+    )
+
+    metadata, _ = okf.load_frontmatter(result)
+    assert metadata["provenance"] == ["sources/survivor", "sources/other.md"]
+
+
+# -- reverse_provenance_rewrites (tasks 2.8-2.9) -----------------------------
+
+
+def test_reverse_provenance_rewrites_restores_recorded_snapshot_exactly() -> None:
+    """`reverse_provenance_rewrites` restores the recorded whole-file
+    snapshot verbatim -- an ABSOLUTE overwrite, ignoring the passed-in
+    (rewritten) text entirely."""
+    original = _make_provenance_doc(["sources/absorbed"])
+    rewrite = okf.ProvenanceRewrite(file="concepts/other.md", snapshot=original)
+    rewritten = provenance.apply_provenance_rewrites(
+        original,
+        file="concepts/other.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=[rewrite],
+    )
+    assert rewritten != original  # sanity: the rewrite actually changed the text
+
+    restored = provenance.reverse_provenance_rewrites(
+        rewritten,
+        file="concepts/other.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=[rewrite],
+        link_rewrites=[],
+        relation_rewrites=[],
+    )
+
+    assert restored == original
+
+
+def test_reverse_provenance_rewrites_no_op_when_file_not_in_rewrites() -> None:
+    """A file with no matching recorded rewrite is returned unchanged; no
+    drift check applies since there is nothing recorded to compare
+    against."""
+    text = "some arbitrary text\n"
+    rewrite = okf.ProvenanceRewrite(file="concepts/unrelated.md", snapshot="snapshot\n")
+
+    result = provenance.reverse_provenance_rewrites(
+        text,
+        file="concepts/other.md",
+        survivor_id="sources/survivor",
+        absorbed_id="sources/absorbed",
+        rewrites=[rewrite],
+        link_rewrites=[],
+        relation_rewrites=[],
+    )
+
+    assert result == text
+
+
+def test_reverse_provenance_rewrites_rejects_more_than_one_snapshot_for_same_file() -> (
+    None
+):
+    """More than one recorded snapshot for the SAME file within one ledger
+    entry is a construction bug -- fails closed rather than picking one
+    silently."""
+    rewrites = [
+        okf.ProvenanceRewrite(file="concepts/other.md", snapshot="first\n"),
+        okf.ProvenanceRewrite(file="concepts/other.md", snapshot="second\n"),
+    ]
+
+    with pytest.raises(ValueError, match="more than one"):
+        provenance.reverse_provenance_rewrites(
+            "text\n",
+            file="concepts/other.md",
+            survivor_id="sources/survivor",
+            absorbed_id="sources/absorbed",
+            rewrites=rewrites,
+            link_rewrites=[],
+            relation_rewrites=[],
+        )
+
+
+def test_reverse_provenance_rewrites_fails_closed_on_drifted_current_text() -> None:
+    """A file's current on-disk content that does not match what this merge
+    deterministically wrote raises `ValueError` rather than silently
+    clobbering a legitimate post-merge edit."""
+    original = _make_provenance_doc(["sources/absorbed"])
+    rewrite = okf.ProvenanceRewrite(file="concepts/other.md", snapshot=original)
+    drifted_current_text = _make_provenance_doc(
+        ["sources/survivor", "sources/elsewhere"]
+    )
+
+    with pytest.raises(ValueError, match="drifted"):
+        provenance.reverse_provenance_rewrites(
+            drifted_current_text,
+            file="concepts/other.md",
+            survivor_id="sources/survivor",
+            absorbed_id="sources/absorbed",
+            rewrites=[rewrite],
+            link_rewrites=[],
+            relation_rewrites=[],
+        )
+
+
+def test_reverse_provenance_rewrites_recomputes_forward_through_link_and_relation() -> (
+    None
+):
+    """`reverse_provenance_rewrites` recomputes expected post-merge bytes
+    FORWARD through `merge_core`'s exact chain order (link -> relation ->
+    provenance) before comparing against the current on-disk `text` -- a
+    file touched by all three rewrite kinds must not produce a false drift
+    positive."""
+    original = _doc(
+        {
+            "relations": [{"target": "concepts/absorbed", "type": "depends_on"}],
+            "provenance": ["concepts/absorbed"],
+        },
+        "See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+    provenance_rewrite = okf.ProvenanceRewrite(
+        file="concepts/other.md", snapshot=original
+    )
+    relation_rewrite = okf.RelationRewrite(file="concepts/other.md", snapshot=original)
+    link_rewrite = okf.LinkRewrite(
+        file="concepts/other.md",
+        old_link="/concepts/absorbed.md",
+        new_link="/concepts/survivor.md",
+        offset=original.index("/concepts/absorbed.md") - 1,
+    )
+
+    # What `merge_core`'s chain actually writes: link -> relation ->
+    # provenance, applied in order over the same in-memory text.
+    after_link = bundle_links.apply_link_rewrites(
+        original, file="concepts/other.md", rewrites=[link_rewrite]
+    )
+    after_relation = relations.apply_relation_rewrites(
+        after_link,
+        file="concepts/other.md",
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        rewrites=[relation_rewrite],
+    )
+    current_on_disk = provenance.apply_provenance_rewrites(
+        after_relation,
+        file="concepts/other.md",
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        rewrites=[provenance_rewrite],
+    )
+
+    restored = provenance.reverse_provenance_rewrites(
+        current_on_disk,
+        file="concepts/other.md",
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/absorbed",
+        rewrites=[provenance_rewrite],
+        link_rewrites=[link_rewrite],
+        relation_rewrites=[relation_rewrite],
+    )
+
+    assert restored == original
