@@ -1106,3 +1106,195 @@ def test_set_type_tier_rejects_unknown_tier() -> None:
     raises `ValueError` even though the CLI validates first."""
     with pytest.raises(ValueError, match="bogus"):
         config.set_type_tier("type_tiers:\n  Person: slow\n", "Person", "bogus")
+
+
+# --- #210: one declared set drives the regex, the guards, and the template ---
+
+
+def _packaged_template() -> str:
+    """The packaged `openkos.yaml.template` bytes, read the same way
+    `write_config` reads them."""
+    return (
+        resources.files("openkos") / "templates" / "openkos.yaml.template"
+    ).read_text(encoding="utf-8")
+
+
+def test_placeholder_regex_covers_exactly_the_declared_set() -> None:
+    """The substitution regex must be DERIVED from the declared placeholders.
+
+    This is the invariant #210 is about. The failure it guards is silent:
+    add a third placeholder to the template, to the count guards, and to the
+    substitution mapping, but leave it out of the regex, and nothing raises
+    -- the count guard only inspects the raw template, `re.sub` simply never
+    matches, and `openkos.yaml` is written with a literal
+    `__OPENKOS_SOMETHING__` in it. That file is still valid YAML, so
+    `read_config` parses it and hands the caller a placeholder string as
+    though it were a real value.
+
+    Asserted as a set equality in both directions rather than a membership
+    loop, so a regex that grew an alternative nobody declared fails here too.
+    """
+    joined = " ".join(config._PLACEHOLDERS)
+
+    assert set(config._PLACEHOLDER_RE.findall(joined)) == set(config._PLACEHOLDERS)
+
+
+def test_every_declared_placeholder_gets_a_count_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The count guards are derived too, not written one per placeholder.
+
+    Declares a placeholder the packaged template does not contain. If the
+    guards were still hand-written per token, the new one would go unchecked
+    and `write_config` would write a file; deriving them from the same
+    declaration makes the omission impossible.
+    """
+    monkeypatch.setattr(
+        config, "_PLACEHOLDERS", (*config._PLACEHOLDERS, "__OPENKOS_FUTURE__")
+    )
+
+    with pytest.raises(ValueError, match="__OPENKOS_FUTURE__"):
+        config.write_config(tmp_path)
+
+    assert not (tmp_path / "openkos.yaml").exists()
+
+
+def test_undeclared_template_placeholder_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A placeholder in the template that NOTHING declares must raise.
+
+    The complement of the guard above, and the one hole deriving the regex
+    cannot close on its own: here the template is what grew, so every
+    declaration-driven check still passes and the token would be written
+    through verbatim as a literal.
+    """
+    monkeypatch.setattr(
+        config,
+        "_read_template",
+        lambda _: _packaged_template() + "\nfuture: __OPENKOS_FUTURE__\n",
+    )
+
+    with pytest.raises(ValueError, match="__OPENKOS_FUTURE__"):
+        config.write_config(tmp_path)
+
+    assert not (tmp_path / "openkos.yaml").exists()
+
+
+def test_undeclared_check_does_not_fire_on_a_placeholder_shaped_value(
+    tmp_path: Path,
+) -> None:
+    """A user value that LOOKS like a placeholder must still be written.
+
+    `validate_model`'s allowlist admits `_`, so `__OPENKOS_EMBEDDING_MODEL__`
+    is a legal model name -- and two existing tests pin that it round-trips,
+    because a single-pass substitution is what keeps one field's value from
+    being eaten by the other's pass.
+
+    That is why the undeclared-token check runs over the TEMPLATE before
+    substitution rather than over the finished content after it. A survivor
+    scan of the output would see this value, conclude a placeholder had
+    escaped, and refuse to write a config that is entirely correct.
+    """
+    config.write_config(tmp_path, model="__OPENKOS_FUTURE__")
+
+    assert config.read_config(tmp_path).model == "__OPENKOS_FUTURE__"
+
+
+def test_adjacent_placeholders_are_scanned_as_two_tokens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two placeholders with nothing between them are two tokens, not one.
+
+    `__OPENKOS_` and the characters that follow it are all inside the token
+    scanner's own character class, so a greedy body runs straight through the
+    second token's prefix and backtracks only to the FINAL `__`, yielding one
+    merged match. That merged string matches no declaration, so the
+    undeclared-token check would reject a template whose placeholders are
+    both correctly declared and both present exactly once -- failing for a
+    reason that is not true.
+
+    Dormant against the packaged template, where the two sit on separate
+    lines. Pinned because the check exists to make adding a placeholder safe,
+    and a rule that only works when the author happens to separate them is
+    not that.
+    """
+    monkeypatch.setattr(
+        config,
+        "_read_template",
+        lambda _: "model: __OPENKOS_MODEL____OPENKOS_EMBEDDING_MODEL__\n",
+    )
+
+    config.write_config(tmp_path, model="m", embedding_model="e")
+
+    written = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "__OPENKOS_" not in written
+    assert written == "model: me\n"
+
+
+def test_placeholder_missing_from_the_substitution_mapping_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one hand-written site fails LOUDLY, which is why it is acceptable.
+
+    `substitutions` binds each token to a runtime argument, so it cannot be
+    derived from a module-level tuple the way the regex and the count guards
+    are. `_PLACEHOLDERS`' docstring rests the whole design on that omission
+    being loud rather than silent -- this is the test that makes the claim
+    checkable instead of merely asserted.
+
+    Reaching the branch needs `_PLACEHOLDER_RE` patched alongside
+    `_PLACEHOLDERS`, because the regex is compiled once at import and a test
+    that patched only the tuple would never drive a match for the new token
+    -- it would pass while proving nothing. Rebuilt here exactly as the
+    module builds it, so the setup mirrors a real half-application rather
+    than inventing a shape the code cannot produce.
+    """
+    future = "__OPENKOS_FUTURE__"
+    monkeypatch.setattr(config, "_PLACEHOLDERS", (*config._PLACEHOLDERS, future))
+    monkeypatch.setattr(
+        config,
+        "_PLACEHOLDER_RE",
+        re.compile("|".join(re.escape(p) for p in config._PLACEHOLDERS)),
+    )
+    monkeypatch.setattr(
+        config, "_read_template", lambda _: _packaged_template() + f"\nx: {future}\n"
+    )
+
+    with pytest.raises(KeyError):
+        config.write_config(tmp_path)
+
+    assert not (tmp_path / "openkos.yaml").exists()
+
+
+def test_placeholders_sharing_an_underscore_pair_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two tokens overlapping on one underscore pair must not slip through.
+
+    `__OPENKOS_MODEL__OPENKOS_EMBEDDING_MODEL__` is one pair short of the
+    well-formed adjacent case: both declared tokens are present as
+    substrings, but they SHARE the two underscores between them, so only one
+    of them can be consumed.
+
+    Every guard that inspects the raw text disagrees with what substitution
+    actually does. `str.count` finds each token once, because it counts
+    OVERLAPPING substrings; `re.sub` consumes NON-OVERLAPPING, so it replaces
+    the first and walks past the second's opening delimiter. The result --
+    a literal `OPENKOS_EMBEDDING_MODEL__` written into `openkos.yaml`, valid
+    YAML, no error -- is precisely the failure #210 exists to end.
+
+    So the count guard measures with the same alternation the substitution
+    uses, rather than with `str.count`. A guard that does not measure what
+    the operation will do is not a guard.
+    """
+    monkeypatch.setattr(
+        config,
+        "_read_template",
+        lambda _: "model: __OPENKOS_MODEL__OPENKOS_EMBEDDING_MODEL__\n",
+    )
+
+    with pytest.raises(ValueError, match="__OPENKOS_EMBEDDING_MODEL__"):
+        config.write_config(tmp_path)
+
+    assert not (tmp_path / "openkos.yaml").exists()

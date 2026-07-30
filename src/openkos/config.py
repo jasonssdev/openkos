@@ -346,16 +346,52 @@ def write_agents(root: Path) -> None:
 _MODEL_PLACEHOLDER = "__OPENKOS_MODEL__"
 _EMBEDDING_MODEL_PLACEHOLDER = "__OPENKOS_EMBEDDING_MODEL__"
 
-_PLACEHOLDER_RE = re.compile(
-    "|".join(re.escape(p) for p in (_MODEL_PLACEHOLDER, _EMBEDDING_MODEL_PLACEHOLDER))
-)
-"""Matches either placeholder, so `write_config` substitutes both in ONE pass.
+_PLACEHOLDERS = (_MODEL_PLACEHOLDER, _EMBEDDING_MODEL_PLACEHOLDER)
+"""The declared placeholder set -- the ONE place a new one is added (#210).
+
+Both the substitution regex below and `write_config`'s per-placeholder count
+guards are derived from this tuple, because the set used to be written out by
+hand in three places and omitting any one of them failed SILENTLY: the count
+guard only inspects the raw template, so it still passed; `re.sub` simply
+never matched; and `openkos.yaml` was written with a literal
+`__OPENKOS_SOMETHING__` in it. That file is still valid YAML, so `read_config`
+parsed it and handed the caller a placeholder string as a real value.
+
+One hand-written site remains by necessity -- `write_config`'s `substitutions`
+mapping, which binds each token to a runtime argument this module-level tuple
+cannot know. Omitting a token there is LOUD: the derived regex matches it and
+the substitution callback raises `KeyError`."""
+
+_PLACEHOLDER_RE = re.compile("|".join(re.escape(p) for p in _PLACEHOLDERS))
+"""Matches any declared placeholder, so `write_config` substitutes in ONE pass.
 
 Sequential `str.replace` calls would not be order-independent: the character
 allowlist in `_MODEL_TOKEN_RE` admits `_`, so a validated `model` value may
 itself equal the embedding placeholder token, and a later pass would overwrite
 the value the earlier pass just wrote. A single pass never re-examines
 substituted text."""
+
+_TEMPLATE_PLACEHOLDER_RE = re.compile(r"__OPENKOS_[A-Z0-9_]*?__")
+"""Any placeholder-SHAPED token, declared or not.
+
+The body is LAZY. Greedy would run straight through a second token's
+`__OPENKOS_` prefix -- every character of it is inside this same class --
+and backtrack only to the final `__`, so two placeholders written back to
+back would scan as ONE merged match belonging to no declaration, and the
+check below would reject a template in which both are correctly declared and
+each appears exactly once. Lazy stops at the first closing delimiter, which
+is what a delimiter-bounded token means.
+
+Closes the one hole deriving `_PLACEHOLDER_RE` cannot: a token added to the
+packaged template that no constant declares. Every declaration-driven check
+still passes in that case -- there is nothing to be inconsistent WITH -- and
+the token is written through verbatim.
+
+Applied to the TEMPLATE before substitution, never to the finished content
+after it. A survivor scan of the output would be simpler and would be wrong:
+`__OPENKOS_EMBEDDING_MODEL__` is a legal `model` value (the allowlist admits
+`_`), and two tests pin that it round-trips intact, so an output scan would
+refuse to write a config that is entirely correct."""
 
 
 def write_config(
@@ -379,23 +415,56 @@ def write_config(
     `validate_embedding_model` each run first and raise `ValueError` before
     any file is written if their value is blank or contains whitespace, a
     quote, or `#`; `embedding_model` is validated for YAML-safety only,
-    independent of `EMBEDDING_MODEL_ALLOWLIST` membership (D6). Each
-    placeholder's count in the packaged template is checked independently
-    (must be exactly one). Exclusive-create mode ("x") never overwrites an
-    existing file (D2).
+    independent of `EMBEDDING_MODEL_ALLOWLIST` membership (D6).
+
+    Two template checks run before any substitution, both derived from
+    `_PLACEHOLDERS` rather than written per token (#210). First, the template
+    may contain no placeholder-shaped token that nothing declares. Second,
+    each declared placeholder must be matched exactly once -- counted by
+    running `_PLACEHOLDER_RE` over the template, the SAME alternation that
+    then performs the substitution, so the guard measures what the operation
+    will actually do rather than what a substring search reports.
+
+    Together they mean adding a placeholder is a single edit to
+    `_PLACEHOLDERS` plus its template line and its `substitutions` entry,
+    with every way of half-applying it raising rather than writing a literal
+    token into `openkos.yaml`.
+
+    Exclusive-create mode ("x") never overwrites an existing file (D2).
     """
     validated_model = validate_model(model)
     validated_embedding_model = validate_embedding_model(embedding_model)
     template = _read_template("openkos.yaml.template")
-    if template.count(_MODEL_PLACEHOLDER) != 1:
+    undeclared = sorted(
+        set(_TEMPLATE_PLACEHOLDER_RE.findall(template)) - set(_PLACEHOLDERS)
+    )
+    if undeclared:
         raise ValueError(
-            f"expected exactly one {_MODEL_PLACEHOLDER!r} placeholder in the "
-            "packaged template"
+            "packaged template contains undeclared placeholder(s): "
+            + ", ".join(repr(token) for token in undeclared)
         )
-    if template.count(_EMBEDDING_MODEL_PLACEHOLDER) != 1:
+    # Counted with the SAME alternation that performs the substitution, never
+    # with `str.count`. The two disagree: `str.count` counts OVERLAPPING
+    # substrings, while `re.sub` consumes NON-OVERLAPPING. Two declared tokens
+    # sharing one underscore pair (`__OPENKOS_MODEL__OPENKOS_EMBEDDING_MODEL__`)
+    # are therefore each "present once" to `str.count` while substitution can
+    # only ever consume the first -- writing the second through as literal
+    # text, valid YAML, no error. A guard that does not measure what the
+    # operation will actually do is not a guard.
+    matched = _PLACEHOLDER_RE.findall(template)
+    mismatched = [
+        (placeholder, matched.count(placeholder))
+        for placeholder in _PLACEHOLDERS
+        if matched.count(placeholder) != 1
+    ]
+    if mismatched:
         raise ValueError(
-            f"expected exactly one {_EMBEDDING_MODEL_PLACEHOLDER!r} placeholder "
-            "in the packaged template"
+            "packaged template placeholder mismatch: "
+            + "; ".join(
+                f"{placeholder!r} is matched {count} time(s) by the "
+                "substitution scan, expected exactly one"
+                for placeholder, count in mismatched
+            )
         )
     substitutions = {
         _MODEL_PLACEHOLDER: validated_model,
