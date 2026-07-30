@@ -28,6 +28,7 @@ from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.bundle import relations as bundle_relations
+from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
 from openkos.extraction.concept import extract_concept
 from openkos.graph import proximity, sqlite_graph
@@ -5351,6 +5352,42 @@ def status() -> None:
             typer.echo("  No concept relationships yet.")
         else:
             typer.echo(f"  {total} concept-to-concept edge(s) ({typed} typed).")
+
+
+@app.command("next")
+def next_cmd() -> None:
+    """Print the one command worth running next: read-only, deterministic.
+
+    Refuses (exit 1) via the SAME shared `config.require_workspace` gate
+    (D1) `status` uses if the current directory is not an initialized
+    workspace, printing the reason to stderr with no raw traceback. This is
+    the ONLY non-zero exit path -- every other workspace state, including a
+    freshly initialized, empty bundle, exits 0.
+
+    Delegates the whole ranked decision to
+    `openkos.cli.next_action.next_action` (the ordered `_TIERS` tuple over
+    a lazily-memoized `_BundleSignals` holder) and echoes
+    `next_action.render_lines`'s output verbatim. `status`'s body is not
+    read or touched here (design D2): every signal `next` reads comes from
+    a function `status`/`lint` already ship, so no walk logic is
+    duplicated. Named `next_cmd` internally only because `next` shadows a
+    Python builtin -- the command itself is registered as `next`.
+
+    No file under the workspace is ever created, modified, or deleted, no
+    model backend is ever constructed, and no `--json` or other structured
+    output mode is offered (spec: Read-Only and Human-Readable Only, No
+    Model Backend Constructed).
+    """
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos next: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    action = next_action_module.next_action(layout)
+    for line in next_action_module.render_lines(action):
+        typer.echo(line)
 
 
 @app.command("list")

@@ -316,6 +316,16 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 **Not in this slice:** `--json` or any other structured output mode; a non-zero exit for findings or CI-gate behavior. Freshness and orphan-link checks are `lint`'s job, not `status`'s.
 
+### `openkos next`
+
+**Read-only.** Answers one narrower question than `status`: not "what is in this bundle", but "which single command should I run next". It ranks four actionable finding kinds by a fixed priority order and prints exactly one runnable command with a one-line reason — or, when none of them fires, one line pointing at `openkos status` for the full report.
+
+Priority order, highest first: (1) missing or empty vector index — `openkos reindex`; (2) an unextracted source (`extraction_status: failed`) — `openkos ingest <resource>`; (3) a descendant below its Source's sensitivity — `openkos backfill-sensitivity`; (4) a pending exact-title duplicate group — `openkos duplicates`. Evaluation stops at the first tier with a finding — a lower-ranked tier's finding is never mentioned while a higher one exists — so cost is capped by how far it needs to look: stopping at tier 1 costs nothing beyond the cheapest possible check, and the worst case (reaching tier 4, or finding nothing) still costs less than `status`'s own scan.
+
+Findings that name no command at all (a §9 conformance violation, a dangling reference, a source cited by more than one closure) are never "the one action" here — they stay visible only through `status`/`lint`. Because `next` stops looking as soon as one tier fires, it can never prove those commandless findings are absent, so its no-action output never claims the bundle is clean — it always points at `openkos status` instead, with no count of anything left unseen.
+
+Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status` uses. Every other workspace state, including a freshly initialized, empty bundle, exits 0. No `--json` or other structured output mode is offered, no file under the workspace is ever created, modified, or deleted, and no model backend is ever constructed — the answer is a pure function of files already on disk.
+
 ### `openkos list [TYPE]`
 
 **Read-only.** Enumerates bundle objects with their id, sensitivity, lifecycle status, and title — the discovery counterpart to the id-taking write verbs (`forget`, `relate`, `merge`, `unmerge`, `set-sensitivity`), which all require an id you first have to know. One read-only bundle walk backs every invocation; id, sensitivity, status, and title are all derived in that same pass.
