@@ -157,13 +157,19 @@ context and citations — rather than raise. WHEN every hit is unreadable,
 
 `answer` MUST NOT catch or suppress `FtsUnavailable` or any `OllamaError`
 family member raised by `llm.chat`; these MUST propagate to the caller
-unchanged. `OllamaUnavailable` and `OllamaModelNotFound` raised while
-embedding the question (`embedder.embed([question])`) MUST ALSO propagate
-unswallowed — they are environment-fatal, not per-question transient. The
-GENERIC transient `OllamaError` raised while embedding the question is the
-ONLY exception to this rule: it is caught and handled by the Dense
-Retrieval Degrades To FTS-Only requirement instead, and MUST NOT propagate
-from `answer`.
+unchanged. `OllamaUnavailable`, `OllamaModelNotFound`, and
+`OllamaEmbeddingDimensionMismatch` raised while embedding the question
+(`embedder.embed([question])`) MUST ALSO propagate unswallowed — the first
+two are environment-fatal and the third is a permanent misconfiguration of
+the configured embedding model; none of the three is per-question
+transient. The GENERIC transient `OllamaError` raised while embedding the
+question is the ONLY exception to this rule: it is caught and handled by
+the Dense Retrieval Degrades To FTS-Only requirement instead, and MUST NOT
+propagate from `answer`.
+
+(Previously: only `OllamaUnavailable` and `OllamaModelNotFound` propagated
+from the question-embed step; `OllamaEmbeddingDimensionMismatch` was
+swallowed by the generic transient `OllamaError` degrade instead.)
 
 #### Scenario: FTS index unavailable
 
@@ -192,6 +198,16 @@ from `answer`.
 - WHEN `answer(...)` is called
 - THEN that exception propagates to the caller unchanged, exactly like an
   `OllamaError`-family exception from `llm.chat`
+
+#### Scenario: Question-embed dimension mismatch still propagates
+
+- GIVEN `embedder.embed([question])` raises
+  `OllamaEmbeddingDimensionMismatch` (the configured embedding model does
+  not emit `EMBED_DIM`-dimensional vectors)
+- WHEN `answer(...)` is called
+- THEN that exception propagates to the caller unchanged rather than being
+  degraded — a wrong dimension is permanent, so no retry and no re-run can
+  make dense retrieval possible
 
 ### Requirement: Module Is Config-Free And Backend-Injected
 
@@ -377,13 +393,19 @@ embedding the question (`embedder.embed([question])`) — `answer` MUST catch
 it, proceed using the FTS list alone as the fused input (equivalent to an
 empty dense list), set `dense_degraded=True` on the returned `AnswerResult`,
 and MUST NOT raise. `answer` MUST NOT degrade on `OllamaUnavailable` (server
-unreachable) or `OllamaModelNotFound` (configured embedding model not
-installed) raised from the question-embed step — these two subclasses are
-environment-fatal, not per-question transient, and MUST propagate
+unreachable), `OllamaModelNotFound` (configured embedding model not
+installed), or `OllamaEmbeddingDimensionMismatch` (configured embedding
+model does not emit `EMBED_DIM`-dimensional vectors) raised from the
+question-embed step — these three subclasses are environment-fatal or
+permanently misconfigured, not per-question transient, and MUST propagate
 unswallowed to the caller so `query` reaches its existing fatal exit-1
 ladder. `FtsUnavailable` and any `OllamaError`-family exception raised by
 `llm.chat` (the LLM completion path, not the question-embed step) also
 remain unaffected and continue to propagate unchanged.
+
+(Previously: only `OllamaUnavailable` and `OllamaModelNotFound` were
+excluded from the degrade; `OllamaEmbeddingDimensionMismatch` set
+`dense_degraded=True` and produced a silent FTS-only answer.)
 
 #### Scenario: Cold store (never reindexed) degrades cleanly
 
@@ -432,6 +454,16 @@ remain unaffected and continue to propagate unchanged.
 - THEN that exception propagates from `answer` unswallowed, `dense_degraded`
   is NEVER set, and the caller (`query`) exits 1 via its existing
   model-not-installed message, not a degraded FTS-only answer
+
+#### Scenario: Question-embed dimension mismatch propagates to query's fatal ladder
+
+- GIVEN `embedder.embed([question])` raises
+  `OllamaEmbeddingDimensionMismatch` (the configured embedding model returns
+  wrong-length vectors)
+- WHEN `answer(...)` is called
+- THEN that exception propagates from `answer` unswallowed, `dense_degraded`
+  is NEVER set, and the caller (`query`) exits 1 via its dimension-mismatch
+  message, not a degraded FTS-only answer at exit 0
 
 #### Scenario: FtsUnavailable still propagates despite dense degrade logic
 

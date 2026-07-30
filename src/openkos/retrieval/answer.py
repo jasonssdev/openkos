@@ -32,8 +32,13 @@ Typed exceptions (the `OllamaError` family, or any exception a caller's
 OUTSIDE its own documented degrade cases) propagate unswallowed to the
 caller -- the exception-vs-degrade boundary lives ONLY at the handle's
 OWN documented failure modes (dense: `VecUnavailable`/read-path
-`sqlite3.Error`; graph: any exception from `graph_rank`), never at a
-broader catch-all here. `fts_index.search` itself is documented as never
+`sqlite3.Error`, plus the GENERIC transient `OllamaError` from the question
+embed; graph: any exception from `graph_rank`), never at a broader catch-all
+here. The three FATAL `OllamaError` subclasses -- `OllamaUnavailable`,
+`OllamaModelNotFound`, and `OllamaEmbeddingDimensionMismatch` (issue #209)
+-- are on the propagating side of that split, never the degrading one: each
+names a permanent environment or configuration fault that no re-run can
+heal. `fts_index.search` itself is documented as never
 raising (mirrors `state.fts.FtsIndex.search`'s own contract), so FTS stays
 mandatory and un-degraded except via the `fts_index is None` branch.
 
@@ -67,7 +72,12 @@ from typing import Literal
 from openkos import lifecycle, sensitivity
 from openkos.graph.base import GraphStore
 from openkos.llm.base import Embedder, LLMBackend, Message
-from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.llm.ollama import (
+    OllamaEmbeddingDimensionMismatch,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.model import okf
 from openkos.retrieval import fusion, graph_retrieve, pool
 from openkos.state import fts
@@ -143,9 +153,13 @@ class AnswerResult:
     `vec_hits`/`graph_hits` are all filtered before this fuse."""
     dense_degraded: bool = False
     """`True` when dense retrieval could not proceed this call (absent
-    `vector_store`, `VecUnavailable`, or a read-path `sqlite3.Error`) and
-    FTS-only fusion was used instead; `False` when dense retrieval ran
-    normally (additive)."""
+    `vector_store`, `VecUnavailable`, a read-path `sqlite3.Error`, or the
+    GENERIC transient `OllamaError` from the question embed) and FTS-only
+    fusion was used instead; `False` when dense retrieval ran normally
+    (additive). NEVER set for a FATAL question-embed subclass
+    (`OllamaUnavailable`, `OllamaModelNotFound`,
+    `OllamaEmbeddingDimensionMismatch`) -- those propagate instead, so no
+    `AnswerResult` is produced at all (issue #209)."""
     graph_hit_count: int = 0
     """Personalized-PageRank pool size returned by `graph_rank` for this
     call, BEFORE the final fusion's truncation to `limit` but AFTER the
@@ -293,21 +307,34 @@ def _dense_search(
     question (`embedder.embed([question])`) -- reindex-embedding-resilience:
     a flaky embedding path degrades the QUESTION embed the same way a flaky
     vector read already degrades, rather than aborting the whole `query`
-    call (D4). The two FATAL `OllamaError` subclasses, `OllamaUnavailable`
-    (down server) and `OllamaModelNotFound` (missing model), are explicitly
-    EXCLUDED from this degrade and re-raised instead -- they propagate to
-    `query`'s fatal exit-1 ladder, mirroring the same fatal/transient split
-    already applied on the reindex side (review correction, CRITICAL
-    finding: these two subclasses were previously swallowed by the broad
-    `OllamaError` catch below). Never raises for a transient generic
-    `OllamaError`; only ever called with a non-empty/whitespace `question`.
+    call (D4). The three FATAL `OllamaError` subclasses, `OllamaUnavailable`
+    (down server), `OllamaModelNotFound` (missing model), and
+    `OllamaEmbeddingDimensionMismatch` (the configured embedding model does
+    not emit `EMBED_DIM`-dimensional vectors), are explicitly EXCLUDED from
+    this degrade and re-raised instead -- they propagate to `query`'s fatal
+    exit-1 ladder, mirroring the same fatal/transient split already applied
+    on the reindex side (review correction, CRITICAL finding: the first two
+    subclasses were previously swallowed by the broad `OllamaError` catch
+    below). `OllamaEmbeddingDimensionMismatch` joins them because a wrong
+    dimension is a PERMANENT, non-healing misconfiguration -- no retry and
+    no re-run can fix it, so dense retrieval is structurally impossible
+    rather than merely unhelpful this call, unlike a generic transient
+    `OllamaError` whose next attempt may well succeed; degrading it silently
+    handed the user an FTS-only answer at exit 0 with no indication that
+    semantic retrieval could never have run (issue #209). Never raises for a
+    transient generic `OllamaError`; only ever called with a
+    non-empty/whitespace `question`.
     """
     if embedder is None or vector_store is None:
         return [], True
     try:
         embedding = embedder.embed([question])[0]
         return vector_store.query(embedding, k=pool_limit), False
-    except (OllamaUnavailable, OllamaModelNotFound):
+    except (
+        OllamaUnavailable,
+        OllamaModelNotFound,
+        OllamaEmbeddingDimensionMismatch,
+    ):
         raise
     except (VecUnavailable, sqlite3.Error, OllamaError):
         return [], True
