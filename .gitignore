@@ -256,3 +256,8 @@ $RECYCLE.BIN/
 # successful open, never written by `openkos init` (design: embedding-vector-store,
 # Decision #4).
 .openkos/
+
+# CodeGraph's local symbol index: per-checkout and rebuildable from source, so
+# it must never be committed or shared between worktrees (its stored paths and
+# indexed bytes are specific to one checkout).
+.codegraph/

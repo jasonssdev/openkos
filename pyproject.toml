@@ -75,6 +75,13 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib"]
+markers = [
+    # Opts a test out of the unit suite's fail-closed network guard (#217).
+    # Reserved for assumption pins that measure the real backend and already
+    # gate themselves on a reachability probe -- not an escape hatch for a
+    # unit test that is merely inconvenient to stub.
+    "live_backend: test deliberately reaches a live Ollama backend",
+]
 
 # Coverage is opt-in: `--cov` is deliberately not in pytest's addopts, so plain
 # `uv run pytest` stays fast for the local loop. CI passes `--cov`, and because
