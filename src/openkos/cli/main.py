@@ -50,7 +50,7 @@ from openkos.model.relations import validate_relation_type
 from openkos.model.types import CLASSIFIABLE_TYPES as _CLASSIFIABLE_TYPES
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
-from openkos.resolution import find_candidates
+from openkos.resolution import find_candidates, find_exact_title_groups
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     Verdict,
@@ -5223,17 +5223,18 @@ def status() -> None:
     drift after an interrupted `ingest` is still visible;
     `lint_check.collect_docs` (dangling-reference AND unextracted-source
     findings, #141/#187 -- both reuse this SAME `docs` list, no extra walk);
-    `resolution.find_candidates` (exact-title candidate groups, #186), run
-    UNCONDITIONALLY -- unlike the edge-count line below, it is never gated
-    on `vectors_missing`, because its similarity path is stdlib `difflib`
-    (`similarity.py`) and never touches embeddings -- which is TWO walks by
-    itself, not one: `_iter_eligible`, plus `lifecycle.deprecated_concept_ids`
-    under the default `include_deprecated=False` (`candidates.py:148-150`);
-    and -- only when `vectors.db` is non-empty -- `build_graph`'s walk behind
-    the informational edge-count line. Consolidating the remaining walks has
-    no open owner: #195 already landed, and what it guaranteed is that
-    `status` calls `build_graph` exactly once; #216 covers the cost of
-    `find_candidates`'s own pair of walks.
+    `resolution.find_exact_title_groups` (exact-title candidate groups,
+    #186), run UNCONDITIONALLY -- unlike the edge-count line below, it is
+    never gated on `vectors_missing`, because it never touches embeddings --
+    which is TWO walks by itself, not one: `_iter_eligible`, plus
+    `lifecycle.deprecated_concept_ids` under the default
+    `include_deprecated=False`; and -- only when `vectors.db` is non-empty --
+    `build_graph`'s walk behind the informational edge-count line.
+    Consolidating the remaining walks has no open owner: #195 already
+    landed, and what it guaranteed is that `status` calls `build_graph`
+    exactly once; #216 landed too, and what it removed was the O(n^2)
+    pairwise `near_match_score` pass this line paid for and discarded -- NOT
+    either of the two walks above, which are unchanged.
     `log.md` is read and passed through `bundle_log.read_recent_entries` for
     the most recent `RECENT_ACTIVITY_LIMIT` entries, newest-first -- an
     unreadable or malformed `log.md` degrades to a notice (`except (OSError,
@@ -5308,11 +5309,14 @@ def status() -> None:
         for finding in sensitivity_findings
     )
     # #186: pending duplicate groups are ACTIONABLE -- name `duplicates` as
-    # the next step. Exact-title matches only (Tier.HIGH); near-match (LOW)
-    # is a deliberate high-recall review queue, not an alert (similarity.py).
-    exact_title_groups = sum(
-        1 for group in find_candidates(layout.bundle_dir) if group.tier is Tier.HIGH
-    )
+    # the next step. Exact-title matches only; near-match (LOW) is a
+    # deliberate high-recall review queue, not an alert (similarity.py).
+    # #216: hence `find_exact_title_groups`, not `find_candidates` -- it
+    # returns the identical HIGH groups in the identical order, but skips the
+    # O(n^2) pairwise `near_match_score` pass whose LOW groups this line
+    # discarded. `duplicates`/`adjudicate` still call `find_candidates`:
+    # they use both tiers.
+    exact_title_groups = len(find_exact_title_groups(layout.bundle_dir))
     if exact_title_groups:
         needs_attention.append(
             f"{exact_title_groups} candidate group{_plural(exact_title_groups)} with "

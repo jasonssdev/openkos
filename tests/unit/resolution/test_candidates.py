@@ -17,7 +17,14 @@ from pathlib import Path
 import pytest
 
 from openkos import lifecycle
-from openkos.resolution.candidates import CandidateGroup, Tier, find_candidates
+from openkos.resolution import candidates as candidates_mod
+from openkos.resolution import similarity
+from openkos.resolution.candidates import (
+    CandidateGroup,
+    Tier,
+    find_candidates,
+    find_exact_title_groups,
+)
 
 
 def _write_doc(
@@ -562,3 +569,178 @@ def test_all_live_bundle_is_identical_with_and_without_include_deprecated(
 
     assert default_groups == included_groups
     assert len(default_groups) == 1
+
+
+# ---------------------------------------------------------------------------
+# issue #216: `find_exact_title_groups` -- the HIGH-only entry point `status`
+# uses. Its entire safety argument is an EQUIVALENCE: it must return exactly
+# the `Tier.HIGH` groups `find_candidates` returns, in the SAME ORDER, while
+# never running the O(n^2) `near_match_score` pass whose LOW groups `status`
+# discarded. Both halves need pinning: order equality alone would pass a
+# trivial `find_candidates`-and-filter implementation, and a zero-call spy
+# alone would pass an implementation that ordered its groups differently.
+# ---------------------------------------------------------------------------
+
+
+def _write_everything_bundle(bundle_dir: Path) -> None:
+    """Write one bundle that exercises every branch the two entry points
+    share, at once: two `okf_type`s, two exact-title HIGH groups within a
+    single type, a near-match-only LOW pair, a `status: deprecated` concept,
+    a concept deprecated by another's `supersedes` edge, a `type: Source`
+    doc, a single-doc type, and one malformed plus one unreadable doc.
+
+    The two Concept HIGH groups are deliberately laid out so
+    `_high_groups_for_type`'s key-sorted order (`aristotle` before `zeno`)
+    is the REVERSE of the `member_ids` order `find_candidates` finally sorts
+    by (`concepts/aaa...` before `concepts/zzy...`) -- so a missing final
+    sort in `find_exact_title_groups` shows up here as an order divergence
+    rather than passing by luck.
+    """
+    # Concept, HIGH key "zeno": `concepts/aaa` also supersedes
+    # `concepts/old-zeno`, which deprecates that target by relation.
+    _write_doc(
+        bundle_dir / "concepts" / "aaa.md",
+        title="Zeno",
+        relations=[("concepts/old-zeno", "supersedes")],
+    )
+    _write_doc(bundle_dir / "concepts" / "aab.md", title="ZENO")
+    _write_doc(bundle_dir / "concepts" / "old-zeno.md", title="zeno  ")
+    _write_doc(
+        bundle_dir / "concepts" / "dep-zeno.md", title="Zeno", status="deprecated"
+    )
+    # Concept, HIGH key "aristotle" -- sorts first by key, last by member_ids.
+    _write_doc(bundle_dir / "concepts" / "zzy.md", title="Aristotle")
+    _write_doc(bundle_dir / "concepts" / "zzz.md", title="ARISTOTLE")
+    # Concept, a near-match-only LOW pair (no shared exact key).
+    _write_doc(bundle_dir / "concepts" / "s1.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "s2.md", title="Stoic Philosophy")
+    # A second type with its own HIGH group.
+    _write_doc(bundle_dir / "entities" / "e1.md", doc_type="Entity", title="Epictetus")
+    _write_doc(bundle_dir / "entities" / "e2.md", doc_type="Entity", title="EPICTETUS")
+    # A single-doc type yields nothing for that type.
+    _write_doc(
+        bundle_dir / "decisions" / "d1.md", doc_type="Decision", title="Adopt Stoicism"
+    )
+    # A Source never participates, even sharing a title with a Concept.
+    _write_doc(bundle_dir / "sources" / "src.md", doc_type="Source", title="Zeno")
+    # Degrade, not crash: both skip paths.
+    (bundle_dir / "concepts" / "malformed.md").write_text(
+        "Just plain text, no frontmatter block.\n", encoding="utf-8"
+    )
+    (bundle_dir / "concepts" / "unreadable.md").write_bytes(b"\xff\xfe\x00\x01not-utf8")
+
+
+def test_find_exact_title_groups_equals_the_high_slice_in_order(
+    tmp_path: Path,
+) -> None:
+    """`find_exact_title_groups(d)` equals
+    `[g for g in find_candidates(d) if g.tier is Tier.HIGH]` as an ORDERED
+    list -- the equivalence that is the whole safety argument for the
+    HIGH-only entry point (#216)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_everything_bundle(bundle_dir)
+
+    exact = find_exact_title_groups(bundle_dir)
+    high_slice = [g for g in find_candidates(bundle_dir) if g.tier is Tier.HIGH]
+
+    assert exact == high_slice
+    # Pinned literally too: list equality alone would also hold if BOTH
+    # sides were mis-ordered the same way.
+    assert [g.member_ids for g in exact] == [
+        ("concepts/aaa", "concepts/aab"),
+        ("concepts/zzy", "concepts/zzz"),
+        ("entities/e1", "entities/e2"),
+    ]
+    assert all(g.tier is Tier.HIGH for g in exact)
+
+
+def test_find_exact_title_groups_equals_the_high_slice_with_include_deprecated(
+    tmp_path: Path,
+) -> None:
+    """The same ordered equivalence holds under `include_deprecated=True`,
+    where the deprecated and superseded concepts rejoin their HIGH group."""
+    bundle_dir = tmp_path / "bundle"
+    _write_everything_bundle(bundle_dir)
+
+    exact = find_exact_title_groups(bundle_dir, include_deprecated=True)
+    high_slice = [
+        g
+        for g in find_candidates(bundle_dir, include_deprecated=True)
+        if g.tier is Tier.HIGH
+    ]
+
+    assert exact == high_slice
+    assert [g.member_ids for g in exact] == [
+        (
+            "concepts/aaa",
+            "concepts/aab",
+            "concepts/dep-zeno",
+            "concepts/old-zeno",
+        ),
+        ("concepts/zzy", "concepts/zzz"),
+        ("entities/e1", "entities/e2"),
+    ]
+
+
+def test_find_exact_title_groups_never_calls_near_match_score(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`find_exact_title_groups` calls `near_match_score` ZERO times, while
+    `find_candidates` over the SAME bundle calls it a non-zero number of
+    times -- the pairwise O(n^2) pass really is not run (#216). Spied where
+    `candidates.py` resolves the name, so the module-global lookup inside
+    both functions goes through the spy."""
+    bundle_dir = tmp_path / "bundle"
+    _write_everything_bundle(bundle_dir)
+    calls: list[tuple[str, str]] = []
+    original_score = similarity.near_match_score
+
+    def _spy_score(key_a: str, key_b: str) -> float | None:
+        calls.append((key_a, key_b))
+        return original_score(key_a, key_b)
+
+    monkeypatch.setattr(candidates_mod, "near_match_score", _spy_score)
+
+    find_exact_title_groups(bundle_dir)
+
+    assert calls == []
+
+    find_candidates(bundle_dir)
+
+    assert calls != []
+
+
+def test_find_exact_title_groups_degrades_on_unreadable_document(
+    tmp_path: Path,
+) -> None:
+    """An unreadable (undecodable) document is skipped, never raised; the
+    exact-title group among the remaining valid documents is still
+    returned."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="STOICISM")
+    unreadable = bundle_dir / "concepts" / "broken.md"
+    unreadable.parent.mkdir(parents=True, exist_ok=True)
+    unreadable.write_bytes(b"\xff\xfe\x00\x01not-utf8")
+
+    groups = find_exact_title_groups(bundle_dir)
+
+    assert len(groups) == 1
+    assert groups[0].member_ids == ("concepts/a", "concepts/b")
+
+
+def test_find_exact_title_groups_degrades_on_malformed_frontmatter(
+    tmp_path: Path,
+) -> None:
+    """A document with no parseable frontmatter is skipped, never raised."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="STOICISM")
+    (bundle_dir / "concepts" / "broken.md").write_text(
+        "Just plain text, no frontmatter block.\n", encoding="utf-8"
+    )
+
+    groups = find_exact_title_groups(bundle_dir)
+
+    assert len(groups) == 1
+    assert groups[0].member_ids == ("concepts/a", "concepts/b")
