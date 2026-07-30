@@ -107,28 +107,26 @@ def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str]]:
 
 def _high_groups_for_type(
     keyed: list[tuple[str, str]],
-) -> tuple[list[tuple[str, ...]], set[frozenset[str]]]:
+) -> list[tuple[str, ...]]:
     """Group `(concept_id, normalized_key)` pairs by exact key.
 
-    Returns the HIGH member-id tuples (each with >= 2 members, sorted) and
-    the set of every unordered pair already covered by a HIGH group --
-    the latter is what excludes a pair from the LOW pass (HIGH/LOW
-    disjoint, per pair).
+    Returns the HIGH member-id tuples (each with >= 2 members, sorted), in
+    ascending normalized-key order. Bucketing plus one sort of the keys --
+    no pairwise work here, so the HIGH-only entry point never pays for any
+    (see `_pairs_covered_by_high_groups`, which only `find_candidates`
+    calls).
     """
     by_key: dict[str, list[str]] = defaultdict(list)
     for concept_id, key in keyed:
         by_key[key].append(concept_id)
 
     high_groups: list[tuple[str, ...]] = []
-    high_pairs: set[frozenset[str]] = set()
     for key in sorted(by_key):
         members = sorted(by_key[key])
         if len(members) < 2:
             continue
         high_groups.append(tuple(members))
-        for pair in combinations(members, 2):
-            high_pairs.add(frozenset(pair))
-    return high_groups, high_pairs
+    return high_groups
 
 
 def _keyed_docs_by_type(
@@ -174,27 +172,43 @@ def _keyed_docs_by_type(
 
 def _high_candidate_groups(
     okf_type: str, keyed: list[tuple[str, str]]
-) -> tuple[list[CandidateGroup], set[frozenset[str]]]:
+) -> list[CandidateGroup]:
     """Build one type partition's HIGH `CandidateGroup`s from `keyed`.
 
-    Returns the groups (in `_high_groups_for_type`'s key-sorted order --
-    callers own the final ordering) and the already-HIGH pair set that
-    excludes a pair from the LOW pass. Shared by both public entry points so
-    a HIGH group's `okf_type`/`member_ids`/`trigger` are constructed in
-    exactly ONE place (#216).
+    Returns them in `_high_groups_for_type`'s key-sorted order -- callers own
+    the final ordering. Shared by both public entry points so a HIGH group's
+    `okf_type`/`member_ids`/`trigger` are constructed in exactly ONE place
+    (#216).
     """
-    high_groups, high_pairs = _high_groups_for_type(keyed)
     key_by_id = dict(keyed)
-    groups = [
+    return [
         CandidateGroup(
             okf_type=okf_type,
             member_ids=member_ids,
             tier=Tier.HIGH,
             trigger=key_by_id[member_ids[0]],
         )
-        for member_ids in high_groups
+        for member_ids in _high_groups_for_type(keyed)
     ]
-    return groups, high_pairs
+
+
+def _pairs_covered_by_high_groups(
+    high_groups: list[CandidateGroup],
+) -> set[frozenset[str]]:
+    """Every unordered concept-id pair already covered by a HIGH group.
+
+    This is exactly what excludes a pair from the LOW pass (HIGH/LOW
+    disjoint, per pair), and it is fully derivable from the HIGH groups, so
+    ONLY `find_candidates` calls it. Keeping it out of
+    `_high_groups_for_type` keeps the O(m^2)-in-cluster-size pair build off
+    `find_exact_title_groups`'s path, which never runs a LOW pass and so has
+    nothing to exclude.
+    """
+    return {
+        frozenset(pair)
+        for group in high_groups
+        for pair in combinations(group.member_ids, 2)
+    }
 
 
 def find_candidates(
@@ -227,8 +241,9 @@ def find_candidates(
     for okf_type, keyed in _keyed_docs_by_type(
         bundle_dir, include_deprecated=include_deprecated
     ):
-        high_groups, high_pairs = _high_candidate_groups(okf_type, keyed)
+        high_groups = _high_candidate_groups(okf_type, keyed)
         groups.extend(high_groups)
+        high_pairs = _pairs_covered_by_high_groups(high_groups)
 
         for (id_a, key_a), (id_b, key_b) in combinations(keyed, 2):
             pair = frozenset((id_a, id_b))
@@ -280,12 +295,20 @@ def find_exact_title_groups(
     walks is issue #195's territory and explicitly out of scope here; do not
     read this function as a walk-count win.
 
+    WHAT THIS COSTS, precisely: after the shared walks, one pass bucketing
+    the type partition's documents by their normalized key, plus one sort of
+    those keys. No pairwise work of any kind -- not `near_match_score`, and
+    not the already-HIGH pair set either, which is quadratic in the size of a
+    single exact-title cluster and which only the LOW pass needs (see
+    `_pairs_covered_by_high_groups`, called by `find_candidates` alone).
+
     WHY A SEPARATE FUNCTION rather than a `tier=` filter on
     `find_candidates`:
 
-    - A parameter that silently changes the cost class from linear to
-      quadratic is easy to miss at a call site. A distinct name makes the
-      cheap path obviously cheap, at the point of call.
+    - A parameter that silently adds the whole-type pairwise pass -- the
+      quadratic-in-concepts-per-type cost this function avoids entirely -- is
+      easy to miss at a call site. A distinct name makes the cheap path
+      obviously cheap, at the point of call.
     - A `tier` parameter would invite `Tier.LOW`, which has no coherent
       cheap implementation: the LOW pass excludes any pair already covered
       by a HIGH group, so it cannot skip the HIGH pass anyway.
@@ -298,8 +321,7 @@ def find_exact_title_groups(
     for okf_type, keyed in _keyed_docs_by_type(
         bundle_dir, include_deprecated=include_deprecated
     ):
-        high_groups, _high_pairs = _high_candidate_groups(okf_type, keyed)
-        groups.extend(high_groups)
+        groups.extend(_high_candidate_groups(okf_type, keyed))
 
     groups.sort(key=lambda g: (g.okf_type, _TIER_ORDER[g.tier], g.member_ids))
     return groups

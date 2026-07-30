@@ -710,6 +710,37 @@ def test_find_exact_title_groups_never_calls_near_match_score(
     assert calls != []
 
 
+def test_find_exact_title_groups_never_builds_the_already_high_pair_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`find_exact_title_groups` builds the already-HIGH pair set ZERO times,
+    while `find_candidates` over the SAME bundle builds it a non-zero number
+    of times. That set exists only to exclude already-HIGH pairs from the LOW
+    pass, and building it costs O(m^2) in the size of a single exact-title
+    cluster -- the one shape most likely to be large on the cheap path, so
+    the cheap path must not pay for it at all. Spied where `candidates.py`
+    resolves the name, so the module-global lookup inside `find_candidates`
+    goes through the spy."""
+    bundle_dir = tmp_path / "bundle"
+    _write_everything_bundle(bundle_dir)
+    calls: list[list[tuple[str, ...]]] = []
+    original_pairs = candidates_mod._pairs_covered_by_high_groups
+
+    def _spy_pairs(high_groups: list[CandidateGroup]) -> set[frozenset[str]]:
+        calls.append([group.member_ids for group in high_groups])
+        return original_pairs(high_groups)
+
+    monkeypatch.setattr(candidates_mod, "_pairs_covered_by_high_groups", _spy_pairs)
+
+    find_exact_title_groups(bundle_dir)
+
+    assert calls == []
+
+    find_candidates(bundle_dir)
+
+    assert calls != []
+
+
 def test_find_exact_title_groups_degrades_on_unreadable_document(
     tmp_path: Path,
 ) -> None:
