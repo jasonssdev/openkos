@@ -10,6 +10,13 @@ excluding any pair already HIGH). Output is ephemeral -- frozen
 dataclasses only, never a persisted OKF type or `bundle`/`state` file --
 and this module never writes a byte of the bundle.
 
+`find_exact_title_groups` (issue #216) is the same pass with the LOW tier
+left out: it returns exactly the `Tier.HIGH` groups `find_candidates` would
+return, in the same order, without ever running the O(n^2) pairwise
+`near_match_score` pass. It exists for `status`, which counted HIGH groups
+and threw every LOW group away. Both entry points share
+`_keyed_docs_by_type` and `_high_candidate_groups`, so they cannot drift.
+
 status-aware-retrieval (MVP-3 gap #8 · S1, Phase 3): unless the caller
 passes `include_deprecated=True`, `find_candidates` computes the shared
 `openkos.lifecycle.deprecated_concept_ids(bundle_dir)` predicate ONCE per
@@ -124,6 +131,72 @@ def _high_groups_for_type(
     return high_groups, high_pairs
 
 
+def _keyed_docs_by_type(
+    bundle_dir: Path, *, include_deprecated: bool
+) -> list[tuple[str, list[tuple[str, str]]]]:
+    """The shared prelude of BOTH public entry points, in one place.
+
+    Walks the bundle via `_iter_eligible`, applies the
+    `lifecycle.deprecated_concept_ids` exclusion unless
+    `include_deprecated=True` (in which case that predicate walk is skipped
+    entirely), partitions what survives by exact `okf_type`, and returns
+    `(okf_type, keyed)` pairs in ASCENDING `okf_type` order, where `keyed`
+    is `(concept_id, normalize_key(title))` sorted by ascending
+    `concept_id`. Callers pick up exactly where `_high_groups_for_type`
+    takes over, so `find_candidates` and `find_exact_title_groups` cannot
+    drift on eligibility, deprecation, partitioning, or normalization
+    (#216).
+    """
+    eligible = _iter_eligible(bundle_dir)
+    if not include_deprecated:
+        deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+        eligible = [
+            (concept_id, okf_type, title)
+            for concept_id, okf_type, title in eligible
+            if concept_id not in deprecated
+        ]
+
+    by_type: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for concept_id, okf_type, title in eligible:
+        by_type[okf_type].append((concept_id, title))
+
+    keyed_by_type: list[tuple[str, list[tuple[str, str]]]] = []
+    for okf_type in sorted(by_type):
+        docs = sorted(by_type[okf_type], key=lambda doc: doc[0])
+        keyed_by_type.append(
+            (
+                okf_type,
+                [(concept_id, normalize_key(title)) for concept_id, title in docs],
+            )
+        )
+    return keyed_by_type
+
+
+def _high_candidate_groups(
+    okf_type: str, keyed: list[tuple[str, str]]
+) -> tuple[list[CandidateGroup], set[frozenset[str]]]:
+    """Build one type partition's HIGH `CandidateGroup`s from `keyed`.
+
+    Returns the groups (in `_high_groups_for_type`'s key-sorted order --
+    callers own the final ordering) and the already-HIGH pair set that
+    excludes a pair from the LOW pass. Shared by both public entry points so
+    a HIGH group's `okf_type`/`member_ids`/`trigger` are constructed in
+    exactly ONE place (#216).
+    """
+    high_groups, high_pairs = _high_groups_for_type(keyed)
+    key_by_id = dict(keyed)
+    groups = [
+        CandidateGroup(
+            okf_type=okf_type,
+            member_ids=member_ids,
+            tier=Tier.HIGH,
+            trigger=key_by_id[member_ids[0]],
+        )
+        for member_ids in high_groups
+    ]
+    return groups, high_pairs
+
+
 def find_candidates(
     bundle_dir: Path, *, include_deprecated: bool = False
 ) -> list[CandidateGroup]:
@@ -144,36 +217,18 @@ def find_candidates(
     group, but its live groupmates still pair normally with each other.
     `include_deprecated=True` skips the predicate walk entirely, restoring
     today's status-blind behavior byte-for-byte.
+
+    A caller that needs only the `Tier.HIGH` groups should call
+    `find_exact_title_groups` instead (issue #216): it returns the identical
+    HIGH groups in the identical order without paying for the O(n^2)
+    `near_match_score` pass below.
     """
-    eligible = _iter_eligible(bundle_dir)
-    if not include_deprecated:
-        deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
-        eligible = [
-            (concept_id, okf_type, title)
-            for concept_id, okf_type, title in eligible
-            if concept_id not in deprecated
-        ]
-
-    by_type: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for concept_id, okf_type, title in eligible:
-        by_type[okf_type].append((concept_id, title))
-
     groups: list[CandidateGroup] = []
-    for okf_type in sorted(by_type):
-        docs = sorted(by_type[okf_type], key=lambda doc: doc[0])
-        keyed = [(concept_id, normalize_key(title)) for concept_id, title in docs]
-        key_by_id = dict(keyed)
-
-        high_groups, high_pairs = _high_groups_for_type(keyed)
-        for member_ids in high_groups:
-            groups.append(
-                CandidateGroup(
-                    okf_type=okf_type,
-                    member_ids=member_ids,
-                    tier=Tier.HIGH,
-                    trigger=key_by_id[member_ids[0]],
-                )
-            )
+    for okf_type, keyed in _keyed_docs_by_type(
+        bundle_dir, include_deprecated=include_deprecated
+    ):
+        high_groups, high_pairs = _high_candidate_groups(okf_type, keyed)
+        groups.extend(high_groups)
 
         for (id_a, key_a), (id_b, key_b) in combinations(keyed, 2):
             pair = frozenset((id_a, id_b))
@@ -190,6 +245,61 @@ def find_candidates(
                     trigger=f"{score:.3f}",
                 )
             )
+
+    groups.sort(key=lambda g: (g.okf_type, _TIER_ORDER[g.tier], g.member_ids))
+    return groups
+
+
+def find_exact_title_groups(
+    bundle_dir: Path, *, include_deprecated: bool = False
+) -> list[CandidateGroup]:
+    """Scan `bundle_dir` and return only its exact-title (`Tier.HIGH`)
+    candidate groups, read-only -- the cheap entry point (issue #216).
+
+    EQUIVALENCE (the contract, and the whole safety argument): the result is
+    exactly `[g for g in find_candidates(bundle_dir,
+    include_deprecated=include_deprecated) if g.tier is Tier.HIGH]`,
+    INCLUDING list order. Both functions share `_keyed_docs_by_type` and
+    `_high_candidate_groups`, then apply the SAME final sort key, and within
+    one type HIGH groups have disjoint member sets -- so
+    `(okf_type, member_ids)` is a strict total order over them and no tie
+    is left for the sort to break arbitrarily. Pinned by
+    `tests/unit/resolution/test_candidates.py::
+    test_find_exact_title_groups_equals_the_high_slice_in_order`.
+
+    WHAT THIS SAVES: the pairwise LOW pass. `find_candidates` runs
+    `near_match_score` over `combinations(keyed, 2)` for every type -- an
+    O(n^2) cost in concepts-per-type -- and `status` discarded every
+    `Tier.LOW` group it paid for. This function never calls
+    `near_match_score` at all.
+
+    WHAT THIS DOES NOT SAVE: the bundle walks. Like `find_candidates`, this
+    still performs `_iter_eligible`'s `okf._iter_docs` walk plus, under the
+    default `include_deprecated=False`, `lifecycle.deprecated_concept_ids`'s
+    own walk -- TWO walks, unchanged. Consolidating `status`'s repeated
+    walks is issue #195's territory and explicitly out of scope here; do not
+    read this function as a walk-count win.
+
+    WHY A SEPARATE FUNCTION rather than a `tier=` filter on
+    `find_candidates`:
+
+    - A parameter that silently changes the cost class from linear to
+      quadratic is easy to miss at a call site. A distinct name makes the
+      cheap path obviously cheap, at the point of call.
+    - A `tier` parameter would invite `Tier.LOW`, which has no coherent
+      cheap implementation: the LOW pass excludes any pair already covered
+      by a HIGH group, so it cannot skip the HIGH pass anyway.
+
+    `duplicates` and `adjudicate` deliberately keep calling
+    `find_candidates`: they render and adjudicate both tiers, so the
+    pairwise pass is work they actually use.
+    """
+    groups: list[CandidateGroup] = []
+    for okf_type, keyed in _keyed_docs_by_type(
+        bundle_dir, include_deprecated=include_deprecated
+    ):
+        high_groups, _high_pairs = _high_candidate_groups(okf_type, keyed)
+        groups.extend(high_groups)
 
     groups.sort(key=lambda g: (g.okf_type, _TIER_ORDER[g.tier], g.member_ids))
     return groups

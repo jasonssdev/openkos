@@ -83,6 +83,49 @@ the threshold MUST NOT form a candidate on this basis.
 - WHEN `find_candidates` runs
 - THEN no candidate is returned for that pair
 
+### Requirement: Exact-Title-Only Entry Point
+
+`resolution.find_exact_title_groups(bundle_dir)` MUST return exactly the
+HIGH-confidence (exact normalized-key) candidate groups that
+`find_candidates` returns for the same bundle and the same
+`include_deprecated` value, in the same order, and MUST do so without
+running the near-match tier: the similarity computation MUST NOT be invoked
+at all. Every other candidate-building contract in this spec applies to it
+unchanged — strict per-type blocking, deterministic read-only building, no
+self-pairing, unordered pairs once, trivial bundles, and degrade-not-crash
+on unreadable or malformed documents. It MUST be a distinct public function
+rather than a tier-filter parameter on `find_candidates`, so that no caller
+can silently select the quadratic cost class, and `find_candidates` MUST
+stay unchanged for the callers that render or adjudicate both tiers. What
+this entry point removes is the pairwise near-match work only; it MUST NOT
+be specified or documented as reducing the number of bundle walks.
+
+#### Scenario: Exact-title-only result equals the full pass's HIGH groups
+
+- GIVEN a bundle containing at least two types, more than one exact-title
+  group within a single type, a near-match-only pair, and a deprecated
+  concept
+- WHEN `find_exact_title_groups(bundle_dir)` and `find_candidates(bundle_dir)`
+  both run
+- THEN the first result equals the HIGH-confidence groups of the second as an
+  ordered list, for both the default `include_deprecated=False` and
+  `include_deprecated=True`
+
+#### Scenario: Near-match computation is never invoked
+
+- GIVEN a bundle whose documents include at least one near-match-only pair
+- WHEN `find_exact_title_groups(bundle_dir)` runs
+- THEN the near-match similarity function is called zero times, while
+  `find_candidates` over the same bundle calls it a non-zero number of times
+
+#### Scenario: Malformed document is skipped by the exact-title-only pass
+
+- GIVEN a bundle with one malformed/unreadable document and two other
+  same-type documents whose titles normalize identically
+- WHEN `find_exact_title_groups(bundle_dir)` runs
+- THEN it does not raise, the malformed document is excluded, and the
+  exact-title group among the valid documents is still returned
+
 ### Requirement: Deterministic, Read-Only Candidate Building
 
 Building candidates MUST NOT modify any bundle file's bytes or mtime and

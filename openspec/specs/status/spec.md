@@ -128,18 +128,23 @@ presence MUST NOT cause a non-zero exit.
 
 ### Requirement: Needs-Attention Surfaces Pending Duplicate Groups
 
-`openkos status` MUST consult `find_candidates` over the bundle (with the
-default `include_deprecated=False`, offering no `--include-deprecated` flag)
-and fold exact-title-match groups into "needs attention". Only exact-title
-matches count toward this requirement; near-match groups MUST NOT cause
-`status` to depart from `Nothing needs attention.` The surfaced line MUST
-report the exact-title group count with correct singular/plural wording,
+`openkos status` MUST consult the exact-title-only entry point
+`find_exact_title_groups` over the bundle (with the default
+`include_deprecated=False`, offering no `--include-deprecated` flag) and fold
+the exact-title-match groups it returns into "needs attention". Only
+exact-title matches count toward this requirement; near-match groups MUST NOT
+cause `status` to depart from `Nothing needs attention.` The surfaced line
+MUST report the exact-title group count with correct singular/plural wording,
 MUST name `openkos duplicates` as the next step, and MUST NOT use the words
 `HIGH`, `LOW`, `exact`, or `near`, nor phrase the count as a total (the
 count intentionally differs from — and is normally lower than — the count
 `openkos duplicates` itself reports, once near-match groups exist). This
 check MUST remain read-only and informational: its presence MUST NOT cause
 a non-zero exit.
+(Previously: `status` consulted `find_candidates` and filtered its result to
+the exact-title tier, paying for the pairwise near-match pass over every
+same-type document and then discarding every near-match group it produced.
+The surfaced line is unchanged; only the entry point is.)
 
 #### Scenario: No duplicate groups
 
