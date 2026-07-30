@@ -110,6 +110,18 @@ _CROP_ROTATION = _doc(
     "agricultural year.",
 )
 
+pytestmark = pytest.mark.live_backend
+"""Opts this module out of the unit suite's fail-closed network guard (#217).
+
+Module-level rather than per-test because EVERY test here is a live-backend
+assumption pin by construction -- see the module docstring. The guard's
+default is to refuse outbound sockets in `tests/unit/**`, which is right for
+a unit test and wrong for these two, whose entire purpose is to measure the
+real backend. `requires_embed_backend` below still decides whether they run
+at all; this mark only says that when they DO run, reaching the network is
+the intent rather than an accident.
+"""
+
 requires_embed_backend = pytest.mark.skipif(
     not probe_embed_backend(),
     reason=f"live Ollama serving {DEFAULT_EMBEDDING_MODEL!r} not reachable",
