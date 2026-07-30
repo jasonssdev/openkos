@@ -3,11 +3,14 @@
 `query` is the read-only counterpart to `status`/`lint` (D1: bare
 `require_workspace` gate, no Phase B, no confirm gate, no `--auto`), followed
 by a Phase-A `read_config` guard (`except (OSError, ValueError)`, lint
-parity) and a Phase-B `answer()` call guarded by three ORDERED handlers --
-`OllamaUnavailable`, then `OllamaModelNotFound`, then the generic
-`(FtsUnavailable, OllamaError)` fallback -- each with its own actionable
-message. Every test patches `openkos.cli.main.answer` (D4) -- zero
-network, zero real Ollama process, zero real FTS5 index.
+parity) and a Phase-B `answer()` call guarded by four ORDERED handlers --
+`OllamaUnavailable`, then `OllamaModelNotFound`, then
+`OllamaEmbeddingDimensionMismatch` (issue #209), then the generic
+`(FtsUnavailable, OllamaError)` fallback -- the first three carry their own
+cause-specific actionable remediation, the fourth a deliberately generic,
+non-actionable-specific message. Most tests patch `openkos.cli.main.answer`
+(D4) -- zero network, zero real Ollama process; the few end-to-end pins
+substitute `openkos.cli.main.OllamaClient` and drive the REAL `answer()`.
 """
 
 import ast
@@ -20,8 +23,10 @@ from typer.testing import CliRunner
 
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
+from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import (
     OllamaClient,
+    OllamaEmbeddingDimensionMismatch,
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
@@ -78,6 +83,27 @@ class _FakeOllamaClient:
 
     def chat(self, messages: list[object]) -> str:
         return "a fake answer"
+
+
+class _FakeHealthyEmbedOllamaClient(_FakeOllamaClient):
+    """Control half of the unconditional-refusal pin: a HEALTHY `embed`."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * EMBED_DIM for _ in texts]
+
+
+class _FakeWrongWidthEmbedOllamaClient(_FakeOllamaClient):
+    """`embed` raises the mismatch with production's exact message, surfacing
+    it from the EMBEDDER seam inside the real `answer()` after `_fts_search`
+    returned hits. Raised directly: replacing this class hides the validator."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        raise OllamaEmbeddingDimensionMismatch(
+            f"Ollama returned an embedding row of length 768, expected "
+            f"exactly {EMBED_DIM} (EMBED_DIM) -- this is a permanent "
+            "dimension mismatch caused by the configured embedding model, "
+            "not a transient failure; it will not heal by retrying."
+        )
 
 
 def _write_query_doc(
@@ -1051,6 +1077,110 @@ def test_query_model_not_found_maps_to_exit_one(
     assert "Traceback" not in result.stderr
 
 
+def test_query_dimension_mismatch_maps_to_exit_one_with_dedicated_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`answer()` raising `OllamaEmbeddingDimensionMismatch` is caught by a
+    DEDICATED branch -- distinct from the generic `(FtsUnavailable,
+    OllamaError)` ladder entry -- printed with remediation naming
+    `embedding_model` in `openkos.yaml`, and exits 1 with nothing on stdout
+    (issue #209: this used to degrade to a silent FTS-only answer at exit
+    0).
+
+    The `"permanent dimension mismatch" in result.stderr` assertion below
+    proves ONLY that the exception text is interpolated at all: this test
+    constructs the exception with that phrase itself, and BOTH the dedicated
+    handler and the generic `(FtsUnavailable, OllamaError)` fallback
+    interpolate `{exc}`, so it cannot discriminate which branch ran. The
+    DISCRIMINATING assertions are "restore", `embedding_model`, and
+    `openkos.yaml`: the generic branch only echoes
+    `f"openkos query: failed -- {exc}."` and never mentions any of them, so
+    reordering the dedicated branch AFTER that generic tuple would make those
+    three fail for real, not by coincidence of matching exception text.
+
+    Stderr must ALSO stay free of the `openkos reindex` hint: reindex fails
+    with this very same error until `openkos.yaml` is fixed, so pointing at
+    it would be actively misleading. The pre-existing
+    "one or more derived indexes are unavailable" hint only fires off
+    `dense_degraded`, which this exception now bypasses entirely by
+    propagating."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _raise_dimension_mismatch(*args: object, **kwargs: object) -> AnswerResult:
+        raise OllamaEmbeddingDimensionMismatch(
+            "Ollama returned an embedding row of length 768, expected "
+            "exactly 1024 (EMBED_DIM) -- this is a permanent dimension "
+            "mismatch caused by the configured embedding model, not a "
+            "transient failure; it will not heal by retrying."
+        )
+
+    monkeypatch.setattr("openkos.cli.main.answer", _raise_dimension_mismatch)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert result.stderr.startswith("openkos query: failed -- ")
+    assert "permanent dimension mismatch" in result.stderr
+    assert "restore" in result.stderr.lower()
+    assert "embedding_model" in result.stderr
+    assert "openkos.yaml" in result.stderr
+    assert "will retry next run" not in result.stderr.lower()
+    # The misleading hint MUST NOT fire: `reindex` fails with this same
+    # error until the config is fixed, so it is not the remedy here.
+    assert "reindex" not in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""
+
+
+def test_query_dimension_mismatch_is_fatal_even_when_fts_already_had_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exit-1 refusal is UNCONDITIONAL: it stands even when lexical
+    retrieval ALREADY succeeded and would have grounded a cited answer (spec:
+    Refusal stands even when FTS retrieval already succeeded).
+
+    Driven end-to-end through the REAL (unmocked) `answer()`: `_fts_search`
+    runs BEFORE `_dense_search`, so the mismatch surfaces only AFTER the FTS
+    hits are in hand, which a wholesale `answer` patch cannot express. The
+    control pins that genuine FTS material exists -- only the embedder differs
+    -- so the second run's exit 1 with EMPTY stdout is deliberate disposal of
+    already-successful retrieval work, not a zero-hit coincidence. A refusal
+    conditional on FTS hits, or an `--fts-only` hatch, would turn it back
+    into the control's exit-0 cited answer."""
+    monkeypatch.chdir(tmp_path)
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+    bundle_dir = tmp_path / "bundle"
+    _write_query_doc(bundle_dir / "concepts" / "live.md", title="Live")
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    # A schema-initialized (empty) vectors.db: a `None` store would make
+    # `_dense_search` return early and the mismatch could never surface.
+    vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db").close()
+
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeHealthyEmbedOllamaClient)
+    control = runner.invoke(app, ["query", "dichotomyzz"])
+
+    assert control.exit_code == 0
+    assert control.stderr.startswith(
+        "retrieval: 1 FTS + 0 dense + 0 graph → 1 fused → LLM invoked → 1 cited\n"
+    )
+    assert "a fake answer" in control.stdout
+
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient", _FakeWrongWidthEmbedOllamaClient
+    )
+    result = runner.invoke(app, ["query", "dichotomyzz"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    # The FTS hit the control just cited is thrown away.
+    assert result.stdout == ""
+    assert "retrieval:" not in result.stderr
+    assert "openkos.yaml" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_query_generic_ollama_error_maps_to_exit_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1078,9 +1208,10 @@ def test_query_generic_ollama_error_maps_to_exit_one(
 def test_query_specific_ollama_subclasses_do_not_fall_through_to_generic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both `OllamaUnavailable` and `OllamaModelNotFound` must reach their
-    OWN handler, not the generic `(FtsUnavailable, OllamaError)` fallback --
-    the direct RED test for D1's specific-before-general handler ordering."""
+    """All three of `OllamaUnavailable`, `OllamaModelNotFound`, and
+    `OllamaEmbeddingDimensionMismatch` must reach their OWN handler, not the
+    generic `(FtsUnavailable, OllamaError)` fallback -- the direct RED test
+    for D1's specific-before-general handler ordering."""
     _init_workspace(tmp_path, monkeypatch)
 
     unavailable_message = "Ollama not reachable at http://localhost:11434"
@@ -1105,6 +1236,18 @@ def test_query_specific_ollama_subclasses_do_not_fall_through_to_generic(
     # `ollama pull` remediation text proves `OllamaModelNotFound` reached its
     # OWN handler instead.
     assert "ollama pull" in result.stderr
+
+    mismatch_message = "wrong embedding width."
+
+    def _raise_dimension_mismatch(*args: object, **kwargs: object) -> AnswerResult:
+        raise OllamaEmbeddingDimensionMismatch(mismatch_message)
+
+    monkeypatch.setattr("openkos.cli.main.answer", _raise_dimension_mismatch)
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+    # The generic fallback prints exactly this bare shape; the `openkos.yaml`
+    # remediation proves the mismatch reached its OWN handler (issue #209).
+    assert result.stderr != f"openkos query: failed -- {mismatch_message}.\n"
+    assert "openkos.yaml" in result.stderr
 
 
 def test_query_fts_unavailable_maps_to_exit_one(

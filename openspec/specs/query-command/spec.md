@@ -156,8 +156,8 @@ MUST forward it unchanged as `answer(..., limit=n)`.
 
 WHEN `answer()` raises an `OllamaError`-family exception or `FtsUnavailable`,
 `query` MUST catch it, print a message to stderr, and exit 1 with no raw
-traceback reaching the user. The stderr message MUST be actionable for the
-two most common first-run causes and MUST remain generic for all other
+traceback reaching the user. The stderr message MUST be actionable for each
+of the three enumerated causes below and MUST remain generic for all other
 cases:
 
 - WHEN the raised exception is `OllamaUnavailable`, the stderr message MUST
@@ -169,12 +169,40 @@ cases:
   name the configured model that could not be found, and MUST tell the user
   how to install it, referencing the `ollama pull <model>` command with the
   configured model name.
+- WHEN the raised exception is `OllamaEmbeddingDimensionMismatch`, the stderr
+  message MUST identify the failure as a PERMANENT dimension mismatch caused
+  by the configured embedding model, and MUST name restoring the working
+  `embedding_model` value in `openkos.yaml` as the remedy. It MUST NOT be
+  worded as transient or self-healing (never "will retry next run"), and
+  MUST NOT point the user at `openkos reindex` as the remedy — `reindex`
+  fails with this same permanent error until `openkos.yaml` is fixed. The
+  reindex hint of the Dense-Unavailable Runs Degrade And Hint At Reindex
+  requirement MUST NOT be printed for this cause: `answer()` propagates
+  instead of setting `dense_degraded`, so a run that hits this error never
+  reaches that hint.
 - WHEN the raised exception is any other `OllamaError` or `FtsUnavailable`,
   `query` MUST print a friendly (non-actionable-specific) failure message to
   stderr — unchanged from prior behavior.
 
+For `OllamaEmbeddingDimensionMismatch` the exit-1 refusal MUST be
+UNCONDITIONAL. `answer()` runs lexical retrieval BEFORE dense retrieval, so
+the mismatch surfaces only after FTS retrieval has already succeeded and may
+already hold hits that would have grounded a citable answer. `query` MUST
+still exit 1 and print nothing on stdout, discarding that already-successful
+retrieval work: it MUST NOT print an FTS-only answer, MUST NOT offer any flag
+that forces one (no `--fts-only`, no `--allow-degraded`), and MUST NOT make
+the refusal conditional on whether FTS found hits. The accepted cost is
+denying the user even the answers FTS could have grounded; the ONLY remedy is
+restoring the working `embedding_model` in `openkos.yaml`, not a CLI flag.
+
 (Previously: the `OllamaUnavailable` message told the user to run
 `ollama serve` with no additional pointer to `openkos doctor`.)
+(Previously: `OllamaEmbeddingDimensionMismatch` never reached this ladder —
+`answer()` swallowed it into `dense_degraded`, so `query` printed a
+successful FTS-only answer at exit 0, plus the misleading
+`openkos reindex` hint, and never reported the misconfiguration.)
+(Previously: the FTS hits gathered before the mismatch were still fused,
+cited, and printed; this requirement deliberately discards them.)
 
 #### Scenario: Ollama backend unreachable
 
@@ -194,6 +222,32 @@ cases:
 - THEN stderr names the configured model and tells the user to run
   `ollama pull <model>` with that model's name
 - AND the process exits 1 with no raw traceback shown
+
+#### Scenario: Embedding model returns wrong-dimension vectors
+
+- GIVEN `answer()` raises `OllamaEmbeddingDimensionMismatch` because the
+  configured `embedding_model` does not emit `EMBED_DIM`-dimensional vectors
+- WHEN `openkos query "<question>"` is run
+- THEN stderr identifies the failure as a permanent dimension mismatch and
+  tells the user to restore the working `embedding_model` value in
+  `openkos.yaml`
+- AND stderr does NOT suggest running `openkos reindex` and is never worded
+  as transient ("will retry next run")
+- AND the process exits 1 with no answer on stdout and no raw traceback shown
+
+#### Scenario: Refusal stands even when FTS retrieval already succeeded
+
+- GIVEN a workspace whose FTS index matches the question, so the same run
+  would have printed a cited FTS-only answer at exit 0 had the embedding
+  model been healthy
+- AND the configured `embedding_model` returns a wrong-dimension embedding,
+  so `answer()` raises `OllamaEmbeddingDimensionMismatch` AFTER those FTS
+  hits were already retrieved
+- WHEN `openkos query "<question>"` is run
+- THEN the process exits 1 with nothing on stdout — no answer, no citation,
+  and no flag exists that would force the degraded FTS-only answer instead
+- AND the only remedy is restoring the working `embedding_model` value in
+  `openkos.yaml`
 
 #### Scenario: Other Ollama error
 

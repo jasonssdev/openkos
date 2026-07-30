@@ -6938,10 +6938,34 @@ def query(
                 err=True,
             )
             raise typer.Exit(code=1) from exc
-        # The two specific handlers above MUST precede this generic tuple:
-        # both `OllamaUnavailable` and `OllamaModelNotFound` subclass
-        # `OllamaError`, so reordering would silently funnel them into this
-        # fallback and lose their actionable remediation messages.
+        # `OllamaEmbeddingDimensionMismatch` is a PERMANENT, non-healing
+        # misconfiguration (issue #209): the configured `embedding_model`
+        # does not emit `EMBED_DIM`-dimensional vectors, so dense retrieval
+        # is structurally impossible, not merely unhelpful this run --
+        # `answer()` therefore propagates it instead of degrading to a
+        # silent FTS-only answer at exit 0. Like `reindex`'s own branch, it
+        # names a concrete remediation: restore the working
+        # `embedding_model` value in `openkos.yaml`. It deliberately does
+        # NOT point at `openkos reindex` -- reindex fails with this very
+        # same error until the config is fixed, so that hint would be
+        # actively misleading here. MUST NOT say "will retry next run"
+        # (phrasing reserved for a transient `embed_failed` skip). Placed
+        # BEFORE the generic tuple below for the same ordering reason as the
+        # two handlers above: `OllamaEmbeddingDimensionMismatch` subclasses
+        # `OllamaError`, so reordering would swallow it into the bare
+        # message and lose this remediation.
+        except OllamaEmbeddingDimensionMismatch as exc:
+            typer.echo(
+                f"openkos query: failed -- {exc} Restore the working "
+                "'embedding_model' value in openkos.yaml, then try again.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        # The three specific handlers above MUST precede this generic tuple:
+        # `OllamaUnavailable`, `OllamaModelNotFound`, and
+        # `OllamaEmbeddingDimensionMismatch` all subclass `OllamaError`, so
+        # reordering would silently funnel them into this fallback and lose
+        # their actionable remediation messages.
         except (FtsUnavailable, OllamaError) as exc:
             typer.echo(f"openkos query: failed -- {exc}.", err=True)
             raise typer.Exit(code=1) from exc

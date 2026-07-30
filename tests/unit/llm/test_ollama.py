@@ -1162,7 +1162,16 @@ def test_embed_row_wrong_length_raises_dimension_mismatch_not_generic_error() ->
 def test_embed_dimension_mismatch_message_names_actual_and_expected_length() -> None:
     """The message states both the actual row length and the expected
     `EMBED_DIM` (task 2.2; llm-client: Message names the actual and expected
-    dimension)."""
+    dimension), AND names the fault as permanent.
+
+    The permanence phrasing is load-bearing for two CLI requirements that
+    render this exception's own text rather than restating it -- `reindex`'s
+    permanent-mismatch failure message and, since issue #209, `query`'s. Both
+    are specified to identify the fault as a permanent dimension mismatch and
+    to avoid transient "will retry next run" phrasing, so a reword here would
+    silently stop satisfying them: each CLI test supplies its own exception
+    instance and therefore cannot catch it. This assertion is the only thing
+    pinning the production wording those requirements depend on."""
     short_row = [0.1] * 768
     client = OllamaClient(
         "qwen3-embedding:0.6b",
@@ -1176,6 +1185,8 @@ def test_embed_dimension_mismatch_message_names_actual_and_expected_length() -> 
     message = str(excinfo.value)
     assert "768" in message
     assert str(EMBED_DIM) in message
+    assert "permanent dimension mismatch" in message
+    assert "will retry next run" not in message
 
 
 def test_embed_dimension_mismatch_is_a_ollama_error_subclass() -> None:

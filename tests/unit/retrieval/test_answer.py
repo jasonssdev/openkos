@@ -27,7 +27,12 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import EMBED_DIM, Message
-from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.llm.ollama import (
+    OllamaEmbeddingDimensionMismatch,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.retrieval import answer as answer_mod
 from openkos.retrieval import fusion, graph_retrieve
 from openkos.retrieval.fusion import GraphHit
@@ -1003,6 +1008,49 @@ def test_question_embed_ollama_model_not_found_propagates(tmp_path: Path) -> Non
             vector_store=vector_store,
             fts_index=idx,
         )
+
+
+def test_question_embed_dimension_mismatch_propagates(tmp_path: Path) -> None:
+    """`embedder.embed([question])` raising
+    `OllamaEmbeddingDimensionMismatch` (an `OllamaError` subclass)
+    PROPAGATES out of `answer()` -- it must NOT be swallowed into
+    `dense_degraded=True` (issue #209): a wrong-dimension response is a
+    PERMANENT misconfiguration of the configured `embedding_model` that no
+    retry and no re-run can fix, so semantic retrieval is structurally
+    impossible rather than merely unhelpful, and `query`'s fatal exit-1
+    ladder must report it instead of silently returning an FTS-only
+    answer."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    llm = _FakeLLM(reply="unused")
+    embedder = _FakeEmbedder(
+        raises=OllamaEmbeddingDimensionMismatch(
+            "Ollama returned an embedding row of length 768, expected "
+            f"exactly {EMBED_DIM} (EMBED_DIM) -- this is a permanent "
+            "dimension mismatch caused by the configured embedding model, "
+            "not a transient failure; it will not heal by retrying."
+        )
+    )
+    vector_store = _FakeVectorStore()
+
+    with (
+        fts.build_index(bundle_dir) as idx,
+        pytest.raises(OllamaEmbeddingDimensionMismatch),
+    ):
+        answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=llm,
+            embedder=embedder,
+            vector_store=vector_store,
+            fts_index=idx,
+        )
+
+    assert llm.calls == []  # never reached a degraded FTS-only answer
 
 
 def test_cold_store_vector_store_none_degrades_cleanly(tmp_path: Path) -> None:
