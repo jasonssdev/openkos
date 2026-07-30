@@ -139,6 +139,31 @@ def _wants_live_backend(request: pytest.FixtureRequest) -> bool:
     return request.node.get_closest_marker("live_backend") is not None
 
 
+RESOLVER_TARGET_KEYWORDS = {
+    "getaddrinfo": "host",
+    "gethostbyname": "hostname",
+}
+"""Per-surface keyword naming the resolution target.
+
+Keyed by surface because the two resolvers DISAGREE: `getaddrinfo(host,
+port, ...)` against `gethostbyname(hostname)`. A single shared keyword would
+cover whichever surface it was written for and silently report `''` for the
+other -- the same empty-target defect this fallback exists to remove, just
+moved to the surface nobody checked.
+
+Only the unbound convention consults this. The bound family
+(`socket.socket.connect`/`connect_ex`) takes an address TUPLE rather than a
+named host, so there is no keyword to fall back to.
+
+Worth stating because it is counter-intuitive: unpatched, both resolvers are
+C callables that reject keywords outright, so none of these shapes can occur
+in production. The guard REPLACES them with a plain Python `*args, **kwargs`
+function, which accepts keywords -- so the guard itself widens the calling
+convention of the surface it guards, and the refusal message has to handle
+the wider one.
+"""
+
+
 def _refusal(
     request: pytest.FixtureRequest, surface: str, *, bound: bool
 ) -> Callable[..., Any]:
@@ -157,11 +182,26 @@ def _refusal(
     resolution guard exists to surface. Passing the convention makes the
     distinction explicit at both call sites and impossible to get wrong by
     accident.
+
+    The target may also arrive with NO positional slot at all --
+    `getaddrinfo(host=...)` and `gethostbyname(hostname=...)` are both legal
+    against the replacement -- so the unbound convention falls back to this
+    surface's entry in `RESOLVER_TARGET_KEYWORDS` before giving up. Without
+    it the message degrades to `attempted socket.getaddrinfo('')`, which
+    names a test that reached the network but not where it reached.
+    Fail-closed behavior never depended on this: the raise happens either
+    way, and this is observability only.
     """
+    keyword = None if bound else RESOLVER_TARGET_KEYWORDS.get(surface)
 
     def _raiser(*args: Any, **kwargs: Any) -> Any:
         positional = args[1:] if bound else args
-        target = positional[0] if positional else ""
+        if positional:
+            target = positional[0]
+        elif keyword is not None:
+            target = kwargs.get(keyword, "")
+        else:
+            target = ""
         raise UnitSuiteNetworkAccessError(
             f"{request.node.nodeid} attempted socket.{surface}({target!r}). "
             "Unit tests must not reach a real service -- stub the seam "

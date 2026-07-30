@@ -74,7 +74,16 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--import-mode=importlib"]
+# `--strict-markers` turns an unregistered marker into a collection error
+# instead of a `PytestUnknownMarkWarning` nobody reads (#264). The entire
+# opt-out from the unit suite's fail-closed network guard is a marker NAME
+# matched as a string, so a misspelled `live_backend` would otherwise leave
+# BOTH autouse fixtures installed while reading as a deliberate opt-out --
+# and, combined with the absorbability the guard's own docstring concedes,
+# a mis-marked live-backend pin would degrade through a broad handler and
+# read green while never contacting the backend it claims to measure. That
+# is #217's silence, re-entered through the escape hatch.
+addopts = ["--import-mode=importlib", "--strict-markers"]
 markers = [
     # Opts a test out of the unit suite's fail-closed network guard (#217).
     # Reserved for assumption pins that measure the real backend and already
