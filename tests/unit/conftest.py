@@ -155,12 +155,25 @@ Only the unbound convention consults this. The bound family
 (`socket.socket.connect`/`connect_ex`) takes an address TUPLE rather than a
 named host, so there is no keyword to fall back to.
 
-Worth stating because it is counter-intuitive: unpatched, both resolvers are
-C callables that reject keywords outright, so none of these shapes can occur
-in production. The guard REPLACES them with a plain Python `*args, **kwargs`
-function, which accepts keywords -- so the guard itself widens the calling
-convention of the surface it guards, and the refusal message has to handle
-the wider one.
+The two resolvers also disagree on whether a keyword call is reachable at
+all, and that asymmetry is worth stating once, here, because it is
+counter-intuitive in opposite directions:
+
+- `socket.getaddrinfo` is a pure-Python wrapper with named parameters
+  (`getaddrinfo(host, port, family=0, ...)`), so `getaddrinfo(host=...)` is
+  accepted whether or not the guard is installed. That shape is legal in
+  production; no PRODUCTION path here writes it, and the only call sites
+  are this suite's own guard tests.
+- `socket.gethostbyname` is a C callable that rejects keywords outright, so
+  `gethostbyname(hostname=...)` CANNOT occur in production. It becomes
+  reachable only because the guard replaces it with a plain Python
+  `*args, **kwargs` function -- the guard widens the calling convention of
+  the surface it guards, and the refusal message has to cope with the wider
+  one.
+
+mypy proves the split: the `gethostbyname` keyword call in
+`test_network_guard.py` needs a `type: ignore[call-arg]` and the
+`getaddrinfo` one does not.
 """
 
 

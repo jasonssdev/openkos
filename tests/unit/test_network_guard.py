@@ -240,25 +240,17 @@ def test_resolution_refusal_names_a_keyword_host() -> None:
 def test_gethostbyname_refusal_names_a_keyword_hostname() -> None:
     """`gethostbyname(hostname=...)` must name the host too.
 
-    The two guarded resolvers do NOT agree on the keyword: `getaddrinfo`
-    names its target `host`, `gethostbyname` names it `hostname`. One shared
-    keyword covers whichever it was written for and silently reports `''` for
-    the other.
-
-    That this shape is reachable at all is a property the guard itself
-    creates. Unpatched, `socket.gethostbyname` is a C callable and rejects
-    keywords -- but the guard REPLACES it with a plain Python function taking
-    `*args, **kwargs`, which accepts them. So the guard widens the calling
-    convention of the very surface it is guarding, and the refusal message has
-    to cope with the wider one.
+    The two guarded resolvers agree on neither the keyword's NAME nor whether
+    a keyword call is reachable unpatched. `RESOLVER_TARGET_KEYWORDS` in
+    `conftest.py` owns that statement; this test is the executable half of it
+    for `gethostbyname`, and `test_resolution_refusal_names_a_keyword_host`
+    is the other half.
 
     The `type: ignore` below is the proof, not a workaround: mypy resolves
     `gethostbyname` to its positional-only C signature in `_socket` and
     rejects the keyword, which is precisely the static fact that makes this
-    shape impossible in production and possible only against the
-    replacement. `getaddrinfo` needs no such ignore, because it really is
-    pure Python with named parameters -- and that asymmetry between the two
-    resolvers is the whole reason the keyword is looked up per surface.
+    shape impossible in production and possible only against the guard's
+    replacement.
     """
     with pytest.raises(UnitSuiteNetworkAccessError) as excinfo:
         socket.gethostbyname(hostname=_HOSTNAME)  # type: ignore[call-arg]
