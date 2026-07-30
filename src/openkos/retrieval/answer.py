@@ -64,6 +64,7 @@ skips the predicate walk entirely -- no `_iter_docs` pass, no filtering --
 restoring today's status-blind behavior byte-for-byte at zero added cost.
 """
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,15 +97,96 @@ that were all unreadable/unparseable at re-read time."""
 _SYSTEM_PROMPT = (
     "You are OpenKOS, a local-first knowledge assistant. Answer the question "
     "using ONLY the numbered CONTEXT concepts below -- do not use outside "
-    "knowledge. Cite the concepts you rely on by their concept id. If the "
+    "knowledge. Write prose only: a concept id is an internal identifier, so "
+    "never quote one in your answer and never repeat the bracketed labels "
+    "that head the context blocks -- the caller renders its own citation "
+    "list from the same concepts. If the "
     "context does not contain enough information to answer, say so plainly "
     'rather than guessing; an honest "the compiled bundle does not cover '
     'this" is the correct answer when the context is insufficient.'
 )
 """Stable system half of the 2-message prompt (D5): local-first grounding
-rules (answer only from CONTEXT, cite by concept id, admit gaps honestly)
-baked into system text; the `user` message carries the context blocks +
-question."""
+rules (answer only from CONTEXT, keep internal ids out of the prose, admit
+gaps honestly) baked into system text; the `user` message carries the
+context blocks + question.
+
+The id instruction is INVERTED from what shipped originally (#193). It used
+to read "cite the concepts you rely on by their concept id", so the model
+was doing exactly as told when it emitted `[concept_id: sources/x]` into the
+answer -- and the label it copied is the one `_assemble_context` writes at
+the head of every block. The leak was an instruction, not a model quirk,
+which is why `_strip_concept_id_scaffolding` is a backstop here rather than
+the fix: leaving the old wording would have the prompt fighting the
+post-processor on every single call."""
+
+
+_CONCEPT_ID_SCAFFOLD = r"""
+      \[[ \t]*concept_id[ \t]*:[^\]\n]*\]        # [concept_id: id — Title]
+    | \([ \t]*concept_id[ \t]*:[^)\n]*\)         # (concept_id: id)
+    | concept_id[ \t]*:[ \t]*[^\s,;:!?)\]]+(?<![.])   # bare concept_id: id
+"""
+"""The three shapes an internal id takes when it reaches the prose (#193).
+
+The delimited forms stop at their closing delimiter and are refused a
+newline, so an unbalanced bracket consumes one line at most rather than
+running to the end of the answer.
+
+The bare form has no closing delimiter to find, so it terminates at
+whitespace or sentence punctuation -- deliberately under-matching, because
+truncating an identifier is a visible blemish while over-matching would
+silently eat the rest of a sentence.
+
+The dot is handled by a trailing lookbehind rather than by the terminator
+class, because an id can legitimately CONTAIN one: a Source's slug is its
+filename stem with only the final extension removed, so `notes.v2.txt`
+ingests as `sources/notes.v2`. Excluding the dot outright stopped the match
+mid-identifier and left the remainder welded onto the preceding word --
+`...documented in.v2 for reference` -- which corrupts neighbouring prose
+instead of merely truncating. The lookbehind lets the greedy class take the
+dot and then backtrack off it, so a sentence-final dot still ends the match
+while an id-internal one does not.
+"""
+
+_SCAFFOLD_AT_LINE_START_RE = re.compile(
+    rf"(?m)^[ \t]*(?:{_CONCEPT_ID_SCAFFOLD})[ \t]*", re.VERBOSE
+)
+"""Scaffolding that opens a line, with the space that followed it.
+
+Separate from the inline rule because the two need opposite treatment of
+trailing space: absorbing it inline would weld the surrounding words
+together, while NOT absorbing it here would leave the line indented by one
+space -- which in markdown is noise at best and a changed block at worst."""
+
+_SCAFFOLD_INLINE_RE = re.compile(rf"[ \t]*(?:{_CONCEPT_ID_SCAFFOLD})", re.VERBOSE)
+"""Scaffolding inside a line, with the space that preceded it.
+
+Only HORIZONTAL space is absorbed. Using `\\s*` would swallow the newline
+before a scaffold that opens a line and silently reflow the answer's
+markdown -- joining a list item or a heading onto the previous paragraph."""
+
+
+def _strip_concept_id_scaffolding(text: str) -> str:
+    """Remove internal concept-id scaffolding from answer prose (#193).
+
+    A BACKSTOP, not the fix. The fix is `_SYSTEM_PROMPT`, which no longer
+    asks for ids in the answer; this exists because prompt compliance is not
+    a guarantee, and because `query --save` files the answer text as a real
+    concept -- so an id that survives here is not merely shown once, it is
+    written into the bundle permanently.
+
+    Scoped to removal and nothing else: no whitespace normalization, no
+    punctuation repair. A reply with no scaffolding is returned
+    byte-identical, which is the property that keeps this from quietly
+    becoming a rewriting pass over compliant answers. The cost is that
+    `... based on [concept_id: x] .` keeps its stranded space -- accepted,
+    because the alternative is a rule that edits prose no model ever
+    scaffolded.
+
+    Provenance is unaffected: `AnswerResult.citations` is built from the
+    context assembly, never parsed back out of the reply, so stripping the
+    prose removes the redundant copy and not the traceability.
+    """
+    return _SCAFFOLD_INLINE_RE.sub("", _SCAFFOLD_AT_LINE_START_RE.sub("", text))
 
 
 @dataclass(frozen=True)
@@ -498,7 +580,11 @@ def answer(
 
     reply = llm.chat(_build_messages(context_blocks, question))
     return AnswerResult(
-        answer=reply,
+        # Stripped HERE, not at the print site, because `AnswerResult.answer`
+        # feeds both -- `query` echoes it and `query --save` files it as a
+        # new concept. Cleaning only the echo would leave the leak permanent
+        # in the bundle while looking fixed on screen (#193).
+        answer=_strip_concept_id_scaffolding(reply),
         citations=citations,
         fts_hit_count=len(hits),
         llm_invoked=True,

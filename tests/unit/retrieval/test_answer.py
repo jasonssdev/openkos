@@ -2330,3 +2330,219 @@ def test_confidential_cid_that_slips_past_the_hit_seam_filter_is_still_excluded(
 
     assert result.citations == []
     assert result.answer == answer_mod.NO_MATCH
+
+
+# --- #193: internal concept_id scaffolding must not reach the reader -------
+
+
+def _answer_with_reply(tmp_path: Path, reply: str) -> answer_mod.AnswerResult:
+    """Drive a successful one-hit `answer()` whose LLM returns `reply`.
+
+    A helper rather than five copies of the same four-line setup, so each
+    test below is its scaffolding shape plus its assertion.
+    """
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    with fts.build_index(bundle_dir) as idx:
+        return answer_mod.answer(
+            "dichotomyzz",
+            bundle_dir=bundle_dir,
+            llm=_FakeLLM(reply=reply),
+            fts_index=idx,
+        )
+
+
+def test_bracketed_concept_id_scaffolding_is_stripped(tmp_path: Path) -> None:
+    """`[concept_id: ...]` must not survive into the answer text.
+
+    This is the exact shape reported in #193. It leaks because the context
+    blocks label each concept that way and the prompt used to invite citing
+    by id, so the model was copying the label it was shown.
+    """
+    result = _answer_with_reply(
+        tmp_path,
+        "MCP was launched on 2024-11. This information is based on "
+        "[concept_id: sources/mcp-launch].",
+    )
+
+    assert "concept_id" not in result.answer
+    assert result.answer == "MCP was launched on 2024-11. This information is based on."
+
+
+def test_parenthesised_concept_id_scaffolding_is_stripped(tmp_path: Path) -> None:
+    """The other shape #193 reports, `(concept_id: ...)`, is stripped too.
+
+    Pinned separately from the bracketed form rather than parametrized: the
+    delimiters need different character classes to terminate on, so one
+    passing says nothing about the other.
+    """
+    result = _answer_with_reply(
+        tmp_path,
+        "It can reference other files or scripts. (concept_id: concepts/skills-in-ai)",
+    )
+
+    assert "concept_id" not in result.answer
+    assert result.answer == "It can reference other files or scripts."
+
+
+def test_bare_concept_id_scaffolding_is_stripped(tmp_path: Path) -> None:
+    """An undelimited `concept_id: <id>` is stripped, and stops at the id.
+
+    The delimited forms have an unambiguous end; this one has to guess, and
+    it guesses conservatively -- terminating at whitespace or sentence
+    punctuation, so a mis-scoped match truncates the identifier rather than
+    eating the rest of the sentence.
+    """
+    result = _answer_with_reply(
+        tmp_path,
+        "Stoicism is a philosophy, per concept_id: concepts/stoicism. It endures.",
+    )
+
+    assert "concept_id" not in result.answer
+    assert result.answer == "Stoicism is a philosophy, per. It endures."
+
+
+def test_bare_scaffolding_consumes_an_id_containing_a_dot(tmp_path: Path) -> None:
+    """A dot INSIDE the id must not end the match.
+
+    Concept ids can carry one: a Source's slug is its filename stem with only
+    the final extension removed, so ingesting `notes.v2.txt` yields
+    `sources/notes.v2`. A terminator class that treats every dot as
+    sentence-final stops mid-identifier and leaves the remainder welded onto
+    the preceding word -- `...documented in.v2 for reference` -- which is
+    corruption of neighbouring prose, not the harmless truncation the
+    conservative-matching rationale describes.
+
+    The companion of the test above: that one proves a SENTENCE-ending dot
+    still terminates, this one proves an id-internal dot does not. Both
+    directions are needed, since a rule that satisfies either alone is easy
+    to write by accident.
+    """
+    result = _answer_with_reply(
+        tmp_path,
+        "It is documented in concept_id: sources/notes.v2 for reference.",
+    )
+
+    assert "concept_id" not in result.answer
+    assert ".v2" not in result.answer
+    assert result.answer == "It is documented in for reference."
+
+
+def test_scaffolding_carrying_a_title_is_stripped_whole(tmp_path: Path) -> None:
+    """The context-block label form, id plus em-dashed title, is one unit.
+
+    This is the literal string `_assemble_context` writes, so it is the shape
+    a model is most likely to echo verbatim.
+    """
+    result = _answer_with_reply(
+        tmp_path,
+        "Control is the core idea [concept_id: concepts/stoicism — Stoicism].",
+    )
+
+    assert "concept_id" not in result.answer
+    assert "Stoicism]" not in result.answer
+    assert result.answer == "Control is the core idea."
+
+
+def test_stripping_preserves_line_structure(tmp_path: Path) -> None:
+    """Removing scaffolding must not join two lines into one.
+
+    The answer is rendered as-is and may be markdown, so absorbing the
+    newline before a scaffold would silently reflow a list or a heading into
+    the previous paragraph.
+    """
+    result = _answer_with_reply(
+        tmp_path,
+        "First point.\n[concept_id: concepts/stoicism] Second point.",
+    )
+
+    assert result.answer == "First point.\nSecond point."
+
+
+def test_stripping_leaves_the_citation_list_intact(tmp_path: Path) -> None:
+    """Ids leave the PROSE, not the answer's provenance.
+
+    The structured citations are the supported way to trace an answer, and
+    #193's whole argument is that the inline copy is redundant BECAUSE this
+    exists. A strip that also emptied this would remove traceability instead
+    of tidying it.
+
+    Both halves are asserted, and the prose half is what makes this a test of
+    the strip at all: citations are built by `_assemble_context` from the
+    fused ids and never parsed back out of the reply, so a version that
+    checked only the citation list would pass unchanged with the whole #193
+    feature reverted -- pinning an independent code path while appearing to
+    guard this one.
+    """
+    result = _answer_with_reply(tmp_path, "An answer [concept_id: concepts/stoicism].")
+
+    assert result.answer == "An answer."
+    assert [c.concept_id for c in result.citations] == ["concepts/stoicism"]
+
+
+def test_scaffolding_inside_a_code_fence_is_stripped_too(tmp_path: Path) -> None:
+    """The strip is content-blind, and that is pinned rather than accidental.
+
+    An answer explaining the bundle's own shape could legitimately quote the
+    context-block label inside a fence, and this removes it there as well --
+    corrupting the example it was illustrating.
+
+    Accepted rather than solved. Making the strip fence-aware means tracking
+    markdown state across a stream the model controls, which is a parser's
+    worth of machinery guarding a BACKSTOP whose real job is done by the
+    prompt. The failure it prevents is a permanent one -- `query --save`
+    files the answer as a bundle concept -- while the failure it causes is a
+    mangled illustration in a single reply.
+
+    Pinned as a characterization test so the trade is visible to whoever
+    reconsiders it, and so a future fence-aware version fails here loudly
+    instead of quietly changing what this module promises.
+    """
+    result = _answer_with_reply(
+        tmp_path,
+        "A source block is headed like this:\n\n"
+        "```\n[concept_id: sources/example — Example]\n```",
+    )
+
+    assert "concept_id" not in result.answer
+    assert result.answer == "A source block is headed like this:\n\n```\n\n```"
+
+
+def test_ordinary_prose_is_returned_unchanged(tmp_path: Path) -> None:
+    """A reply with no scaffolding must pass through byte-identical.
+
+    The stripping is a backstop for a prompt the model may not obey; it must
+    not become a rewriting pass that touches compliant answers.
+    """
+    reply = "Stoicism  teaches the dichotomy of control.\n\n- One\n- Two"
+
+    result = _answer_with_reply(tmp_path, reply)
+
+    assert result.answer == reply
+
+
+def test_system_prompt_does_not_invite_inlining_concept_ids(tmp_path: Path) -> None:
+    """The prompt must stop asking for what the strip then removes.
+
+    The leak's root cause was an instruction to "cite the concepts you rely
+    on by their concept id" -- the model was obeying. Stripping alone would
+    leave the prompt fighting the post-processor on every call.
+    """
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="dichotomyzz of control",
+    )
+    llm = _FakeLLM()
+
+    with fts.build_index(bundle_dir) as idx:
+        answer_mod.answer("dichotomyzz", bundle_dir=bundle_dir, llm=llm, fts_index=idx)
+
+    system = llm.calls[0][0]["content"]
+    assert "by their concept id" not in system
+    assert "concept id" in system
