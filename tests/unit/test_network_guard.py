@@ -16,10 +16,13 @@ Three deliberate design choices are worth knowing before editing:
    `getaddrinfo`, `gethostbyname`) instead of being parametrized over the
    guard's own constants. Driving a test from `BLOCKED_SOCKET_FUNCTIONS` reads
    tidier but is self-defeating: deleting an entry would remove the protection
-   AND the test that noticed, leaving the suite green. The constants are still
-   used, but only by `test_every_declared_surface_is_actually_guarded`, which
-   catches the opposite mistake -- a surface declared as guarded that the
-   fixture never patches.
+   AND the test that noticed, leaving the suite green.
+
+   The constants are still read here -- by `_guarded_surfaces()`, and
+   therefore by both install/opt-out pins -- but every one of those checks is
+   a count or an all-quantified predicate, so all of them pass trivially if
+   the constants are emptied. `test_declared_surfaces_match_the_ones_tested_literally`
+   is the assertion that does not, which is why it is expressed as literals.
 
 2. The install checks (`test_guard_is_installed_for_an_ordinary_unit_test`,
    `test_offline_seam_is_installed_for_an_ordinary_unit_test`, and their
@@ -33,7 +36,7 @@ Three deliberate design choices are worth knowing before editing:
 
 3. `test_offline_stub_covers_every_network_method` guards the OTHER half. The
    socket guard is a backstop; stubbing the seam is the fix, and #217 was
-   caused by a stub that covered two of three network methods. That test
+   caused by a stub that covered every network method but one. That test
    derives the set from the client's own source, so the same omission cannot
    recur silently -- and it checks the derivation both ways, so the derivation
    itself cannot silently narrow.
@@ -41,7 +44,8 @@ Three deliberate design choices are worth knowing before editing:
 
 import inspect
 import socket
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from typing import ClassVar
 
 import pytest
 
@@ -150,23 +154,38 @@ def test_gethostbyname_is_refused() -> None:
         socket.gethostbyname(_HOSTNAME)
 
 
-def test_every_declared_surface_is_actually_guarded() -> None:
-    """No entry in either constant may be declared but left unpatched.
+def test_declared_surfaces_match_the_ones_tested_literally() -> None:
+    """The declarations must name exactly the surfaces tested literally above.
 
-    Complements the literal tests above rather than replacing them: those
-    catch a SHRUNK constant (protection silently removed), this catches a
-    GROWN one (a surface listed as guarded that the fixture never patches).
-    Neither alone is sufficient.
+    This is the anti-vacuity pin for the declared set. Exactly two things in
+    this module read those constants: this test, and `_guarded_surfaces()` --
+    which reaches the install and opt-out pins only as a COUNT
+    (`_tagged_count() == len(_guarded_surfaces())`, `_tagged_count() == 0`).
+    Empty both constants and every count collapses to `0 == 0` and passes
+    while the guard protects nothing, so this is the one check over the
+    declared set that still fails.
+
+    Other tests here would also notice, but only by attempting real network
+    and getting the wrong exception -- which is the failure mode this module
+    exists to prevent, not a signal to rely on. That is what makes a check
+    over the declaration itself worth having.
+
+    Pinned against literals rather than derived from the constants, for the
+    reason stated in the module docstring: a check driven by the thing it
+    checks disappears together with it.
+
+    It also catches the GROWN case -- adding a surface to a constant without
+    adding a literal call test for it fails here, naming the omission,
+    instead of silently widening what the module claims to cover.
+
+    The "declared but never patched" case the previous version of this test
+    aimed at is already impossible: the fixture loops over these same
+    constants, and `monkeypatch.setattr` raises `AttributeError` for a name
+    the target does not have, so an entry is either patched by construction
+    or fails loudly at setup.
     """
-    unguarded = [
-        name
-        for name, surface in (
-            [(n, getattr(socket.socket, n)) for n in BLOCKED_SOCKET_METHODS]
-            + [(n, getattr(socket, n)) for n in BLOCKED_SOCKET_FUNCTIONS]
-        )
-        if not getattr(surface, GUARD_ATTRIBUTE, False)
-    ]
-    assert not unguarded, f"declared as guarded but left unpatched: {unguarded}"
+    assert set(BLOCKED_SOCKET_METHODS) == {"connect", "connect_ex"}
+    assert set(BLOCKED_SOCKET_FUNCTIONS) == {"getaddrinfo", "gethostbyname"}
 
 
 def test_resolution_refusal_names_the_host_not_the_port() -> None:
@@ -190,6 +209,123 @@ def test_resolution_refusal_names_the_host_not_the_port() -> None:
     message = str(excinfo.value)
     assert _HOSTNAME in message
     assert "11434" not in message
+
+
+def test_resolution_refusal_names_a_keyword_host() -> None:
+    """`getaddrinfo(host=..., port=...)` must still name the HOST.
+
+    `socket.getaddrinfo` is pure Python and therefore keyword-callable, so a
+    raiser that reads only positional arguments reports `''` for this shape --
+    a refusal that says a test reached the network but not where.
+
+    No production path produces this shape today: the only transport is the
+    stdlib HTTP stack via `socket.create_connection`, which passes host and
+    port positionally. The direct resolver calls that do exist in this
+    repository are this module's own guard tests, a few lines above and
+    below. Pinned anyway because the guard's whole job is to be legible on
+    the day production code does reach a resolver, and observability that is
+    never exercised is observability nobody notices has broken.
+
+    The residual half of the convention bug fixed in #263: `bound` fixed WHICH
+    positional slot is read, not the case where there is no positional slot.
+    """
+    with pytest.raises(UnitSuiteNetworkAccessError) as excinfo:
+        socket.getaddrinfo(host=_HOSTNAME, port=11434)
+
+    message = str(excinfo.value)
+    assert _HOSTNAME in message
+    assert "11434" not in message
+
+
+def test_gethostbyname_refusal_names_a_keyword_hostname() -> None:
+    """`gethostbyname(hostname=...)` must name the host too.
+
+    The two guarded resolvers do NOT agree on the keyword: `getaddrinfo`
+    names its target `host`, `gethostbyname` names it `hostname`. One shared
+    keyword covers whichever it was written for and silently reports `''` for
+    the other.
+
+    That this shape is reachable at all is a property the guard itself
+    creates. Unpatched, `socket.gethostbyname` is a C callable and rejects
+    keywords -- but the guard REPLACES it with a plain Python function taking
+    `*args, **kwargs`, which accepts them. So the guard widens the calling
+    convention of the very surface it is guarding, and the refusal message has
+    to cope with the wider one.
+
+    The `type: ignore` below is the proof, not a workaround: mypy resolves
+    `gethostbyname` to its positional-only C signature in `_socket` and
+    rejects the keyword, which is precisely the static fact that makes this
+    shape impossible in production and possible only against the
+    replacement. `getaddrinfo` needs no such ignore, because it really is
+    pure Python with named parameters -- and that asymmetry between the two
+    resolvers is the whole reason the keyword is looked up per surface.
+    """
+    with pytest.raises(UnitSuiteNetworkAccessError) as excinfo:
+        socket.gethostbyname(hostname=_HOSTNAME)  # type: ignore[call-arg]
+
+    assert _HOSTNAME in str(excinfo.value)
+
+
+def test_stub_coverage_reads_public_callables_only() -> None:
+    """The stub-coverage check must ignore private helpers and constants.
+
+    `test_offline_stub_covers_every_network_method` compares two sets that
+    must be drawn from the SAME namespace. Its `network_methods` side is
+    filtered to public names; if the `overridden` side is not filtered
+    identically, any legitimate addition to the stub that is not a derived
+    public network method lands in `undetected` and fails the run -- with a
+    message blaming the derivation for drifting, sending the reader to inspect
+    a client transport that never changed.
+
+    Not hypothetical shapes: a shared fixed-vector helper behind `embed`, a
+    class-level constant so a test can reference the stub's canned value, or
+    making the stub inherit a Protocol/ABC -- `ABCMeta` writes `_abc_impl`
+    into the subclass `__dict__`, and the client being a plain class today is
+    the only reason that does not already fire.
+
+    Pinned on a deliberately polluted subclass rather than on `OfflineOllama`
+    itself, so the invariant holds regardless of what the real stub happens to
+    contain right now.
+
+    The stub carries one member per branch of the filter, so neither half can
+    rot unnoticed. `PUBLIC_VECTOR` is the one that earns the `callable` check:
+    a private constant is already excluded by the underscore rule, so a stub
+    polluted only with private members would leave `callable` unproved and let
+    it be deleted with every assertion still green. `chat` pins the positive
+    direction -- a public callable override must still be COUNTED, or the
+    filter would exclude the very methods the coverage check exists to compare.
+    """
+
+    class _PollutedStub(OfflineOllama):
+        PUBLIC_VECTOR: ClassVar[list[float]] = [1.0, 0.0]
+        _FIXED: ClassVar[list[float]] = [1.0, 0.0]
+
+        def _vector(self) -> list[float]:
+            return list(self._FIXED)
+
+        def chat(self, messages: Sequence[object]) -> str:
+            return '{"extract": false}'
+
+    assert _overridden_network_overrides(_PollutedStub) == {"chat"}
+
+
+def test_live_backend_marker_is_registered(pytestconfig: pytest.Config) -> None:
+    """The opt-out marker must be REGISTERED, not merely spelled.
+
+    The whole escape hatch is a marker name compared as a string in
+    `_wants_live_backend`. Under `--strict-markers` an unregistered name is a
+    collection error rather than a warning, so this test and that flag protect
+    different halves: the flag catches a typo at the USE site, this catches the
+    registration being dropped from `pyproject.toml` while uses remain.
+
+    Reads the collected registry rather than the file, so it measures what
+    pytest actually loaded.
+    """
+    registered = {
+        entry.split(":", 1)[0].strip() for entry in pytestconfig.getini("markers")
+    }
+
+    assert "live_backend" in registered
 
 
 def test_refusal_is_not_an_oserror() -> None:
@@ -311,6 +447,27 @@ def test_live_backend_marker_also_lifts_the_offline_ollama_seam() -> None:
     assert seam is not OfflineOllama
 
 
+def _overridden_network_overrides(stub: type) -> set[str]:
+    """The stub's own PUBLIC CALLABLE overrides -- the comparable half.
+
+    Filtered to public callables so it is drawn from the same namespace as the
+    derived `network_methods` set below, which is itself public-only. A looser
+    rule (everything non-dunder) would sweep in private helpers, class
+    constants, and machinery a base class writes into `__dict__` -- `ABCMeta`
+    contributes `_abc_impl` -- and each would then read as a network method the
+    derivation failed to classify.
+
+    Takes the class as a parameter so the invariant can be pinned against a
+    deliberately polluted subclass rather than against whatever `OfflineOllama`
+    happens to contain today.
+    """
+    return {
+        name
+        for name, member in vars(stub).items()
+        if not name.startswith("_") and callable(member)
+    }
+
+
 def test_offline_stub_covers_every_network_method() -> None:
     """The offline stub must override EVERY network method of the real client.
 
@@ -321,9 +478,9 @@ def test_offline_stub_covers_every_network_method() -> None:
     said nothing.
 
     Derives the expected set from the client's own source instead of
-    hardcoding names, so ADDING a fourth network method to the client fails
-    here until the stub covers it. A hardcoded list would have to be
-    remembered, which is exactly what went wrong the first time.
+    hardcoding names, so ADDING a network method to the client fails here
+    until the stub covers it. A hardcoded list would have to be remembered,
+    which is exactly what went wrong the first time.
 
     The derivation is a two-level closure over `self._urlopen(` -- a CALL, so
     the constructor's `self._urlopen = urlopen` assignment is correctly
@@ -345,7 +502,7 @@ def test_offline_stub_covers_every_network_method() -> None:
         and any(f"self.{helper}(" in src for helper in private_direct)
     }
 
-    overridden = {name for name in vars(OfflineOllama) if not name.startswith("__")}
+    overridden = _overridden_network_overrides(OfflineOllama)
 
     # Non-emptiness alone is too weak a vacuity check: it still passes if the
     # derivation silently loses ONE method -- say `embed`'s transport moves a
