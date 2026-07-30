@@ -793,9 +793,17 @@ def test_raising_one_source_never_warns_about_another_sources_lineage(
     global `user.email` -- a blanket `"WARNING" not in stderr` therefore
     passes or fails on the developer's `~/.gitconfig` rather than on the
     behaviour under test. Scoping the assertion keeps it strict where it
-    matters: `sources/b`, its derived concept, its raw resource, and the
-    exact stderr wording this scan emits are each asserted absent, all four
-    of which the pre-fix bundle-wide scan produced."""
+    matters: the pre-fix bundle-wide scan emitted `'sources/b' cites
+    unresolvable provenance 'raw/b.txt'`, so THREE of the negative
+    assertions below -- the message wording, `sources/b`, and `b.txt` --
+    each independently fail on the pre-fix behaviour.
+
+    The fourth, `derived_b not in result.stderr`, never fired pre-fix and
+    cannot: `derived_b`'s only provenance entry is `source_b`, which always
+    resolves to an existing bundle file, so it is never a citing concept
+    with an unresolvable entry under either scope. It is kept as a guard
+    against a future change that widened the warning to name descendants of
+    an out-of-scope Source, not as a witness to the original bug."""
     _init_workspace(tmp_path, monkeypatch)
     source_a = _ingest_source(tmp_path, "a.txt")
     source_b = _ingest_source(tmp_path, "b.txt")
