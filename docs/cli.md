@@ -324,6 +324,10 @@ Priority order, highest first: (1) missing or empty vector index — `openkos re
 
 Findings that name no command at all (a §9 conformance violation, a dangling reference, a source cited by more than one closure) are never "the one action" here — they stay visible only through `status`/`lint`. Because `next` stops looking as soon as one tier fires, it can never prove those commandless findings are absent, so its no-action output never claims the bundle is clean — it always points at `openkos status` instead, with no count of anything left unseen.
 
+A document that could not be read or whose frontmatter would not parse is excluded from the scan entirely, so `next` names every such document by path before the `openkos status` pointer — on the no-action path *and* when a tier fires, since an action derived from a knowingly incomplete document set needs the caveat just as much as no action does. Only what the run actually read is reported: stopping at tier 1 costs no bundle walk, so it collects no skip notices and claims none.
+
+Tier 2's `openkos ingest <resource>` is read out of the finding's own retry text and then corroborated against the Source's `resource` frontmatter. A `resource` carrying a backtick would otherwise close that text's code span early and leave behind a real command naming the *wrong* path; when the two do not match exactly, tier 2 declines and evaluation continues.
+
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status` uses. Every other workspace state, including a freshly initialized, empty bundle, exits 0. No `--json` or other structured output mode is offered, no file under the workspace is ever created, modified, or deleted, and no model backend is ever constructed — the answer is a pure function of files already on disk.
 
 ### `openkos list [TYPE]`

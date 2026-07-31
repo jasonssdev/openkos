@@ -5385,8 +5385,8 @@ def next_cmd() -> None:
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
-    action = next_action_module.next_action(layout)
-    for line in next_action_module.render_lines(action):
+    result = next_action_module.next_action(layout)
+    for line in next_action_module.render_lines(result):
         typer.echo(line)
 
 

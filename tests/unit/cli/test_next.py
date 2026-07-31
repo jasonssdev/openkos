@@ -992,3 +992,163 @@ def test_no_count_of_unseen_findings_when_tier_4_has_paid_every_walk(
     assert "1 candidate group" in result.stdout
     stripped = result.stdout.replace("1 candidate group", "")
     assert not any(char.isdigit() for char in stripped)
+
+
+# --- #274: a `resource` backtick must never truncate the printed path -----
+
+
+def test_backtick_in_resource_never_becomes_a_truncated_printed_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source's `resource` is interpolated verbatim INSIDE the retry
+    hint's backtick span (`lint.py:630`), so a `resource` carrying a
+    backtick of its own closes that span early. The truncated remainder is
+    a well-formed `openkos ingest <plain path>` naming a DIFFERENT file
+    than the finding is about, which is the one thing tier 2 must never
+    print (issue #274). Declining hands the run to tier 4."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="raw/notes.txt`; rm -rf /")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "rm -rf" not in result.stdout
+    assert "Run: openkos duplicates" in result.stdout
+
+
+def test_balanced_backticks_in_resource_are_declined_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The truncation is not detectable by counting backticks. A `resource`
+    carrying TWO of them leaves the detail's total count EVEN and still
+    yields a well-formed, wrong `openkos ingest raw/a` span. Tier 2 must
+    therefore corroborate the extracted argument against the document's own
+    `resource`, not against the span's shape (issue #274)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="raw/a`x`b.txt")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "Run: openkos duplicates" in result.stdout
+
+
+def test_an_intact_resource_still_fires_tier_2_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The corroboration closing #274 must not cost tier 2 its normal
+    behaviour: an ordinary `resource` still produces the finding's own
+    retry command, character for character."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="raw/notes.txt")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+
+
+# --- #275: a bundle that could not be fully read is never silent ----------
+
+
+def _write_unparseable_doc(tmp_path: Path, name: str = "broken") -> None:
+    """A file with no frontmatter block at all -- `collect_docs` excludes it
+    from `docs` and reports it ONLY as a skip notice (`lint.py:176`)."""
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / f"{name}.md").write_text(
+        "Just plain text, no frontmatter block.\n", encoding="utf-8"
+    )
+
+
+def test_skip_notices_are_named_on_the_no_action_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A document excluded from `docs` exists ONLY as a skip notice, so a
+    run that discards the notices reports "no ranked action" over a bundle
+    it could not fully read -- a partial scan reading as a clean one, which
+    `collect_docs` documents as the exact failure it exists to prevent
+    (issue #275)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unparseable_doc(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "No ranked action found in this bundle." in result.stdout
+    assert "concepts/broken.md: skipped (unparseable frontmatter)" in result.stdout
+    assert "openkos status" in result.stdout
+
+
+def test_skip_notices_are_named_even_when_a_tier_fires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A damaged bundle can also produce a ranked action, and that action is
+    then derived from a document set that is knowingly incomplete. The
+    notices are emitted on that path too, exactly as `_STATUS_POINTER` is
+    (D4: the honesty guard holds on every path)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="raw/notes.txt")
+    _write_unparseable_doc(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+    assert "concepts/broken.md: skipped (unparseable frontmatter)" in result.stdout
+
+
+def test_every_skipped_document_is_named_not_just_the_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each skipped document names a separate file to go and look at, so a
+    count alone -- or the first one only -- would leave the rest invisible."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unparseable_doc(tmp_path, name="broken-a")
+    _write_unparseable_doc(tmp_path, name="broken-b")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "concepts/broken-a.md: skipped (unparseable frontmatter)" in result.stdout
+    assert "concepts/broken-b.md: skipped (unparseable frontmatter)" in result.stdout
+
+
+def test_tier_1_reports_no_skip_notices_and_still_pays_no_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`next` reports only what it actually observed. Tier 1 fires on a
+    zero-walk check, so it never collected a notice and must not claim
+    otherwise -- surfacing notices MUST NOT buy them with the bundle walk
+    tier 1's cost contract forbids (spec: First-Hit Short-Circuit Cost
+    Contract, tier-1 = 0 walks)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_unparseable_doc(tmp_path)
+    calls = 0
+    real_collect_docs = lint_check.collect_docs
+
+    def counting_collect_docs(bundle_dir: Path) -> object:
+        nonlocal calls
+        calls += 1
+        return real_collect_docs(bundle_dir)
+
+    monkeypatch.setattr(lint_check, "collect_docs", counting_collect_docs)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos reindex" in result.stdout
+    assert calls == 0
+    assert "skipped" not in result.stdout
