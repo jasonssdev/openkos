@@ -2,7 +2,16 @@
 
 Pre-flight (D1 Phase A) is a pure read: `config.refusal_reason`'s five
 conditions are checked before any write happens, so a refusal leaves the
-directory exactly as it was found.
+directory as it was found.
+
+What "as it was found" means here is narrower than it was before #281: the
+shared snapshot imported below compares every workspace entry INCLUDING the
+`.git` node itself, but not `.git/`'s contents. So a refusal that created a
+repository is still caught; a refusal that wrote inside an existing one is
+not. `test_preflight_outcome_never_changes_written_files` is the exception
+and uses `snapshot_including_git`, because there the repository `init`
+creates is the measurement rather than ambient noise -- see the comment at
+its `isolate_git_identity` call and `tests/unit/cli/conftest.py`.
 """
 
 import os
@@ -24,6 +33,8 @@ from openkos.config import DEFAULT_MODEL
 from openkos.llm.ollama import InstalledModel, OllamaUnavailable
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
+from tests.unit.cli.conftest import snapshot_including_git
+from tests.unit.cli.conftest import snapshot_with_symlinks as _snapshot
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -92,32 +103,6 @@ def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     `isolation()` creates next.
     """
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
-
-
-def _snapshot_entry(path: Path) -> bytes | None | tuple[str, str]:
-    """Classify one path for `_snapshot`, without ever following a symlink.
-
-    A symlink is checked first because `Path.is_dir()`/`is_file()` follow
-    it -- checking those first would either misread a symlink-to-dir as a
-    plain directory or crash `read_bytes()` on a broken symlink.
-    """
-    if path.is_symlink():
-        return ("symlink", str(path.readlink()))
-    if path.is_dir():
-        return None
-    return path.read_bytes()
-
-
-def _snapshot(root: Path) -> dict[Path, bytes | None | tuple[str, str]]:
-    """Capture every entry under `root`, keyed by relative path.
-
-    Files map to their exact bytes, directories map to `None`, and symlinks
-    map to their raw (unfollowed) target. Recording directory and symlink
-    entries too (not only `is_file()`) means a refusal test also catches a
-    stray directory or symlink created outside pre-flight -- a file-only
-    snapshot would miss both, since neither holds byte content of its own.
-    """
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def test_refuses_when_openkos_yaml_exists(
@@ -1369,6 +1354,13 @@ def test_preflight_outcome_never_changes_written_files(
     # checks (preflight-outcome independence). `git init` alone (no commit)
     # is byte-identical across separate invocations, so this keeps the
     # snapshot comparison meaningful without weakening it.
+    #
+    # That reasoning is why this test uses `snapshot_including_git` while
+    # the refusal tests above use the excluding `_snapshot`: here the
+    # repository IS part of what must not vary with preflight outcome, and
+    # the isolation above is exactly what makes comparing it safe. Swapping
+    # in the excluding variant would silently delete the only assertion in
+    # the suite that preflight outcome does not change git setup (#281).
     isolate_git_identity(monkeypatch, tmp_path)
 
     outcomes: dict[str, Callable[..., Any]] = {
@@ -1390,7 +1382,14 @@ def test_preflight_outcome_never_changes_written_files(
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
-        snapshots[name] = _snapshot(workspace)
+        # The precondition that makes comparing `.git/` safe here, asserted
+        # rather than assumed: if git identity leaked in from the host, `init`
+        # WOULD commit, and a commit object embeds a one-second-resolution
+        # timestamp that makes the four trees diverge whenever the loop
+        # straddles a second boundary -- the exact intermittency this whole
+        # change exists to retire (#281 review, R4).
+        assert "skipped the initial commit" in result.output
+        snapshots[name] = snapshot_including_git(workspace)
 
     reference = snapshots["reachable"]
     for name, snapshot in snapshots.items():

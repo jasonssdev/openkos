@@ -25,6 +25,7 @@ from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
 
@@ -32,17 +33,6 @@ runner = CliRunner()
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make `sys.stdin.isatty()` report `True` inside a `CliRunner.invoke` call."""
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
-
-
-def _snapshot_entry(path: Path) -> bytes | None:
-    if path.is_dir():
-        return None
-    return path.read_bytes()
-
-
-def _snapshot(root: Path) -> dict[Path, bytes | None]:
-    """Capture every entry under `root`, keyed by relative path."""
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

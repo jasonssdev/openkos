@@ -16,6 +16,7 @@ from openkos.bundle import index as bundle_index
 from openkos.bundle import links as bundle_links
 from openkos.cli.main import _apply_link_rewrite_idempotently, app
 from openkos.model import okf
+from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
 
@@ -23,19 +24,6 @@ runner = CliRunner()
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make `sys.stdin.isatty()` report `True` inside a `CliRunner.invoke` call."""
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
-
-
-def _snapshot_entry(path: Path) -> tuple[bytes, int] | None:
-    if path.is_dir():
-        return None
-    return path.read_bytes(), path.stat().st_mtime_ns
-
-
-def _snapshot(root: Path) -> dict[Path, tuple[bytes, int] | None]:
-    """Capture every entry's bytes AND `st_mtime_ns`, keyed by relative
-    path -- a decline (or refusal) must leave the bundle untouched at the
-    filesystem level, not merely byte-identical after a write-then-restore."""
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

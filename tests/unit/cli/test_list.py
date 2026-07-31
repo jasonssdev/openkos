@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 from openkos import lifecycle
 from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.cli.conftest import MtimeEntry, snapshot_with_mtime
 
 runner = CliRunner()
 
@@ -30,22 +31,25 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
 
 
-def _workspace_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
-    """Return a map of every file under `root` to its `(content, mtime_ns)`.
+def _workspace_snapshot(root: Path) -> dict[Path, MtimeEntry]:
+    """Map every entry under `root` to its `(content, mtime_ns)`.
 
     Used to prove `list` performs no mutation: comparing this snapshot
-    before and after a `list` invocation catches any file created,
+    before and after a `list` invocation catches any entry created,
     modified, or deleted under the workspace, including content changes
     that leave the file set unchanged (spec: Read-Only, No Structured
-    Output, Scenario "No mutation on any run")."""
-    return {
-        str(path.relative_to(root)): (
-            path.read_bytes(),
-            path.stat().st_mtime_ns,
-        )
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
+    Output, Scenario "No mutation on any run") -- EXCEPT the contents of
+    `.git`, which the shared helper excludes. The `.git` node itself is
+    still compared, so a `list` that created a repository is still caught;
+    what is no longer caught is a `list` that wrote INSIDE an existing one.
+
+    Delegates to the shared helper (#281) instead of walking the workspace
+    itself. The local copy excluded nothing, so it compared git's private
+    state around a `list` invocation that ACTUALLY RUNS -- a stronger
+    exposure than the refusal paths #281 started from, since those return
+    before touching git at all.
+    """
+    return snapshot_with_mtime(root)
 
 
 def _write_doc(

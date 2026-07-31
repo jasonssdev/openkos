@@ -25,6 +25,7 @@ from typer.testing import CliRunner
 from openkos.cli.main import app
 from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL
 from openkos.llm.ollama import InstalledModel, OllamaError, OllamaUnavailable
+from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
 
@@ -60,16 +61,6 @@ def _fake_ollama_client(
             return [InstalledModel(tag=tag, family=None) for tag in (installed or [])]
 
     return _FakeOllamaClient
-
-
-def _snapshot_entry(path: Path) -> bytes | None:
-    if path.is_dir():
-        return None
-    return path.read_bytes()
-
-
-def _snapshot(root: Path) -> dict[Path, bytes | None]:
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def test_doctor_all_healthy_exits_zero(

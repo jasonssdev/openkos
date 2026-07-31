@@ -2,9 +2,10 @@
 (`openkos.cli.next_action`): a read-only, deterministic pointer to the one
 runnable command worth running next over the current bundle.
 
-Follows `test_status.py`'s pattern exactly: `_init_workspace` and
-`_snapshot`/`_snapshot_entry` are copied verbatim (`test_status.py:26-40`),
-and every cost-contract assertion patches a PUBLIC module attribute via
+Follows `test_status.py`'s pattern exactly: `_init_workspace` is copied
+verbatim, the workspace snapshot comes from the shared
+`tests.unit.cli.conftest` helper (#281 replaced the per-module copies), and
+every cost-contract assertion patches a PUBLIC module attribute via
 `monkeypatch.setattr` -- never a private internal, never an rglob counter
 (design's Testing Strategy).
 """
@@ -21,19 +22,9 @@ from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM
 from openkos.resolution import CandidateGroup
 from openkos.resolution import find_exact_title_groups as _real_find_exact_title_groups
+from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
-
-
-def _snapshot_entry(path: Path) -> bytes | None:
-    if path.is_dir():
-        return None
-    return path.read_bytes()
-
-
-def _snapshot(root: Path) -> dict[Path, bytes | None]:
-    """Capture every entry under `root`, keyed by relative path."""
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
