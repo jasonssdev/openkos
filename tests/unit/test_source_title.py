@@ -291,6 +291,86 @@ class TestForbiddenUnicodeControlCharacters:
 
     @pytest.mark.parametrize(
         "char",
+        ["\U000e0100", "\U000e0150", "\U000e01ef"],
+    )
+    def test_variation_selectors_supplement_are_rejected(self, char: str) -> None:
+        """`U+E0100`-`U+E01EF` is the Tag block's sibling vector: same astral
+        plane, same invisibility, and `category` `Mn` with `str.isspace()`
+        `False`, so normalization's whitespace collapse does not remove them
+        either. These 240 code points are 240 of the 256 symbols the
+        published variation-selector smuggling technique uses to encode one
+        arbitrary byte per selector, and they chain after any visible
+        character, so a byte stream can ride inside a title that renders as
+        clean text -- straight into the same unescaped sinks (`index.md`
+        and `log.md` bullet labels, `openkos list`, and the prompt
+        interpolation in `extraction/concept.py`) the Tag block was
+        rejected to protect.
+
+        Parametrized on the block's exact first code point, a middle one, and
+        its exact last one, for the reason the Tag block test states: a case
+        one code point inside the range cannot detect a range endpoint that
+        is one code point short. The opposite error -- a range written too
+        WIDE -- is pinned separately by
+        `test_unassigned_astral_neighbours_stay_admitted`."""
+        raw = f"Title with {char} inside"
+
+        assert source_title.derive_source_title(raw) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Warning \u26a0\ufe0f sign",
+            "Text style \u26a0\ufe0e sign",
+            "Variant \ufe00 selector",
+        ],
+        ids=["emoji-presentation", "text-presentation", "vs1"],
+    )
+    def test_variation_selectors_bmp_are_deliberately_not_rejected(
+        self, text: str
+    ) -> None:
+        """`U+FE00`-`U+FE0F` is NOT rejected, and that omission is a decision
+        rather than an oversight (issue #296).
+
+        `U+FE0F` VARIATION SELECTOR-16 is a component of ordinary emoji
+        presentation sequences -- `\u26a0\ufe0f` is one -- so rejecting the
+        BMP range would send any title containing a common emoji back to the
+        filename slug, regressing exactly the ordinary non-ASCII content
+        `_FORBIDDEN_IN_TITLE`'s docstring commits to keeping valid.
+
+        These 16 code points and the supplement's 240 are the two halves of
+        one 256-symbol byte-encoding alphabet: this range carries byte
+        values 0-15 and the supplement carries 16-255. Rejecting the
+        supplement deletes 240 of the 256 symbols at no cost to ordinary
+        documents; rejecting this range too would cost the corpus, and
+        unlike the supplement it cannot be separated from legitimate text.
+
+        This test exists so that a later "be consistent, reject both ranges"
+        change fails here with the reason attached instead of silently
+        regressing the corpus."""
+        assert source_title.derive_source_title(text) == text
+
+    @pytest.mark.parametrize(
+        "char",
+        ["\U000e0080", "\U000e00ff", "\U000e01f0"],
+    )
+    def test_unassigned_astral_neighbours_stay_admitted(self, char: str) -> None:
+        """The two rejected astral ranges are `U+E0000`-`U+E007F` and
+        `U+E0100`-`U+E01EF`, and the code points BETWEEN and AFTER them are
+        deliberately admitted -- `openspec/specs/ingestion/spec.md` states
+        the rejected set exhaustively, so admitting these is normative
+        behavior, not an accident.
+
+        Its sibling test above pins the ranges against being written one code
+        point too SHORT; nothing pinned them against being written too WIDE.
+        A single sloppy `U+E0000`-`U+E01EF` range, or an upper bound of
+        `U+E01FF`, would reject these three, contradict the spec, and still
+        pass every other test in this file. That is the gap this closes."""
+        raw = f"Title with {char} inside"
+
+        assert source_title.derive_source_title(raw) == f"Title with {char} inside"
+
+    @pytest.mark.parametrize(
+        "char",
         ["\u2028", "\u2029"],  # LINE SEPARATOR, PARAGRAPH SEPARATOR
     )
     def test_line_and_paragraph_separators_are_already_stripped_by_normalization(

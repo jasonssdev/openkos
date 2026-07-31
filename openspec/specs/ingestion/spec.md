@@ -173,11 +173,19 @@ direction-altering character: the Arabic letter mark `U+061C`, the
 zero-width and directional marks `U+200B`-`U+200F`, the bidirectional
 embedding and override controls `U+202A`-`U+202E`, the bidirectional
 isolates `U+2066`-`U+2069`, the line and paragraph separators
-`U+2028`-`U+2029`, the byte-order mark `U+FEFF`, or any character in the
-Unicode Tag block `U+E0000`-`U+E007F`. These reach the terminal and the
+`U+2028`-`U+2029`, the byte-order mark `U+FEFF`, any character in the
+Unicode Tag block `U+E0000`-`U+E007F`, or any character in the Variation
+Selectors Supplement `U+E0100`-`U+E01EF`. These reach the terminal and the
 markdown link labels unescaped; `U+202E` in particular can visually
-reorder the text that follows it, and the Tag block can carry an
-invisible copy of ASCII into the extraction prompt.
+reorder the text that follows it, and both the Tag block and the Variation
+Selectors Supplement can carry an invisible payload into the extraction
+prompt alongside text that renders as clean.
+
+The Variation Selectors in the BMP, `U+FE00`-`U+FE0F`, MUST NOT be
+rejected, even though they are invisible and share the Variation Selectors
+Supplement's Unicode general category. `U+FE0F` is a component of ordinary
+emoji presentation sequences, so rejecting the range would send any title
+containing a common emoji back to the filename fallback (3).
 
 Ordinary non-ASCII text MUST NOT be rejected. Accented letters, CJK
 characters, emoji and typographic dashes are all valid title content.
