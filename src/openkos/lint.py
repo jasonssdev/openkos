@@ -621,6 +621,25 @@ def check_unextracted(docs: list[LintDoc]) -> list[LintFinding]:
     The finding's detail names the literal retry command built from the
     Source's own `resource` frontmatter value (`openkos ingest <resource>`),
     falling back to a generic re-ingest hint when `resource` is empty.
+
+    THAT COMMAND IS READ BY ANOTHER MODULE (issue #278). `openkos next`
+    prints tier 2's recommendation by scanning this detail's backtick spans
+    and taking the one that is `openkos ingest <path>`
+    (`cli/next_action.py`, `_command_from_detail`). The backticks are a data
+    boundary here, not decoration.
+
+    What that permits and what it forbids, precisely:
+
+    - Rewording the prose around the command is SAFE, including adding
+      backticked text before it -- the extractor scans every span and
+      matches by verb, never by position.
+    - Splitting the command across spans (`` `openkos` `ingest x` ``) or
+      dropping its backticks BREAKS tier 2, and breaks it SILENTLY: `next`
+      falls through and prints a lower-ranked recommendation instead. No
+      exception, no failing assertion in this module.
+
+    `tests/unit/test_lint_command_spans.py` pins the span from this side so
+    the break surfaces here rather than only in `test_next.py`.
     """
     findings: list[LintFinding] = []
     for doc in docs:
@@ -687,6 +706,21 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
     mistyped or since-removed id is silent in every check. It may still sit
     below its Source. Surfacing it needs its own finding and is tracked as a
     follow-up rather than smuggled into this change's two categories.
+
+    BOTH DETAILS ARE READ BY ANOTHER MODULE (issue #278). `openkos next`
+    prints tier 3's recommendation by scanning the `below-source-sensitivity`
+    detail's backtick spans for `openkos backfill-sensitivity`
+    (`cli/next_action.py`, `_command_from_detail`), so keeping that command
+    inside ONE span is a contract, not a style choice -- splitting it or
+    dropping its backticks stops tier 3 firing, silently.
+
+    The `multi-source-uncovered` detail names the same command only to RULE
+    IT OUT, and `next` is protected from it by filtering on `finding.kind`
+    BEFORE extracting anything -- not by the sentence's negation, which no
+    regex reads. So the safety of that wording rests entirely on the kind
+    filter: this detail may keep naming the command it excludes, but a NEW
+    finding kind whose detail names a command it does not endorse would
+    need the same explicit gate on the consuming side.
     """
     docs_by_id = {doc.identity: doc for doc in docs}
     provenance_by_id = {
