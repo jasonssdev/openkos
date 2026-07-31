@@ -4,7 +4,15 @@
 **Archived to**: `openspec/changes/archive/2026-07-29-backfill-sensitivity/`
 **Archive date**: 2026-07-29
 **Branch**: feat/backfill-sensitivity-verb, HEAD 02b913c
-**All artifacts included**: proposal.md, design.md, apply-progress.md, tasks.md, verify-report.md, explore.md, specs/{lint,sensitivity-backfill,status,sensitivity-config}/spec.md
+**All artifacts included**: proposal.md, design.md, apply-progress.md, tasks.md, verify-report.md, verify-report-superseded.md, explore.md, specs/{lint,sensitivity-backfill,status,sensitivity-config}/spec.md
+
+`verify-report.md` is the terminal verification record and the one this report
+cites throughout. `verify-report-superseded.md` is an earlier pass, recovered
+later from a work-in-progress stash and added after this report was first
+written. It is not authoritative, and it is kept because it carries evidence
+this record does not — that evidence has not been exhaustively catalogued, so
+do not treat any summary of it as complete. Its own opening note lists the
+examples found so far.
 
 ## Artifact Observation IDs (for Engram traceability)
 
@@ -12,7 +20,8 @@
 - Spec: #2143
 - Design: #2144
 - Tasks: #2146
-- Verify-report: #2150
+- Verify-report (terminal, `verify-report.md`): #2150
+- Verify-report (superseded pass): not persisted to Engram; recovered from a stash after this report was written
 
 ## Change Summary
 
@@ -96,4 +105,4 @@ The change has been fully planned (proposal), specified (4 delta specs), designe
 
 ---
 
-**Archive summary**: All artifacts preserved in `/Users/jasonssdev/Dev/Projects/openkos/openspec/changes/archive/2026-07-29-backfill-sensitivity/` and persisted to Engram under topic key `sdd/backfill-sensitivity/archive-report` for traceability.
+**Archive summary**: All artifacts listed at the top of this report are preserved in `/Users/jasonssdev/Dev/Projects/openkos/openspec/changes/archive/2026-07-29-backfill-sensitivity/` and persisted to Engram under topic key `sdd/backfill-sensitivity/archive-report` for traceability.
