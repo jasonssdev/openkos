@@ -1139,17 +1139,25 @@ def test_check_unextracted_declination_names_the_rename_repair() -> None:
     assert "re-ingest" in detail
 
 
-def test_check_unextracted_declines_the_command_for_a_newline_resource() -> None:
-    """A newline is as legal in a POSIX filename as a backtick is, and it
+@pytest.mark.parametrize("break_char", ["\n", "\r"], ids=["lf", "cr"])
+def test_check_unextracted_declines_the_command_for_a_line_break_resource(
+    break_char: str,
+) -> None:
+    """A line break is as legal in a POSIX filename as a backtick is, and it
     breaks the same contract from the other side: `LintFinding.detail` is a
     single line, so an embedded CR/LF truncates whatever a reader scans out
-    of it. It takes the same declining branch, not the ordinary one."""
+    of it. It takes the same declining branch, not the ordinary one.
+
+    BOTH arms are exercised because `_UNSPELLABLE_IN_SPAN` is a
+    THREE-character contract and a test suite that proves only two of them
+    lets the third be dropped from the character class in silence -- a bare
+    CR is a real filename on any POSIX system, not a curiosity."""
     docs = [
         _doc(
             "sources/notes",
             "Body.",
             extraction_status="failed",
-            resource="raw/notes\ntxt",
+            resource=f"raw/notes{break_char}txt",
         )
     ]
 
@@ -1157,7 +1165,7 @@ def test_check_unextracted_declines_the_command_for_a_newline_resource() -> None
 
     assert _ingest_spans_with_an_argument(detail) == []
     assert "cannot be spelled inside a command" in detail
-    assert "\n" not in detail
+    assert break_char not in detail
 
 
 def test_check_unextracted_signature_has_no_bundle_dir_param() -> None:
