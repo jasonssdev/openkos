@@ -19,7 +19,7 @@ Chain strategy: pending
 ### Suggested Work Units
 
 | Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
-|------|------|-----------|----------------------|-----------------|-------------------|
+|------|------|-----------|----------------------|-----------------|---|
 | 1 | Pure `source_title.py` module + full branch-covering unit suite, no wiring into `ingest` yet | PR 1 | `uv run pytest tests/unit/test_source_title.py` | N/A — pure function, no CLI/filesystem harness needed | Delete `source_title.py` and `test_source_title.py`; zero blast radius, nothing imports it yet |
 | 2 | Wire `derive_source_title` into `ingest`, integration tests, fixture-churn resolution, final gate | PR 2 | `uv run pytest tests/unit/cli/test_ingest.py` | `uv run openkos ingest examples/good-life-demo/raw/*.txt` (manual smoke, real title observed in `index.md`/`log.md`) | Revert `main.py` diff at `:1684-1695`; no backfill exists so no other file changes |
 
