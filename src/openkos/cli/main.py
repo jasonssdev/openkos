@@ -20,7 +20,7 @@ from rich.console import Console
 
 from openkos import config, fsio, source_title
 from openkos import lint as lint_check
-from openkos.bundle import bundle, listing
+from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import index as bundle_index
 from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
@@ -1064,7 +1064,6 @@ def _run_adjudicate_apply_same(
 
 
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
-_TITLE_SEPARATOR_RE = re.compile(r"[-_]+")
 
 
 def _slugify(stem: str) -> str:
@@ -1081,8 +1080,13 @@ def _slugify(stem: str) -> str:
 
 
 def _titleize(stem: str) -> str:
-    """Turn a filename stem into a human-readable title: `-`/`_` -> spaces."""
-    return _TITLE_SEPARATOR_RE.sub(" ", stem).strip()
+    """Turn a filename stem into a human-readable title: `-`/`_` -> spaces.
+
+    Delegates to `bundle.source_titles.titleize` (design D1), promoted
+    there so `ingest` and `backfill-source-titles` share exactly ONE
+    implementation.
+    """
+    return source_titles.titleize(stem)
 
 
 # `_TYPE_TO_LINK_DIR`/`_TYPE_TO_SECTION` are now derived from
