@@ -138,7 +138,7 @@ forbidden character).
 ### Call-site wiring in `ingest`
 
 Delete `title = _titleize(src.stem)` at `main.py:1684`. Insert, immediately after the
-`except UnicodeDecodeError: raw_content = None` block ends (`main.py:1695`), before the
+`except UnicodeDecodeError: raw_content = None` block ends (`main.py:1689`), before the
 `if raw_content is None:` description branch:
 
 ```python
@@ -146,7 +146,7 @@ derived = None if raw_content is None else source_title.derive_source_title(raw_
 title = derived if derived is not None else _titleize(src.stem)
 ```
 
-The valid insertion interval is exactly **(`:1695`, `:1753`)**: it needs `raw_content` (decoded at
+The valid insertion interval is exactly **(`:1689`, `:1753`)**: it needs `raw_content` (decoded at
 `:1689`) and must precede `_build_source_document`, whose closure captures `title` and is first
 called at `:1753`. `now` and `resource` (`:1683`, `:1685`) stay where they are.
 
@@ -174,7 +174,7 @@ sequenceDiagram
 
     CLI->>FS: read_text(utf-8)  (:1689)
     alt UnicodeDecodeError
-        FS-->>CLI: raw_content = None  (:1695)
+        FS-->>CLI: raw_content = None  (:1689)
         CLI->>CLI: title = _titleize(src.stem)
     else decoded
         FS-->>CLI: raw_content: str
