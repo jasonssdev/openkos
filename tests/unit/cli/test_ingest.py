@@ -316,6 +316,15 @@ def test_description_is_honest_no_extraction_claim(
     (D-honesty, null-compiler scope)."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
+    # Fixture-churn boundary (source-title-from-heading): this bare
+    # `"content"` fixture is now a content-derived title ("content", a
+    # single title-plausible line with no trailing blank issue since it is
+    # also EOF) rather than the slug ("notes"), while the neighboring
+    # `test_successful_ingest_of_valid_path` above keeps its slug title
+    # because `"Some raw notes."` ends in `.` and fails the title-plausible
+    # predicate's terminal-punctuation clause. Neither test asserts on the
+    # title, so both pass unchanged -- the split is the predicate working
+    # as designed, not an inconsistency between adjacent fixtures.
     source.write_text("content", encoding="utf-8")
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
@@ -3818,3 +3827,276 @@ def test_confidential_skip_message_admits_embeddings_still_ran(
     assert "skipping concept extraction" in result.stderr
     assert fake.embed_calls, "embeddings should still be computed"
     assert "added to the embedding index" in result.stderr
+
+
+# --- Title derivation from content (source-title-from-heading) -------------
+#
+# `title` is derived from `raw_content` via `source_title.derive_source_title`
+# and feeds the frontmatter `title`, the Source document's own `# ` heading,
+# the `index.md` bullet label, and the `log.md` entry label -- one assignment,
+# several consumers (design: "Call-site wiring in `ingest`").
+
+
+def _read_source(tmp_path: Path, slug: str) -> tuple[dict[str, object], str]:
+    concept_path = tmp_path / "bundle" / "sources" / f"{slug}.md"
+    return okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+
+
+def test_first_atx_h1_becomes_the_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first non-fenced `# ` line becomes the title everywhere: frontmatter
+    `title`, the Source's own `# ` heading, the `index.md` bullet, and the
+    `log.md` entry (spec: "First ATX H1 becomes the title")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "# Introduction to Stoicism\n\nSome body text.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, body = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "Introduction to Stoicism"
+    assert "# Introduction to Stoicism" in body.splitlines()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "[Introduction to Stoicism]" in index_text
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert "[Introduction to Stoicism](/sources/notes.md)" in log_text
+
+
+def test_h1_inside_a_fenced_block_is_ignored_later_real_h1_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An H1 fenced inside a code block does not become the title; the
+    first real H1 outside any fence wins (spec: "An H1 inside a fenced code
+    block is ignored")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "```\n# Not a title\n```\n\n# Chapter One\n\nBody text.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "Chapter One"
+
+
+def test_no_h1_title_plausible_first_line_is_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no H1 anywhere, a title-plausible first line (followed by a
+    blank line) becomes the title (spec: "No H1, a title-plausible first
+    line is used")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "Call with Maria Salazar — 2026-07-14\n\nMeeting notes follow.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "Call with Maria Salazar — 2026-07-14"
+
+
+def test_wrapped_prose_first_line_falls_back_to_slug_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first line that is the start of a wrapped prose paragraph (no
+    blank line immediately after it) is not title-plausible; the title
+    falls back to `_titleize(src.stem)` (spec: "Wrapped prose first line is
+    not title-plausible")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "This paragraph keeps going\non the next physical line.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "notes"
+
+
+def test_forbidden_character_candidate_falls_back_to_slug_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate that, after normalization, carries a forbidden character
+    (here `[` and `]`) falls back to the slug title (spec: "A candidate
+    carrying a forbidden character falls back")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("# [Draft] Notes\n\nBody text.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "notes"
+
+
+def test_candidate_over_120_chars_falls_back_to_slug_title_no_truncation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A normalized candidate exceeding 120 characters falls back to the
+    slug title, with no truncation of the over-long candidate (spec: "A
+    candidate over 120 characters falls back")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text(f"# {'A' * 121}\n\nBody text.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "notes"
+
+
+def test_well_formed_frontmatter_block_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed leading `---`...`---` frontmatter block is skipped, its
+    own `title:` key is not read, and a later real H1 becomes the title
+    (spec: "A well-formed leading frontmatter block is skipped")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "---\ntitle: Ignored Frontmatter Title\n---\n\n# Chapter One\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "Chapter One"
+
+
+def test_unclosed_leading_dashes_are_treated_as_content_falls_back_to_slug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A leading `---` with no later closing `---` anywhere in the file is
+    evaluated as an ordinary candidate line, fails the title-plausible
+    predicate (begins with block syntax), and the title falls back to the
+    slug (spec: "An unclosed leading `---` is treated as content")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("---\nno closing dashes anywhere\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "notes"
+
+
+def test_binary_source_never_calls_derivation_keeps_slug_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source that does not decode as UTF-8 never invokes
+    `derive_source_title`; the title stays the slug (spec: "A binary source
+    uses the slug title")."""
+    _init_workspace(tmp_path, monkeypatch)
+    calls: list[str] = []
+
+    def _spy(raw_content: str) -> str:
+        calls.append(raw_content)
+        return "Should Never Appear"
+
+    monkeypatch.setattr("openkos.source_title.derive_source_title", _spy)
+    source = tmp_path / "notes.bin"
+    source.write_bytes(b"\xff\xfe\x00\x01binary content")
+
+    result = runner.invoke(app, ["ingest", "notes.bin", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "notes"
+    assert calls == []
+
+
+def test_empty_source_never_calls_derivation_keeps_slug_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty source (whitespace-only content) yields no usable candidate
+    -- `derive_source_title` returns `None` and the title stays the slug
+    (spec: "An empty source uses the slug title")."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "notes")
+    assert metadata["title"] == "notes"
+
+
+def test_reingest_of_identical_bytes_writes_a_byte_identical_source_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Title derivation is a pure function of `raw_content`: re-ingesting a
+    byte-identical raw file produces a byte-identical Source document,
+    including its derived `title` (spec: "Idempotent Title Derivation" /
+    "Byte-identical re-ingest yields a byte-identical Source"). Reuses the
+    `_FixedClock` monkeypatch pattern (`:2385-2390`) because `timestamp` is
+    refreshed on every re-ingest, and reuses the assertion shape of
+    `test_reingest_with_equal_values_writes_byte_identical_output`
+    (`:2401`) so the diff is limited to the always-refreshing field."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("# Chapter One\n\nBody text.\n", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    before = concept_path.read_text(encoding="utf-8")
+
+    class _FixedClock:
+        @staticmethod
+        def now(tz: object = None) -> datetime:
+            return datetime(2099, 1, 1, tzinfo=UTC)
+
+    monkeypatch.setattr("openkos.cli.main.datetime", _FixedClock)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    after = concept_path.read_text(encoding="utf-8")
+    metadata, _ = okf.load_frontmatter(after)
+    assert metadata["title"] == "Chapter One"
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    changed = [(b, a) for b, a in zip(before_lines, after_lines, strict=True) if b != a]
+    assert changed
+    assert all("timestamp" in b for b, _ in changed)
+
+
+def test_stage_derived_objects_receives_the_final_derived_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_stage_derived_objects(source_title=title)` -- and therefore
+    `extraction/concept.py`'s `SOURCE TITLE:` prompt line -- receives the
+    FINAL derived title (the H1 value), not the slug, when a candidate is
+    accepted (design: "the easy-to-miss one" / task 3.1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("# Introduction to Stoicism\n\nBody text.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert fake.calls, "the extraction prompt should have been sent"
+    user_message = fake.calls[0][1]
+    assert user_message["content"].startswith(
+        "SOURCE TITLE: Introduction to Stoicism\n"
+    )

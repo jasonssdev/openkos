@@ -119,13 +119,20 @@ _FENCE_MARKERS: Final = ("```", "~~~")
 docstring's fence-duplication note: identical bounded duplicate of
 `bundle/links.py`'s `_FENCE_MARKERS`, not an import."""
 
-_BLOCK_SYNTAX_PREFIXES: Final = ("-", "*", ">", "#", "|", *_FENCE_MARKERS)
+_BLOCK_SYNTAX_PREFIXES: Final = ("-", "*", ">", "#", "|")
 """Markdown block-syntax prefixes that disqualify a rule-2 plain line from
 being title-plausible (proposal: "does not begin with markdown block
 syntax"). `#` is included because a line starting with `#` that reaches
 rule 2 was NOT a matched ATX H1 (rule 1 already claims those), so it is
 some other heading level (`##`, `###`, ...) -- still block syntax, not
-plain prose."""
+plain prose.
+
+Deliberately does NOT include `_FENCE_MARKERS`: a fence marker line can
+never reach `_is_title_plausible` in the first place -- the walk in
+`derive_source_title` `continue`s on any fence-opening line before
+`first_body_index` is ever assigned, so a fence marker string is
+unreachable here. Including it would be dead code that implies a rejection
+this predicate never actually performs."""
 
 _TERMINAL_PUNCTUATION: Final = (".", ",", ";", ":")
 """Trailing punctuation that disqualifies a rule-2 plain line: it reads as
