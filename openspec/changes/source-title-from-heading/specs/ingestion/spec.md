@@ -37,7 +37,9 @@ the Source document's own `# ` heading line, the `index.md` bullet label,
 and the `log.md` entry label:
 
 1. The first ATX H1 (`# ` line) that is not inside a fenced code block.
-2. Otherwise, the first **title-plausible** line.
+2. Otherwise, only the first non-blank body line is considered, and only
+   when it is **title-plausible**; derivation does NOT scan further lines
+   looking for one that qualifies.
 3. Otherwise, `_titleize(src.stem)` (today's behavior), unchanged.
 
 A candidate from (1) or (2) MUST be normalized — strip surrounding

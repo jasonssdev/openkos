@@ -18,7 +18,7 @@ from typing import Literal
 import typer
 from rich.console import Console
 
-from openkos import config, fsio
+from openkos import config, fsio, source_title
 from openkos import lint as lint_check
 from openkos.bundle import bundle, listing
 from openkos.bundle import index as bundle_index
@@ -1681,7 +1681,6 @@ def ingest(
         raise typer.Exit(code=1) from exc
 
     now = datetime.now(UTC)
-    title = _titleize(src.stem)
     resource = f"raw/{name}"
 
     try:
@@ -1693,6 +1692,19 @@ def ingest(
             # would otherwise swallow a binary/non-text source and fail the
             # whole ingest, instead of degrading to the binary-fallback body.
             raw_content = None
+        # `title` is derived from the decoded content (issue #248): a
+        # binary/undecodable source MUST NOT call the helper at all, and any
+        # `None` result (no usable candidate) falls back to today's slug
+        # title, unchanged. This single assignment feeds every downstream
+        # consumer -- frontmatter `title`, the Source's own `# ` heading,
+        # `index.md`/`log.md`, and `_stage_derived_objects`'s LLM prompt
+        # (design: "Call-site wiring in `ingest`").
+        derived_title = (
+            None
+            if raw_content is None
+            else source_title.derive_source_title(raw_content)
+        )
+        title = derived_title if derived_title is not None else _titleize(src.stem)
         if raw_content is None:
             description = (
                 f"Raw source imported from '{src}' as {resource}; "

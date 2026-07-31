@@ -33,6 +33,37 @@ class TestFrontmatterEnd:
         assert source_title._frontmatter_end(lines) == 0
 
 
+# --- Frontmatter skipping via the PUBLIC API (review finding: `_frontmatter_end`
+# had no public-API coverage; these drive real leading `---` content through
+# `derive_source_title` itself, not just the private helper) ---------------
+
+
+class TestFrontmatterViaPublicApi:
+    def test_well_formed_frontmatter_block_is_skipped(self) -> None:
+        raw = "---\ntitle: Ignored\n---\n# Chapter One"
+
+        assert source_title.derive_source_title(raw) == "Chapter One"
+
+    def test_unclosed_leading_dashes_are_treated_as_ordinary_content(self) -> None:
+        # No closing `---` anywhere: the leading line is evaluated as a
+        # plain rule (b) candidate and rejected -- it starts with `-`, a
+        # block-syntax prefix -- so the result is `None`, not a title.
+        raw = "---\nnot a real frontmatter block"
+
+        assert source_title.derive_source_title(raw) is None
+
+    def test_frontmatter_probe_is_fence_blind_by_design(self) -> None:
+        # A `---` inside a fenced code block within the leading probe's
+        # bounded scan closes the frontmatter early -- matching
+        # `python-frontmatter`'s own behavior (module docstring: "a named,
+        # accepted inaccuracy, not an oversight"). Here the probe closes at
+        # the fence-internal `---`, so the walk resumes mid-fence and the
+        # real `# Chapter Two` heading is swallowed as fenced content.
+        raw = "---\n```\n---\n```\n# Chapter Two\n"
+
+        assert source_title.derive_source_title(raw) is None
+
+
 # --- Fence tracking inside the single walk (tasks 1.3/1.4) -----------------
 
 
@@ -111,6 +142,24 @@ class TestTitlePlausiblePredicate:
 
     def test_wrapped_prose_first_line_with_no_trailing_blank_is_rejected(self) -> None:
         raw = "This paragraph keeps going\non the next physical line"
+
+        assert source_title.derive_source_title(raw) is None
+
+    def test_hash_prefix_without_atx_space_is_rejected_as_block_syntax(self) -> None:
+        # `##Subheading` (no space after the hashes) does NOT match
+        # `_ATX_H1_RE`, so it reaches rule (b) as a plain candidate -- where
+        # the `#` member of `_BLOCK_SYNTAX_PREFIXES` rejects it. Deleting
+        # that member would let this line through untested.
+        assert source_title.derive_source_title("##Subheading") is None
+
+    def test_only_the_first_non_blank_line_is_considered_no_scanning_ahead(
+        self,
+    ) -> None:
+        # The first non-blank candidate line ends in `.` and is rejected.
+        # A LATER line ("A plausible line") would pass the predicate on its
+        # own, but the walk evaluates only the first candidate and does not
+        # scan forward to find one that qualifies.
+        raw = "First line fails.\n\nA plausible line\n\nbody"
 
         assert source_title.derive_source_title(raw) is None
 
