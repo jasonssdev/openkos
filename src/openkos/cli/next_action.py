@@ -7,6 +7,27 @@ This module owns the whole decision: an ordered tuple of tier callables
 into `next_action()`, and an echo loop over `render_lines()` -- no ranking
 logic lives there.
 
+WHY THE TIERS ARE IN THIS ORDER (issue #277) -- read before reordering
+`_TIERS`. The order is *what blocks other work, then what is missing, then
+what is unsafe, then what is merely ambiguous*:
+
+1. a missing vector index blocks dense retrieval and candidate edges, so
+   every later judgment is made over a starved corpus;
+2. an unextracted source is knowledge absent from the bundle entirely;
+3. a descendant below its Source's sensitivity is present but mislabelled;
+4. a duplicate group is present, correctly labelled, and merely ambiguous.
+
+Absence outranks ambiguity BECAUSE the ambiguity cannot be judged correctly
+over an incomplete set -- adjudicating duplicates before the missing
+documents are in is work that may have to be redone.
+
+Cost order corroborates this ranking (tier 1 is also the cheapest, tier 4
+also the most expensive) but DOES NOT DRIVE IT, and the individual tier
+docstrings below mention only cost because that is what their own
+implementation has to honour. Do not infer from them that the sequence is
+cost-derived and reorder on cost grounds: a cheaper check that answers a
+less blocking question still belongs lower.
+
 `status` (`cli/main.py:5209-5353`) is never touched, imported for its
 control flow, or refactored (design D2): every signal this module reads
 comes from a function `status`/`lint` already ship
@@ -213,8 +234,10 @@ def _command_from_detail(detail: str, verb: str, *, takes_argument: bool) -> str
 
 
 def _tier_missing_vector_index(signals: _BundleSignals) -> NextAction | None:
-    """Rank 1: missing or empty vector index. Cheapest possible check --
-    zero bundle walks."""
+    """Rank 1: missing or empty vector index. Ranked first because it BLOCKS
+    every later judgment, not because it is cheap; that it is also the
+    cheapest check -- zero bundle walks -- is corroboration (see the module
+    docstring's ordering principle before reordering `_TIERS`)."""
     if not signals.vector_store_empty:
         return None
     return NextAction(
@@ -227,7 +250,10 @@ def _tier_missing_vector_index(signals: _BundleSignals) -> NextAction | None:
 
 
 def _tier_unextracted_source(signals: _BundleSignals) -> NextAction | None:
-    """Rank 2: unextracted source (`extraction_status: failed`).
+    """Rank 2: unextracted source (`extraction_status: failed`). Ranked
+    above tier 3 because this is knowledge ABSENT from the bundle, and
+    absence outranks mislabelling: judging a label over a set still missing
+    documents is work that may have to be redone (module docstring).
 
     Trap 2 (`check_unextracted`'s empty-`resource` fallback, `lint.py:632`):
     accepts only a command that carries an argument -- a bare `openkos
@@ -284,7 +310,12 @@ def _tier_unextracted_source(signals: _BundleSignals) -> NextAction | None:
 
 
 def _tier_below_source_sensitivity(signals: _BundleSignals) -> NextAction | None:
-    """Rank 3: below-source-sensitivity descendant.
+    """Rank 3: below-source-sensitivity descendant. Ranked above tier 4
+    because a mislabelled sensitivity is UNSAFE while a duplicate group is
+    only ambiguous, and below tier 2 because the document is at least
+    present (module docstring). Note that tiers 2 and 3 cost the same single
+    shared walk, so cost cannot separate them at all -- this pair is the
+    clearest evidence the order is not cost-derived.
 
     Trap 1 (`multi-source-uncovered`'s negating detail sentence,
     `lint.py:766-768`): filters on `finding.kind` BEFORE ever extracting a
@@ -311,11 +342,15 @@ def _tier_below_source_sensitivity(signals: _BundleSignals) -> NextAction | None
 
 
 def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
-    """Rank 4: pending exact-title duplicate group. Ranked last -- the most
-    expensive check (two further walks) and the only tier requiring human
-    judgment before any write. Reports only the count of the finding that
-    fired, never a count of findings `next` never walked far enough to see
-    (D5)."""
+    """Rank 4: pending exact-title duplicate group. Ranked last because it is
+    merely AMBIGUOUS -- everything it concerns is present and correctly
+    labelled, and the ambiguity cannot be judged well over an incomplete set
+    anyway (module docstring's ordering principle). That it is also the most
+    expensive check (two further walks), and the only tier requiring human
+    judgment before any write, corroborates the position without setting it.
+
+    Reports only the count of the finding that fired, never a count of
+    findings `next` never walked far enough to see (D5)."""
     groups = signals.exact_title_groups
     if not groups:
         return None
