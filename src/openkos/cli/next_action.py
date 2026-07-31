@@ -80,6 +80,12 @@ class NextResult:
     to prevent."""
 
     action: NextAction | None
+    declinations: tuple[str, ...] = ()
+    """Real findings this run saw and deliberately refused to recommend,
+    because no runnable command could be derived from them (#276). Declining
+    is correct -- a command that does not run is worse than none -- but
+    declining silently is not: the finding is genuine and would otherwise
+    leave no trace on any output at all."""
     skip_notices: tuple[str, ...] = ()
     """Only what this run ACTUALLY observed, never what a further walk
     might have found. A run whose first tier fires without paying the docs
@@ -96,7 +102,23 @@ class _BundleSignals:
         self._layout = layout
         self._docs: list[lint_check.LintDoc] | None = None
         self._skip_notices: tuple[str, ...] = ()
+        self._declinations: list[str] = []
         self._exact_title_groups: list[CandidateGroup] | None = None
+
+    def record_declination(self, notice: str) -> None:
+        """Note a real finding this run deliberately refused to turn into a
+        recommendation (#276). Kept on the signals object rather than
+        threaded through the tier return type so `Tier`'s pinned signature
+        -- the structural guard that a tier receives only signals, never a
+        directory -- stays exactly as it is."""
+        self._declinations.append(notice)
+
+    @property
+    def observed_declinations(self) -> tuple[str, ...]:
+        """Findings seen and declined, in evaluation order. Like
+        `observed_skip_notices`, this reports only what an already-paid
+        walk produced and never triggers one."""
+        return tuple(self._declinations)
 
     @property
     def vector_store_empty(self) -> bool:
@@ -213,16 +235,33 @@ def _tier_unextracted_source(signals: _BundleSignals) -> NextAction | None:
     command is corroborated against the document's own `resource`: it is
     printed only when it is exactly the verb plus that value. The detail
     still supplies the command; the document decides whether the span the
-    prose yielded was the whole of it."""
+    prose yielded was the whole of it.
+
+    Issue #276: every one of those declinations is a REAL failed extraction,
+    and dropping it silently leaves the user no trace of it at all. Each is
+    therefore recorded, naming the document and which of the two repairs it
+    needs -- record the missing path, or rename a file whose name cannot be
+    spelled as an argument. The declination names the DOCUMENT and never
+    echoes the raw `resource` back: reprinting the value tier 2 just refused
+    to trust would reintroduce #274's defect one line lower."""
     docs_by_identity = {doc.identity: doc for doc in signals.docs}
     for finding in lint_check.check_unextracted(signals.docs):
         doc = docs_by_identity.get(finding.concept_id)
         if doc is None or not doc.resource:
-            continue  # bare `openkos ingest`, no argument -- trap 2
+            # bare `openkos ingest`, no argument -- trap 2
+            signals.record_declination(
+                f"{finding.concept_id}: extraction failed, but the document "
+                "records no resource to re-ingest"
+            )
+            continue
         command = _command_from_detail(
             finding.detail, _INGEST_VERB, takes_argument=True
         )
         if command != f"{_INGEST_VERB} {doc.resource}":
+            signals.record_declination(
+                f"{finding.concept_id}: extraction failed, but its resource "
+                "is not a runnable argument -- rename the file and re-ingest"
+            )
             continue
         return NextAction(
             command=command,
@@ -302,7 +341,25 @@ def next_action(layout: config.WorkspaceLayout) -> NextResult:
         action = tier(signals)
         if action is not None:
             break
-    return NextResult(action=action, skip_notices=signals.observed_skip_notices)
+    return NextResult(
+        action=action,
+        declinations=signals.observed_declinations,
+        skip_notices=signals.observed_skip_notices,
+    )
+
+
+def _declination_lines(declinations: tuple[str, ...]) -> list[str]:
+    """Name every finding the run refused to act on. Deliberately carries no
+    count: `No Count of Unseen Findings` bans a numeral standing in for
+    findings `next` never enumerated, and these are enumerated in full --
+    but a header counting them would add nothing the list does not already
+    say, so there is no reason to sail close to that line."""
+    if not declinations:
+        return []
+    return [
+        "Seen but not recommended -- no runnable command could be derived:",
+        *(f"  {declination}" for declination in declinations),
+    ]
 
 
 def _skip_notice_lines(notices: tuple[str, ...]) -> list[str]:
@@ -330,6 +387,7 @@ def render_lines(result: NextResult) -> list[str]:
     else:
         lines.append(f"Run: {result.action.command}")
         lines.append(result.action.reason)
+    lines.extend(_declination_lines(result.declinations))
     lines.extend(_skip_notice_lines(result.skip_notices))
     lines.append(_STATUS_POINTER)
     return lines

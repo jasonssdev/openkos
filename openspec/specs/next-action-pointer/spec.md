@@ -184,6 +184,99 @@ reindex`. Tier 4's command MUST be exactly `openkos duplicates`.
 - WHEN `openkos next` runs
 - THEN the printed command is exactly `openkos duplicates`
 
+### Requirement: A Declined Finding Is Named, Never Silently Dropped
+
+A finding whose own detail yields no runnable command MUST NOT be
+recommended: printing a command that cannot be run as printed is worse than
+printing none. Tier 2 therefore declines when the Source records no
+`resource`, and when the command extracted from the finding's detail is not
+exactly `openkos ingest` followed by that Source's own `resource` value.
+
+Each such declination MUST be named in the output, on every path, whether or
+not a lower-ranked tier subsequently fires. The declination MUST identify
+the document and distinguish which repair it needs — a missing `resource`
+versus one that cannot be spelled as a runnable argument — and MUST NOT
+reprint the raw `resource` value, which is the very value the declination
+established cannot be trusted in generated prose.
+
+#### Scenario: A failed extraction recording no resource is named
+
+- GIVEN a bundle with a present vector index and a Source with
+  `extraction_status: failed` and no `resource`
+- WHEN `openkos next` runs
+- THEN it recommends no `openkos ingest` command, and names the document as
+  seen but not recommended because it records no resource
+
+#### Scenario: A failed extraction whose resource is unusable is named
+
+- GIVEN a bundle with a present vector index and a Source with
+  `extraction_status: failed` whose `resource` cannot be spelled as a
+  runnable argument
+- WHEN `openkos next` runs
+- THEN it recommends no `openkos ingest` command, names the document as
+  seen but not recommended because its resource is not a runnable argument,
+  and its output does not contain the raw `resource` value
+
+#### Scenario: A declination is named even when a lower tier fires
+
+- GIVEN a bundle containing both a declined unextracted-source finding and
+  an exact-title duplicate group
+- WHEN `openkos next` runs
+- THEN it recommends `openkos duplicates` and still names the declined
+  document
+
+#### Scenario: A runnable finding produces no declination
+
+- GIVEN a bundle with a Source with `extraction_status: failed` and an
+  intact `resource`
+- WHEN `openkos next` runs
+- THEN it recommends that Source's own retry command and names no
+  declination
+
+### Requirement: A Partially Read Bundle Is Never Reported as Fully Read
+
+A document that could not be read, or whose frontmatter could not be parsed,
+is excluded from the scan entirely and exists only as a skip notice. WHEN
+such notices were produced by a walk this run already performed,
+`openkos next` MUST name every skipped document by path, on every path,
+whether or not a ranked tier fired — an action derived from a knowingly
+incomplete document set carries the same caveat as no action at all.
+
+Reporting these notices MUST NOT itself trigger a bundle walk: a run whose
+first tier fires without reading documents observed no notices and MUST NOT
+claim otherwise, so the cost contract above is unaffected.
+
+#### Scenario: Skipped documents are named when no tier fires
+
+- GIVEN a bundle with a present vector index, no ranked findings, and a
+  document whose frontmatter cannot be parsed
+- WHEN `openkos next` runs
+- THEN it prints the no-runnable-action line and names the skipped document
+  by path
+
+#### Scenario: Skipped documents are named when a tier fires
+
+- GIVEN a bundle with a present vector index, a Source with
+  `extraction_status: failed` and an intact `resource`, and a document whose
+  frontmatter cannot be parsed
+- WHEN `openkos next` runs
+- THEN it recommends that Source's retry command and also names the skipped
+  document by path
+
+#### Scenario: Every skipped document is named, not only the first
+
+- GIVEN a bundle containing more than one unparseable document
+- WHEN `openkos next` runs
+- THEN every one of them is named by path
+
+#### Scenario: Stopping at tier 1 names no skipped documents
+
+- GIVEN a bundle whose vector index is missing and which also contains an
+  unparseable document
+- WHEN `openkos next` runs
+- THEN it recommends `openkos reindex`, performs zero bundle walks, and
+  names no skipped document
+
 ### Requirement: No-Runnable-Action Output Never Claims Cleanliness
 
 WHEN none of the four ranked tiers produces a finding, `openkos next` MUST
@@ -193,6 +286,11 @@ nothing needing attention. This output MUST be the same regardless of
 whether commandless findings (conformance, dangling,
 multi-source-uncovered) exist in the bundle, because `next`'s short-circuit
 means it never proves their absence.
+
+Declinations and skip notices are NOT commandless findings and are exempt
+from that sameness rule: both name specific documents this run actually
+observed, so withholding them to keep the output uniform would trade an
+honest report for a tidy one.
 
 #### Scenario: No ranked tier fires on a truly empty bundle
 
@@ -217,6 +315,13 @@ means it never proves their absence.
 `openkos next` MUST NOT print any numeral representing a count of findings
 it did not rank or did not walk far enough to discover, on any path,
 including the path that reaches tier 4 and has already paid for every walk.
+
+What this bans is a numeral standing IN PLACE OF items the output never
+enumerates — "3 other items pending" over a list of nothing. A count
+attached to a full enumeration is not that, and is permitted: tier 4's own
+group count describes the finding that fired, and the skip-notice count is
+immediately followed by every skipped document named by path. The
+distinction is whether the reader can act on what the numeral refers to.
 
 #### Scenario: No count appears when a tier fires
 

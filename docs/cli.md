@@ -328,6 +328,8 @@ A document that could not be read or whose frontmatter would not parse is exclud
 
 Tier 2's `openkos ingest <resource>` is read out of the finding's own retry text and then corroborated against the Source's `resource` frontmatter. A `resource` carrying a backtick would otherwise close that text's code span early and leave behind a real command naming the *wrong* path; when the two do not match exactly, tier 2 declines and evaluation continues.
 
+A declined finding is still a real failed extraction, so it is named rather than dropped — on every path, whether or not a lower tier goes on to fire. Each declination identifies the document and which of the two repairs it needs (the Source records no `resource` at all, or its `resource` cannot be spelled as a runnable argument and the file needs renaming). It never reprints the `resource` value itself: that is precisely the value the declination established cannot be trusted in generated prose.
+
 Refuses (exit 1) outside an initialized workspace, using the same shared workspace check `status` uses. Every other workspace state, including a freshly initialized, empty bundle, exits 0. No `--json` or other structured output mode is offered, no file under the workspace is ever created, modified, or deleted, and no model backend is ever constructed — the answer is a pure function of files already on disk.
 
 ### `openkos list [TYPE]`
