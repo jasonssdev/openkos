@@ -19,22 +19,13 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos.bundle import index as bundle_index
 from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
 
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
-
-
-def _snapshot_entry(path: Path) -> tuple[bytes, int] | None:
-    if path.is_dir():
-        return None
-    return path.read_bytes(), path.stat().st_mtime_ns
-
-
-def _snapshot(root: Path) -> dict[Path, tuple[bytes, int] | None]:
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def _bundle_bytes_snapshot(root: Path) -> dict[Path, bytes]:

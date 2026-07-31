@@ -30,6 +30,7 @@ from openkos.graph.base import Edge
 from openkos.graph.proximity import ProximityPair
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.edge_typing import EdgeSuggestion
+from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
 
@@ -52,19 +53,6 @@ def _break_os_walk(monkeypatch: pytest.MonkeyPatch) -> None:
         yield from original_walk(top, topdown, onerror, followlinks)
 
     monkeypatch.setattr(os, "walk", fake_walk)
-
-
-def _snapshot_entry(path: Path) -> tuple[bytes, int] | None:
-    if path.is_dir():
-        return None
-    return path.read_bytes(), path.stat().st_mtime_ns
-
-
-def _snapshot(root: Path) -> dict[Path, tuple[bytes, int] | None]:
-    """Capture every entry under `root`, keyed by relative path, as its byte
-    contents and `st_mtime_ns` -- so a rewrite-with-identical-bytes (touch)
-    regression is caught, not just a content change."""
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -19,19 +19,9 @@ from openkos import lint as lint_check
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
+from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
-
-
-def _snapshot_entry(path: Path) -> bytes | None:
-    if path.is_dir():
-        return None
-    return path.read_bytes()
-
-
-def _snapshot(root: Path) -> dict[Path, bytes | None]:
-    """Capture every entry under `root`, keyed by relative path."""
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

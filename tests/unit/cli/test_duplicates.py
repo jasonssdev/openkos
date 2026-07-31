@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.resolution.candidates import CandidateGroup, Tier
+from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
 
@@ -42,19 +43,6 @@ def test_format_group_tally_mixed_plural() -> None:
     """Mixed HIGH/LOW counts pluralize and sum correctly (spec: Multiple
     mixed exact/near groups)."""
     assert main._format_group_tally(2, 3) == "5 candidate groups (2 exact, 3 near)"
-
-
-def _snapshot_entry(path: Path) -> tuple[bytes, int] | None:
-    if path.is_dir():
-        return None
-    return path.read_bytes(), path.stat().st_mtime_ns
-
-
-def _snapshot(root: Path) -> dict[Path, tuple[bytes, int] | None]:
-    """Capture every entry under `root`, keyed by relative path, as its byte
-    contents and `st_mtime_ns` -- so a rewrite-with-identical-bytes (touch)
-    regression is caught, not just a content change."""
-    return {path.relative_to(root): _snapshot_entry(path) for path in root.rglob("*")}
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
