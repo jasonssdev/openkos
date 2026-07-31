@@ -34,6 +34,23 @@ as its failure mode:
   dropping its backticks IS the real break, and it is silent: `next` falls
   through and prints a lower-ranked recommendation. That mutation fails the
   first test below, and seven in `test_next.py`.
+
+There is a SECOND class of break, and it is worse, because the span it
+produces is perfectly well-formed (#274/#285). These details interpolate
+values the bundle's own documents control -- a Source's `resource` is the
+raw, unsanitised basename `ingest` copied to disk (see
+`okf.build_source_concept`'s contract), and a backtick is a legal POSIX
+filename character. A backtick inside the value closes the span early, so
+what a scanner reads out is a complete, runnable `openkos ingest <plain
+path>` naming a DIFFERENT file than the finding is about. Nothing here is
+malformed; the span is simply not the whole command.
+
+That guard belongs on this side too. `next` corroborates the extracted
+command against the document's own `resource` and declines (`test_next.py`),
+but that defence protects exactly one consumer. The producing module is
+where the truncated span is authored, so it is where "never emit a partial
+command span a scanner would read as whole" has to be pinned -- otherwise
+the next consumer inherits the same trap and has to rediscover it.
 """
 
 import re
@@ -110,6 +127,33 @@ def test_unextracted_fallback_detail_spells_the_bare_verb_as_a_whole_span() -> N
     findings = lint.check_unextracted(docs)
 
     assert "openkos ingest" in _spans(findings[0].detail)
+
+
+def test_unextracted_detail_emits_no_partial_ingest_span_for_a_backtick_resource() -> (
+    None
+):
+    """A backtick in `resource` closes the retry hint's span early, and what
+    survives is a WELL-FORMED `openkos ingest <plain path>` naming a
+    different file than the finding is about (#274). No span this module
+    emits may begin with `openkos ingest ` unless it is the whole command,
+    so for an unspellable value it emits none at all (#285). Pinned here, on
+    the producing side, because this is where the truncated span would be
+    authored."""
+    docs = [
+        _source(
+            "sources/notes",
+            extraction_status="failed",
+            resource="raw/notes.txt`; rm -rf /",
+        )
+    ]
+
+    findings = lint.check_unextracted(docs)
+
+    assert not [
+        span
+        for span in _spans(findings[0].detail)
+        if span.startswith("openkos ingest ")
+    ]
 
 
 def test_below_source_detail_spells_backfill_sensitivity_as_a_whole_span() -> None:

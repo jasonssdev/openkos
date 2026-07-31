@@ -600,6 +600,28 @@ def check_dangling_targets(docs: list[LintDoc]) -> list[LintFinding]:
     return findings
 
 
+_UNSPELLABLE_IN_SPAN = re.compile(r"[`\r\n]")
+"""The characters a `resource` value MUST NOT carry for its retry command to
+be spelled inside a single-line backtick span (issue #285).
+
+Exactly three, each for a stated reason: a BACKTICK closes the span early,
+leaving a well-formed `openkos ingest <plain path>` that names a DIFFERENT
+file than the finding is about (issue #274); a CR or an LF splits the
+single-line `LintFinding.detail` across lines, truncating it the same way.
+All three are legal POSIX filename characters, so `resource` -- the raw,
+unsanitised basename `ingest` copied to disk (see
+`okf.build_source_concept`'s contract) -- really can carry them.
+
+Deliberately NARROW, and NOT `cli/next_action.py`'s `_SAFE_ARGUMENT`. That
+regex answers "is this runnable exactly as printed" and rejects far more
+(spaces, semicolons, quotes, a leading `-`). This one answers only "can this
+value be spelled unambiguously inside one backtick span", which every other
+character does survive. Widening this set would decline hints for filenames
+this module can name perfectly well -- and it would NOT make the hint safer,
+because `next` corroborates the extracted command against the document's own
+`resource` before printing it."""
+
+
 def check_unextracted(docs: list[LintDoc]) -> list[LintFinding]:
     """Flag each Source whose extraction was skipped for a RETRYABLE reason
     (issue #187).
@@ -618,9 +640,26 @@ def check_unextracted(docs: list[LintDoc]) -> list[LintFinding]:
     receives a directory is incapable of opening a walk, so a future edit
     cannot add one without changing this pinned signature.
 
-    The finding's detail names the literal retry command built from the
-    Source's own `resource` frontmatter value (`openkos ingest <resource>`),
-    falling back to a generic re-ingest hint when `resource` is empty.
+    The finding's detail has THREE outcomes, not two:
+
+    1. `resource` present and spellable -> the literal retry command built
+       from the Source's own value (`openkos ingest <resource>`).
+    2. `resource` empty -> a generic re-ingest hint naming the bare verb.
+    3. `resource` present but UNSPELLABLE (`_UNSPELLABLE_IN_SPAN`) -> no
+       command at all, and a hint naming the repair instead.
+
+    Outcome 3 exists because `resource` is the raw, unsanitised basename of
+    the ingested file (`okf.build_source_concept`'s contract, issue #285):
+    it can legally carry a backtick, which closes the span below early and
+    leaves a WELL-FORMED `openkos ingest <plain path>` naming a DIFFERENT
+    file than this finding is about -- issue #274, printed by `openkos next`
+    against a real bundle. A CR/LF breaks the single-line detail the same
+    way. Declining costs nothing: the finding's `path`/`concept_id` still
+    locates the document. The declining hint MUST NOT echo the raw value
+    back, either -- reprinting the string this function just refused to
+    trust reintroduces the defect one line lower, which is the same
+    reasoning `next_action._tier_unextracted_source` records for its own
+    declinations (#276).
 
     THAT COMMAND IS READ BY ANOTHER MODULE (issue #278). `openkos next`
     prints tier 2's recommendation by scanning this detail's backtick spans
@@ -645,7 +684,19 @@ def check_unextracted(docs: list[LintDoc]) -> list[LintFinding]:
     for doc in docs:
         if doc.extraction_status != okf.EXTRACTION_STATUS_FAILED:
             continue
-        if doc.resource:
+        if doc.resource and _UNSPELLABLE_IN_SPAN.search(doc.resource):
+            # Third outcome (#285): a present `resource` that cannot be
+            # spelled inside the span. Emit NO command at all -- not even a
+            # bare `openkos ingest` span, which would collide with the
+            # empty-`resource` fallback below and make two different repairs
+            # indistinguishable -- and never echo the value back, which
+            # would reintroduce #274's defect one line lower. The finding's
+            # `path`/`concept_id` still locates the document.
+            retry_hint = (
+                "this source's raw filename cannot be spelled inside a "
+                "command; rename the raw file and re-ingest it"
+            )
+        elif doc.resource:
             retry_hint = f"retry with `openkos ingest {doc.resource}`"
         else:
             retry_hint = "re-run `openkos ingest` on this source's raw file"
