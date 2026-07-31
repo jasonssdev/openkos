@@ -72,7 +72,7 @@ stripped.
 _FORBIDDEN_IN_TITLE: Final = re.compile(
     r"[\x00-\x1f\x7f\[\]()`*_<>|"
     r"\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028-\u2029\ufeff"
-    r"\U000e0000-\U000e007f]"
+    r"\U000e0000-\U000e007f\U000e0100-\U000e01ef]"
 )
 """Characters a normalized title candidate MUST NOT contain (rejected,
 never escaped or truncated). Follows `lint._UNSPELLABLE_IN_SPAN`'s shape
@@ -148,17 +148,61 @@ never escaped or truncated). Follows `lint._UNSPELLABLE_IN_SPAN`'s shape
   the source text below it is already fully user-controlled. Rejecting the
   block costs nothing -- it encodes no text any human would type into a
   document title.
+- `\\U000e0100`-`\\U000e01ef` -- the Variation Selectors Supplement
+  (VS17-VS256), the Tag block's sibling vector: same astral plane, same
+  invisibility, category `Mn` with `str.isspace()` `False` so whitespace
+  collapse leaves them intact. These 240 code points are 240 of the 256
+  symbols the published variation-selector smuggling technique uses to
+  encode one arbitrary byte per selector (the other 16 are
+  `\\ufe00`-`\\ufe0f`, see below); selectors CHAIN after any visible
+  character, so a byte stream can ride inside a title that renders as clean
+  text -- reaching the same unescaped sinks the Tag block is rejected to
+  protect. Their one legitimate use is Ideographic Variation Sequences
+  (kanji glyph variants), and the cost of rejecting one of those is not an
+  error: `None` here means the caller falls back to `_titleize(slug)`, the
+  pre-#248 behavior.
 
 Deliberately NOT rejected (stated so nobody over-corrects this class
 later): `#`, `&`, `"`, `'`, `:` (mid-string; a trailing `:` is rejected by
 the title-plausible predicate, not this class), `-`, and all ORDINARY
 non-ASCII text -- accented letters, CJK, emoji, em dashes. Both of this
 repo's shipped example first lines contain an em dash (`—`); a greedier
-class would regress the repo's own flagship corpus. The additions above
-target specific invisible-or-direction-altering Unicode FORMAT/CONTROL
-code points, never "non-ASCII" as a class -- an accented word, a CJK
-string, or an emoji is exactly as acceptable in a title after this change
-as before it.
+class would regress the repo's own flagship corpus.
+
+`\\ufe00`-`\\ufe0f` -- the Variation Selectors in the BMP (VS1-VS16) -- is
+the one omission worth arguing explicitly (issue #296), because rejecting
+its astral sibling above and not this range looks inconsistent until you
+measure it. `U+FE0F` VARIATION SELECTOR-16 is a COMPONENT of ordinary
+emoji presentation sequences: `⚠️` is `U+26A0 U+FE0F`, so a class that
+rejected this range would send every title containing a common emoji back
+to the filename slug -- regressing precisely the ordinary non-ASCII
+content this docstring commits to keeping valid, one paragraph above.
+
+Note what the two ranges are to each other, because it is the whole
+argument: 16 plus 240 is 256, and they are the two halves of ONE
+byte-encoding alphabet -- this range carries byte values 0-15, the
+supplement carries 16-255. Rejecting the supplement therefore does not
+close a channel and leave a weaker one open; it deletes 240 of the 256
+symbols, so a payload that survives must re-encode every byte across
+multiple selectors drawn from the 16 that remain. That is bought at zero
+cost to ordinary documents, which is exactly what rejecting this range
+would not be. So the asymmetry is deliberate: take the half that can be
+taken for free, keep the half that ordinary documents actually contain.
+
+Every non-ASCII member above is a specific invisible-or-direction-altering
+code point, never "non-ASCII" as a class. Do NOT reach for Unicode general
+category as the admission test for the next candidate member: the members
+here span at least `Cc`, `Cf`, `Cn` (parts of the Tag block are
+unassigned), `Mn`, `Zl` and `Zp`, and that list is descriptive, not a
+catalogue to complete -- one is deliberately excluded (`\\ufe00`-`\\ufe0f`
+is `Mn`, exactly like the supplement that IS rejected), which is the
+clearest proof that category cannot decide membership on its own.
+
+The test that actually governs membership is the one every bullet above
+argues: does the code point reach a sink invisibly, or alter how
+surrounding text is displayed, and is rejecting it worth what it costs? An
+accented word, a CJK string, or an emoji answers no, and is exactly as
+acceptable in a title after this change as before it.
 """
 
 _TITLE_MAX_CHARS: Final = 120
