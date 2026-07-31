@@ -66,6 +66,27 @@ class NextAction:
     """A single line explaining why this command was recommended."""
 
 
+@dataclass(frozen=True)
+class NextResult:
+    """Everything one `next` run learned: the ranked action, if any, plus
+    the notices for documents the run could not read (#275).
+
+    The two travel together because they are answers to the same question.
+    `collect_docs` EXCLUDES an unreadable or unparseable document from
+    `docs` and reports it only as a skip notice (`lint.py:147-166`), so a
+    result carrying the action alone describes a document set it already
+    knows is incomplete -- and "no ranked action" over a damaged bundle
+    then reads as a clean scan, which is precisely what those notices exist
+    to prevent."""
+
+    action: NextAction | None
+    skip_notices: tuple[str, ...] = ()
+    """Only what this run ACTUALLY observed, never what a further walk
+    might have found. A run whose first tier fires without paying the docs
+    walk collected no notices and says nothing -- surfacing them must not
+    buy them with the walk the cost contract forbids (D3)."""
+
+
 class _BundleSignals:
     """Lazily-memoized signals over one bundle, each paying its own walk
     exactly once no matter how many tiers read it (design: "lazy memoized
@@ -74,6 +95,7 @@ class _BundleSignals:
     def __init__(self, layout: config.WorkspaceLayout) -> None:
         self._layout = layout
         self._docs: list[lint_check.LintDoc] | None = None
+        self._skip_notices: tuple[str, ...] = ()
         self._exact_title_groups: list[CandidateGroup] | None = None
 
     @property
@@ -84,11 +106,24 @@ class _BundleSignals:
     @property
     def docs(self) -> list[lint_check.LintDoc]:
         """1 walk (`lint_check.collect_docs`), memoized so tiers 2 and 3
-        sharing this property never trigger a second call."""
+        sharing this property never trigger a second call. The same call's
+        skip notices are retained rather than discarded (#275): they name
+        the documents this list is missing, so dropping them would leave a
+        partial `docs` indistinguishable from a complete one."""
         if self._docs is None:
-            docs, _skip_notices = lint_check.collect_docs(self._layout.bundle_dir)
+            docs, skip_notices = lint_check.collect_docs(self._layout.bundle_dir)
             self._docs = docs
+            self._skip_notices = tuple(skip_notices)
         return self._docs
+
+    @property
+    def observed_skip_notices(self) -> tuple[str, ...]:
+        """The notices this run actually paid for -- empty until `docs` has
+        been read at least once. Reading this property NEVER triggers the
+        walk itself: tier 1's zero-walk cost contract is structural, and a
+        report of what was observed must not become a reason to observe
+        more."""
+        return self._skip_notices
 
     @property
     def exact_title_groups(self) -> list[CandidateGroup]:
@@ -166,15 +201,29 @@ def _tier_unextracted_source(signals: _BundleSignals) -> NextAction | None:
     and evaluation continues to the next matching finding or the next
     tier. A resource path that is not a plain path is declined by
     `_command_from_detail` for the same reason: it would not be runnable as
-    printed."""
+    printed.
+
+    Issue #274: reading the command out of the detail is necessary but not
+    sufficient. `lint.py:630` interpolates `doc.resource` verbatim INSIDE
+    the retry hint's backtick span, so a `resource` carrying a backtick of
+    its own closes that span early and leaves a well-formed `openkos ingest
+    <plain path>` behind -- a real command naming a DIFFERENT file than the
+    finding is about. Counting backticks cannot detect this (two of them
+    leave the total even and truncate just the same), so the extracted
+    command is corroborated against the document's own `resource`: it is
+    printed only when it is exactly the verb plus that value. The detail
+    still supplies the command; the document decides whether the span the
+    prose yielded was the whole of it."""
+    docs_by_identity = {doc.identity: doc for doc in signals.docs}
     for finding in lint_check.check_unextracted(signals.docs):
+        doc = docs_by_identity.get(finding.concept_id)
+        if doc is None or not doc.resource:
+            continue  # bare `openkos ingest`, no argument -- trap 2
         command = _command_from_detail(
             finding.detail, _INGEST_VERB, takes_argument=True
         )
-        if command is None:
+        if command != f"{_INGEST_VERB} {doc.resource}":
             continue
-        if command == _INGEST_VERB:
-            continue  # bare `openkos ingest`, no argument -- trap 2
         return NextAction(
             command=command,
             reason=f"{finding.concept_id}: {finding.detail}",
@@ -241,26 +290,46 @@ higher-ranked tier's finding always wins; a lower-ranked tier is never even
 evaluated once a higher one fires (first-hit short-circuit)."""
 
 
-def next_action(layout: config.WorkspaceLayout) -> NextAction | None:
-    """Evaluate `_TIERS` in order, first hit wins. `None` means no ranked
-    tier produced a finding -- not that the bundle is clean (D4)."""
+def next_action(layout: config.WorkspaceLayout) -> NextResult:
+    """Evaluate `_TIERS` in order, first hit wins. A `None` `action` means
+    no ranked tier produced a finding -- not that the bundle is clean (D4).
+    The result also carries whatever skip notices the run happened to
+    observe, which is none at all when a tier fired before the docs walk
+    was ever paid."""
     signals = _BundleSignals(layout)
+    action: NextAction | None = None
     for tier in _TIERS:
-        result = tier(signals)
-        if result is not None:
-            return result
-    return None
+        action = tier(signals)
+        if action is not None:
+            break
+    return NextResult(action=action, skip_notices=signals.observed_skip_notices)
 
 
-def render_lines(action: NextAction | None) -> list[str]:
-    """Render `action` as human-readable lines. `_STATUS_POINTER` is
-    appended at this one site, after both branches, so the honesty guard
-    (D4) is emitted on every path by construction."""
+def _skip_notice_lines(notices: tuple[str, ...]) -> list[str]:
+    """Name every skipped document, not just how many there were: each one
+    is a separate file to go and look at, so a bare count would report the
+    damage while hiding where it is."""
+    if not notices:
+        return []
+    count = len(notices)
+    verb = "was" if count == 1 else "were"
+    header = f"{count} document{_plural(count)} could not be read and {verb} skipped:"
+    return [header, *(f"  {notice}" for notice in notices)]
+
+
+def render_lines(result: NextResult) -> list[str]:
+    """Render `result` as human-readable lines. The skip notices and
+    `_STATUS_POINTER` are both appended at this one site, after both
+    branches, so the honesty guard (D4) is emitted on every path by
+    construction -- a damaged bundle is named whether or not a tier fired,
+    because an action derived from a knowingly incomplete document set is
+    exactly as much in need of the caveat as no action at all."""
     lines: list[str] = []
-    if action is None:
+    if result.action is None:
         lines.append(_NO_ACTION_LINE)
     else:
-        lines.append(f"Run: {action.command}")
-        lines.append(action.reason)
+        lines.append(f"Run: {result.action.command}")
+        lines.append(result.action.reason)
+    lines.extend(_skip_notice_lines(result.skip_notices))
     lines.append(_STATUS_POINTER)
     return lines
