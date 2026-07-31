@@ -382,8 +382,10 @@ def _skip_notice_lines(notices: tuple[str, ...]) -> list[str]:
     if not notices:
         return []
     count = len(notices)
-    verb = "was" if count == 1 else "were"
-    header = f"{count} document{_plural(count)} could not be read and {verb} skipped:"
+    header = (
+        f"{count} document{_plural(count)} could not be read and "
+        f"{_agree(count, 'was', 'were')} skipped:"
+    )
     return [header, *(f"  {notice}" for notice in notices)]
 
 
