@@ -201,6 +201,97 @@ class TestForbiddenCharacters:
         assert source_title.derive_source_title(raw) == raw
 
 
+# --- `_FORBIDDEN_IN_TITLE` Unicode extension (review finding: the class was
+# ASCII-only, so invisible/direction-altering code points like `U+202E`
+# RIGHT-TO-LEFT OVERRIDE survived normalization and reached unescaped
+# markdown/terminal sinks -- Trojan-Source-class spoofing, newly reachable
+# now that `title` comes from file CONTENT, where before it needed a
+# deliberately crafted FILENAME) -------------------------------------------
+
+
+class TestForbiddenUnicodeControlCharacters:
+    @pytest.mark.parametrize(
+        "char",
+        [
+            "​",  # ZERO WIDTH SPACE
+            "‌",  # ZERO WIDTH NON-JOINER
+            "‍",  # ZERO WIDTH JOINER
+            "‎",  # LEFT-TO-RIGHT MARK
+            "‏",  # RIGHT-TO-LEFT MARK
+        ],
+    )
+    def test_zero_width_and_directional_marks_are_rejected(self, char: str) -> None:
+        raw = f"Title with {char} inside"
+
+        assert source_title.derive_source_title(raw) is None
+
+    @pytest.mark.parametrize(
+        "char",
+        [
+            "‪",  # LEFT-TO-RIGHT EMBEDDING
+            "‫",  # RIGHT-TO-LEFT EMBEDDING
+            "‬",  # POP DIRECTIONAL FORMATTING
+            "‭",  # LEFT-TO-RIGHT OVERRIDE
+            "‮",  # RIGHT-TO-LEFT OVERRIDE -- the Trojan-Source vector
+        ],
+    )
+    def test_bidi_embedding_and_override_controls_are_rejected(self, char: str) -> None:
+        raw = f"Title with {char} inside"
+
+        assert source_title.derive_source_title(raw) is None
+
+    @pytest.mark.parametrize(
+        "char",
+        [
+            "⁦",  # LEFT-TO-RIGHT ISOLATE
+            "⁧",  # RIGHT-TO-LEFT ISOLATE
+            "⁨",  # FIRST STRONG ISOLATE
+            "⁩",  # POP DIRECTIONAL ISOLATE
+        ],
+    )
+    def test_bidi_isolate_controls_are_rejected(self, char: str) -> None:
+        raw = f"Title with {char} inside"
+
+        assert source_title.derive_source_title(raw) is None
+
+    def test_bom_is_rejected(self) -> None:
+        raw = "Title with ﻿ inside"
+
+        assert source_title.derive_source_title(raw) is None
+
+    @pytest.mark.parametrize(
+        "char",
+        ["\u2028", "\u2029"],  # LINE SEPARATOR, PARAGRAPH SEPARATOR
+    )
+    def test_line_and_paragraph_separators_are_already_stripped_by_normalization(
+        self, char: str
+    ) -> None:
+        # Unlike the members above, `str.isspace()` is `True` for both of
+        # these, so step 1's `" ".join(candidate.split())` already destroys
+        # them -- exactly the same "reachable vs unreachable" situation
+        # `_FORBIDDEN_IN_TITLE`'s docstring already documents for
+        # `\x1c-\x1f`. They are still listed in the class as defense in
+        # depth (in case the normalization order ever changes), but this
+        # test proves the OUTCOME today is "silently collapsed to a single
+        # space", not "rejected by the forbidden-character check".
+        raw = f"Title with {char} inside"
+
+        assert source_title.derive_source_title(raw) == "Title with inside"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Título con acentos",
+            "深圳笔记本",
+            "Notes 📝 for later",
+            "Call with Maria — 2026",
+        ],
+        ids=["accented", "cjk", "emoji", "em-dash"],
+    )
+    def test_ordinary_non_ascii_text_is_still_not_rejected(self, text: str) -> None:
+        assert source_title.derive_source_title(text) == text
+
+
 # --- Length: 120 vs 121 chars post-normalization (tasks 1.11/1.12) ---------
 
 

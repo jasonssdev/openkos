@@ -53,8 +53,19 @@ end in `.`, `,`, `;`, or `:`; does not begin with markdown block syntax
 (`-`, `*`, `>`, `#`, a table pipe, or a code fence).
 
 A normalized candidate MUST be rejected (falling back to (3)) when it
-contains any control character, `\n`, `\r`, `[`, `]`, `(`, `)`, a backtick,
-`*`, `_`, `<`, `>`, `|`, or exceeds 120 characters.
+contains any ASCII control character, `\n`, `\r`, `[`, `]`, `(`, `)`, a
+backtick, `*`, `_`, `<`, `>`, `|`, or exceeds 120 characters.
+
+It MUST also be rejected when it contains a Unicode invisible or
+direction-altering character: the zero-width and directional marks
+`U+200B`-`U+200F`, the bidirectional embedding and override controls
+`U+202A`-`U+202E`, the bidirectional isolates `U+2066`-`U+2069`, the line
+and paragraph separators `U+2028`-`U+2029`, or the byte-order mark
+`U+FEFF`. These reach the terminal and markdown link labels unescaped, and
+`U+202E` in particular can visually reorder the text that follows it.
+
+Ordinary non-ASCII text MUST NOT be rejected. Accented letters, CJK
+characters, emoji and typographic dashes are all valid title content.
 
 A leading `---` line MUST be skipped as frontmatter only when a closing
 `---` line exists later in the file; otherwise it is ordinary content.
