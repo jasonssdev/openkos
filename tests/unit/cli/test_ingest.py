@@ -4024,21 +4024,45 @@ def test_binary_source_never_calls_derivation_keeps_slug_title(
     assert calls == []
 
 
-def test_empty_source_never_calls_derivation_keeps_slug_title(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "content",
+    ["", "   \n\n   "],
+    ids=["truly-empty", "whitespace-only"],
+)
+def test_blank_source_never_calls_derivation_keeps_slug_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str
 ) -> None:
-    """An empty source (whitespace-only content) yields no usable candidate
-    -- `derive_source_title` returns `None` and the title stays the slug
-    (spec: "An empty source uses the slug title")."""
+    """A blank OR whitespace-only decoded source must never invoke
+    `derive_source_title` at all (spec: "An empty source uses the slug
+    title" -- title derivation MUST NOT run for blank/whitespace-only
+    content, the same as it must not run for undecodable/binary content).
+
+    This replaces the former `test_empty_source_never_calls_derivation_keeps_slug_title`,
+    which only asserted the FINAL title -- a check that passes whether or
+    not the helper actually ran, since `derive_source_title("")` already
+    returns `None` on its own. A test whose NAME claims non-invocation but
+    never checks it is worse than no test: it looks like coverage for the
+    call-site guard while actually providing none. Mirrors
+    `test_binary_source_never_calls_derivation_keeps_slug_title`'s
+    monkeypatch-and-record-calls shape, parametrized over both blank
+    shapes (zero-length and whitespace-only) rather than duplicated."""
     _init_workspace(tmp_path, monkeypatch)
+    calls: list[str] = []
+
+    def _spy(raw_content: str) -> str:
+        calls.append(raw_content)
+        return "Should Never Appear"
+
+    monkeypatch.setattr("openkos.source_title.derive_source_title", _spy)
     source = tmp_path / "notes.txt"
-    source.write_text("", encoding="utf-8")
+    source.write_text(content, encoding="utf-8")
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0, result.stdout
     metadata, _ = _read_source(tmp_path, "notes")
     assert metadata["title"] == "notes"
+    assert calls == []
 
 
 def test_reingest_of_identical_bytes_writes_a_byte_identical_source_document(
@@ -4100,3 +4124,70 @@ def test_stage_derived_objects_receives_the_final_derived_title(
     assert user_message["content"].startswith(
         "SOURCE TITLE: Introduction to Stoicism\n"
     )
+
+
+# --- Re-ingest preview names a silent title change (review finding) --------
+#
+# Re-ingest is a documented full regeneration -- only `sensitivity` carries
+# forward, everything else (including `title`) is rebuilt from content every
+# run (spec: "Idempotent Re-Ingest Reconciles Derived Objects Per Slug",
+# "Default Sensitivity from Config"). A byte-identical re-ingest of a Source
+# created before issue #248 (or hand-retitled since) recomputes `title` from
+# content and silently overwrites the on-disk title in the frontmatter, the
+# document's own `# ` heading, and the `index.md`/`log.md` link labels -- the
+# regenerate preview never mentioned it. The fix is NOT to make the title
+# sticky (that would contradict "re-ingest rebuilds everything but
+# sensitivity" and would be a worse change); the fix is to make the preview
+# say so, mirroring the existing sensitivity clause on the same line.
+
+
+def _set_source_title(tmp_path: Path, slug: str, value: str) -> None:
+    """Directly rewrite an existing Source concept's on-disk `title`
+    frontmatter field, simulating a Source whose title predates content
+    derivation (or was hand-edited since) -- mirrors
+    `_set_source_sensitivity`'s shape (`:2073`)."""
+    concept_path = tmp_path / "bundle" / "sources" / f"{slug}.md"
+    text = concept_path.read_text(encoding="utf-8")
+    metadata, body = okf.load_frontmatter(text)
+    metadata["title"] = value
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+
+def test_reingest_preview_names_a_title_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the derived title differs from the title already on disk, the
+    re-ingest preview's regenerated-Source line names BOTH the old and new
+    title -- the user must not be asked to confirm a retitle it was never
+    told about."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("# Chapter One\n\nBody text.\n", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    _set_source_title(tmp_path, "notes", "Legacy Slug Title")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "title changed from 'Legacy Slug Title' to 'Chapter One'" in result.stdout
+
+
+def test_reingest_preview_omits_title_clause_when_title_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The common path -- a re-ingest whose derived title matches the title
+    already on disk -- must say NOTHING about the title; noise on the
+    unchanged path is its own defect (mirrors the existing sensitivity
+    "unchanged" clause's restraint -- but here, restraint means silence, not
+    a clause)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("# Chapter One\n\nBody text.\n", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "title changed" not in result.stdout

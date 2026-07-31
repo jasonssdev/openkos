@@ -1166,6 +1166,37 @@ def _read_source_sensitivity(concept_path: Path) -> object:
     return metadata.get("sensitivity")
 
 
+def _read_source_title(concept_path: Path) -> object:
+    """Raw `title` from an EXISTING Source concept, read so a re-ingest's
+    preview can name a title change instead of overwriting it silently
+    (review finding on issue #248's content-derived title: the regenerate
+    preview never mentioned that re-ingest recomputes and overwrites a
+    pre-existing Source's title). Mirrors `_read_source_sensitivity`'s
+    shape exactly -- same read, same `load_frontmatter` call, same
+    fail-closed `ValueError` on an unreadable or unparseable file -- but
+    for `title` rather than `sensitivity`. This does NOT make `title`
+    sticky: the caller uses the return value only to decide what the
+    preview SAYS, never to decide what gets WRITTEN -- re-ingest still
+    rebuilds `title` from content every run, unaffected by this read."""
+    try:
+        text = concept_path.read_text(encoding="utf-8")
+        metadata, _ = okf.load_frontmatter(text)
+    except OSError as exc:
+        raise ValueError(
+            f"refusing to ingest -- '{concept_path}' could not be read to "
+            f"resolve its existing title: {exc}"
+        ) from exc
+    except Exception as exc:
+        # `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
+        # which is neither `OSError` nor `ValueError` -- translate rather
+        # than degrade (design gotcha), matching `_read_source_sensitivity`.
+        raise ValueError(
+            f"refusing to ingest -- '{concept_path}' frontmatter could not "
+            f"be parsed to resolve its existing title: {exc}"
+        ) from exc
+    return metadata.get("title")
+
+
 def _first_free_disambiguated_slug(
     family: list[Path], base_slug: str, reserved: set[str]
 ) -> str:
@@ -1693,15 +1724,20 @@ def ingest(
             # whole ingest, instead of degrading to the binary-fallback body.
             raw_content = None
         # `title` is derived from the decoded content (issue #248): a
-        # binary/undecodable source MUST NOT call the helper at all, and any
-        # `None` result (no usable candidate) falls back to today's slug
-        # title, unchanged. This single assignment feeds every downstream
-        # consumer -- frontmatter `title`, the Source's own `# ` heading,
-        # `index.md`/`log.md`, and `_stage_derived_objects`'s LLM prompt
-        # (design: "Call-site wiring in `ingest`").
+        # binary/undecodable source (`raw_content is None`) and a blank or
+        # whitespace-only decoded source (`not raw_content.strip()`) MUST
+        # NOT call the helper at all -- neither has any usable text to
+        # derive a title from, and the spec requires derivation to not run
+        # for either case, not merely to return `None` for them. Any other
+        # `None` result (no usable candidate found in real content) falls
+        # back to today's slug title, unchanged. This single assignment
+        # feeds every downstream consumer -- frontmatter `title`, the
+        # Source's own `# ` heading, `index.md`/`log.md`, and
+        # `_stage_derived_objects`'s LLM prompt (design: "Call-site wiring
+        # in `ingest`").
         derived_title = (
             None
-            if raw_content is None
+            if raw_content is None or not raw_content.strip()
             else source_title.derive_source_title(raw_content)
         )
         title = derived_title if derived_title is not None else _titleize(src.stem)
@@ -1734,9 +1770,17 @@ def ingest(
             resolved_sensitivity = okf.combine_sensitivity(
                 on_disk_sensitivity, cfg.default_sensitivity
             )
+            # Read BEFORE `title` is (re)computed below, purely so the
+            # preview can NAME a retitle -- never to make `title` sticky
+            # (review finding: re-ingest silently overwrote a pre-existing
+            # Source's title with no mention in the preview). `title`
+            # itself is still rebuilt from content every run, exactly as
+            # before this read existed.
+            on_disk_title = _read_source_title(concept_path)
         else:
             on_disk_sensitivity = None
             resolved_sensitivity = cfg.default_sensitivity
+            on_disk_title = None
 
         def _build_source_document(
             extraction_status: okf.ExtractionStatus | None,
@@ -1874,9 +1918,22 @@ def ingest(
                 sensitivity_clause = "unchanged"
         else:
             sensitivity_clause = "from the workspace default"
+        # Review finding: re-ingest recomputes `title` from content every
+        # run (unaffected by this on-disk read -- only the PREVIEW WORDING
+        # depends on it) and previously overwrote a pre-existing Source's
+        # title with no mention in the preview. Name the change ONLY when
+        # `on_disk_title` is known (`had_prior_source`) and actually
+        # differs from the freshly derived `title` -- silence on the
+        # common (unchanged) path is deliberate, matching the sensitivity
+        # clause's own restraint on its "unchanged" branch.
+        title_clause = (
+            f"; title changed from {on_disk_title!r} to {title!r}"
+            if on_disk_title is not None and on_disk_title != title
+            else ""
+        )
         typer.echo(
             f"  ~ bundle/sources/{slug}.md (regenerated -- sensitivity "
-            f"{resolved_sensitivity} {sensitivity_clause})"
+            f"{resolved_sensitivity} {sensitivity_clause}{title_clause})"
         )
         for plan in derived_plans:
             typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")

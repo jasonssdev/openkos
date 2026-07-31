@@ -69,7 +69,10 @@ final `#`, so they are left untouched; only `Title #` (space then `#`) is
 stripped.
 """
 
-_FORBIDDEN_IN_TITLE: Final = re.compile(r"[\x00-\x1f\x7f\[\]()`*_<>|]")
+_FORBIDDEN_IN_TITLE: Final = re.compile(
+    r"[\x00-\x1f\x7f\[\]()`*_<>|"
+    r"\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028-\u2029\ufeff]"
+)
 """Characters a normalized title candidate MUST NOT contain (rejected,
 never escaped or truncated). Follows `lint._UNSPELLABLE_IN_SPAN`'s shape
 (`lint.py:603-622`): one compiled class, each member justified individually.
@@ -100,12 +103,47 @@ never escaped or truncated). Follows `lint._UNSPELLABLE_IN_SPAN`'s shape
 - `\\x7f` DEL -- a control character no normalization step removes and that
   renders as nothing visible; excluding it would let an invisible byte into
   the title silently.
+- `\\u200b`-`\\u200f` -- ZERO WIDTH SPACE, ZERO WIDTH NON-JOINER, ZERO WIDTH
+  JOINER, LEFT-TO-RIGHT MARK, RIGHT-TO-LEFT MARK: invisible formatting
+  characters. None of them satisfies Python's `str.isspace()`, so step 1's
+  whitespace collapse does NOT remove them -- they survive normalization
+  intact and land, invisibly, in every sink that renders the title
+  unescaped: `openkos list`'s terminal column and the `index.md`/`log.md`
+  bullet link labels.
+- `\\u202a`-`\\u202e` -- the bidi embedding/override controls (LRE, RLE,
+  PDF, LRO, RLO). `U+202E` RIGHT-TO-LEFT OVERRIDE is the canonical
+  Trojan-Source vector: a terminal or renderer that honors bidi controls
+  will visually reorder every character that follows it, so a title can be
+  made to DISPLAY as something other than what it actually contains. This
+  is newly reachable now that `title` comes from file CONTENT (issue
+  #248) -- before, an attacker needed a deliberately crafted FILENAME to
+  reach this code path at all.
+- `\\u2066`-`\\u2069` -- the bidi isolate controls (LRI, RLI, FSI, PDI):
+  the modern, better-behaved replacements for the embedding/override
+  controls above, but still invisible and still capable of altering how
+  surrounding text lays out bidirectionally -- excluded for the same
+  reason.
+- `\\u2028`-`\\u2029` -- LINE SEPARATOR and PARAGRAPH SEPARATOR. Unlike the
+  ranges above, `str.isspace()` IS `True` for both, so -- exactly like
+  `\\x1c-\\x1f` above -- step 1's whitespace collapse already destroys them
+  before this class ever runs; they are UNREACHABLE by construction today.
+  Listed anyway as defense in depth (in case the normalization order ever
+  changes), following this class's own precedent of naming an unreachable
+  member rather than pretending the regex is what protects here.
+- `\\ufeff` -- ZERO WIDTH NO-BREAK SPACE / byte-order mark: invisible, not
+  whitespace under `str.isspace()`, and a stray BOM landing mid-title is
+  exactly the silent corruption this class exists to keep out.
 
 Deliberately NOT rejected (stated so nobody over-corrects this class
 later): `#`, `&`, `"`, `'`, `:` (mid-string; a trailing `:` is rejected by
-the title-plausible predicate, not this class), `-`, and all non-ASCII
-text. Both of this repo's shipped example first lines contain an em dash
-(`—`); a greedier class would regress the repo's own flagship corpus.
+the title-plausible predicate, not this class), `-`, and all ORDINARY
+non-ASCII text -- accented letters, CJK, emoji, em dashes. Both of this
+repo's shipped example first lines contain an em dash (`—`); a greedier
+class would regress the repo's own flagship corpus. The additions above
+target specific invisible-or-direction-altering Unicode FORMAT/CONTROL
+code points, never "non-ASCII" as a class -- an accented word, a CJK
+string, or an emoji is exactly as acceptable in a title after this change
+as before it.
 """
 
 _TITLE_MAX_CHARS: Final = 120
