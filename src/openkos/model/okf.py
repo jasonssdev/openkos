@@ -134,11 +134,43 @@ def build_source_concept(
 ) -> str:
     """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
 
-    Plain dict -> `dump_frontmatter`, no pydantic: every field is
-    engine-derived from trusted local inputs (workspace config, the source's
-    filename, an injected clock, the raw path) rather than untrusted
-    structured LLM output, so `check_conformance` (§9 rules 1-2: parseable
-    frontmatter, non-empty `type`) is the only gate this slice needs.
+    Plain dict -> `dump_frontmatter`, no pydantic: no field here is
+    untrusted STRUCTURED LLM output (contrast `build_concept`, the
+    fail-closed gate for exactly that), and `dump_frontmatter` goes through
+    `frontmatter.dumps`, which quotes and folds correctly -- so any byte
+    sequence round-trips byte-exact through `load_frontmatter`.
+    `check_conformance` (§9 rules 1-2: parseable frontmatter, non-empty
+    `type`) is therefore the only gate this slice needs.
+
+    THE SOURCE'S FILENAME IS NOT A TRUSTED INPUT (issue #285). It is
+    unconstrained, user-chosen text, and `ingest` carries it unsanitised
+    into FOUR of these values, plus `index.md` and `log.md`. State them
+    precisely, because they do not all carry the same thing: `resource` and
+    `provenance` are the raw basename verbatim under a `raw/` prefix;
+    `description` interpolates `resource` AND the source path exactly as the
+    caller typed it, so it carries MORE than the basename; `title` is
+    `_titleize`d, which maps `-`/`_` to spaces and strips, and is cosmetic
+    rather than sanitising -- every other character survives it.
+
+    `_slugify` sanitises only the document's OWN filename (the file
+    `openkos` creates). `resource` is deliberately left alone: it must keep
+    naming the real file on disk. Do NOT slug it -- rewriting it would break
+    the correspondence `purge`'s containment check depends on.
+
+    So every CONSUMER that interpolates these values into generated prose, a
+    shell command, or any other delimited context MUST validate or escape at
+    READ time. Two live precedents, so the next consumer finds the shape
+    rather than rediscovering the bug: `lint.check_unextracted` declines to
+    spell the retry command at all when `resource` cannot appear whole
+    inside a backtick span, and `next_action._tier_unextracted_source`
+    corroborates the command it extracted against the document's own
+    `resource` before printing it (#274, #285).
+
+    Two things this does NOT mean, stated so nobody over-corrects: there is
+    no YAML corruption (see the round-trip guarantee above), and no path
+    traversal (`Path.name` has already stripped every directory component,
+    so `raw/<name>` is contained by construction).
+
     `description` is passed through verbatim -- callers MUST phrase it as an
     honest description of the source's embedding state (embedded verbatim,
     or could not be embedded), never claiming extraction/compilation
@@ -200,8 +232,9 @@ def build_concept(
     """Build a conformant OKF derived-object document from LLM-extracted,
     UNTRUSTED fields (design: "Builder validation").
 
-    Unlike `build_source_concept` (whose inputs are engine-derived and
-    trusted, so it skips validation -- see its docstring), this builder is
+    Unlike `build_source_concept` (whose inputs are not structured LLM
+    output, so it skips validation -- see its docstring, which is also
+    explicit that the filename it carries is NOT trusted), this builder is
     the fail-closed gate for `extraction.ExtractionResult` data: `type` MUST
     be a member of the closed classifiable vocabulary (see
     `openkos.model.types.CLASSIFIABLE_TYPES`, the single source of truth);

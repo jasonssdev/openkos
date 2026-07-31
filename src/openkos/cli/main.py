@@ -1731,7 +1731,7 @@ def ingest(
         ) -> str:
             """Bound immediately before the first build (design: "The
             ordering conflict"). Builds the Source document from-scratch
-            from this run's trusted local inputs -- called once with `None`
+            from this run's local inputs -- called once with `None`
             before staging (`:1717` today), and, ONLY when staging produces
             a `skip_reason`, called a SECOND time with that reason so the
             key is stamped onto freshly built content, never merged onto

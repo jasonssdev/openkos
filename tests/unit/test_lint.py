@@ -11,6 +11,7 @@ link. The clock and window are always injected -- `lint.py` never calls
 `datetime.now()`.
 """
 
+import re
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
 
@@ -1035,7 +1036,10 @@ def test_check_unextracted_ignores_non_failed_values(value: str) -> None:
 def test_check_unextracted_names_exact_retry_command() -> None:
     """The finding's detail names the literal retry command built from the
     Source's own `resource` frontmatter value (lint spec: "Detail names the
-    exact retry command")."""
+    exact retry command"). The third, declining outcome added for #285 must
+    cost the ordinary path nothing: the whole detail is pinned character for
+    character, because `next` prints this command verbatim and only ever
+    accepts it when it matches the document's own `resource` exactly."""
     docs = [
         _doc(
             "sources/notes",
@@ -1048,6 +1052,10 @@ def test_check_unextracted_names_exact_retry_command() -> None:
     findings = lint.check_unextracted(docs)
 
     assert "openkos ingest raw/foo.md" in findings[0].detail
+    assert findings[0].detail == (
+        "concept extraction failed during ingest — retry with "
+        "`openkos ingest raw/foo.md`"
+    )
 
 
 def test_check_unextracted_falls_back_when_resource_is_missing() -> None:
@@ -1059,6 +1067,97 @@ def test_check_unextracted_falls_back_when_resource_is_missing() -> None:
 
     assert "openkos ingest" in findings[0].detail
     assert "raw/" not in findings[0].detail
+
+
+def _ingest_spans_with_an_argument(detail: str) -> list[str]:
+    """Every complete backtick span in `detail` that reads as `openkos
+    ingest <argument>` -- the exact shape `next_action._command_from_detail`
+    accepts for tier 2. A declining detail must yield none of them."""
+    return [
+        span
+        for span in re.findall(r"`([^`]+)`", detail)
+        if span.startswith("openkos ingest ")
+    ]
+
+
+def test_check_unextracted_declines_the_command_for_a_backtick_resource() -> None:
+    """A backtick inside `resource` closes the retry hint's span early, so
+    the span that survives is a well-formed `openkos ingest <plain path>`
+    naming a DIFFERENT file than the finding is about (issue #274). The
+    detail must therefore carry NO `openkos ingest <argument>` span at all
+    rather than a truncated one a scanner would read as whole (#285)."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_status="failed",
+            resource="raw/notes.txt`; rm -rf /",
+        )
+    ]
+
+    findings = lint.check_unextracted(docs)
+
+    assert _ingest_spans_with_an_argument(findings[0].detail) == []
+
+
+def test_check_unextracted_never_echoes_an_unspellable_resource() -> None:
+    """The declining detail names the DOCUMENT, never the value it just
+    refused to spell. Reprinting a value this module declined to trust would
+    reintroduce the defect one line lower -- the same reasoning
+    `next_action._tier_unextracted_source` records for its own declinations
+    (#276). Nothing is lost: the finding's `path`/`concept_id` already
+    locates the document, and the document records the resource."""
+    resource = "raw/notes.txt`; rm -rf /"
+    docs = [
+        _doc("sources/notes", "Body.", extraction_status="failed", resource=resource)
+    ]
+
+    findings = lint.check_unextracted(docs)
+
+    assert resource not in findings[0].detail
+    assert "rm -rf" not in findings[0].detail
+
+
+def test_check_unextracted_declination_names_the_rename_repair() -> None:
+    """Declining must stay ACTIONABLE. A detail that only withholds the
+    command leaves a real failed extraction with no next step, so it says
+    what is wrong (the raw filename cannot be spelled inside a command) and
+    what repairs it (rename the raw file, then re-ingest)."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_status="failed",
+            resource="raw/notes.txt`; rm -rf /",
+        )
+    ]
+
+    detail = lint.check_unextracted(docs)[0].detail
+
+    assert "cannot be spelled inside a command" in detail
+    assert "rename the raw file" in detail
+    assert "re-ingest" in detail
+
+
+def test_check_unextracted_declines_the_command_for_a_newline_resource() -> None:
+    """A newline is as legal in a POSIX filename as a backtick is, and it
+    breaks the same contract from the other side: `LintFinding.detail` is a
+    single line, so an embedded CR/LF truncates whatever a reader scans out
+    of it. It takes the same declining branch, not the ordinary one."""
+    docs = [
+        _doc(
+            "sources/notes",
+            "Body.",
+            extraction_status="failed",
+            resource="raw/notes\ntxt",
+        )
+    ]
+
+    detail = lint.check_unextracted(docs)[0].detail
+
+    assert _ingest_spans_with_an_argument(detail) == []
+    assert "cannot be spelled inside a command" in detail
+    assert "\n" not in detail
 
 
 def test_check_unextracted_signature_has_no_bundle_dir_param() -> None:
