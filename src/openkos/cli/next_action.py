@@ -56,6 +56,19 @@ def _plural(count: int) -> str:
     return "" if count == 1 else "s"
 
 
+def _agree(count: int, singular: str, plural: str) -> str:
+    """Pick the form that agrees with `count`, for words `_plural` cannot
+    inflect by appending an `s`.
+
+    A line carrying both a count and a verb has to inflect BOTH from the
+    same number. Inflecting only the noun is what produced "1 candidate
+    group with identical titles are pending review" -- the count was right,
+    the noun was right, and the sentence still read as a typo. `status`
+    avoids the trap by ending its own duplicate-group line with a command
+    rather than a verb (`main.py:5323-5324`), so it never needed this."""
+    return singular if count == 1 else plural
+
+
 @dataclass(frozen=True)
 class NextAction:
     """One ranked recommendation: a runnable command and a one-line reason."""
@@ -272,7 +285,7 @@ def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
         command="openkos duplicates",
         reason=(
             f"{count} candidate group{_plural(count)} with identical "
-            "titles are pending review."
+            f"titles {_agree(count, 'is', 'are')} pending review."
         ),
     )
 

@@ -455,6 +455,45 @@ def test_tier_4_command_is_fixed_duplicates(
     assert "Run: openkos duplicates" in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("titles", "expected"),
+    [
+        (
+            (("Stoicism", "STOICISM"),),
+            "1 candidate group with identical titles is pending review.",
+        ),
+        (
+            (("Stoicism", "STOICISM"), ("Kant", "KANT")),
+            "2 candidate groups with identical titles are pending review.",
+        ),
+    ],
+    ids=["one-group", "two-groups"],
+)
+def test_tier_4_reason_agrees_with_its_own_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    titles: tuple[tuple[str, str], ...],
+    expected: str,
+) -> None:
+    """Tier 4's reason inflects the noun from its count but hardcoded the
+    verb, so a single group read "1 candidate group ... are pending
+    review". The count and the verb come from the same number and must
+    agree; `status` sidesteps this by ending its own line with a command
+    instead of a verb (`main.py:5323-5324`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    for index, (first, second) in enumerate(titles):
+        _write_doc(concepts_dir / f"dup-{index}a.md", title=first)
+        _write_doc(concepts_dir / f"dup-{index}b.md", title=second)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos duplicates" in result.stdout
+    assert expected in result.stdout
+
+
 def test_tier_2_command_matches_the_findings_own_retry_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
