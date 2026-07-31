@@ -66,14 +66,31 @@ No modifications to existing specs: `status/spec.md` byte-identical (D2), no cha
 
 - **Total changed lines**: 1950 (insertions only, zero deletions)
 - **Files modified**: 8 (all additions or minor wiring)
-  - `src/openkos/cli/next_action.py` — NEW (200 lines)
+  - `src/openkos/cli/next_action.py` — NEW (221 lines)
   - `src/openkos/cli/main.py` — MODIFIED (~40 lines, workspace gate + call + echo)
-  - `tests/unit/cli/test_next.py` — NEW (280 lines, 28 tests)
+  - `tests/unit/cli/test_next.py` — NEW (906 lines, 28 tests)
   - `docs/cli.md` — MODIFIED (~25 lines)
 - **Test coverage**: 2704 passed / 97.52% branch (gate 90%)
 - **Linting**: ruff check / ruff format / mypy --strict all clean
 - **Build**: uv build produces sdist + wheel, exit 0
 - **All 14 implementation tasks complete**: Phases 1-4 plus 5.1 (remediation) marked [x]
+
+> **Correction (issue #280).** The two file sizes above originally read
+> "200 lines" and "280 lines, 28 tests". Both were wrong as written; the
+> figures now shown are measured at `46cbd95`, the HEAD this report itself
+> declares. The test module was understated by more than 3x — 906 lines,
+> not 280 — and the test COUNT (28) was the only part that was right.
+>
+> This matters beyond tidiness, because every size judgment downstream
+> rests on it. The design forecast ~450-650 changed lines, the task list
+> recorded "800-line budget risk: Low", and the "Risk" line below concludes
+> the change fit the 800-line budget with no chaining needed. Against the
+> real total that conclusion does not hold: the change should have been
+> split, and the seam was named in its own design. The judgment is left
+> standing as it was made, with this note beside it — an archived report is
+> the record of what was believed at the time, and correcting the numbers
+> while silently rewriting the conclusion would destroy the very lesson the
+> numbers teach.
 
 ## Commits on feat/next-action-pointer
 
@@ -86,7 +103,7 @@ No modifications to existing specs: `status/spec.md` byte-identical (D2), no cha
 
 The issue claims "four of the six finding kinds name no command at all". **This is FALSE.** Verified by reading `lint.py` directly:
 
-- `missing-vector-index` → command `openkos reindex` (lint.py:5332-5333)
+- `missing-vector-index` → command `openkos reindex` (main.py:5333-5334)
 - `unextracted` → command `openkos ingest <resource>` (lint.py:630, fallback :632)
 - `below-source-sensitivity` → command `openkos backfill-sensitivity` (lint.py:729-730)
 - `duplicate-groups` → command `openkos duplicates` (main.py:5323)
@@ -97,10 +114,25 @@ The issue claims "four of the six finding kinds name no command at all". **This 
 **Accurate count**: 4 of 7 kinds carry a runnable command (not 2 of 6); 2 name nothing; 1 names a command only in a negating sentence. Consequence: the real work was ranking the 4 actionable kinds + short-circuiting, not mapping new commands. `next` reads the command string the finding already carries.
 
 Two traps in the design close this:
-1. **Trap 1** (`test_tier3_does_not_fire_on_multi_source_uncovered`): `multi-source-uncovered`'s detail string contains a negating backtick command; tier 3 filters on `kind == "below-source-sensitivity"` first, avoiding the temptation to extract the negated command.
-2. **Trap 2** (`test_tier2_does_not_fire_on_bare_ingest_fallback`): when `resource` is empty, the fallback is a bare `openkos ingest` with no argument; tier 2 accepts only commands carrying arguments, declining to fire and letting evaluation continue.
+1. **Trap 1** (`test_trap1_multi_source_uncovered_never_surfaces_a_negated_command`): `multi-source-uncovered`'s detail string contains a negating backtick command; tier 3 filters on `kind == "below-source-sensitivity"` first, avoiding the temptation to extract the negated command.
+2. **Trap 2** (`test_trap2_bare_ingest_fallback_never_fires_tier_2`): when `resource` is empty, the fallback is a bare `openkos ingest` with no argument; tier 2 accepts only commands carrying arguments, declining to fire and letting evaluation continue.
 
 Both traps verified non-vacuous by mutation testing and test names in the suite.
+
+> **Correction (issue #280).** The `missing-vector-index` citation above
+> originally read `lint.py:5332-5333`. That text has never lived in
+> `lint.py`, which is 773 lines long at this report's HEAD; it is in
+> `main.py`, and at lines 5333-5334 rather than 5332-5333. The adjacent
+> `duplicate-groups` row cited `main.py` correctly, which is what makes the
+> slip legible as a copy rather than a misreading.
+>
+> The two trap test names were also invented rather than quoted — the
+> report named `test_tier3_does_not_fire_on_multi_source_uncovered` and
+> `test_tier2_does_not_fire_on_bare_ingest_fallback`; neither has ever
+> existed. The real names are shown above. The claim they support is
+> sound — both traps are genuinely covered — but a reader following the
+> citation to check would have found nothing and had no way to tell
+> whether the guard or the name was missing.
 
 ## Delivery
 
