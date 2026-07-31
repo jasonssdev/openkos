@@ -1191,3 +1191,124 @@ def test_tier_1_reports_no_skip_notices_and_still_pays_no_walk(
     assert "Run: openkos reindex" in result.stdout
     assert calls == 0
     assert "skipped" not in result.stdout
+
+
+# --- #276: a declined tier-2 finding is named, never silently dropped -----
+
+
+def test_failed_extraction_with_no_resource_is_named_not_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`check_unextracted` emits a genuine, actionable finding for a Source
+    with `extraction_status: failed` and no `resource` -- only its embedded
+    command is the bare, non-runnable `openkos ingest` (`lint.py:632`).
+    Declining to print that command is right; declining SILENTLY is not,
+    because a real failed ingest then leaves no trace at all (issue #276)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "sources/notes" in result.stdout
+    assert "records no resource" in result.stdout
+    assert "openkos status" in result.stdout
+
+
+def test_declination_says_why_a_present_resource_was_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing `resource` and an unusable one point at DIFFERENT repairs
+    -- record the path, versus rename the file -- so the two declinations
+    must not collapse into one indistinguishable sentence."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="raw/notes.txt`; rm -rf /")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "sources/notes" in result.stdout
+    assert "records no resource" not in result.stdout
+    assert "not a runnable argument" in result.stdout
+
+
+def test_declination_is_named_even_when_a_lower_tier_fires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lower tier firing does not make the skipped finding go away. The
+    declination is emitted alongside the recommendation, the same way #275's
+    skip notices are (D4: the honesty guard holds on every path)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "dup-b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos duplicates" in result.stdout
+    assert "sources/notes" in result.stdout
+
+
+def test_declination_never_reprints_the_raw_unusable_resource(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declination names the DOCUMENT, never the value that made it
+    undecidable. Echoing the raw `resource` back would put the very string
+    tier 2 refused to trust onto the line below `Run:` (#274's defect, one
+    step removed)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="raw/notes.txt`; rm -rf /")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "rm -rf" not in result.stdout
+    assert "sources/notes" in result.stdout
+
+
+def test_a_runnable_finding_produces_no_declination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming declinations must not turn every ordinary tier-2 run into a
+    two-part message: an intact finding fires and says nothing else."""
+    _init_workspace(tmp_path, monkeypatch)
+    _seed_vector_index(tmp_path)
+    _write_unextracted_source(tmp_path, resource="raw/notes.txt")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest raw/notes.txt" in result.stdout
+    assert "could not be turned into" not in result.stdout
+
+
+def test_tier_1_reports_no_declination_and_still_pays_no_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same structural rule the skip notices follow: reporting a
+    declination must never buy the walk tier 1's cost contract forbids."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_unextracted_source(tmp_path, resource="")
+    calls = 0
+    real_collect_docs = lint_check.collect_docs
+
+    def counting_collect_docs(bundle_dir: Path) -> object:
+        nonlocal calls
+        calls += 1
+        return real_collect_docs(bundle_dir)
+
+    monkeypatch.setattr(lint_check, "collect_docs", counting_collect_docs)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos reindex" in result.stdout
+    assert calls == 0
+    assert "sources/notes" not in result.stdout
