@@ -71,7 +71,8 @@ stripped.
 
 _FORBIDDEN_IN_TITLE: Final = re.compile(
     r"[\x00-\x1f\x7f\[\]()`*_<>|"
-    r"\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028-\u2029\ufeff]"
+    r"\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028-\u2029\ufeff"
+    r"\U000e0000-\U000e007f]"
 )
 """Characters a normalized title candidate MUST NOT contain (rejected,
 never escaped or truncated). Follows `lint._UNSPELLABLE_IN_SPAN`'s shape
@@ -110,6 +111,11 @@ never escaped or truncated). Follows `lint._UNSPELLABLE_IN_SPAN`'s shape
   intact and land, invisibly, in every sink that renders the title
   unescaped: `openkos list`'s terminal column and the `index.md`/`log.md`
   bullet link labels.
+- `\\u061c` -- ARABIC LETTER MARK. Does exactly the job of the LEFT-TO-RIGHT
+  and RIGHT-TO-LEFT marks listed above -- an invisible directional mark --
+  and is excluded for exactly their reason. It is listed separately only
+  because the code chart puts it nowhere near them, which is why the first
+  version of this class missed it.
 - `\\u202a`-`\\u202e` -- the bidi embedding/override controls (LRE, RLE,
   PDF, LRO, RLO). `U+202E` RIGHT-TO-LEFT OVERRIDE is the canonical
   Trojan-Source vector: a terminal or renderer that honors bidi controls
@@ -133,6 +139,15 @@ never escaped or truncated). Follows `lint._UNSPELLABLE_IN_SPAN`'s shape
 - `\\ufeff` -- ZERO WIDTH NO-BREAK SPACE / byte-order mark: invisible, not
   whitespace under `str.isspace()`, and a stray BOM landing mid-title is
   exactly the silent corruption this class exists to keep out.
+- `\\U000e0000`-`\\U000e007f` -- the Unicode Tag block, an invisible copy of
+  ASCII. A whole readable sentence can be encoded in it and carried inside a
+  title that renders as clean text, which is why it is a known real-world
+  vector for smuggling instructions into text bound for a model. That is not
+  hypothetical here: this title is interpolated into the extraction prompt
+  (`extraction/concept.py:189`, fed from `cli/main.py`) with no escaping, and
+  the source text below it is already fully user-controlled. Rejecting the
+  block costs nothing -- it encodes no text any human would type into a
+  document title.
 
 Deliberately NOT rejected (stated so nobody over-corrects this class
 later): `#`, `&`, `"`, `'`, `:` (mid-string; a trailing `:` is rejected by

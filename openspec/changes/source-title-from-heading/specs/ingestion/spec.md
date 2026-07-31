@@ -57,12 +57,15 @@ contains any ASCII control character, `\n`, `\r`, `[`, `]`, `(`, `)`, a
 backtick, `*`, `_`, `<`, `>`, `|`, or exceeds 120 characters.
 
 It MUST also be rejected when it contains a Unicode invisible or
-direction-altering character: the zero-width and directional marks
-`U+200B`-`U+200F`, the bidirectional embedding and override controls
-`U+202A`-`U+202E`, the bidirectional isolates `U+2066`-`U+2069`, the line
-and paragraph separators `U+2028`-`U+2029`, or the byte-order mark
-`U+FEFF`. These reach the terminal and markdown link labels unescaped, and
-`U+202E` in particular can visually reorder the text that follows it.
+direction-altering character: the Arabic letter mark `U+061C`, the
+zero-width and directional marks `U+200B`-`U+200F`, the bidirectional
+embedding and override controls `U+202A`-`U+202E`, the bidirectional
+isolates `U+2066`-`U+2069`, the line and paragraph separators
+`U+2028`-`U+2029`, the byte-order mark `U+FEFF`, or any character in the
+Unicode Tag block `U+E0000`-`U+E007F`. These reach the terminal and the
+markdown link labels unescaped; `U+202E` in particular can visually
+reorder the text that follows it, and the Tag block can carry an
+invisible copy of ASCII into the extraction prompt.
 
 Ordinary non-ASCII text MUST NOT be rejected. Accented letters, CJK
 characters, emoji and typographic dashes are all valid title content.

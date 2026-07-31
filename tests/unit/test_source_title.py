@@ -259,6 +259,36 @@ class TestForbiddenUnicodeControlCharacters:
 
         assert source_title.derive_source_title(raw) is None
 
+    def test_arabic_letter_mark_is_rejected(self) -> None:
+        """`U+061C` ARABIC LETTER MARK does the same job as the LEFT-TO-RIGHT
+        and RIGHT-TO-LEFT marks already rejected above -- it is an invisible
+        directional mark -- so a class that rejects those and not this one is
+        inconsistent rather than principled. It sits far from them in the code
+        chart, which is exactly why it was missed the first time."""
+        raw = "Title with ؜ inside"
+
+        assert source_title.derive_source_title(raw) is None
+
+    @pytest.mark.parametrize(
+        "char",
+        ["\U000e0000", "\U000e0041", "\U000e007f"],
+    )
+    def test_unicode_tag_characters_are_rejected(self, char: str) -> None:
+        """The `U+E0000`-`U+E007F` Tag block encodes an invisible copy of
+        ASCII. A whole readable sentence can be smuggled inside a title that
+        renders as clean text, which is why it is a known real-world vector
+        for hiding instructions in text bound for an LLM -- and this title IS
+        interpolated into the extraction prompt (`extraction/concept.py:189`).
+        Parametrized across the block's exact first code point, a middle one,
+        and its exact last one, so a mis-typed range endpoint fails here
+        rather than shipping. The endpoints must be the literal boundaries:
+        a case one code point inside the range cannot detect a range that
+        starts or ends one code point short, which is the whole reason this
+        test exists."""
+        raw = f"Title with {char} inside"
+
+        assert source_title.derive_source_title(raw) is None
+
     @pytest.mark.parametrize(
         "char",
         ["\u2028", "\u2029"],  # LINE SEPARATOR, PARAGRAPH SEPARATOR
