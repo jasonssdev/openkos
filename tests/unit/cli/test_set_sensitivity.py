@@ -15,6 +15,7 @@ from openkos.bundle import provenance as bundle_provenance
 from openkos.cli.main import app
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
+from tests.unit.cli.conftest import confirm_after, snapshot_with_mtime
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 from tests.unit.vcs.conftest import isolate_git_identity
 
@@ -1087,3 +1088,56 @@ def test_the_two_preparation_phases_do_not_share_a_message(
     assert scan_line
     assert render_line
     assert scan_line[-1] != render_line[-1]
+
+
+# -- concurrent-edit window (#306) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["bundle/sources/notes.md", "bundle/concepts/zzz-derived.md", "bundle/log.md"],
+)
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#306: the target concept's new frontmatter, every propagated
+    descendant's, and the new `log.md` are all computed BEFORE the prompt, so
+    an edit landing while the operator reads the preview used to be
+    overwritten in full and then committed. Each of the three target kinds is
+    parametrized because each reaches the guard through a different entry.
+
+    Two descendants are propagated so "every OTHER target is untouched" is
+    falsifiable, and the assertion is on BYTES both ways: the concurrent edit
+    survives verbatim, and the whole-workspace diff holds nothing but that
+    one path.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    _write_derived_concept(
+        tmp_path, slug="aaa-derived", provenance=[source_id], sensitivity="public"
+    )
+    _write_derived_concept(
+        tmp_path, slug="zzz-derived", provenance=[source_id], sensitivity="public"
+    )
+    target_path = tmp_path / target
+    concurrent = (
+        target_path.read_text(encoding="utf-8")
+        + "\nA paragraph added while the prompt waited.\n"
+    )
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential"], input="y\n"
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}

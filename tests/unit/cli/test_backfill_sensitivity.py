@@ -15,6 +15,7 @@ from openkos import fsio
 from openkos.cli.main import app
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
+from tests.unit.cli.conftest import confirm_after, snapshot_with_mtime
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -402,3 +403,52 @@ def test_phase_b_failure_with_zero_landed_paths(
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert "No path was written." in result.stderr
+
+
+# -- concurrent-edit window (#306) -------------------------------------------
+
+
+@pytest.mark.parametrize("target", ["bundle/concepts/zzz-derived.md", "bundle/log.md"])
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#306: every staged descendant's rewritten frontmatter and the new
+    `log.md` are computed from a Phase-A snapshot, so an edit landing while
+    the operator reads the preview used to be overwritten in full and then
+    committed. Both target kinds are parametrized because each reaches the
+    guard through a different entry.
+
+    Two descendants are staged so "every OTHER target is untouched" is
+    falsifiable, and the assertion is on BYTES both ways: the concurrent edit
+    survives verbatim, and the whole-workspace diff holds nothing but that
+    one path.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    _write_raw_sensitivity(tmp_path, source_id, "confidential")
+    _write_derived_concept(
+        tmp_path, slug="aaa-derived", provenance=[source_id], sensitivity="public"
+    )
+    _write_derived_concept(
+        tmp_path, slug="zzz-derived", provenance=[source_id], sensitivity="public"
+    )
+    target_path = tmp_path / target
+    concurrent = (
+        target_path.read_text(encoding="utf-8")
+        + "\nA paragraph added while the prompt waited.\n"
+    )
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["backfill-sensitivity"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}

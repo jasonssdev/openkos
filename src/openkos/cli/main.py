@@ -6,7 +6,7 @@ import shutil
 import sqlite3
 import sys
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -403,6 +403,79 @@ def _commit_has_confidential(root: Path, paths: Sequence[str]) -> bool:
         if str(metadata.get("sensitivity", "")).strip() == okf.SENSITIVITY_ORDER[-1]:
             return True
     return False
+
+
+def _reject_drifted_targets(
+    layout: config.WorkspaceLayout, expected: Mapping[str, bytes], verb: str
+) -> None:
+    """Refuse the whole run (exit 1, nothing written) when any write target
+    changed on disk after the plan was computed from it (issue #306).
+
+    `set-sensitivity`/`backfill-sensitivity`/`backfill-source-titles` all
+    share one shape: Phase A reads a snapshot, computes the ENTIRE write plan
+    from it -- every document's new bytes, plus the new `log.md` text in all
+    three and the new `index.md` text in the title backfill -- and only then
+    prompts. Nothing re-read anything at write time, so an edit landing while
+    the prompt waited was overwritten IN FULL by `fsio.write_atomic`, with no
+    error, no signal that a newer version existed, and an `_autocommit` that
+    then committed the reverted content. Every caller therefore invokes this
+    strictly AFTER its confirm gate and strictly BEFORE its first write.
+
+    `expected` maps a workspace-relative POSIX path to the RAW BYTES that
+    path held when Phase A read it, and the comparison is bytes-to-bytes.
+
+    Both sides MUST come from the same reader; this is the one thing to get
+    right here, and it is wrong in both directions if you mix them. Callers
+    read `read_text` for the plan (parsers want decoded text) and
+    `read_bytes` alongside it purely for this guard. Comparing `read_text`
+    to `read_text` misses a CRLF-only rewrite landing during the prompt,
+    because universal-newline translation makes it equal its own LF
+    snapshot, while `fsio.write_atomic` (opening with `newline=""`) then
+    writes the LF plan over it. Comparing raw bytes to a `read_text`
+    snapshot is worse: a file that was ALREADY CRLF at rest, untouched by
+    anyone, compares unequal on every run, so the verb refuses forever with
+    a message naming a cause that never happened and a re-run that cannot
+    clear it. Bytes on both sides is the only pairing with neither failure.
+
+    The two Phase-A reads are microseconds apart and both land long before
+    the prompt, so the window between them is not the one this guard is
+    about.
+
+    A path that has since been DELETED, or that cannot be read at all,
+    counts as drift -- re-creating or overwriting a file whose current state
+    the operator can no longer be shown is the same silent revert.
+
+    Refusal is whole-run, never per-path, because the plan is a unit: the
+    title backfill's new `index.md` already encodes a relabel for every
+    staged Source and its new `log.md` already names them, so skipping one
+    drifted document would leave `index.md` asserting a relabel that never
+    happened. Recomputing after the prompt merely re-opens the same window.
+    Refusing before the first write is the only fail-closed option, and it
+    costs the operator one cheap re-run over fresh state.
+    """
+    drifted = []
+    for rel_path in sorted(expected):
+        try:
+            current = (layout.root / rel_path).read_bytes()
+        except OSError:
+            drifted.append(rel_path)
+            continue
+        if current != expected[rel_path]:
+            drifted.append(rel_path)
+    if not drifted:
+        return
+    # Deliberately NOT Phase B's "No path was written." sentence: that one
+    # reports a write that already began, this one reports a run that never
+    # started writing, and #234 pinned that two messages a bug report might
+    # quote must never read alike.
+    typer.echo(
+        f"openkos {verb}: refusing to write -- {len(drifted)} write "
+        f"target(s) changed on disk after this run computed its plan: "
+        f"{', '.join(drifted)}. Nothing was written; re-run to recompute "
+        "over the current bundle.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
 
 
 def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
@@ -3333,6 +3406,11 @@ def set_sensitivity_cmd(
     never cascade even when `combine_sensitivity` would compute a raise for
     some individual descendant sitting below the new (lower) level.
 
+    Once the gate passes, `_reject_drifted_targets` re-reads every path this
+    run intends to write -- the target concept, each staged descendant, and
+    `log.md` -- and refuses the WHOLE run (exit 1, nothing written) if any
+    of them changed or vanished while the prompt waited (issue #306).
+
     A confirmed write re-renders the frontmatter (`okf.dump_frontmatter`,
     changing only `sensitivity`), appends a `log.md` entry (no
     `index.md` change -- editing an existing catalog entry, not a new
@@ -3365,6 +3443,10 @@ def set_sensitivity_cmd(
             layout.bundle_dir, concept_id
         )
         concept_text = concept_path.read_text(encoding="utf-8")
+        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
+        # only: both sides of its comparison must come from the SAME reader
+        # (issue #306). Every parser below wants the decoded form.
+        concept_bytes = concept_path.read_bytes()
         metadata, body = okf.load_frontmatter(concept_text)
         current = metadata.get("sensitivity")
     except (OSError, ValueError) as exc:
@@ -3412,9 +3494,10 @@ def set_sensitivity_cmd(
     # when `combine_sensitivity` would compute a raise for some individual
     # descendant below the new (lower) level.
     descendant_raises: list[okf.DescendantRaise] = []
+    bundle_snapshot: dict[str, str] = {}
+    bundle_bytes: dict[str, bytes] = {}
     if metadata.get("type") == "Source" and direction == "raise":
         try:
-            bundle_snapshot: dict[str, str] = {}
             for path in sorted(layout.bundle_dir.rglob("*.md")):
                 if path.name in okf.RESERVED_FILENAMES:
                     continue
@@ -3422,6 +3505,7 @@ def set_sensitivity_cmd(
                     continue
                 rel = path.relative_to(layout.bundle_dir).as_posix()
                 bundle_snapshot[rel] = path.read_text(encoding="utf-8")
+                bundle_bytes[rel] = path.read_bytes()
 
             # Unresolvable provenance (design: "Unresolvable provenance"):
             # `known_extra_ids={canonical_id}` paired with the
@@ -3472,6 +3556,7 @@ def set_sensitivity_cmd(
 
     try:
         log_text = log_path.read_text(encoding="utf-8")
+        log_bytes = log_path.read_bytes()
         metadata["sensitivity"] = level
         new_concept_text = okf.dump_frontmatter(metadata, body)
         log_line = (
@@ -3522,6 +3607,23 @@ def set_sensitivity_cmd(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #306: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    _reject_drifted_targets(
+        layout,
+        {
+            **{
+                f"bundle/{descendant_raise.concept_id}.md": bundle_bytes[
+                    f"{descendant_raise.concept_id}.md"
+                ]
+                for descendant_raise in descendant_raises
+            },
+            f"bundle/{canonical_id}.md": concept_bytes,
+            "bundle/log.md": log_bytes,
+        },
+        "set-sensitivity",
+    )
 
     landed: list[str] = []
     try:
@@ -3635,6 +3737,11 @@ def backfill_sensitivity_cmd(
     invocation, including the no-op path above. That signal is delivered by
     `lint`'s existing `dangling` finding, never this sweep.
 
+    Once the gate passes, `_reject_drifted_targets` re-reads every staged
+    descendant plus `log.md` and refuses the WHOLE run (exit 1, nothing
+    written) if any of them changed or vanished while the prompt waited
+    (issue #306).
+
     Phase B writes every merged raise (sorted by `concept_id`), then
     appends exactly one dated `log.md` entry summarizing the whole sweep,
     then issues exactly one `_autocommit` covering every changed path.
@@ -3656,11 +3763,13 @@ def backfill_sensitivity_cmd(
         cfg = config.read_config(root)
 
         bundle_snapshot: dict[str, str] = {}
+        bundle_bytes: dict[str, bytes] = {}
         for path in sorted(layout.bundle_dir.rglob("*.md")):
             if path.name in okf.RESERVED_FILENAMES:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
             bundle_snapshot[rel] = path.read_text(encoding="utf-8")
+            bundle_bytes[rel] = path.read_bytes()
 
         descendant_raises = bundle_provenance.resolve_backfill_raises(bundle_snapshot)
     except (OSError, ValueError) as exc:
@@ -3681,6 +3790,7 @@ def backfill_sensitivity_cmd(
     now = datetime.now(UTC)
     try:
         log_text = log_path.read_text(encoding="utf-8")
+        log_bytes = log_path.read_bytes()
         propagated = ", ".join(
             f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
             for descendant_raise in descendant_raises
@@ -3720,6 +3830,22 @@ def backfill_sensitivity_cmd(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #306: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    _reject_drifted_targets(
+        layout,
+        {
+            **{
+                f"bundle/{descendant_raise.concept_id}.md": bundle_bytes[
+                    f"{descendant_raise.concept_id}.md"
+                ]
+                for descendant_raise in descendant_raises
+            },
+            "bundle/log.md": log_bytes,
+        },
+        "backfill-sensitivity",
+    )
 
     landed: list[str] = []
     try:
@@ -3797,6 +3923,11 @@ def backfill_source_titles_cmd(
     precedence exactly: `--auto` / `review: false` / TTY `typer.confirm` /
     non-TTY refuse.
 
+    Once the gate passes, `_reject_drifted_targets` re-reads `index.md`,
+    every staged Source, and `log.md`, and refuses the WHOLE run (exit 1,
+    nothing written) if any of them changed or vanished while the prompt
+    waited (issue #306).
+
     Phase B writes `index.md` first, then each staged Source, then `log.md`,
     then one `_autocommit` (design D6); both write-bound texts are computed
     before the preview so a malformed `index.md` refuses before any write.
@@ -3813,11 +3944,13 @@ def backfill_source_titles_cmd(
         cfg = config.read_config(root)
 
         bundle_snapshot: dict[str, str] = {}
+        bundle_bytes: dict[str, bytes] = {}
         for path in sorted(layout.bundle_dir.rglob("*.md")):
             if path.name in okf.RESERVED_FILENAMES:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
             bundle_snapshot[rel] = path.read_text(encoding="utf-8")
+            bundle_bytes[rel] = path.read_bytes()
 
         scan = source_titles.scan_source_titles(bundle_snapshot)
 
@@ -3851,7 +3984,11 @@ def backfill_source_titles_cmd(
     # malformed `index.md` refuses before any write rather than halfway
     # through Phase B (design D6).
     try:
-        new_index_text = index_path.read_text(encoding="utf-8")
+        # Both originals are kept alongside their rewrites: they are what
+        # `_reject_drifted_targets` compares against below (issue #306).
+        index_text = index_path.read_text(encoding="utf-8")
+        index_bytes = index_path.read_bytes()
+        new_index_text = index_text
         for retitle in backfill.staged:
             new_index_text, _ = bundle_index.relabel_index_entry(
                 new_index_text, retitle.concept_id, retitle.new_title
@@ -3865,8 +4002,10 @@ def backfill_source_titles_cmd(
             f"**Backfill-source-titles**: Re-derived {len(backfill.staged)} "
             f"Source title(s) from their raw content: {retitled}."
         )
+        log_text = log_path.read_text(encoding="utf-8")
+        log_bytes = log_path.read_bytes()
         new_log_text = bundle_log.insert_log_entry(
-            log_path.read_text(encoding="utf-8"),
+            log_text,
             datetime.now(UTC).astimezone().date(),
             log_line,
         )
@@ -3902,6 +4041,23 @@ def backfill_source_titles_cmd(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #306: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    _reject_drifted_targets(
+        layout,
+        {
+            "bundle/index.md": index_bytes,
+            **{
+                f"bundle/{retitle.concept_id}.md": bundle_bytes[
+                    f"{retitle.concept_id}.md"
+                ]
+                for retitle in backfill.staged
+            },
+            "bundle/log.md": log_bytes,
+        },
+        "backfill-source-titles",
+    )
 
     landed: list[str] = []
     try:
