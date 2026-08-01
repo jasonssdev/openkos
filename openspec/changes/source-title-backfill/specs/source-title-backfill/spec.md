@@ -152,7 +152,9 @@ classification test in the preceding requirement.
 
 For each staged Source, the command MUST change exactly two things in the
 document: the frontmatter `title:` value, and the document body's literal
-first line (from `# {current_title}` to `# {new_title}`). The
+first line (from `# {current_title}` to `# {new_title}`), written as a
+surgical patch to the original text rather than a full frontmatter
+re-dump (which could re-sort keys or reshape a value's on-disk type). The
 `description` field, the `## Source content` section, the `# Citations`
 section, every other frontmatter key, and every other line of the body
 MUST remain byte-identical to before the run.
@@ -164,7 +166,13 @@ MUST remain byte-identical to before the run.
 - THEN a byte-level diff of the document shows changes only to the
   frontmatter `title:` value and the first body line; `description`,
   `## Source content`, `# Citations`, and all other frontmatter keys are
-  unchanged
+  unchanged, including their original key order and quoting/flow style
+
+#### Scenario: An unrewritable `title:` scalar is skipped, not overwritten
+
+- GIVEN a Source's frontmatter `title:` is a block scalar, anchor, alias, or spans multiple lines
+- WHEN `openkos backfill-source-titles` reaches that Source
+- THEN the write is refused, refusal is reported, and frontmatter/body stay byte-identical to before the run
 
 ### Requirement: `index.md` Bullet Label Update
 

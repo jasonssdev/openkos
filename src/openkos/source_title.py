@@ -159,8 +159,9 @@ never escaped or truncated). Follows `lint._UNSPELLABLE_IN_SPAN`'s shape
   text -- reaching the same unescaped sinks the Tag block is rejected to
   protect. Their one legitimate use is Ideographic Variation Sequences
   (kanji glyph variants), and the cost of rejecting one of those is not an
-  error: `None` here means the caller falls back to `_titleize(slug)`, the
-  pre-#248 behavior.
+  error: `None` here means the caller falls back to `titleize(src.stem)`
+  (`openkos.bundle.source_titles.titleize`, `ingest`'s pre-#248 behavior,
+  promoted from `cli/main.py`'s former `_titleize`).
 
 Deliberately NOT rejected (stated so nobody over-corrects this class
 later): `#`, `&`, `"`, `'`, `:` (mid-string; a trailing `:` is rejected by

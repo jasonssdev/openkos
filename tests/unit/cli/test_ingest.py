@@ -3917,6 +3917,25 @@ def test_wrapped_prose_first_line_falls_back_to_slug_title(
     assert metadata["title"] == "notes"
 
 
+def test_titleize_fallback_still_works_after_delegation_to_source_titles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_titleize` now delegates to `bundle.source_titles.titleize`
+    (regression for task 1.4's promotion): a `None`-derived title still
+    falls back to the same hyphen-to-space title as before."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "01-Introduction.txt"
+    source.write_text(
+        "This paragraph keeps going\non the next line.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["ingest", "01-Introduction.txt", "--auto"])
+
+    assert result.exit_code == 0, result.stdout
+    metadata, _ = _read_source(tmp_path, "01-introduction")
+    assert metadata["title"] == "01 Introduction"
+
+
 def test_forbidden_character_candidate_falls_back_to_slug_title(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
