@@ -41,20 +41,130 @@ def _source_doc(*, title: str, first_line: str, description: str = "Desc.") -> s
     return okf.dump_frontmatter(metadata, body)
 
 
-def test_retitle_document_changes_only_title_and_first_line() -> None:
-    """Requirement: Exactly Two Byte-Level Edits Per Staged Source."""
-    text = _source_doc(title="01 Introduction", first_line="# 01 Introduction")
+_NON_CANONICAL_DOC = """---
+type: Source
+title: Reading notes — Enchiridion, 2026-07-05
+description: First pass through Epictetus's Enchiridion and its introduction.
+resource: raw/notes-on-the-enchiridion-2026-07-05.txt
+tags: [reading-notes, philosophy]
+timestamp: 2026-07-05T20:00:00Z
+status: active
+version: 1
+freshness: snapshot
+sensitivity: private
+---
+
+# Reading notes — Enchiridion, 2026-07-05
+
+Notes body text here.
+"""
+
+
+def test_retitle_document_patches_only_two_lines_in_a_non_canonical_document() -> None:
+    """Exactly Two Byte-Level Edits: pinned on the full output STRING over a
+    NON-CANONICAL fixture (unsorted keys, inline `tags`, unquoted `Z`
+    timestamp) -- a `dump_frontmatter`-built fixture is already canonical
+    and cannot observe a re-dump regression."""
+    current_title = "Reading notes — Enchiridion, 2026-07-05"
+    new_title = "Enchiridion, first pass"
 
     result = source_titles.retitle_document(
-        text, current_title="01 Introduction", new_title="Chapter One"
+        _NON_CANONICAL_DOC, current_title=current_title, new_title=new_title
     )
 
-    metadata, body = okf.load_frontmatter(result)
-    old_metadata, old_body = okf.load_frontmatter(text)
-    old_metadata["title"] = "Chapter One"
-    assert metadata == old_metadata
-    assert body.split("\n")[0] == "# Chapter One"
-    assert body.split("\n")[1:] == old_body.split("\n")[1:]
+    expected = _NON_CANONICAL_DOC.replace(
+        f"title: {current_title}\n", f"title: {new_title}\n", 1
+    ).replace(f"# {current_title}\n", f"# {new_title}\n", 1)
+    assert result == expected  # proves order, `tags`, and `timestamp` untouched
+    assert "tags: [reading-notes, philosophy]\n" in result
+    assert "timestamp: 2026-07-05T20:00:00Z\n" in result
+
+
+def test_retitle_document_preserves_trailing_body_whitespace() -> None:
+    """A full re-dump strips trailing body whitespace on parse; the
+    surgical patch never reparses the body, so it survives (point 7)."""
+    text = "---\ntitle: Notes\n---\n\n# Notes\n\nBody text.\n\n\n"
+
+    result = source_titles.retitle_document(
+        text, current_title="Notes", new_title="New Notes"
+    )
+
+    expected = text.replace("title: Notes\n", "title: New Notes\n", 1).replace(
+        "# Notes\n", "# New Notes\n", 1
+    )
+    assert result == expected
+    assert result.endswith("\n\n\n")
+
+
+@pytest.mark.parametrize(
+    ("block", "current_title", "expected"),
+    [
+        # ANCHOR is the load-bearing row. `yaml.safe_load("title: &a Notes")`
+        # yields "Notes", which EQUALS `current_title`, so the round-trip check
+        # passes and ONLY the scalar-shape guard can refuse. Without the guard
+        # the anchor definition is deleted while a later `*a` alias survives,
+        # and the emitted document no longer loads at all.
+        ("title: &a Notes\nauthor: *a\n", "Notes", "not a rewritable scalar"),
+        ("title: >-\n  Notes\n", "Notes", "not a rewritable scalar"),
+        ("title: Notes\ntitle: Notes\n", "Notes", "line count is 2"),
+        ("author: x\n", "Notes", "line count is 0"),
+        # Nested and embedded `title:` keys are invisible to the top-level
+        # pattern, so the count is 0 rather than a wrong-key rewrite.
+        ("meta:\n  title: Inner\n", "Inner", "line count is 0"),
+        ("note: |\n  title: fake\n", "Notes", "line count is 0"),
+        ("title: Notes  # keep me\n", "Notes", "trailing comment"),
+    ],
+)
+def test_retitle_document_fails_closed_on_unrewritable_title(
+    block: str, current_title: str, expected: str
+) -> None:
+    """Fail-closed (point 4). Each row refuses for a DISTINCT reason and
+    asserts that reason's own message, so no row can pass because a
+    different guard fired first -- the defect the review caught in the
+    single block-scalar test this replaces."""
+    text = f"---\n{block}---\n\n# {current_title}\n"
+
+    with pytest.raises(ValueError, match=expected):
+        source_titles._patch_title_line(
+            f"---\n{block}---\n", current_title=current_title, new_title="New Title"
+        )
+    assert text  # the document is never rewritten; nothing is returned
+
+
+def test_retitle_document_refuses_a_crlf_framed_document() -> None:
+    """A CRLF-framed document is REFUSED, not silently normalised. The
+    pre-surgery implementation rewrote it by round-tripping every line
+    ending to LF; that was a whole-file mutation, so refusing is the
+    fail-closed reading of "exactly two byte-level edits"."""
+    text = "---\r\ntitle: Notes\r\n---\r\n\r\n# Notes\r\n\r\nBody.\r\n"
+
+    with pytest.raises(ValueError, match="missing or malformed frontmatter"):
+        source_titles.retitle_document(
+            text, current_title="Notes", new_title="New Title"
+        )
+
+
+@pytest.mark.parametrize(
+    "new_title",
+    [
+        "Title: with colon",
+        '"quoted" title',
+        "# hashy title",
+        "123456",
+        "Café résumé",
+    ],
+)
+def test_retitle_document_round_trips_awkward_new_titles(new_title: str) -> None:
+    """Point 5: reparsing the patched document yields exactly `new_title`,
+    whatever quoting `okf.dump_frontmatter` emits."""
+    text = _source_doc(title="Notes", first_line="# Notes")
+
+    result = source_titles.retitle_document(
+        text, current_title="Notes", new_title=new_title
+    )
+
+    metadata, _ = okf.load_frontmatter(result)
+    assert metadata["title"] == new_title
 
 
 @pytest.mark.parametrize(

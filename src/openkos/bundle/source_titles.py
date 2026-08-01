@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+import yaml
+
 from openkos import source_title
 from openkos.model import okf
 
@@ -34,46 +36,104 @@ def titleize(stem: str) -> str:
     return _TITLE_SEPARATOR_RE.sub(" ", stem).strip()
 
 
+_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
+_TOP_LEVEL_TITLE_RE = re.compile(r"^title:([ \t]*.*)$", re.MULTILINE)
+
+
+def _split_frontmatter_verbatim(text: str) -> tuple[str, str]:
+    """Split off the frontmatter block byte-for-byte, mirroring
+    `bundle/index.py:_split_frontmatter_verbatim` (`index.py:20-31`,
+    design D2 there): never re-dump it, since that risks reformatting a
+    quoting choice. A deliberate separate copy, not an import, to avoid
+    cross-module private coupling. Raises `ValueError` if `text` lacks a
+    `---`-delimited block.
+    """
+    match = _FRONTMATTER_RE.match(text)
+    if match is None:
+        raise ValueError("Source document: missing or malformed frontmatter block")
+    return match.group(0), text[match.end() :]
+
+
+def _patch_title_line(block: str, *, current_title: str, new_title: str) -> str:
+    """Replace ONLY the top-level `title:` line in `block`, verbatim
+    otherwise. Fails closed unless `title:` is a single self-contained
+    scalar: a block scalar, anchor/alias, multi-line value, or anything not
+    round-tripping to `current_title` alone all refuse. The replacement
+    comes from `okf.dump_frontmatter`, so quoting is never hand-rolled.
+    """
+    matches = list(_TOP_LEVEL_TITLE_RE.finditer(block))
+    if len(matches) != 1:
+        raise ValueError(f"'title:' line count is {len(matches)}, expected exactly 1")
+    match = matches[0]
+    value = match.group(1)
+    stripped = value.strip()
+    if not stripped or stripped[0] in "|>&*":
+        raise ValueError(f"'title:' is not a rewritable scalar: {match.group(0)!r}")
+    try:
+        parsed = yaml.safe_load(f"title:{value}\n")
+    except yaml.YAMLError as exc:
+        raise ValueError(f"'title:' did not parse: {match.group(0)!r}") from exc
+    if not isinstance(parsed, dict) or parsed.get("title") != current_title:
+        raise ValueError(f"'title:' does not round-trip: {match.group(0)!r}")
+    # A trailing YAML comment lives on the line but not in the parsed value,
+    # so re-emitting the line would silently DELETE it -- a third byte-level
+    # edit, exactly what this function exists to prevent. Refuse instead of
+    # guessing where the comment ends. ` #` inside the parsed value is not a
+    # comment (it was quoted), so it must not trigger the refusal.
+    if " #" in value and " #" not in current_title:
+        raise ValueError(f"'title:' carries a trailing comment: {match.group(0)!r}")
+
+    new_line = "\n".join(
+        okf.dump_frontmatter({"title": new_title}, "").split("\n")[1:-2]
+    )
+    return block[: match.start()] + new_line + block[match.end() :]
+
+
 def retitle_document(text: str, *, current_title: str, new_title: str) -> str:
     """Rewrite a Source document's `title` and its first body line, and
     nothing else (spec: "Exactly Two Byte-Level Edits Per Staged Source").
 
-    Raises `ValueError` when `metadata["title"]` does not equal
-    `current_title`, or when the body's first line does not read exactly
-    `f"# {current_title}"` (spec: "Body First-Line Safety Property").
-    Neither check is skippable: a hand-edited body MUST be refused, never
-    overwritten.
+    Validates semantically via `okf.load_frontmatter` (parsed `title` must
+    equal `current_title`) but writes surgically via
+    `_split_frontmatter_verbatim`/`_patch_title_line`, never a full
+    `dump_frontmatter` re-dump -- mirrors `bundle/index.py`'s precedent
+    (`index.py:20-31`, design D2): re-dumping risks reformatting keys,
+    ordering, or a value's on-disk type. Verified against this repo's own
+    shipped Source: a re-dump re-sorted keys, flattened an inline `tags`
+    sequence into a block one, and turned an ISO-8601 `Z` timestamp into a
+    `datetime` on reload. The body is also preserved verbatim except its
+    first line, so trailing whitespace a re-dump would drop now survives.
 
-    No separate CRLF handling is needed here (design D4's stated caveat):
-    `load_frontmatter` delegates to `python-frontmatter`'s `parse`, which
-    unconditionally replaces every `\\r\\n` with `\\n` in `text` BEFORE
-    splitting it into lines -- so `body.split("\\n")[0]` can never itself
-    end in a bare `\\r` by construction. There is nothing left to strip or
-    re-attach; `dump_frontmatter`'s output is `\\n`-terminated throughout,
-    matching every other engine-written Source.
+    Raises `ValueError` when `metadata["title"]` != `current_title`, when
+    the first body line != `f"# {current_title}"` (spec: "Body First-Line
+    Safety Property"), or when `title:` is not a scalar
+    `_patch_title_line` can safely rewrite.
     """
-    metadata, body = okf.load_frontmatter(text)
+    metadata, _ = okf.load_frontmatter(text)
     on_disk_title = metadata.get("title")
     if on_disk_title != current_title:
         raise ValueError(
             f"expected on-disk title {current_title!r}, found {on_disk_title!r}"
         )
 
-    lines = body.split("\n")
-    first_line = lines[0] if lines else ""
+    frontmatter_block, body = _split_frontmatter_verbatim(text)
+    new_block = _patch_title_line(
+        frontmatter_block, current_title=current_title, new_title=new_title
+    )
+
+    # `load_frontmatter` returns `content.strip()`: preserve the leading
+    # whitespace run it would drop, rather than discarding it (point 7).
+    stripped_body = body.lstrip()
+    leading_ws = body[: len(body) - len(stripped_body)]
+    first_line_raw, sep, rest = stripped_body.partition("\n")
+    trailing_cr = "\r" if first_line_raw.endswith("\r") else ""
+    first_line = first_line_raw[:-1] if trailing_cr else first_line_raw
     expected = f"# {current_title}"
     if first_line != expected:
-        raise ValueError(
-            f"Source {current_title!r}: expected first body line "
-            f"{expected!r}, found {first_line!r}"
-        )
+        raise ValueError(f"expected first body line {expected!r}, found {first_line!r}")
 
-    lines[0] = f"# {new_title}"
-    new_body = "\n".join(lines)
-
-    new_metadata = dict(metadata)
-    new_metadata["title"] = new_title
-    return okf.dump_frontmatter(new_metadata, new_body)
+    new_body = leading_ws + f"# {new_title}{trailing_cr}" + sep + rest
+    return new_block + new_body
 
 
 @dataclass(frozen=True)

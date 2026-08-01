@@ -51,11 +51,13 @@ This confirms the design's decomposition; no adjustment needed.
 - [x] 1.9 Write failing golden-string tests for `retitle_document(text, *, current_title, new_title)` in `tests/unit/bundle/test_source_titles.py` covering: byte-identical output apart from the frontmatter `title:` value and the first body line (spec: "Only title and first line change" — assert `description`, `## Source content`, `# Citations`, and every other frontmatter key are unchanged, using the verified byte-identical `load_frontmatter`/`dump_frontmatter` round trip as the golden baseline); a first body line that does NOT read exactly `# {current_title}` raises `ValueError` naming the concept and the line found, and is never written (spec: "A hand-edited first line is refused, not overwritten"); a first body line that matches exactly is rewritten to `# {new_title}` (spec: "A matching first line is overwritten normally"); a CRLF first line has its `\r` stripped for comparison and re-attached verbatim on write, with no other byte moved (design D4). File: `tests/unit/bundle/test_source_titles.py`.
 - [x] 1.10 Implement `retitle_document(text: str, *, current_title: str, new_title: str) -> str` in `src/openkos/bundle/source_titles.py`: `load_frontmatter` -> assert `metadata["title"] == current_title` -> `metadata["title"] = new_title` -> replace only `body.split("\n")[0]` (CRLF-aware) -> `dump_frontmatter`; raise `ValueError` on any first-line mismatch, caught by `resolve_source_title_backfill` and filed under `warned` / `heading-mismatch`. File: `src/openkos/bundle/source_titles.py`.
 
+- [x] 1.14 Post-review revision: `retitle_document` no longer re-dumps the whole frontmatter block (was reformatting key order/`tags`/`timestamp` on a non-canonical Source, verified against the shipped Enchiridion Source); now patches only the `title:` line surgically via `_split_frontmatter_verbatim`/`_patch_title_line` (mirrors `bundle/index.py`'s D2 discipline, not imported), failing closed on a block scalar/anchor/alias/multi-line value; body preserved verbatim except its first line. Tests rewritten with a byte-string assertion over a non-canonical fixture, a trailing-whitespace test, a fail-closed test, and a 5-title round-trip test. Files: `src/openkos/bundle/source_titles.py`, `tests/unit/bundle/test_source_titles.py`.
+
 ### Phase 1.5 — Slice 1 quality gate
 
-- [ ] 1.11 Run `uv run pytest --cov` and confirm branch coverage >= 90% for the new module; fix any gaps.
-- [ ] 1.12 Run `uv run ruff check .`, `uv run ruff format --check .`, and `uv run mypy .`; fix any findings.
-- [ ] 1.13 Confirm `main` stays green and independently mergeable at this point: `bundle/source_titles.py` has no CLI wiring yet, so no user-facing command or behavior changes.
+- [x] 1.11 Ran `uv run pytest --cov=openkos.bundle.source_titles --cov-branch`: 94% branch coverage (>= 90%) for the module, whole-suite `uv run pytest` green at 2894 passed.
+- [x] 1.12 Ran `uv run ruff check .`, `uv run ruff format --check .`, and `uv run mypy .`; all clean.
+- [x] 1.13 Confirmed `main` stays green and independently mergeable at this point: `bundle/source_titles.py` has no CLI wiring yet, so no user-facing command or behavior changes.
 
 ---
 

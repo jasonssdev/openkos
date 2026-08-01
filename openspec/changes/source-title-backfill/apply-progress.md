@@ -1,10 +1,26 @@
 # Apply Progress: source-title-backfill
 
-**Objectives covered so far**: 1A, 1B, and 1C (per orchestrator re-partition of
-Slice 1 into 1A/1B/1C, all landing in one PR). Slice 1 is now functionally
-complete: `titleize`, `retitle_document`, `scan_source_titles`, and
-`resolve_source_title_backfill` are all implemented and green. Slice 2
-(`relabel_index_entry`) and Slice 3 (CLI verb) remain untouched, as scoped.
+**Objectives covered so far**: 1A, 1B, 1C, and a post-review revision
+(task 1.14, below). Slice 1 is functionally complete: `titleize`,
+`retitle_document`, `scan_source_titles`, `resolve_source_title_backfill`
+all implemented and green. Slice 2/3 untouched, as scoped.
+
+## Post-review revision (this run, task 1.14)
+
+Review found `retitle_document` re-dumping the whole frontmatter block
+(re-sorted keys, flattened `tags`, `datetime`-ified `timestamp` on the
+shipped Enchiridion Source). Fixed: semantic validation via
+`okf.load_frontmatter` unchanged; write now surgical via
+`_split_frontmatter_verbatim`/`_patch_title_line` (mirrors `index.py`
+D2, not imported), failing closed on a block scalar/anchor/alias/
+multi-line value. Body preserved verbatim except its first line. Tests
+rewritten: byte-string assertion over a non-canonical fixture,
+trailing-whitespace test, fail-closed test, 5-title round-trip test.
+Acceptance diff on shipped Source: exactly 2 lines. **Risk**:
+`resolve_source_title_backfill` still files this under
+`heading-mismatch`, out of scope here. Budget: src+tests 200 lines
+(numstat) + these 4 artifacts. Gate: pytest 2894 passed, 94% branch
+coverage, ruff/mypy clean.
 
 ## Tasks completed — objective 1C (this run)
 
