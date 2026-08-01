@@ -17,7 +17,7 @@ from openkos.bundle import log as bundle_log
 from openkos.bundle.source_titles import titleize
 from openkos.cli.main import app
 from openkos.model import okf
-from tests.unit.cli.conftest import snapshot_with_mtime
+from tests.unit.cli.conftest import confirm_after, snapshot_with_mtime
 
 runner = CliRunner()
 
@@ -530,3 +530,133 @@ def test_a_confirmed_run_touches_only_the_expected_paths(
     }
     changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
     assert changed == expected
+
+
+def _two_registered_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str]:
+    """A workspace with two staged, index-registered Sources on a TTY -- the
+    minimum that makes "every OTHER write target is untouched" falsifiable."""
+    _init_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    first_id = _staged(tmp_path, "aaa-mechanical")
+    _register_index_entry(tmp_path, first_id, titleize("aaa-mechanical"))
+    second_id = _staged(tmp_path, "zzz-mechanical")
+    _register_index_entry(tmp_path, second_id, titleize("zzz-mechanical"))
+    return first_id, second_id
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["bundle/sources/zzz-mechanical.md", "bundle/index.md", "bundle/log.md"],
+)
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#306: the whole plan -- every staged Source's new bytes, the relabeled
+    `index.md`, the new `log.md` -- is computed BEFORE the prompt, so an edit
+    landing while the operator reads the preview used to be overwritten in
+    full and then committed. Every one of the three target kinds is
+    parametrized because each reaches the guard through a different entry.
+
+    The assertion is on BYTES, both ways: the concurrent edit must survive
+    verbatim, and the whole-workspace diff must contain nothing but that one
+    path -- so a guard that refused only after writing some other target
+    fails here.
+    """
+    _two_registered_sources(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = (
+        target_path.read_text(encoding="utf-8")
+        + "\nA paragraph added while the prompt waited.\n"
+    )
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["backfill-source-titles"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_write_target_deleted_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target that has since been DELETED is drift too: re-creating it from
+    a snapshot the operator can no longer see is the same silent revert as
+    overwriting it, so the run must refuse rather than resurrect it."""
+    _, second_id = _two_registered_sources(tmp_path, monkeypatch)
+    deleted_path = tmp_path / "bundle" / f"{second_id}.md"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, deleted_path.unlink)
+
+    result = runner.invoke(app, ["backfill-source-titles"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert f"bundle/{second_id}.md" in result.stderr
+    assert not deleted_path.exists()
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(f"bundle/{second_id}.md")}
+
+
+def test_a_crlf_rewrite_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#306: line-ending-only drift is still drift.
+
+    `read_text` applies universal-newline translation, so a CRLF rewrite
+    compares EQUAL to its own LF snapshot. The guard would pass, and
+    `fsio.write_atomic` -- which opens with `newline=""` -- would then put
+    the LF plan back over the operator's CRLF file: the exact silent revert
+    this guard exists to stop, narrowed to line endings. Comparing raw bytes
+    is what makes this observable, so this test fails if the comparison ever
+    goes back through `read_text`.
+    """
+    _two_registered_sources(tmp_path, monkeypatch)
+    target = "bundle/index.md"
+    target_path = tmp_path / target
+    concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != target_path.read_bytes()
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent))
+
+    result = runner.invoke(app, ["backfill-source-titles"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_bytes() == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_target_that_was_already_crlf_is_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#306, the other direction: a write target that was ALREADY CRLF at
+    rest, untouched by anyone, must not be reported as drift.
+
+    Both sides of the guard's comparison have to come from the same reader.
+    Comparing raw bytes against a `read_text` snapshot fails here on every
+    run -- and because `log.md` is a write target of all three verbs, one
+    CRLF file would make all three refuse permanently, with a message naming
+    a cause that never happened and a re-run that cannot clear it.
+    """
+    _two_registered_sources(tmp_path, monkeypatch)
+    log_path = tmp_path / "bundle" / "log.md"
+    log_path.write_bytes(log_path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = runner.invoke(app, ["backfill-source-titles", "--auto"])
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr

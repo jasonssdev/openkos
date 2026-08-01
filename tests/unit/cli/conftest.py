@@ -9,6 +9,11 @@ conftest (`tests/unit/vcs/conftest.py`'s `isolate_git_identity` is imported
 that way by six CLI modules). #281 replaced 18 verbatim per-module copies
 with them.
 
+`confirm_after` (#306) shares the same import convention but is neither a
+snapshot helper nor a wrote-nothing assertion: it is a `typer.confirm` stub
+that lands an edit inside the prompt window, and only the three modules
+covering the drift guard import it.
+
 The offline-Ollama default that used to live here (#183) moved up to
 `tests/unit/conftest.py` in #217. Two reasons, both discovered by measuring
 rather than reading: it was INCOMPLETE (it stubbed `chat` and `embed` but not
@@ -28,6 +33,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+import typer
 
 _EXCLUDED_DIRS = (".git",)
 """Directories whose CONTENTS a workspace snapshot must not compare -- the
@@ -178,6 +184,38 @@ def snapshot_including_git(root: Path) -> dict[Path, Entry]:
         path.relative_to(root): _classify(path)
         for path in _walk(root, apply_exclusions=False)
     }
+
+
+def confirm_after(monkeypatch: pytest.MonkeyPatch, edit: Callable[[], object]) -> None:
+    """Replace `typer.confirm` with a stub that runs `edit` and then answers
+    yes, so a test can mutate the workspace INSIDE the window a mutating
+    verb leaves open between its Phase-A snapshot and its first Phase-B
+    write (#306).
+
+    Patching the prompt rather than `fsio.write_atomic` is deliberate: the
+    prompt is where that window is actually widest -- an operator reading a
+    preview is a human-scale pause, which is exactly when a second terminal
+    lands an edit -- and it needs no timing, no threads, and no assumption
+    about how many writes a verb performs. `typer.confirm` is patched on the
+    `typer` module itself because `cli/main.py` calls it as `typer.confirm`
+    (the precedent is `test_forget.py`'s two confirm stubs).
+
+    The stub swallows the call's arguments, `abort=True` included: returning
+    `True` is what "the operator said yes" means to every call site here, so
+    a verb that refuses after this stub ran refused for its OWN reason, not
+    because the prompt declined.
+
+    `edit` returns `object` rather than `None` so a caller can pass a bare
+    `lambda: path.write_text(...)` (which returns the character count) or a
+    bound `path.unlink` without either one needing a wrapper; the return
+    value is discarded.
+    """
+
+    def _confirm(*args: object, **kwargs: object) -> bool:
+        edit()
+        return True
+
+    monkeypatch.setattr(typer, "confirm", _confirm)
 
 
 @pytest.fixture
