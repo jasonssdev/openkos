@@ -3770,6 +3770,115 @@ def backfill_sensitivity_cmd(
     )
 
 
+@app.command("backfill-source-titles")
+def backfill_source_titles_cmd(
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Bundle-wide sweep that re-derives each `type: Source` concept's
+    `title` from its immutable `raw/` bytes (design D2/D3), mirroring
+    `backfill_sensitivity_cmd`'s Phase A/Phase B shape. No `<concept-id>`
+    argument -- bundle-wide only.
+
+    Phase A: snapshot -> `scan_source_titles` (candidates/skipped/warned
+    from frontmatter alone) -> read `raw/<name>` per candidate into
+    `raw_texts` (an absent key means unreadable, an explicit `None` means
+    undecodable -- `UnicodeDecodeError` is caught before the outer
+    `except (OSError, ValueError)`, `ingest`'s ordering, since it
+    subclasses `ValueError`) -> `resolve_source_title_backfill`.
+
+    Empty `staged` short-circuits: "nothing was staged", no write, no
+    commit, exit 0. Otherwise a THREE-bucket preview (staged/skipped/
+    warned, unlike `backfill-sensitivity`'s stage-or-nothing preview) is
+    printed, then the confirm gate mirrors `backfill_sensitivity_cmd`'s
+    precedence exactly: `--auto` / `review: false` / TTY `typer.confirm` /
+    non-TTY refuse.
+
+    Phase B (write `index.md` -> each staged Source -> `log.md`, one
+    `_autocommit`, design D6) is a later objective, deliberately NOT
+    implemented here: this stops right after the confirm gate.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            raise ValueError(workspace_reason)
+        cfg = config.read_config(root)
+
+        bundle_snapshot: dict[str, str] = {}
+        for path in sorted(layout.bundle_dir.rglob("*.md")):
+            if path.name in okf.RESERVED_FILENAMES:
+                continue
+            rel = path.relative_to(layout.bundle_dir).as_posix()
+            bundle_snapshot[rel] = path.read_text(encoding="utf-8")
+
+        scan = source_titles.scan_source_titles(bundle_snapshot)
+
+        raw_texts: dict[str, str | None] = {}
+        for candidate in scan.candidates:
+            raw_path = layout.raw_dir / PurePosixPath(candidate.resource).name
+            try:
+                raw_texts[candidate.resource] = raw_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # Subclasses `ValueError`: caught before `except (OSError,
+                # ValueError)` below, or one binary raw file fails the sweep.
+                raw_texts[candidate.resource] = None
+            except OSError:
+                pass  # absent key -> `raw-unreadable` (design D2)
+
+        backfill = source_titles.resolve_source_title_backfill(scan, raw_texts)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos backfill-source-titles: refusing to run -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    if not backfill.staged:
+        typer.echo(
+            "openkos backfill-source-titles: nothing was staged -- no Source "
+            "has a mechanical title with a differing re-derivation."
+        )
+        return
+
+    typer.echo("openkos backfill-source-titles: proposed changes:")
+    for retitle in backfill.staged:
+        typer.echo(
+            f"  ~ bundle/{retitle.concept_id}.md (title: "
+            f"{retitle.current_title!r} -> {retitle.new_title!r})"
+        )
+    for skipped in backfill.skipped:
+        typer.echo(f"  = bundle/{skipped.concept_id}.md (skipped: {skipped.reason})")
+    for warned in backfill.warned:
+        typer.echo(f"  ! bundle/{warned.concept_id}.md (warned: {warned.reason})")
+
+    confirm_enabled = not auto and cfg.review
+    prompt_will_run = confirm_enabled and sys.stdin.isatty()
+
+    if confirm_enabled:
+        if prompt_will_run:
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos backfill-source-titles: refusing to write without "
+                "confirmation -- stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    # TODO(objective 3B, tasks 3.5-3.11): Phase B write orchestration --
+    # `relabel_index_entry` per staged Source, one `log.md` entry,
+    # `write_atomic(index.md)` -> each staged Source (sorted) ->
+    # `write_atomic(log.md)`, one `_autocommit` (design D6).
+    typer.echo(
+        "openkos backfill-source-titles: confirmed -- writing is not yet implemented."
+    )
+
+
 @app.command("set-volatility")
 def set_volatility_cmd(
     concept_type: str = typer.Argument(

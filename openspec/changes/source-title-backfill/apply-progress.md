@@ -402,5 +402,109 @@ Status: complete (tasks 2.1-2.5).
 
 ## Slice 3 — `backfill-source-titles` CLI verb
 
-Not started. Depends on Slice 1 (landed via PR #302) and Slice 2 (this
-branch) both being present before it can be implemented.
+### Objective 3A (this run): tasks 3.1-3.4 + mandatory bracket guard
+
+Scope was hard-bounded to the confirm gate: the command reaches the
+three-bucket preview and the confirm-gate precedence, then stops with an
+explicit `TODO(objective 3B, ...)` marker and a "writing is not yet
+implemented" message -- no `index.md`/Source/`log.md` write, no
+`_autocommit`, per instructions. Tasks 3.5-3.18 (write orchestration,
+atomicity, idempotence, cross-run invariants, malformed-resource and
+hand-edited-first-line CLI-level integration, the Slice 3 quality gate) are
+untouched, as scoped.
+
+**Mandatory guard from the Slice 2 review, landed here** (task 3.4b, added
+to `tasks.md`): `relabel_index_entry` in `src/openkos/bundle/index.py` now
+rejects `[`, `]`, `(`, `)`, and a backtick in `new_title` via a new
+`_reject_markdown_link_delimiters` guard, in the same style as
+`_reject_newline`. Also fixed the pre-existing message-field drift: the
+call site passed the literal `"title"` to `_reject_newline` while the
+parameter is `new_title`; both guards now pass `"new_title"`. Pinned by a
+parametrized test in `tests/unit/bundle/test_index.py` asserting the
+guard's specific message (`match=r"markdown link delimiter"`, not a generic
+`match=`) and that the bullet's link target is unchanged when it fires.
+This guard was not merge-blocking for Slice 2 because nothing called
+`relabel_index_entry` yet; this objective adds the CLI's first read path
+toward that call (Phase B wiring itself is objective 3B/3C), so the guard
+lands here per instructions.
+
+**`backfill-source-titles` Typer command** (`src/openkos/cli/main.py`),
+structural sibling of `backfill_sensitivity_cmd`: `require_workspace` ->
+`read_config` -> `sorted(rglob(bundle/*.md))` snapshot (reserved filenames
+skipped) -> `scan_source_titles` -> read `raw/<name>` per candidate into
+`raw_texts` (`UnicodeDecodeError` caught before the outer
+`except (OSError, ValueError)`, `ingest`'s ordering, since it subclasses
+`ValueError`; an absent key means unreadable, an explicit `None` means
+undecodable) -> `resolve_source_title_backfill`. Empty `staged`
+short-circuits (exit 0, "nothing was staged", no write). Otherwise a
+THREE-bucket preview (staged/skipped/warned, each with its reason) prints
+before the confirm gate, which reuses `backfill_sensitivity_cmd`'s exact
+precedence (`--auto` / `cfg.review is False` / TTY `typer.confirm` /
+non-TTY refuse). After the gate: a `TODO` placeholder comment plus one
+`typer.echo` — the deliberate seam for objective 3B.
+
+**Tests** (`tests/unit/cli/test_backfill_source_titles.py`, new file, 7
+cases): both empty-result short-circuit scenarios; the three-bucket
+preview showing a staged/curated/warned id each; `--auto`; `review: false`
+(hand-edited `openkos.yaml`, mirroring `test_relate.py`'s pattern); non-TTY
+refusal; declining the TTY prompt performs no write to the Source, `index.md`,
+or `log.md` (byte-snapshot before/after). Sources are hand-written via
+`okf.build_source_concept` directly (bypassing `ingest`) because a
+single-Source `ingest` cannot express the pre-#248 "mechanical title, raw
+content re-derives to something different" state this command targets --
+`ingest` always derives the title from the same raw content it embeds.
+
+### Quality gate — verbatim evidence (objective 3A, this run)
+
+```
+uv run pytest            -> 2920 passed
+uv run ruff check .      -> All checks passed!
+uv run ruff format --check .  -> 160 files already formatted
+uv run mypy .            -> Success: no issues found in 160 source files
+```
+
+### Changed-line budget (objective 3A, this run)
+
+```
+git diff --numstat
+ src/openkos/bundle/index.py                    28 (+25/-3)
+ src/openkos/cli/main.py                        109
+ tests/unit/bundle/test_index.py                17
+ tests/unit/cli/test_backfill_source_titles.py  181
+```
+**Total: 335 changed lines** (`git diff --stat` insertions+deletions),
+over the 200-line hard cap given for this objective, even after several
+compaction passes (docstrings trimmed on both `backfill_source_titles_cmd`
+and `_reject_markdown_link_delimiters`; test helpers deduplicated into
+`_staged`/`_skipped`/`_warned`). Flagged, not silent: **no spec-required
+scenario was cut to reach the cap.** The seven CLI test cases each pin a
+distinct spec scenario (two short-circuit, one preview, and four
+confirm-gate-precedence cases), and the bracket guard was an explicit,
+non-optional instruction from this run's own prompt. The 200-line figure
+matches design.md's own per-slice estimate for a much SMALLER unit (a
+single primitive, e.g. Slice 2's `relabel_index_entry` alone landed at 194)
+-- design.md's own estimate for the FULL CLI verb + tests is 380-490 lines,
+of which this objective (a strict subset: 4 of Slice 3's 18 tasks, plus one
+review-driven addition) accounts for 335.
+
+### Files touched (objective 3A, this run)
+
+- `src/openkos/bundle/index.py` -- `_reject_markdown_link_delimiters` +
+  `_LABEL_UNSAFE_CHARS_RE`, call-site wiring, `_reject_newline` field-name
+  fix, docstring updates
+- `src/openkos/cli/main.py` -- new `backfill-source-titles` command
+  (Phase A + preview + confirm gate only; Phase B is a `TODO` placeholder)
+- `tests/unit/bundle/test_index.py` -- one new parametrized guard test
+- `tests/unit/cli/test_backfill_source_titles.py` -- new file, 7 cases
+- `openspec/changes/source-title-backfill/tasks.md` -- 3.1-3.4 ticked,
+  new 3.4b added and ticked
+
+### Not done (next run, objective 3B)
+
+Tasks 3.5-3.18: Phase B write orchestration (`relabel_index_entry` wiring,
+`write_atomic(index.md)` -> each staged Source (sorted) ->
+`write_atomic(log.md)`, one `_autocommit`, design D6's index-first
+ordering), atomicity/partial-failure reporting, idempotence and cross-run
+invariants, the malformed-resource and hand-edited-first-line CLI-level
+integration tests, and the Slice 3 quality gate (branch coverage,
+whole-suite regression confirmation).

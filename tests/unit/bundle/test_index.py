@@ -1124,6 +1124,23 @@ def test_relabel_index_entry_rejects_newline_in_new_title() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "new_title", ["Notes [draft]", "Notes (draft)", "Notes]", "Notes(", "`Notes`"]
+)
+def test_relabel_index_entry_rejects_markdown_link_delimiters_in_new_title(
+    new_title: str,
+) -> None:
+    """A `new_title` with `[`, `]`, `(`, `)`, or a backtick is REJECTED --
+    unescaped it would forge/break a link, permanently hiding the bullet
+    from `relabel_index_entry`/`remove_index_entry` (verified by execution).
+    The guard raises before touching `index_text`, so the original bullet's
+    link target is provably still present, unchanged, in the input."""
+    with pytest.raises(ValueError, match=r"markdown link delimiter"):
+        relabel_index_entry(_TWO_SOURCE_INDEX, "sources/reading-notes", new_title)
+
+    assert "(/sources/reading-notes.md)" in _TWO_SOURCE_INDEX
+
+
 def test_relabel_index_entry_raises_valueerror_on_malformed_frontmatter() -> None:
     """A text that does not start with a `---`-delimited frontmatter block
     raises `ValueError`, matching `remove_index_entry`'s existing contract."""
