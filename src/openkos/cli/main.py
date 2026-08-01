@@ -3770,6 +3770,180 @@ def backfill_sensitivity_cmd(
     )
 
 
+@app.command("backfill-source-titles")
+def backfill_source_titles_cmd(
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Bundle-wide sweep that re-derives each `type: Source` concept's
+    `title` from its immutable `raw/` bytes (design D2/D3), mirroring
+    `backfill_sensitivity_cmd`'s Phase A/Phase B shape. No `<concept-id>`
+    argument -- bundle-wide only.
+
+    Phase A: snapshot -> `scan_source_titles` (candidates/skipped/warned
+    from frontmatter alone) -> read `raw/<name>` per candidate into
+    `raw_texts` (an absent key means unreadable, an explicit `None` means
+    undecodable -- `UnicodeDecodeError` is caught before the outer
+    `except (OSError, ValueError)`, `ingest`'s ordering, since it
+    subclasses `ValueError`) -> `resolve_source_title_backfill`.
+
+    Empty `staged` short-circuits: "nothing was staged", no write, no
+    commit, exit 0. Otherwise a THREE-bucket preview (staged/skipped/
+    warned, unlike `backfill-sensitivity`'s stage-or-nothing preview) is
+    printed, then the confirm gate mirrors `backfill_sensitivity_cmd`'s
+    precedence exactly: `--auto` / `review: false` / TTY `typer.confirm` /
+    non-TTY refuse.
+
+    Phase B writes `index.md` first, then each staged Source, then `log.md`,
+    then one `_autocommit` (design D6); both write-bound texts are computed
+    before the preview so a malformed `index.md` refuses before any write.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            raise ValueError(workspace_reason)
+        cfg = config.read_config(root)
+
+        bundle_snapshot: dict[str, str] = {}
+        for path in sorted(layout.bundle_dir.rglob("*.md")):
+            if path.name in okf.RESERVED_FILENAMES:
+                continue
+            rel = path.relative_to(layout.bundle_dir).as_posix()
+            bundle_snapshot[rel] = path.read_text(encoding="utf-8")
+
+        scan = source_titles.scan_source_titles(bundle_snapshot)
+
+        raw_texts: dict[str, str | None] = {}
+        for candidate in scan.candidates:
+            raw_path = layout.raw_dir / PurePosixPath(candidate.resource).name
+            try:
+                raw_texts[candidate.resource] = raw_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # Subclasses `ValueError`: caught before `except (OSError,
+                # ValueError)` below, or one binary raw file fails the sweep.
+                raw_texts[candidate.resource] = None
+            except OSError:
+                pass  # absent key -> `raw-unreadable` (design D2)
+
+        backfill = source_titles.resolve_source_title_backfill(scan, raw_texts)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos backfill-source-titles: refusing to run -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    if not backfill.staged:
+        typer.echo(
+            "openkos backfill-source-titles: nothing was staged -- no Source "
+            "has a mechanical title with a differing re-derivation."
+        )
+        return
+
+    # Both write-bound texts are computed HERE, before the preview, so a
+    # malformed `index.md` refuses before any write rather than halfway
+    # through Phase B (design D6).
+    try:
+        new_index_text = index_path.read_text(encoding="utf-8")
+        for retitle in backfill.staged:
+            new_index_text, _ = bundle_index.relabel_index_entry(
+                new_index_text, retitle.concept_id, retitle.new_title
+            )
+
+        retitled = ", ".join(
+            f"'bundle/{retitle.concept_id}.md' -> {retitle.new_title!r}"
+            for retitle in backfill.staged
+        )
+        log_line = (
+            f"**Backfill-source-titles**: Re-derived {len(backfill.staged)} "
+            f"Source title(s) from their raw content: {retitled}."
+        )
+        new_log_text = bundle_log.insert_log_entry(
+            log_path.read_text(encoding="utf-8"),
+            datetime.now(UTC).astimezone().date(),
+            log_line,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos backfill-source-titles: failed while preparing the "
+            f"backfill-source-titles -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("openkos backfill-source-titles: proposed changes:")
+    for retitle in backfill.staged:
+        typer.echo(
+            f"  ~ bundle/{retitle.concept_id}.md (title: "
+            f"{retitle.current_title!r} -> {retitle.new_title!r})"
+        )
+    for skipped in backfill.skipped:
+        typer.echo(f"  = bundle/{skipped.concept_id}.md (skipped: {skipped.reason})")
+    for warned in backfill.warned:
+        typer.echo(f"  ! bundle/{warned.concept_id}.md (warned: {warned.reason})")
+
+    confirm_enabled = not auto and cfg.review
+    prompt_will_run = confirm_enabled and sys.stdin.isatty()
+
+    if confirm_enabled:
+        if prompt_will_run:
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos backfill-source-titles: refusing to write without "
+                "confirmation -- stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    landed: list[str] = []
+    try:
+        # `index.md` FIRST, then each staged Source, then `log.md` --
+        # the OPPOSITE of `backfill-sensitivity`'s items-then-aggregate
+        # order (design D6). The classifier keys on a Source document's own
+        # `title`; once a document is written, a mid-sweep failure before
+        # `index.md` lands would leave its bullet unrevisitable on re-run.
+        # Index-first is the only order a re-run repairs -- do NOT "fix"
+        # this to match `backfill-sensitivity`.
+        fsio.write_atomic(index_path, new_index_text)
+        landed.append("bundle/index.md")
+        for retitle in backfill.staged:
+            source_path = f"bundle/{retitle.concept_id}.md"
+            fsio.write_atomic(
+                layout.bundle_dir / f"{retitle.concept_id}.md", retitle.content
+            )
+            landed.append(source_path)
+        fsio.write_atomic(log_path, new_log_text)
+        landed.append("bundle/log.md")
+    except (OSError, ValueError) as exc:
+        landed_suffix = (
+            f"Already written (left partially retitled, not rolled back): "
+            f"{', '.join(landed)}."
+            if landed
+            else "No path was written."
+        )
+        typer.echo(
+            f"openkos backfill-source-titles: failed while writing the "
+            f"backfill -- {exc}. {landed_suffix}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos backfill-source-titles: retitled {len(backfill.staged)} "
+        f"Source(s) ({index_path.name}, {log_path.name} updated): {retitled}."
+    )
+
+    _autocommit(root, landed, "openkos: backfill-source-titles")
+
+
 @app.command("set-volatility")
 def set_volatility_cmd(
     concept_type: str = typer.Argument(

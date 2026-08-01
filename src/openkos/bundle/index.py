@@ -230,6 +230,26 @@ def remove_index_entry(index_text: str, concept_id: str) -> tuple[str, int]:
 
 
 _LABELLED_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+_LABEL_UNSAFE_CHARS_RE = re.compile(r"[\[\]()`]")
+
+
+def _reject_markdown_link_delimiters(field: str, value: str) -> None:
+    """Raise `ValueError` if `value` contains `[`, `]`, `(`, `)`, or a
+    backtick (Slice 2 review finding, corroborated by execution).
+
+    The LABEL span written by `relabel_index_entry` is the one place a
+    title is interpolated without becoming the link target or description,
+    so it is the one place a slipped-through delimiter lets the REST of the
+    bullet be rewritten: `[`/`]` forges a second link, `(`/`)` breaks the
+    existing target. Either way `_LINK_RE`/`_LABELLED_LINK_RE` then match
+    the FORGED link, not the real one -- verified by execution: the bullet
+    becomes invisible to both `relabel_index_entry` and `remove_index_entry`.
+    """
+    if _LABEL_UNSAFE_CHARS_RE.search(value):
+        raise ValueError(
+            f"index.md: {field!r} must not contain a markdown link delimiter "
+            "('[', ']', '(', ')') or a backtick"
+        )
 
 
 def relabel_index_entry(
@@ -255,15 +275,17 @@ def relabel_index_entry(
     Only the label span between `[` and `]` of the bullet's first link is
     replaced; the link target, the ` - ` separator, the description, the
     bullet marker, leading indentation, and the line ending all round-trip
-    verbatim. `_reject_newline` guards `new_title` for the same RISK-1 reason
-    as `insert_index_entry`'s fields. Count semantics mirror
+    verbatim. `_reject_newline` and `_reject_markdown_link_delimiters` both
+    guard `new_title` (see the latter's own docstring for why the label
+    span is the one place that must be escaped). Count semantics mirror
     `remove_index_entry`: zero matches returns `(index_text, 0)` unchanged --
     not an error, since catalog drift is not a reason to refuse an otherwise
     safe relabel; more than one match (a duplicate catalog entry) relabels
     ALL of them, reporting the total, since leaving one stale label behind
     would be worse than the duplicate itself.
     """
-    _reject_newline("title", new_title)
+    _reject_newline("new_title", new_title)
+    _reject_markdown_link_delimiters("new_title", new_title)
     frontmatter_block, body = _split_frontmatter_verbatim(index_text)
     lines = body.splitlines(keepends=True)
     result_lines: list[str] = []
