@@ -227,3 +227,59 @@ def remove_index_entry(index_text: str, concept_id: str) -> tuple[str, int]:
     if removed == 0:
         return index_text, 0
     return frontmatter_block + "".join(kept_lines), removed
+
+
+_LABELLED_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+
+
+def relabel_index_entry(
+    index_text: str, concept_id: str, new_title: str
+) -> tuple[str, int]:
+    """Rewrite the LABEL of every bullet whose FIRST markdown link resolves to
+    `concept_id`, leaving slug, link target, and description untouched.
+
+    `remove_index_entry`'s twin: same frontmatter-splitting discipline, same
+    line-walk, same "first link only" candidate rule, same zero/duplicate
+    count semantics -- but this REWRITES a span instead of dropping a line.
+    Identity is `_link_identity(target) == concept_id`, never a label-text
+    match, because the whole point of this function is to correct a label
+    that has drifted from the document's actual `title` -- matching on the
+    (stale) label itself would never find the bullet that needs fixing.
+
+    Uses a SEPARATE regex, `_LABELLED_LINK_RE`, rather than adding a capture
+    group to the module-level `_LINK_RE`: `remove_index_entry` reads
+    `_LINK_RE.search(...).group(1)` as the link TARGET and depends on
+    `_LINK_RE` having exactly one group, so widening it here would silently
+    break that call site.
+
+    Only the label span between `[` and `]` of the bullet's first link is
+    replaced; the link target, the ` - ` separator, the description, the
+    bullet marker, leading indentation, and the line ending all round-trip
+    verbatim. `_reject_newline` guards `new_title` for the same RISK-1 reason
+    as `insert_index_entry`'s fields. Count semantics mirror
+    `remove_index_entry`: zero matches returns `(index_text, 0)` unchanged --
+    not an error, since catalog drift is not a reason to refuse an otherwise
+    safe relabel; more than one match (a duplicate catalog entry) relabels
+    ALL of them, reporting the total, since leaving one stale label behind
+    would be worse than the duplicate itself.
+    """
+    _reject_newline("title", new_title)
+    frontmatter_block, body = _split_frontmatter_verbatim(index_text)
+    lines = body.splitlines(keepends=True)
+    result_lines: list[str] = []
+    relabeled = 0
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(_BULLET_MARKERS):
+            match = _LABELLED_LINK_RE.search(stripped)
+            if match is not None and _link_identity(match.group(2)) == concept_id:
+                start, end = match.span(1)
+                stripped = stripped[:start] + new_title + stripped[end:]
+                indent = line[: len(line) - len(line.lstrip())]
+                line = indent + stripped
+                relabeled += 1
+        result_lines.append(line)
+
+    if relabeled == 0:
+        return index_text, 0
+    return frontmatter_block + "".join(result_lines), relabeled
