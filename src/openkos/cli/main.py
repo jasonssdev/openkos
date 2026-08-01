@@ -3797,12 +3797,14 @@ def backfill_source_titles_cmd(
     precedence exactly: `--auto` / `review: false` / TTY `typer.confirm` /
     non-TTY refuse.
 
-    Phase B (write `index.md` -> each staged Source -> `log.md`, one
-    `_autocommit`, design D6) is a later objective, deliberately NOT
-    implemented here: this stops right after the confirm gate.
+    Phase B writes `index.md` first, then each staged Source, then `log.md`,
+    then one `_autocommit` (design D6); both write-bound texts are computed
+    before the preview so a malformed `index.md` refuses before any write.
     """
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
 
     try:
         workspace_reason = config.require_workspace(root)
@@ -3845,6 +3847,37 @@ def backfill_source_titles_cmd(
         )
         return
 
+    # Both write-bound texts are computed HERE, before the preview, so a
+    # malformed `index.md` refuses before any write rather than halfway
+    # through Phase B (design D6).
+    try:
+        new_index_text = index_path.read_text(encoding="utf-8")
+        for retitle in backfill.staged:
+            new_index_text, _ = bundle_index.relabel_index_entry(
+                new_index_text, retitle.concept_id, retitle.new_title
+            )
+
+        retitled = ", ".join(
+            f"'bundle/{retitle.concept_id}.md' -> {retitle.new_title!r}"
+            for retitle in backfill.staged
+        )
+        log_line = (
+            f"**Backfill-source-titles**: Re-derived {len(backfill.staged)} "
+            f"Source title(s) from their raw content: {retitled}."
+        )
+        new_log_text = bundle_log.insert_log_entry(
+            log_path.read_text(encoding="utf-8"),
+            datetime.now(UTC).astimezone().date(),
+            log_line,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos backfill-source-titles: failed while preparing the "
+            f"backfill-source-titles -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
     typer.echo("openkos backfill-source-titles: proposed changes:")
     for retitle in backfill.staged:
         typer.echo(
@@ -3870,13 +3903,45 @@ def backfill_source_titles_cmd(
             )
             raise typer.Exit(code=1)
 
-    # TODO(objective 3B, tasks 3.5-3.11): Phase B write orchestration --
-    # `relabel_index_entry` per staged Source, one `log.md` entry,
-    # `write_atomic(index.md)` -> each staged Source (sorted) ->
-    # `write_atomic(log.md)`, one `_autocommit` (design D6).
+    landed: list[str] = []
+    try:
+        # `index.md` FIRST, then each staged Source, then `log.md` --
+        # the OPPOSITE of `backfill-sensitivity`'s items-then-aggregate
+        # order (design D6). The classifier keys on a Source document's own
+        # `title`; once a document is written, a mid-sweep failure before
+        # `index.md` lands would leave its bullet unrevisitable on re-run.
+        # Index-first is the only order a re-run repairs -- do NOT "fix"
+        # this to match `backfill-sensitivity`.
+        fsio.write_atomic(index_path, new_index_text)
+        landed.append("bundle/index.md")
+        for retitle in backfill.staged:
+            source_path = f"bundle/{retitle.concept_id}.md"
+            fsio.write_atomic(
+                layout.bundle_dir / f"{retitle.concept_id}.md", retitle.content
+            )
+            landed.append(source_path)
+        fsio.write_atomic(log_path, new_log_text)
+        landed.append("bundle/log.md")
+    except (OSError, ValueError) as exc:
+        landed_suffix = (
+            f"Already written (left partially retitled, not rolled back): "
+            f"{', '.join(landed)}."
+            if landed
+            else "No path was written."
+        )
+        typer.echo(
+            f"openkos backfill-source-titles: failed while writing the "
+            f"backfill -- {exc}. {landed_suffix}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
     typer.echo(
-        "openkos backfill-source-titles: confirmed -- writing is not yet implemented."
+        f"openkos backfill-source-titles: retitled {len(backfill.staged)} "
+        f"Source(s) ({index_path.name}, {log_path.name} updated): {retitled}."
     )
+
+    _autocommit(root, landed, "openkos: backfill-source-titles")
 
 
 @app.command("set-volatility")
