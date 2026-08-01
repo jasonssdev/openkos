@@ -5,6 +5,7 @@ import pytest
 from openkos.bundle.index import (
     insert_index_entry,
     insert_source_entry,
+    relabel_index_entry,
     remove_index_entry,
     render_index,
 )
@@ -1013,4 +1014,141 @@ def test_remove_index_entry_does_not_match_non_first_link_on_the_line() -> None:
     result, removed = remove_index_entry(index_text, "people/epictetus")
 
     assert removed == 0
+    assert result == index_text
+
+
+_TWO_SOURCE_INDEX = (
+    "---\n"
+    'okf_version: "0.1"\n'
+    "---\n"
+    "\n"
+    "# Sources\n"
+    "\n"
+    "* [Untitled Draft](/sources/reading-notes.md) - First pass through the text.\n"
+    "* [Call transcript](/sources/call-transcript.md) - A recorded call.\n"
+)
+
+
+def test_relabel_index_entry_rewrites_only_the_matching_bullet_label() -> None:
+    """The matched bullet's label becomes `new_title`; slug, link target, and
+    description text round-trip byte-for-byte -- proven against a SECOND,
+    distinguishable bullet so a cross-bullet mixup would fail this test.
+    The original label ("Untitled Draft") shares no text with `concept_id`
+    or the new title, proving identity comes from the link target, never a
+    label match."""
+    result, relabeled = relabel_index_entry(
+        _TWO_SOURCE_INDEX, "sources/reading-notes", "Notes on the Reading"
+    )
+
+    assert relabeled == 1
+    assert result == (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Sources\n"
+        "\n"
+        "* [Notes on the Reading](/sources/reading-notes.md) - "
+        "First pass through the text.\n"
+        "* [Call transcript](/sources/call-transcript.md) - A recorded call.\n"
+    )
+
+
+def test_relabel_index_entry_zero_matches_returns_unchanged() -> None:
+    """A `concept_id` with no matching bullet returns `(index_text, 0)`
+    UNCHANGED -- catalog drift is not a reason to refuse an otherwise-safe
+    relabel (mirrors `remove_index_entry`'s rule)."""
+    result, relabeled = relabel_index_entry(
+        _TWO_SOURCE_INDEX, "sources/nonexistent", "New Title"
+    )
+
+    assert relabeled == 0
+    assert result == _TWO_SOURCE_INDEX
+
+
+def test_relabel_index_entry_relabels_duplicates_and_preserves_indent_and_marker() -> (
+    None
+):
+    """More than one bullet resolving to the same `concept_id` is relabeled
+    in EVERY occurrence, reporting the total; indentation and the `-`
+    bullet marker (vs. the engine's `*`) round-trip verbatim on every
+    changed line."""
+    index_text = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Sources\n"
+        "\n"
+        "  - [Reading notes](/sources/reading-notes.md) - First pass.\n"
+        "* [Reading notes again](/sources/reading-notes.md) - Duplicate entry.\n"
+    )
+
+    result, relabeled = relabel_index_entry(
+        index_text, "sources/reading-notes", "Consolidated Title"
+    )
+
+    assert relabeled == 2
+    assert result == (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Sources\n"
+        "\n"
+        "  - [Consolidated Title](/sources/reading-notes.md) - First pass.\n"
+        "* [Consolidated Title](/sources/reading-notes.md) - Duplicate entry.\n"
+    )
+
+
+def test_relabel_index_entry_preserves_frontmatter_verbatim() -> None:
+    """The frontmatter block is preserved byte-for-byte across a relabel,
+    never re-dumped through `_split_frontmatter_verbatim`'s twin."""
+    result, relabeled = relabel_index_entry(
+        _TWO_SOURCE_INDEX, "sources/reading-notes", "New Label"
+    )
+
+    assert relabeled == 1
+    frontmatter_block = _TWO_SOURCE_INDEX.split("---\n", 2)
+    expected_frontmatter = "---\n" + frontmatter_block[1] + "---\n"
+    assert result.startswith(expected_frontmatter)
+
+
+def test_relabel_index_entry_rejects_newline_in_new_title() -> None:
+    """A `new_title` containing a newline is REJECTED via `_reject_newline`,
+    matching `insert_index_entry`'s RISK-1 guard: unescaped, it could forge a
+    section header the next time `index.md` is parsed."""
+    with pytest.raises(ValueError, match="newline"):
+        relabel_index_entry(
+            _TWO_SOURCE_INDEX, "sources/reading-notes", "evil\n# Forged Section"
+        )
+
+
+def test_relabel_index_entry_raises_valueerror_on_malformed_frontmatter() -> None:
+    """A text that does not start with a `---`-delimited frontmatter block
+    raises `ValueError`, matching `remove_index_entry`'s existing contract."""
+    with pytest.raises(ValueError, match="frontmatter"):
+        relabel_index_entry(
+            "# Sources\n\n* [X](/sources/x.md) - Y.\n", "sources/x", "New"
+        )
+
+
+def test_relabel_index_entry_does_not_match_non_first_link_on_the_line() -> None:
+    """Only the FIRST markdown link on a bullet line is the match candidate --
+    a bullet whose description happens to mention another concept must not
+    be relabeled when that OTHER concept is targeted."""
+    index_text = (
+        "---\n"
+        'okf_version: "0.1"\n'
+        "---\n"
+        "\n"
+        "# Concepts\n"
+        "\n"
+        "* [Stoicism](/concepts/stoicism.md) - See also "
+        "[Epictetus](/people/epictetus.md).\n"
+    )
+
+    result, relabeled = relabel_index_entry(index_text, "people/epictetus", "New")
+
+    assert relabeled == 0
     assert result == index_text
