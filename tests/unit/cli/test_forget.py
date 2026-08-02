@@ -25,6 +25,7 @@ from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
@@ -1412,3 +1413,228 @@ def test_scope_source_tombstones_appear_in_ascending_id_order(
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     positions = [log_text.index(f"(id: {member})") for member in purge_ids]
     assert positions == sorted(positions)
+
+
+# -- #313: re-validate every write AND delete target after the confirm gate --
+
+
+def _source_with_two_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str, str]:
+    """A Source with two concepts whose ENTIRE provenance resolves back to
+    it, on a TTY -- so `--scope source` purges all three and the delete set
+    is bigger than one, which is what makes "the guard covers deletes too"
+    falsifiable."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    first = "concepts/alpha"
+    second = "concepts/beta"
+    _write_child_concept(tmp_path, first, provenance=[f"{source_id}.md"])
+    _write_child_concept(tmp_path, second, provenance=[f"{source_id}.md"])
+    _simulate_tty(monkeypatch)
+    return source_id, first, second
+
+
+@pytest.mark.parametrize(
+    "target", ["bundle/concepts/alpha.md", "bundle/concepts/beta.md"]
+)
+def test_a_delete_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313: `forget` decides WHICH concepts to delete from a Phase-A
+    snapshot of the whole bundle, then prompts, then unlinks them.
+
+    An edit landing while the operator reads the preview is destroyed
+    outright -- worse than the overwrite the issue's table describes, since
+    nothing survives to recover from. The purge set is also a claim about
+    the bundle that the edit may have invalidated: adding an inbound
+    reference to a member during the prompt is exactly what the `--force`
+    gate would have refused, and deleting anyway leaves it dangling.
+
+    So the delete targets belong in the guard's mapping alongside
+    `index.md` and `log.md`, not outside it.
+    """
+    source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    # The edit survives: nothing was unlinked, nothing was rewritten.
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """The two `write_atomic` targets the issue's table names: both are
+    rendered from a pre-prompt read and written back verbatim."""
+    source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_delete_target_deleted_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A member that VANISHED is drift too. `forget` would have reported
+    removing it, and `log.md` would have named it, so proceeding would put
+    a claim in the audit trail that this run cannot support."""
+    source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
+    deleted_path = tmp_path / "bundle" / "concepts" / "alpha.md"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, deleted_path.unlink)
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "bundle/concepts/alpha.md" in result.stderr
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle/concepts/alpha.md")}
+
+
+def test_a_crlf_rewrite_of_a_delete_target_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#306's constraint, applied to a DELETE target: a line-ending-only
+    rewrite is a real edit, and `read_text`'s universal-newline translation
+    would make it compare equal to its own LF snapshot.
+
+    The stakes differ from the write verbs: there is no `write_atomic` to
+    put the LF plan back, but the file is UNLINKED, so the operator's
+    rewrite is destroyed just the same.
+    """
+    source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
+    target = "bundle/concepts/alpha.md"
+    target_path = tmp_path / target
+    concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != target_path.read_bytes()
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent))
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
+
+    assert result.exit_code == 1
+    assert target in result.stderr
+    assert target_path.read_bytes() == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_targets_that_were_already_crlf_are_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction, across BOTH kinds of target: files already CRLF
+    at rest, untouched, must not be reported as drift -- otherwise `forget`
+    refuses forever on a CRLF workspace."""
+    source_id, first, second = _source_with_two_children(tmp_path, monkeypatch)
+    for rel in (
+        "bundle/index.md",
+        "bundle/log.md",
+        f"bundle/{source_id}.md",
+        f"bundle/{first}.md",
+        f"bundle/{second}.md",
+    ):
+        path = tmp_path / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr
+    assert not (tmp_path / "bundle" / f"{first}.md").exists()
+    assert not (tmp_path / "bundle" / f"{second}.md").exists()
+
+
+def test_drift_on_the_unprompted_path_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#313: the guard must run on `--auto` too -- and for `forget` that
+    matters most, because an unattended run deletes files."""
+    source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
+    target = "bundle/concepts/alpha.md"
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the preview printed\n"
+    before = snapshot_with_mtime(tmp_path)
+    echo_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        trigger="(new dated entry)",
+    )
+
+    result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_the_root_concept_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#313 review, R3 CRITICAL: the ROOT concept, on the DEFAULT scope.
+
+    Every other drift test here runs `--scope source` and lands its edit on
+    a descendant, so they all exercise the mapping's `**{...}` comprehension
+    and none of them exercise its `f"bundle/{canonical_id}.md"` entry. That
+    one line is the entire delete-target protection for `--scope self`,
+    where `purge_ids` collapses to the root alone and the root concept is
+    the only file unlinked -- so deleting it left the whole suite green.
+
+    `--scope self` is also the scope with the byte-identity contract, which
+    makes it the path most likely to be touched by a future edit.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    _simulate_tty(monkeypatch)
+    target = f"bundle/{source_id}.md"
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["forget", source_id], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    # Not unlinked, and the edit survives.
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
