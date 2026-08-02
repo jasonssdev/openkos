@@ -19,6 +19,7 @@ from openkos import fsio
 from openkos.bundle import index as bundle_index
 from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.cli.conftest import confirm_after, echo_after
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -1020,3 +1021,219 @@ def test_unmerge_warns_on_interleaved_index_log_drift(
     assert result.exit_code == 0, result.stderr
     assert "changed since the merge" in result.stdout
     assert "discard" in result.stdout
+
+
+# -- #313: re-validate every write target after the confirm gate ------------
+
+
+def _merged_pair_with_all_three_rewrite_groups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A merged survivor/absorbed pair plus one third-party file per REWRITE
+    GROUP, on a TTY.
+
+    `unmerge` partitions its rewritten files three ways -- provenance, then
+    relations minus provenance, then body links minus both -- and feeds each
+    partition into `rewrite_bytes` with its OWN `.update(...)` call. A
+    fixture that produces only a link rewrite leaves the other two updates
+    running over an empty set, so deleting either of them keeps every test
+    green (#313 review, R3).
+
+    That is the same trap as pinning a dict literal's fixed keys and missing
+    that one slot is fed by three separate statements; the lesson only holds
+    if it is applied all the way down.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="Survivor body."
+    )
+    _write_concept(
+        tmp_path, "concepts/absorbed", title="Absorbed", body="Absorbed body."
+    )
+    # link group: an inbound body link, no frontmatter references
+    _write_concept(
+        tmp_path,
+        "concepts/other",
+        title="Other",
+        body="See [Absorbed](/concepts/absorbed.md) for details.",
+    )
+    # relation group: a typed relation and NO `provenance:` (which would
+    # take precedence and move it into the provenance partition instead)
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/relator",
+        title="Relator",
+        relations=[{"target": "concepts/absorbed", "type": "depends_on"}],
+    )
+    # provenance group: takes precedence over both of the above
+    _write_concept_with_provenance(
+        tmp_path,
+        "concepts/derived",
+        title="Derived",
+        provenance=["concepts/absorbed"],
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+        ).exit_code
+        == 0
+    )
+    _simulate_tty(monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "bundle/index.md",
+        "bundle/log.md",
+        "bundle/concepts/survivor.md",
+        "bundle/concepts/other.md",
+        "bundle/concepts/relator.md",
+        "bundle/concepts/derived.md",
+    ],
+)
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313: `unmerge` restores every one of these from bytes computed
+    before the prompt, so an edit landing while the operator reads the
+    preview was overwritten in full and auto-committed.
+
+    Parametrized over every readable target, one per rewrite group, so no
+    single `rewrite_bytes.update(...)` call can be deleted unnoticed.
+    """
+    _merged_pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    before = _snapshot(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = _snapshot(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_write_target_deleted_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target that has since been DELETED is drift too: restoring it from
+    a snapshot the operator can no longer see is the same silent revert."""
+    _merged_pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
+    deleted_path = tmp_path / "bundle" / "concepts" / "other.md"
+    before = _snapshot(tmp_path)
+    confirm_after(monkeypatch, deleted_path.unlink)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
+    )
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert "bundle/concepts/other.md" in result.stderr
+    assert not deleted_path.exists()
+    after = _snapshot(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle/concepts/other.md")}
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "bundle/index.md",
+        "bundle/log.md",
+        "bundle/concepts/survivor.md",
+        "bundle/concepts/other.md",
+        "bundle/concepts/relator.md",
+        "bundle/concepts/derived.md",
+    ],
+)
+def test_a_crlf_rewrite_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#306's constraint, re-pinned for `unmerge`: `read_text`'s
+    universal-newline translation makes a CRLF rewrite compare EQUAL to its
+    own LF snapshot, and `fsio.write_atomic` (opening with `newline=""`)
+    would then put the LF restore back over it."""
+    _merged_pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != target_path.read_bytes()
+    before = _snapshot(tmp_path)
+    confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent))
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
+    )
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_bytes() == concurrent
+    after = _snapshot(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_targets_that_were_already_crlf_are_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: every readable write target already CRLF at
+    rest, untouched, must not be reported as drift."""
+    _merged_pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
+    for rel in (
+        "bundle/index.md",
+        "bundle/log.md",
+        "bundle/concepts/survivor.md",
+        "bundle/concepts/other.md",
+        "bundle/concepts/relator.md",
+        "bundle/concepts/derived.md",
+    ):
+        path = tmp_path / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr
+    assert (tmp_path / "bundle" / "concepts" / "absorbed.md").is_file()
+
+
+def test_drift_on_the_unprompted_path_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#313: the guard must run on `--auto` too."""
+    _merged_pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
+    target = "bundle/concepts/survivor.md"
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the preview printed\n"
+    before = _snapshot(tmp_path)
+    echo_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        trigger="absorbed.md (restore)",
+    )
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = _snapshot(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}

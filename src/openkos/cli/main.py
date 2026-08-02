@@ -5013,6 +5013,27 @@ def unmerge(
     Declining or refusing leaves the bundle completely untouched -- Phase A
     never writes anything.
 
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads `index.md`, `log.md`, the survivor
+    and every rewritten third-party file, and refuses the WHOLE run (exit 1,
+    nothing written) if any changed or vanished since Phase A read it
+    (issues #306, #313).
+
+    What that adds differs per target, and only one group was already
+    protected. The link/relation/provenance rewrite files DO have a
+    pre-prompt fail-closed check below, so for them the guard narrows a
+    timing window. `index.md`/`log.md` have only the warn-and-continue
+    `catalog_log_drifted` notice (see Limitation), and the survivor has no
+    pre-prompt drift check at all -- for those three the guard is the FIRST
+    thing that refuses, and only for drift landing inside the prompt
+    window. Drift that arrives a moment earlier is still discarded.
+
+    The recreated absorbed file is the one write NOT covered: Phase A
+    refuses outright if it already exists, so there are no bytes to compare
+    against, which leaves a window between that check and its write in which
+    a file created meanwhile is still clobbered.
+
     Phase B (after confirm) writes, in this order: `index.md` then
     `log.md` restored to their EXACT pre-merge bytes (`index_before`/
     `log_before`) first; then every reversed inbound-link file; then the
@@ -5066,6 +5087,12 @@ def unmerge(
     try:
         cfg = config.read_config(root)
         survivor_text = survivor_path.read_text(encoding="utf-8")
+        # Raw bytes alongside the decoded read, for `_reject_drifted_targets`
+        # only: both sides of its comparison must come from the SAME reader
+        # (issues #306, #313). Taken here rather than batched with the
+        # `index.md`/`log.md` snapshots below, because `plan_unmerge` runs in
+        # between and the plan is derived from THIS text.
+        survivor_bytes = survivor_path.read_bytes()
 
         plan = bundle_merge.plan_unmerge(
             survivor_id=survivor_canonical,
@@ -5082,6 +5109,10 @@ def unmerge(
 
         current_index_text = index_path.read_text(encoding="utf-8")
         current_log_text = log_path.read_text(encoding="utf-8")
+        # These two belong together, next to the reads that produced
+        # `current_index_text`/`current_log_text` -- nothing runs between them.
+        index_bytes = index_path.read_bytes()
+        log_bytes = log_path.read_bytes()
         expected_index_text, expected_log_text = _expected_post_merge_index_and_log(
             plan.entry,
             survivor_id=survivor_canonical,
@@ -5114,10 +5145,19 @@ def unmerge(
             - set(provenance_rewrite_files)
             - set(relation_rewrite_files)
         )
+        # Accumulated across all three partitions below, each beside its own
+        # group's read (issues #306, #313).
+        rewrite_bytes: dict[str, bytes] = {}
         provenance_texts = {
             rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
             for rel in provenance_rewrite_files
         }
+        rewrite_bytes.update(
+            {
+                rel: (layout.bundle_dir / rel).read_bytes()
+                for rel in provenance_rewrite_files
+            }
+        )
         provenance_reversed_texts = {
             rel: bundle_provenance.reverse_provenance_rewrites(
                 provenance_texts[rel],
@@ -5134,6 +5174,9 @@ def unmerge(
             rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
             for rel in rewritten_files
         }
+        rewrite_bytes.update(
+            {rel: (layout.bundle_dir / rel).read_bytes() for rel in rewritten_files}
+        )
         reversed_texts = {
             rel: _reverse_link_rewrite_idempotently(
                 other_texts[rel], file=rel, rewrites=plan.link_rewrites
@@ -5153,6 +5196,12 @@ def unmerge(
             rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
             for rel in relation_rewrite_files
         }
+        rewrite_bytes.update(
+            {
+                rel: (layout.bundle_dir / rel).read_bytes()
+                for rel in relation_rewrite_files
+            }
+        )
         relation_reversed_texts = {
             rel: bundle_relations.reverse_relation_rewrites(
                 relation_texts[rel],
@@ -5206,6 +5255,24 @@ def unmerge(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #313: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    #
+    # `absorbed_path` is absent by necessity, not oversight -- see the
+    # docstring. Closing its window needs either a `write_exclusive` there or
+    # an "expected absent" this guard's `Mapping[str, bytes]` cannot express;
+    # both are behavior changes beyond it.
+    _reject_drifted_targets(
+        layout,
+        {
+            "bundle/index.md": index_bytes,
+            "bundle/log.md": log_bytes,
+            f"bundle/{survivor_canonical}.md": survivor_bytes,
+            **{f"bundle/{rel}": data for rel, data in rewrite_bytes.items()},
+        },
+        "unmerge",
+    )
 
     try:
         # `index.md`/`log.md` are restored to their EXACT pre-merge bytes
