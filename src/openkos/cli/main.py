@@ -405,8 +405,38 @@ def _commit_has_confidential(root: Path, paths: Sequence[str]) -> bool:
     return False
 
 
+def _snapshot_read(path: Path) -> tuple[bytes, str]:
+    """Read `path` exactly ONCE; return the raw bytes (for
+    `_reject_drifted_targets`) and the decoded text (for the parsers), both
+    derived from the SAME observation (issue #318).
+
+    Every drift-guarded verb needs both forms of every write target: the
+    parsers want decoded text to compute the plan from, and the guard wants
+    raw bytes to compare against at write time. Obtaining them as TWO reads
+    -- `read_text` for the plan, then `read_bytes` for the guard -- left a
+    window between them that defeated the guard entirely: a writer landing
+    in it became the guard's own baseline, so the comparison found no
+    drift and Phase B wrote the plan derived from the EARLIER text,
+    silently reverting the edit the guard exists to catch (and
+    `_autocommit` then committed the revert). One read, both forms derived
+    from it, is the only shape with no such window; callers must never
+    split this back into separate `read_text`/`read_bytes` calls.
+
+    The newline translation below reproduces `read_text`'s
+    universal-newline behavior EXACTLY -- `\\r\\n` first, then any lone
+    `\\r`, both to `\\n` -- because a bare `bytes.decode()` is not the text
+    the parsers were written against: a CRLF-at-rest file would hand them
+    `\\r`-bearing lines that `read_text` never produced, changing parser
+    behavior for a file nobody touched. The RAW bytes are returned
+    untranslated, which is what lets the guard still see a CRLF-only
+    rewrite as the drift it is."""
+    data = path.read_bytes()
+    text = data.decode("utf-8")
+    return data, text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _reject_drifted_targets(
-    layout: config.WorkspaceLayout, expected: Mapping[str, bytes], verb: str
+    layout: config.WorkspaceLayout, expected: Mapping[Path, bytes], verb: str
 ) -> None:
     """Refuse the whole run (exit 1, nothing written) when any write target
     changed on disk after the plan was computed from it (issues #306, #313).
@@ -432,25 +462,39 @@ def _reject_drifted_targets(
     to update, which is how the previous version of this paragraph came to
     claim three callers while five existed.
 
-    `expected` maps a workspace-relative POSIX path to the RAW BYTES that
-    path held when Phase A read it, and the comparison is bytes-to-bytes.
+    `expected` maps the ABSOLUTE `Path` a verb will actually hand to
+    `fsio.write_atomic` (or delete) to the RAW BYTES that path held when
+    Phase A read it, and the comparison is bytes-to-bytes. `Path` keys, not
+    workspace-relative strings, are the point (issue #325): a string key is
+    a SECOND construction of the target's identity, rebuilt by
+    interpolation at each call site, and it protects the write only while
+    the two constructions happen to agree -- a drive-anchored concept-id or
+    an absolute `rel` out of an unmerge ledger made them diverge, and the
+    guard then validated a path the verb was not going to write. Passing
+    the one `Path` object both phases share leaves nothing to diverge.
+    The workspace-relative POSIX spelling still appears in the refusal
+    message, derived here via `relative_to(layout.root)`; a key that
+    escapes the workspace entirely (`relative_to` raises) is drift BY
+    DEFINITION, named by its raw path and refused before any byte of it is
+    read -- an out-of-tree target is one the operator was never shown, so
+    even byte-identical content must fail closed, explicitly rather than
+    by accident of an unreadable join as before.
 
-    Both sides MUST come from the same reader; this is the one thing to get
-    right here, and it is wrong in both directions if you mix them. Callers
-    read `read_text` for the plan (parsers want decoded text) and
-    `read_bytes` alongside it purely for this guard. Comparing `read_text`
-    to `read_text` misses a CRLF-only rewrite landing during the prompt,
-    because universal-newline translation makes it equal its own LF
-    snapshot, while `fsio.write_atomic` (opening with `newline=""`) then
-    writes the LF plan over it. Comparing raw bytes to a `read_text`
-    snapshot is worse: a file that was ALREADY CRLF at rest, untouched by
-    anyone, compares unequal on every run, so the verb refuses forever with
-    a message naming a cause that never happened and a re-run that cannot
-    clear it. Bytes on both sides is the only pairing with neither failure.
-
-    The two Phase-A reads are microseconds apart and both land long before
-    the prompt, so the window between them is not the one this guard is
-    about.
+    Both sides MUST come from the same single observation: every caller
+    obtains its snapshot bytes from the `_snapshot_read` call whose decoded
+    text fed the plan, which is precisely what closes the #318 window (two
+    reads made an edit landing between them the guard's own baseline).
+    That helper returning BYTES for this guard alongside the text is not
+    convenience but correctness, in both directions: comparing decoded
+    text to decoded text misses a CRLF-only rewrite landing during the
+    prompt, because universal-newline translation makes it equal its own
+    LF snapshot, while `fsio.write_atomic` (opening with `newline=""`)
+    then writes the LF plan over it; comparing raw bytes to a translated
+    snapshot is worse, because a file that was ALREADY CRLF at rest,
+    untouched by anyone, compares unequal on every run, so the verb
+    refuses forever with a message naming a cause that never happened and
+    a re-run that cannot clear it. Bytes on both sides is the only pairing
+    with neither failure.
 
     A path that has since been DELETED, or that cannot be read at all,
     counts as drift -- re-creating or overwriting a file whose current state
@@ -471,16 +515,25 @@ def _reject_drifted_targets(
     costs the operator one cheap re-run over fresh state.
     """
     drifted = []
-    for rel_path in sorted(expected):
+    for path in expected:
         try:
-            current = (layout.root / rel_path).read_bytes()
+            rel_path = path.relative_to(layout.root).as_posix()
+        except ValueError:
+            # Out-of-tree target: no workspace-relative spelling exists, so
+            # the raw path is the entry, and no read is attempted -- see the
+            # docstring for why matching bytes must not rescue it (#325).
+            drifted.append(str(path))
+            continue
+        try:
+            current = path.read_bytes()
         except OSError:
             drifted.append(rel_path)
             continue
-        if current != expected[rel_path]:
+        if current != expected[path]:
             drifted.append(rel_path)
     if not drifted:
         return
+    drifted.sort()
     # Deliberately NOT Phase B's "No path was written." sentence: that one
     # reports a write that already began, this one reports a run that never
     # started writing, and #234 pinned that two messages a bug report might
@@ -1230,25 +1283,28 @@ def _family_owns_source(family: list[Path], source_slug: str) -> bool:
     return False
 
 
-def _read_source_sensitivity(concept_path: Path) -> object:
+def _read_source_sensitivity(concept_path: Path, text: str) -> object:
     """Raw `sensitivity` from an EXISTING Source concept, unranked.
 
     Returns the raw frontmatter value (possibly missing, blank, non-string)
     for `okf.combine_sensitivity` to rank fail-closed per ADR-0003.
-    Raises `ValueError` when the file cannot be read or its frontmatter
-    cannot be parsed -- a re-ingest MUST NOT degrade an unreadable
-    classification to the config default (design: "Where the on-disk read
-    happens, and how it fails"). This deliberately diverges from
-    `_family_owns_source`'s degrade-and-continue pattern (`:1130`), which
-    is a best-effort scan; this is a security field."""
+    Raises `ValueError` when the frontmatter cannot be parsed -- a
+    re-ingest MUST NOT degrade an unreadable classification to the config
+    default (design: "Where the on-disk read happens, and how it fails").
+    This deliberately diverges from `_family_owns_source`'s
+    degrade-and-continue pattern (`:1130`), which is a best-effort scan;
+    this is a security field.
+
+    Takes the already-decoded `text` rather than reading `concept_path`
+    itself (#318): the caller snapshots the file exactly once via
+    `_snapshot_read`, and this helper parsing that same observation is
+    what keeps `_reject_drifted_targets`' baseline and the resolved
+    sensitivity describing one on-disk state. `concept_path` is retained
+    purely to name the file in the error. The read-failure translation
+    that used to live here moved to the call site, next to the one read
+    that can now fail."""
     try:
-        text = concept_path.read_text(encoding="utf-8")
         metadata, _ = okf.load_frontmatter(text)
-    except OSError as exc:
-        raise ValueError(
-            f"refusing to ingest -- '{concept_path}' could not be read to "
-            f"resolve its existing sensitivity: {exc}"
-        ) from exc
     except Exception as exc:
         # `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
         # which is neither `OSError` nor `ValueError` -- translate rather
@@ -1260,26 +1316,21 @@ def _read_source_sensitivity(concept_path: Path) -> object:
     return metadata.get("sensitivity")
 
 
-def _read_source_title(concept_path: Path) -> object:
+def _read_source_title(concept_path: Path, text: str) -> object:
     """Raw `title` from an EXISTING Source concept, read so a re-ingest's
     preview can name a title change instead of overwriting it silently
     (review finding on issue #248's content-derived title: the regenerate
     preview never mentioned that re-ingest recomputes and overwrites a
     pre-existing Source's title). Mirrors `_read_source_sensitivity`'s
-    shape exactly -- same read, same `load_frontmatter` call, same
-    fail-closed `ValueError` on an unreadable or unparseable file -- but
-    for `title` rather than `sensitivity`. This does NOT make `title`
-    sticky: the caller uses the return value only to decide what the
-    preview SAYS, never to decide what gets WRITTEN -- re-ingest still
-    rebuilds `title` from content every run, unaffected by this read."""
+    shape exactly -- same single-observation `text` parameter, same
+    `load_frontmatter` call, same fail-closed `ValueError` on an
+    unparseable file -- but for `title` rather than `sensitivity`. This
+    does NOT make `title` sticky: the caller uses the return value only to
+    decide what the preview SAYS, never to decide what gets WRITTEN --
+    re-ingest still rebuilds `title` from content every run, unaffected by
+    this read."""
     try:
-        text = concept_path.read_text(encoding="utf-8")
         metadata, _ = okf.load_frontmatter(text)
-    except OSError as exc:
-        raise ValueError(
-            f"refusing to ingest -- '{concept_path}' could not be read to "
-            f"resolve its existing title: {exc}"
-        ) from exc
     except Exception as exc:
         # `frontmatter.loads` raises `yaml.YAMLError` on malformed YAML,
         # which is neither `OSError` nor `ValueError` -- translate rather
@@ -1870,37 +1921,43 @@ def ingest(
         # floors at `private`).
         had_prior_source = regenerate and concept_path.exists()
         if had_prior_source:
-            on_disk_sensitivity = _read_source_sensitivity(concept_path)
+            # ONE observation of the concept file, taken HERE and not with
+            # `index.md`/`log.md` further down (#313 review, R4 CRITICAL;
+            # single-read shape per #318). Between this point and there sits
+            # `_stage_derived_objects`' `llm.chat` round trip -- an
+            # unbounded network call. Snapshotting after it would make an
+            # edit landing during extraction the guard's OWN baseline: the
+            # comparison would find no drift and `write_atomic` would then
+            # write back the document built from this text, reverting it.
+            # That revert is a sensitivity DOWNGRADE, since
+            # `resolved_sensitivity` is the high-water mark computed from
+            # `on_disk_sensitivity`. Both parses below and the guard's
+            # bytes derive from this single read, so there is no second
+            # read for an edit to slip between.
+            try:
+                concept_snapshot: bytes | None
+                concept_snapshot, concept_text = _snapshot_read(concept_path)
+            except (OSError, UnicodeDecodeError) as exc:
+                raise ValueError(
+                    f"refusing to ingest -- '{concept_path}' could not be "
+                    f"read to resolve its existing sensitivity: {exc}"
+                ) from exc
+            on_disk_sensitivity = _read_source_sensitivity(concept_path, concept_text)
             resolved_sensitivity = okf.combine_sensitivity(
                 on_disk_sensitivity, cfg.default_sensitivity
             )
-            # Read BEFORE `title` is (re)computed below, purely so the
+            # Parsed BEFORE `title` is (re)computed below, purely so the
             # preview can NAME a retitle -- never to make `title` sticky
             # (review finding: re-ingest silently overwrote a pre-existing
             # Source's title with no mention in the preview). `title`
             # itself is still rebuilt from content every run, exactly as
             # before this read existed.
-            on_disk_title = _read_source_title(concept_path)
-            # The guard's snapshot of this file, taken HERE and not with
-            # `index.md`/`log.md` further down (#313 review, R4 CRITICAL).
-            # Between this point and there sits `_stage_derived_objects`'
-            # `llm.chat` round trip -- an unbounded network call, not the
-            # microseconds `_reject_drifted_targets` assumes between a
-            # caller's two Phase-A reads. Snapshotting after it would make
-            # an edit landing during extraction the guard's OWN baseline:
-            # the comparison would find no drift and `write_atomic` would
-            # then write back the document built from the two reads above,
-            # reverting it. That revert is a sensitivity DOWNGRADE, since
-            # `resolved_sensitivity` is the high-water mark computed from
-            # `on_disk_sensitivity`. Pairing the byte read with the reads
-            # that actually feed the plan is what makes the guard's
-            # bytes-to-bytes comparison mean what it claims.
-            concept_bytes: bytes | None = concept_path.read_bytes()
+            on_disk_title = _read_source_title(concept_path, concept_text)
         else:
             on_disk_sensitivity = None
             resolved_sensitivity = cfg.default_sensitivity
             on_disk_title = None
-            concept_bytes = None
+            concept_snapshot = None
 
         def _build_source_document(
             extraction_status: okf.ExtractionStatus | None,
@@ -1953,22 +2010,17 @@ def ingest(
             # `extraction_status` off disk (unlike `sensitivity` above):
             # this key is always recomputed fresh for THIS run alone.
             concept_content = _build_source_document(skip_reason)
-        index_text = index_path.read_text(encoding="utf-8")
-        log_text = log_path.read_text(encoding="utf-8")
-        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
-        # only: both sides of its comparison must come from the SAME reader
-        # (issues #306, #313). Every parser below wants the decoded form.
-        # Unlike the concept's, these two snapshots belong here, next to the
-        # reads that produced `index_text`/`log_text` -- nothing runs between
-        # them.
-        index_bytes = index_path.read_bytes()
-        log_bytes = log_path.read_bytes()
-        guarded_targets: dict[str, bytes] = {
-            "bundle/index.md": index_bytes,
-            "bundle/log.md": log_bytes,
+        # One `_snapshot_read` observation per target: the decoded text
+        # feeds the parsers below, the raw bytes feed
+        # `_reject_drifted_targets` (issues #306, #313, #318).
+        index_bytes, index_text = _snapshot_read(index_path)
+        log_bytes, log_text = _snapshot_read(log_path)
+        guarded_targets: dict[Path, bytes] = {
+            index_path: index_bytes,
+            log_path: log_bytes,
         }
-        if concept_bytes is not None:
-            guarded_targets[f"bundle/sources/{slug}.md"] = concept_bytes
+        if concept_snapshot is not None:
+            guarded_targets[concept_path] = concept_snapshot
         if regenerate:
             # D3: dedup before insert -- a no-forget re-ingest already has
             # the bullet, so a bare insert would duplicate it; a post-forget
@@ -2378,18 +2430,15 @@ def forget(
 
     try:
         cfg = config.read_config(root)
-        index_text = index_path.read_text(encoding="utf-8")
-        log_text = log_path.read_text(encoding="utf-8")
-        concept_text = concept_path.read_text(encoding="utf-8")
-        # Raw bytes alongside each decoded read, for `_reject_drifted_targets`
-        # only: both sides of its comparison must come from the SAME reader
-        # (issues #306, #313), and each snapshot is taken NEXT TO the read
-        # that feeds the plan, never batched afterwards -- grouping them is
-        # what let an edit slip in ahead of the guard's own baseline in
-        # `ingest` (#313 review, R4).
-        index_bytes = index_path.read_bytes()
-        log_bytes = log_path.read_bytes()
-        concept_bytes = concept_path.read_bytes()
+        # One `_snapshot_read` observation per target (issues #306, #313,
+        # #318): each path is read exactly once, at the moment its decoded
+        # text feeds the plan, and the guard's bytes come from that same
+        # read -- there is no second read for an edit to slip between,
+        # which is the window that let one land ahead of the guard's own
+        # baseline in `ingest` (#313 review, R4).
+        index_bytes, index_text = _snapshot_read(index_path)
+        log_bytes, log_text = _snapshot_read(log_path)
+        concept_bytes, concept_text = _snapshot_read(concept_path)
 
         # One whole-bundle snapshot, read ONCE, mirroring `merge`'s
         # `other_files` construction (~L1330-1337): every other `*.md`
@@ -2400,10 +2449,10 @@ def forget(
         #
         # `other_bytes` shadows it for the guard. Which of these files the
         # run will DELETE is not known until `purge_ids` resolves below, so
-        # the bytes are captured here, in the same iteration as the text,
-        # rather than re-read per member afterwards: a second pass would
-        # leave every file a window as wide as the rest of the scan. Only
-        # the purge-set entries are ever consulted; the rest are dropped.
+        # the bytes come out of the same `_snapshot_read` observation as
+        # the text, rather than re-read per member afterwards: a second
+        # read would leave every file the #318 window. Only the purge-set
+        # entries are ever consulted; the rest are dropped.
         other_files: dict[str, str] = {}
         other_bytes: dict[str, bytes] = {}
         for path in sorted(layout.bundle_dir.rglob("*.md")):
@@ -2412,8 +2461,7 @@ def forget(
             if path == concept_path:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
-            other_files[rel] = path.read_text(encoding="utf-8")
-            other_bytes[rel] = path.read_bytes()
+            other_bytes[rel], other_files[rel] = _snapshot_read(path)
 
         # Unified Phase-A data path (design decision 6): `--scope self`
         # collapses to a single-member purge set and reproduces every
@@ -2630,11 +2678,11 @@ def forget(
     _reject_drifted_targets(
         layout,
         {
-            "bundle/index.md": index_bytes,
-            "bundle/log.md": log_bytes,
-            f"bundle/{canonical_id}.md": concept_bytes,
+            index_path: index_bytes,
+            log_path: log_bytes,
+            concept_path: concept_bytes,
             **{
-                f"bundle/{member}.md": other_bytes[f"{member}.md"]
+                layout.bundle_dir / f"{member}.md": other_bytes[f"{member}.md"]
                 for member in purge_ids
                 if member != canonical_id
             },
@@ -3346,13 +3394,11 @@ def relate(
 
     try:
         cfg = config.read_config(root)
-        source_text = source_path.read_text(encoding="utf-8")
-        log_text = log_path.read_text(encoding="utf-8")
-        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
-        # only: both sides of its comparison must come from the SAME reader
-        # (issues #306, #313). Every parser below wants the decoded form.
-        source_bytes = source_path.read_bytes()
-        log_bytes = log_path.read_bytes()
+        # One `_snapshot_read` observation per target: the decoded text
+        # feeds the parsers below, the raw bytes feed
+        # `_reject_drifted_targets` (issues #306, #313, #318).
+        source_bytes, source_text = _snapshot_read(source_path)
+        log_bytes, log_text = _snapshot_read(log_path)
 
         metadata, body = okf.load_frontmatter(source_text)
         existing_relations = okf.decode_relations(metadata)
@@ -3424,8 +3470,8 @@ def relate(
     _reject_drifted_targets(
         layout,
         {
-            f"bundle/{source_canonical}.md": source_bytes,
-            "bundle/log.md": log_bytes,
+            source_path: source_bytes,
+            log_path: log_bytes,
         },
         "relate",
     )
@@ -3589,11 +3635,10 @@ def set_sensitivity_cmd(
         concept_path, canonical_id = _resolve_concept_path(
             layout.bundle_dir, concept_id
         )
-        concept_text = concept_path.read_text(encoding="utf-8")
-        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
-        # only: both sides of its comparison must come from the SAME reader
-        # (issue #306). Every parser below wants the decoded form.
-        concept_bytes = concept_path.read_bytes()
+        # One `_snapshot_read` observation: the decoded text feeds the
+        # parsers below, the raw bytes feed `_reject_drifted_targets`
+        # (issues #306, #318).
+        concept_bytes, concept_text = _snapshot_read(concept_path)
         metadata, body = okf.load_frontmatter(concept_text)
         current = metadata.get("sensitivity")
     except (OSError, ValueError) as exc:
@@ -3651,8 +3696,7 @@ def set_sensitivity_cmd(
                 if path == concept_path:
                     continue
                 rel = path.relative_to(layout.bundle_dir).as_posix()
-                bundle_snapshot[rel] = path.read_text(encoding="utf-8")
-                bundle_bytes[rel] = path.read_bytes()
+                bundle_bytes[rel], bundle_snapshot[rel] = _snapshot_read(path)
 
             # Unresolvable provenance (design: "Unresolvable provenance"):
             # `known_extra_ids={canonical_id}` paired with the
@@ -3702,8 +3746,7 @@ def set_sensitivity_cmd(
     now = datetime.now(UTC)
 
     try:
-        log_text = log_path.read_text(encoding="utf-8")
-        log_bytes = log_path.read_bytes()
+        log_bytes, log_text = _snapshot_read(log_path)
         metadata["sensitivity"] = level
         new_concept_text = okf.dump_frontmatter(metadata, body)
         log_line = (
@@ -3761,13 +3804,13 @@ def set_sensitivity_cmd(
         layout,
         {
             **{
-                f"bundle/{descendant_raise.concept_id}.md": bundle_bytes[
+                layout.bundle_dir / f"{descendant_raise.concept_id}.md": bundle_bytes[
                     f"{descendant_raise.concept_id}.md"
                 ]
                 for descendant_raise in descendant_raises
             },
-            f"bundle/{canonical_id}.md": concept_bytes,
-            "bundle/log.md": log_bytes,
+            concept_path: concept_bytes,
+            log_path: log_bytes,
         },
         "set-sensitivity",
     )
@@ -3916,8 +3959,7 @@ def backfill_sensitivity_cmd(
             if path.name in okf.RESERVED_FILENAMES:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
-            bundle_snapshot[rel] = path.read_text(encoding="utf-8")
-            bundle_bytes[rel] = path.read_bytes()
+            bundle_bytes[rel], bundle_snapshot[rel] = _snapshot_read(path)
 
         descendant_raises = bundle_provenance.resolve_backfill_raises(bundle_snapshot)
     except (OSError, ValueError) as exc:
@@ -3937,8 +3979,7 @@ def backfill_sensitivity_cmd(
 
     now = datetime.now(UTC)
     try:
-        log_text = log_path.read_text(encoding="utf-8")
-        log_bytes = log_path.read_bytes()
+        log_bytes, log_text = _snapshot_read(log_path)
         propagated = ", ".join(
             f"'bundle/{descendant_raise.concept_id}.md' -> {descendant_raise.new_level}"
             for descendant_raise in descendant_raises
@@ -3985,12 +4026,12 @@ def backfill_sensitivity_cmd(
         layout,
         {
             **{
-                f"bundle/{descendant_raise.concept_id}.md": bundle_bytes[
+                layout.bundle_dir / f"{descendant_raise.concept_id}.md": bundle_bytes[
                     f"{descendant_raise.concept_id}.md"
                 ]
                 for descendant_raise in descendant_raises
             },
-            "bundle/log.md": log_bytes,
+            log_path: log_bytes,
         },
         "backfill-sensitivity",
     )
@@ -4098,8 +4139,7 @@ def backfill_source_titles_cmd(
             if path.name in okf.RESERVED_FILENAMES:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
-            bundle_snapshot[rel] = path.read_text(encoding="utf-8")
-            bundle_bytes[rel] = path.read_bytes()
+            bundle_bytes[rel], bundle_snapshot[rel] = _snapshot_read(path)
 
         scan = source_titles.scan_source_titles(bundle_snapshot)
 
@@ -4133,10 +4173,11 @@ def backfill_source_titles_cmd(
     # malformed `index.md` refuses before any write rather than halfway
     # through Phase B (design D6).
     try:
-        # Both originals are kept alongside their rewrites: they are what
-        # `_reject_drifted_targets` compares against below (issue #306).
-        index_text = index_path.read_text(encoding="utf-8")
-        index_bytes = index_path.read_bytes()
+        # Both originals come out of one `_snapshot_read` observation each:
+        # the decoded text is what the rewrites are computed from, and the
+        # raw bytes are what `_reject_drifted_targets` compares against
+        # below (issues #306, #318).
+        index_bytes, index_text = _snapshot_read(index_path)
         new_index_text = index_text
         for retitle in backfill.staged:
             new_index_text, _ = bundle_index.relabel_index_entry(
@@ -4151,8 +4192,7 @@ def backfill_source_titles_cmd(
             f"**Backfill-source-titles**: Re-derived {len(backfill.staged)} "
             f"Source title(s) from their raw content: {retitled}."
         )
-        log_text = log_path.read_text(encoding="utf-8")
-        log_bytes = log_path.read_bytes()
+        log_bytes, log_text = _snapshot_read(log_path)
         new_log_text = bundle_log.insert_log_entry(
             log_text,
             datetime.now(UTC).astimezone().date(),
@@ -4196,14 +4236,14 @@ def backfill_source_titles_cmd(
     _reject_drifted_targets(
         layout,
         {
-            "bundle/index.md": index_bytes,
+            index_path: index_bytes,
             **{
-                f"bundle/{retitle.concept_id}.md": bundle_bytes[
+                layout.bundle_dir / f"{retitle.concept_id}.md": bundle_bytes[
                     f"{retitle.concept_id}.md"
                 ]
                 for retitle in backfill.staged
             },
-            "bundle/log.md": log_bytes,
+            log_path: log_bytes,
         },
         "backfill-source-titles",
     )
@@ -5086,13 +5126,13 @@ def unmerge(
 
     try:
         cfg = config.read_config(root)
-        survivor_text = survivor_path.read_text(encoding="utf-8")
-        # Raw bytes alongside the decoded read, for `_reject_drifted_targets`
-        # only: both sides of its comparison must come from the SAME reader
-        # (issues #306, #313). Taken here rather than batched with the
-        # `index.md`/`log.md` snapshots below, because `plan_unmerge` runs in
-        # between and the plan is derived from THIS text.
-        survivor_bytes = survivor_path.read_bytes()
+        # One `_snapshot_read` observation (issues #306, #313, #318): the
+        # decoded text is what `plan_unmerge` derives the plan from, and
+        # the raw bytes are the guard's baseline for that same state. Taken
+        # here rather than batched with the `index.md`/`log.md` snapshots
+        # below, because `plan_unmerge` runs in between and the plan is
+        # derived from THIS text.
+        survivor_bytes, survivor_text = _snapshot_read(survivor_path)
 
         plan = bundle_merge.plan_unmerge(
             survivor_id=survivor_canonical,
@@ -5107,12 +5147,8 @@ def unmerge(
                 "already exists at that path"
             )
 
-        current_index_text = index_path.read_text(encoding="utf-8")
-        current_log_text = log_path.read_text(encoding="utf-8")
-        # These two belong together, next to the reads that produced
-        # `current_index_text`/`current_log_text` -- nothing runs between them.
-        index_bytes = index_path.read_bytes()
-        log_bytes = log_path.read_bytes()
+        index_bytes, current_index_text = _snapshot_read(index_path)
+        log_bytes, current_log_text = _snapshot_read(log_path)
         expected_index_text, expected_log_text = _expected_post_merge_index_and_log(
             plan.entry,
             survivor_id=survivor_canonical,
@@ -5145,19 +5181,15 @@ def unmerge(
             - set(provenance_rewrite_files)
             - set(relation_rewrite_files)
         )
-        # Accumulated across all three partitions below, each beside its own
-        # group's read (issues #306, #313).
+        # Accumulated across all three partitions below, each file's bytes
+        # coming out of the same `_snapshot_read` observation as the text
+        # its reversal is computed from (issues #306, #313, #318).
         rewrite_bytes: dict[str, bytes] = {}
-        provenance_texts = {
-            rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
-            for rel in provenance_rewrite_files
-        }
-        rewrite_bytes.update(
-            {
-                rel: (layout.bundle_dir / rel).read_bytes()
-                for rel in provenance_rewrite_files
-            }
-        )
+        provenance_texts: dict[str, str] = {}
+        for rel in provenance_rewrite_files:
+            rewrite_bytes[rel], provenance_texts[rel] = _snapshot_read(
+                layout.bundle_dir / rel
+            )
         provenance_reversed_texts = {
             rel: bundle_provenance.reverse_provenance_rewrites(
                 provenance_texts[rel],
@@ -5170,13 +5202,11 @@ def unmerge(
             )
             for rel in provenance_rewrite_files
         }
-        other_texts = {
-            rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
-            for rel in rewritten_files
-        }
-        rewrite_bytes.update(
-            {rel: (layout.bundle_dir / rel).read_bytes() for rel in rewritten_files}
-        )
+        other_texts: dict[str, str] = {}
+        for rel in rewritten_files:
+            rewrite_bytes[rel], other_texts[rel] = _snapshot_read(
+                layout.bundle_dir / rel
+            )
         reversed_texts = {
             rel: _reverse_link_rewrite_idempotently(
                 other_texts[rel], file=rel, rewrites=plan.link_rewrites
@@ -5192,16 +5222,11 @@ def unmerge(
         # caught by this same try/except -- refusing the whole unmerge
         # before any write, rather than clobbering the edit with the stale
         # snapshot.
-        relation_texts = {
-            rel: (layout.bundle_dir / rel).read_text(encoding="utf-8")
-            for rel in relation_rewrite_files
-        }
-        rewrite_bytes.update(
-            {
-                rel: (layout.bundle_dir / rel).read_bytes()
-                for rel in relation_rewrite_files
-            }
-        )
+        relation_texts: dict[str, str] = {}
+        for rel in relation_rewrite_files:
+            rewrite_bytes[rel], relation_texts[rel] = _snapshot_read(
+                layout.bundle_dir / rel
+            )
         relation_reversed_texts = {
             rel: bundle_relations.reverse_relation_rewrites(
                 relation_texts[rel],
@@ -5261,15 +5286,15 @@ def unmerge(
     #
     # `absorbed_path` is absent by necessity, not oversight -- see the
     # docstring. Closing its window needs either a `write_exclusive` there or
-    # an "expected absent" this guard's `Mapping[str, bytes]` cannot express;
+    # an "expected absent" this guard's `Mapping[Path, bytes]` cannot express;
     # both are behavior changes beyond it.
     _reject_drifted_targets(
         layout,
         {
-            "bundle/index.md": index_bytes,
-            "bundle/log.md": log_bytes,
-            f"bundle/{survivor_canonical}.md": survivor_bytes,
-            **{f"bundle/{rel}": data for rel, data in rewrite_bytes.items()},
+            index_path: index_bytes,
+            log_path: log_bytes,
+            survivor_path: survivor_bytes,
+            **{layout.bundle_dir / rel: data for rel, data in rewrite_bytes.items()},
         },
         "unmerge",
     )
@@ -5625,15 +5650,12 @@ def reconcile(
 
     try:
         cfg = config.read_config(root)
-        text_a = path_a.read_text(encoding="utf-8")
-        text_b = path_b.read_text(encoding="utf-8")
-        log_text = log_path.read_text(encoding="utf-8")
-        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
-        # only: both sides of its comparison must come from the SAME reader
-        # (issues #306, #313). Every parser below wants the decoded form.
-        bytes_a = path_a.read_bytes()
-        bytes_b = path_b.read_bytes()
-        log_bytes = log_path.read_bytes()
+        # One `_snapshot_read` observation per target: the decoded text
+        # feeds the parsers below, the raw bytes feed
+        # `_reject_drifted_targets` (issues #306, #313, #318).
+        bytes_a, text_a = _snapshot_read(path_a)
+        bytes_b, text_b = _snapshot_read(path_b)
+        log_bytes, log_text = _snapshot_read(log_path)
 
         metadata_a, body_a = okf.load_frontmatter(text_a)
         metadata_b, body_b = okf.load_frontmatter(text_b)
@@ -5782,9 +5804,9 @@ def reconcile(
     _reject_drifted_targets(
         layout,
         {
-            f"bundle/{canonical_a}.md": bytes_a,
-            f"bundle/{canonical_b}.md": bytes_b,
-            "bundle/log.md": log_bytes,
+            path_a: bytes_a,
+            path_b: bytes_b,
+            log_path: log_bytes,
         },
         "reconcile",
     )
@@ -7745,14 +7767,11 @@ def query(
     save_log_path = layout.bundle_dir / "log.md"
     now = datetime.now(UTC)
     try:
-        index_text = save_index_path.read_text(encoding="utf-8")
-        log_text = save_log_path.read_text(encoding="utf-8")
-        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
-        # only: both sides of its comparison must come from the SAME reader
-        # (issues #306, #313). These two belong together, next to the reads
-        # that produced `index_text`/`log_text` -- nothing runs between them.
-        index_bytes = save_index_path.read_bytes()
-        log_bytes = save_log_path.read_bytes()
+        # One `_snapshot_read` observation per target: the decoded text
+        # feeds the parsers below, the raw bytes feed
+        # `_reject_drifted_targets` (issues #306, #313, #318).
+        index_bytes, index_text = _snapshot_read(save_index_path)
+        log_bytes, log_text = _snapshot_read(save_log_path)
         new_index_text = bundle_index.insert_index_entry(
             index_text,
             section=plan.section,
@@ -7794,7 +7813,7 @@ def query(
     # `plan.path` is absent by necessity, not oversight -- see the docstring.
     _reject_drifted_targets(
         layout,
-        {"bundle/index.md": index_bytes, "bundle/log.md": log_bytes},
+        {save_index_path: index_bytes, save_log_path: log_bytes},
         "query",
     )
 
