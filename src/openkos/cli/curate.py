@@ -20,14 +20,14 @@ have to see the POST-merge bundle, not a stale pre-run view (design D4,
 proposal D4). Every stage therefore derives its own queue from scratch when
 the loop reaches it, by calling its own `probe` fresh, every run.
 
-`_STAGES` carries all five entries starting in slice 1 (design D2): the
-three not yet implemented (Structure, Metadata, Contradictions) carry
-`live=False` and are skipped WITHOUT probing and WITHOUT prompting, but
-still appear in the five-entry end-of-run summary, labeled "not yet
-available in this version" (spec: Slice Boundary). This is deliberately NOT
-a two-entry `_STAGES` proven only by test-only fakes: the tuple and every
-descriptor field are frozen in slice 1, so slice 2 only flips `live` and
-fills in `probe`/`run` on the three existing entries -- no framework change.
+`_STAGES` has carried all five entries since slice 1 (design D2), and as of
+slice 2 every entry is `live=True` with a real `probe`/`run` pair -- the
+slice-1 state (Structure, Metadata, Contradictions at `live=False`, skipped
+without probing and labeled "not yet available in this version") is history,
+kept only as the record of HOW the tuple stayed frozen: slice 2 flipped
+`live` and filled in `probe`/`run` on the three existing entries with no
+framework change (spec: Slice Boundary). The `live` field itself remains,
+as the descriptor contract a future stage would ship through the same way.
 
 Imports here mirror `next_action.py`'s own precedent (design D1): this
 module is the CLI-layer composition root, so it imports `resolution`,
@@ -46,14 +46,17 @@ function bodies that need them, which is safe because by the time any
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 import typer
 
-from openkos import config
+from openkos import config, lifecycle, lint, sensitivity
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
+from openkos.graph.base import Edge
+from openkos.graph.sqlite_graph import build_graph
 from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
     OllamaClient,
@@ -61,6 +64,7 @@ from openkos.llm.ollama import (
     OllamaModelNotFound,
     OllamaUnavailable,
 )
+from openkos.model import okf
 from openkos.resolution import find_candidates
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
@@ -68,6 +72,18 @@ from openkos.resolution.adjudication import (
     adjudicate_candidates,
 )
 from openkos.resolution.candidates import CandidateGroup
+from openkos.resolution.contradiction import (
+    ContradictionVerdict,
+    _pairs_and_types,
+    find_contradictions,
+    is_high_confidence_contradiction,
+)
+from openkos.resolution.edge_typing import (
+    EdgeSuggestion,
+    candidate_edges,
+    suggest_edge_types,
+)
+from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
 
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
 """Byte-identical to `cli/main.py`'s own `_DOCTOR_HINT` (mirrors, not
@@ -149,13 +165,19 @@ class CurateContext:
 
 def cost_line(stage: Stage, probe: StageProbe) -> str:
     """The pinned cost-gate literal (design D3): `{n} {noun}(s) -> {n} LLM
-    call(s)`, byte-compatible with `suggest-relations`' existing line
-    (`main.py:7436`) for Structure's `untyped edge` noun. `probe.llm_calls`
-    -- not `len(probe.items)` -- is the one number both halves report: the
-    two coincide for every stage this design has pinned so far, but keeping
-    `llm_calls` authoritative is what lets a future stage (design's Open
-    Questions: Metadata's exact cost unit) report a call count that is NOT
-    a 1:1 count of its queue without this helper needing to change."""
+    call(s)`. For Structure's `untyped edge` noun, this is byte-identical
+    to the PREFIX of `suggest-relations`' existing line (`main.py:7587`):
+    that line reads `f"{total} untyped edge(s) -> {total} LLM call(s), one
+    per edge (this can take a while). Pass --auto to skip this prompt."` --
+    `cost_line` pins the shared `"{n} {noun}(s) -> {n} LLM call(s)"` prefix
+    only, never the standalone verb's trailing "one per edge..."/"Pass
+    --auto..." clause, which is specific to that verb's own confirm prompt,
+    not `curate`'s `gate()`. `probe.llm_calls` -- not `len(probe.items)` --
+    is the one number both halves report: the two coincide for every stage
+    this design has pinned so far, but keeping `llm_calls` authoritative is
+    what lets a future stage (design's Open Questions: Metadata's exact
+    cost unit) report a call count that is NOT a 1:1 count of its queue
+    without this helper needing to change."""
     n = probe.llm_calls
     return f"{n} {stage.noun}(s) -> {n} LLM call(s)"
 
@@ -343,29 +365,397 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     )
 
 
-def _not_live_probe(stage_name: str) -> "Callable[[CurateContext], StageProbe]":
-    """Build a defensive placeholder `probe` for a `live=False` slice-1
-    descriptor: raises if ever called, proving the sequencer's `not
-    stage.live` short-circuit is what keeps it from running -- never a live
-    stage silently doing nothing (design D2)."""
+def _structure_probe(ctx: CurateContext) -> StageProbe:
+    """`build_graph(..., candidates=source)` + `candidate_edges` (design
+    D4): the SAME pre-flight surface `suggest-relations` counts to bound
+    cost before committing to `suggest_edge_types`'s one-`llm.chat`-per-edge
+    run (issue #134) -- no LLM call, graph-projection-reuse (#196) closes
+    the proximity source as soon as `build_graph` consumes it."""
+    from openkos.cli import main as cli_main
 
-    def _probe(ctx: CurateContext) -> StageProbe:
-        raise AssertionError(
-            f"{stage_name}: probe must not be called while live=False (slice 1)"
+    source = cli_main._open_proximity_or_degrade(ctx.layout.vectors_db_path)
+    try:
+        graph = build_graph(ctx.layout.bundle_dir, candidates=source)
+    finally:
+        if source is not None:
+            source.close()
+
+    with graph as store:
+        edges = candidate_edges(
+            ctx.layout.bundle_dir,
+            include_confidential=ctx.include_confidential,
+            store=store,
         )
 
-    return _probe
+    return StageProbe(
+        items=tuple(edges),
+        llm_calls=len(edges),
+        empty_message="No untyped edges found." if not edges else None,
+    )
 
 
-def _not_live_run(
-    stage_name: str,
-) -> "Callable[[CurateContext, StageProbe], StageOutcome]":
-    def _run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
-        raise AssertionError(
-            f"{stage_name}: run must not be called while live=False (slice 1)"
+def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
+    """`suggest_edge_types` with `on_progress` (design D4), then a per-item
+    `[y/N/skip]` walk writing every accepted suggestion through the
+    extracted `relate` core (`prepare_relate`/`relate_core`, design D5) --
+    the exact same write path standalone `relate` uses, so the two can
+    never drift apart. A degraded suggestion (`suggested_type=None`) is
+    reported and skipped without a prompt (spec: Structure Stage Writes
+    Through The Relate Core)."""
+    from openkos.cli import main as cli_main
+
+    edges = [item for item in probe.items if isinstance(item, Edge)]
+    llm = ctx.ollama_client
+    if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
+        raise RuntimeError("Structure stage requires an LLM client")
+
+    suggestions: Sequence[EdgeSuggestion] = suggest_edge_types(
+        edges,
+        bundle_dir=ctx.layout.bundle_dir,
+        llm=llm,
+        include_confidential=ctx.include_confidential,
+        on_progress=observability.progress_callback("curate", "untyped edge"),
+    )
+
+    layout = ctx.layout
+    log_path = layout.bundle_dir / "log.md"
+    now = datetime.now(UTC)
+    applied = 0
+    skipped = 0
+
+    for suggestion in suggestions:
+        edge = suggestion.edge
+        if suggestion.suggested_type is None:
+            typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
+            typer.echo("  note: no valid type suggested")
+            skipped += 1
+            continue
+
+        typer.echo(
+            f"[{suggestion.suggested_type}] {edge.source_id} -> {edge.target_id}"
+        )
+        typer.echo(f"  rationale: {suggestion.rationale}")
+        answer = typer.prompt(
+            f"Relate {edge.source_id} -> {edge.target_id} "
+            f"[{suggestion.suggested_type}]? [y/N/skip]",
+            default="N",
+            show_default=False,
+        )
+        if answer.strip().lower() not in {"y", "yes"}:
+            skipped += 1
+            continue
+
+        source_path = layout.bundle_dir / f"{edge.source_id}.md"
+        try:
+            prepared = cli_main.prepare_relate(
+                source_path,
+                log_path,
+                edge.source_id,
+                edge.target_id,
+                suggestion.suggested_type,
+                ctx.root,
+                now=now,
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos curate: Structure: failed while relating "
+                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        cli_main._reject_drifted_targets(
+            layout,
+            {source_path: prepared.source_bytes, log_path: prepared.log_bytes},
+            "curate",
         )
 
-    return _run
+        try:
+            cli_main.relate_core(source_path, log_path, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos curate: Structure: failed while relating "
+                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        cli_main._autocommit(
+            ctx.root,
+            [f"bundle/{edge.source_id}.md", "bundle/log.md"],
+            f"openkos: relate {edge.source_id} -> {edge.target_id} "
+            f"({suggestion.suggested_type})",
+        )
+        applied += 1
+
+    status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
+    return StageOutcome(
+        status=status,
+        applied=applied,
+        skipped=skipped,
+        notice=f"Structure: applied {applied}, skipped {skipped}.",
+    )
+
+
+def _concept_type_names(ctx: CurateContext) -> list[str]:
+    """The cheap, LLM-free pre-flight count Metadata's `cost_line` needs
+    (design D4): every distinct, non-blank `type` present among
+    `lint.collect_docs`' readable/parseable docs, after the SAME
+    sensitivity fail-closed filter (S3b) `suggest_volatility` itself
+    applies -- mirroring `candidate_edges`' role for Structure. This is a
+    genuine re-derivation, not a cached count: it re-walks the bundle every
+    time `run_curate` reaches Metadata (design D4's no-memoization rule)."""
+    blocked: frozenset[str] = frozenset()
+    if not ctx.include_confidential:
+        blocked = sensitivity.sensitive_concept_ids(ctx.layout.bundle_dir)
+    docs, _skip_notices = lint.collect_docs(ctx.layout.bundle_dir)
+    return sorted(
+        {doc.type for doc in docs if doc.type and doc.identity not in blocked}
+    )
+
+
+def _sensitivity_gap_ids(bundle_dir: Path) -> frozenset[str]:
+    """Concept ids with NO `sensitivity` frontmatter key at all (design D4:
+    Metadata's report-only sensitivity gap) -- a strictly narrower set than
+    `sensitivity.sensitive_concept_ids` (which also folds in blank/
+    unrecognized/confidential values, since THAT predicate answers "does
+    this block an LLM send", not "is this literally unset"). An unreadable
+    or unparseable doc is skipped, never reported as a gap: this is a
+    report, not a fail-closed send gate, so a doc this cannot even read
+    contributes no signal either way."""
+    gaps: set[str] = set()
+    for scan in okf._iter_docs(bundle_dir):
+        if scan.read_error is not None or scan.parse_error is not None:
+            continue
+        if (scan.metadata or {}).get("sensitivity") is None:
+            cid = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+            gaps.add(cid)
+    return frozenset(gaps)
+
+
+def _metadata_probe(ctx: CurateContext) -> StageProbe:
+    """`lint.collect_docs` + `cfg.type_tiers` (design D4): the queue is
+    every distinct concept TYPE `suggest_volatility` would sample -- one
+    `llm.chat` call per type, never per concept (module docstring of
+    `resolution.volatility_typing`).
+
+    The sensitivity-gap notice rides the EMPTY branch too (review
+    correction, R3-01 CRITICAL): `_concept_type_names` and
+    `_sensitivity_gap_ids` key off the same fail-closed sensitivity set, so
+    the one bundle shape the gap report exists to flag -- every
+    under-specified doc excluded from the type list precisely BECAUSE its
+    `sensitivity` is unset -- used to empty the probe, and `run_curate`'s
+    empty-queue short-circuit then returned before `_metadata_run` (the
+    only place the notice printed). Folding the notice into
+    `empty_message` keeps the report reachable without touching the frozen
+    sequencer: the empty branch already prints this message verbatim."""
+    type_names = _concept_type_names(ctx)
+    empty_message: str | None = None
+    if not type_names:
+        empty_message = "No concept types found."
+        gaps = _sensitivity_gap_ids(ctx.layout.bundle_dir)
+        if gaps:
+            gap_list = ", ".join(sorted(gaps))
+            empty_message += (
+                f" Sensitivity unset on: {gap_list} -- set it with "
+                "`openkos set-sensitivity`."
+            )
+    return StageProbe(
+        items=tuple(type_names),
+        llm_calls=len(type_names),
+        empty_message=empty_message,
+    )
+
+
+def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
+    """`suggest_volatility` with `on_progress` (design D4), then a per-type
+    `[y/N/skip]` walk writing every accepted tier through the extracted
+    `set-volatility` core (`prepare_set_volatility`/`set_volatility_core`,
+    design D5). Sensitivity gaps surfaced in the SAME pass (`
+    _sensitivity_gap_ids`) are reported only, naming `openkos
+    set-sensitivity`, and never written here (spec: Metadata Stage Writes
+    Tiers, Reports Sensitivity)."""
+    from openkos.cli import main as cli_main
+
+    llm = ctx.ollama_client
+    if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
+        raise RuntimeError("Metadata stage requires an LLM client")
+
+    results: Sequence[TierSuggestion] = suggest_volatility(
+        ctx.layout.bundle_dir,
+        llm=llm,
+        include_confidential=ctx.include_confidential,
+        on_progress=observability.progress_callback("curate", "concept type"),
+    )
+
+    applied = 0
+    skipped = 0
+    for result in results:
+        if result.suggested_tier is None:
+            typer.echo(f"[?] {result.type_name}")
+            typer.echo("  note: no valid tier suggested")
+            skipped += 1
+            continue
+
+        typer.echo(f"[{result.suggested_tier}] {result.type_name}")
+        typer.echo(f"  rationale: {result.rationale}")
+        answer = typer.prompt(
+            f"Set {result.type_name} -> {result.suggested_tier}? [y/N/skip]",
+            default="N",
+            show_default=False,
+        )
+        if answer.strip().lower() not in {"y", "yes"}:
+            skipped += 1
+            continue
+
+        try:
+            prepared = cli_main.prepare_set_volatility(
+                ctx.layout.config_path, result.type_name, result.suggested_tier
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos curate: Metadata: failed while setting volatility "
+                f"for {result.type_name} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        cli_main._reject_drifted_targets(
+            ctx.layout, {ctx.layout.config_path: prepared.config_bytes}, "curate"
+        )
+
+        try:
+            cli_main.set_volatility_core(ctx.layout.config_path, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos curate: Metadata: failed while setting volatility "
+                f"for {result.type_name} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        cli_main._autocommit(
+            ctx.root,
+            ["openkos.yaml"],
+            f"openkos: set-volatility {result.type_name} -> {result.suggested_tier}",
+        )
+        applied += 1
+
+    for concept_id in sorted(_sensitivity_gap_ids(ctx.layout.bundle_dir)):
+        typer.echo(
+            f"Metadata: sensitivity gap -- {concept_id} has no sensitivity "
+            f"set. Run `openkos set-sensitivity {concept_id} <level>`."
+        )
+
+    status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
+    return StageOutcome(
+        status=status,
+        applied=applied,
+        skipped=skipped,
+        notice=f"Metadata: applied {applied}, skipped {skipped}.",
+    )
+
+
+def _contradiction_pairs(
+    ctx: CurateContext,
+) -> tuple[list[tuple[str, str]], int]:
+    """The cheap, LLM-free pre-flight pair count Contradictions' `cost_line`
+    needs (design D4): `build_graph` + `_pairs_and_types`'s deduped, typed-
+    edge candidate pairs, deprecation/sensitivity-excluded exactly as
+    `find_contradictions` itself would exclude them -- no `llm.chat` call.
+    Reused as-is by `_contradictions_run`'s own `find_contradictions` call,
+    which re-derives its own graph fresh (design D4's no-memoization rule
+    is about STATE CARRIED BETWEEN STAGES, not a ban on this stage reading
+    its own bundle twice in one pass)."""
+    from openkos.cli import main as cli_main
+
+    excluded: set[str] = set()
+    if not ctx.include_deprecated:
+        excluded |= lifecycle.deprecated_concept_ids(ctx.layout.bundle_dir)
+    if not ctx.include_confidential:
+        excluded |= sensitivity.sensitive_concept_ids(ctx.layout.bundle_dir)
+
+    source = cli_main._open_proximity_or_degrade(ctx.layout.vectors_db_path)
+    try:
+        graph = build_graph(ctx.layout.bundle_dir, candidates=source)
+    finally:
+        if source is not None:
+            source.close()
+
+    with graph as store:
+        pairs, total_count, _relation_types = _pairs_and_types(
+            store, frozenset(excluded)
+        )
+    return pairs, total_count
+
+
+def _contradictions_probe(ctx: CurateContext) -> StageProbe:
+    """`build_graph` + `find_contradictions`'s own candidate-pair narrowing
+    (design D4), counted via `_contradiction_pairs` with no `llm.chat`
+    call -- Contradictions runs LAST, so this never affects an earlier
+    stage's queue."""
+    pairs, _total = _contradiction_pairs(ctx)
+    return StageProbe(
+        items=tuple(pairs),
+        llm_calls=len(pairs),
+        empty_message="No candidate pairs found." if not pairs else None,
+    )
+
+
+def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
+    """`find_contradictions` with `on_progress` (design D4): report-only
+    and terminal -- never proposes or performs a write (spec: Contradictions
+    Stage Is Report-Only And Last)."""
+    from openkos.cli import main as cli_main
+
+    llm = ctx.ollama_client
+    if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
+        raise RuntimeError("Contradictions stage requires an LLM client")
+
+    source = cli_main._open_proximity_or_degrade(ctx.layout.vectors_db_path)
+    try:
+        graph = build_graph(ctx.layout.bundle_dir, candidates=source)
+    finally:
+        if source is not None:
+            source.close()
+
+    with graph as store:
+        verdicts, total_pairs = find_contradictions(
+            ctx.layout.bundle_dir,
+            llm=llm,
+            include_deprecated=ctx.include_deprecated,
+            include_confidential=ctx.include_confidential,
+            store=store,
+            on_progress=observability.progress_callback("curate", "pair"),
+        )
+
+    if total_pairs > len(verdicts):
+        typer.echo(
+            f"Contradictions: {len(verdicts)} of {total_pairs} pairs shown "
+            "(cap reached)"
+        )
+
+    high_confidence: list[ContradictionVerdict] = [
+        v for v in verdicts if is_high_confidence_contradiction(v)
+    ]
+    for verdict in high_confidence:
+        source_id, target_id = verdict.pair_ids
+        typer.echo(
+            f"[{verdict.verdict.value.upper()}] {source_id} <-> {target_id} "
+            f"(confidence: {verdict.confidence:.2f})"
+        )
+        for claim in verdict.conflicting_claims:
+            typer.echo(f"  - {claim}")
+        typer.echo(f"  rationale: {verdict.rationale}")
+
+    status: Literal["applied", "empty"] = "applied" if high_confidence else "empty"
+    notice = (
+        f"Contradictions: {len(high_confidence)} high-confidence "
+        "contradiction(s) found."
+        if high_confidence
+        else "Contradictions: no high-confidence contradictions found."
+    )
+    return StageOutcome(status=status, applied=len(high_confidence), notice=notice)
 
 
 _STAGES: tuple[Stage, ...] = (
@@ -392,38 +782,38 @@ _STAGES: tuple[Stage, ...] = (
     Stage(
         name="Structure",
         noun="untyped edge",
-        probe=_not_live_probe("Structure"),
-        run=_not_live_run("Structure"),
+        probe=_structure_probe,
+        run=_structure_run,
         needs_llm=True,
         writes=True,
         unattended_hint="openkos relate <source> <type> <target>",
-        live=False,
+        live=True,
     ),
     Stage(
         name="Metadata",
         noun="concept type",
-        probe=_not_live_probe("Metadata"),
-        run=_not_live_run("Metadata"),
+        probe=_metadata_probe,
+        run=_metadata_run,
         needs_llm=True,
         writes=True,
         unattended_hint="openkos set-volatility <concept> <tier>",
-        live=False,
+        live=True,
     ),
     Stage(
         name="Contradictions",
         noun="pair",
-        probe=_not_live_probe("Contradictions"),
-        run=_not_live_run("Contradictions"),
+        probe=_contradictions_probe,
+        run=_contradictions_run,
         needs_llm=True,
         writes=False,
-        live=False,
+        live=True,
     ),
 )
-"""D1 order, all five entries declared at runtime in slice 1 (design D2):
-Preconditions, Identity, Structure, Metadata, Contradictions. The tuple and
-every descriptor field are frozen here -- slice 2 only flips `live` and
-fills in `probe`/`run` on the last three; nothing about this tuple's shape
-changes."""
+"""D1 order, all five entries declared at runtime (design D2): Preconditions,
+Identity, Structure, Metadata, Contradictions. All five are `live=True` as
+of slice 2 -- the tuple's SHAPE stayed frozen from slice 1 through slice 2;
+only `live` flipped and `probe`/`run` were filled in on the last three,
+exactly as design D10 planned."""
 
 _NOT_LIVE_NOTICE = "not yet available in this version"
 """Verbatim spec wording (Requirement: Slice Boundary) for a `live=False`

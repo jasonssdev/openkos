@@ -53,8 +53,11 @@ stages that prompt — dead prompts.
 gate, so `cfg.review` is deliberately not consulted. `curate` keeps that: one `gate()` helper prints
 `{n} {noun} -> {n} LLM call(s) ...` to stderr, then `typer.confirm`.
 
-The literal is pinned: `{n} {noun} -> {n} LLM call(s)`, with Structure's noun `untyped edge`
-(byte-compatible with `suggest-relations`' existing line).
+The literal is pinned: `{n} {noun} -> {n} LLM call(s)`, with Structure's noun `untyped edge`.
+This matches only the PREFIX of `suggest-relations`' existing line (`main.py:7587`:
+`f"{total} untyped edge(s) -> {total} LLM call(s), one per edge (this can take a while).
+Pass --auto to skip this prompt."`) -- `curate`'s `gate()` never emits that line's trailing
+"one per edge..."/"Pass --auto..." clause, which is specific to the standalone verb's own prompt.
 
 | Condition | Standalone verb | `curate` |
 |---|---|---|

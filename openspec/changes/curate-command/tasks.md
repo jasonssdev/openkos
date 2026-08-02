@@ -62,27 +62,27 @@ Chain strategy: stacked-to-main
 
 ## Slice 2 (PR 2): relate/set-volatility extraction, Structure, Metadata, Contradictions
 
-- [ ] 2.1 RED: test `prepare_relate` returns `PreparedRelate` with snapshot drift baseline, Phase A writes nothing
-- [ ] 2.2 GREEN: extract `prepare_relate` from `main.py:3715-3753` into `src/openkos/cli/main.py`
-- [ ] 2.3 RED: test `relate_core(prepared)` performs only `write_atomic` x2 (`main.py:3800-3801`), no commit, raises `OSError`/`ValueError`
-- [ ] 2.4 GREEN: implement `relate_core`
-- [ ] 2.5 Refactor `relate` command onto `prepare_relate`/`relate_core`, keeping gate/preview/confirm/drift-guard/echo (3686-3711, 3760-3775, 3777-3786, 3790-3797, 3808-3818) unchanged
-- [ ] 2.6 GATE: run `uv run pytest tests/unit/cli/test_relate.py` UNEDITED — must pass (D5/spec preservation proof)
-- [ ] 2.7 RED: test `prepare_set_volatility` returns `PreparedSetVolatility` with snapshot baseline, Phase A writes nothing
-- [ ] 2.8 GREEN: extract `prepare_set_volatility` from `main.py:4769-4776`
-- [ ] 2.9 RED: test `set_volatility_core(prepared)` performs only `write_atomic` (`main.py:4805`), no commit
-- [ ] 2.10 GREEN: implement `set_volatility_core`
-- [ ] 2.11 Refactor `set-volatility` command onto `prepare_set_volatility`/`set_volatility_core`, keeping vocab/gate/preview/confirm/guard/echo (4726-4767, 4781-4782, 4784-4793, 4800-4802, 4810-4819) unchanged
-- [ ] 2.12 GATE: run `uv run pytest tests/unit/cli/test_set_volatility.py` UNEDITED — must pass
-- [ ] 2.13 RED: test Structure's accepted edge-type suggestion writes via extracted `relate` core matching standalone output; declined suggestion writes nothing
-- [ ] 2.14 GREEN: implement Structure `probe` (`build_graph(..., candidates=source)` + `candidate_edges`) and `run` (`suggest_edge_types` with `on_progress`, accepted → `prepare_relate`/`relate_core`); noun `"untyped edge"` (depends on 2.4)
-- [ ] 2.15 RED: post-merge freshness test — seed all five finding kinds, merge in Identity, assert Structure's queue references the survivor
-- [ ] 2.16 RED: test Metadata's accepted tier writes via extracted `set-volatility` core; sensitivity gap reported only, naming `openkos set-sensitivity`, no write
-- [ ] 2.17 GREEN: implement Metadata `probe` (`lint.collect_docs` + `cfg.type_tiers`) and `run` (`suggest_volatility` with `on_progress`, one `llm.chat` call per concept TYPE, accepted → `prepare_set_volatility`/`set_volatility_core`); noun `"concept type"` (depends on 2.10)
-- [ ] 2.18 RED: test Contradictions runs last, calls `find_contradictions` with `on_progress`, never proposes/performs a write
-- [ ] 2.19 GREEN: implement Contradictions `probe`/`run` (`build_graph` + `find_contradictions`); `writes=False`, noun `"pair"`
-- [ ] 2.20 Flip `live=True` on Structure/Metadata/Contradictions descriptors in `_STAGES` without touching `Stage`/`gate`/`run_curate`/`render_summary`
-- [ ] 2.21 RED: test the full five-stage summary with no "not yet available" label remaining
-- [ ] 2.22 Update `docs/cli.md` `curate` entry — remove "not yet available" note
-- [ ] 2.23 Run `uv run pytest tests/unit/cli/test_curate.py tests/unit/cli/test_relate.py tests/unit/cli/test_set_volatility.py tests/unit/cli/test_merge.py tests/unit/cli/test_adjudicate.py tests/unit/cli/test_next.py tests/unit/cli/test_status.py` — full regression, unedited suites pass
+- [x] 2.1 RED: test `prepare_relate` returns `PreparedRelate` with snapshot drift baseline, Phase A writes nothing
+- [x] 2.2 GREEN: extract `prepare_relate` from `main.py:3715-3753` into `src/openkos/cli/main.py`
+- [x] 2.3 RED: test `relate_core(prepared)` performs only `write_atomic` x2 (`main.py:3800-3801`), no commit, raises `OSError`/`ValueError`
+- [x] 2.4 GREEN: implement `relate_core`
+- [x] 2.5 Refactor `relate` command onto `prepare_relate`/`relate_core`, keeping gate/preview/confirm/drift-guard/echo (3686-3711, 3760-3775, 3777-3786, 3790-3797, 3808-3818) unchanged
+- [x] 2.6 GATE: run `uv run pytest tests/unit/cli/test_relate.py` UNEDITED — must pass (D5/spec preservation proof)
+- [x] 2.7 RED: test `prepare_set_volatility` returns `PreparedSetVolatility` with snapshot baseline, Phase A writes nothing
+- [x] 2.8 GREEN: extract `prepare_set_volatility` from `main.py:4769-4776`
+- [x] 2.9 RED: test `set_volatility_core(prepared)` performs only `write_atomic` (`main.py:4805`), no commit
+- [x] 2.10 GREEN: implement `set_volatility_core`
+- [x] 2.11 Refactor `set-volatility` command onto `prepare_set_volatility`/`set_volatility_core`, keeping vocab/gate/preview/confirm/guard/echo (4726-4767, 4781-4782, 4784-4793, 4800-4802, 4810-4819) unchanged
+- [x] 2.12 GATE: run `uv run pytest tests/unit/cli/test_set_volatility.py` UNEDITED — must pass
+- [x] 2.13 RED: test Structure's accepted edge-type suggestion writes via extracted `relate` core matching standalone output; declined suggestion writes nothing
+- [x] 2.14 GREEN: implement Structure `probe` (`build_graph(..., candidates=source)` + `candidate_edges`) and `run` (`suggest_edge_types` with `on_progress`, accepted → `prepare_relate`/`relate_core`); noun `"untyped edge"` (depends on 2.4)
+- [x] 2.15 RED: post-merge freshness test — seed all five finding kinds, merge in Identity, assert Structure's queue references the survivor
+- [x] 2.16 RED: test Metadata's accepted tier writes via extracted `set-volatility` core; sensitivity gap reported only, naming `openkos set-sensitivity`, no write
+- [x] 2.17 GREEN: implement Metadata `probe` (`lint.collect_docs` + `cfg.type_tiers`) and `run` (`suggest_volatility` with `on_progress`, one `llm.chat` call per concept TYPE, accepted → `prepare_set_volatility`/`set_volatility_core`); noun `"concept type"` (depends on 2.10)
+- [x] 2.18 RED: test Contradictions runs last, calls `find_contradictions` with `on_progress`, never proposes/performs a write
+- [x] 2.19 GREEN: implement Contradictions `probe`/`run` (`build_graph` + `find_contradictions`); `writes=False`, noun `"pair"`
+- [x] 2.20 Flip `live=True` on Structure/Metadata/Contradictions descriptors in `_STAGES` without touching `Stage`/`gate`/`run_curate`/`render_summary`
+- [x] 2.21 RED: test the full five-stage summary with no "not yet available" label remaining
+- [x] 2.22 Update `docs/cli.md` `curate` entry — remove "not yet available" note
+- [x] 2.23 Run `uv run pytest tests/unit/cli/test_curate.py tests/unit/cli/test_relate.py tests/unit/cli/test_set_volatility.py tests/unit/cli/test_merge.py tests/unit/cli/test_adjudicate.py tests/unit/cli/test_next.py tests/unit/cli/test_status.py` — full regression, unedited suites pass
 </content>
