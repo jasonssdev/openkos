@@ -698,14 +698,17 @@ def _changed_under_bundle(
 ) -> set[Path]:
     """Paths under `bundle/` whose snapshot entry changed.
 
-    Scoped to `bundle/` because `query` is the only guarded verb that opens
-    the retrieval stores: SQLite creates and removes `-wal`/`-shm` sidecars
-    beside `.openkos/*.db` on every run, and an unscoped comparison reports
-    them as changes that have nothing to do with what the verb wrote. Every
-    path `query --save` writes lives under `bundle/`, so nothing the
-    assertion is about is excluded -- but note the converse: a write this
-    verb should NOT be making, outside `bundle/`, would not be caught here
-    either.
+    Scoped to `bundle/` because opening the retrieval stores makes SQLite
+    create and remove `-wal`/`-shm` sidecars beside `.openkos/*.db` on
+    every run, and an unscoped comparison reports them as changes that have
+    nothing to do with what the verb wrote. `query` is the verb whose TESTS
+    hit this first, not the only guarded verb that opens the stores (#332):
+    `ingest` opens and writes `vectors.db` through `_embed_after_ingest`,
+    so its suite has the same sidecar problem waiting -- this helper stays
+    here only until a second suite actually needs it. Every path
+    `query --save` writes lives under `bundle/`, so nothing the assertion
+    is about is excluded -- but note the converse: a write this verb should
+    NOT be making, outside `bundle/`, would not be caught here either.
     """
     return {
         k for k in changed_paths(before, after) if k.parts and k.parts[0] == "bundle"

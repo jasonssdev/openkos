@@ -1374,3 +1374,44 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused_by_rail_4(
     assert changed_paths(before, snapshot_with_mtime(tmp_git_repo.root)) == {
         Path(target)
     }
+
+
+# -- #313 wave-2 R3: a purge-set member without a Phase-A baseline -----------
+
+
+def test_a_member_without_a_phase_a_baseline_refuses_instead_of_tracebacking(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`purge`'s guard mapping looks up every non-root member's snapshot
+    bytes by `<member>.md`. Today that key exists by construction --
+    `purge_ids` and the snapshot are built from the same bundle scan, and
+    Phase A's own `member_texts` lookup would have crashed first -- so this
+    lookup is defensive-only, and it CANNOT be forced end-to-end without
+    first breaking that earlier lookup. But a future refactor that computes
+    `purge_ids` from anything other than the scanned files would turn a
+    bare `[]` lookup into a `KeyError` traceback in the middle of the
+    post-confirmation gate. The helper pins the fail-closed alternative: a
+    member with no same-observation baseline (#318) cannot be validated, so
+    it is treated as drift -- refuse (exit 3), name the member, write
+    nothing."""
+    with pytest.raises(typer.Exit) as excinfo:
+        main._require_member_baseline("purge", {}, "concepts/ghost")
+
+    assert excinfo.value.exit_code == 3
+    err = capsys.readouterr().err
+    assert "openkos purge: refusing to write --" in err
+    assert "concepts/ghost" in err
+    assert "no Phase-A snapshot" in err
+    assert "Nothing was written." in err
+    assert "Re-run to recompute over the current bundle." in err
+
+
+def test_a_member_with_a_baseline_returns_it_unchanged() -> None:
+    """The happy path is a plain lookup: the helper hands back the exact
+    snapshot bytes so the guard's mapping is byte-for-byte what the direct
+    indexing built before it existed."""
+    baseline = main._require_member_baseline(
+        "purge", {"concepts/child.md": b"snapshot\n"}, "concepts/child"
+    )
+
+    assert baseline == b"snapshot\n"
