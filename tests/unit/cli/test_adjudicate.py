@@ -39,6 +39,7 @@ from openkos.llm.ollama import (
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.vcs import git as vcs_git
+from tests.unit.cli.conftest import changed_paths
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 from tests.unit.vcs.conftest import isolate_git_identity
 
@@ -1515,6 +1516,77 @@ def test_adjudicate_apply_prepare_merge_failure_stops_the_run(
     assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
 
 
+# ---------------------------------------------------------------------------
+# `adjudicate --apply` TOCTOU drift guard (issue #346)
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_apply_toctou_drift_exits_three_nothing_written(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An edit landing on the survivor file INSIDE the post-confirm window
+    -- after `_prepare_one_merge`'s snapshot, while the `[y/N/skip]` prompt
+    waited -- is refused, not clobbered (issue #346, the #306/#313/#319
+    drift-guard contract): exit 3, `refusing to write --` on stderr naming
+    the actual command, the hand-edit intact, and nothing else on disk
+    touched.
+
+    The TOCTOU window under test opens AFTER `_prepare_one_merge`'s
+    snapshot and closes at `_merge_drift_targets` -- in the `--apply` walk
+    that window is exactly the per-pair `[y/N/skip]` `typer.prompt`, so the
+    concurrent edit is injected from a `typer.prompt` stub that edits the
+    survivor and then accepts (mirrors `test_curate.py`'s Identity TOCTOU
+    test, the established pattern for this window)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    survivor_path = tmp_path / "bundle" / "concepts" / "a.md"
+    concurrent = "hand-edited while the prompt waited\n"
+    before = _snapshot(tmp_path)
+
+    def _prompt_edits_then_accepts(*args: object, **kwargs: object) -> str:
+        survivor_path.write_text(concurrent, encoding="utf-8")
+        return "y"
+
+    monkeypatch.setattr("typer.prompt", _prompt_edits_then_accepts)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"])
+
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos adjudicate --apply: refusing to write --" in result.stderr
+    after = _snapshot(tmp_path)
+    changed = changed_paths(before, after)
+    assert changed == {Path("bundle/concepts/a.md")}
+    assert survivor_path.read_text(encoding="utf-8") == concurrent
+
+
+def test_adjudicate_apply_clean_accepted_pair_still_merges_after_drift_guard(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression pin for issue #346: the drift guard is a NO-OP on a clean
+    accepted pair -- when nothing edits the targets during the prompt, the
+    guarded walk merges exactly as before (exit 0, absorbed file removed,
+    one applied in the summary), so adding the guard changed only the
+    drifted case."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "applied 1" in result.stdout
+
+
 def test_adjudicate_apply_summary_reflects_applied_and_skipped_counts(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -2049,6 +2121,63 @@ def test_adjudicate_apply_same_mid_batch_merge_core_failure_keeps_prior_commit(
     assert (tmp_path / "bundle" / "concepts" / "f.md").exists()
     assert "applied 1 of 3 previewed before this failure" in result.stderr
     assert "remaining pairs were not attempted" in result.stderr
+
+
+def test_adjudicate_apply_same_toctou_drift_exits_three_with_partial_summary(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An edit landing on the survivor file INSIDE the batch's unguarded
+    window -- after Pass 2's re-prepare captured the pair's baseline, before
+    `_commit_one_merge` writes it -- is refused, not clobbered (issue #346,
+    the #306/#313/#319 drift-guard contract): exit 3, `refusing to write --`
+    on stderr naming the actual command, the mid-batch partial summary
+    (applied so far of total, remainder never attempted, applied merges
+    reversible via `unmerge`) echoed before the run ends, the hand-edit
+    intact, and nothing else on disk touched.
+
+    The injection point differs from the `--apply` test on purpose: an edit
+    landing at the typed-count prompt is RE-READ by Pass 2's re-prepare and
+    recomputed over, so the prompt is not this walk's unguarded window --
+    the re-prepare-to-write gap inside the batch loop is. The concurrent
+    edit is therefore injected from a `prepare_merge` wrapper on its second
+    call (Pass 1 previews on call 1, Pass 2 re-prepares on call 2), which
+    lands the edit strictly after the baseline capture and strictly before
+    the write."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    survivor_path = tmp_path / "bundle" / "concepts" / "a.md"
+    concurrent = "hand-edited between re-prepare and write\n"
+    before = _snapshot(tmp_path)
+
+    original_prepare_merge = main.prepare_merge
+    call_count = {"n": 0}
+
+    def _prepare_then_concurrent_edit(*args: object, **kwargs: object) -> object:
+        prepared = original_prepare_merge(*args, **kwargs)  # type: ignore[arg-type]
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            survivor_path.write_text(concurrent, encoding="utf-8")
+        return prepared
+
+    monkeypatch.setattr("openkos.cli.main.prepare_merge", _prepare_then_concurrent_edit)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos adjudicate --apply-same: refusing to write --" in result.stderr
+    assert "applied 0 of 1 previewed" in result.stderr
+    assert "remaining pairs were not attempted" in result.stderr
+    assert "reversible via `unmerge`" in result.stderr
+    after = _snapshot(tmp_path)
+    changed = changed_paths(before, after)
+    assert changed == {Path("bundle/concepts/a.md")}
+    assert survivor_path.read_text(encoding="utf-8") == concurrent
 
 
 def test_adjudicate_apply_same_chained_shared_member_skips_second_pair(
