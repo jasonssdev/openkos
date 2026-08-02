@@ -2322,6 +2322,20 @@ def forget(
     refuses to write (exit 1). `--force` does NOT auto-confirm gate 2 --
     the two gates stay fully orthogonal for both scopes.
 
+    Past both gates -- and on the runs that skip gate 2, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads every path this run intends to touch
+    and refuses the WHOLE run (exit 1, nothing written, nothing unlinked)
+    if any changed or vanished since Phase A read it (issues #306, #313).
+
+    That set includes the DELETE targets, not just `index.md` and `log.md`.
+    An edit landing on a purge-set member during the prompt would be
+    destroyed outright rather than overwritten, and the purge set is itself
+    a claim about the Phase-A bundle: a member that gained an inbound
+    reference while the prompt waited is one gate 1 would have refused, so
+    unlinking it anyway would leave that reference dangling under a
+    `--force` the operator never passed.
+
     Phase B (after both gates) writes `index.md` then `log.md`
     (`write_atomic`, catalog FIRST, covering every purge-set member) and
     deletes each member's concept file (`fsio.remove_file`) LAST, in
@@ -2367,6 +2381,15 @@ def forget(
         index_text = index_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
         concept_text = concept_path.read_text(encoding="utf-8")
+        # Raw bytes alongside each decoded read, for `_reject_drifted_targets`
+        # only: both sides of its comparison must come from the SAME reader
+        # (issues #306, #313), and each snapshot is taken NEXT TO the read
+        # that feeds the plan, never batched afterwards -- grouping them is
+        # what let an edit slip in ahead of the guard's own baseline in
+        # `ingest` (#313 review, R4).
+        index_bytes = index_path.read_bytes()
+        log_bytes = log_path.read_bytes()
+        concept_bytes = concept_path.read_bytes()
 
         # One whole-bundle snapshot, read ONCE, mirroring `merge`'s
         # `other_files` construction (~L1330-1337): every other `*.md`
@@ -2374,7 +2397,15 @@ def forget(
         # single snapshot feeds descendant resolution, inbound detection,
         # resurrection, and per-member titles/tombstones -- no extra
         # bundle scan, for either scope (design: Technical Approach).
+        #
+        # `other_bytes` shadows it for the guard. Which of these files the
+        # run will DELETE is not known until `purge_ids` resolves below, so
+        # the bytes are captured here, in the same iteration as the text,
+        # rather than re-read per member afterwards: a second pass would
+        # leave every file a window as wide as the rest of the scan. Only
+        # the purge-set entries are ever consulted; the rest are dropped.
         other_files: dict[str, str] = {}
+        other_bytes: dict[str, bytes] = {}
         for path in sorted(layout.bundle_dir.rglob("*.md")):
             if path.name in okf.RESERVED_FILENAMES:
                 continue
@@ -2382,6 +2413,7 @@ def forget(
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
             other_files[rel] = path.read_text(encoding="utf-8")
+            other_bytes[rel] = path.read_bytes()
 
         # Unified Phase-A data path (design decision 6): `--scope self`
         # collapses to a single-member purge set and reproduces every
@@ -2581,6 +2613,34 @@ def forget(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #313: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    #
+    # The DELETE targets are in here too, not just the two `write_atomic`
+    # ones. `forget` picks its purge set from the Phase-A bundle snapshot
+    # and then unlinks those exact paths, so an edit landing during the
+    # prompt is destroyed outright -- strictly worse than being overwritten,
+    # since nothing survives to recover from. The purge set is also a claim
+    # ABOUT that snapshot: a member that gained an inbound reference while
+    # the prompt waited is one the `--force` gate above would have refused,
+    # and deleting it anyway leaves the reference dangling. Refusing the
+    # whole run is the only answer that keeps the preview, the audit trail
+    # and the deletions describing the same bundle.
+    _reject_drifted_targets(
+        layout,
+        {
+            "bundle/index.md": index_bytes,
+            "bundle/log.md": log_bytes,
+            f"bundle/{canonical_id}.md": concept_bytes,
+            **{
+                f"bundle/{member}.md": other_bytes[f"{member}.md"]
+                for member in purge_ids
+                if member != canonical_id
+            },
+        },
+        "forget",
+    )
 
     unlinked_count = 0
     try:
@@ -3491,10 +3551,12 @@ def set_sensitivity_cmd(
     never cascade even when `combine_sensitivity` would compute a raise for
     some individual descendant sitting below the new (lower) level.
 
-    Once the gate passes, `_reject_drifted_targets` re-reads every path this
-    run intends to write -- the target concept, each staged descendant, and
-    `log.md` -- and refuses the WHOLE run (exit 1, nothing written) if any
-    of them changed or vanished while the prompt waited (issue #306).
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads every path this run intends to write
+    (the target concept, each staged descendant, and `log.md`) and refuses
+    the WHOLE run (exit 1, nothing written) if any changed or vanished since
+    Phase A read it (issues #306, #313).
 
     A confirmed write re-renders the frontmatter (`okf.dump_frontmatter`,
     changing only `sensitivity`), appends a `log.md` entry (no
@@ -3822,10 +3884,11 @@ def backfill_sensitivity_cmd(
     invocation, including the no-op path above. That signal is delivered by
     `lint`'s existing `dangling` finding, never this sweep.
 
-    Once the gate passes, `_reject_drifted_targets` re-reads every staged
-    descendant plus `log.md` and refuses the WHOLE run (exit 1, nothing
-    written) if any of them changed or vanished while the prompt waited
-    (issue #306).
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads every staged descendant plus `log.md`
+    and refuses the WHOLE run (exit 1, nothing written) if any changed or
+    vanished since Phase A read it (issues #306, #313).
 
     Phase B writes every merged raise (sorted by `concept_id`), then
     appends exactly one dated `log.md` entry summarizing the whole sweep,
@@ -4008,10 +4071,11 @@ def backfill_source_titles_cmd(
     precedence exactly: `--auto` / `review: false` / TTY `typer.confirm` /
     non-TTY refuse.
 
-    Once the gate passes, `_reject_drifted_targets` re-reads `index.md`,
-    every staged Source, and `log.md`, and refuses the WHOLE run (exit 1,
-    nothing written) if any of them changed or vanished while the prompt
-    waited (issue #306).
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads `index.md`, every staged Source, and
+    `log.md`, and refuses the WHOLE run (exit 1, nothing written) if any
+    changed or vanished since Phase A read it (issues #306, #313).
 
     Phase B writes `index.md` first, then each staged Source, then `log.md`,
     then one `_autocommit` (design D6); both write-bound texts are computed
