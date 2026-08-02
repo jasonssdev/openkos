@@ -16,12 +16,18 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.cli import main
 from openkos.cli.main import _stage_filed_answer, app
 from openkos.graph import sqlite_graph
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state import fts, vectorstore
 from openkos.vcs import git as vcs_git
-from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
+from tests.unit.cli.conftest import (
+    changed_paths,
+    confirm_after,
+    echo_after,
+    snapshot_with_mtime,
+)
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -701,11 +707,8 @@ def _changed_under_bundle(
     verb should NOT be making, outside `bundle/`, would not be caught here
     either.
     """
-    keys = before.keys() | after.keys()
     return {
-        k
-        for k in keys
-        if k.parts and k.parts[0] == "bundle" and before.get(k) != after.get(k)
+        k for k in changed_paths(before, after) if k.parts and k.parts[0] == "bundle"
     }
 
 
@@ -840,7 +843,7 @@ def test_drift_on_the_unprompted_path_is_refused(
     target_path = tmp_path / target
     concurrent = "hand-edited while the preview printed\n"
     before = snapshot_with_mtime(tmp_path)
-    echo_after(
+    hook = echo_after(
         monkeypatch,
         lambda: target_path.write_text(concurrent, encoding="utf-8"),
         trigger="(new dated entry)",
@@ -848,12 +851,65 @@ def test_drift_on_the_unprompted_path_is_refused(
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = snapshot_with_mtime(tmp_path)
     assert _changed_under_bundle(before, after) == {Path(target)}
+
+
+def test_an_edit_landing_after_the_snapshot_observation_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318's race, pinned for `query --save` (#327 follow-up; the pin
+    existed only in `test_relate.py`): the guard's baseline and the new
+    catalog's source text must come from the ONE `_snapshot_read`
+    observation -- under a two-read shape a writer landing between the
+    text-read and the bytes-read becomes the guard's own baseline, and
+    Phase B writes the catalog rendered from the EARLIER text, silently
+    reverting the edit.
+
+    The edit lands immediately after `index.md`'s snapshot returns (the
+    first of the verb's two snapshots), the earliest a concurrent writer
+    can now land relative to the plan; the guard's re-read must call it
+    drift and refuse the whole run.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    target_path = tmp_path / "bundle" / "index.md"
+    concurrent = "hand-edited the instant the snapshot returned\n"
+    real_snapshot_read = main._snapshot_read
+    fired = False
+
+    def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        nonlocal fired
+        snapshot = real_snapshot_read(path)
+        if not fired and path == target_path:
+            fired = True
+            target_path.write_text(concurrent, encoding="utf-8")
+        return snapshot
+
+    before = snapshot_with_mtime(tmp_path)
+    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert fired, "the racing wrapper never saw the index.md snapshot"
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert "bundle/index.md" in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    # The answer document was never created: the guard precedes every write.
+    assert not (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").exists()
+    assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
+        Path("bundle/index.md")
+    }
 
 
 def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
@@ -871,6 +927,18 @@ def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
     This lands the collision inside the prompt window instead -- the only
     window the exclusion's justification is about -- and asserts the run
     fails closed with the operator's file intact.
+
+    #333: fail-closed alone was still mechanism-vacuous. TWO mechanisms
+    could satisfy "non-zero exit, file intact": the intended one
+    (`write_exclusive` raising `FileExistsError` out of Phase B) and a
+    wrong one (someone adds `plan.path` to the guard mapping AND downgrades
+    the write to `write_atomic` -- the guard has no Phase-A bytes for a
+    file that did not exist, but a future "treat missing as empty" tweak
+    would make it refuse here too). So this pins WHICH mechanism fired:
+    the Phase-B save-failure message with the colliding path named
+    workspace-relative, NOT the guard's refusal phrase, and exit code
+    exactly 1 -- the guard exits 3 since wave 4, so the wrong mechanism
+    cannot keep this green.
     """
     _matched_answer_on_a_tty(tmp_path, monkeypatch)
     answer_path = tmp_path / "bundle" / "concepts" / "what-is-stoicism.md"
@@ -885,8 +953,16 @@ def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
 
+    # Exactly 1: the Phase-B failure ladder's exit code, never the drift
+    # guard's retryable 3 (#333).
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
+    # The failure surfaced through the save-failure path, naming the
+    # colliding path workspace-relative...
+    assert "failed while saving the answer --" in result.stderr
+    assert "bundle/concepts/what-is-stoicism.md" in result.stderr
+    # ...and NOT through the drift guard, which never saw this file.
+    assert "refusing to write --" not in result.stderr
     # The other file's content survives: create-only is what protects it.
     assert answer_path.read_text(encoding="utf-8") == concurrent
     # And the catalog was not touched -- the answer document is written
@@ -899,20 +975,22 @@ def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
 # -- #331: Phase-B failure reporting and auto-commit -------------------------
 
 
-def _fail_write_atomic_at(monkeypatch: pytest.MonkeyPatch, fail_at: int) -> None:
-    """Make `write_atomic`'s `fail_at`-th call (1-indexed) raise, counting
-    only the calls of the invocation under test (mirrors
-    `test_backfill_source_titles.py::_monkeypatch_failing_write`). In
-    `query --save`'s Phase B, call 1 is `index.md` and call 2 is `log.md` --
-    the answer document goes through `write_exclusive` and is never
-    counted here."""
+def _fail_write_atomic_on(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
+    """Make `write_atomic` raise exactly when asked to write `target`,
+    delegating every other path to the real implementation.
+
+    This replaces a call-INDEX version (#327, wave-4 R3): counting calls
+    globally meant the tests encoded "call 1 is `index.md`, call 2 is
+    `log.md`" as a positional fact about today's Phase B, so any future
+    `write_atomic` added BEFORE Phase B would silently shift which write
+    fails -- the test would then be injecting the fault somewhere it never
+    intended while its name and docstring kept claiming the old target.
+    Keying on the written path pins the fault to the file the test is
+    actually about, however many writes come to precede it."""
     real_write_atomic = fsio.write_atomic
-    call_count = 0
 
     def _write(path: Path, content: str) -> None:
-        nonlocal call_count
-        call_count += 1
-        if call_count == fail_at:
+        if path == target:
             raise OSError("simulated disk failure")
         real_write_atomic(path, content)
 
@@ -953,7 +1031,7 @@ def test_a_failure_at_the_index_write_names_the_landed_answer_document(
     benign (nothing references a missing file), but only if the operator
     can see WHICH state they are in."""
     _matched_answer_on_a_tty(tmp_path, monkeypatch)
-    _fail_write_atomic_at(monkeypatch, fail_at=1)
+    _fail_write_atomic_on(monkeypatch, tmp_path / "bundle" / "index.md")
     before = snapshot_with_mtime(tmp_path)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
@@ -978,7 +1056,7 @@ def test_a_failure_at_the_log_write_names_the_answer_and_the_index(
     the new `index.md` entry on disk; only the audit line is missing. The
     landed list must name both, in write order."""
     _matched_answer_on_a_tty(tmp_path, monkeypatch)
-    _fail_write_atomic_at(monkeypatch, fail_at=2)
+    _fail_write_atomic_on(monkeypatch, tmp_path / "bundle" / "log.md")
     before = snapshot_with_mtime(tmp_path)
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")

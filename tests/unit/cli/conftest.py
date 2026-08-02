@@ -33,7 +33,7 @@ deliberately defined once, at the unit-suite root.
 """
 
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -191,6 +191,35 @@ def snapshot_including_git(root: Path) -> dict[Path, Entry]:
     }
 
 
+def changed_paths(
+    before: Mapping[Path, object], after: Mapping[Path, object]
+) -> set[Path]:
+    """The relative paths whose snapshot entry differs between `before` and
+    `after` -- the drift suites' one definition of "what did this run touch"
+    (#327; previously copy-pasted as an inline set comprehension across the
+    #313 drift suites).
+
+    Feed it `snapshot_with_mtime` captures, not `snapshot_bytes` ones. The
+    guard's contract is that a refused run left every non-drifted file
+    untouched at the FILESYSTEM level, and a bytes-only snapshot cannot see
+    the one violation that matters most here: a write-then-restore puts the
+    original bytes back, so it compares equal to never having been written.
+    `st_mtime_ns` is what makes that rewrite count as a change -- which is
+    also why this helper compares entries with plain `!=` and adds no
+    tolerance: any observable difference, content or timestamp, is a touch.
+
+    `before.keys() | after.keys()` (not either alone) is load-bearing too:
+    a FILE that only exists on one side -- created or deleted during the
+    run -- must be reported, and `.get()`'s `None` default makes it compare
+    unequal to any file entry. Directories are the known blind spot the
+    idiom always had: a directory maps to `None` on the side it exists,
+    which equals the `None` default on the side it does not, so a bare
+    directory create/delete is invisible here (the snapshot equality
+    asserts, which compare whole dicts, still see it).
+    """
+    return {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+
+
 def confirm_after(monkeypatch: pytest.MonkeyPatch, edit: Callable[[], object]) -> None:
     """Replace `typer.confirm` with a stub that runs `edit` and then answers
     yes, so a test can mutate the workspace INSIDE the window a mutating
@@ -223,9 +252,25 @@ def confirm_after(monkeypatch: pytest.MonkeyPatch, edit: Callable[[], object]) -
     monkeypatch.setattr(typer, "confirm", _confirm)
 
 
+class EchoAfterLatch:
+    """The handle `echo_after` returns: `fired` flips the moment the trigger
+    line matches and `edit` runs.
+
+    Exposed because a dead stub used to be indistinguishable from a live one
+    (#327): when a verb's preview wording changes, the trigger stops
+    matching, the edit never fires, the run SUCCEEDS, and the test fails on
+    its exit-code assert -- pointing the reader at the drift guard when the
+    defect is the stub's stale trigger. `assert hook.fired` right after the
+    run makes the never-fired stub name itself instead.
+    """
+
+    def __init__(self) -> None:
+        self.fired = False
+
+
 def echo_after(
     monkeypatch: pytest.MonkeyPatch, edit: Callable[[], object], *, trigger: str
-) -> None:
+) -> EchoAfterLatch:
     """`confirm_after`'s counterpart for the UNPROMPTED path (#313 review, R3).
 
     `confirm_after` can only widen the window a verb leaves open when a
@@ -246,18 +291,22 @@ def echo_after(
     Firing once matters: a verb may echo its trigger line again on the
     success path, and re-running `edit` there would corrupt the very
     workspace the test is about to assert on.
+
+    Returns an `EchoAfterLatch` so every caller can `assert hook.fired`
+    after the run (#327) -- see the class docstring for why a silent
+    never-fired stub is the failure mode worth naming.
     """
     real_echo = typer.echo
-    fired = False
+    latch = EchoAfterLatch()
 
     def _echo(message: object = "", *args: Any, **kwargs: Any) -> None:
-        nonlocal fired
-        if not fired and trigger in str(message):
-            fired = True
+        if not latch.fired and trigger in str(message):
+            latch.fired = True
             edit()
         real_echo(message, *args, **kwargs)
 
     monkeypatch.setattr(typer, "echo", _echo)
+    return latch
 
 
 @pytest.fixture

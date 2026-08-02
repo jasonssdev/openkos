@@ -12,9 +12,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
-from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
+from tests.unit.cli.conftest import (
+    changed_paths,
+    confirm_after,
+    echo_after,
+    snapshot_with_mtime,
+)
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
@@ -628,7 +634,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -650,7 +656,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
     assert "bundle/sources/b.md" in result.stderr
     assert not deleted_path.exists()
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path("bundle/sources/b.md")}
 
 
@@ -685,7 +691,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -735,7 +741,7 @@ def test_drift_on_the_unprompted_path_is_refused(
     target_path = tmp_path / target
     concurrent = "hand-edited while the preview printed\n"
     before = snapshot_with_mtime(tmp_path)
-    echo_after(
+    hook = echo_after(
         monkeypatch,
         lambda: target_path.write_text(concurrent, encoding="utf-8"),
         trigger="(new dated entry)",
@@ -743,16 +749,87 @@ def test_drift_on_the_unprompted_path_is_refused(
 
     result = runner.invoke(app, ["reconcile", id_a, id_b, "--auto"])
 
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
+def test_an_edit_landing_after_the_snapshot_observation_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318's race, pinned for `reconcile` (#327 follow-up; the pin existed
+    only in `test_relate.py`): the guard's baseline and the text both new
+    documents are computed from must come from the ONE `_snapshot_read`
+    observation -- under a two-read shape a writer landing between the two
+    reads becomes the guard's own baseline, and Phase B writes the pair
+    computed from the EARLIER text, silently reverting the edit on a verb
+    whose whole contract is refuse-on-conflict.
+
+    The edit lands immediately after side A's snapshot returns (the verb's
+    FIRST snapshot -- side B and `log.md` are read after it), the earliest
+    a concurrent writer can now land relative to the plan; the guard's
+    later re-read must call it drift and refuse the whole run.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    id_a = _ingest_source(tmp_path, "a.txt")
+    id_b = _ingest_source(tmp_path, "b.txt")
+    target_path = tmp_path / "bundle" / "sources" / "a.md"
+    concurrent = "hand-edited the instant the snapshot returned\n"
+    real_snapshot_read = main._snapshot_read
+    fired = False
+
+    def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        nonlocal fired
+        snapshot = real_snapshot_read(path)
+        if not fired and path == target_path:
+            fired = True
+            target_path.write_text(concurrent, encoding="utf-8")
+        return snapshot
+
+    before = snapshot_with_mtime(tmp_path)
+    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+
+    result = runner.invoke(app, ["reconcile", id_a, id_b, "--auto"])
+
+    assert fired, "the racing wrapper never saw side A's snapshot"
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert "bundle/sources/a.md" in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
+        Path("bundle/sources/a.md")
+    }
+
+
 # -- #324: two ids aliasing ONE file must be refused ------------------------
+
+
+def _symlinks_are_creatable(probe_dir: Path) -> bool:
+    """Detect at runtime whether this process may create symlinks in
+    `probe_dir` -- mirroring `_filesystem_is_case_insensitive` below: probe
+    the exact filesystem and privilege the test runs under, never a
+    platform check. On Windows, `symlink_to` raises `OSError` without the
+    `SeCreateSymbolicLink` privilege (admin or Developer Mode), and a bare
+    call would then ERROR the test rather than skip it (#327, wave-3 R3);
+    some filesystems raise `NotImplementedError` instead."""
+    probe_target = probe_dir / "okos-symlink-probe-target.tmp"
+    probe_target.write_text("probe", encoding="utf-8")
+    probe_link = probe_dir / "okos-symlink-probe-link.tmp"
+    try:
+        probe_link.symlink_to(probe_target.name)
+    except (OSError, NotImplementedError):
+        return False
+    else:
+        probe_link.unlink()
+        return True
+    finally:
+        probe_target.unlink()
 
 
 def test_symlinked_pair_resolving_to_one_file_refuses_no_write(
@@ -764,10 +841,20 @@ def test_symlinked_pair_resolving_to_one_file_refuses_no_write(
     drift), and Phase B's second `write_atomic` over the same inode
     silently discards the first document's edge and note.
 
-    A symlink reproduces the same-inode condition on EVERY filesystem, so
-    this is the host-independent pin: `samefile` (device+inode) must refuse
-    the pair in Phase A, before any write.
+    A symlink reproduces the same-inode condition on EVERY filesystem that
+    lets this process create one, so this is the host-independent pin:
+    `samefile` (device+inode) must refuse the pair in Phase A, before any
+    write. Where symlink creation itself is unavailable (Windows without
+    the privilege), the aliasing this test pins cannot be constructed, so
+    it SKIPS rather than errors -- the case-insensitivity test below still
+    covers the aliasing report on those hosts.
     """
+    if not _symlinks_are_creatable(tmp_path):
+        pytest.skip(
+            "symlink creation unavailable here (e.g. Windows without the "
+            "symlink privilege): the same-inode aliasing this test pins "
+            "cannot be constructed"
+        )
     _init_workspace(tmp_path, monkeypatch)
     a_id = _ingest_source(tmp_path, "a.txt")
     alias_path = tmp_path / "bundle" / "sources" / "alias.md"
@@ -780,8 +867,12 @@ def test_symlinked_pair_resolving_to_one_file_refuses_no_write(
     assert isinstance(result.exception, SystemExit)
     assert "refusing to reconcile --" in result.stderr
     assert "resolve to the same file" in result.stderr
-    assert "sources/a" in result.stderr
-    assert "sources/alias" in result.stderr
+    # Both ids, quoted as the message reprs them. The quotes are what makes
+    # the first assertion non-vacuous (#327, wave-3 R3): a bare
+    # `"sources/a" in stderr` is a substring of "sources/alias" and would
+    # pass with side A missing from the message entirely.
+    assert "'sources/a'" in result.stderr
+    assert "'sources/alias'" in result.stderr
     assert snapshot_with_mtime(tmp_path) == before
 
 

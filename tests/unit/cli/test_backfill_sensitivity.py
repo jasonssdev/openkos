@@ -12,10 +12,11 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
-from tests.unit.cli.conftest import confirm_after, snapshot_with_mtime
+from tests.unit.cli.conftest import changed_paths, confirm_after, snapshot_with_mtime
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -450,5 +451,55 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
+
+
+def test_an_edit_landing_after_the_snapshot_observation_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318's race, pinned for `backfill-sensitivity` (#327 follow-up; the
+    pin existed only in `test_relate.py`): the guard's baseline and the text
+    every staged descendant's rewrite is computed from must come from the
+    ONE `_snapshot_read` observation -- under a two-read shape a writer
+    landing between the two reads becomes the guard's own baseline, and
+    Phase B silently reverts the edit.
+
+    The edit lands immediately after `log.md`'s snapshot returns (the
+    verb's LAST snapshot, taken after the whole-bundle scan), the earliest
+    a concurrent writer can now land relative to the plan; the guard's
+    later re-read must call it drift and refuse the whole run.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    _write_raw_sensitivity(tmp_path, source_id, "confidential")
+    _write_derived_concept(
+        tmp_path, slug="aaa-derived", provenance=[source_id], sensitivity="public"
+    )
+    target_path = tmp_path / "bundle" / "log.md"
+    concurrent = "hand-edited the instant the snapshot returned\n"
+    real_snapshot_read = main._snapshot_read
+    fired = False
+
+    def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        nonlocal fired
+        snapshot = real_snapshot_read(path)
+        if not fired and path == target_path:
+            fired = True
+            target_path.write_text(concurrent, encoding="utf-8")
+        return snapshot
+
+    before = snapshot_with_mtime(tmp_path)
+    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+
+    result = runner.invoke(app, ["backfill-sensitivity", "--auto"])
+
+    assert fired, "the racing wrapper never saw the log.md snapshot"
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert "bundle/log.md" in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
+        Path("bundle/log.md")
+    }

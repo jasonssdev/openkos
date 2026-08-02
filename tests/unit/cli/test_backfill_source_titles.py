@@ -15,9 +15,10 @@ from openkos import fsio
 from openkos.bundle import index as bundle_index
 from openkos.bundle import log as bundle_log
 from openkos.bundle.source_titles import titleize
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
-from tests.unit.cli.conftest import confirm_after, snapshot_with_mtime
+from tests.unit.cli.conftest import changed_paths, confirm_after, snapshot_with_mtime
 
 runner = CliRunner()
 
@@ -528,7 +529,7 @@ def test_a_confirmed_run_touches_only_the_expected_paths(
         Path(f"bundle/{staged_id}.md"),
         Path("bundle/log.md"),
     }
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == expected
 
 
@@ -582,7 +583,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -604,7 +605,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
     assert f"bundle/{second_id}.md" in result.stderr
     assert not deleted_path.exists()
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(f"bundle/{second_id}.md")}
 
 
@@ -636,7 +637,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -660,3 +661,48 @@ def test_a_target_that_was_already_crlf_is_not_drift(
 
     assert result.exit_code == 0
     assert "refusing to write" not in result.stderr
+
+
+def test_an_edit_landing_after_the_snapshot_observation_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318's race, pinned for `backfill-source-titles` (#327 follow-up;
+    the pin existed only in `test_relate.py`): the guard's baseline and the
+    text the relabel plan is computed from must come from the ONE
+    `_snapshot_read` observation -- under a two-read shape a writer landing
+    between the two reads becomes the guard's own baseline, and Phase B
+    silently reverts the edit.
+
+    The edit lands immediately after `log.md`'s snapshot returns (the
+    verb's LAST snapshot, after the source scan and `index.md`), the
+    earliest a concurrent writer can now land relative to the plan; the
+    guard's later re-read must call it drift and refuse the whole run.
+    """
+    _two_registered_sources(tmp_path, monkeypatch)
+    target_path = tmp_path / "bundle" / "log.md"
+    concurrent = "hand-edited the instant the snapshot returned\n"
+    real_snapshot_read = main._snapshot_read
+    fired = False
+
+    def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        nonlocal fired
+        snapshot = real_snapshot_read(path)
+        if not fired and path == target_path:
+            fired = True
+            target_path.write_text(concurrent, encoding="utf-8")
+        return snapshot
+
+    before = snapshot_with_mtime(tmp_path)
+    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+
+    result = runner.invoke(app, ["backfill-source-titles", "--auto"])
+
+    assert fired, "the racing wrapper never saw the log.md snapshot"
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert "bundle/log.md" in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
+        Path("bundle/log.md")
+    }

@@ -20,7 +20,7 @@ from openkos.bundle import index as bundle_index
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.vcs import git as vcs_git
-from tests.unit.cli.conftest import snapshot_with_mtime
+from tests.unit.cli.conftest import changed_paths, snapshot_with_mtime
 from tests.unit.vcs.conftest import TmpGitRepo, _git, isolate_git_identity, tmp_git_repo
 
 __all__ = ["tmp_git_repo"]
@@ -1113,7 +1113,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     assert target_path.read_text(encoding="utf-8") == concurrent
     assert _tree_contains_path(tmp_git_repo.root, "raw/notes.txt")
     after = snapshot_with_mtime(tmp_git_repo.root)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -1149,7 +1149,7 @@ def test_the_root_delete_target_edited_during_the_prompt_is_refused(
         tmp_git_repo.root, f"bundle/{tmp_git_repo.source_id}.md"
     )
     after = snapshot_with_mtime(tmp_git_repo.root)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -1179,7 +1179,7 @@ def test_a_cascade_delete_target_edited_during_the_prompt_is_refused(
     assert target_path.read_text(encoding="utf-8") == concurrent
     assert _blob_history_contains(tmp_git_repo.root, f"bundle/{child_id}.md")
     after = snapshot_with_mtime(tmp_git_repo.root)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -1212,7 +1212,7 @@ def test_a_delete_target_deleted_during_the_prompt_is_refused(
     assert (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").is_file()
     assert _tree_contains_path(tmp_git_repo.root, "raw/notes.txt")
     after = snapshot_with_mtime(tmp_git_repo.root)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path("bundle") / f"{child_id}.md"}
 
 
@@ -1242,7 +1242,7 @@ def test_a_crlf_rewrite_of_a_delete_target_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
     after = snapshot_with_mtime(tmp_git_repo.root)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -1315,5 +1315,62 @@ def test_drift_on_the_unprompted_path_is_refused(
     assert target_path.read_text(encoding="utf-8") == concurrent
     assert _tree_contains_path(tmp_git_repo.root, "raw/notes.txt")
     after = snapshot_with_mtime(tmp_git_repo.root)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
+
+
+def test_an_edit_landing_after_the_snapshot_observation_is_refused_by_rail_4(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318's race, pinned for `purge` (#327 follow-up) -- with a twist no
+    other guarded verb has: `purge` CANNOT host the exit-3 drift-guard pin
+    for this interleaving, and that is worth pinning in itself.
+
+    Every other verb's `_snapshot_read` is followed only by pure planning,
+    so an edit landing the instant the snapshot returns is caught by
+    nothing until the drift guard refuses (exit 3). `purge`'s snapshots
+    are followed by rail 4 (`vcs.is_clean`), which runs BEFORE the typed
+    phrase and the guard -- so the same edit dirties the working tree and
+    rail 4 refuses first, exit 1, and the guard never runs. That is the
+    system fail-closed by an EARLIER mechanism, not a gap: the guard's own
+    remit starts after rail 4, inside the phrase window, which
+    `test_drift_on_the_unprompted_path_is_refused` covers.
+
+    This test pins the rail-4 half so the interleaving can never fall
+    between the two mechanisms: if the snapshots ever move AFTER rail 4,
+    this test starts failing (the run would succeed or exit 3), and
+    whoever moves them must consciously re-point it at the guard.
+    """
+    target = "bundle/index.md"
+    target_path = tmp_git_repo.root / target
+    concurrent = "hand-edited the instant the snapshot returned\n"
+    real_snapshot_read = main._snapshot_read
+    fired = False
+
+    def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        nonlocal fired
+        snapshot = real_snapshot_read(path)
+        if not fired and path == target_path:
+            fired = True
+            target_path.write_text(concurrent, encoding="utf-8")
+        return snapshot
+
+    before = snapshot_with_mtime(tmp_git_repo.root)
+    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+    phrase = f"purge {tmp_git_repo.source_id}"
+
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert fired, "the racing wrapper never saw the index.md snapshot"
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "uncommitted changes" in result.stderr
+    assert "refusing to write --" not in result.stderr
+    # The edit survives, nothing was expunged, history is intact.
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert _tree_contains_path(tmp_git_repo.root, "raw/notes.txt")
+    assert changed_paths(before, snapshot_with_mtime(tmp_git_repo.root)) == {
+        Path(target)
+    }
