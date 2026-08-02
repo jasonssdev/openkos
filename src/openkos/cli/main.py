@@ -1769,14 +1769,22 @@ def ingest(
     (issues #306, #313). The create-only writes below are excluded
     deliberately: `copy_exclusive`/`write_exclusive` already fail closed on
     a concurrent create, and a fresh ingest has no snapshot of a concept
-    that did not exist.
+    that did not exist. The two mechanisms tile the whole space by
+    construction (#322): every target that EXISTED at Phase A is in the
+    guard's mapping, and every target that did NOT exist -- including the
+    concept on a post-`forget` regenerate -- is written create-only, so a
+    file created at any write target during the prompt window is always
+    refused, never silently overwritten.
 
     Phase B (after confirm) writes, in order: `bundle/sources/` (created if
     absent), the raw copy (`copy_exclusive`, create-only) and the concept
     document (`write_exclusive`, create-only) on a fresh ingest -- or, on a
     byte-identical re-ingest (D2), the raw copy step is SKIPPED entirely and
-    the concept is written via non-exclusive `write_atomic` instead, since it
-    may already exist -- then, for EACH staged derived object in staging
+    the concept is written via non-exclusive `write_atomic` ONLY when it
+    existed at Phase A (the drift guard holds its snapshot); a post-`forget`
+    regenerate, whose concept was absent at Phase A, writes it create-only
+    (`write_exclusive`) like a fresh ingest, since the guard has no bytes to
+    defend it with (#322) -- then, for EACH staged derived object in staging
     order (zero or more; `_stage_derived_objects` already computed and
     deduped the full write set in Phase A, so this loop does nothing but
     `mkdir` + `write_exclusive`, with no existence check or dedup left
@@ -2152,10 +2160,22 @@ def ingest(
     try:
         sources_dir.mkdir(parents=True, exist_ok=True)
         if regenerate:
-            # D2: raw copy SKIPPED -- raw/<name> is reused, never rewritten;
-            # write_atomic (not write_exclusive) since the concept may
-            # already exist (no-forget case) or be absent (post-forget case).
-            fsio.write_atomic(concept_path, concept_content)
+            # D2: raw copy SKIPPED -- raw/<name> is reused, never rewritten.
+            # The concept's writer is chosen by the SAME `had_prior_source`
+            # condition that gated its guard entry above, so the two
+            # mechanisms are visibly complementary (#322): a concept that
+            # EXISTED at Phase A has a snapshot in `guarded_targets` and is
+            # written with `write_atomic` (create-only would ALWAYS fail
+            # there); a concept ABSENT at Phase A (post-`forget`) left the
+            # guard nothing to compare, so `write_exclusive` fails closed
+            # on a file created during the prompt window instead of
+            # silently overwriting it -- the same create-only protection,
+            # surfacing the same `FileExistsError` through the same error
+            # path, as the fresh-ingest branch below.
+            if had_prior_source:
+                fsio.write_atomic(concept_path, concept_content)
+            else:
+                fsio.write_exclusive(concept_path, concept_content)
         else:
             fsio.copy_exclusive(src, raw_dest)
             fsio.write_exclusive(concept_path, concept_content)
@@ -5229,10 +5249,13 @@ def unmerge(
     thing that refuses, and only for drift landing inside the prompt
     window. Drift that arrives a moment earlier is still discarded.
 
-    The recreated absorbed file is the one write NOT covered: Phase A
-    refuses outright if it already exists, so there are no bytes to compare
-    against, which leaves a window between that check and its write in which
-    a file created meanwhile is still clobbered.
+    The recreated absorbed file is the one write the guard cannot cover:
+    Phase A refuses outright if it already exists, so there are no bytes to
+    compare against. Its protection is the write itself being create-only
+    (`fsio.write_exclusive`, #323): a file created at that path between
+    Phase A's existence check and Phase B's write raises `FileExistsError`
+    instead of being clobbered, making the Phase-A promise hold at write
+    time.
 
     Phase B (after confirm) writes, in this order: `index.md` then
     `log.md` restored to their EXACT pre-merge bytes (`index_before`/
@@ -5249,8 +5272,13 @@ def unmerge(
     returns to its pre-merge bytes exactly. Not transactional as a whole,
     matching `merge`/`forget`'s documented limitation: a failure partway
     through is a benign, git-recoverable partial result, never silent
-    corruption. Any failure, Phase A or Phase B, is caught and reported on
-    stderr (exit 1), not a raw traceback.
+    corruption. That now includes a file created at the absorbed path
+    during the prompt window (#323): its create-only write errors
+    mid-Phase-B instead of silently winning, leaving the catalog/log
+    restored, the created file intact, and the survivor -- ledger and all,
+    so the absorbed content stays recoverable -- untouched. Any failure,
+    Phase A or Phase B, is caught and reported on stderr (exit 1), not a
+    raw traceback.
 
     Limitation: `unmerge` restores `index.md`/`log.md` to their EXACT
     pre-merge snapshot (`index_before`/`log_before`), not a merge of that
@@ -5445,9 +5473,9 @@ def unmerge(
     # re-validate each target now -- after the gate, before the first write.
     #
     # `absorbed_path` is absent by necessity, not oversight -- see the
-    # docstring. Closing its window needs either a `write_exclusive` there or
-    # an "expected absent" this guard's `Mapping[Path, bytes]` cannot express;
-    # both are behavior changes beyond it.
+    # docstring. The guard's `Mapping[Path, bytes]` cannot express "expected
+    # absent", so its window is closed by the write itself being create-only
+    # (`fsio.write_exclusive` below, #323), not by an entry here.
     _reject_drifted_targets(
         layout,
         {
@@ -5480,7 +5508,17 @@ def unmerge(
         # the absorbed file it describes has actually landed, so a failure
         # between these two steps never loses the absorbed content --
         # it is still recoverable from the (not-yet-overwritten) survivor.
-        fsio.write_atomic(absorbed_path, plan.restored_absorbed)
+        #
+        # Create-only (#323): Phase A promised that "a file already exists
+        # at that path" refuses the unmerge, but that existence check
+        # cannot see a file created during the prompt window, and the drift
+        # guard cannot either (no Phase-A bytes to compare). `write_exclusive`
+        # makes the promise hold at write time: a concurrent create raises
+        # `FileExistsError` here -- caught by this try's `except OSError`
+        # arm and reported like any other Phase-B write failure, never a
+        # traceback -- leaving the git-recoverable partial state documented
+        # above instead of silently discarding the created file.
+        fsio.write_exclusive(absorbed_path, plan.restored_absorbed)
         fsio.write_atomic(survivor_path, plan.restored_survivor)
 
         # Only once every restore above has succeeded is `log.md` written a
@@ -5684,7 +5722,11 @@ def reconcile(
     `merge` use -- rejecting an absolute id, any `..` segment, a reserved
     basename, or a nonexistent concept file, all as `ValueError`, all before
     any read. The two ids MUST resolve to DISTINCT concept files, else this
-    refuses too (self-pair rejected). If `--winner <id>` is given, it is
+    refuses too (self-pair rejected) -- checked BOTH as canonical strings
+    (the literal duplicate, clearer message) and as `samefile` device+inode
+    identity (#324), since a case-insensitive filesystem or a symlink can
+    make two differing ids denote one file, which the byte-comparing drift
+    guard cannot detect. If `--winner <id>` is given, it is
     ALSO resolved via `_resolve_concept_path` and its canonical id MUST
     equal EXACTLY one of the two pair members -- else this refuses (no
     write, spec: "--winner gamma (not in pair {alpha,beta})"); the other
@@ -5785,6 +5827,23 @@ def reconcile(
         if canonical_a == canonical_b:
             raise ValueError(
                 f"id_a and id_b must be distinct, both resolved to {canonical_a!r}"
+            )
+        # Distinct STRINGS are not distinct FILES (#324): on a
+        # case-insensitive filesystem (macOS default) `foo` and `Foo` are
+        # two canonical ids for ONE file -- and a symlink aliases one under
+        # any name on any filesystem. The drift guard cannot catch this
+        # either: both keys snapshot the same identical bytes (no drift),
+        # and Phase B's second `write_atomic` over the same inode then
+        # silently discards the first document's edge and note. `samefile`
+        # compares device+inode -- after `_resolve_concept_path` proved
+        # both exist, so error precedence is preserved -- and is naturally
+        # False for genuinely distinct files on case-sensitive hosts. The
+        # string check above stays: it is cheap and gives the literal
+        # self-pair its clearer message.
+        if path_a.samefile(path_b):
+            raise ValueError(
+                f"id_a and id_b must be distinct, {canonical_a!r} and "
+                f"{canonical_b!r} resolve to the same file on this filesystem"
             )
 
         winner_canonical: str | None = None
