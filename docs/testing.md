@@ -18,11 +18,11 @@ yourself to the full surface of the tool.
 > code (`echo $?`), what was printed, and what changed on disk. A test that only
 > reads stdout misses half the behavior.
 >
-> **Where "what changed on disk" lives.** Every mutating verb except
-> `query --save` **auto-commits** its own writes, so `git status` is normally
-> clean and the evidence is in `git log -1 --stat` / `git show`. A *dirty* tree
-> after a mutating verb is itself a finding — it means the auto-commit was
-> skipped (check stderr for a `WARNING`).
+> **Where "what changed on disk" lives.** Every mutating verb (including
+> `query --save`, since #331) **auto-commits** its own writes, so `git status`
+> is normally clean and the evidence is in `git log -1 --stat` / `git show`. A
+> *dirty* tree after a mutating verb is itself a finding — it means the
+> auto-commit was skipped (check stderr for a `WARNING`).
 
 ---
 
@@ -429,14 +429,13 @@ openkos reindex
 openkos query "the same question"                       # now answers
 ```
 
-**`query --save`** is the only writing form of query — and the **only mutating
-path that does not auto-commit**, so this is the one place in the walkthrough
-where you commit by hand:
+**`query --save`** is the only writing form of query. Since #331 it
+auto-commits its three writes (answer document, `index.md`, `log.md`) like
+every other mutating verb, so no manual commit step remains:
 
 ```bash
 openkos query "a synthesis question" --save --title "My Synthesis" --type Concept
-git status                                    # expect dirty — no auto-commit here
-git add bundle/ && git commit -m "feat: save synthesized concept"
+git status                                    # expect clean — auto-committed
 openkos reindex
 ```
 
@@ -566,9 +565,9 @@ bundle content).
 ## Phase 8 — Removal (run last)
 
 > `forget`/`purge` depend on git. The tree should already be **committed and
-> clean** here, since every earlier verb auto-committed — but verify with
-> `git status` first: `purge` refuses to run on a dirty tree, and a leftover
-> uncommitted `query --save` (Phase 4) is the likeliest cause.
+> clean** here, since every earlier verb auto-committed (including
+> `query --save`, since #331) — but verify with `git status` first: `purge`
+> refuses to run on a dirty tree.
 
 ### 8.1 `forget` — recoverable
 

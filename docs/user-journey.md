@@ -127,7 +127,7 @@ Apply? [Y]es / [e]dit / [n]o:
 
 ### Step 4 — Commit
 
-Accepted changes are written to disk (`raw/`, the new `Source` concept, any derived documents extraction produced — across the nine types, up to five per source — `index.md`, `log.md`) **and committed for the user**: `ingest` auto-commits exactly the paths it wrote, as does every other mutating verb except `query --save`. This was a manual step in MVP 1; MVP 2 made it automatic, which is what closes the loop on "the human curates, the engine maintains" — the safety net exists without the user having to maintain it. The workspace is still a normal git repository, so `git log`/`git diff` always show what changed, and `git revert` undoes any single step. When git is unavailable or its identity is unset, the write still lands and a stderr `WARNING` says the commit was skipped.
+Accepted changes are written to disk (`raw/`, the new `Source` concept, any derived documents extraction produced — across the nine types, up to five per source — `index.md`, `log.md`) **and committed for the user**: `ingest` auto-commits exactly the paths it wrote, as does every other mutating verb (`query --save` included, since #331). This was a manual step in MVP 1; MVP 2 made it automatic, which is what closes the loop on "the human curates, the engine maintains" — the safety net exists without the user having to maintain it. The workspace is still a normal git repository, so `git log`/`git diff` always show what changed, and `git revert` undoes any single step. When git is unavailable or its identity is unset, the write still lands and a stderr `WARNING` says the commit was skipped.
 
 ### Step 5 — Use (the value moment)
 

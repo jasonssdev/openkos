@@ -7,6 +7,7 @@ import sqlite3
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -436,10 +437,16 @@ def _snapshot_read(path: Path) -> tuple[bytes, str]:
 
 
 def _reject_drifted_targets(
-    layout: config.WorkspaceLayout, expected: Mapping[Path, bytes], verb: str
+    layout: config.WorkspaceLayout,
+    expected: Mapping[Path, bytes],
+    verb: str,
+    *,
+    deletes: AbstractSet[Path] = frozenset(),
+    remedy: str | None = None,
 ) -> None:
-    """Refuse the whole run (exit 1, nothing written) when any write target
-    changed on disk after the plan was computed from it (issues #306, #313).
+    """Refuse the whole run (exit 3, nothing written, nothing deleted) when
+    any target changed on disk after the plan was computed from it (issues
+    #306, #313, #319).
 
     Every caller shares one shape: Phase A reads a snapshot, computes the
     ENTIRE write plan from it -- each document's new bytes, plus the new
@@ -496,9 +503,51 @@ def _reject_drifted_targets(
     a re-run that cannot clear it. Bytes on both sides is the only pairing
     with neither failure.
 
-    A path that has since been DELETED, or that cannot be read at all,
-    counts as drift -- re-creating or overwriting a file whose current state
-    the operator can no longer be shown is the same silent revert.
+    Drift is not one situation but THREE, and the refusal reports them
+    separately because each demands a different next step (#319; flattening
+    them into one "changed on disk" sentence sent operators in circles):
+
+    - CHANGED: the bytes differ. The benign bucket -- a plain re-run
+      recomputes the plan over the current state and succeeds, so the
+      default advice is exactly that re-run.
+    - VANISHED: the read raised `OSError` (deleted, or unreadable).
+      Re-creating or overwriting a file whose current state the operator
+      can no longer be shown is the same silent revert, so it still
+      refuses -- but a plain re-run reads the same missing path and
+      refuses AGAIN. The advice must say the path has to be restored (or
+      the operator must confirm the deletion is intended) before any
+      re-run can help; advising a bare re-run here was the #319 loop.
+    - OUT-OF-TREE: the key escapes the workspace (`relative_to` raises).
+      Nothing "changed" and nothing "vanished" -- the same inputs produce
+      this refusal on EVERY run, deterministically, so a re-run cannot
+      clear it and the message says so (this is also the wave-2 R4 fix:
+      the flattened sentence blamed an edit that never happened).
+
+    `deletes` names the subset of `expected`'s keys the verb will UNLINK
+    rather than write -- `forget`'s purge set, `purge`'s root-plus-cascade,
+    `merge`'s absorbed file. The distinction is reporting, not detection:
+    every bucket applies to both kinds, but "refusing to write" on a path
+    the verb was about to DESTROY understates what the operator just
+    avoided, so each path is labeled a "write target" or a "delete target"
+    by what Phase B would actually have done to it, and the fail-closed
+    footer extends to "nothing was deleted" exactly when the plan had a
+    delete half to fail closed on.
+
+    `remedy` replaces the default per-bucket advice wholesale when a verb's
+    re-run is NOT a safe recovery -- `unmerge` (#328), whose re-run would
+    overwrite the very edit the guard just protected. Replacement, never
+    concatenation: appending a verb's warning to advice that contradicts it
+    would be worse than the flattened message this redesign removes.
+
+    Exit code 3, and only here (#319): a drift refusal is the ONE failure a
+    script may safely retry -- nothing was written, and when the message
+    carries the re-run advice a retry genuinely recovers -- while every
+    other failure keeps exit 1 and stays not-obviously-retryable. Scripts
+    can now branch on `$? -eq 3` instead of parsing stderr; fail-closed
+    semantics are unchanged (still non-zero, still before the first
+    write). The retry contract is "safe WHEN the message says so": a
+    vanished or out-of-tree refusal also exits 3, and its message is what
+    tells the script's operator that a bare retry will not clear it.
 
     Refusal is whole-run, never per-path, because the plan is a unit. The
     title backfill's new `index.md` already encodes a relabel for every
@@ -514,38 +563,89 @@ def _reject_drifted_targets(
     Refusing before the first write is the only fail-closed option, and it
     costs the operator one cheap re-run over fresh state.
     """
-    drifted = []
+    changed: dict[bool, list[str]] = {False: [], True: []}
+    vanished: dict[bool, list[str]] = {False: [], True: []}
+    out_of_tree: dict[bool, list[str]] = {False: [], True: []}
     for path in expected:
+        is_delete = path in deletes
         try:
             rel_path = path.relative_to(layout.root).as_posix()
         except ValueError:
             # Out-of-tree target: no workspace-relative spelling exists, so
             # the raw path is the entry, and no read is attempted -- see the
             # docstring for why matching bytes must not rescue it (#325).
-            drifted.append(str(path))
+            out_of_tree[is_delete].append(str(path))
             continue
         try:
             current = path.read_bytes()
         except OSError:
-            drifted.append(rel_path)
+            vanished[is_delete].append(rel_path)
             continue
         if current != expected[path]:
-            drifted.append(rel_path)
-    if not drifted:
+            changed[is_delete].append(rel_path)
+    if (
+        not any(changed.values())
+        and not any(vanished.values())
+        and not any(out_of_tree.values())
+    ):
         return
-    drifted.sort()
+
+    # One clause per non-empty (bucket, kind) pair, bucket-major, writes
+    # before deletes -- so every path is named under the verb's ACTUAL
+    # intent for it and under the ACTUAL observation that refused it.
+    clauses: list[str] = []
+    bucket_specs = [
+        (changed, "changed on disk after this run computed its plan"),
+        (vanished, "vanished from disk (deleted or unreadable)"),
+        (out_of_tree, "resolve outside the workspace"),
+    ]
+    for bucket, cause in bucket_specs:
+        for is_delete in (False, True):
+            paths = sorted(bucket[is_delete])
+            if not paths:
+                continue
+            kind = "delete target(s)" if is_delete else "write target(s)"
+            clauses.append(f"{len(paths)} {kind} {cause}: {', '.join(paths)}")
+
     # Deliberately NOT Phase B's "No path was written." sentence: that one
     # reports a write that already began, this one reports a run that never
     # started writing, and #234 pinned that two messages a bug report might
-    # quote must never read alike.
+    # quote must never read alike. The delete half appears exactly when the
+    # plan HAD a delete half (`deletes` non-empty) -- claiming "nothing was
+    # deleted" for a verb that deletes nothing would be noise.
+    footer = (
+        "Nothing was written, nothing was deleted."
+        if deletes
+        else "Nothing was written."
+    )
+
+    if remedy is None:
+        # Per-bucket advice, additive: each sentence is scoped to its own
+        # bucket ("the vanished target(s)", "the out-of-tree refusal"), so
+        # a mixed refusal reads as a checklist, not a contradiction.
+        advice: list[str] = []
+        if any(changed.values()):
+            advice.append("Re-run to recompute over the current bundle.")
+        if any(vanished.values()):
+            advice.append(
+                "A plain re-run will refuse again on the vanished target(s): "
+                "restore them first, or confirm the deletion is intended."
+            )
+        if any(out_of_tree.values()):
+            advice.append(
+                "The out-of-tree refusal is deterministic -- the same inputs "
+                "reproduce it on every run, and a re-run cannot clear it."
+            )
+        remedy = " ".join(advice)
+
     typer.echo(
-        f"openkos {verb}: refusing to write -- {len(drifted)} write "
-        f"target(s) changed on disk after this run computed its plan: "
-        f"{', '.join(drifted)}. Nothing was written; re-run to recompute "
-        "over the current bundle.",
+        f"openkos {verb}: refusing to write -- {'; '.join(clauses)}. {footer} {remedy}",
         err=True,
     )
-    raise typer.Exit(code=1)
+    # Exit 3 is the drift-refusal contract (#319): the one failure code a
+    # script may treat as retryable when the message says so. Everything
+    # else in this module exits 1.
+    raise typer.Exit(code=3)
 
 
 def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
@@ -1764,9 +1864,9 @@ def ingest(
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads `index.md`, `log.md`, and the
-    existing concept on a re-ingest, and refuses the WHOLE run (exit 1,
+    existing concept on a re-ingest, and refuses the WHOLE run (exit 3,
     nothing written) if any changed or vanished since Phase A read it
-    (issues #306, #313). The create-only writes below are excluded
+    (issues #306, #313, #319). The create-only writes below are excluded
     deliberately: `copy_exclusive`/`write_exclusive` already fail closed on
     a concurrent create, and a fresh ingest has no snapshot of a concept
     that did not exist. The two mechanisms tile the whole space by
@@ -2397,8 +2497,9 @@ def forget(
     Past both gates -- and on the runs that skip gate 2, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads every path this run intends to touch
-    and refuses the WHOLE run (exit 1, nothing written, nothing unlinked)
-    if any changed or vanished since Phase A read it (issues #306, #313).
+    and refuses the WHOLE run (exit 3, nothing written, nothing unlinked)
+    if any changed or vanished since Phase A read it (issues #306, #313,
+    #319).
 
     That set includes the DELETE targets, not just `index.md` and `log.md`.
     An edit landing on a purge-set member during the prompt would be
@@ -2708,6 +2809,19 @@ def forget(
             },
         },
         "forget",
+        # #319: the purge-set members are UNLINKED below, not written --
+        # `deletes` is what makes the refusal say so. Built the same way the
+        # unlink loop builds its paths (`bundle_dir / f"{member}.md"`, with
+        # `concept_path` standing in for the canonical root), so the labels
+        # track Phase B by construction.
+        deletes=frozenset(
+            {concept_path}
+            | {
+                layout.bundle_dir / f"{member}.md"
+                for member in purge_ids
+                if member != canonical_id
+            }
+        ),
     )
 
     unlinked_count = 0
@@ -2970,9 +3084,9 @@ def purge(
     Past rail 6 -- reached without pausing when `--confirm-phrase` is
     given, so the check is unconditional -- `_reject_drifted_targets`
     re-reads `index.md`, `log.md`, and every purge-set member's bundle
-    file, and refuses the WHOLE run (exit 1, nothing written, no history
+    file, and refuses the WHOLE run (exit 3, nothing written, no history
     rewritten) if any changed or vanished since Phase A read it (issues
-    #313, #321). Rail 4 pinned the tree clean BEFORE the typed-phrase
+    #313, #319, #321). Rail 4 pinned the tree clean BEFORE the typed-phrase
     prompt -- the widest prompt window of any verb -- so without this an
     edit landing while the operator typed the phrase would be destroyed by
     the checkout of rewritten history, unrecoverably. The `raw/<name>`
@@ -3289,6 +3403,17 @@ def purge(
             },
         },
         "purge",
+        # #319: the root concept and every cascade member are expunged --
+        # DELETE targets, and the refusal must name them as such. Only
+        # `index.md`/`log.md` are writes here.
+        deletes=frozenset(
+            {concept_path}
+            | {
+                layout.bundle_dir / f"{member}.md"
+                for member in purge_ids
+                if member != canonical_id
+            }
+        ),
     )
 
     # Phase B: the point of no return. No rail evaluation, no abort path,
@@ -3431,9 +3556,9 @@ def relate(
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads every path this run intends to write
-    (the source concept and `log.md`) and refuses the WHOLE run (exit 1,
+    (the source concept and `log.md`) and refuses the WHOLE run (exit 3,
     nothing written) if either changed or vanished since Phase A read it
-    (issues #306, #313). Any run, prompted or not, can therefore reach this
+    (issues #306, #313, #319). Any run, prompted or not, can therefore reach this
     point and still end without writing.
 
     Phase B (after confirm) writes the source concept file
@@ -3683,8 +3808,8 @@ def set_sensitivity_cmd(
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads every path this run intends to write
     (the target concept, each staged descendant, and `log.md`) and refuses
-    the WHOLE run (exit 1, nothing written) if any changed or vanished since
-    Phase A read it (issues #306, #313).
+    the WHOLE run (exit 3, nothing written) if any changed or vanished since
+    Phase A read it (issues #306, #313, #319).
 
     A confirmed write re-renders the frontmatter (`okf.dump_frontmatter`,
     changing only `sensitivity`), appends a `log.md` entry (no
@@ -4012,8 +4137,8 @@ def backfill_sensitivity_cmd(
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads every staged descendant plus `log.md`
-    and refuses the WHOLE run (exit 1, nothing written) if any changed or
-    vanished since Phase A read it (issues #306, #313).
+    and refuses the WHOLE run (exit 3, nothing written) if any changed or
+    vanished since Phase A read it (issues #306, #313, #319).
 
     Phase B writes every merged raise (sorted by `concept_id`), then
     appends exactly one dated `log.md` entry summarizing the whole sweep,
@@ -4197,8 +4322,8 @@ def backfill_source_titles_cmd(
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads `index.md`, every staged Source, and
-    `log.md`, and refuses the WHOLE run (exit 1, nothing written) if any
-    changed or vanished since Phase A read it (issues #306, #313).
+    `log.md`, and refuses the WHOLE run (exit 3, nothing written) if any
+    changed or vanished since Phase A read it (issues #306, #313, #319).
 
     Phase B writes `index.md` first, then each staged Source, then `log.md`,
     then one `_autocommit` (design D6); both write-bound texts are computed
@@ -4424,9 +4549,9 @@ def set_volatility_cmd(
 
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
-    `_reject_drifted_targets` re-reads `openkos.yaml` and refuses (exit 1,
+    `_reject_drifted_targets` re-reads `openkos.yaml` and refuses (exit 3,
     nothing written) if it changed or vanished since the plan was rendered
-    from it (issues #313, #335).
+    from it (issues #313, #319, #335).
 
     A confirmed write goes through `fsio.write_atomic`, then
     `_autocommit(root, ["openkos.yaml"], ...)` with message `openkos:
@@ -4976,8 +5101,9 @@ def merge(
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads every path this run intends to touch
-    and refuses the WHOLE run (exit 1, nothing written, nothing removed) if
-    any changed or vanished since Phase A read it (issues #313, #334).
+    and refuses the WHOLE run (exit 3, nothing written, nothing removed) if
+    any changed or vanished since Phase A read it (issues #313, #319,
+    #334).
 
     That set is `index.md`, `log.md`, every touched third-party file, the
     survivor, AND the absorbed file. The absorbed file is the worst case:
@@ -5121,6 +5247,9 @@ def merge(
             absorbed_path: prepared.absorbed_bytes,
         },
         "merge",
+        # #319: the absorbed file is the one path `merge_core` UNLINKS;
+        # everything else in the mapping is overwritten.
+        deletes=frozenset({absorbed_path}),
     )
 
     try:
@@ -5236,9 +5365,16 @@ def unmerge(
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads `index.md`, `log.md`, the survivor
-    and every rewritten third-party file, and refuses the WHOLE run (exit 1,
+    and every rewritten third-party file, and refuses the WHOLE run (exit 3,
     nothing written) if any changed or vanished since Phase A read it
-    (issues #306, #313).
+    (issues #306, #313, #319). The refusal carries a CUSTOM remedy (#328)
+    because `unmerge` is the one guarded verb whose re-run is not a safe
+    recovery: nothing is recomputed from the current state, so a re-run
+    restores the pre-merge snapshots over `index.md`/`log.md`/the survivor
+    -- overwriting the protected edit -- and keeps refusing on an edited
+    rewrite file until the edit is reverted. The message therefore tells
+    the operator to copy the edit somewhere safe first, and never advises
+    the plain re-run that would discard it.
 
     What that adds differs per target, and only one group was already
     protected. The link/relation/provenance rewrite files DO have a
@@ -5485,6 +5621,20 @@ def unmerge(
             **{layout.bundle_dir / rel: data for rel, data in rewrite_bytes.items()},
         },
         "unmerge",
+        # #328: the guard's default advice -- "re-run to recompute" -- is
+        # actively destructive here. `unmerge` does not recompute anything
+        # from the current state: `index.md`/`log.md`/the survivor are
+        # restored to their PRE-MERGE snapshots, so a re-run overwrites the
+        # very edit this refusal just protected; and an edited rewrite file
+        # keeps failing `reverse_link_rewrites`' own drift check until the
+        # edit is reverted. The remedy must describe that asymmetry and put
+        # "save your edit first" ahead of any re-run.
+        remedy=(
+            "Copy your edit somewhere safe before re-running: a re-run "
+            "restores the pre-merge snapshots over index.md, log.md, and "
+            "the survivor (overwriting the edit), and keeps refusing on an "
+            "edited rewrite file until that edit is reverted."
+        ),
     )
 
     try:
@@ -5783,9 +5933,9 @@ def reconcile(
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads every path this run intends to write
-    (both concept documents and `log.md`) and refuses the WHOLE run (exit 1,
+    (both concept documents and `log.md`) and refuses the WHOLE run (exit 3,
     nothing written) if any changed or vanished since Phase A read it
-    (issues #306, #313). Distinct from the partial result the next paragraph
+    (issues #306, #313, #319). Distinct from the partial result the next paragraph
     describes: nothing is written at all, so there is nothing to complete on
     re-run.
 
@@ -7818,11 +7968,27 @@ def query(
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
     `_reject_drifted_targets` re-reads `index.md` and `log.md` and refuses
-    the WHOLE run (exit 1, nothing written) if either changed or vanished
-    since Phase A read it (issues #306, #313). The answer document itself
-    is written create-only (`fsio.write_exclusive`), which already fails
-    closed if something appeared at that path meanwhile, so it needs no
-    entry in the guard and has no Phase-A bytes to give one.
+    the WHOLE run (exit 3, nothing written) if either changed or vanished
+    since Phase A read it (issues #306, #313, #319). The answer document
+    itself is written create-only (`fsio.write_exclusive`), which already
+    fails closed if something appeared at that path meanwhile, so it needs
+    no entry in the guard and has no Phase-A bytes to give one.
+
+    Phase B is NOT transactional, matching `ingest`/`set-sensitivity`'s
+    documented limitation (#331): three writes -- the answer document, then
+    `index.md`, then `log.md` -- with no rollback across the sequence.
+    Content-before-catalog ordering is why a partial result is benign: the
+    catalog never references a missing file; the worst partial state is an
+    uncataloged answer document (or a filed-and-indexed one missing only
+    its `log.md` line). A mid-sequence failure names exactly the paths that
+    already landed ("Already written (left partially filed, not rolled
+    back): ..."), or "No path was written." when the first write failed --
+    so the operator knows which state they are in without diffing. On
+    success the three paths are auto-committed like every other mutating
+    verb (workspace-autocommit; the previous exclusion had no documented
+    rationale, #331); a PARTIAL result is not captured in a commit, since
+    `_autocommit` runs only on the success path -- recover a partial with
+    `git status`/`git checkout` as with any sibling's mid-write failure.
     """
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -8036,19 +8202,59 @@ def query(
         "query",
     )
 
+    answer_rel = f"bundle/{plan.link_dir}/{plan.slug}.md"
+    landed: list[str] = []
     try:
+        # Write order: answer document BEFORE `index.md` BEFORE `log.md`
+        # (content before catalog, mirroring `ingest`'s D3): a mid-sequence
+        # failure can leave an uncataloged file on disk, never a catalog
+        # entry pointing at a file that does not exist. There is no
+        # cross-file rollback, matching every other mutating verb's
+        # documented limitation. `landed` records each path only AFTER its
+        # write returns, so a failure names exactly the paths already on
+        # disk (#331, mirroring `set-sensitivity`'s D9 shape).
         plan.path.parent.mkdir(parents=True, exist_ok=True)
         fsio.write_exclusive(plan.path, plan.content)
+        landed.append(answer_rel)
         fsio.write_atomic(save_index_path, new_index_text)
+        landed.append("bundle/index.md")
         fsio.write_atomic(save_log_path, new_log_text)
+        landed.append("bundle/log.md")
     except (OSError, ValueError) as exc:
-        typer.echo(f"openkos query: failed while saving the answer -- {exc}.", err=True)
+        # Distinct from the refusal phases above on purpose (#234): this is
+        # reached only after the write phase began, so the answer document
+        # may already be on disk while the catalog is not. "refusing" would
+        # tell an operator nothing happened, which is exactly wrong here.
+        landed_suffix = (
+            f"Already written (left partially filed, not rolled back): "
+            f"{', '.join(landed)}."
+            if landed
+            else "No path was written."
+        )
+        typer.echo(
+            f"openkos query: failed while saving the answer -- {exc}. {landed_suffix}",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
 
     typer.echo(
         f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
         f"({save_index_path.name}, {save_log_path.name} updated). Run "
         "`openkos reindex` to make it searchable."
+    )
+
+    # #331: `query --save` was the ONE mutating path without the
+    # workspace-autocommit safety net, for no documented reason -- the
+    # Slice-2 exclusion list (workspace-autocommit spec: "Exclusions and
+    # Unconditional Behavior") names `reindex` output, `init`, and
+    # read-only verbs only, and `query --save` simply postdated the
+    # planning that produced the six-verb roster. Same call shape as every
+    # sibling: the exact Phase-B paths, workspace-relative POSIX, scoped
+    # `git add -- <paths>`, best-effort and non-fatal.
+    _autocommit(
+        root,
+        [answer_rel, "bundle/index.md", "bundle/log.md"],
+        f"openkos: query --save {plan.link_dir}/{plan.slug}",
     )
 
 

@@ -1464,10 +1464,15 @@ def test_a_delete_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
+    # #319: the message names what `forget` was actually about to do to this
+    # path -- UNLINK it -- and extends the fail-closed claim to the delete
+    # half of the plan.
+    assert "delete target(s)" in result.stderr
+    assert "nothing was deleted" in result.stderr
     # The edit survives: nothing was unlinked, nothing was rewritten.
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = snapshot_with_mtime(tmp_path)
@@ -1491,7 +1496,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
@@ -1513,8 +1518,14 @@ def test_a_delete_target_deleted_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "bundle/concepts/alpha.md" in result.stderr
+    # #319: reported as the VANISHED bucket, not as "changed on disk", and
+    # the advice must not be a plain re-run -- that refuses again on the
+    # same missing path. Restoring it (or confirming the deletion) is the
+    # only way forward the message may name.
+    assert "delete target(s) vanished" in result.stderr
+    assert "restore" in result.stderr
     after = snapshot_with_mtime(tmp_path)
     changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
     assert changed == {Path("bundle/concepts/alpha.md")}
@@ -1541,7 +1552,7 @@ def test_a_crlf_rewrite_of_a_delete_target_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["forget", source_id, "--scope", "source"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
     after = snapshot_with_mtime(tmp_path)
@@ -1592,7 +1603,7 @@ def test_drift_on_the_unprompted_path_is_refused(
 
     result = runner.invoke(app, ["forget", source_id, "--scope", "source", "--auto"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
@@ -1629,7 +1640,7 @@ def test_the_root_concept_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["forget", source_id], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr

@@ -1087,7 +1087,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
         app, ["merge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
@@ -1118,10 +1118,15 @@ def test_the_absorbed_delete_target_edited_during_the_prompt_is_refused(
         app, ["merge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
+    # #319: the absorbed file is the mapping's one DELETE target, so the
+    # message must label it as such and extend the fail-closed footer to
+    # "nothing was deleted".
+    assert "delete target(s)" in result.stderr
+    assert "nothing was deleted" in result.stderr
     # The edit survives: not unlinked, not rewritten.
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = _snapshot(tmp_path)
@@ -1144,7 +1149,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
         app, ["merge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "bundle/concepts/other.md" in result.stderr
     assert not deleted_path.exists()
@@ -1175,7 +1180,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
         app, ["merge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
@@ -1225,7 +1230,7 @@ def test_drift_on_the_unprompted_path_is_refused(
         app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
@@ -1261,7 +1266,7 @@ def test_drift_under_review_false_is_refused(
 
     result = runner.invoke(app, ["merge", "concepts/survivor", "concepts/absorbed"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent

@@ -303,7 +303,7 @@ def test_the_config_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["set-volatility", "Person", "volatile"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert "openkos.yaml" in result.stderr
@@ -328,7 +328,7 @@ def test_the_config_deleted_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["set-volatility", "Person", "volatile"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "openkos.yaml" in result.stderr
     assert not config_path.exists()
@@ -350,7 +350,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["set-volatility", "Person", "volatile"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "openkos.yaml" in result.stderr
     assert config_path.read_bytes() == concurrent
@@ -391,7 +391,7 @@ def test_drift_on_the_unprompted_path_is_refused(
 
     result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "openkos.yaml" in result.stderr
     assert config_path.read_text(encoding="utf-8") == concurrent
@@ -427,7 +427,7 @@ def test_drift_under_review_false_is_refused(
 
     result = runner.invoke(app, ["set-volatility", "Person", "volatile"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "openkos.yaml" in result.stderr
     assert config_path.read_text(encoding="utf-8") == concurrent
