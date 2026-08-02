@@ -14,8 +14,20 @@ Mirrors the existing `state/reindex.py:285` + `cli/main.py`'s
 one shared helper reused by all five sensitivity-filter verbs (`query`,
 `contradictions`, `adjudicate`, `suggest-relations`, `suggest-volatility`)
 instead of duplicating the STDERR message at five call sites.
+
+Issue #190 widens this module's charter from "walk-incompleteness signal"
+to "CLI-layer STDERR signals" generally: `progress_callback` builds the
+TTY-gated per-item progress hook the library `on_progress` seams
+(`adjudicate_candidates`, `suggest_volatility`, `find_contradictions`,
+`state.reindex.reindex`) accept, and `stage_notice` is its single-call
+sibling for verbs whose long wait is ONE LLM call (`ingest`, `query`).
+Both are gated on `sys.stderr.isatty()`: a piped or redirected run stays
+byte-clean, which is the entire NO_COLOR/non-TTY discipline here since no
+color is ever emitted.
 """
 
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -64,3 +76,42 @@ def warn_if_walk_incomplete(
         )
     if mode == "warn" and bool(okf._walk_errors(bundle_dir)):
         typer.echo(_INCOMPLETE_WALK_WARNING, err=True)
+
+
+def progress_callback(
+    verb: str, noun: str
+) -> Callable[[int, int, object], None] | None:
+    """Build the TTY-gated per-item progress hook a CLI verb passes into a
+    library `on_progress` seam (issue #190).
+
+    Returns `None` when stderr is NOT a TTY -- the verb then passes no hook
+    at all, so a piped or redirected run stays byte-clean with zero
+    per-item overhead. On a TTY, returns a callback matching every library
+    `on_progress` contract (`(index, total, result)`, index 1-based) that
+    prints `openkos <verb>: <noun> <index>/<total>...` to STDERR per item;
+    the just-built result object is accepted but never rendered, so ONE
+    generic factory serves every seam regardless of its result type.
+    STDOUT is never touched -- it belongs to the verb's report.
+    """
+    if not sys.stderr.isatty():
+        return None
+
+    def _callback(index: int, total: int, _result: object) -> None:
+        typer.echo(f"openkos {verb}: {noun} {index}/{total}...", err=True)
+
+    return _callback
+
+
+def stage_notice(verb: str, message: str) -> None:
+    """Print one TTY-gated `openkos <verb>: <message>` stage line to STDERR
+    -- `progress_callback`'s single-call sibling for verbs whose long wait
+    is ONE LLM call rather than a per-item loop (issue #190: `ingest`
+    before extraction, `query` before its answer call).
+
+    Silent when stderr is NOT a TTY, for the same clean-piping reason;
+    signal-only otherwise -- it never raises and never changes the
+    caller's exit code.
+    """
+    if not sys.stderr.isatty():
+        return
+    typer.echo(f"openkos {verb}: {message}", err=True)

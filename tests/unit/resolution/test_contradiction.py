@@ -1590,3 +1590,90 @@ def test_typed_edges_still_judged_when_a_candidate_source_is_present(
 
     assert total == 1
     assert len(verdicts) == 1
+
+
+# ---------------------------------------------------------------------------
+# `on_progress` per-pair progress hook (issue #190)
+# ---------------------------------------------------------------------------
+
+
+def test_find_contradictions_invokes_on_progress_once_per_pair_in_order(
+    tmp_path: Path,
+) -> None:
+    """`on_progress` fires once per judged pair, in the deterministic pair
+    order, AFTER that pair's `ContradictionVerdict` is built -- carrying
+    `(index, total, verdict)` with a 1-based `index` and `total` equal to
+    the number of pairs actually judged (post-cap), so a CLI can render a
+    per-pair progress line during an otherwise opaque, minutes-long run
+    (issue #190, mirroring `suggest_edge_types`'s #134 contract)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: references\n"
+        "---\nBody A.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody B.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "c.md").write_text(
+        "---\ntype: Concept\ntitle: C\nsensitivity: private\n"
+        "relations:\n  - target: concepts/d\n    type: references\n"
+        "---\nBody C.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "d.md").write_text(
+        "---\ntype: Concept\ntitle: D\nsensitivity: private\n---\nBody D.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM(replies=[_valid_reply(), _valid_reply(verdict="consistent")])
+    seen: list[tuple[int, int, contradiction_mod.ContradictionVerdict]] = []
+
+    def _cb(
+        index: int, total: int, verdict: contradiction_mod.ContradictionVerdict
+    ) -> None:
+        seen.append((index, total, verdict))
+
+    verdicts, _total_pairs = contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, on_progress=_cb
+    )
+
+    assert [(index, total) for index, total, _ in seen] == [(1, 2), (2, 2)]
+    # Identity, not equality: the callback receives the SAME objects the
+    # function returns.
+    assert all(
+        cb_verdict is verdict
+        for (_, _, cb_verdict), verdict in zip(seen, verdicts, strict=True)
+    )
+    assert [v.pair_ids for _, _, v in seen] == [
+        ("concepts/a", "concepts/b"),
+        ("concepts/c", "concepts/d"),
+    ]
+
+
+def test_find_contradictions_on_progress_exception_propagates(tmp_path: Path) -> None:
+    """An exception raised inside `on_progress` propagates to the caller
+    unswallowed -- it is the caller's own callback (issue #190)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    (bundle_dir / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\nsensitivity: private\n"
+        "relations:\n  - target: concepts/b\n    type: references\n"
+        "---\nBody A.\n",
+        encoding="utf-8",
+    )
+    (bundle_dir / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody B.\n",
+        encoding="utf-8",
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    def _boom(index: int, total: int, verdict: object) -> None:
+        raise RuntimeError("callback failed")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        contradiction_mod.find_contradictions(bundle_dir, llm=llm, on_progress=_boom)

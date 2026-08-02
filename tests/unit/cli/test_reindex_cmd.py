@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config
 from openkos.cli.main import app
@@ -980,3 +980,57 @@ def test_reindex_malformed_config_maps_to_exit_one_before_calling_orchestrator(
     )
     assert "Traceback" not in result.stderr
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #190: TTY-gated per-doc embedding progress wiring
+# ---------------------------------------------------------------------------
+
+
+def test_reindex_wires_tty_gated_progress_callback_into_the_orchestrator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a TTY, `reindex` passes `observability.progress_callback`'s hook
+    into `state.reindex.reindex` as `on_progress`; each invocation renders
+    `openkos reindex: embedding doc <i>/<n>...` on STDERR while STDOUT
+    keeps the clean summary (issue #190, mirroring `suggest-relations`'
+    #134 wiring)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+
+    def _recording_reindex(*args: object, **kwargs: object) -> ReindexReport:
+        on_progress = kwargs["on_progress"]
+        assert callable(on_progress)
+        on_progress(1, 2, "concepts/alpha")
+        on_progress(2, 2, "concepts/beta")
+        return ReindexReport(embedded=2, cache_hits=0, pruned=0, skipped=0)
+
+    monkeypatch.setattr("openkos.cli.main.reindex_module.reindex", _recording_reindex)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert "openkos reindex: embedding doc 1/2..." in result.stderr
+    assert "openkos reindex: embedding doc 2/2..." in result.stderr
+    assert "embedding doc" not in result.stdout
+
+
+def test_reindex_passes_no_progress_hook_when_stderr_is_not_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a TTY (`CliRunner`'s default), the factory returns `None`
+    and the orchestrator receives `on_progress=None` -- piped output stays
+    byte-clean (issue #190)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _recording_reindex(*args: object, **kwargs: object) -> ReindexReport:
+        captured["on_progress"] = kwargs["on_progress"]
+        return ReindexReport(embedded=0, cache_hits=0, pruned=0, skipped=0)
+
+    monkeypatch.setattr("openkos.cli.main.reindex_module.reindex", _recording_reindex)
+
+    result = runner.invoke(app, ["reindex"])
+
+    assert result.exit_code == 0
+    assert captured["on_progress"] is None

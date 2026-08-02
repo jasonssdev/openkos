@@ -1100,6 +1100,29 @@ def _format_merge_preview_line(prepared: "PreparedMerge") -> str:
     )
 
 
+def _echo_n_gt2_skip(group: "CandidateGroup") -> None:
+    """The SAME-verdict N>2 skip report shared by `_run_adjudicate_apply`
+    and `_run_adjudicate_apply_same` (issue #191) -- ONE helper so the two
+    walks can never drift apart again.
+
+    Keeps the pre-#191 skip line byte-identical, then prints the exact
+    pairwise merge commands the operator would otherwise have to
+    reconstruct by hand: the survivor is `group.member_ids[0]` (member ids
+    are sorted ascending, so this matches the existing 2-member convention
+    `survivor_id, absorbed_id = group.member_ids`), and each remaining
+    member is absorbed into it with one `openkos merge <survivor>
+    <absorbed>` line, in member order. Sequential pairwise merges into one
+    survivor are safe to run in order because each individual merge is
+    reversible via `unmerge` -- a mistake at step k never strands steps
+    1..k-1 (issue #191). Print-only: counters and summary lines stay with
+    the callers, byte-identical to the pre-#191 output."""
+    typer.echo(f"[{group.okf_type}] {group.member_ids}: skipped (N>2, merge manually)")
+    survivor_id = group.member_ids[0]
+    typer.echo("  run in order (each reversible via unmerge):")
+    for absorbed_id in group.member_ids[1:]:
+        typer.echo(f"    openkos merge {survivor_id} {absorbed_id}")
+
+
 def _commit_one_merge(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -1153,10 +1176,7 @@ def _run_adjudicate_apply(
             continue
         if len(group.member_ids) != 2:
             if len(group.member_ids) > 2:
-                typer.echo(
-                    f"[{group.okf_type}] {group.member_ids}: "
-                    f"skipped (N>2, merge manually)"
-                )
+                _echo_n_gt2_skip(group)
                 skipped_n_gt2 += 1
             continue
 
@@ -1260,9 +1280,7 @@ def _run_adjudicate_apply_same(
         if len(group.member_ids) == 2:
             eligible_groups.append(group)
         elif len(group.member_ids) > 2:
-            typer.echo(
-                f"[{group.okf_type}] {group.member_ids}: skipped (N>2, merge manually)"
-            )
+            _echo_n_gt2_skip(group)
             skipped_n_gt2 += 1
 
     previewed_groups: list[CandidateGroup] = []
@@ -2165,6 +2183,15 @@ def ingest(
         # order. `skip_reason` (issue #187) is `None` on the healthy path.
         source_metadata, _ = okf.load_frontmatter(concept_content)
         source_sensitivity = str(source_metadata["sensitivity"])
+        # ONE TTY-gated stage notice before the single long extraction call
+        # (issue #190) -- `ingest` has no per-item loop to hook, so
+        # `stage_notice` is the single-call sibling of `progress_callback`.
+        # Printed even when the confidential-floor short-circuit inside
+        # `_stage_derived_objects` skips the LLM: harmless on a TTY, and the
+        # skip itself is reported right after.
+        observability.stage_notice(
+            "ingest", "extracting derived objects (waiting on the LLM)..."
+        )
         derived_plans, skip_reason = _stage_derived_objects(
             raw_content=raw_content,
             source_title=title,
@@ -7082,6 +7109,12 @@ def adjudicate(
             bundle_dir=layout.bundle_dir,
             llm=llm,
             include_confidential=include_confidential,
+            # TTY-gated per-group progress on stderr; `None` (silent) when
+            # output is piped (issue #190, mirrors `suggest-relations`' #134
+            # per-edge line).
+            on_progress=observability.progress_callback(
+                "adjudicate", "adjudicating group"
+            ),
         )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -7536,7 +7569,15 @@ def suggest_volatility_cmd(
     )
     try:
         results = suggest_volatility(
-            layout.bundle_dir, llm=llm, include_confidential=include_confidential
+            layout.bundle_dir,
+            llm=llm,
+            include_confidential=include_confidential,
+            # TTY-gated per-type progress on stderr; `None` (silent) when
+            # output is piped (issue #190, mirrors `suggest-relations`' #134
+            # per-edge line).
+            on_progress=observability.progress_callback(
+                "suggest-volatility", "suggesting type"
+            ),
         )
     except OllamaUnavailable as exc:
         typer.echo(
@@ -7695,6 +7736,12 @@ def contradictions(
                 include_deprecated=include_deprecated,
                 include_confidential=include_confidential,
                 store=store,
+                # TTY-gated per-pair progress on stderr; `None` (silent)
+                # when output is piped (issue #190, mirrors
+                # `suggest-relations`' #134 per-edge line).
+                on_progress=observability.progress_callback(
+                    "contradictions", "checking pair"
+                ),
             )
         except OllamaUnavailable as exc:
             typer.echo(
@@ -8157,6 +8204,11 @@ def query(
         fts_index_cm as fts_index,
         graph_index_cm as graph_index,
     ):
+        # ONE TTY-gated stage notice before the single long retrieval+answer
+        # call (issue #190) -- `query`'s `llm.chat` runs inside `answer()`,
+        # so this CLI seam is where the wait becomes visible; `stage_notice`
+        # is the single-call sibling of `progress_callback`.
+        observability.stage_notice("query", "answering (waiting on the LLM)...")
         try:
             result = answer(
                 question,
@@ -8483,6 +8535,10 @@ def reindex(
                 force=force,
                 fts_db_path=layout.fts_db_path,
                 model_tag=cfg.embedding_model,
+                # TTY-gated per-doc embedding progress on stderr; `None`
+                # (silent) when output is piped (issue #190, mirrors
+                # `suggest-relations`' #134 per-edge line).
+                on_progress=observability.progress_callback("reindex", "embedding doc"),
             )
     except OllamaUnavailable as exc:
         typer.echo(

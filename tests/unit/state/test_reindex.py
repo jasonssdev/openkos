@@ -1360,3 +1360,106 @@ def test_reindex_tag_persist_gate_withheld_when_embed_failed_even_if_skipped_zer
     assert report.skipped == 0
     assert report.embed_failed == 1
     assert stored_tag is None  # withheld -- NOT "qwen3-embedding:0.6b"
+
+
+# --- `on_progress` per-embedded-doc progress hook (issue #190) ---------------
+
+
+def test_reindex_invokes_on_progress_once_per_queued_doc_in_walk_order(
+    tmp_path: Path,
+) -> None:
+    """`on_progress` fires once per QUEUED doc, in walk order, AFTER that
+    doc's individual `embedder.embed` attempt resolves -- carrying `(index,
+    total, concept_id)` with a 1-based `index` and `total` equal to the
+    number of docs queued for embedding this run (issue #190, mirroring
+    `suggest_edge_types`'s #134 contract). A cache-hit doc is never queued,
+    so a fully cached re-run fires nothing at all."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(bundle_dir / "concepts" / "beta.md", title="Beta")
+    seen: list[tuple[int, int, str]] = []
+
+    def _cb(index: int, total: int, concept_id: str) -> None:
+        seen.append((index, total, concept_id))
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), on_progress=_cb)
+
+        assert seen == [
+            (1, 2, "concepts/alpha"),
+            (2, 2, "concepts/beta"),
+        ]
+
+        seen.clear()
+        report = reindex.reindex(bundle_dir, db, _FakeEmbedder(), on_progress=_cb)
+
+    assert report.cache_hits == 2
+    assert seen == []
+
+
+def test_reindex_on_progress_fires_for_transient_embed_failure_too(
+    tmp_path: Path,
+) -> None:
+    """A doc whose individual embed call fails with the generic transient
+    `OllamaError` (isolated as `embed_failed`, not fatal) STILL fires its
+    callback -- the attempt is what takes the time, and skipping it would
+    make the progress counter silently stall on a poison doc (issue #190)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "alpha.md", title="Alpha", body="poison body")
+    _write_doc(bundle_dir / "concepts" / "beta.md", title="Beta", body="fine body")
+    embedder = _FaultyEmbedder({"poison body": OllamaError("transient failure")})
+    seen: list[tuple[int, int, str]] = []
+
+    def _cb(index: int, total: int, concept_id: str) -> None:
+        seen.append((index, total, concept_id))
+
+    with vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db:
+        report = reindex.reindex(bundle_dir, db, embedder, on_progress=_cb)
+
+    assert report.embed_failed == 1
+    assert report.embedded == 1
+    assert seen == [
+        (1, 2, "concepts/alpha"),
+        (2, 2, "concepts/beta"),
+    ]
+
+
+def test_reindex_on_progress_never_fires_for_a_doc_behind_a_fatal_failure(
+    tmp_path: Path,
+) -> None:
+    """A FATAL embed failure (`OllamaUnavailable`) re-raises immediately --
+    the failing doc's callback never fires, and neither does any later
+    doc's (issue #190: the hook reports resolved attempts, never invents
+    progress past an aborted run)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "alpha.md", title="Alpha", body="fine body")
+    _write_doc(bundle_dir / "concepts" / "beta.md", title="Beta", body="poison body")
+    embedder = _FaultyEmbedder({"poison body": OllamaUnavailable("server down")})
+    seen: list[tuple[int, int, str]] = []
+
+    def _cb(index: int, total: int, concept_id: str) -> None:
+        seen.append((index, total, concept_id))
+
+    with (
+        vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db,
+        pytest.raises(OllamaUnavailable),
+    ):
+        reindex.reindex(bundle_dir, db, embedder, on_progress=_cb)
+
+    assert seen == [(1, 2, "concepts/alpha")]
+
+
+def test_reindex_on_progress_exception_propagates(tmp_path: Path) -> None:
+    """An exception raised inside `on_progress` propagates to the caller
+    unswallowed -- it is the caller's own callback (issue #190)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "alpha.md", title="Alpha")
+
+    def _boom(index: int, total: int, concept_id: str) -> None:
+        raise RuntimeError("callback failed")
+
+    with (
+        vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db") as db,
+        pytest.raises(RuntimeError, match="callback failed"),
+    ):
+        reindex.reindex(bundle_dir, db, _FakeEmbedder(), on_progress=_boom)

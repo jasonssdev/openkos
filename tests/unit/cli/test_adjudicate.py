@@ -1120,8 +1120,60 @@ def test_adjudicate_apply_same_group_with_three_members_is_skipped_not_prompted(
     result = runner.invoke(app, ["adjudicate", "--apply"])
 
     assert "skipped (N>2, merge manually)" in result.stdout
+    assert "run in order (each reversible via unmerge):" in result.stdout
+    assert "openkos merge a b" in result.stdout
+    assert "openkos merge a c" in result.stdout
     assert "[y/N/skip]" not in result.stdout
     assert result.exit_code == 0
+
+
+def test_adjudicate_apply_n_gt2_skip_prints_pairwise_merge_commands_in_order(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The N>2 skip line is followed by the EXACT pairwise merge commands --
+    survivor is the first member (member_ids are sorted ascending, matching
+    the 2-member `survivor_id, absorbed_id = group.member_ids` convention),
+    one `openkos merge <survivor> <absorbed>` line per remaining member, in
+    member order -- so the operator can run the manual merges without
+    reconstructing them (issue #191). Counters and the summary line stay
+    byte-identical to the pre-#191 output."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b", "concepts/c"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"])
+
+    assert result.exit_code == 0
+    skip_at = result.stdout.index("skipped (N>2, merge manually)")
+    guidance_at = result.stdout.index("run in order (each reversible via unmerge):")
+    first_at = result.stdout.index("openkos merge concepts/a concepts/b")
+    second_at = result.stdout.index("openkos merge concepts/a concepts/c")
+    assert skip_at < guidance_at < first_at < second_at
+    # Exactly the two pairwise commands -- never a survivor-less extra pair.
+    assert result.stdout.count("openkos merge ") == 2
+    assert "openkos merge concepts/b concepts/c" not in result.stdout
+    # Summary counters are unchanged by the new command lines.
+    assert "applied 0, skipped 1" in result.stdout
+    assert "N>2: 1" in result.stdout
 
 
 def test_adjudicate_apply_overlapping_groups_second_reports_already_merged(
@@ -1697,7 +1749,56 @@ def test_adjudicate_apply_same_eligibility_filters_to_same_two_member_groups(
     assert "concepts/b" in result.stdout
     assert "concepts/a" in result.stdout
     assert "skipped (N>2, merge manually)" in result.stdout
+    assert "run in order (each reversible via unmerge):" in result.stdout
+    assert "openkos merge x y" in result.stdout
+    assert "openkos merge x z" in result.stdout
     assert "Total: 1" in result.stdout
+
+
+def test_adjudicate_apply_same_n_gt2_skip_prints_pairwise_merge_commands_in_order(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--apply-same`'s N>2 skip prints the SAME pairwise merge commands as
+    `--apply` -- shared helper, no divergent strings: survivor is the first
+    (sorted-ascending) member, one `openkos merge <survivor> <absorbed>`
+    line per remaining member, in member order (issue #191). Counters and
+    the zero-eligible summary stay byte-identical to the pre-#191 output."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b", "concepts/c"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same"])
+
+    assert result.exit_code == 0
+    skip_at = result.stdout.index("skipped (N>2, merge manually)")
+    guidance_at = result.stdout.index("run in order (each reversible via unmerge):")
+    first_at = result.stdout.index("openkos merge concepts/a concepts/b")
+    second_at = result.stdout.index("openkos merge concepts/a concepts/c")
+    assert skip_at < guidance_at < first_at < second_at
+    assert result.stdout.count("openkos merge ") == 2
+    assert "openkos merge concepts/b concepts/c" not in result.stdout
+    # Zero eligible 2-member groups: the short-circuit summary still counts
+    # the N>2 skip exactly as before.
+    assert "applied 0, skipped 1 (N>2: 1, already-merged: 0)" in result.stdout
 
 
 def test_adjudicate_apply_same_aggregate_preview_precedes_gate_and_writes(
@@ -2573,3 +2674,70 @@ def test_adjudicate_include_confidential_suppresses_the_warning(
 
     assert result.exit_code == 0
     assert "bundle scan was incomplete" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Issue #190: TTY-gated per-group progress wiring
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_wires_tty_gated_progress_callback_into_the_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a TTY, `adjudicate` passes `observability.progress_callback`'s
+    hook into `adjudicate_candidates` as `on_progress`; each invocation
+    renders `openkos adjudicate: adjudicating group <i>/<n>...` on STDERR
+    while STDOUT keeps the clean report (issue #190, mirroring
+    `suggest-relations`' #134 wiring)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> list[CandidateGroup]:
+        return [group]
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        on_progress = kwargs["on_progress"]
+        assert callable(on_progress)
+        results = [_adjudicated(group, verdict=Verdict.DIFFERENT, rationale="diff")]
+        for index, result in enumerate(results, start=1):
+            on_progress(index, len(results), result)
+        return results
+
+    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "openkos adjudicate: adjudicating group 1/1..." in result.stderr
+    assert "adjudicating group" not in result.stdout
+
+
+def test_adjudicate_passes_no_progress_hook_when_stderr_is_not_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a TTY (`CliRunner`'s default), the factory returns `None`
+    and `adjudicate_candidates` receives `on_progress=None` -- piped output
+    stays byte-clean (issue #190)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        captured["on_progress"] = kwargs["on_progress"]
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert captured["on_progress"] is None

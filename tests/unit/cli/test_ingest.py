@@ -4570,3 +4570,45 @@ def test_a_concept_created_during_the_prompt_on_a_post_forget_reingest_is_refuse
     after = snapshot_with_mtime(tmp_path)
     changed = changed_paths(before, after)
     assert changed == {Path("bundle/sources/notes.md")}
+
+
+# --- Issue #190: TTY-gated stage notice before extraction -------------------
+
+
+def test_ingest_prints_tty_gated_stage_notice_before_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a TTY, `ingest` prints ONE `openkos ingest: extracting derived
+    objects (waiting on the LLM)...` stage notice to STDERR immediately
+    before `_stage_derived_objects`' extraction call -- the single-call
+    sibling of the per-item progress hooks (issue #190). STDOUT keeps the
+    clean report."""
+    _init_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "openkos ingest: extracting derived objects (waiting on the LLM)..."
+        in result.stderr
+    )
+    assert "waiting on the LLM" not in result.stdout
+
+
+def test_ingest_stage_notice_is_silent_without_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a TTY (`CliRunner`'s default), the stage notice never
+    appears -- piped output stays byte-clean (issue #190)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "waiting on the LLM" not in result.stderr
+    assert "waiting on the LLM" not in result.stdout
