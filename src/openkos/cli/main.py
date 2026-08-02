@@ -424,11 +424,13 @@ def _reject_drifted_targets(
     the window: nothing pauses for a human there, which makes those runs the
     likeliest to race a second writer, not the least.
 
-    The callers are `set-sensitivity`, `backfill-sensitivity`,
-    `backfill-source-titles` (#306), and `relate` and `reconcile` (#313).
-    Rather than extend this list again, a new caller only has to satisfy the
-    contract below; the list is here because a reader arriving from one call
-    site needs to know the others exist and agree.
+    Several mutating verbs call this, and the set is still growing as #313
+    works through them. A reader arriving from one call site does not need
+    the roster -- `grep _reject_drifted_targets` is exact and never goes
+    stale -- only the assurance that every caller satisfies the same
+    contract below. An enumeration here would be a second place to forget
+    to update, which is how the previous version of this paragraph came to
+    claim three callers while five existed.
 
     `expected` maps a workspace-relative POSIX path to the RAW BYTES that
     path held when Phase A read it, and the comparison is bytes-to-bytes.
@@ -1708,6 +1710,16 @@ def ingest(
     `init`'s silent-on-non-TTY behavior, because `ingest` honors "review
     before save".
 
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads `index.md`, `log.md`, and the
+    existing concept on a re-ingest, and refuses the WHOLE run (exit 1,
+    nothing written) if any changed or vanished since Phase A read it
+    (issues #306, #313). The create-only writes below are excluded
+    deliberately: `copy_exclusive`/`write_exclusive` already fail closed on
+    a concurrent create, and a fresh ingest has no snapshot of a concept
+    that did not exist.
+
     Phase B (after confirm) writes, in order: `bundle/sources/` (created if
     absent), the raw copy (`copy_exclusive`, create-only) and the concept
     document (`write_exclusive`, create-only) on a fresh ingest -- or, on a
@@ -1869,10 +1881,26 @@ def ingest(
             # itself is still rebuilt from content every run, exactly as
             # before this read existed.
             on_disk_title = _read_source_title(concept_path)
+            # The guard's snapshot of this file, taken HERE and not with
+            # `index.md`/`log.md` further down (#313 review, R4 CRITICAL).
+            # Between this point and there sits `_stage_derived_objects`'
+            # `llm.chat` round trip -- an unbounded network call, not the
+            # microseconds `_reject_drifted_targets` assumes between a
+            # caller's two Phase-A reads. Snapshotting after it would make
+            # an edit landing during extraction the guard's OWN baseline:
+            # the comparison would find no drift and `write_atomic` would
+            # then write back the document built from the two reads above,
+            # reverting it. That revert is a sensitivity DOWNGRADE, since
+            # `resolved_sensitivity` is the high-water mark computed from
+            # `on_disk_sensitivity`. Pairing the byte read with the reads
+            # that actually feed the plan is what makes the guard's
+            # bytes-to-bytes comparison mean what it claims.
+            concept_bytes: bytes | None = concept_path.read_bytes()
         else:
             on_disk_sensitivity = None
             resolved_sensitivity = cfg.default_sensitivity
             on_disk_title = None
+            concept_bytes = None
 
         def _build_source_document(
             extraction_status: okf.ExtractionStatus | None,
@@ -1927,6 +1955,20 @@ def ingest(
             concept_content = _build_source_document(skip_reason)
         index_text = index_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
+        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
+        # only: both sides of its comparison must come from the SAME reader
+        # (issues #306, #313). Every parser below wants the decoded form.
+        # Unlike the concept's, these two snapshots belong here, next to the
+        # reads that produced `index_text`/`log_text` -- nothing runs between
+        # them.
+        index_bytes = index_path.read_bytes()
+        log_bytes = log_path.read_bytes()
+        guarded_targets: dict[str, bytes] = {
+            "bundle/index.md": index_bytes,
+            "bundle/log.md": log_bytes,
+        }
+        if concept_bytes is not None:
+            guarded_targets[f"bundle/sources/{slug}.md"] = concept_bytes
         if regenerate:
             # D3: dedup before insert -- a no-forget re-ingest already has
             # the bullet, so a bare insert would duplicate it; a post-forget
@@ -2050,6 +2092,10 @@ def ingest(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #313: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    _reject_drifted_targets(layout, guarded_targets, "ingest")
 
     try:
         sources_dir.mkdir(parents=True, exist_ok=True)
@@ -3192,11 +3238,13 @@ def relate(
     to re-run with `--auto`. Declining or refusing leaves the bundle
     completely untouched -- Phase A never writes anything.
 
-    Once the gate passes, `_reject_drifted_targets` re-reads every path this
-    run intends to write -- the source concept and `log.md` -- and refuses
-    the WHOLE run (exit 1, nothing written) if either changed or vanished
-    while the prompt waited (issues #306, #313). A confirmed run can
-    therefore still end without writing.
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads every path this run intends to write
+    (the source concept and `log.md`) and refuses the WHOLE run (exit 1,
+    nothing written) if either changed or vanished since Phase A read it
+    (issues #306, #313). Any run, prompted or not, can therefore reach this
+    point and still end without writing.
 
     Phase B (after confirm) writes the source concept file
     (`fsio.write_atomic`, since it already exists) then `log.md`
@@ -5374,13 +5422,14 @@ def reconcile(
     to re-run with `--auto`. Declining or refusing leaves the bundle
     completely untouched -- Phase A never writes anything.
 
-    Once the gate passes, `_reject_drifted_targets` re-reads every path this
-    run intends to write -- both concept documents and `log.md` -- and
-    refuses the WHOLE run (exit 1, nothing written) if any of them changed
-    or vanished while the prompt waited (issues #306, #313). This is a
-    third outcome for a confirmed run, distinct from the partial result the
-    next paragraph describes: nothing is written at all, so there is
-    nothing to complete on re-run.
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads every path this run intends to write
+    (both concept documents and `log.md`) and refuses the WHOLE run (exit 1,
+    nothing written) if any changed or vanished since Phase A read it
+    (issues #306, #313). Distinct from the partial result the next paragraph
+    describes: nothing is written at all, so there is nothing to complete on
+    re-run.
 
     Phase B (after confirm) writes, in order: `id_a`'s document, then
     `id_b`'s document (both `fsio.write_atomic`, since both already exist),
