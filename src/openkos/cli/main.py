@@ -1165,7 +1165,21 @@ def _run_adjudicate_apply(
     `merge_core` + `_autocommit` (D7) -- reusing every 2b-i building block
     verbatim. A mid-run write failure (D8) stops the loop immediately;
     prior per-merge commits remain intact and reversible via `unmerge`. A
-    final summary line (D9) always prints, even when nothing is eligible."""
+    final summary line (D9) always prints, even when nothing is eligible.
+
+    Between the accepted `y` and the write sits the same TOCTOU window
+    every drift-guarded verb closes (the #306/#313/#319 arc): every byte
+    `_commit_one_merge` writes was computed by `_prepare_one_merge` BEFORE
+    the `[y/N/skip]` prompt, so an edit landing on any target while the
+    prompt waited -- likeliest on the survivor, worst on the absorbed
+    file, which is UNLINKED rather than overwritten -- would be silently
+    destroyed. Each accepted pair therefore hands `_merge_drift_targets`'
+    baseline mapping to `_reject_drifted_targets` strictly after its
+    prompt and strictly before its write (issue #346, closing the gap
+    `merge` and `curate`'s Identity stage already closed): drift refuses
+    with exit 3, nothing is written for that pair, and the run ends --
+    prior per-pair commits remain intact and reversible via `unmerge`,
+    exactly like the D8 failure path."""
     applied = 0
     skipped_n_gt2 = 0
     skipped_already_merged = 0
@@ -1210,6 +1224,19 @@ def _run_adjudicate_apply(
         if answer.strip().lower() not in {"y", "yes"}:
             skipped_declined += 1
             continue
+
+        # Issue #346: every byte `_commit_one_merge` writes below was
+        # computed before the prompt, so re-validate each target now --
+        # after the accepted `y`, before the first write. The absorbed
+        # file rides in `deletes=` because it is UNLINKED, not overwritten
+        # (#329), mirroring `merge`'s own call site.
+        absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+        _reject_drifted_targets(
+            layout,
+            _merge_drift_targets(layout, prepared),
+            "adjudicate --apply",
+            deletes=frozenset({absorbed_path}),
+        )
 
         try:
             _commit_one_merge(root, layout, index_path, log_path, prepared)
@@ -1271,7 +1298,24 @@ def _run_adjudicate_apply_same(
     far / previewed, and that the remainder was never attempted) so the
     operator can drive that recovery without reconstructing the count
     themselves (spec: Sequential Execution And Mid-Batch Failure
-    Semantics; 4R fix: mid-batch failure hides the applied count)."""
+    Semantics; 4R fix: mid-batch failure hides the applied count).
+
+    Pass 2's re-prepare narrows the batch's TOCTOU window but does not
+    close it (the #306/#313/#319 arc): an edit landing during the confirm
+    gate or an earlier pair's commit IS re-read and recomputed over, but
+    every byte `_commit_one_merge` writes for pair k was still captured by
+    that pair's re-prepare BEFORE the write, so an edit landing in the
+    re-prepare-to-write gap would be silently destroyed -- likeliest on
+    the survivor, worst on the absorbed file, which is UNLINKED rather
+    than overwritten. Each pair therefore hands `_merge_drift_targets`'
+    baseline mapping to `_reject_drifted_targets` strictly between its
+    re-prepare and its write (issue #346, closing the gap `merge` and
+    `curate`'s Identity stage already closed). A drift refusal on pair k
+    aborts the batch exactly like a mid-batch write failure: the partial
+    summary (applied so far of total, remainder never attempted, applied
+    merges committed and reversible via `unmerge`) is echoed before the
+    guard's exit 3 propagates, so the refusal keeps the same recovery
+    affordance the failure path already has."""
     eligible_groups: list[CandidateGroup] = []
     skipped_n_gt2 = 0
     for result in results:
@@ -1359,6 +1403,34 @@ def _run_adjudicate_apply_same(
             )
             skipped_already_merged += 1
             continue
+
+        # Issue #346: every byte `_commit_one_merge` writes below was
+        # captured by this pair's re-prepare above, so re-validate each
+        # target now -- after the baseline capture, before the first
+        # write. The absorbed file rides in `deletes=` because it is
+        # UNLINKED, not overwritten (#329), mirroring `merge`'s own call
+        # site. The guard's exit 3 is re-raised unchanged; the wrapper
+        # exists only to echo the same partial summary the mid-batch
+        # failure paths echo, so a drift abort leaves the operator the
+        # same recovery affordance.
+        absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+        try:
+            _reject_drifted_targets(
+                layout,
+                _merge_drift_targets(layout, prepared),
+                "adjudicate --apply-same",
+                deletes=frozenset({absorbed_path}),
+            )
+        except typer.Exit:
+            typer.echo(
+                "openkos adjudicate --apply-same: stopped after drift "
+                f"refusal -- applied {applied} of {total} previewed before "
+                "this refusal; the remaining pairs were not attempted. "
+                "Applied merges remain committed and reversible via "
+                "`unmerge`.",
+                err=True,
+            )
+            raise
 
         try:
             _commit_one_merge(root, layout, index_path, log_path, prepared)
