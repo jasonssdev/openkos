@@ -1452,13 +1452,12 @@ def test_a_delete_target_edited_during_the_prompt_is_refused(
 
     An edit landing while the operator reads the preview is destroyed
     outright -- worse than the overwrite the issue's table describes, since
-    nothing survives to recover from. The purge set is also a claim about
-    the bundle that the edit may have invalidated: adding an inbound
-    reference to a member during the prompt is exactly what the `--force`
-    gate would have refused, and deleting anyway leaves it dangling.
-
-    So the delete targets belong in the guard's mapping alongside
-    `index.md` and `log.md`, not outside it.
+    nothing survives to recover from. That alone puts the delete targets in
+    the guard's mapping alongside `index.md` and `log.md` (#320: the guard
+    re-reads only its own targets, so this is a MEMBER-side protection --
+    an inbound reference gained during the prompt lives in a referrer file
+    outside the purge set, which the guard never re-reads, and is
+    deliberately not claimed here).
     """
     source_id, _, _ = _source_with_two_children(tmp_path, monkeypatch)
     target_path = tmp_path / target
@@ -1656,6 +1655,38 @@ def test_the_root_concept_edited_during_the_prompt_is_refused(
     after = snapshot_with_mtime(tmp_path)
     changed = changed_paths(before, after)
     assert changed == {Path(target)}
+
+
+def test_scope_self_ignores_drift_on_an_unrelated_bundle_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#326: on the DEFAULT scope the guard's member comprehension yields
+    zero entries -- the mapping is exactly `index.md`, `log.md`, and the
+    root -- so an unrelated bundle file edited during the prompt is not
+    this run's business and must not refuse it. This is the property that
+    makes gating the whole-bundle BYTES retention on `--scope source` safe:
+    a `self`-scope run never consults `other_bytes`, so retaining every
+    file's raw bytes for it bought nothing and doubled the scan's residency
+    for the default path. No behavior may change either way -- this test
+    pins that the mapping stays member-free on `self`, which is the
+    invariant the retention gate leans on."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "notes.txt")
+    _write_plain_concept(tmp_path, "concepts/bystander")
+    _simulate_tty(monkeypatch)
+    bystander_path = tmp_path / "bundle" / "concepts" / "bystander.md"
+    concurrent = "hand-edited while the prompt waited\n"
+    confirm_after(
+        monkeypatch, lambda: bystander_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["forget", source_id], input="y\n")
+
+    assert result.exit_code == 0, result.stderr
+    # The forget completed: root unlinked, catalog updated, and the
+    # bystander's concurrent edit is untouched.
+    assert not (tmp_path / "bundle" / f"{source_id}.md").exists()
+    assert bystander_path.read_text(encoding="utf-8") == concurrent
 
 
 def test_an_edit_landing_after_the_snapshot_observation_is_refused(

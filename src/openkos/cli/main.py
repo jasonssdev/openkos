@@ -445,29 +445,32 @@ def _reject_drifted_targets(
     remedy: str | None = None,
 ) -> None:
     """Refuse the whole run (exit 3, nothing written, nothing deleted) when
-    any target changed on disk after the plan was computed from it (issues
-    #306, #313, #319).
+    any target this run intends to WRITE or UNLINK changed on disk after
+    the plan was computed from it (issues #306, #313, #319, #329).
 
     Every caller shares one shape: Phase A reads a snapshot, computes the
-    ENTIRE write plan from it -- each document's new bytes, plus the new
-    `log.md` text in all of them and the new `index.md` text in the title
-    backfill -- and only then prompts. Nothing re-read anything at write
-    time, so an edit landing while the prompt waited was overwritten IN FULL
-    by `fsio.write_atomic`, with no error, no signal that a newer version
-    existed, and an `_autocommit` that then committed the reverted content.
-    Every caller therefore invokes this strictly AFTER its confirm gate and
-    strictly BEFORE its first write -- and unconditionally, outside the gate's
-    own `if`, because `--auto` and `review: false` skip the prompt but not
-    the window: nothing pauses for a human there, which makes those runs the
+    ENTIRE plan from it -- each document's new bytes, plus the new
+    `log.md` text in all of them, the new `index.md` text in the title
+    backfill, and for the delete verbs WHICH files to unlink -- and only
+    then prompts. Nothing re-read anything at write time, so an edit
+    landing while the prompt waited was overwritten IN FULL by
+    `fsio.write_atomic` -- or, on a delete target, destroyed outright by
+    `fsio.remove_file`, which is strictly worse since nothing survives to
+    recover from -- with no error, no signal that a newer version existed,
+    and an `_autocommit` that then committed the result. Every caller
+    therefore invokes this strictly AFTER its confirm gate and strictly
+    BEFORE its first write -- and unconditionally, outside the gate's own
+    `if`, because `--auto` and `review: false` skip the prompt but not the
+    window: nothing pauses for a human there, which makes those runs the
     likeliest to race a second writer, not the least.
 
-    Several mutating verbs call this, and the set is still growing as #313
-    works through them. A reader arriving from one call site does not need
-    the roster -- `grep _reject_drifted_targets` is exact and never goes
-    stale -- only the assurance that every caller satisfies the same
-    contract below. An enumeration here would be a second place to forget
-    to update, which is how the previous version of this paragraph came to
-    claim three callers while five existed.
+    Every mutating verb now calls this (#313's rollout is complete). A
+    reader arriving from one call site does not need the roster --
+    `grep _reject_drifted_targets` is exact and never goes stale -- only
+    the assurance that every caller satisfies the same contract below. An
+    enumeration here would be a second place to forget to update, which is
+    how a previous version of this paragraph came to claim three callers
+    while five existed.
 
     `expected` maps the ABSOLUTE `Path` a verb will actually hand to
     `fsio.write_atomic` (or delete) to the RAW BYTES that path held when
@@ -513,10 +516,16 @@ def _reject_drifted_targets(
     - VANISHED: the read raised `OSError` (deleted, or unreadable).
       Re-creating or overwriting a file whose current state the operator
       can no longer be shown is the same silent revert, so it still
-      refuses -- but a plain re-run reads the same missing path and
-      refuses AGAIN. The advice must say the path has to be restored (or
-      the operator must confirm the deletion is intended) before any
-      re-run can help; advising a bare re-run here was the #319 loop.
+      refuses -- and a vanished DELETE target is not the run's own intent
+      honored early (#329): the run promised to unlink exactly the bytes
+      the operator previewed, and a path someone ELSE removed no longer
+      supports that claim any more than a changed one does. A plain re-run
+      reads the same missing path and -- for the delete verbs -- fails in
+      Phase A before any prompt, so the advice must say the path has to be
+      restored first, and ONLY that: the old "or confirm the deletion is
+      intended" clause was a dead end (R4 wave 4), since no re-run reaches
+      a confirmation while the path stays missing. Advising a bare re-run
+      here was the #319 loop.
     - OUT-OF-TREE: the key escapes the workspace (`relative_to` raises).
       Nothing "changed" and nothing "vanished" -- the same inputs produce
       this refusal on EVERY run, deterministically, so a re-run cannot
@@ -531,13 +540,24 @@ def _reject_drifted_targets(
     avoided, so each path is labeled a "write target" or a "delete target"
     by what Phase B would actually have done to it, and the fail-closed
     footer extends to "nothing was deleted" exactly when the plan had a
-    delete half to fail closed on.
+    delete half to fail closed on. The function's NAME stays
+    target-kind-neutral on purpose (#329): with `deletes` in the signature
+    and both kinds named in the message, "drifted targets" already covers
+    writes and unlinks alike, and a rename would churn every call site for
+    no contract gain.
 
-    `remedy` replaces the default per-bucket advice wholesale when a verb's
-    re-run is NOT a safe recovery -- `unmerge` (#328), whose re-run would
-    overwrite the very edit the guard just protected. Replacement, never
-    concatenation: appending a verb's warning to advice that contradicts it
-    would be worse than the flattened message this redesign removes.
+    `remedy` replaces the DEFAULT advice -- the changed bucket's re-run
+    sentence -- when a verb's re-run is NOT a safe recovery: `unmerge`
+    (#328), whose re-run would overwrite the very edit the guard just
+    protected. Replacement is scoped to that one sentence, not wholesale
+    (R3+R4 wave 5): the vanished and out-of-tree sentences are advisory
+    FACTS about the refusal, not recovery advice a verb can substitute --
+    a vanished target still has to be restored before anything proceeds,
+    and an out-of-tree refusal is still deterministic -- so each is
+    appended after whatever remedy is in effect whenever its bucket is
+    non-empty. Under wholesale replacement, unmerge's copy-your-edit
+    remedy talked about copying an edit that, for a vanished target, does
+    not exist, and silently dropped the restore-first instruction.
 
     Exit code 3, and only here (#319): a drift refusal is the ONE failure a
     script may safely retry -- nothing was written, and when the message
@@ -619,24 +639,28 @@ def _reject_drifted_targets(
         else "Nothing was written."
     )
 
-    if remedy is None:
-        # Per-bucket advice, additive: each sentence is scoped to its own
-        # bucket ("the vanished target(s)", "the out-of-tree refusal"), so
-        # a mixed refusal reads as a checklist, not a contradiction.
-        advice: list[str] = []
-        if any(changed.values()):
-            advice.append("Re-run to recompute over the current bundle.")
-        if any(vanished.values()):
-            advice.append(
-                "A plain re-run will refuse again on the vanished target(s): "
-                "restore them first, or confirm the deletion is intended."
-            )
-        if any(out_of_tree.values()):
-            advice.append(
-                "The out-of-tree refusal is deterministic -- the same inputs "
-                "reproduce it on every run, and a re-run cannot clear it."
-            )
-        remedy = " ".join(advice)
+    # A custom `remedy` replaces only the DEFAULT re-run advice (the
+    # changed bucket's); the vanished/out-of-tree sentences are advisory
+    # facts about the refusal itself and follow whichever remedy is in
+    # effect, each scoped to its own bucket ("the vanished target(s)",
+    # "the out-of-tree refusal") so a mixed refusal reads as a checklist,
+    # not a contradiction -- see the docstring (R3+R4 wave 5).
+    advice: list[str] = []
+    if remedy is not None:
+        advice.append(remedy)
+    elif any(changed.values()):
+        advice.append("Re-run to recompute over the current bundle.")
+    if any(vanished.values()):
+        advice.append(
+            "A plain re-run will refuse again on the vanished target(s): "
+            "restore them first."
+        )
+    if any(out_of_tree.values()):
+        advice.append(
+            "The out-of-tree refusal is deterministic -- the same inputs "
+            "reproduce it on every run, and a re-run cannot clear it."
+        )
+    remedy = " ".join(advice)
 
     typer.echo(
         f"openkos {verb}: refusing to write -- {'; '.join(clauses)}. {footer} {remedy}",
@@ -648,12 +672,50 @@ def _reject_drifted_targets(
     raise typer.Exit(code=3)
 
 
+def _require_member_baseline(
+    verb: str, other_bytes: Mapping[str, bytes], member: str
+) -> bytes:
+    """A purge-set member's Phase-A snapshot bytes, or a clean exit-3
+    refusal when the scan somehow produced none.
+
+    DEFENSIVE-ONLY, deliberately: today `purge_ids` and `other_bytes` are
+    built from the SAME bundle scan, and Phase A's own `member_texts`
+    lookup would have crashed on the missing key long before the guard
+    mapping is built -- so this branch cannot be reached end-to-end, and no
+    integration test contorts the suite to pretend it can; the helper's
+    unit tests pin the behavior directly instead. It exists because both
+    callers used to index `other_bytes[f"{member}.md"]` bare, which a
+    future refactor computing `purge_ids` from anything other than the
+    scanned files would turn into a `KeyError` traceback in the middle of
+    the post-confirm gate. A member with no same-observation baseline
+    (#318) cannot be validated against drift, so the fail-closed answer is
+    the guard's own shape: refuse the whole run (exit 3), name the member,
+    write nothing. `_reject_drifted_targets`' contract is untouched --
+    this refusal fires while its mapping is being BUILT, before the guard
+    ever sees it.
+    """
+    baseline = other_bytes.get(f"{member}.md")
+    if baseline is None:
+        typer.echo(
+            f"openkos {verb}: refusing to write -- 'bundle/{member}.md' is "
+            "in the delete plan but has no Phase-A snapshot to validate "
+            "against, so post-confirm drift on it cannot be ruled out. "
+            "Nothing was written. Re-run to recompute over the current "
+            "bundle.",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+    return baseline
+
+
 def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
     """Best-effort, non-fatal auto-commit after a mutating verb's Phase B
     (git-lifecycle Slice 2), structurally cloned from `init`'s own
-    best-effort git-setup block below. Every one of `ingest`/`forget`/
-    `relate`/`merge`/`unmerge`/`reconcile` calls this exactly once, on the
-    success path, strictly AFTER its own confirm gate and Phase-B writes
+    best-effort git-setup block below. Every mutating verb calls this
+    exactly once, on the success path -- `grep _autocommit(` is exact and
+    never goes stale, where the enumeration this sentence replaces had
+    quietly stopped at six callers while thirteen existed -- strictly
+    AFTER its own confirm gate and Phase-B writes
     have already landed on disk -- so no failure mode here ever changes
     the caller's exit code or leaves a canonical write unfinished; the
     worst outcome is a stderr WARNING pointing at `git status`.
@@ -1411,7 +1473,9 @@ def _read_source_sensitivity(concept_path: Path, text: str) -> object:
         # than degrade (design gotcha).
         raise ValueError(
             f"refusing to ingest -- '{concept_path}' frontmatter could not "
-            f"be parsed to resolve its existing sensitivity: {exc}"
+            "be parsed to resolve the sensitivity from its snapshot -- the "
+            f"single read that also feeds the title parse and the drift "
+            f"baseline: {exc}"
         ) from exc
     return metadata.get("sensitivity")
 
@@ -2048,7 +2112,8 @@ def ingest(
             except (OSError, UnicodeDecodeError) as exc:
                 raise ValueError(
                     f"refusing to ingest -- '{concept_path}' could not be "
-                    f"read to resolve its existing sensitivity: {exc}"
+                    "read to snapshot its current contents (sensitivity, "
+                    f"title, and drift baseline): {exc}"
                 ) from exc
             on_disk_sensitivity = _read_source_sensitivity(concept_path, concept_text)
             resolved_sensitivity = okf.combine_sensitivity(
@@ -2502,12 +2567,11 @@ def forget(
     #319).
 
     That set includes the DELETE targets, not just `index.md` and `log.md`.
-    An edit landing on a purge-set member during the prompt would be
-    destroyed outright rather than overwritten, and the purge set is itself
-    a claim about the Phase-A bundle: a member that gained an inbound
-    reference while the prompt waited is one gate 1 would have refused, so
-    unlinking it anyway would leave that reference dangling under a
-    `--force` the operator never passed.
+    The why lives in ONE place -- the comment on the
+    `_reject_drifted_targets` call in the body (#320) -- in short: an edit
+    landing on a purge-set member during the prompt would be destroyed
+    outright rather than overwritten, and that member-side protection is
+    all the guard delivers; referrer-side drift is out of its reach.
 
     Phase B (after both gates) writes `index.md` then `log.md`
     (`write_atomic`, catalog FIRST, covering every purge-set member) and
@@ -2568,12 +2632,18 @@ def forget(
         # resurrection, and per-member titles/tombstones -- no extra
         # bundle scan, for either scope (design: Technical Approach).
         #
-        # `other_bytes` shadows it for the guard. Which of these files the
-        # run will DELETE is not known until `purge_ids` resolves below, so
-        # the bytes come out of the same `_snapshot_read` observation as
-        # the text, rather than re-read per member afterwards: a second
-        # read would leave every file the #318 window. Only the purge-set
-        # entries are ever consulted; the rest are dropped.
+        # `other_bytes` shadows it for the guard -- and ONLY on `--scope
+        # source` (#326). Which of these files the run will DELETE is not
+        # known until `purge_ids` resolves below, so for that scope the
+        # bytes come out of the same `_snapshot_read` observation as the
+        # text, rather than re-read per member afterwards: a second read
+        # would leave every file the #318 window. On the default `self`
+        # scope the guard's member comprehension is empty by construction
+        # (`purge_ids` is statically `[canonical_id]`), so not one byte
+        # would ever be consulted -- retaining the whole bundle's raw bytes
+        # there doubled Phase A's peak memory for nothing. The scope is
+        # known before the scan starts, so gating retention on it opens no
+        # new drift window: every file is still a single-read observation.
         other_files: dict[str, str] = {}
         other_bytes: dict[str, bytes] = {}
         for path in sorted(layout.bundle_dir.rglob("*.md")):
@@ -2582,7 +2652,9 @@ def forget(
             if path == concept_path:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
-            other_bytes[rel], other_files[rel] = _snapshot_read(path)
+            raw, other_files[rel] = _snapshot_read(path)
+            if scope == "source":
+                other_bytes[rel] = raw
 
         # Unified Phase-A data path (design decision 6): `--scope self`
         # collapses to a single-member purge set and reproduces every
@@ -2787,15 +2859,19 @@ def forget(
     # re-validate each target now -- after the gate, before the first write.
     #
     # The DELETE targets are in here too, not just the two `write_atomic`
-    # ones. `forget` picks its purge set from the Phase-A bundle snapshot
-    # and then unlinks those exact paths, so an edit landing during the
-    # prompt is destroyed outright -- strictly worse than being overwritten,
-    # since nothing survives to recover from. The purge set is also a claim
-    # ABOUT that snapshot: a member that gained an inbound reference while
-    # the prompt waited is one the `--force` gate above would have refused,
-    # and deleting it anyway leaves the reference dangling. Refusing the
-    # whole run is the only answer that keeps the preview, the audit trail
-    # and the deletions describing the same bundle.
+    # ones -- and this comment is the ONE copy of the why (#320: three
+    # copies of this rationale each over-claimed). `forget` picks its purge
+    # set from the Phase-A bundle snapshot and then unlinks those exact
+    # paths, so an edit landing during the prompt is destroyed outright --
+    # strictly worse than being overwritten, since nothing survives to
+    # recover from -- and a `provenance:` edit on a member is drift in that
+    # member's own claim to purge-set membership. Either alone justifies
+    # guarding the delete targets. It is also ALL the guard delivers: it
+    # re-reads only this mapping's paths, so an inbound reference gained
+    # during the prompt -- which lives in a REFERRER file, by construction
+    # outside the purge set, since the gate above drops intra-set referrers
+    # -- is not caught, and neither is a brand-new `.md` file created
+    # during the prompt: additive drift has no baseline here.
     _reject_drifted_targets(
         layout,
         {
@@ -2803,7 +2879,12 @@ def forget(
             log_path: log_bytes,
             concept_path: concept_bytes,
             **{
-                layout.bundle_dir / f"{member}.md": other_bytes[f"{member}.md"]
+                # Defensive fail-closed lookup (see `_require_member_baseline`):
+                # today the key exists by construction, but a missing baseline
+                # must refuse cleanly, never `KeyError` mid-gate.
+                layout.bundle_dir / f"{member}.md": _require_member_baseline(
+                    "forget", other_bytes, member
+                )
                 for member in purge_ids
                 if member != canonical_id
             },
@@ -3397,7 +3478,12 @@ def purge(
             log_path: log_bytes,
             concept_path: concept_bytes,
             **{
-                layout.bundle_dir / f"{member}.md": other_bytes[f"{member}.md"]
+                # Defensive fail-closed lookup (see `_require_member_baseline`):
+                # today the key exists by construction, but a missing baseline
+                # must refuse cleanly, never `KeyError` mid-gate.
+                layout.bundle_dir / f"{member}.md": _require_member_baseline(
+                    "purge", other_bytes, member
+                )
                 for member in purge_ids
                 if member != canonical_id
             },
@@ -5411,7 +5497,9 @@ def unmerge(
     corruption. That now includes a file created at the absorbed path
     during the prompt window (#323): its create-only write errors
     mid-Phase-B instead of silently winning, leaving the catalog/log
-    restored, the created file intact, and the survivor -- ledger and all,
+    restored, every reversed inbound-link/relation/provenance rewrite file
+    already restored too (they land before the absorbed write in the order
+    above), the created file intact, and the survivor -- ledger and all,
     so the absorbed content stays recoverable -- untouched. Any failure,
     Phase A or Phase B, is caught and reported on stderr (exit 1), not a
     raw traceback.

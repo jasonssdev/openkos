@@ -2522,6 +2522,37 @@ def test_reingest_with_unparseable_source_frontmatter_refuses(
     assert concept_path.read_bytes() != before
 
 
+def test_reingest_with_undecodable_concept_names_the_snapshot_roles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-regenerate concept read is ONE `_snapshot_read` observation
+    feeding THREE consumers -- the sensitivity high-water mark, the retitle
+    preview, and the drift guard's byte baseline (#318) -- so its failure
+    message must name that whole role, not just sensitivity (#313 review,
+    R2+R3 wave 1: a message claiming the read exists "to resolve its
+    existing sensitivity" invited a future edit to move or narrow it as if
+    only sensitivity depended on it). Same error surface as before: caught,
+    `refusing to ingest`, exit 1, on-disk bytes untouched."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    undecodable = b"\xff\xfe not valid utf-8 \x00\x01"
+    concept_path.write_bytes(undecodable)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to ingest" in result.stderr
+    assert (
+        "could not be read to snapshot its current contents "
+        "(sensitivity, title, and drift baseline)"
+    ) in result.stderr
+    assert concept_path.read_bytes() == undecodable
+
+
 def test_reingest_with_unknown_on_disk_sensitivity_fails_closed_to_confidential(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

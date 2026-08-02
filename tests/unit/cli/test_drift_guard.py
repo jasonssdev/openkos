@@ -163,7 +163,10 @@ def test_a_vanished_target_gets_the_restore_first_remedy(
     operator to re-run, as the flattened message did, sent them in a
     circle. The vanished bucket must be reported as vanished, not as
     "changed on disk", and the advice must say the path has to be restored
-    (or the deletion confirmed as intended) first."""
+    first -- and ONLY that (R4 wave 4): the old "or confirm the deletion is
+    intended" clause was a dead end, because for `forget`/`purge` delete
+    targets a re-run fails in Phase A (the file cannot be resolved) before
+    any confirmation could matter."""
     layout = _layout(tmp_path)
     target = layout.bundle_dir / "gone.md"
     # Never created on disk: the guard's read raises, which is the same
@@ -177,7 +180,8 @@ def test_a_vanished_target_gets_the_restore_first_remedy(
     assert "refusing to write --" in err
     assert "1 write target(s) vanished" in err
     assert "bundle/gone.md" in err
-    assert "restore" in err
+    assert "restore them first" in err
+    assert "confirm the deletion" not in err
     assert "changed on disk" not in err
     # The changed-only advice alone would be a lie here: a plain re-run
     # refuses again on the same path.
@@ -278,10 +282,12 @@ def test_a_custom_remedy_replaces_the_default_advice(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """#319/#328: a verb whose re-run is NOT a safe recovery (unmerge) must
-    be able to substitute its own recovery sentence; when it does, the
-    default per-bucket advice is fully replaced, never appended -- two
-    contradictory recovery sentences would be worse than the flattened
-    message this redesign removes."""
+    be able to substitute its own recovery sentence; when it does, it
+    replaces the DEFAULT re-run advice -- the changed bucket's -- because
+    two contradictory recovery sentences would be worse than the flattened
+    message this redesign removes. It does NOT suppress the vanished/
+    out-of-tree advisory sentences (R3+R4 wave 5, pinned in the next test);
+    here those buckets are empty, so the custom remedy stands alone."""
     layout = _layout(tmp_path)
     target = layout.bundle_dir / "x.md"
     target.write_bytes(b"edited\n")
@@ -297,6 +303,46 @@ def test_a_custom_remedy_replaces_the_default_advice(
     assert excinfo.value.exit_code == 3
     err = capsys.readouterr().err
     assert "Copy your edit somewhere safe first." in err
+    assert "re-run to recompute over the current bundle" not in err.lower()
+    # Empty buckets contribute no advisory: the composition rule appends
+    # them only when they have paths to speak about.
+    assert "vanished" not in err
+    assert "deterministic" not in err
+
+
+def test_a_custom_remedy_still_carries_the_vanished_advisory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R3+R4 wave 5: the vanished (and out-of-tree) advisory sentences are
+    facts about the refusal, not recovery advice a verb can meaningfully
+    substitute -- under wholesale replacement, unmerge's "copy your edit
+    somewhere safe" remedy talked about copying an edit that, for a
+    VANISHED target, does not exist, and dropped the one instruction
+    (restore the path) without which no re-run can ever proceed. A custom
+    remedy therefore replaces only the default re-run advice; each
+    non-empty advisory bucket's sentence is appended after it."""
+    layout = _layout(tmp_path)
+    vanished = layout.bundle_dir / "gone.md"
+    # Never created: the guard's read raises.
+
+    with pytest.raises(typer.Exit) as excinfo:
+        main._reject_drifted_targets(
+            layout,
+            {vanished: b"planned\n"},
+            "test-verb",
+            remedy="Copy your edit somewhere safe first.",
+        )
+
+    assert excinfo.value.exit_code == 3
+    err = capsys.readouterr().err
+    assert "Copy your edit somewhere safe first." in err
+    assert "restore them first" in err
+    # Composition order: the remedy in effect first, advisories after it.
+    assert err.index("Copy your edit somewhere safe first.") < err.index(
+        "restore them first"
+    )
+    # The DEFAULT advice is what the custom remedy replaces -- it must not
+    # leak back in alongside it.
     assert "re-run to recompute over the current bundle" not in err.lower()
 
 
