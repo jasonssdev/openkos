@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.cli import main as contradiction_main
 from openkos.cli.main import app
@@ -1043,3 +1043,70 @@ def test_contradictions_builds_the_graph_once_on_the_zero_path(
     assert result.exit_code == 0
     assert len(calls) == 1
     assert "The graph has no typed edges yet." in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Issue #190: TTY-gated per-pair progress wiring
+# ---------------------------------------------------------------------------
+
+
+def test_contradictions_wires_tty_gated_progress_callback_into_the_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a TTY, `contradictions` passes
+    `observability.progress_callback`'s hook into `find_contradictions` as
+    `on_progress`; each invocation renders `openkos contradictions:
+    checking pair <i>/<n>...` on STDERR while STDOUT keeps the clean
+    report (issue #190, mirroring `suggest-relations`' #134 wiring)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[list[ContradictionVerdict], int]:
+        on_progress = kwargs["on_progress"]
+        assert callable(on_progress)
+        verdicts = [
+            _verdict(
+                source="concepts/a",
+                target="concepts/b",
+                verdict=Verdict.CONSISTENT,
+                confidence=0.9,
+                rationale="aligned",
+                conflicting_claims=(),
+            )
+        ]
+        for index, verdict in enumerate(verdicts, start=1):
+            on_progress(index, len(verdicts), verdict)
+        return verdicts, 1
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "openkos contradictions: checking pair 1/1..." in result.stderr
+    assert "checking pair" not in result.stdout
+
+
+def test_contradictions_passes_no_progress_hook_when_stderr_is_not_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a TTY (`CliRunner`'s default), the factory returns `None`
+    and `find_contradictions` receives `on_progress=None` -- piped output
+    stays byte-clean (issue #190)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[list[ContradictionVerdict], int]:
+        captured["on_progress"] = kwargs["on_progress"]
+        return [], 0
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert captured["on_progress"] is None

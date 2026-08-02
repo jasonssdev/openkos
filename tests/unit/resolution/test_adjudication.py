@@ -715,3 +715,90 @@ def test_include_confidential_true_bypasses_the_load_members_recheck(
     (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
     assert "[a — A]" in message["content"]
     assert "[b — B]" in message["content"]
+
+
+# ---------------------------------------------------------------------------
+# Requirement: `on_progress` per-group progress hook (issue #190)
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_candidates_invokes_on_progress_once_per_group_in_order(
+    tmp_path: Path,
+) -> None:
+    """`on_progress` fires once per candidate group, in input order, AFTER
+    that group's `AdjudicatedCandidate` is built -- carrying `(index, total,
+    result)` with a 1-based `index` and `total == len(candidates)` so a CLI
+    can render a per-group progress line during an otherwise opaque,
+    minutes-long run (issue #190, mirrors `suggest_edge_types`'s #134
+    contract). The no-readable-members short-circuit result COUNTS: a
+    result is a result, whether or not `llm.chat` was ever called."""
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    _write_doc(tmp_path / "c.md", title="C")
+    _write_doc(tmp_path / "d.md", title="D")
+    readable_1 = _group("a", "b")
+    unreadable = _group("missing-1", "missing-2")  # short-circuits, no chat call
+    readable_2 = _group("c", "d")
+    llm = _FakeLLM(replies=[_valid_reply("same"), _valid_reply("different")])
+    seen: list[tuple[int, int, adjudication_mod.AdjudicatedCandidate]] = []
+
+    def _cb(
+        index: int, total: int, result: adjudication_mod.AdjudicatedCandidate
+    ) -> None:
+        seen.append((index, total, result))
+
+    results = adjudication_mod.adjudicate_candidates(
+        [readable_1, unreadable, readable_2],
+        bundle_dir=tmp_path,
+        llm=llm,
+        on_progress=_cb,
+    )
+
+    assert [(index, total) for index, total, _ in seen] == [(1, 3), (2, 3), (3, 3)]
+    # Identity, not equality: the callback receives the SAME objects the
+    # function returns.
+    assert [result for _, _, result in seen] == results
+    assert all(
+        cb_result is result
+        for (_, _, cb_result), result in zip(seen, results, strict=True)
+    )
+    assert seen[1][2].verdict is adjudication_mod.Verdict.UNCERTAIN
+
+
+def test_adjudicate_candidates_on_progress_omitted_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    """Omitting `on_progress` (the default) keeps the return value and call
+    pattern byte-identical -- the hook never affects the returned list
+    (issue #190)."""
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    group = _group("a", "b")
+    llm = _FakeLLM(replies=[_valid_reply("same")])
+
+    results = adjudication_mod.adjudicate_candidates(
+        [group], bundle_dir=tmp_path, llm=llm
+    )
+
+    assert len(results) == 1
+    assert len(llm.calls) == 1
+
+
+def test_adjudicate_candidates_on_progress_exception_propagates(
+    tmp_path: Path,
+) -> None:
+    """An exception raised inside `on_progress` propagates to the caller
+    unswallowed -- it is the caller's own callback (issue #190, same
+    contract as `suggest_edge_types`)."""
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    group = _group("a", "b")
+    llm = _FakeLLM(replies=[_valid_reply("same")])
+
+    def _boom(index: int, total: int, result: object) -> None:
+        raise RuntimeError("callback failed")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        adjudication_mod.adjudicate_candidates(
+            [group], bundle_dir=tmp_path, llm=llm, on_progress=_boom
+        )

@@ -17,6 +17,7 @@ of that type's concept bodies (design's "Deterministic Sampling Rule") to
 show the LLM -- one `llm.chat` call per type, never per concept.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -217,7 +218,11 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
 
 
 def suggest_volatility(
-    bundle_dir: Path, *, llm: LLMBackend, include_confidential: bool = False
+    bundle_dir: Path,
+    *,
+    llm: LLMBackend,
+    include_confidential: bool = False,
+    on_progress: Callable[[int, int, TierSuggestion], None] | None = None,
 ) -> list[TierSuggestion]:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
     present under `bundle_dir`, read-only.
@@ -246,7 +251,19 @@ def suggest_volatility(
     type) -- not against the full bundle beforehand. A type whose sampled
     docs are ALL excluded by either filter yields no suggestion for that
     type at all (it never reaches an `llm.chat` call with an empty body
-    list)."""
+    list).
+
+    `on_progress` (issue #190, mirroring `suggest_edge_types`'s #134
+    contract), if given, is called once per EMITTED `TierSuggestion`, in
+    sorted-type order, AFTER that suggestion is built, with `(index, total,
+    suggestion)`: `index` is the 1-based count of suggestions emitted so
+    far, and `total == len(sampled_docs)` -- the number of distinct types
+    entering the loop. A type whose sampled docs are ALL excluded by the
+    post-sampling re-check emits no suggestion and fires NO callback, so
+    `total` is an UPPER BOUND: the final `index` ends below `total`
+    whenever a type was filtered out. It never affects the returned list;
+    an exception it raises propagates to the caller (it is the caller's
+    own callback)."""
     blocked: frozenset[str] = frozenset()
     if not include_confidential:
         blocked = sensitivity.sensitive_concept_ids(bundle_dir)
@@ -255,6 +272,7 @@ def suggest_volatility(
     docs = [doc for doc in docs if doc.identity not in blocked]
     sampled_docs = _sample_docs_by_type(docs)
     results: list[TierSuggestion] = []
+    total = len(sampled_docs)
     for type_name in sorted(sampled_docs):
         type_docs = [
             doc
@@ -270,12 +288,13 @@ def suggest_volatility(
         messages = _build_messages(type_name, current_default, bodies)
         reply = llm.chat(messages)
         suggested_tier, rationale = _parse_reply(reply)
-        results.append(
-            TierSuggestion(
-                type_name=type_name,
-                current_default=current_default,
-                suggested_tier=suggested_tier,
-                rationale=rationale,
-            )
+        suggestion = TierSuggestion(
+            type_name=type_name,
+            current_default=current_default,
+            suggested_tier=suggested_tier,
+            rationale=rationale,
         )
+        results.append(suggestion)
+        if on_progress is not None:
+            on_progress(len(results), total, suggestion)
     return results

@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.cli.main import app
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
@@ -465,3 +465,59 @@ def test_suggest_volatility_over_good_life_demo_is_read_only(
     assert _snapshot(bundle_dir) == before
     if result.exit_code == 0:
         assert "openkos suggest-volatility: workspace at" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Issue #190: TTY-gated per-type progress wiring
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_volatility_wires_tty_gated_progress_callback_into_the_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a TTY, `suggest-volatility` passes
+    `observability.progress_callback`'s hook into `suggest_volatility` as
+    `on_progress`; each invocation renders `openkos suggest-volatility:
+    suggesting type <i>/<n>...` on STDERR while STDOUT keeps the clean
+    report (issue #190, mirroring `suggest-relations`' #134 wiring)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+        on_progress = kwargs["on_progress"]
+        assert callable(on_progress)
+        results = [
+            _suggestion(type_name="Person", suggested_tier="slow", rationale="steady")
+        ]
+        for index, suggestion in enumerate(results, start=1):
+            on_progress(index, len(results), suggestion)
+        return results
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 0
+    assert "openkos suggest-volatility: suggesting type 1/1..." in result.stderr
+    assert "suggesting type" not in result.stdout
+
+
+def test_suggest_volatility_passes_no_progress_hook_when_stderr_is_not_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a TTY (`CliRunner`'s default), the factory returns `None`
+    and `suggest_volatility` receives `on_progress=None` -- piped output
+    stays byte-clean (issue #190)."""
+    _init_workspace(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+        captured["on_progress"] = kwargs["on_progress"]
+        return []
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 0
+    assert captured["on_progress"] is None

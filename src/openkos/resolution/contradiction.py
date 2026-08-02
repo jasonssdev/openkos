@@ -56,6 +56,7 @@ pairs genuinely exceed the cap.
 """
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -406,6 +407,7 @@ def find_contradictions(
     include_confidential: bool = False,
     candidates: CandidateSource | None = None,
     store: GraphStore | None = None,
+    on_progress: Callable[[int, int, ContradictionVerdict], None] | None = None,
 ) -> tuple[list[ContradictionVerdict], int]:
     """Orchestrate the whole read-only contradiction-detection flow: open
     `build_graph` over `bundle_dir` internally, derive candidate pairs
@@ -458,7 +460,18 @@ def find_contradictions(
     unswallowed (module docstring) -- this function catches only
     reply-parsing/validation failures for a single pair, never transport or
     model-availability errors, and a malformed reply for one pair never
-    affects any other pair's result."""
+    affects any other pair's result.
+
+    `on_progress` (issue #190, mirroring `suggest_edge_types`'s #134
+    contract), if given, is called once per judged pair in the
+    deterministic pair order, AFTER that pair's `ContradictionVerdict` is
+    built, with `(index, total, verdict)` where `index` is 1-based and
+    `total` is the number of pairs actually judged (post-cap, i.e.
+    `len(pairs)` -- NOT the pre-cap `total_pair_count` this function
+    returns) -- a hook for a CLI to render a per-pair progress line during
+    an otherwise opaque, minutes-long run. It never affects the returned
+    verdicts; an exception it raises propagates to the caller (it is the
+    caller's own callback)."""
     deprecated: frozenset[str] = frozenset()
     if not include_deprecated:
         deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
@@ -474,7 +487,8 @@ def find_contradictions(
             pairs, total_count, relation_types = _pairs_and_types(owned, excluded)
 
     verdicts: list[ContradictionVerdict] = []
-    for pair in pairs:
+    judged_total = len(pairs)
+    for index, pair in enumerate(pairs, start=1):
         source_id, target_id = pair
         src_doc = _load_doc(
             bundle_dir, source_id, include_confidential=include_confidential
@@ -486,13 +500,14 @@ def find_contradictions(
         messages = _build_messages(pair, src_doc, tgt_doc, relation_type)
         reply = llm.chat(messages)
         verdict, confidence, rationale, conflicting_claims = _parse_reply(reply)
-        verdicts.append(
-            ContradictionVerdict(
-                pair_ids=pair,
-                verdict=verdict,
-                confidence=confidence,
-                rationale=rationale,
-                conflicting_claims=conflicting_claims,
-            )
+        pair_verdict = ContradictionVerdict(
+            pair_ids=pair,
+            verdict=verdict,
+            confidence=confidence,
+            rationale=rationale,
+            conflicting_claims=conflicting_claims,
         )
+        verdicts.append(pair_verdict)
+        if on_progress is not None:
+            on_progress(index, judged_total, pair_verdict)
     return verdicts, total_count

@@ -695,3 +695,96 @@ def test_reread_excludes_a_confidential_doc_that_would_be_sampled(
     (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
     assert "Alpha secret body." not in message["content"]
     assert "Beta private body." in message["content"]
+
+
+# ---------------------------------------------------------------------------
+# `on_progress` per-emitted-suggestion progress hook (issue #190)
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_volatility_invokes_on_progress_once_per_emitted_suggestion(
+    tmp_path: Path,
+) -> None:
+    """`on_progress` fires once per EMITTED `TierSuggestion`, in
+    sorted-type order, AFTER that suggestion is built -- carrying `(index,
+    total, suggestion)` where `index` counts emitted suggestions (1-based)
+    and `total == len(sampled_docs)`, the number of distinct types entering
+    the loop (issue #190, mirroring `suggest_edge_types`'s #134 contract)."""
+    _write_doc(tmp_path / "a.md", doc_type="Project", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Person", title="B")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply("slow", "people change slowly"),
+            _valid_reply("volatile", "projects churn"),
+        ]
+    )
+    seen: list[tuple[int, int, volatility_typing_mod.TierSuggestion]] = []
+
+    def _cb(
+        index: int, total: int, suggestion: volatility_typing_mod.TierSuggestion
+    ) -> None:
+        seen.append((index, total, suggestion))
+
+    results = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=llm, on_progress=_cb
+    )
+
+    assert [(index, total) for index, total, _ in seen] == [(1, 2), (2, 2)]
+    assert all(
+        cb_suggestion is result
+        for (_, _, cb_suggestion), result in zip(seen, results, strict=True)
+    )
+    assert [s.type_name for _, _, s in seen] == ["Person", "Project"]
+
+
+def test_suggest_volatility_on_progress_total_is_upper_bound_when_type_filtered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A type whose sampled docs are ALL excluded by the post-sampling
+    re-check emits no suggestion and fires no callback -- so `total` is an
+    UPPER BOUND on how many callbacks will fire, and the final `index` can
+    end below it (issue #190; the docstring documents this explicitly).
+    Simulated exactly like the FIX-3 fail-closed test above: the
+    precomputed confidential-id set is emptied, leaving the sampled-subset
+    re-check as the only filter."""
+    from openkos import sensitivity
+
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        sensitivity_value="confidential",
+    )
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    monkeypatch.setattr(
+        sensitivity, "sensitive_concept_ids", lambda *a, **k: frozenset()
+    )
+    llm = _FakeLLM(replies=[_valid_reply("slow", "projects are steady")])
+    seen: list[tuple[int, int, str]] = []
+
+    def _cb(
+        index: int, total: int, suggestion: volatility_typing_mod.TierSuggestion
+    ) -> None:
+        seen.append((index, total, suggestion.type_name))
+
+    results = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=llm, on_progress=_cb
+    )
+
+    # Two types entered the loop (`total == 2`), but the all-confidential
+    # `Person` type emitted nothing: exactly one callback, ending at 1/2.
+    assert seen == [(1, 2, "Project")]
+    assert len(results) == 1
+
+
+def test_suggest_volatility_on_progress_exception_propagates(tmp_path: Path) -> None:
+    """An exception raised inside `on_progress` propagates to the caller
+    unswallowed -- it is the caller's own callback (issue #190)."""
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    def _boom(index: int, total: int, suggestion: object) -> None:
+        raise RuntimeError("callback failed")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        volatility_typing_mod.suggest_volatility(tmp_path, llm=llm, on_progress=_boom)

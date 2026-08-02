@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
@@ -1553,3 +1553,41 @@ def test_query_docstring_no_longer_claims_no_persisted_state() -> None:
     assert "no CLI-level graph command" not in query_docstring
     assert "persisted" in query_docstring.lower()
     assert "reindex" in query_docstring
+
+
+# ---------------------------------------------------------------------------
+# Issue #190: TTY-gated stage notice before the long answer call
+# ---------------------------------------------------------------------------
+
+
+def test_query_prints_tty_gated_stage_notice_before_the_answer_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a TTY, `query` prints ONE `openkos query: answering (waiting on
+    the LLM)...` stage notice to STDERR immediately before its single long
+    `answer()` call -- the single-call sibling of the per-item progress
+    hooks (issue #190). STDOUT keeps the clean answer."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "openkos query: answering (waiting on the LLM)..." in result.stderr
+    assert "waiting on the LLM" not in result.stdout
+
+
+def test_query_stage_notice_is_silent_without_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a TTY (`CliRunner`'s default), the stage notice never
+    appears -- piped output stays byte-clean (issue #190)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "waiting on the LLM" not in result.stderr
+    assert "waiting on the LLM" not in result.stdout

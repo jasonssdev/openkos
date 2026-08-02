@@ -20,7 +20,7 @@ group whose members are ALL unreadable short-circuits to `Verdict.UNCERTAIN`
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -216,6 +216,7 @@ def adjudicate_candidates(
     bundle_dir: Path,
     llm: LLMBackend,
     include_confidential: bool = False,
+    on_progress: Callable[[int, int, AdjudicatedCandidate], None] | None = None,
 ) -> list[AdjudicatedCandidate]:
     """Adjudicate every `CandidateGroup` in `candidates` against `bundle_dir`
     using `llm`, read-only.
@@ -239,13 +240,25 @@ def adjudicate_candidates(
     like a deprecated concept is dropped upstream of `find_candidates`.
     `include_confidential=True` skips the predicate walk entirely, at zero
     added cost.
+
+    `on_progress`, if given, is called once per candidate group in input
+    order, AFTER that group's `AdjudicatedCandidate` is built, with
+    `(index, total, result)` where `index` is 1-based and `total ==
+    len(candidates)` -- a hook for a CLI to render a per-group progress line
+    during an otherwise opaque, minutes-long run (issue #190, mirroring
+    `suggest_edge_types`'s #134 contract). The no-readable-members
+    short-circuit result COUNTS -- a result is a result, whether or not
+    `llm.chat` was ever called for it. It never affects the returned list;
+    an exception it raises propagates to the caller (it is the caller's own
+    callback).
     """
     blocked: frozenset[str] = frozenset()
     if not include_confidential:
         blocked = sensitivity.sensitive_concept_ids(bundle_dir)
 
     results: list[AdjudicatedCandidate] = []
-    for candidate in candidates:
+    total = len(candidates)
+    for index, candidate in enumerate(candidates, start=1):
         member_ids = [
             member_id for member_id in candidate.member_ids if member_id not in blocked
         ]
@@ -253,25 +266,25 @@ def adjudicate_candidates(
             bundle_dir, member_ids, include_confidential=include_confidential
         )
         if not members:
-            results.append(
-                AdjudicatedCandidate(
-                    candidate=candidate,
-                    verdict=Verdict.UNCERTAIN,
-                    confidence=0.0,
-                    rationale=_NO_READABLE_MEMBER_CONTENT,
-                )
+            result = AdjudicatedCandidate(
+                candidate=candidate,
+                verdict=Verdict.UNCERTAIN,
+                confidence=0.0,
+                rationale=_NO_READABLE_MEMBER_CONTENT,
             )
-            continue
-
-        messages = _build_messages(candidate.okf_type, candidate.tier.value, members)
-        reply = llm.chat(messages)
-        verdict, confidence, rationale = _parse_reply(reply)
-        results.append(
-            AdjudicatedCandidate(
+        else:
+            messages = _build_messages(
+                candidate.okf_type, candidate.tier.value, members
+            )
+            reply = llm.chat(messages)
+            verdict, confidence, rationale = _parse_reply(reply)
+            result = AdjudicatedCandidate(
                 candidate=candidate,
                 verdict=verdict,
                 confidence=confidence,
                 rationale=rationale,
             )
-        )
+        results.append(result)
+        if on_progress is not None:
+            on_progress(index, total, result)
     return results

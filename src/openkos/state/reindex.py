@@ -55,6 +55,7 @@ FTS/graph `bundle_manifest_hash` gate. The new tag, when written, shares
 this same single end-of-run commit.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -148,6 +149,7 @@ def reindex(
     force: bool = False,
     fts_db_path: Path | None = None,
     model_tag: str | None = None,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> ReindexReport:
     """Walk `bundle_dir`, embed changed/new/forced docs through `embedder`,
     upsert into `db`, then prune any `db` row whose source file vanished.
@@ -218,6 +220,21 @@ def reindex(
     forced the run, independent of whether the tag ended up persisted)
     makes both the heavy re-embed AND a persistently unhealed doc visible to
     a caller instead of leaving them silent.
+
+    `on_progress` (issue #190, mirroring `suggest_edge_types`'s #134
+    contract), if given, is called once per QUEUED doc -- a doc that
+    reached its own individual `embedder.embed([text])` call -- in walk
+    order, AFTER that call resolves non-fatally (a successful embed OR the
+    isolated transient `OllamaError` counted as `embed_failed`; the
+    attempt is what takes the time, so a poison doc must not silently
+    stall the counter). It carries `(index, total, concept_id)` where
+    `index` is 1-based over the queue and `total` is the number of docs
+    queued for embedding this run. Cache-hit and skipped docs are never
+    queued, so they never fire -- a fully cached run fires nothing. A
+    FATAL embed failure re-raises BEFORE that doc's callback fires, so the
+    hook never invents progress past an aborted run. It never affects the
+    returned report; an exception it raises propagates to the caller (it
+    is the caller's own callback).
     """
     cached_hashes = db.meta_hashes()
     stored_model_tag = db.read_model_tag()
@@ -261,7 +278,8 @@ def reindex(
     embed_failed = 0
     if to_embed:
         items: list[tuple[str, list[float], str]] = []
-        for concept_id, text, digest in to_embed:
+        queue_total = len(to_embed)
+        for queue_index, (concept_id, text, digest) in enumerate(to_embed, start=1):
             try:
                 vector = embedder.embed([text])[0]
             except (
@@ -289,8 +307,14 @@ def reindex(
                 # exhausted -- isolate THIS doc only and keep processing the
                 # rest (design D2: per-doc grain is the exact failure unit).
                 embed_failed += 1
+                if on_progress is not None:
+                    # The transient-failure attempt still counts as resolved
+                    # progress (issue #190, docstring above).
+                    on_progress(queue_index, queue_total, concept_id)
                 continue
             items.append((concept_id, vector, digest))
+            if on_progress is not None:
+                on_progress(queue_index, queue_total, concept_id)
         if items:
             db.upsert_many(items)
         embedded = len(items)
