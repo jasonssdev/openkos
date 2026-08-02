@@ -7510,10 +7510,12 @@ def query(
 ) -> None:
     """Answer a natural-language question from the compiled bundle, with citations.
 
-    Read-only, like `status` and `lint`: no writes, no confirmation prompt,
-    no `--auto`. Must be run inside an initialized workspace; outside one it
-    refuses (exit 1) with a short reason on stderr. Retrieval fuses THREE
-    lists: lexical (FTS5) hits, dense (`vectors.db`) hits, and a second-stage
+    Read-only WITHOUT `--save`, like `status` and `lint`: no writes, no
+    confirmation prompt, no `--auto`. `--save` is the sole exception and
+    brings all three with it (see below). Must be run inside an initialized
+    workspace; outside one it refuses (exit 1) with a short reason on
+    stderr. Retrieval fuses THREE lists: lexical (FTS5) hits, dense
+    (`vectors.db`) hits, and a second-stage
     seeded personalized-PageRank graph pool -- all three now read PERSISTED,
     read-only on-disk indexes under `.openkos/` (`fts.db`, `vectors.db`,
     `graph.db`) that `reindex` maintains, rather than rebuilding anything
@@ -7565,6 +7567,21 @@ def query(
     Unless `--include-confidential` is passed, confidential concepts
     (sensitivity-fail-closed-filter) are likewise excluded from every
     retrieval channel before fusion, exactly like a deprecated concept.
+
+    `--save` files the just-printed cited answer as a new concept, and is
+    the only writing path here. It previews the three paths it would touch,
+    then gates on the usual precedence: `--auto` skips the prompt outright;
+    otherwise config `review: false` skips it the same way; otherwise a TTY
+    prompts via `typer.confirm`; otherwise it refuses (exit 1).
+
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads `index.md` and `log.md` and refuses
+    the WHOLE run (exit 1, nothing written) if either changed or vanished
+    since Phase A read it (issues #306, #313). The answer document itself
+    is written create-only (`fsio.write_exclusive`), which already fails
+    closed if something appeared at that path meanwhile, so it needs no
+    entry in the guard and has no Phase-A bytes to give one.
     """
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -7730,6 +7747,12 @@ def query(
     try:
         index_text = save_index_path.read_text(encoding="utf-8")
         log_text = save_log_path.read_text(encoding="utf-8")
+        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
+        # only: both sides of its comparison must come from the SAME reader
+        # (issues #306, #313). These two belong together, next to the reads
+        # that produced `index_text`/`log_text` -- nothing runs between them.
+        index_bytes = save_index_path.read_bytes()
+        log_bytes = save_log_path.read_bytes()
         new_index_text = bundle_index.insert_index_entry(
             index_text,
             section=plan.section,
@@ -7765,6 +7788,15 @@ def query(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #313: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    # `plan.path` is absent by necessity, not oversight -- see the docstring.
+    _reject_drifted_targets(
+        layout,
+        {"bundle/index.md": index_bytes, "bundle/log.md": log_bytes},
+        "query",
+    )
 
     try:
         plan.path.parent.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,7 @@ through `CliRunner`, patching `openkos.cli.main.answer` exactly like
 process, zero real FTS5/vector/graph index.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from openkos.cli.main import _stage_filed_answer, app
 from openkos.graph import sqlite_graph
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state import fts, vectorstore
+from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
 
 runner = CliRunner()
 
@@ -664,3 +666,228 @@ def test_query_save_prints_reindex_hint(
 
     assert result.exit_code == 0
     assert "openkos reindex" in result.output
+
+
+# -- #313: re-validate every write target after the confirm gate ------------
+
+_SAVE_WRITE_TARGETS = ("bundle/index.md", "bundle/log.md")
+"""The two `write_atomic` targets `query --save` passes to the drift guard.
+
+Named once and spread into every case below so the roster lives in ONE place
+in this module rather than in each `parametrize` list. It is NOT coupled to
+the guard's mapping in `cli/main.py` -- nothing here introspects that dict --
+so adding a target there and forgetting this tuple still leaves the suite
+green. Closing that gap is what #327 is about; this constant only makes the
+edit a one-liner once someone remembers to make it.
+
+The answer document is a third write and deliberately not in the mapping;
+`query`'s docstring says why."""
+
+
+def _changed_under_bundle(
+    before: Mapping[Path, object], after: Mapping[Path, object]
+) -> set[Path]:
+    """Paths under `bundle/` whose snapshot entry changed.
+
+    Scoped to `bundle/` because `query` is the only guarded verb that opens
+    the retrieval stores: SQLite creates and removes `-wal`/`-shm` sidecars
+    beside `.openkos/*.db` on every run, and an unscoped comparison reports
+    them as changes that have nothing to do with what the verb wrote. Every
+    path `query --save` writes lives under `bundle/`, so nothing the
+    assertion is about is excluded -- but note the converse: a write this
+    verb should NOT be making, outside `bundle/`, would not be caught here
+    either.
+    """
+    keys = before.keys() | after.keys()
+    return {
+        k
+        for k in keys
+        if k.parts and k.parts[0] == "bundle" and before.get(k) != after.get(k)
+    }
+
+
+def _matched_answer_on_a_tty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A workspace with one cited concept and a stubbed matched answer, on a
+    TTY -- the minimum that reaches `query --save`'s confirm gate with both
+    write targets present."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    _simulate_tty(monkeypatch)
+
+
+@pytest.mark.parametrize("target", _SAVE_WRITE_TARGETS)
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313: `query --save` renders the new `index.md` and `log.md` from a
+    pre-prompt read and then writes those exact bytes, so an edit landing
+    while the operator reads the preview was overwritten in full.
+
+    `query` is the one guarded verb where the operator has just been shown
+    an answer and is deciding whether to keep it -- a human-scale pause by
+    construction, which is exactly when a second terminal lands an edit.
+    """
+    _matched_answer_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    # The answer document was never created: the guard precedes every write.
+    assert not (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").exists()
+    after = snapshot_with_mtime(tmp_path)
+    assert _changed_under_bundle(before, after) == {Path(target)}
+
+
+@pytest.mark.parametrize("target", _SAVE_WRITE_TARGETS)
+def test_a_write_target_deleted_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """A target that has since been DELETED is drift too: re-creating it
+    from a snapshot the operator can no longer see is the same silent
+    revert as overwriting it."""
+    _matched_answer_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, target_path.unlink)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert not target_path.exists()
+    after = snapshot_with_mtime(tmp_path)
+    assert _changed_under_bundle(before, after) == {Path(target)}
+
+
+@pytest.mark.parametrize("target", _SAVE_WRITE_TARGETS)
+def test_a_crlf_rewrite_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#306's constraint, re-pinned for `query --save`: `read_text` applies
+    universal-newline translation, so a CRLF rewrite compares EQUAL to its
+    own LF snapshot and the guard would wave it through -- then
+    `fsio.write_atomic` (which opens with `newline=""`) puts the LF plan
+    back over the operator's CRLF file.
+    """
+    _matched_answer_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != target_path.read_bytes()
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent))
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_bytes() == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    assert _changed_under_bundle(before, after) == {Path(target)}
+
+
+def test_targets_that_were_already_crlf_are_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: BOTH targets already CRLF at rest, untouched,
+    must not be reported as drift -- otherwise `query --save` refuses
+    forever on a CRLF workspace, naming a cause that never happened."""
+    _matched_answer_on_a_tty(tmp_path, monkeypatch)
+    for rel in _SAVE_WRITE_TARGETS:
+        path = tmp_path / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr
+    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+
+
+@pytest.mark.parametrize("target", _SAVE_WRITE_TARGETS)
+def test_drift_on_the_unprompted_path_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313: the guard must run on `--auto` too.
+
+    Every other drift test here reaches the gate through `typer.confirm`,
+    so indenting the `_reject_drifted_targets` call into the
+    `if not auto and cfg.review:` block would disable it for unattended
+    runs and leave all of them green.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the preview printed\n"
+    before = snapshot_with_mtime(tmp_path)
+    echo_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        trigger="(new dated entry)",
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    assert _changed_under_bundle(before, after) == {Path(target)}
+
+
+def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#313 review, R3: pin the premise the guard's exclusion rests on.
+
+    `plan.path` is left out of the guard's mapping because it goes through
+    `fsio.write_exclusive`, which fails closed if something appeared at that
+    path meanwhile. Nothing pinned that: the existing collision test plants
+    the file BEFORE the run, so Phase A's staging rejects it and execution
+    never reaches the write. Swapping `write_exclusive` for `write_atomic`
+    left every test in this module green.
+
+    This lands the collision inside the prompt window instead -- the only
+    window the exclusion's justification is about -- and asserts the run
+    fails closed with the operator's file intact.
+    """
+    _matched_answer_on_a_tty(tmp_path, monkeypatch)
+    answer_path = tmp_path / "bundle" / "concepts" / "what-is-stoicism.md"
+    concurrent = "filed by someone else while the prompt waited\n"
+
+    def _create_it() -> None:
+        answer_path.parent.mkdir(parents=True, exist_ok=True)
+        answer_path.write_text(concurrent, encoding="utf-8")
+
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, _create_it)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    # The other file's content survives: create-only is what protects it.
+    assert answer_path.read_text(encoding="utf-8") == concurrent
+    # And the catalog was not touched -- the answer document is written
+    # FIRST, so failing there leaves `index.md`/`log.md` untouched.
+    assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
+        Path("bundle/concepts/what-is-stoicism.md")
+    }
