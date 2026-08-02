@@ -31,6 +31,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.model import okf
+from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
@@ -4200,3 +4201,239 @@ def test_reingest_preview_omits_title_clause_when_title_unchanged(
 
     assert result.exit_code == 0, result.stdout
     assert "title changed" not in result.stdout
+
+
+# -- #313: re-validate every write target after the confirm gate ------------
+
+
+def _ingested_source_on_a_tty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A workspace with `notes.txt` already ingested, on a TTY, positioned
+    for a RE-INGEST -- the only `ingest` shape that overwrites an existing
+    concept (`write_atomic` on the regenerate branch) rather than creating
+    one."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    assert runner.invoke(app, ["ingest", "notes.txt", "--auto"]).exit_code == 0
+    _simulate_tty(monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["bundle/sources/notes.md", "bundle/index.md", "bundle/log.md"],
+)
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313: a re-ingest renders the concept, `index.md` and `log.md` from a
+    pre-prompt read and then writes those exact bytes with `write_atomic`,
+    so an edit landing while the operator reads the preview was overwritten
+    in full and auto-committed.
+
+    Only these three are at risk. The raw copy and the derived objects go
+    through `copy_exclusive`/`write_exclusive`, which already fail closed on
+    a concurrent create -- guarding them would be redundant, and NOT
+    guarding these three is what leaves the verb uneven.
+    """
+    _ingested_source_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_write_target_deleted_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target that has since been DELETED is drift too: re-creating it
+    from a snapshot the operator can no longer see is the same silent
+    revert as overwriting it."""
+    _ingested_source_on_a_tty(tmp_path, monkeypatch)
+    deleted_path = tmp_path / "bundle" / "sources" / "notes.md"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, deleted_path.unlink)
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "bundle/sources/notes.md" in result.stderr
+    assert not deleted_path.exists()
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle/sources/notes.md")}
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["bundle/sources/notes.md", "bundle/index.md", "bundle/log.md"],
+)
+def test_a_crlf_rewrite_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#306's constraint, re-pinned for `ingest`: line-ending-only drift is
+    still drift. `read_text` applies universal-newline translation, so a
+    CRLF rewrite compares EQUAL to its own LF snapshot and the guard would
+    wave it through -- then `fsio.write_atomic` (which opens with
+    `newline=""`) puts the LF plan back over the operator's CRLF file.
+    """
+    _ingested_source_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != target_path.read_bytes()
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent))
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_bytes() == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_targets_that_were_already_crlf_are_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: write targets that were ALREADY CRLF at rest,
+    untouched by anyone, must not be reported as drift -- otherwise the
+    verb refuses forever, naming a cause that never happened and a re-run
+    that cannot clear it.
+    """
+    _ingested_source_on_a_tty(tmp_path, monkeypatch)
+    for rel in ("bundle/sources/notes.md", "bundle/index.md", "bundle/log.md"):
+        path = tmp_path / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr
+
+
+@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
+def test_drift_on_the_unprompted_path_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313: the guard must run on `--auto` too.
+
+    Every other drift test here reaches the gate through `typer.confirm`,
+    so indenting the `_reject_drifted_targets` call into the
+    `if not auto and cfg.review:` block would disable it for unattended
+    runs and leave all of them green -- and `ingest --auto` is the shape
+    most likely to be scripted against a bundle someone else is editing.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the preview printed\n"
+    before = snapshot_with_mtime(tmp_path)
+    echo_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        trigger="(new dated entry)",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_fresh_ingest_does_not_guard_the_concept_it_creates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A FIRST ingest must not enter the concept in the guard's mapping:
+    there is no Phase-A snapshot of a file that did not exist, and claiming
+    one would make every fresh ingest refuse on a path the operator was
+    never shown.
+
+    The create-only write is what protects this case instead --
+    `write_exclusive` fails closed if the concept appeared meanwhile -- so
+    this test pins that the guard stays out of its way.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+
+
+def test_a_concept_edited_during_the_llm_call_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#313 review, R4 CRITICAL: the concept's guard snapshot must be taken
+    where Phase A READ the concept, not after extraction.
+
+    `ingest` is the only guarded verb whose Phase A makes a network call.
+    `_stage_derived_objects` sits between the reads that produce
+    `resolved_sensitivity` and the point the other two snapshots are taken,
+    so snapshotting the concept there would capture an edit landing during
+    the LLM round trip as the guard's OWN baseline: the comparison finds no
+    drift, and `write_atomic` then writes back the document built from the
+    pre-call reads -- a silent sensitivity DOWNGRADE, auto-committed.
+
+    The edit is landed from inside `chat()` because that is precisely the
+    window; `confirm_after` fires later and cannot reach it.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    assert runner.invoke(app, ["ingest", "notes.txt", "--auto"]).exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+
+    original = concept_path.read_text(encoding="utf-8")
+    on_disk, _ = okf.load_frontmatter(original)
+    top = okf.SENSITIVITY_ORDER[-1]
+    assert str(on_disk["sensitivity"]) != top, (
+        "the fixture must start BELOW the top rank, or the raise this test "
+        "lands during the LLM call would be a no-op"
+    )
+    raised = original.replace(
+        f"sensitivity: {on_disk['sensitivity']}", f"sensitivity: {top}"
+    )
+    assert f"sensitivity: {top}" in raised
+
+    class _EditingLLM(_FakeLLM):
+        def chat(self, messages: Sequence[Message]) -> str:
+            concept_path.write_text(raised, encoding="utf-8")
+            return super().chat(messages)
+
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        lambda *args, **kwargs: _EditingLLM('{"extract": false}'),
+    )
+    before = snapshot_with_mtime(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert "bundle/sources/notes.md" in result.stderr
+    # The raise survives: this is the downgrade the guard exists to stop.
+    assert f"sensitivity: {top}" in concept_path.read_text(encoding="utf-8")
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle/sources/notes.md")}
