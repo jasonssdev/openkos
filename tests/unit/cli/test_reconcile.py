@@ -750,3 +750,75 @@ def test_drift_on_the_unprompted_path_is_refused(
     after = snapshot_with_mtime(tmp_path)
     changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
     assert changed == {Path(target)}
+
+
+# -- #324: two ids aliasing ONE file must be refused ------------------------
+
+
+def test_symlinked_pair_resolving_to_one_file_refuses_no_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#324: the distinctness gate is a STRING comparison, so two ids whose
+    paths alias the same file (case-insensitive filesystem, or a symlink)
+    pass it -- the drift guard then holds two identical-byte keys (no
+    drift), and Phase B's second `write_atomic` over the same inode
+    silently discards the first document's edge and note.
+
+    A symlink reproduces the same-inode condition on EVERY filesystem, so
+    this is the host-independent pin: `samefile` (device+inode) must refuse
+    the pair in Phase A, before any write.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    a_id = _ingest_source(tmp_path, "a.txt")
+    alias_path = tmp_path / "bundle" / "sources" / "alias.md"
+    alias_path.symlink_to("a.md")
+    before = snapshot_with_mtime(tmp_path)
+
+    result = runner.invoke(app, ["reconcile", a_id, "sources/alias", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to reconcile --" in result.stderr
+    assert "resolve to the same file" in result.stderr
+    assert "sources/a" in result.stderr
+    assert "sources/alias" in result.stderr
+    assert snapshot_with_mtime(tmp_path) == before
+
+
+def _filesystem_is_case_insensitive(probe_dir: Path) -> bool:
+    """Detect at runtime whether `probe_dir`'s filesystem folds case, by
+    creating a lowercase file and probing for its uppercase spelling --
+    cheap, and truthful for the exact filesystem the test runs on (a
+    platform check would lie on a case-sensitive APFS volume)."""
+    probe = probe_dir / "okos-case-probe.tmp"
+    probe.write_text("probe", encoding="utf-8")
+    try:
+        return (probe_dir / "OKOS-CASE-PROBE.TMP").exists()
+    finally:
+        probe.unlink()
+
+
+def test_case_differing_pair_refuses_on_a_case_insensitive_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#324's literal reported scenario, pinned directly where the host
+    allows: `reconcile foo Foo` on a case-insensitive filesystem (macOS
+    default) names ONE file twice. The symlink test above is the
+    host-independent guarantee; this one runs on macOS dev machines and any
+    case-insensitive CI runner as a bonus pin of the exact report."""
+    if not _filesystem_is_case_insensitive(tmp_path):
+        pytest.skip(
+            "case-sensitive filesystem: 'foo'/'Foo' denote two distinct "
+            "files here, so the aliasing this test pins cannot occur"
+        )
+    _init_workspace(tmp_path, monkeypatch)
+    _ingest_source(tmp_path, "foo.txt")
+    before = snapshot_with_mtime(tmp_path)
+
+    result = runner.invoke(app, ["reconcile", "sources/foo", "sources/Foo", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to reconcile --" in result.stderr
+    assert "resolve to the same file" in result.stderr
+    assert snapshot_with_mtime(tmp_path) == before

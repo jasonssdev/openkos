@@ -1237,3 +1237,71 @@ def test_drift_on_the_unprompted_path_is_refused(
     after = _snapshot(tmp_path)
     changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
     assert changed == {Path(target)}
+
+
+# -- #323: a create landing at the absorbed path during the prompt ----------
+
+
+def test_a_create_at_the_absorbed_path_during_the_prompt_is_not_clobbered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#323: Phase A refuses when a file already sits at the absorbed path,
+    but that existence check is a TOCTOU against Phase B's recreation write
+    -- a file created while the operator read the preview is invisible to
+    both the check (already passed) and the drift guard (no Phase-A bytes
+    to compare against). The recreation must be create-only
+    (`write_exclusive`) so the Phase-A promise holds: the collision then
+    errors mid-Phase-B, leaving the documented git-recoverable partial
+    state, instead of silently discarding the created file.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    pre_index = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    pre_log = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+        ).exit_code
+        == 0
+    )
+    _simulate_tty(monkeypatch)
+
+    absorbed_path = tmp_path / "bundle" / "concepts" / "absorbed.md"
+    survivor_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    merged_survivor = survivor_path.read_text(encoding="utf-8")
+    concurrent = "created while the prompt waited\n"
+    before = _snapshot(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: absorbed_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    # `FileExistsError` surfaces through the existing Phase-B error path --
+    # a clean stderr line naming the colliding path, never a traceback.
+    assert "failed while writing the unmerge --" in result.stderr
+    assert "bundle/concepts/absorbed.md" in result.stderr
+    # The concurrently created file survives byte-for-byte.
+    assert absorbed_path.read_text(encoding="utf-8") == concurrent
+    # The documented mid-Phase-B partial state, pinned exactly:
+    # `index.md`/`log.md` land FIRST and were already restored to their
+    # pre-merge bytes (idempotent to re-write on a retry); the survivor is
+    # untouched, so its `merged_from` ledger still holds the absorbed
+    # snapshot (the absorbed content stays recoverable); the second log
+    # write (the `**Unmerge**` audit line) never ran.
+    assert (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8") == pre_index
+    assert (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8") == pre_log
+    assert survivor_path.read_text(encoding="utf-8") == merged_survivor
+    assert "merged_from" in merged_survivor
+    after = _snapshot(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {
+        Path("bundle/index.md"),
+        Path("bundle/log.md"),
+        Path("bundle/concepts/absorbed.md"),
+    }

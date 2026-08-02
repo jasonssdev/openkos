@@ -4437,3 +4437,51 @@ def test_a_concept_edited_during_the_llm_call_is_refused(
     after = snapshot_with_mtime(tmp_path)
     changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
     assert changed == {Path("bundle/sources/notes.md")}
+
+
+# -- #322: a create landing at the concept path during the prompt -----------
+
+
+def test_a_concept_created_during_the_prompt_on_a_post_forget_reingest_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#322: the guard's concept entry is gated on `had_prior_source`, so a
+    post-`forget` re-ingest (`regenerate=True`, concept ABSENT at Phase A)
+    enters the prompt with NO concept snapshot -- there were no bytes to
+    take one of. `write_atomic` on that branch would then silently overwrite
+    a file created at the concept path while the operator read the preview.
+    The regenerate branch must write create-only (`write_exclusive`) exactly
+    when the guard has no snapshot, so the two mechanisms tile the space:
+    guard covers existed-at-Phase-A, exclusive-create covers did-not-exist.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+    assert runner.invoke(app, ["ingest", "notes.txt", "--auto"]).exit_code == 0
+    assert runner.invoke(app, ["forget", "sources/notes", "--auto"]).exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert not concept_path.exists()
+    _simulate_tty(monkeypatch)
+
+    concurrent = "created while the prompt waited\n"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: concept_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    # Same failure surface as a concurrent create on a FRESH ingest:
+    # `write_exclusive` raises `FileExistsError`, reported by the Phase-B
+    # error path, naming the colliding path.
+    assert "failed while writing the ingest --" in result.stderr
+    assert "bundle/sources/notes.md" in result.stderr
+    # The concurrently created file survives byte-for-byte...
+    assert concept_path.read_text(encoding="utf-8") == concurrent
+    # ...and it is the ONLY change on disk: the concept write comes before
+    # `index.md`/`log.md` (content before catalog, D3), so the failure
+    # leaves the catalog untouched.
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle/sources/notes.md")}
