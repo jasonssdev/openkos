@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
 from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
@@ -523,6 +524,53 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
     assert changed == {Path(target)}
 
 
+def test_an_edit_landing_after_the_snapshot_observation_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318: the guard's baseline and the parsers' text must be derived from
+    ONE read. The previous shape took them from TWO -- `read_text` for the
+    plan, then `read_bytes` for the guard -- so a writer landing between the
+    two reads became the guard's own baseline: the comparison found no drift
+    and Phase B wrote the plan computed from the EARLIER text, silently
+    reverting the edit and autocommitting the revert.
+
+    `_snapshot_read` is the single observation that closes that window, and
+    this test races the only seam left: it lands an edit immediately AFTER
+    the snapshot is taken (before the wrapper returns), which is the
+    earliest any concurrent writer can now land relative to the plan. The
+    guard's later re-read must see it as drift and refuse the whole run --
+    under the two-read shape the same interleaving was blessed.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    target_id = _ingest_source(tmp_path, "b.txt")
+    target_path = tmp_path / "bundle" / "sources" / "a.md"
+    concurrent = "hand-edited the instant the snapshot returned\n"
+    real_snapshot_read = main._snapshot_read
+
+    def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        snapshot = real_snapshot_read(path)
+        if path == target_path:
+            target_path.write_text(concurrent, encoding="utf-8")
+        return snapshot
+
+    before = snapshot_with_mtime(tmp_path)
+    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+
+    result = runner.invoke(
+        app, ["relate", source_id, "references", target_id, "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert "bundle/sources/a.md" in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle/sources/a.md")}
+
+
 def test_targets_that_were_already_crlf_are_not_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -551,6 +599,15 @@ def test_targets_that_were_already_crlf_are_not_drift(
     assert _relations_of(tmp_path, source_id) == [
         okf.Relation(target=target_id, type="references")
     ]
+    # #318 regression pin: the single-observation reader must reproduce
+    # `read_text`'s universal-newline translation exactly. A naive
+    # `bytes.decode()` hands the parsers text still containing `\r\n`, and
+    # the rewrite then lands a mixed-ending file (`insert_log_entry`'s new
+    # LF lines spliced between surviving CRLF ones). With translation, both
+    # rewritten targets come out uniformly LF -- byte-identical to what the
+    # two-read shape produced here.
+    assert b"\r" not in (tmp_path / "bundle" / "sources" / "a.md").read_bytes()
+    assert b"\r" not in (tmp_path / "bundle" / "log.md").read_bytes()
 
 
 @pytest.mark.parametrize("target", ["bundle/sources/a.md", "bundle/log.md"])
