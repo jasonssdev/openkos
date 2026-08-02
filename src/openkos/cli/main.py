@@ -2947,6 +2947,19 @@ def purge(
     rail refuses immediately (exit 1, nothing written); no later rail is
     evaluated.
 
+    Past rail 6 -- reached without pausing when `--confirm-phrase` is
+    given, so the check is unconditional -- `_reject_drifted_targets`
+    re-reads `index.md`, `log.md`, and every purge-set member's bundle
+    file, and refuses the WHOLE run (exit 1, nothing written, no history
+    rewritten) if any changed or vanished since Phase A read it (issues
+    #313, #321). Rail 4 pinned the tree clean BEFORE the typed-phrase
+    prompt -- the widest prompt window of any verb -- so without this an
+    edit landing while the operator typed the phrase would be destroyed by
+    the checkout of rewritten history, unrecoverably. The `raw/<name>`
+    targets are deliberately not in the mapping: Phase A never reads their
+    content, so they have no same-observation baseline (#318) and remain
+    covered by rail 4 alone.
+
     Phase B (the point of no return, reached only once all six rails pass):
     `vcs.expunge_paths` rewrites every purge-set member's `raw/<name>` and
     `bundle/<id>.md` out of ALL git history and the working tree, and, in
@@ -2985,18 +2998,37 @@ def purge(
         typer.echo(f"openkos purge: refusing to purge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+
     try:
-        concept_text = concept_path.read_text(encoding="utf-8")
+        # One `_snapshot_read` observation per target (issues #313, #318,
+        # #321): each path is read exactly once, at the moment its decoded
+        # text feeds the plan, and the guard's bytes come from that same
+        # read. `index.md`/`log.md` are not plan inputs here -- their
+        # post-rewrite cleanup re-reads them fresh -- but they ARE what
+        # `git filter-repo`'s checkout clobbers, so their baselines are
+        # captured with the same single-observation discipline.
+        index_bytes, _ = _snapshot_read(index_path)
+        log_bytes, _ = _snapshot_read(log_path)
+        concept_bytes, concept_text = _snapshot_read(concept_path)
 
         # Same whole-bundle snapshot construction as `forget` (~L1006-1019).
+        # `other_bytes` shadows it for the guard: which of these files the
+        # run will EXPUNGE is not known until `purge_ids` resolves below, so
+        # the bytes come out of the same `_snapshot_read` observation as the
+        # text rather than re-read per member afterwards -- a second read
+        # would leave every file the #318 window. Only the purge-set
+        # entries are ever consulted; the rest are dropped.
         other_files: dict[str, str] = {}
+        other_bytes: dict[str, bytes] = {}
         for path in sorted(layout.bundle_dir.rglob("*.md")):
             if path.name in okf.RESERVED_FILENAMES:
                 continue
             if path == concept_path:
                 continue
             rel = path.relative_to(layout.bundle_dir).as_posix()
-            other_files[rel] = path.read_text(encoding="utf-8")
+            other_bytes[rel], other_files[rel] = _snapshot_read(path)
 
         purge_ids: list[str] = (
             bundle_provenance.find_provenance_descendants(
@@ -3208,6 +3240,36 @@ def purge(
             err=True,
         )
         raise typer.Exit(code=1)
+
+    # Issue #321: rail 4 pinned the tree clean BEFORE the typed-phrase
+    # prompt, and typing a whole sentence makes this the WIDEST prompt
+    # window of any verb -- so an edit landing during it is invisible to
+    # every rail, and `git filter-repo`'s history rewrite plus checkout
+    # would destroy it outright, unrecoverably. Re-validate each target
+    # now -- after the phrase gate (which `--confirm-phrase` reaches
+    # without pausing, hence unconditionally), before the first write.
+    #
+    # The DELETE targets are in here alongside `index.md`/`log.md`: the
+    # purge set is a claim about the Phase-A bundle, and a member edited
+    # while the prompt waited is a state the operator was never shown.
+    # The `raw/<name>` expunge targets are NOT: Phase A never reads their
+    # content (they may legitimately be absent from the live tree), so
+    # there is no same-observation baseline to compare -- they stay under
+    # rail 4's clean-tree protection alone.
+    _reject_drifted_targets(
+        layout,
+        {
+            index_path: index_bytes,
+            log_path: log_bytes,
+            concept_path: concept_bytes,
+            **{
+                layout.bundle_dir / f"{member}.md": other_bytes[f"{member}.md"]
+                for member in purge_ids
+                if member != canonical_id
+            },
+        },
+        "purge",
+    )
 
     # Phase B: the point of no return. No rail evaluation, no abort path,
     # from here on (spec: Irreversibility -- No Rollback After Rewrite
@@ -4340,6 +4402,12 @@ def set_volatility_cmd(
     otherwise, non-TTY with no `--auto`, this refuses to write). Declining
     or refusing leaves `openkos.yaml` untouched.
 
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads `openkos.yaml` and refuses (exit 1,
+    nothing written) if it changed or vanished since the plan was rendered
+    from it (issues #313, #335).
+
     A confirmed write goes through `fsio.write_atomic`, then
     `_autocommit(root, ["openkos.yaml"], ...)` with message `openkos:
     set-volatility <ConceptType> -> <tier>`, mirroring every other mutating
@@ -4392,7 +4460,12 @@ def set_volatility_cmd(
     )
 
     try:
-        config_text = layout.config_path.read_text(encoding="utf-8")
+        # One `_snapshot_read` observation (issues #313, #318, #335): the
+        # decoded text is what `set_type_tier` derives the whole new file
+        # from, and the raw bytes are the guard's baseline for that same
+        # state -- `read_config` above parsed a separate read, but the plan
+        # is computed from THIS text, so the snapshot sits beside it.
+        config_bytes, config_text = _snapshot_read(layout.config_path)
         new_config_text = config.set_type_tier(config_text, concept_type, tier)
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos set-volatility: refusing to set -- {exc}.", err=True)
@@ -4411,6 +4484,15 @@ def set_volatility_cmd(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #335: `new_config_text` is the ENTIRE file, rendered from a
+    # pre-prompt read, so an edit landing while the prompt waited --
+    # possibly a safety setting like `review:` or `default_sensitivity:` --
+    # would be silently reverted by the whole-file write below. Re-validate
+    # the one target now -- after the gate, before the write.
+    _reject_drifted_targets(
+        layout, {layout.config_path: config_bytes}, "set-volatility"
+    )
 
     try:
         fsio.write_atomic(layout.config_path, new_config_text)
@@ -4514,7 +4596,15 @@ class PreparedMerge:
     confirm gate, and `merge_core` need, built in memory without writing
     anything (design: merge-core Extraction, Slice 2b-i). `review` carries
     `cfg.review`, consumed only by the command's confirm gate -- `prepare_merge`
-    itself never prompts."""
+    itself never prompts.
+
+    The `*_bytes` fields are the drift guard's baselines (issue #334): the
+    raw bytes each write/delete target held at the SAME `_snapshot_read`
+    observation whose decoded text fed the plan (#318), which the command
+    hands to `_reject_drifted_targets` after its confirm gate.
+    `touched_bytes` is scoped to `touched_files` -- the rest of the
+    whole-bundle scan feeds rewrite detection only and is never written, so
+    it never becomes a guard target."""
 
     survivor_canonical: str
     absorbed_canonical: str
@@ -4536,6 +4626,11 @@ class PreparedMerge:
     sensitivity_after: str
     review: bool
     now: datetime
+    index_bytes: bytes
+    log_bytes: bytes
+    survivor_bytes: bytes
+    absorbed_bytes: bytes
+    touched_bytes: dict[str, bytes]
 
 
 @dataclass(frozen=True)
@@ -4568,21 +4663,40 @@ def prepare_merge(
     preview data -- extracted verbatim from `merge`'s former inline body
     (`main.py:2453-2519`, design: merge-core Extraction, Slice 2b-i).
     Non-interactive; raises `OSError`/`ValueError` on bad input. Writes
-    nothing to disk."""
-    cfg = config.read_config(root)
-    survivor_text = survivor_path.read_text(encoding="utf-8")
-    absorbed_text = absorbed_path.read_text(encoding="utf-8")
-    index_text = index_path.read_text(encoding="utf-8")
-    log_text = log_path.read_text(encoding="utf-8")
+    nothing to disk.
 
+    Every plan-feeding read goes through `_snapshot_read`, capturing the
+    raw bytes BESIDE the decoded text -- one observation per target, never
+    a second batched read (issue #318) -- so the returned `PreparedMerge`
+    can carry the drift guard's baselines for the command to check after
+    its confirm gate (issue #334)."""
+    cfg = config.read_config(root)
+    # One `_snapshot_read` observation per target (issues #313, #318, #334):
+    # each path is read exactly once, at the moment its decoded text feeds
+    # the plan, and the guard's bytes come from that same read -- there is
+    # no second read for an edit to slip between.
+    survivor_bytes, survivor_text = _snapshot_read(survivor_path)
+    absorbed_bytes, absorbed_text = _snapshot_read(absorbed_path)
+    index_bytes, index_text = _snapshot_read(index_path)
+    log_bytes, log_text = _snapshot_read(log_path)
+
+    # `other_bytes` shadows the whole-bundle snapshot for the guard. Which
+    # of these files the run will WRITE is not known until the three rewrite
+    # scans below resolve `touched_files`, so the bytes come out of the same
+    # `_snapshot_read` observation as the text rather than re-read per
+    # touched file afterwards -- a second read would leave every file the
+    # #318 window. Only the touched entries reach the guard mapping; the
+    # rest feed rewrite DETECTION only and are never written, so they are
+    # not guard targets (mirrors `unmerge`'s scoping).
     other_files: dict[str, str] = {}
+    other_bytes: dict[str, bytes] = {}
     for path in sorted(bundle_dir.rglob("*.md")):
         if path.name in okf.RESERVED_FILENAMES:
             continue
         if path in (survivor_path, absorbed_path):
             continue
         rel = path.relative_to(bundle_dir).as_posix()
-        other_files[rel] = path.read_text(encoding="utf-8")
+        other_bytes[rel], other_files[rel] = _snapshot_read(path)
 
     link_rewrites = bundle_links.find_inbound_link_rewrites(
         other_files,
@@ -4657,6 +4771,7 @@ def prepare_merge(
         | set(relation_rewritten_files)
         | set(provenance_rewritten_files)
     )
+    touched_bytes = {rel: other_bytes[rel] for rel in touched_files}
     sensitivity_before = plan.ledger_entry.sensitivity_before or "(none)"
     sensitivity_after = plan.ledger_entry.sensitivity_after
 
@@ -4681,6 +4796,11 @@ def prepare_merge(
         sensitivity_after=sensitivity_after,
         review=cfg.review,
         now=now,
+        index_bytes=index_bytes,
+        log_bytes=log_bytes,
+        survivor_bytes=survivor_bytes,
+        absorbed_bytes=absorbed_bytes,
+        touched_bytes=touched_bytes,
     )
 
 
@@ -4833,6 +4953,19 @@ def merge(
     Declining or refusing leaves the bundle completely untouched -- Phase A
     never writes anything.
 
+    Past that gate -- and on the runs that skip it, since `--auto` and
+    `review: false` skip the prompt but not the window it stood in --
+    `_reject_drifted_targets` re-reads every path this run intends to touch
+    and refuses the WHOLE run (exit 1, nothing written, nothing removed) if
+    any changed or vanished since Phase A read it (issues #313, #334).
+
+    That set is `index.md`, `log.md`, every touched third-party file, the
+    survivor, AND the absorbed file. The absorbed file is the worst case:
+    it is deleted, not overwritten, so an edit landing on it during the
+    prompt would be destroyed outright with nothing left to recover from.
+    Files the whole-bundle scan read but the plan will neither write nor
+    delete are not guard targets -- they feed rewrite detection only.
+
     Phase B (after confirm) writes, in order: `index.md` then `log.md`
     (`write_atomic`, catalog FIRST, mirroring `forget`'s ordering
     invariant), then applies EVERY OTHER file's inbound-link rewrite AND/OR
@@ -4942,6 +5075,33 @@ def merge(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #334: every byte `merge_core` writes below was computed from a
+    # pre-prompt read, so re-validate each target now -- after the gate,
+    # before the first write.
+    #
+    # The ABSORBED file is in here too, not just the write targets: it is
+    # UNLINKED, so an edit landing on it during the prompt would be
+    # destroyed outright -- strictly worse than being overwritten, since
+    # nothing survives to recover from. The keys are built from the same
+    # `bundle_dir`/resolution both phases share (#325): `survivor_path`/
+    # `absorbed_path` are `_resolve_concept_path`'s `bundle_dir /
+    # f"{canonical}.md"`, the exact construction `merge_core` writes and
+    # removes.
+    _reject_drifted_targets(
+        layout,
+        {
+            index_path: prepared.index_bytes,
+            log_path: prepared.log_bytes,
+            **{
+                layout.bundle_dir / rel: data
+                for rel, data in prepared.touched_bytes.items()
+            },
+            survivor_path: prepared.survivor_bytes,
+            absorbed_path: prepared.absorbed_bytes,
+        },
+        "merge",
+    )
 
     try:
         result = merge_core(layout.bundle_dir, index_path, log_path, prepared)

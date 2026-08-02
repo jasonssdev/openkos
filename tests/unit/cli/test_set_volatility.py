@@ -12,6 +12,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.cli.main import app
 from openkos.vcs import git as vcs_git
+from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -277,3 +278,159 @@ def test_set_volatility_accepts_source_type_end_to_end(
     assert result.exit_code == 0
     assert "Source: slow" in _config_bytes(tmp_path).decode("utf-8")
     assert _last_commit_message(tmp_path) == "openkos: set-volatility Source -> slow"
+
+
+# -- #335: re-validate openkos.yaml after the confirm gate --------------------
+
+
+def test_the_config_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#335: the new `openkos.yaml` is rendered WHOLE from a pre-prompt read
+    and written back with `write_atomic`, so an edit landing while the
+    operator reads the preview -- possibly a safety setting like `review:`
+    or `default_sensitivity:` -- was silently reverted and auto-committed.
+    The guard mapping's single entry is `layout.config_path` itself."""
+    _init_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    concurrent = config_path.read_text(encoding="utf-8") + "default_sensitivity: high\n"
+    before = snapshot_with_mtime(tmp_path)
+    commit_before = _last_commit_message(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: config_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert "openkos.yaml" in result.stderr
+    # The edit survives and no commit was created.
+    assert config_path.read_text(encoding="utf-8") == concurrent
+    assert _last_commit_message(tmp_path) == commit_before
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("openkos.yaml")}
+
+
+def test_the_config_deleted_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config that has since been DELETED is drift too: re-creating it
+    from a snapshot the operator can no longer see is the same silent
+    revert as overwriting it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    confirm_after(monkeypatch, config_path.unlink)
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert "openkos.yaml" in result.stderr
+    assert not config_path.exists()
+
+
+def test_a_crlf_rewrite_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#306's constraint, re-pinned for `set-volatility`: `read_text`'s
+    universal-newline translation makes a CRLF rewrite compare EQUAL to its
+    own LF snapshot, and `fsio.write_atomic` (opening with `newline=""`)
+    would then put the LF plan back over it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    concurrent = config_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != config_path.read_bytes()
+    confirm_after(monkeypatch, lambda: config_path.write_bytes(concurrent))
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert "openkos.yaml" in result.stderr
+    assert config_path.read_bytes() == concurrent
+
+
+def test_a_config_already_crlf_at_rest_is_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: a config already CRLF at rest, untouched, must
+    not be reported as drift -- otherwise `set-volatility` refuses forever
+    on a CRLF workspace, naming a cause that never happened."""
+    _init_workspace(tmp_path, monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_bytes(config_path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr
+    assert "Person: volatile" in _config_bytes(tmp_path).decode("utf-8")
+
+
+def test_drift_on_the_unprompted_path_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#335: the guard must run on `--auto` too -- nothing pauses for a
+    human there, which makes an unattended run the likeliest to race a
+    second writer, not the least."""
+    _init_workspace(tmp_path, monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    concurrent = config_path.read_text(encoding="utf-8") + "review: false\n"
+    before = snapshot_with_mtime(tmp_path)
+    echo_after(
+        monkeypatch,
+        lambda: config_path.write_text(concurrent, encoding="utf-8"),
+        trigger="Person: slow -> volatile",
+    )
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert "openkos.yaml" in result.stderr
+    assert config_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("openkos.yaml")}
+
+
+def test_drift_under_review_false_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#335's OTHER unprompted path: config `review: false` skips the
+    prompt exactly like `--auto`, but the window between Phase A's read
+    and Phase B's write is still open -- so the guard must run
+    unconditionally, not only when `review` is set. The config is itself
+    the drift target here: `review: false` is written BEFORE Phase A
+    reads it, and the concurrent edit lands during the run."""
+    _init_workspace(tmp_path, monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "review: true", "review: false"
+        ),
+        encoding="utf-8",
+    )
+    concurrent = config_path.read_text(encoding="utf-8") + "default_sensitivity: high\n"
+    before = snapshot_with_mtime(tmp_path)
+    echo_after(
+        monkeypatch,
+        lambda: config_path.write_text(concurrent, encoding="utf-8"),
+        trigger="Person: slow -> volatile",
+    )
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert "openkos.yaml" in result.stderr
+    assert config_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("openkos.yaml")}
