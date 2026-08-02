@@ -409,17 +409,26 @@ def _reject_drifted_targets(
     layout: config.WorkspaceLayout, expected: Mapping[str, bytes], verb: str
 ) -> None:
     """Refuse the whole run (exit 1, nothing written) when any write target
-    changed on disk after the plan was computed from it (issue #306).
+    changed on disk after the plan was computed from it (issues #306, #313).
 
-    `set-sensitivity`/`backfill-sensitivity`/`backfill-source-titles` all
-    share one shape: Phase A reads a snapshot, computes the ENTIRE write plan
-    from it -- every document's new bytes, plus the new `log.md` text in all
-    three and the new `index.md` text in the title backfill -- and only then
-    prompts. Nothing re-read anything at write time, so an edit landing while
-    the prompt waited was overwritten IN FULL by `fsio.write_atomic`, with no
-    error, no signal that a newer version existed, and an `_autocommit` that
-    then committed the reverted content. Every caller therefore invokes this
-    strictly AFTER its confirm gate and strictly BEFORE its first write.
+    Every caller shares one shape: Phase A reads a snapshot, computes the
+    ENTIRE write plan from it -- each document's new bytes, plus the new
+    `log.md` text in all of them and the new `index.md` text in the title
+    backfill -- and only then prompts. Nothing re-read anything at write
+    time, so an edit landing while the prompt waited was overwritten IN FULL
+    by `fsio.write_atomic`, with no error, no signal that a newer version
+    existed, and an `_autocommit` that then committed the reverted content.
+    Every caller therefore invokes this strictly AFTER its confirm gate and
+    strictly BEFORE its first write -- and unconditionally, outside the gate's
+    own `if`, because `--auto` and `review: false` skip the prompt but not
+    the window: nothing pauses for a human there, which makes those runs the
+    likeliest to race a second writer, not the least.
+
+    The callers are `set-sensitivity`, `backfill-sensitivity`,
+    `backfill-source-titles` (#306), and `relate` and `reconcile` (#313).
+    Rather than extend this list again, a new caller only has to satisfy the
+    contract below; the list is here because a reader arriving from one call
+    site needs to know the others exist and agree.
 
     `expected` maps a workspace-relative POSIX path to the RAW BYTES that
     path held when Phase A read it, and the comparison is bytes-to-bytes.
@@ -445,11 +454,17 @@ def _reject_drifted_targets(
     counts as drift -- re-creating or overwriting a file whose current state
     the operator can no longer be shown is the same silent revert.
 
-    Refusal is whole-run, never per-path, because the plan is a unit: the
+    Refusal is whole-run, never per-path, because the plan is a unit. The
     title backfill's new `index.md` already encodes a relabel for every
     staged Source and its new `log.md` already names them, so skipping one
     drifted document would leave `index.md` asserting a relabel that never
-    happened. Recomputing after the prompt merely re-opens the same window.
+    happened; `reconcile` shows the same thing on a smaller plan, where
+    honouring one side of a symmetric pair while skipping the other leaves
+    the two concepts disagreeing about their own resolution -- the one state
+    its refuse-on-conflict gate exists to prevent. Neither case is special:
+    every caller computes its plan as a whole from one snapshot, so a
+    partial application asserts something that snapshot no longer supports.
+    Recomputing after the prompt merely re-opens the same window.
     Refusing before the first write is the only fail-closed option, and it
     costs the operator one cheap re-run over fresh state.
     """
@@ -3177,6 +3192,12 @@ def relate(
     to re-run with `--auto`. Declining or refusing leaves the bundle
     completely untouched -- Phase A never writes anything.
 
+    Once the gate passes, `_reject_drifted_targets` re-reads every path this
+    run intends to write -- the source concept and `log.md` -- and refuses
+    the WHOLE run (exit 1, nothing written) if either changed or vanished
+    while the prompt waited (issues #306, #313). A confirmed run can
+    therefore still end without writing.
+
     Phase B (after confirm) writes the source concept file
     (`fsio.write_atomic`, since it already exists) then `log.md`
     (`fsio.write_atomic`) -- content before the audit trail, mirroring
@@ -3219,6 +3240,11 @@ def relate(
         cfg = config.read_config(root)
         source_text = source_path.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
+        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
+        # only: both sides of its comparison must come from the SAME reader
+        # (issues #306, #313). Every parser below wants the decoded form.
+        source_bytes = source_path.read_bytes()
+        log_bytes = log_path.read_bytes()
 
         metadata, body = okf.load_frontmatter(source_text)
         existing_relations = okf.decode_relations(metadata)
@@ -3284,6 +3310,17 @@ def relate(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #313: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    _reject_drifted_targets(
+        layout,
+        {
+            f"bundle/{source_canonical}.md": source_bytes,
+            "bundle/log.md": log_bytes,
+        },
+        "relate",
+    )
 
     try:
         fsio.write_atomic(source_path, new_source_text)
@@ -5337,6 +5374,14 @@ def reconcile(
     to re-run with `--auto`. Declining or refusing leaves the bundle
     completely untouched -- Phase A never writes anything.
 
+    Once the gate passes, `_reject_drifted_targets` re-reads every path this
+    run intends to write -- both concept documents and `log.md` -- and
+    refuses the WHOLE run (exit 1, nothing written) if any of them changed
+    or vanished while the prompt waited (issues #306, #313). This is a
+    third outcome for a confirmed run, distinct from the partial result the
+    next paragraph describes: nothing is written at all, so there is
+    nothing to complete on re-run.
+
     Phase B (after confirm) writes, in order: `id_a`'s document, then
     `id_b`'s document (both `fsio.write_atomic`, since both already exist),
     then `log.md` -- content before the audit trail, mirroring every other
@@ -5403,6 +5448,12 @@ def reconcile(
         text_a = path_a.read_text(encoding="utf-8")
         text_b = path_b.read_text(encoding="utf-8")
         log_text = log_path.read_text(encoding="utf-8")
+        # Raw bytes alongside the decoded text, for `_reject_drifted_targets`
+        # only: both sides of its comparison must come from the SAME reader
+        # (issues #306, #313). Every parser below wants the decoded form.
+        bytes_a = path_a.read_bytes()
+        bytes_b = path_b.read_bytes()
+        log_bytes = log_path.read_bytes()
 
         metadata_a, body_a = okf.load_frontmatter(text_a)
         metadata_b, body_b = okf.load_frontmatter(text_b)
@@ -5543,6 +5594,20 @@ def reconcile(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # Issue #313: every byte below was computed from a pre-prompt read, so
+    # re-validate each target now -- after the gate, before the first write.
+    # Whole-run refusal is what keeps the pair from ending up disagreeing
+    # about its own resolution.
+    _reject_drifted_targets(
+        layout,
+        {
+            f"bundle/{canonical_a}.md": bytes_a,
+            f"bundle/{canonical_b}.md": bytes_b,
+            "bundle/log.md": log_bytes,
+        },
+        "reconcile",
+    )
 
     try:
         fsio.write_atomic(path_a, new_text_a)

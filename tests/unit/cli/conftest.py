@@ -9,10 +9,14 @@ conftest (`tests/unit/vcs/conftest.py`'s `isolate_git_identity` is imported
 that way by six CLI modules). #281 replaced 18 verbatim per-module copies
 with them.
 
-`confirm_after` (#306) shares the same import convention but is neither a
-snapshot helper nor a wrote-nothing assertion: it is a `typer.confirm` stub
-that lands an edit inside the prompt window, and only the three modules
-covering the drift guard import it.
+`confirm_after` (#306) and `echo_after` (#313) share the same import
+convention but are neither snapshot helpers nor wrote-nothing assertions:
+both land an edit inside the window a mutating verb leaves open between its
+Phase-A snapshot and its first Phase-B write, and only the modules covering
+the drift guard import them. They differ only in which run they can reach --
+`confirm_after` stubs `typer.confirm`, so it needs a prompt; `echo_after`
+stubs `typer.echo`, which is what makes `--auto` and `review: false`
+testable at all.
 
 The offline-Ollama default that used to live here (#183) moved up to
 `tests/unit/conftest.py` in #217. Two reasons, both discovered by measuring
@@ -31,6 +35,7 @@ deliberately defined once, at the unit-suite root.
 import sqlite3
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import typer
@@ -216,6 +221,43 @@ def confirm_after(monkeypatch: pytest.MonkeyPatch, edit: Callable[[], object]) -
         return True
 
     monkeypatch.setattr(typer, "confirm", _confirm)
+
+
+def echo_after(
+    monkeypatch: pytest.MonkeyPatch, edit: Callable[[], object], *, trigger: str
+) -> None:
+    """`confirm_after`'s counterpart for the UNPROMPTED path (#313 review, R3).
+
+    `confirm_after` can only widen the window a verb leaves open when a
+    prompt actually runs, so it cannot reach `--auto` or `review: false` --
+    and those are the runs most likely to race a second writer, because
+    nothing pauses for a human. This stub instead patches `typer.echo` and
+    fires `edit` ONCE, on the first line containing `trigger`, then keeps
+    delegating to the real `typer.echo` untouched.
+
+    Pass the LAST line of a verb's preview as `trigger`: every verb here
+    prints its full preview at the end of Phase A and writes nothing until
+    Phase B, so that line sits inside the same window the prompt would have
+    held open. Choosing an earlier line still lands in the window; choosing
+    a line a verb prints AFTER its first write does not, and the test would
+    then be asserting nothing -- which is why `trigger` is required rather
+    than defaulted.
+
+    Firing once matters: a verb may echo its trigger line again on the
+    success path, and re-running `edit` there would corrupt the very
+    workspace the test is about to assert on.
+    """
+    real_echo = typer.echo
+    fired = False
+
+    def _echo(message: object = "", *args: Any, **kwargs: Any) -> None:
+        nonlocal fired
+        if not fired and trigger in str(message):
+            fired = True
+            edit()
+        real_echo(message, *args, **kwargs)
+
+    monkeypatch.setattr(typer, "echo", _echo)
 
 
 @pytest.fixture

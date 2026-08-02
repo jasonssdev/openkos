@@ -12,6 +12,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
@@ -408,3 +409,184 @@ def test_tty_confirm_prompts_then_writes(
     assert _relations_of(tmp_path, source_id) == [
         okf.Relation(target=target_id, type="references")
     ]
+
+
+# -- #313: re-validate every write target after the confirm gate ------------
+
+
+def _two_sources_on_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str]:
+    """A workspace with two ingested Sources on a TTY -- the minimum that
+    reaches `relate`'s confirm gate with both of its write targets present."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    target_id = _ingest_source(tmp_path, "b.txt")
+    _simulate_tty(monkeypatch)
+    return source_id, target_id
+
+
+@pytest.mark.parametrize("target", ["bundle/sources/a.md", "bundle/log.md"])
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313: `relate` computes BOTH of its new documents from a pre-prompt
+    read, so an edit landing while the operator reads the preview was
+    overwritten in full, with no error and an `_autocommit` that then
+    committed the revert. Every write target must be re-read after the gate
+    and before the first write.
+
+    Parametrized over both targets because the guard is whole-run: refusing
+    only on the concept while `log.md` still gets clobbered would leave the
+    audit trail asserting an edge that the concept never gained.
+    """
+    source_id, target_id = _two_sources_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(
+        app, ["relate", source_id, "references", target_id], input="y\n"
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_write_target_deleted_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target that has since been DELETED is drift too: re-creating it
+    from a snapshot the operator can no longer see is the same silent
+    revert as overwriting it."""
+    source_id, target_id = _two_sources_on_a_tty(tmp_path, monkeypatch)
+    deleted_path = tmp_path / "bundle" / "sources" / "a.md"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, deleted_path.unlink)
+
+    result = runner.invoke(
+        app, ["relate", source_id, "references", target_id], input="y\n"
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "bundle/sources/a.md" in result.stderr
+    assert not deleted_path.exists()
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle/sources/a.md")}
+
+
+@pytest.mark.parametrize("target", ["bundle/sources/a.md", "bundle/log.md"])
+def test_a_crlf_rewrite_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#306's constraint, re-pinned for `relate`: line-ending-only drift is
+    still drift. `read_text` applies universal-newline translation, so a
+    CRLF rewrite compares EQUAL to its own LF snapshot and the guard would
+    wave it through -- then `fsio.write_atomic` (which opens with
+    `newline=""`) puts the LF plan back over the operator's CRLF file. This
+    test fails if the comparison ever goes back through `read_text`.
+
+    Parametrized over BOTH targets, not just `log.md` (#313 review, R3):
+    each write target carries its own snapshot, and one covered by a CRLF
+    case while the other is not leaves the uncovered one free to be paired
+    with `read_text` -- every remaining assertion here is reader-independent
+    and would stay green.
+    """
+    source_id, target_id = _two_sources_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != target_path.read_bytes()
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent))
+
+    result = runner.invoke(
+        app, ["relate", source_id, "references", target_id], input="y\n"
+    )
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_bytes() == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_targets_that_were_already_crlf_are_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: a write target that was ALREADY CRLF at rest,
+    untouched by anyone, must not be reported as drift. Comparing raw bytes
+    against a `read_text` snapshot fails here on every run, and `log.md` is
+    a write target of every guarded verb -- one CRLF file would make them
+    all refuse permanently, naming a cause that never happened.
+
+    EVERY target is CRLF here, not just `log.md` (#313 review, R3): this is
+    the only case that can catch a concept-document snapshot paired with
+    `read_text`, and leaving that document LF made the whole test pass
+    against the broken pairing.
+    """
+    source_id, target_id = _two_sources_on_a_tty(tmp_path, monkeypatch)
+    for rel in ("bundle/sources/a.md", "bundle/log.md"):
+        path = tmp_path / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = runner.invoke(
+        app, ["relate", source_id, "references", target_id, "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr
+    assert _relations_of(tmp_path, source_id) == [
+        okf.Relation(target=target_id, type="references")
+    ]
+
+
+@pytest.mark.parametrize("target", ["bundle/sources/a.md", "bundle/log.md"])
+def test_drift_on_the_unprompted_path_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313 review, R3: the guard must run on `--auto` too.
+
+    Every other drift test here reaches the gate through `typer.confirm`,
+    so indenting the `_reject_drifted_targets` call into the
+    `if not auto and cfg.review:` block would disable it for unattended
+    runs and leave all of them green. `--auto` is the path most likely to
+    race a second writer, precisely because nothing pauses for a human, so
+    it needs its own case rather than inheriting confidence from the
+    prompted one.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    target_id = _ingest_source(tmp_path, "b.txt")
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the preview printed\n"
+    before = snapshot_with_mtime(tmp_path)
+    echo_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        trigger="(new dated entry)",
+    )
+
+    result = runner.invoke(
+        app, ["relate", source_id, "references", target_id, "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
