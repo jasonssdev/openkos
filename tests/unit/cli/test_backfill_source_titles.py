@@ -47,7 +47,13 @@ def _register_index_entry(tmp_path: Path, concept_id: str, title: str) -> None:
 
 
 def _write_source(
-    tmp_path: Path, *, slug: str, title: str, resource: str, raw: str | None
+    tmp_path: Path,
+    *,
+    slug: str,
+    title: str,
+    resource: str,
+    raw: str | None,
+    provenance: list[str] | None = None,
 ) -> str:
     """Hand-write a Source (bypassing `ingest`) so `title` and its
     re-derived raw content can diverge -- the pre-#248 state this repairs."""
@@ -58,7 +64,7 @@ def _write_source(
         tags=[],
         timestamp="2024-01-01T00:00:00Z",
         sensitivity="public",
-        provenance=[],
+        provenance=provenance or [],
         raw_content=raw,
     )
     path = tmp_path / "bundle" / "sources" / f"{slug}.md"
@@ -72,7 +78,13 @@ def _write_source(
 
 
 def _staged(tmp_path: Path, slug: str) -> str:
-    """Mechanically-titled; raw content re-derives a DIFFERENT title."""
+    """Mechanically-titled; raw content re-derives a DIFFERENT title.
+
+    `provenance` carries the slug (#311 gap 5): with two staged Sources
+    sharing an EMPTY provenance list, a write loop that swapped the two
+    documents' bytes would still read back the right `resource` per path
+    only because `resource` happens to be distinct -- distinct provenance
+    entries make the cross-Source-swap read-back pin BOTH fields."""
     name = f"{slug}.txt"
     return _write_source(
         tmp_path,
@@ -80,6 +92,7 @@ def _staged(tmp_path: Path, slug: str) -> str:
         title=titleize(PurePosixPath(name).stem),
         resource=f"raw/{name}",
         raw="# Real Title\n\nBody text.",
+        provenance=[f"raw/{name}"],
     )
 
 
@@ -121,6 +134,22 @@ def test_bundle_with_no_sources_is_a_no_op(
 
     assert result.exit_code == 0
     assert "nothing" in result.output.lower()
+
+
+def test_the_command_accepts_no_concept_id_argument(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec: "The command accepts no concept-id argument" (#311 gap 3).
+    The spec requirement had no test: a future convenience patch adding a
+    positional argument -- silently narrowing the bundle-wide sweep --
+    would have shipped green. A usage error (exit 2) is the contract."""
+    _init_workspace(tmp_path, monkeypatch)
+    _staged(tmp_path, "mechanical")
+
+    result = runner.invoke(app, ["backfill-source-titles", "sources/mechanical"])
+
+    assert result.exit_code == 2
+    assert "sources/mechanical" in result.output
 
 
 def test_preview_shows_all_three_buckets_before_any_prompt(
@@ -327,6 +356,92 @@ def test_mid_sweep_write_failure_names_the_landed_paths(
         assert okf.load_frontmatter(landed_text)[0]["title"] == "Real Title"
 
 
+def _fail_write_atomic_on(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
+    """Make `write_atomic` raise exactly when asked to write `target`,
+    delegating every other path to the real implementation -- the
+    path-targeted pattern from `test_query_save.py`, because a call-index
+    fault (`_monkeypatch_failing_write`) encodes "call N is `log.md`" as a
+    positional fact any earlier added write would silently shift."""
+    real_write_atomic = fsio.write_atomic
+
+    def _write(path: Path, content: str) -> None:
+        if path == target:
+            raise OSError("simulated disk failure")
+        real_write_atomic(path, content)
+
+    monkeypatch.setattr("openkos.cli.main.fsio.write_atomic", _write)
+
+
+def test_a_log_write_failure_reports_the_lost_entry_and_the_landed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#307: the FINAL write of the sweep is `log.md`. When it fails, the
+    failure geometry inverts the mid-sweep case: EVERY retitle landed
+    (index + all staged Sources), only the audit entry is missing -- and a
+    re-run cannot repair it, because each retitled Source now classifies as
+    curated and the sweep short-circuits. The message must therefore name
+    what landed, say the dated entry was NOT written and will not come
+    back, and point at git, distinctly from the mid-sweep message (#234).
+
+    RESIDUAL BEHAVIOR, DOCUMENTED HONESTLY: the final assertions pin that a
+    subsequent re-run exits 0 reporting "nothing staged" -- the silent-clean
+    poison this message exists to warn about. The re-run does NOT recreate
+    the lost log entry and does NOT commit the partial result; only the
+    operator, following the message, can."""
+    _init_workspace(tmp_path, monkeypatch)
+    first_id = _staged(tmp_path, "aaa-mechanical")
+    _register_index_entry(tmp_path, first_id, titleize("aaa-mechanical"))
+    second_id = _staged(tmp_path, "zzz-mechanical")
+    _register_index_entry(tmp_path, second_id, titleize("zzz-mechanical"))
+    log_path = tmp_path / "bundle" / "log.md"
+    log_before = log_path.read_bytes()
+    autocommit_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "openkos.cli.main._autocommit",
+        lambda root, paths, message: autocommit_calls.append(list(paths)),
+    )
+    _fail_write_atomic_on(monkeypatch, log_path)
+
+    result = runner.invoke(app, ["backfill-source-titles", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert (
+        "openkos backfill-source-titles: failed while writing the sweep's "
+        "log entry -- " in result.stderr
+    )
+    assert (
+        "Landed and left in place: bundle/index.md, "
+        f"bundle/{first_id}.md, bundle/{second_id}.md." in result.stderr
+    )
+    assert (
+        "The dated log.md entry for this sweep was NOT written and a re-run "
+        "will NOT recreate it" in result.stderr
+    )
+    assert "a re-run reports nothing staged" in result.stderr
+    assert "Nothing was committed" in result.stderr
+    assert "git diff" in result.stderr
+    # The on-disk partial state the message describes, proven on disk.
+    for landed_id in (first_id, second_id):
+        landed_text = (tmp_path / "bundle" / f"{landed_id}.md").read_text(
+            encoding="utf-8"
+        )
+        assert okf.load_frontmatter(landed_text)[0]["title"] == "Real Title"
+    index_after = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "[Real Title](/sources/aaa-mechanical.md)" in index_after
+    assert log_path.read_bytes() == log_before
+    assert autocommit_calls == []
+
+    # The poison pin: the re-run sees every Source as curated, reports
+    # nothing staged, exits 0, and touches nothing -- silently clean.
+    before = snapshot_with_mtime(tmp_path)
+    rerun = runner.invoke(app, ["backfill-source-titles", "--auto"])
+    assert rerun.exit_code == 0
+    assert "nothing" in rerun.output.lower()
+    assert changed_paths(before, snapshot_with_mtime(tmp_path)) == set()
+    assert autocommit_calls == []
+
+
 def test_immediate_rerun_after_a_successful_sweep_is_a_no_op(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -421,6 +536,100 @@ def test_malformed_resource_is_warned_and_never_staged(
     assert warned_path.read_bytes() == before
 
 
+def test_preview_discloses_the_index_and_log_rewrites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#308: the preview listed the three buckets but never said `index.md`
+    and `log.md` would be rewritten -- every sibling verb discloses its
+    aggregate targets before the confirm gate (`backfill-sensitivity`'s
+    `~ log.md (new dated entry)` line is the model). The operator must see
+    the full write set BEFORE deciding, so this drives a declined TTY run:
+    the disclosure has to precede the prompt to count."""
+    _init_workspace(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+    staged_id = _staged(tmp_path, "mechanical")
+    _register_index_entry(tmp_path, staged_id, titleize("mechanical"))
+
+    result = runner.invoke(app, ["backfill-source-titles"], input="n\n")
+
+    assert "  ~ index.md (1 catalog label(s) relabeled)" in result.output
+    assert "  ~ log.md (new dated entry)" in result.output
+    assert result.output.index("~ log.md") < result.output.index("Proceed")
+
+
+def test_a_staged_source_missing_from_the_catalog_is_called_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#308: `relabel_index_entry` returns `(text, 0)` when no bullet
+    resolves, and the call site bound the count to `_` -- so a staged
+    Source absent from the catalog got a byte-identical `index.md` write
+    while the run claimed the catalog was updated. The zero must surface
+    twice: a per-source warning line naming the Source, and an honest count
+    in the disclosure and success lines (`forget`'s count pattern)."""
+    _init_workspace(tmp_path, monkeypatch)
+    staged_id = _staged(tmp_path, "mechanical")  # never registered in index.md
+    index_before = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["backfill-source-titles", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        f"  ! bundle/{staged_id}.md (no index.md catalog entry to relabel)"
+        in result.output
+    )
+    assert "index.md: 0 catalog label(s) relabeled" in result.output
+    assert (tmp_path / "bundle" / "index.md").read_text(
+        encoding="utf-8"
+    ) == index_before
+
+
+def test_success_message_reports_the_real_relabel_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#308: the success line must report how many catalog labels actually
+    moved, not assert an update that may not have happened."""
+    _init_workspace(tmp_path, monkeypatch)
+    first_id = _staged(tmp_path, "aaa-mechanical")
+    _register_index_entry(tmp_path, first_id, titleize("aaa-mechanical"))
+    second_id = _staged(tmp_path, "zzz-mechanical")
+    _register_index_entry(tmp_path, second_id, titleize("zzz-mechanical"))
+
+    result = runner.invoke(app, ["backfill-source-titles", "--auto"])
+
+    assert result.exit_code == 0
+    assert "index.md: 2 catalog label(s) relabeled" in result.output
+    assert "no index.md catalog entry to relabel" not in result.output
+
+
+def test_an_unrewritable_title_scalar_is_warned_as_unpatchable_title(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#309 (and #311 gap 2): an anchored `title:` scalar -- one of the
+    ~six frontmatter-shape refusals inside `retitle_document` -- must
+    surface in the preview as `unpatchable-title`, NOT `heading-mismatch`,
+    whose documented meaning is a hand-edited BODY heading. The old
+    labeling pointed operators at a first line that was perfectly fine."""
+    _init_workspace(tmp_path, monkeypatch)
+    staged_id = _staged(tmp_path, "aaa-mechanical")
+    _register_index_entry(tmp_path, staged_id, titleize("aaa-mechanical"))
+    anchored_id = _staged(tmp_path, "zzz-mechanical")
+    _register_index_entry(tmp_path, anchored_id, titleize("zzz-mechanical"))
+    anchored_path = tmp_path / "bundle" / f"{anchored_id}.md"
+    text = anchored_path.read_text(encoding="utf-8")
+    title_line = f"title: {titleize('zzz-mechanical')}"
+    anchored = text.replace(title_line, f"title: &t {titleize('zzz-mechanical')}", 1)
+    assert anchored != text  # the fixture's title line was found and anchored
+    anchored_path.write_text(anchored, encoding="utf-8")
+    before = anchored_path.read_bytes()
+
+    result = runner.invoke(app, ["backfill-source-titles", "--auto"])
+
+    assert result.exit_code == 0
+    assert f"! bundle/{anchored_id}.md (warned: unpatchable-title)" in result.output
+    assert "heading-mismatch" not in result.output
+    assert anchored_path.read_bytes() == before
+
+
 def test_hand_edited_first_line_is_refused_not_overwritten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -476,6 +685,10 @@ def test_each_retitled_document_receives_its_own_rewritten_bytes(
         metadata, body = okf.load_frontmatter(text)
         assert metadata["title"] == "Real Title"
         assert metadata["resource"] == f"raw/{slug}.txt"
+        # #311 gap 5: `provenance` is the second per-Source field a
+        # cross-Source byte swap would carry along; pin it too, so the swap
+        # cannot hide behind a `resource`-only read-back.
+        assert metadata["provenance"] == [f"raw/{slug}.txt"]
         assert body.split("\n")[0] == "# Real Title"
 
 
@@ -489,21 +702,25 @@ def test_a_malformed_index_refuses_before_any_write(
     Nothing else in the repository pins this ordering; moving either
     computation below the gate would reintroduce the partial-write state D6
     exists to prevent, with a green suite.
+
+    "Before any write" is asserted over the WHOLE workspace (#311 gap 4),
+    the same `snapshot_with_mtime` diff the success-path test uses: the
+    per-path reads this replaces could only see the two files the author
+    thought to capture, so a stray write to any OTHER path -- a partial
+    `index.md` rewrite, a temp file left behind -- shipped green.
     """
     _init_workspace(tmp_path, monkeypatch)
     staged_id = _staged(tmp_path, "mechanical")
     _register_index_entry(tmp_path, staged_id, titleize("mechanical"))
     index_path = tmp_path / "bundle" / "index.md"
     index_path.write_text("no frontmatter here\n", encoding="utf-8")
-    source_before = (tmp_path / "bundle" / f"{staged_id}.md").read_bytes()
-    log_before = (tmp_path / "bundle" / "log.md").read_bytes()
+    before = snapshot_with_mtime(tmp_path)
 
     result = runner.invoke(app, ["backfill-source-titles", "--auto"])
 
     assert result.exit_code == 1
     assert "openkos backfill-source-titles: failed while preparing" in result.stderr
-    assert (tmp_path / "bundle" / f"{staged_id}.md").read_bytes() == source_before
-    assert (tmp_path / "bundle" / "log.md").read_bytes() == log_before
+    assert changed_paths(before, snapshot_with_mtime(tmp_path)) == set()
 
 
 def test_a_confirmed_run_touches_only_the_expected_paths(

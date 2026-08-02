@@ -4401,9 +4401,10 @@ def backfill_source_titles_cmd(
     Empty `staged` short-circuits: "nothing was staged", no write, no
     commit, exit 0. Otherwise a THREE-bucket preview (staged/skipped/
     warned, unlike `backfill-sensitivity`'s stage-or-nothing preview) is
-    printed, then the confirm gate mirrors `backfill_sensitivity_cmd`'s
-    precedence exactly: `--auto` / `review: false` / TTY `typer.confirm` /
-    non-TTY refuse.
+    printed -- closed by the `index.md`/`log.md` aggregate disclosure with
+    the real relabel count (#308) -- then the confirm gate mirrors
+    `backfill_sensitivity_cmd`'s precedence exactly: `--auto` /
+    `review: false` / TTY `typer.confirm` / non-TTY refuse.
 
     Past that gate -- and on the runs that skip it, since `--auto` and
     `review: false` skip the prompt but not the window it stood in --
@@ -4472,10 +4473,19 @@ def backfill_source_titles_cmd(
         # below (issues #306, #318).
         index_bytes, index_text = _snapshot_read(index_path)
         new_index_text = index_text
+        relabeled_total = 0
+        uncataloged: list[str] = []
         for retitle in backfill.staged:
-            new_index_text, _ = bundle_index.relabel_index_entry(
+            # The count is BOUND, not discarded (#308): zero matches means
+            # this staged Source has no catalog bullet at all, so the
+            # `index.md` write below is byte-identical for it -- claiming
+            # "catalog updated" would be a lie the operator cannot see.
+            new_index_text, relabel_count = bundle_index.relabel_index_entry(
                 new_index_text, retitle.concept_id, retitle.new_title
             )
+            relabeled_total += relabel_count
+            if relabel_count == 0:
+                uncataloged.append(retitle.concept_id)
 
         retitled = ", ".join(
             f"'bundle/{retitle.concept_id}.md' -> {retitle.new_title!r}"
@@ -4509,6 +4519,18 @@ def backfill_source_titles_cmd(
         typer.echo(f"  = bundle/{skipped.concept_id}.md (skipped: {skipped.reason})")
     for warned in backfill.warned:
         typer.echo(f"  ! bundle/{warned.concept_id}.md (warned: {warned.reason})")
+    # Deliberately NOT a `(warned: ...)` line (#308): those carry the closed
+    # reason vocabulary of Sources the sweep will NOT touch, while these
+    # Sources ARE retitled -- only their catalog bullet is missing, so the
+    # relabel changes nothing for them.
+    for concept_id in uncataloged:
+        typer.echo(f"  ! bundle/{concept_id}.md (no index.md catalog entry to relabel)")
+    # Aggregate disclosure (#308): the buckets above name the Sources, but
+    # `index.md` and `log.md` are write targets of this run too -- every
+    # sibling verb says so before its confirm gate, and the count keeps the
+    # `index.md` line honest when some staged Source has no bullet.
+    typer.echo(f"  ~ {index_path.name} ({relabeled_total} catalog label(s) relabeled)")
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
     confirm_enabled = not auto and cfg.review
     prompt_will_run = confirm_enabled and sys.stdin.isatty()
@@ -4548,8 +4570,12 @@ def backfill_source_titles_cmd(
         # order (design D6). The classifier keys on a Source document's own
         # `title`; once a document is written, a mid-sweep failure before
         # `index.md` lands would leave its bullet unrevisitable on re-run.
-        # Index-first is the only order a re-run repairs -- do NOT "fix"
-        # this to match `backfill-sensitivity`.
+        # Index-first is the order a re-run repairs -- but only for the
+        # index-versus-Source pair (#307): the `log.md` stage sits OUTSIDE
+        # that guarantee, because once every Source is written, a re-run
+        # classifies them all as curated and cannot re-stage the lost
+        # entry (hence the dedicated failure report below). Do NOT "fix"
+        # this order to match `backfill-sensitivity`.
         fsio.write_atomic(index_path, new_index_text)
         landed.append("bundle/index.md")
         for retitle in backfill.staged:
@@ -4558,8 +4584,6 @@ def backfill_source_titles_cmd(
                 layout.bundle_dir / f"{retitle.concept_id}.md", retitle.content
             )
             landed.append(source_path)
-        fsio.write_atomic(log_path, new_log_text)
-        landed.append("bundle/log.md")
     except (OSError, ValueError) as exc:
         landed_suffix = (
             f"Already written (left partially retitled, not rolled back): "
@@ -4574,9 +4598,34 @@ def backfill_source_titles_cmd(
         )
         raise typer.Exit(code=1) from exc
 
+    try:
+        fsio.write_atomic(log_path, new_log_text)
+        landed.append("bundle/log.md")
+    except (OSError, ValueError) as exc:
+        # #307: a failure HERE is not one more mid-sweep hole -- it is the
+        # one the sweep cannot repair. Every retitle landed, so a re-run
+        # classifies each Source as curated and short-circuits "nothing was
+        # staged": silently clean, no log entry, no commit. The message
+        # therefore states exactly what landed, that the dated entry is
+        # gone for good, and that git holds the only record -- worded
+        # apart from the mid-sweep message above per #234, because a bug
+        # report quoting either must identify its phase unambiguously.
+        typer.echo(
+            f"openkos backfill-source-titles: failed while writing the "
+            f"sweep's log entry -- {exc}. Landed and left in place: "
+            f"{', '.join(landed)}. The dated log.md entry for this sweep "
+            f"was NOT written and a re-run will NOT recreate it -- every "
+            f"retitled Source now classifies as curated, so a re-run "
+            f"reports nothing staged. Nothing was committed: inspect the "
+            f"partial result with `git diff` and commit it manually.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
     typer.echo(
         f"openkos backfill-source-titles: retitled {len(backfill.staged)} "
-        f"Source(s) ({index_path.name}, {log_path.name} updated): {retitled}."
+        f"Source(s) ({index_path.name}: {relabeled_total} catalog label(s) "
+        f"relabeled, {log_path.name} updated): {retitled}."
     )
 
     _autocommit(root, landed, "openkos: backfill-source-titles")
