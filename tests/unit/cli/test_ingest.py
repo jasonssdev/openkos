@@ -31,6 +31,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.model import okf
+from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import (
     changed_paths,
     confirm_after,
@@ -38,6 +39,7 @@ from tests.unit.cli.conftest import (
     snapshot_with_mtime,
 )
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
+from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
 
@@ -4612,3 +4614,421 @@ def test_ingest_stage_notice_is_silent_without_a_tty(
     assert result.exit_code == 0
     assert "waiting on the LLM" not in result.stderr
     assert "waiting on the LLM" not in result.stdout
+
+
+# --- Issue #267: batch ingest -- a directory or glob in one invocation ------
+
+
+def _write_notes(tmp_path: Path, files: dict[str, str], subdir: str = "notes") -> Path:
+    """Create `<tmp_path>/<subdir>/` and populate it with `files` (relative
+    name -> content; nested names like `archive/setup.md` create their own
+    parent directories), returning the directory. Shared fixture builder for
+    the issue #267 batch-ingest scenarios below."""
+    directory = tmp_path / subdir
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, content in files.items():
+        path = directory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return directory
+
+
+def test_batch_directory_ingests_every_file_sorted_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory argument ingests EVERY readable file directly inside it
+    in one invocation, in sorted-name order regardless of creation order --
+    never filesystem order, so `log.md` and the per-file commits are
+    reproducible across machines -- and prints per-file outcome lines plus
+    an aggregate summary (issue #267, scenario: directory arg, deterministic
+    order). `--auto` skips the batch cost gate, so no `LLM call(s)` prompt
+    appears; without a TTY the per-file `i/N` progress stays silent
+    (issue #190 discipline)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"b.txt": "Beta notes.", "a.txt": "Alpha notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "a.txt").read_text(encoding="utf-8") == "Alpha notes."
+    assert (tmp_path / "raw" / "b.txt").read_text(encoding="utf-8") == "Beta notes."
+    assert (tmp_path / "bundle" / "sources" / "a.md").is_file()
+    assert (tmp_path / "bundle" / "sources" / "b.md").is_file()
+    # Sorted order: a's outcome line precedes b's, though b was created first.
+    a_line = result.stdout.index(f"+ {Path('notes') / 'a.txt'} -- ingested")
+    b_line = result.stdout.index(f"+ {Path('notes') / 'b.txt'} -- ingested")
+    assert a_line < b_line
+    assert "2 ingested, 0 re-ingested, 0 skipped" in result.stdout
+    assert "LLM call(s)" not in result.stderr
+    assert "ingesting file" not in result.stderr
+
+
+def test_batch_directory_is_non_recursive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory argument matches only files DIRECTLY inside it:
+    subdirectories are ignored, never walked into -- recursion is available
+    only via an explicit `**` glob (issue #267, scenario: non-recursive
+    directory)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "sub/deep.md": "Deep notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "a.txt").is_file()
+    assert not (tmp_path / "raw" / "deep.md").exists()
+    assert not (tmp_path / "bundle" / "sources" / "deep.md").exists()
+    assert "1 file(s)" in result.stdout
+
+
+def test_batch_empty_directory_refuses_nothing_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty directory matches nothing: clear message, exit 1, nothing
+    written (issue #267, scenario: empty directory)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes").mkdir()
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 1
+    assert "no files matched" in result.stderr
+    assert "notes" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_batch_glob_expands_relative_to_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A quoted glob arrives as a literal string and is expanded relative to
+    the cwd: only matching files are ingested, non-matching siblings stay
+    untouched (issue #267, scenario: explicit glob)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.md": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes/*.md", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "a.md").is_file()
+    assert not (tmp_path / "raw" / "b.txt").exists()
+    assert "1 ingested" in result.stdout
+
+
+def test_batch_glob_recursion_only_via_double_star(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recursion happens ONLY via an explicit `**` glob: `notes/**/*.md`
+    reaches a nested file the non-recursive directory form ignores
+    (issue #267, scenario: recursive glob)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.md": "Alpha notes.", "sub/deep.md": "Deep notes."})
+
+    result = runner.invoke(app, ["ingest", "notes/**/*.md", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "a.md").is_file()
+    assert (tmp_path / "raw" / "deep.md").is_file()
+    assert "2 ingested" in result.stdout
+
+
+def test_batch_glob_matching_nothing_refuses_nothing_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A glob matching no files refuses with a clear message, exit 1,
+    nothing written (issue #267, scenario: glob matches nothing)."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes/*.md", "--auto"])
+
+    assert result.exit_code == 1
+    assert "no files matched" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_batch_basename_collision_refuses_whole_run_naming_both_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The destination name and slug derive ONLY from the basename
+    (path-traversal defense), so two matched files sharing a basename would
+    fight over `raw/<name>`. Phase A detects this BEFORE any write and
+    refuses the WHOLE run -- exit 1, both colliding paths named, nothing
+    written (issue #267, settled decision 1)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(
+        tmp_path,
+        {"setup.md": "Root setup.", "archive/setup.md": "Archived setup."},
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes/**/*.md", "--auto"])
+
+    assert result.exit_code == 1
+    assert "collision" in result.stderr
+    assert str(Path("notes") / "setup.md") in result.stderr
+    assert str(Path("notes") / "archive" / "setup.md") in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_batch_cost_gate_prints_counts_and_confirms_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before any LLM contact, the batch prints `{n} file(s) -> {n} LLM
+    call(s)` (the #134 pattern) to stderr and asks ONE up-front
+    confirmation; a `y` answer covers every file -- the per-file prompt is
+    suppressed the way `--auto` suppresses it today, so a single `y` on
+    stdin completes a two-file batch (issue #267, settled decision 4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "2 file(s) -> 2 LLM call(s)" in result.stderr
+    assert (tmp_path / "raw" / "a.txt").is_file()
+    assert (tmp_path / "raw" / "b.txt").is_file()
+    # ONE gate: the batch prompt appears exactly once and the single-file
+    # "Proceed with these changes?" prompt never does.
+    assert "Proceed with these changes?" not in result.output
+    assert result.output.count("Proceed") == 1
+
+
+def test_batch_cost_gate_decline_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining the batch cost gate aborts with nothing written and no LLM
+    contact (issue #267, settled decision 4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake = _patch_llm(monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes."})
+    _simulate_tty(monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes"], input="n\n")
+
+    assert result.exit_code == 1
+    assert fake.calls == []
+    assert _snapshot(tmp_path) == before
+
+
+def test_batch_non_tty_without_auto_refuses_nothing_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-TTY stdin without `--auto` refuses to write rather than
+    defaulting silently -- mirroring the single-file convention -- with
+    nothing written (issue #267, settled decision 4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes."})
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes"])
+
+    assert result.exit_code == 1
+    assert "re-run with --auto" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_batch_review_false_skips_the_cost_gate_like_auto(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config `review: false` skips the batch cost gate the same way it
+    skips the single-file prompt today -- same precedence, mirrored
+    (issue #267, settled decision 4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "review: true", "review: false")
+    _write_notes(tmp_path, {"a.txt": "Alpha notes."})
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes"])
+
+    assert result.exit_code == 0
+    assert "Proceed" not in result.output
+    assert (tmp_path / "raw" / "a.txt").is_file()
+
+
+def test_batch_progress_lines_on_tty_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a TTY, the batch reports per-file `i/N` progress on stderr via the
+    TTY-gated `observability` helpers (issue #267 citing #190); stdout keeps
+    the clean report."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "openkos ingest: ingesting file 1/2..." in result.stderr
+    assert "openkos ingest: ingesting file 2/2..." in result.stderr
+    assert "ingesting file" not in result.stdout
+
+
+def test_batch_partial_failure_skips_that_file_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each file runs through the existing single-file pipeline
+    independently, in order: a per-file refusal (differing bytes under an
+    existing `raw/` copy) SKIPS that file with its reason and CONTINUES to
+    the rest; the run exits 1 because a file was refused (issue #267,
+    settled decision 2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(
+        tmp_path,
+        {"a.txt": "Alpha notes.", "b.txt": "Beta notes.", "c.txt": "Gamma notes."},
+    )
+    (tmp_path / "raw").mkdir(exist_ok=True)
+    (tmp_path / "raw" / "b.txt").write_text("conflicting bytes", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 1
+    # a and c landed despite b's refusal -- the batch continued.
+    assert (tmp_path / "raw" / "a.txt").is_file()
+    assert (tmp_path / "bundle" / "sources" / "a.md").is_file()
+    assert (tmp_path / "raw" / "c.txt").is_file()
+    assert (tmp_path / "bundle" / "sources" / "c.md").is_file()
+    # b's raw copy is untouched, its refusal reason is the single-file
+    # message, unchanged, and its outcome line marks the skip.
+    assert (tmp_path / "raw" / "b.txt").read_text(
+        encoding="utf-8"
+    ) == "conflicting bytes"
+    assert "differs from the existing 'raw/b.txt'" in result.stderr
+    assert f"! {Path('notes') / 'b.txt'} -- skipped" in result.stdout
+    assert "2 ingested, 0 re-ingested, 1 skipped" in result.stdout
+
+
+def test_batch_reingest_counts_as_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-running the same batch is idempotent for completed files: every
+    byte-identical file re-ingests, the summary counts them as
+    `re-ingested`, and the run exits 0 -- idempotent re-ingests count as
+    success (issue #267, settled decisions 2 and 3)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+    first = runner.invoke(app, ["ingest", "notes", "--auto"])
+    assert first.exit_code == 0
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert "0 ingested, 2 re-ingested, 0 skipped" in result.stdout
+    assert f"~ {Path('notes') / 'a.txt'} -- re-ingested" in result.stdout
+
+
+def test_batch_forwards_include_confidential_per_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential` is forwarded unchanged to every per-file
+    ingest: under a `confidential` workspace floor the flag bypasses the
+    extraction gate for EACH file, so the LLM is called once per file
+    (issue #267)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    fake = _patch_llm(monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto", "--include-confidential"])
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 2
+
+
+def test_batch_confidential_floor_degrades_every_file_without_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without `--include-confidential`, a `confidential` workspace floor
+    skips extraction per file exactly as today -- `llm.chat` is never
+    called, every file lands Source-only, and the summary tallies them as
+    extraction-degraded (issue #267, settled decision 2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
+    )
+    fake = _patch_llm(monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert fake.calls == []
+    assert (tmp_path / "bundle" / "sources" / "a.md").is_file()
+    assert "2 extraction-degraded" in result.stdout
+
+
+def test_batch_extraction_failure_stays_per_file_nonfatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreachable LLM degrades each file to Source-only exactly as the
+    single-file path does today (stderr note, exit unaffected): the batch
+    still ingests every Source, exits 0, and tallies the degrades
+    (issue #267, settled decision 2)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, raises=OllamaUnavailable("connection refused"))
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "sources" / "a.md").is_file()
+    assert (tmp_path / "bundle" / "sources" / "b.md").is_file()
+    assert "concept extraction skipped" in result.stderr
+    assert "2 extraction-degraded" in result.stdout
+
+
+def test_batch_commits_per_file_not_per_batch(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Commit granularity is PER FILE -- the existing per-ingest auto-commit
+    is reused unchanged, so each completed file is its own checkpoint and an
+    interrupted run leaves a committed, consistent workspace (issue #267,
+    settled decision 3). Two batch files add exactly two commits, each
+    naming its own source."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+
+    def _log_subjects() -> list[str]:
+        completed = vcs_git._run(["git", "log", "--format=%s"], cwd=tmp_path)
+        return completed.stdout.splitlines()
+
+    before_subjects = _log_subjects()
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    new_subjects = _log_subjects()[: len(_log_subjects()) - len(before_subjects)]
+    assert new_subjects == [
+        "openkos: ingest b.txt (+0 concepts)",
+        "openkos: ingest a.txt (+0 concepts)",
+    ]
+
+
+def test_batch_plain_file_argument_keeps_single_file_behavior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain existing file path keeps today's exact single-file behavior:
+    no batch summary, no cost-gate line -- the batch path wraps, never
+    modifies, the single-file pipeline (issue #267)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("Some raw notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "batch summary" not in result.stdout
+    assert "LLM call(s)" not in result.stderr
+    assert (tmp_path / "raw" / "notes.txt").is_file()
