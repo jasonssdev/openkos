@@ -3714,43 +3714,14 @@ def relate(
     now = datetime.now(UTC)
 
     try:
-        cfg = config.read_config(root)
-        # One `_snapshot_read` observation per target: the decoded text
-        # feeds the parsers below, the raw bytes feed
-        # `_reject_drifted_targets` (issues #306, #313, #318).
-        source_bytes, source_text = _snapshot_read(source_path)
-        log_bytes, log_text = _snapshot_read(log_path)
-
-        metadata, body = okf.load_frontmatter(source_text)
-        existing_relations = okf.decode_relations(metadata)
-        new_relation = okf.Relation(target=target_canonical, type=rel_type)
-        already_present = any(
-            relation.target == new_relation.target
-            and relation.type == new_relation.type
-            for relation in existing_relations
-        )
-        updated_relations = (
-            existing_relations
-            if already_present
-            else [*existing_relations, new_relation]
-        )
-        metadata[okf.RELATIONS_KEY] = okf.encode_relations(updated_relations)
-        new_source_text = okf.dump_frontmatter(metadata, body)
-
-        if already_present:
-            log_line = (
-                f"**Relate**: [{source_canonical}](/{source_canonical}.md) already "
-                f"has a {rel_type!r} relation to "
-                f"[{target_canonical}](/{target_canonical}.md); no change."
-            )
-        else:
-            log_line = (
-                f"**Relate**: Added a {rel_type!r} relation from "
-                f"[{source_canonical}](/{source_canonical}.md) to "
-                f"[{target_canonical}](/{target_canonical}.md)."
-            )
-        new_log_text = bundle_log.insert_log_entry(
-            log_text, now.astimezone().date(), log_line
+        prepared = prepare_relate(
+            source_path,
+            log_path,
+            source_canonical,
+            target_canonical,
+            rel_type,
+            root,
+            now=now,
         )
     except (OSError, ValueError) as exc:
         typer.echo(
@@ -3759,23 +3730,25 @@ def relate(
         raise typer.Exit(code=1) from exc
 
     typer.echo("openkos relate: proposed changes:")
-    if already_present:
+    if prepared.already_present:
         preview_line = (
-            f"  ~ bundle/{source_canonical}.md (relations: "
-            f"{len(existing_relations)} -> {len(updated_relations)} entries; "
-            f"unchanged: {{target: {target_canonical}, type: {rel_type}}} "
-            "already present)"
+            f"  ~ bundle/{prepared.source_canonical}.md (relations: "
+            f"{prepared.existing_relations_count} -> "
+            f"{prepared.updated_relations_count} entries; "
+            f"unchanged: {{target: {prepared.target_canonical}, "
+            f"type: {prepared.rel_type}}} already present)"
         )
     else:
         preview_line = (
-            f"  ~ bundle/{source_canonical}.md (relations: "
-            f"{len(existing_relations)} -> {len(updated_relations)} entries; "
-            f"+{{target: {target_canonical}, type: {rel_type}}})"
+            f"  ~ bundle/{prepared.source_canonical}.md (relations: "
+            f"{prepared.existing_relations_count} -> "
+            f"{prepared.updated_relations_count} entries; "
+            f"+{{target: {prepared.target_canonical}, type: {prepared.rel_type}}})"
         )
     typer.echo(preview_line)
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
-    if not auto and cfg.review:
+    if not auto and prepared.review:
         if sys.stdin.isatty():
             typer.confirm("Proceed with these changes?", abort=True)
         else:
@@ -3791,15 +3764,14 @@ def relate(
     _reject_drifted_targets(
         layout,
         {
-            source_path: source_bytes,
-            log_path: log_bytes,
+            source_path: prepared.source_bytes,
+            log_path: prepared.log_bytes,
         },
         "relate",
     )
 
     try:
-        fsio.write_atomic(source_path, new_source_text)
-        fsio.write_atomic(log_path, new_log_text)
+        relate_core(source_path, log_path, prepared)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos relate: failed while writing the relate -- {exc}.", err=True
@@ -3807,15 +3779,16 @@ def relate(
         raise typer.Exit(code=1) from exc
 
     typer.echo(
-        f"openkos relate: added a {rel_type!r} relation from "
-        f"'bundle/{source_canonical}.md' to 'bundle/{target_canonical}.md' "
-        f"({log_path.name} updated)."
+        f"openkos relate: added a {prepared.rel_type!r} relation from "
+        f"'bundle/{prepared.source_canonical}.md' to "
+        f"'bundle/{prepared.target_canonical}.md' ({log_path.name} updated)."
     )
 
     _autocommit(
         root,
-        [f"bundle/{source_canonical}.md", "bundle/log.md"],
-        f"openkos: relate {source_canonical} -> {target_canonical} ({rel_type})",
+        [f"bundle/{prepared.source_canonical}.md", "bundle/log.md"],
+        f"openkos: relate {prepared.source_canonical} -> "
+        f"{prepared.target_canonical} ({prepared.rel_type})",
     )
 
 
@@ -4768,13 +4741,10 @@ def set_volatility_cmd(
     )
 
     try:
-        # One `_snapshot_read` observation (issues #313, #318, #335): the
-        # decoded text is what `set_type_tier` derives the whole new file
-        # from, and the raw bytes are the guard's baseline for that same
-        # state -- `read_config` above parsed a separate read, but the plan
-        # is computed from THIS text, so the snapshot sits beside it.
-        config_bytes, config_text = _snapshot_read(layout.config_path)
-        new_config_text = config.set_type_tier(config_text, concept_type, tier)
+        # `read_config` above parsed a separate read, but the plan is
+        # computed from `prepare_set_volatility`'s own `_snapshot_read`, so
+        # the guard's baseline sits beside it (issues #313, #318, #335).
+        prepared = prepare_set_volatility(layout.config_path, concept_type, tier)
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos set-volatility: refusing to set -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
@@ -4799,11 +4769,11 @@ def set_volatility_cmd(
     # would be silently reverted by the whole-file write below. Re-validate
     # the one target now -- after the gate, before the write.
     _reject_drifted_targets(
-        layout, {layout.config_path: config_bytes}, "set-volatility"
+        layout, {layout.config_path: prepared.config_bytes}, "set-volatility"
     )
 
     try:
-        fsio.write_atomic(layout.config_path, new_config_text)
+        set_volatility_core(layout.config_path, prepared)
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos set-volatility: failed while writing -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
@@ -5216,6 +5186,163 @@ def _merge_drift_targets(
         survivor_path: prepared.survivor_bytes,
         absorbed_path: prepared.absorbed_bytes,
     }
+
+
+@dataclass(frozen=True)
+class PreparedRelate:
+    """Pure Phase-A result of `prepare_relate`: everything `relate`'s
+    preview, confirm gate, and `relate_core` need, built in memory without
+    writing anything (design: `curate` change, D5 -- the Structure stage's
+    write seam, issue #266).
+
+    `source_bytes`/`log_bytes` are the drift guard's baselines (issues
+    #306, #313, #318): the raw bytes each write target held at the SAME
+    `_snapshot_read` observation whose decoded text fed the plan, which the
+    command hands to `_reject_drifted_targets` after its confirm gate --
+    mirroring `PreparedMerge`'s snapshot-bytes shape."""
+
+    source_canonical: str
+    target_canonical: str
+    rel_type: str
+    new_source_text: str
+    new_log_text: str
+    already_present: bool
+    existing_relations_count: int
+    updated_relations_count: int
+    review: bool
+    source_bytes: bytes
+    log_bytes: bytes
+
+
+def prepare_relate(
+    source_path: Path,
+    log_path: Path,
+    source_canonical: str,
+    target_canonical: str,
+    rel_type: str,
+    root: Path,
+    *,
+    now: datetime,
+) -> PreparedRelate:
+    """Phase A (pure, no writes): read config + the two texts, compute the
+    updated `relations:` list and the `log.md` entry -- extracted verbatim
+    from `relate`'s former inline body (`main.py:3715-3753` pre-extraction,
+    design D5). Non-interactive; raises `OSError`/`ValueError` on bad
+    input. Writes nothing to disk.
+
+    One `_snapshot_read` observation per target (issues #306, #313, #318):
+    the decoded text feeds the plan, the raw bytes feed the drift guard's
+    baseline the returned `PreparedRelate` carries for the command to check
+    after its confirm gate."""
+    cfg = config.read_config(root)
+    # One `_snapshot_read` observation per target: the decoded text feeds
+    # the parsers below, the raw bytes feed `_reject_drifted_targets`
+    # (issues #306, #313, #318).
+    source_bytes, source_text = _snapshot_read(source_path)
+    log_bytes, log_text = _snapshot_read(log_path)
+
+    metadata, body = okf.load_frontmatter(source_text)
+    existing_relations = okf.decode_relations(metadata)
+    new_relation = okf.Relation(target=target_canonical, type=rel_type)
+    already_present = any(
+        relation.target == new_relation.target and relation.type == new_relation.type
+        for relation in existing_relations
+    )
+    updated_relations = (
+        existing_relations if already_present else [*existing_relations, new_relation]
+    )
+    metadata[okf.RELATIONS_KEY] = okf.encode_relations(updated_relations)
+    new_source_text = okf.dump_frontmatter(metadata, body)
+
+    if already_present:
+        log_line = (
+            f"**Relate**: [{source_canonical}](/{source_canonical}.md) already "
+            f"has a {rel_type!r} relation to "
+            f"[{target_canonical}](/{target_canonical}.md); no change."
+        )
+    else:
+        log_line = (
+            f"**Relate**: Added a {rel_type!r} relation from "
+            f"[{source_canonical}](/{source_canonical}.md) to "
+            f"[{target_canonical}](/{target_canonical}.md)."
+        )
+    new_log_text = bundle_log.insert_log_entry(
+        log_text, now.astimezone().date(), log_line
+    )
+
+    return PreparedRelate(
+        source_canonical=source_canonical,
+        target_canonical=target_canonical,
+        rel_type=rel_type,
+        new_source_text=new_source_text,
+        new_log_text=new_log_text,
+        already_present=already_present,
+        existing_relations_count=len(existing_relations),
+        updated_relations_count=len(updated_relations),
+        review=cfg.review,
+        source_bytes=source_bytes,
+        log_bytes=log_bytes,
+    )
+
+
+def relate_core(source_path: Path, log_path: Path, prepared: PreparedRelate) -> None:
+    """Phase B (after confirm): write the source concept file then
+    `log.md` -- extracted verbatim from `relate`'s former inline body
+    (`main.py:3800-3801` pre-extraction, design D5). Non-interactive;
+    raises `OSError`/`ValueError`. Performs NO VCS side effect --
+    `_autocommit` stays the caller's responsibility."""
+    fsio.write_atomic(source_path, prepared.new_source_text)
+    fsio.write_atomic(log_path, prepared.new_log_text)
+
+
+@dataclass(frozen=True)
+class PreparedSetVolatility:
+    """Pure Phase-A result of `prepare_set_volatility`: everything
+    `set-volatility`'s preview, confirm gate, and `set_volatility_core`
+    need, built in memory without writing anything (design: `curate`
+    change, D5 -- the Metadata stage's write seam, issue #266).
+
+    `config_bytes` is the drift guard's baseline (issues #313, #318, #335):
+    the raw bytes `openkos.yaml` held at the SAME `_snapshot_read`
+    observation whose decoded text fed `new_config_text`, which the
+    command hands to `_reject_drifted_targets` after its confirm gate --
+    mirroring `PreparedMerge`'s snapshot-bytes shape."""
+
+    concept_type: str
+    tier: str
+    new_config_text: str
+    config_bytes: bytes
+
+
+def prepare_set_volatility(
+    config_path: Path, concept_type: str, tier: str
+) -> PreparedSetVolatility:
+    """Phase A (pure, no writes): read `openkos.yaml` and run
+    `config.set_type_tier`'s text-surgery core -- extracted verbatim from
+    `set-volatility`'s former inline body (`main.py:4769-4776`
+    pre-extraction, design D5). Non-interactive; raises `OSError`/
+    `ValueError` on an un-editable existing shape. Writes nothing to disk.
+
+    One `_snapshot_read` observation (issues #313, #318, #335): the
+    decoded text is what `set_type_tier` derives the whole new file from,
+    and the raw bytes are the guard's baseline for that same state."""
+    config_bytes, config_text = _snapshot_read(config_path)
+    new_config_text = config.set_type_tier(config_text, concept_type, tier)
+    return PreparedSetVolatility(
+        concept_type=concept_type,
+        tier=tier,
+        new_config_text=new_config_text,
+        config_bytes=config_bytes,
+    )
+
+
+def set_volatility_core(config_path: Path, prepared: PreparedSetVolatility) -> None:
+    """Phase B (after confirm): write `openkos.yaml` -- extracted verbatim
+    from `set-volatility`'s former inline body (`main.py:4805`
+    pre-extraction, design D5). Non-interactive; raises `OSError`/
+    `ValueError`. Performs NO VCS side effect -- `_autocommit` stays the
+    caller's responsibility."""
+    fsio.write_atomic(config_path, prepared.new_config_text)
 
 
 @app.command()
@@ -9138,15 +9265,16 @@ def curate(
     every stage's underlying call, fail-closed by default (spec:
     Sensitivity Threading Is Fail-Closed).
 
-    Slice 1 (design D10) implements Preconditions and Identity fully;
-    Structure, Metadata, and Contradictions are declared in `_STAGES` but
-    carry `live=False` -- skipped without any prompt or model call, and
-    labeled "not yet available in this version" in the closing summary
+    All five stages run fully as of slice 2 (design D10): Preconditions and
+    Identity shipped in slice 1; Structure, Metadata, and Contradictions
+    went `live=True` in slice 2 with real `probe`/`run` implementations, so
+    each now states its cost and, once accepted, spends real model calls
     (spec: Slice Boundary). `curate` is not a CI gate: pending work never
     sets a non-zero exit. Exit codes: 0 normal (including every decline,
-    empty queue, `live=False` skip, and the Preconditions halt), 1 on a
-    workspace/config failure, 2 on a Typer usage error, 3 on a drift
-    refusal (#319, propagated unchanged from `_reject_drifted_targets`)."""
+    empty queue, and the Preconditions halt), 1 on a workspace/config
+    failure or a failed mid-walk write, 2 on a Typer usage error, 3 on a
+    drift refusal (#319, propagated unchanged from
+    `_reject_drifted_targets`)."""
     root = Path.cwd()
     reason = config.require_workspace(root)
     if reason is not None:

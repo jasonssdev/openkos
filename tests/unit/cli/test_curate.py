@@ -10,6 +10,7 @@ gates, per-item confirms, exit codes, `--auto`) follow `test_adjudicate.py`'s
 
 import sys
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -161,6 +162,19 @@ def _patch_stdin_isatty(monkeypatch: pytest.MonkeyPatch, is_tty: bool) -> None:
     # `curate.py` reads `sys.stdin.isatty()` through its own `import sys`,
     # which is the same module object patched here.
     monkeypatch.setattr(sys, "stdin", _FakeStdin(is_tty))
+
+
+def _stub_later_stages_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force Structure/Metadata/Contradictions' probes to report an empty
+    queue (slice 2). An Identity-only test built before these stages went
+    live otherwise picks up a real, unmocked cost-gate prompt for whichever
+    of them the seeded bundle happens to have candidates for -- this keeps
+    those tests scoped to Identity alone, exactly as originally written."""
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +629,7 @@ def test_accepted_identity_pair_commits_via_shared_merge_cores(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _stub_later_stages_empty(monkeypatch)
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
@@ -656,6 +671,7 @@ def test_identity_n_gt2_group_prints_pairwise_commands_no_merge(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _stub_later_stages_empty(monkeypatch)
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     for name in ("a", "b", "c"):
         _write_doc(tmp_path / "bundle" / "concepts" / f"{name}.md", title=name.upper())
@@ -755,6 +771,7 @@ def test_identity_non_tty_auto_declines_write_walk_with_hint(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _stub_later_stages_empty(monkeypatch)
     """D3 rule 2 at the sequencer level, with a REAL non-empty queue: on a
     non-TTY, `--auto` consents to model spend but never to a per-item write,
     so a `writes=True` stage whose gate `--auto`-accepted must decline its
@@ -794,6 +811,7 @@ def test_identity_confidential_member_never_reaches_the_llm_payload(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _stub_later_stages_empty(monkeypatch)
     """Sensitivity threading end-to-end (fail-closed, S3a): a confidential
     member of a REAL candidate group is dropped by the UNPATCHED
     `adjudicate_candidates` before its content is ever read, so its body
@@ -848,15 +866,6 @@ def test_all_five_stages_declared_in_d1_order() -> None:
         "Metadata",
         "Contradictions",
     ]
-
-
-def test_structure_metadata_contradictions_are_not_live() -> None:
-    live_by_name = {stage.name: stage.live for stage in curate._STAGES}
-    assert live_by_name["Preconditions"] is True
-    assert live_by_name["Identity"] is True
-    assert live_by_name["Structure"] is False
-    assert live_by_name["Metadata"] is False
-    assert live_by_name["Contradictions"] is False
 
 
 def test_identity_probe_reads_find_candidates(
@@ -992,3 +1001,582 @@ def test_warn_if_walk_incomplete_fires_once_per_run(
 
     assert result.exit_code == 0
     assert len(calls) == 1
+
+
+# ===========================================================================
+# Slice 2 (issue #266, PR2): relate/set-volatility core extraction,
+# Structure, Metadata, Contradictions made live.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 2.1-2.6 -- prepare_relate / relate_core (design D5)
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_relate_returns_snapshot_baseline_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "a.md", title="A")
+    _write_doc(tmp_path / "bundle" / "b.md", title="B")
+    before = _snapshot(tmp_path)
+
+    from openkos.cli.main import PreparedRelate, prepare_relate
+
+    prepared = prepare_relate(
+        tmp_path / "bundle" / "a.md",
+        tmp_path / "bundle" / "log.md",
+        "a",
+        "b",
+        "references",
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    assert isinstance(prepared, PreparedRelate)
+    assert prepared.already_present is False
+    assert "references" in prepared.new_source_text
+    assert changed_paths(before, _snapshot(tmp_path)) == set()
+
+
+def test_relate_core_performs_only_write_atomic_twice_and_propagates_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "a.md", title="A")
+
+    from openkos.cli import main as cli_main
+
+    source_path = tmp_path / "bundle" / "a.md"
+    log_path = tmp_path / "bundle" / "log.md"
+    prepared = cli_main.prepare_relate(
+        source_path, log_path, "a", "b", "references", tmp_path, now=datetime.now(UTC)
+    )
+
+    calls: list[Path] = []
+    from openkos import fsio as fsio_module
+
+    real_write_atomic = fsio_module.write_atomic
+
+    def _spy(path: Path, text: str) -> None:
+        calls.append(path)
+        real_write_atomic(path, text)
+
+    monkeypatch.setattr(fsio_module, "write_atomic", _spy)
+    cli_main.relate_core(source_path, log_path, prepared)
+    assert calls == [source_path, log_path]
+
+    def _raise(path: Path, text: str) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fsio_module, "write_atomic", _raise)
+    with pytest.raises(OSError, match="disk full"):
+        cli_main.relate_core(source_path, log_path, prepared)
+
+
+def test_relate_test_suite_regression_unedited() -> None:
+    """Documents the D5 gate (task 2.6): `test_relate.py` is run UNEDITED
+    as part of the regression command (task 2.23); there is nothing to
+    assert here beyond the file's own existence, which pytest already
+    verifies by collecting it."""
+    import tests.unit.cli.test_relate as test_relate_module
+
+    assert test_relate_module is not None
+
+
+# ---------------------------------------------------------------------------
+# 2.7-2.12 -- prepare_set_volatility / set_volatility_core (design D5)
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_set_volatility_returns_snapshot_baseline_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    from openkos.cli.main import PreparedSetVolatility, prepare_set_volatility
+
+    layout = config.WorkspaceLayout(tmp_path)
+    prepared = prepare_set_volatility(layout.config_path, "Person", "volatile")
+
+    assert isinstance(prepared, PreparedSetVolatility)
+    assert "volatile" in prepared.new_config_text
+    assert changed_paths(before, _snapshot(tmp_path)) == set()
+
+
+def test_set_volatility_core_performs_only_one_write_atomic_and_propagates_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    from openkos.cli import main as cli_main
+
+    layout = config.WorkspaceLayout(tmp_path)
+    prepared = cli_main.prepare_set_volatility(layout.config_path, "Person", "volatile")
+
+    calls: list[Path] = []
+    from openkos import fsio as fsio_module
+
+    real_write_atomic = fsio_module.write_atomic
+
+    def _spy(path: Path, text: str) -> None:
+        calls.append(path)
+        real_write_atomic(path, text)
+
+    monkeypatch.setattr(fsio_module, "write_atomic", _spy)
+    cli_main.set_volatility_core(layout.config_path, prepared)
+    assert calls == [layout.config_path]
+
+    def _raise(path: Path, text: str) -> None:
+        raise ValueError("bad shape")
+
+    monkeypatch.setattr(fsio_module, "write_atomic", _raise)
+    with pytest.raises(ValueError, match="bad shape"):
+        cli_main.set_volatility_core(layout.config_path, prepared)
+
+
+def test_set_volatility_test_suite_regression_unedited() -> None:
+    """Documents the D5 gate (task 2.12): `test_set_volatility.py` is run
+    UNEDITED as part of the regression command (task 2.23)."""
+    import tests.unit.cli.test_set_volatility as test_set_volatility_module
+
+    assert test_set_volatility_module is not None
+
+
+# ---------------------------------------------------------------------------
+# 2.13-2.15 -- Structure stage (candidate_edges probe, suggest_edge_types run)
+# ---------------------------------------------------------------------------
+
+
+def test_structure_accepted_suggestion_writes_via_extracted_relate_core(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion
+
+    edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+    )
+
+    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+        on_progress = kwargs.get("on_progress")
+        suggestion = EdgeSuggestion(
+            edge=edge, suggested_type="references", rationale="stub rationale"
+        )
+        if on_progress is not None:
+            on_progress(1, 1, suggestion)  # type: ignore[operator]
+        return [suggestion]
+
+    monkeypatch.setattr("openkos.cli.curate.suggest_edge_types", _fake_suggest)
+    _simulate_tty(monkeypatch)
+
+    # Identity's queue is empty (no prompt). Structure's cost gate consumes
+    # one "y"; the per-suggestion [y/N/skip] prompt consumes a second "y".
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "references" in source_text
+    assert "concepts/b" in source_text
+    assert "Structure: applied 1, skipped 0." in result.stdout
+
+
+def test_structure_declined_suggestion_writes_nothing(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion
+
+    edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_edge_types",
+        lambda edges, **k: [
+            EdgeSuggestion(edge=edge, suggested_type="references", rationale="stub")
+        ],
+    )
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+    )
+    _simulate_tty(monkeypatch)
+
+    before = _snapshot(tmp_path)
+    # No Identity candidates: Identity finds an empty queue and does not
+    # prompt. Structure's cost gate consumes "y"; the per-suggestion
+    # [y/N/skip] prompt is declined with "n".
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert "Structure: applied 0, skipped 1." in result.stdout
+    assert changed_paths(before, _snapshot(tmp_path)) == set()
+
+
+def test_structure_sees_post_merge_identity_state(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-merge freshness (task 2.15, design D4): Structure's probe is
+    called AFTER Identity's `run` has already auto-committed, so a fake
+    `candidate_edges` recording `bundle_dir`'s contents at call time proves
+    the survivor concept -- not the absorbed one -- is what Structure sees."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: [
+            AdjudicatedCandidate(
+                candidate=group, verdict=Verdict.SAME, confidence=0.9, rationale="same"
+            )
+        ],
+    )
+
+    seen_survivors: list[bool] = []
+
+    def _recording_candidate_edges(bundle_dir: Path, **kwargs: object) -> list[object]:
+        seen_survivors.append((bundle_dir / "concepts" / "a.md").exists())
+        seen_survivors.append((bundle_dir / "concepts" / "b.md").exists())
+        return []
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.candidate_edges", _recording_candidate_edges
+    )
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+    )
+    _simulate_tty(monkeypatch)
+
+    # Identity's cost gate + per-pair prompt consume "y\ny"; Structure's
+    # cost gate is never reached (its probe reports an empty queue).
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert seen_survivors == [True, False]
+
+
+# ---------------------------------------------------------------------------
+# 2.16-2.17 -- Metadata stage (suggest_volatility run, sensitivity gap)
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_accepted_tier_writes_via_extracted_set_volatility_core(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.resolution.volatility_typing import TierSuggestion
+
+    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+    )
+
+    def _fake_suggest_volatility(
+        bundle_dir: Path, **kwargs: object
+    ) -> list[TierSuggestion]:
+        on_progress = kwargs.get("on_progress")
+        suggestion = TierSuggestion(
+            type_name="Concept",
+            current_default="static",
+            suggested_tier="volatile",
+            rationale="stub rationale",
+        )
+        if on_progress is not None:
+            on_progress(1, 1, suggestion)  # type: ignore[operator]
+        return [suggestion]
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility", _fake_suggest_volatility
+    )
+    _simulate_tty(monkeypatch)
+
+    # Identity finds no candidates (empty queue, no prompt); Structure finds
+    # no untyped edges (empty queue, no prompt); Metadata's cost gate
+    # consumes "y", its per-type [y/N/skip] prompt consumes a second "y".
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    config_text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "Concept: volatile" in config_text or "volatile" in config_text
+    assert "Metadata: applied 1, skipped 0." in result.stdout
+
+
+def test_metadata_sensitivity_gap_reported_never_written(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    gap_path = tmp_path / "bundle" / "concepts" / "a.md"
+    _write_doc(gap_path, title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
+    )
+    monkeypatch.setattr("openkos.cli.curate.suggest_volatility", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+    )
+    _simulate_tty(monkeypatch)
+
+    before = _snapshot(tmp_path)
+    # Metadata's cost gate ("1 concept type(s) -> 1 LLM call(s)") consumes
+    # the only stdin answer; `suggest_volatility` (mocked) returns no
+    # suggestions, so the gap report is the only thing Metadata prints.
+    result = runner.invoke(app, ["curate"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "sensitivity gap" in result.stdout
+    assert "concepts/a" in result.stdout
+    assert "openkos set-sensitivity" in result.stdout
+    assert changed_paths(before, _snapshot(tmp_path)) == set()
+
+
+def test_metadata_gap_notice_survives_an_empty_type_list(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review correction (R3-01 CRITICAL): the REAL, unmocked
+    `_metadata_probe` over the exact bundle shape the gap report exists to
+    flag -- a lone doc whose `sensitivity` is unset, which the fail-closed
+    filter therefore ALSO excludes from `_concept_type_names`, emptying
+    the probe. The gap notice must ride the empty branch's
+    `empty_message`; before the correction, `run_curate`'s empty-queue
+    short-circuit returned before `_metadata_run` and the notice never
+    printed anywhere."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+    )
+    # `_concept_type_names` deliberately NOT patched: the doc's unset
+    # sensitivity must empty the real type list for this scenario to hold.
+
+    before = _snapshot(tmp_path)
+    result = runner.invoke(app, ["curate"])
+
+    assert result.exit_code == 0
+    assert "No concept types found." in result.stdout
+    assert "Sensitivity unset on: concepts/a" in result.stdout
+    assert "openkos set-sensitivity" in result.stdout
+    assert changed_paths(before, _snapshot(tmp_path)) == set()
+
+
+# ---------------------------------------------------------------------------
+# 2.18-2.19 -- Contradictions stage (report-only, terminal)
+# ---------------------------------------------------------------------------
+
+
+def test_contradictions_runs_last_and_never_writes(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.resolution.contradiction import (
+        ContradictionVerdict,
+    )
+    from openkos.resolution.contradiction import (
+        Verdict as CVerdict,
+    )
+
+    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs",
+        lambda *a, **k: ([("concepts/a", "concepts/b")], 1),
+    )
+
+    order: list[str] = []
+
+    def _fake_find_contradictions(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[list[object], int]:
+        order.append("Contradictions")
+        on_progress = kwargs.get("on_progress")
+        verdict = ContradictionVerdict(
+            pair_ids=("concepts/a", "concepts/b"),
+            verdict=CVerdict.CONTRADICTS,
+            confidence=0.9,
+            rationale="stub",
+            conflicting_claims=("claim one",),
+        )
+        if on_progress is not None:
+            on_progress(1, 1, verdict)  # type: ignore[operator]
+        return [verdict], 1
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions", _fake_find_contradictions
+    )
+    _simulate_tty(monkeypatch)
+
+    before = _snapshot(tmp_path)
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0
+    assert order == ["Contradictions"]
+    assert "CONTRADICTS" in result.stdout
+    assert changed_paths(before, _snapshot(tmp_path)) == set()
+
+
+# ---------------------------------------------------------------------------
+# 2.20-2.21 -- all five stages live, no "not yet available" label remains
+# ---------------------------------------------------------------------------
+
+
+def test_all_five_stages_are_live_in_slice_2() -> None:
+    live_by_name = {stage.name: stage.live for stage in curate._STAGES}
+    assert all(live_by_name.values())
+
+
+def test_full_summary_has_no_not_yet_available_label(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["curate"])
+
+    assert result.exit_code == 0
+    assert "not yet available in this version" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Review WARNING (a): `_identity_probe`'s empty-queue branch
+# ---------------------------------------------------------------------------
+
+
+def test_identity_probe_empty_queue_renders_no_candidate_groups_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+    )
+
+    result = runner.invoke(app, ["curate"])
+
+    assert result.exit_code == 0
+    assert "Identity: No candidate groups found." in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Review SUGGESTION: `_preconditions_run`'s structurally-unreachable branch
+# ---------------------------------------------------------------------------
+
+
+def test_preconditions_run_direct_call_returns_empty_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+    )
+    outcome = curate._preconditions_run(ctx, curate.StageProbe())
+    assert outcome.status == "empty"
+
+
+# ---------------------------------------------------------------------------
+# Review SUGGESTION: all-confidential candidate group makes no model call
+# ---------------------------------------------------------------------------
+
+
+def test_identity_all_confidential_group_makes_no_model_call(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    for name in ("alpha", "beta"):
+        path = tmp_path / "bundle" / "concepts" / f"{name}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "---\ntype: Concept\ntitle: Same Title\n"
+            "sensitivity: confidential\n---\n# Same Title\n",
+            encoding="utf-8",
+        )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/alpha", "concepts/beta"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+
+    class _NoChatOllama:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def chat(self, messages: object) -> str:
+            raise AssertionError(
+                "llm.chat must never be called for an all-confidential group"
+            )
+
+    monkeypatch.setattr("openkos.cli.curate.OllamaClient", _NoChatOllama)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Identity: applied 0, skipped 0." in result.stdout
