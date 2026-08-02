@@ -14,6 +14,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.cli.main import app
 from openkos.model import okf
+from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
@@ -578,3 +579,174 @@ def test_additive_only_preserves_existing_body_and_relations(
         (tmp_path / "bundle" / f"{a_id}.md").read_text(encoding="utf-8")
     )
     assert metadata_a.get("status") == "active"
+
+
+# -- #313: re-validate every write target after the confirm gate ------------
+
+
+def _pair_on_a_tty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str]:
+    """A workspace with the reconcilable pair ingested, on a TTY -- the
+    minimum that reaches `reconcile`'s confirm gate with all THREE of its
+    write targets present."""
+    _init_workspace(tmp_path, monkeypatch)
+    id_a = _ingest_source(tmp_path, "a.txt")
+    id_b = _ingest_source(tmp_path, "b.txt")
+    _simulate_tty(monkeypatch)
+    return id_a, id_b
+
+
+@pytest.mark.parametrize(
+    "target", ["bundle/sources/a.md", "bundle/sources/b.md", "bundle/log.md"]
+)
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313: `reconcile` renders BOTH concept documents and the new `log.md`
+    from a pre-prompt read, then writes those exact bytes. An edit landing
+    while the operator reads the preview was overwritten in full, silently,
+    and auto-committed. Every target must be re-read after the gate.
+
+    Parametrized over all three because the guard is whole-run: `reconcile`
+    writes a symmetric pair, so honouring one side while clobbering the
+    other would leave the two concepts disagreeing about their own
+    resolution -- the one state the refuse-on-conflict gate exists to
+    prevent.
+    """
+    id_a, id_b = _pair_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(app, ["reconcile", id_a, id_b], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_write_target_deleted_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target that has since been DELETED is drift too: re-creating it
+    from a snapshot the operator can no longer see is the same silent
+    revert as overwriting it."""
+    id_a, id_b = _pair_on_a_tty(tmp_path, monkeypatch)
+    deleted_path = tmp_path / "bundle" / "sources" / "b.md"
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, deleted_path.unlink)
+
+    result = runner.invoke(app, ["reconcile", id_a, id_b], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "bundle/sources/b.md" in result.stderr
+    assert not deleted_path.exists()
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle/sources/b.md")}
+
+
+@pytest.mark.parametrize(
+    "target", ["bundle/sources/a.md", "bundle/sources/b.md", "bundle/log.md"]
+)
+def test_a_crlf_rewrite_during_the_prompt_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#306's constraint, re-pinned for `reconcile`: line-ending-only drift
+    is still drift. `read_text` applies universal-newline translation, so a
+    CRLF rewrite compares EQUAL to its own LF snapshot and the guard would
+    wave it through -- then `fsio.write_atomic` (which opens with
+    `newline=""`) puts the LF plan back over the operator's CRLF file.
+
+    Parametrized over all THREE targets (#313 review, R3): `reconcile`
+    carries three independent snapshots, and covering only `log.md` left
+    both concept snapshots free to be paired with `read_text` -- every
+    other assertion in this block is reader-independent and stayed green.
+    """
+    id_a, id_b = _pair_on_a_tty(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != target_path.read_bytes()
+    before = snapshot_with_mtime(tmp_path)
+    confirm_after(monkeypatch, lambda: target_path.write_bytes(concurrent))
+
+    result = runner.invoke(app, ["reconcile", id_a, id_b], input="y\n")
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_bytes() == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_targets_that_were_already_crlf_are_not_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: a write target that was ALREADY CRLF at rest,
+    untouched by anyone, must not be reported as drift -- otherwise the
+    verb refuses forever, naming a cause that never happened and a re-run
+    that cannot clear it.
+
+    All three targets are CRLF here (#313 review, R3): this is the only
+    case that can catch a concept snapshot paired with `read_text`, and
+    `reconcile` has two of them.
+    """
+    id_a, id_b = _pair_on_a_tty(tmp_path, monkeypatch)
+    for rel in ("bundle/sources/a.md", "bundle/sources/b.md", "bundle/log.md"):
+        path = tmp_path / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = runner.invoke(app, ["reconcile", id_a, id_b, "--auto"])
+
+    assert result.exit_code == 0
+    assert "refusing to write" not in result.stderr
+    assert _relations_of(tmp_path, id_a) == [
+        okf.Relation(target=id_b, type="reconciled_with")
+    ]
+
+
+@pytest.mark.parametrize(
+    "target", ["bundle/sources/a.md", "bundle/sources/b.md", "bundle/log.md"]
+)
+def test_drift_on_the_unprompted_path_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#313 review, R3: the guard must run on `--auto` too.
+
+    Every other drift test here reaches the gate through `typer.confirm`,
+    so indenting the `_reject_drifted_targets` call into the
+    `if not auto and cfg.review:` block would disable it for unattended
+    runs and leave all of them green. `--auto` is the path most likely to
+    race a second writer, precisely because nothing pauses for a human.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    id_a = _ingest_source(tmp_path, "a.txt")
+    id_b = _ingest_source(tmp_path, "b.txt")
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the preview printed\n"
+    before = snapshot_with_mtime(tmp_path)
+    echo_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        trigger="(new dated entry)",
+    )
+
+    result = runner.invoke(app, ["reconcile", id_a, id_b, "--auto"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    after = snapshot_with_mtime(tmp_path)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
