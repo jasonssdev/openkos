@@ -10,9 +10,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.cli import main
 from openkos.cli.main import app
 from openkos.vcs import git as vcs_git
-from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
+from tests.unit.cli.conftest import (
+    changed_paths,
+    confirm_after,
+    echo_after,
+    snapshot_with_mtime,
+)
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -311,7 +317,7 @@ def test_the_config_edited_during_the_prompt_is_refused(
     assert config_path.read_text(encoding="utf-8") == concurrent
     assert _last_commit_message(tmp_path) == commit_before
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path("openkos.yaml")}
 
 
@@ -383,7 +389,7 @@ def test_drift_on_the_unprompted_path_is_refused(
     config_path = tmp_path / "openkos.yaml"
     concurrent = config_path.read_text(encoding="utf-8") + "review: false\n"
     before = snapshot_with_mtime(tmp_path)
-    echo_after(
+    hook = echo_after(
         monkeypatch,
         lambda: config_path.write_text(concurrent, encoding="utf-8"),
         trigger="Person: slow -> volatile",
@@ -391,12 +397,13 @@ def test_drift_on_the_unprompted_path_is_refused(
 
     result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
 
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "openkos.yaml" in result.stderr
     assert config_path.read_text(encoding="utf-8") == concurrent
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path("openkos.yaml")}
 
 
@@ -419,7 +426,7 @@ def test_drift_under_review_false_is_refused(
     )
     concurrent = config_path.read_text(encoding="utf-8") + "default_sensitivity: high\n"
     before = snapshot_with_mtime(tmp_path)
-    echo_after(
+    hook = echo_after(
         monkeypatch,
         lambda: config_path.write_text(concurrent, encoding="utf-8"),
         trigger="Person: slow -> volatile",
@@ -427,10 +434,56 @@ def test_drift_under_review_false_is_refused(
 
     result = runner.invoke(app, ["set-volatility", "Person", "volatile"])
 
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "openkos.yaml" in result.stderr
     assert config_path.read_text(encoding="utf-8") == concurrent
     after = snapshot_with_mtime(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path("openkos.yaml")}
+
+
+def test_an_edit_landing_after_the_snapshot_observation_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318's race, pinned for `set-volatility` (#327 follow-up; the pin
+    existed only in `test_relate.py`): the guard's baseline and the text
+    `set_type_tier`'s surgery runs over must come from the ONE
+    `_snapshot_read` observation of `openkos.yaml` -- under a two-read shape
+    a writer landing between the two reads becomes the guard's own
+    baseline, and Phase B writes the config rendered from the EARLIER text,
+    silently reverting the edit (possibly a safety setting like `review:`).
+
+    The edit lands immediately after the config's snapshot returns -- the
+    verb's ONLY snapshot, so this is the whole seam -- and the guard's
+    later re-read must call it drift and refuse the run.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    config_path = tmp_path / "openkos.yaml"
+    concurrent = config_path.read_text(encoding="utf-8") + "default_sensitivity: high\n"
+    real_snapshot_read = main._snapshot_read
+    fired = False
+
+    def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        nonlocal fired
+        snapshot = real_snapshot_read(path)
+        if not fired and path == config_path:
+            fired = True
+            config_path.write_text(concurrent, encoding="utf-8")
+        return snapshot
+
+    before = snapshot_with_mtime(tmp_path)
+    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+
+    result = runner.invoke(app, ["set-volatility", "Person", "volatile", "--auto"])
+
+    assert fired, "the racing wrapper never saw the config snapshot"
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert "openkos.yaml" in result.stderr
+    assert config_path.read_text(encoding="utf-8") == concurrent
+    assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
+        Path("openkos.yaml")
+    }

@@ -14,9 +14,10 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos import fsio
 from openkos.bundle import index as bundle_index
 from openkos.bundle import links as bundle_links
+from openkos.cli import main
 from openkos.cli.main import _apply_link_rewrite_idempotently, app
 from openkos.model import okf
-from tests.unit.cli.conftest import confirm_after, echo_after
+from tests.unit.cli.conftest import changed_paths, confirm_after, echo_after
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -1093,7 +1094,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = _snapshot(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -1130,7 +1131,7 @@ def test_the_absorbed_delete_target_edited_during_the_prompt_is_refused(
     # The edit survives: not unlinked, not rewritten.
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = _snapshot(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -1154,7 +1155,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
     assert "bundle/concepts/other.md" in result.stderr
     assert not deleted_path.exists()
     after = _snapshot(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path("bundle/concepts/other.md")}
 
 
@@ -1185,7 +1186,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
     after = _snapshot(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -1220,7 +1221,7 @@ def test_drift_on_the_unprompted_path_is_refused(
     target_path = tmp_path / target
     concurrent = "hand-edited while the preview printed\n"
     before = _snapshot(tmp_path)
-    echo_after(
+    hook = echo_after(
         monkeypatch,
         lambda: target_path.write_text(concurrent, encoding="utf-8"),
         trigger="- bundle/concepts/absorbed.md",
@@ -1230,12 +1231,13 @@ def test_drift_on_the_unprompted_path_is_refused(
         app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
     )
 
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = _snapshot(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
 
 
@@ -1258,7 +1260,7 @@ def test_drift_under_review_false_is_refused(
     target_path = tmp_path / target
     concurrent = "hand-edited while the preview printed\n"
     before = _snapshot(tmp_path)
-    echo_after(
+    hook = echo_after(
         monkeypatch,
         lambda: target_path.write_text(concurrent, encoding="utf-8"),
         trigger="- bundle/concepts/absorbed.md",
@@ -1266,10 +1268,60 @@ def test_drift_under_review_false_is_refused(
 
     result = runner.invoke(app, ["merge", "concepts/survivor", "concepts/absorbed"])
 
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
     assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     after = _snapshot(tmp_path)
-    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    changed = changed_paths(before, after)
     assert changed == {Path(target)}
+
+
+def test_an_edit_landing_after_the_snapshot_observation_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318's race, pinned for `merge` (#327 follow-up; the pin existed only
+    in `test_relate.py`): the guard's baseline and the text the merged
+    survivor is computed from must come from the ONE `_snapshot_read`
+    observation -- under a two-read shape a writer landing between the two
+    reads becomes the guard's own baseline, and Phase B writes the merge
+    computed from the EARLIER text, silently reverting the edit and
+    auto-committing the revert.
+
+    The edit lands immediately after the survivor's snapshot returns (the
+    verb's FIRST snapshot -- absorbed, `index.md`, `log.md`, and every
+    touched third-party file are read after it), the earliest a concurrent
+    writer can now land relative to the plan; the guard's later re-read
+    must call it drift and refuse the whole run.
+    """
+    _pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
+    target_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    concurrent = "hand-edited the instant the snapshot returned\n"
+    real_snapshot_read = main._snapshot_read
+    fired = False
+
+    def racing_snapshot_read(path: Path) -> tuple[bytes, str]:
+        nonlocal fired
+        snapshot = real_snapshot_read(path)
+        if not fired and path == target_path:
+            fired = True
+            target_path.write_text(concurrent, encoding="utf-8")
+        return snapshot
+
+    before = _snapshot(tmp_path)
+    monkeypatch.setattr(main, "_snapshot_read", racing_snapshot_read)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert fired, "the racing wrapper never saw the survivor snapshot"
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert "bundle/concepts/survivor.md" in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert changed_paths(before, _snapshot(tmp_path)) == {
+        Path("bundle/concepts/survivor.md")
+    }
