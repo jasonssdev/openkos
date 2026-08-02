@@ -453,7 +453,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
         app, ["relate", source_id, "references", target_id], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
@@ -478,7 +478,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
         app, ["relate", source_id, "references", target_id], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "bundle/sources/a.md" in result.stderr
     assert not deleted_path.exists()
@@ -515,7 +515,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
         app, ["relate", source_id, "references", target_id], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
@@ -561,7 +561,7 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
         app, ["relate", source_id, "references", target_id, "--auto"]
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert "bundle/sources/a.md" in result.stderr
@@ -640,7 +640,7 @@ def test_drift_on_the_unprompted_path_is_refused(
         app, ["relate", source_id, "references", target_id, "--auto"]
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent

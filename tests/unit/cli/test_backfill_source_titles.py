@@ -577,7 +577,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["backfill-source-titles"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
@@ -599,7 +599,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["backfill-source-titles"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert f"bundle/{second_id}.md" in result.stderr
     assert not deleted_path.exists()
@@ -631,7 +631,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["backfill-source-titles"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent

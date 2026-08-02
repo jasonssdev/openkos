@@ -1114,7 +1114,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
@@ -1122,6 +1122,45 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     after = _snapshot(tmp_path)
     changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
     assert changed == {Path(target)}
+
+
+@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/concepts/survivor.md"])
+def test_the_refusal_warns_that_a_rerun_discards_the_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#328: `unmerge` is the one guarded verb whose re-run is NOT a safe
+    recovery. The default remedy ("re-run to recompute") is exactly wrong
+    here: a re-run restores the PRE-MERGE snapshots over `index.md`,
+    `log.md`, and the survivor -- overwriting the protected edit the guard
+    just saved -- and keeps refusing on an edited rewrite file until that
+    edit is reverted. The refusal must say what the next run will actually
+    do and tell the operator to copy the edit somewhere safe first; it must
+    never advise the action that discards it.
+
+    Parametrized over a snapshot-restored target (`index.md`) and the
+    survivor, because both are on the overwrite-on-re-run side of the
+    asymmetry the message describes.
+    """
+    _merged_pair_with_all_three_rewrite_groups(tmp_path, monkeypatch)
+    target_path = tmp_path / target
+    concurrent = "hand-edited while the prompt waited\n"
+    confirm_after(
+        monkeypatch, lambda: target_path.write_text(concurrent, encoding="utf-8")
+    )
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
+    )
+
+    assert result.exit_code == 3
+    assert "refusing to write --" in result.stderr
+    # Says what the next run WILL do to the protected edit...
+    assert "pre-merge" in result.stderr.lower()
+    assert "overwrit" in result.stderr.lower()
+    # ...and what to do about it first.
+    assert "copy" in result.stderr.lower()
+    # Never the destructive advice the shared default would have given.
+    assert "re-run to recompute over the current bundle" not in result.stderr.lower()
 
 
 def test_a_write_target_deleted_during_the_prompt_is_refused(
@@ -1138,7 +1177,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "bundle/concepts/other.md" in result.stderr
     assert not deleted_path.exists()
@@ -1176,7 +1215,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
@@ -1230,7 +1269,7 @@ def test_drift_on_the_unprompted_path_is_refused(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent

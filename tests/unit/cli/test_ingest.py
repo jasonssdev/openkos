@@ -4244,7 +4244,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
@@ -4267,7 +4267,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "bundle/sources/notes.md" in result.stderr
     assert not deleted_path.exists()
@@ -4298,7 +4298,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["ingest", "notes.txt"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
@@ -4351,7 +4351,7 @@ def test_drift_on_the_unprompted_path_is_refused(
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
@@ -4429,7 +4429,7 @@ def test_a_concept_edited_during_the_llm_call_is_refused(
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert "bundle/sources/notes.md" in result.stderr
     # The raise survives: this is the downgrade the guard exists to stop.

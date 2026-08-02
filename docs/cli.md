@@ -21,7 +21,7 @@ This is the single source of truth for the OpenKOS command line. It covers the c
 - **Local-first.** Every command runs on your machine and works offline.
 - **Color is a layer, not a requirement.** Output uses color to encode meaning, but respects `NO_COLOR` and a `--no-color` flag, and auto-disables when output is not a TTY (e.g. piped to a file). The symbols (`+`, `~`, `✔`, `→`) carry the meaning without color.
 - **Config lives in `openkos.yaml`** at the workspace root, beside `raw/` and `bundle/`; the agent operating manual lives in `AGENTS.md`, next to it.
-- **git is handled for you.** `init` creates the repository, the `.gitignore`, and the first commit; every mutating verb except `query --save` then auto-commits its own writes with a scoped `git add -- <paths>` (never `-A`). You never have to run a git command to keep the workspace versioned — `git log`/`git diff`/`git revert` remain available for inspection and undo. When git is unavailable or its identity is unset, commands print a stderr `WARNING` and still leave every write on disk; they never fail because of git.
+- **git is handled for you.** `init` creates the repository, the `.gitignore`, and the first commit; every mutating verb (including `query --save`, since #331) then auto-commits its own writes with a scoped `git add -- <paths>` (never `-A`). You never have to run a git command to keep the workspace versioned — `git log`/`git diff`/`git revert` remain available for inspection and undo. When git is unavailable or its identity is unset, commands print a stderr `WARNING` and still leave every write on disk; they never fail because of git.
 
 ### Global options
 

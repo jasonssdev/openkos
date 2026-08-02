@@ -1134,7 +1134,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
         app, ["set-sensitivity", source_id, "confidential"], input="y\n"
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent

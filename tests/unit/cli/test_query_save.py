@@ -15,11 +15,14 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos import fsio
 from openkos.cli.main import _stage_filed_answer, app
 from openkos.graph import sqlite_graph
 from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state import fts, vectorstore
+from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import confirm_after, echo_after, snapshot_with_mtime
+from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
 
@@ -740,7 +743,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
@@ -765,7 +768,7 @@ def test_a_write_target_deleted_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert not target_path.exists()
@@ -792,7 +795,7 @@ def test_a_crlf_rewrite_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
@@ -845,7 +848,7 @@ def test_drift_on_the_unprompted_path_is_refused(
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
@@ -891,3 +894,167 @@ def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
     assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
         Path("bundle/concepts/what-is-stoicism.md")
     }
+
+
+# -- #331: Phase-B failure reporting and auto-commit -------------------------
+
+
+def _fail_write_atomic_at(monkeypatch: pytest.MonkeyPatch, fail_at: int) -> None:
+    """Make `write_atomic`'s `fail_at`-th call (1-indexed) raise, counting
+    only the calls of the invocation under test (mirrors
+    `test_backfill_source_titles.py::_monkeypatch_failing_write`). In
+    `query --save`'s Phase B, call 1 is `index.md` and call 2 is `log.md` --
+    the answer document goes through `write_exclusive` and is never
+    counted here."""
+    real_write_atomic = fsio.write_atomic
+    call_count = 0
+
+    def _write(path: Path, content: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == fail_at:
+            raise OSError("simulated disk failure")
+        real_write_atomic(path, content)
+
+    monkeypatch.setattr("openkos.cli.main.fsio.write_atomic", _write)
+
+
+def test_a_failure_at_the_answer_write_reports_no_path_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#331: the answer document is write 1 of 3, so a failure THERE means
+    nothing landed -- and the message must say so with the same "No path
+    was written." clause its siblings use, never leave the operator to
+    guess which of the three paths exists."""
+    _matched_answer_on_a_tty(tmp_path, monkeypatch)
+
+    def _failing_exclusive(path: Path, content: str) -> None:
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr("openkos.cli.main.fsio.write_exclusive", _failing_exclusive)
+    before = snapshot_with_mtime(tmp_path)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos query: failed while saving the answer --" in result.stderr
+    assert "No path was written." in result.stderr
+    assert "Already written" not in result.stderr
+    assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == set()
+
+
+def test_a_failure_at_the_index_write_names_the_landed_answer_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#331: failing write 2 of 3 (`index.md`) leaves the answer document
+    on disk but uncataloged. The failure message must name exactly what
+    landed -- content-before-catalog ordering means the partial state is
+    benign (nothing references a missing file), but only if the operator
+    can see WHICH state they are in."""
+    _matched_answer_on_a_tty(tmp_path, monkeypatch)
+    _fail_write_atomic_at(monkeypatch, fail_at=1)
+    before = snapshot_with_mtime(tmp_path)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "openkos query: failed while saving the answer --" in result.stderr
+    assert (
+        "Already written (left partially filed, not rolled back): "
+        "bundle/concepts/what-is-stoicism.md." in result.stderr
+    )
+    # The message claims "not rolled back"; prove it on disk.
+    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+    assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
+        Path("bundle/concepts/what-is-stoicism.md")
+    }
+
+
+def test_a_failure_at_the_log_write_names_the_answer_and_the_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#331: failing write 3 of 3 (`log.md`) leaves the answer document AND
+    the new `index.md` entry on disk; only the audit line is missing. The
+    landed list must name both, in write order."""
+    _matched_answer_on_a_tty(tmp_path, monkeypatch)
+    _fail_write_atomic_at(monkeypatch, fail_at=2)
+    before = snapshot_with_mtime(tmp_path)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save"], input="y\n")
+
+    assert result.exit_code == 1
+    assert "openkos query: failed while saving the answer --" in result.stderr
+    assert (
+        "Already written (left partially filed, not rolled back): "
+        "bundle/concepts/what-is-stoicism.md, bundle/index.md." in result.stderr
+    )
+    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    assert "what-is-stoicism" in index_text
+    assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
+        Path("bundle/concepts/what-is-stoicism.md"),
+        Path("bundle/index.md"),
+    }
+
+
+def test_query_save_success_autocommits_its_three_writes(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#331: `query --save` now auto-commits its Phase-B writes exactly like
+    every other mutating verb (workspace-autocommit). It was the one
+    mutating path without the safety net, for no documented reason -- the
+    Slice-2 exclusion list names `reindex`, `init`, and read-only verbs
+    only -- which left both a successful save AND a partial failure sitting
+    uncommitted, invisible to the git-recovery story every sibling's
+    docstring leans on."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+    # The hand-planted cited concept is untracked; commit it so the ONLY
+    # dirty paths after the save are the three the verb itself wrote.
+    vcs_git.commit_paths(
+        tmp_path,
+        ["bundle/concepts/stoicism.md", "bundle/index.md"],
+        "seed cited concept",
+    )
+    before = _commit_count(tmp_path)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert _commit_count(tmp_path) == before + 1
+    assert (
+        _last_commit_subject(tmp_path)
+        == "openkos: query --save concepts/what-is-stoicism"
+    )
+    assert _last_commit_files(tmp_path) == {
+        "bundle/concepts/what-is-stoicism.md",
+        "bundle/index.md",
+        "bundle/log.md",
+    }
+    assert vcs_git.is_clean(tmp_path) is True
+
+
+def _commit_count(root: Path) -> int:
+    result = vcs_git._run(["git", "log", "--format=%H"], cwd=root)
+    return len([line for line in result.stdout.splitlines() if line])
+
+
+def _last_commit_subject(root: Path) -> str:
+    result = vcs_git._run(["git", "log", "-1", "--format=%s"], cwd=root)
+    return result.stdout.strip()
+
+
+def _last_commit_files(root: Path) -> set[str]:
+    result = vcs_git._run(["git", "show", "--name-only", "--format=", "-1"], cwd=root)
+    return {line for line in result.stdout.splitlines() if line}

@@ -1105,7 +1105,7 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert isinstance(result.exception, SystemExit)
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
@@ -1137,9 +1137,13 @@ def test_the_root_delete_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
+    # #319: the root concept is a DELETE target -- the message must say the
+    # verb was about to unlink it, and the footer must cover both halves.
+    assert "delete target(s)" in result.stderr
+    assert "nothing was deleted" in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     assert _blob_history_contains(
         tmp_git_repo.root, f"bundle/{tmp_git_repo.source_id}.md"
@@ -1169,7 +1173,7 @@ def test_a_cascade_delete_target_edited_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id, "--scope", "source"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
@@ -1197,9 +1201,13 @@ def test_a_delete_target_deleted_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id, "--scope", "source"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert f"bundle/{child_id}.md" in result.stderr
+    # #319: the VANISHED bucket, on a delete target -- and the advice must
+    # be restore-or-confirm, never a plain re-run that refuses again.
+    assert "delete target(s) vanished" in result.stderr
+    assert "restore" in result.stderr
     # Nothing else was deleted and history is intact.
     assert (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").is_file()
     assert _tree_contains_path(tmp_git_repo.root, "raw/notes.txt")
@@ -1229,7 +1237,7 @@ def test_a_crlf_rewrite_of_a_delete_target_during_the_prompt_is_refused(
 
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_bytes() == concurrent
@@ -1301,7 +1309,7 @@ def test_drift_on_the_unprompted_path_is_refused(
         app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "refusing to write --" in result.stderr
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
