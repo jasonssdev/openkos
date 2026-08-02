@@ -29,6 +29,7 @@ from openkos.bundle import merge as bundle_merge
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.bundle import relations as bundle_relations
+from openkos.cli import curate as curate_module
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
 from openkos.extraction.concept import extract_concept
@@ -5185,6 +5186,38 @@ def merge_core(
     )
 
 
+def _merge_drift_targets(
+    layout: config.WorkspaceLayout, prepared: PreparedMerge
+) -> dict[Path, bytes]:
+    """Build the drift-guard baseline mapping (issue #334) a prepared merge
+    needs for `_reject_drifted_targets` -- extracted from `merge`'s former
+    inline dict literal at its own call site (design D6, issue #266) so
+    `curate`'s Identity stage can call `_reject_drifted_targets` with the
+    EXACT same guard mapping `merge` uses, rather than reconstructing it
+    and risking the two drifting apart. `merge` itself now calls this too,
+    so there is exactly one place this mapping is built.
+
+    The absorbed file's baseline is included alongside every OVERWRITE
+    target: it is the one path `merge_core`/`curate`'s Identity stage
+    UNLINKS, not overwrites -- the caller is responsible for passing it in
+    `deletes=` to `_reject_drifted_targets` so the refusal message reports
+    it as a delete target, not a write target (#329)."""
+    index_path = layout.bundle_dir / "index.md"
+    log_path = layout.bundle_dir / "log.md"
+    survivor_path = layout.bundle_dir / f"{prepared.survivor_canonical}.md"
+    absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
+    return {
+        index_path: prepared.index_bytes,
+        log_path: prepared.log_bytes,
+        **{
+            layout.bundle_dir / rel: data
+            for rel, data in prepared.touched_bytes.items()
+        },
+        survivor_path: prepared.survivor_bytes,
+        absorbed_path: prepared.absorbed_bytes,
+    }
+
+
 @app.command()
 def merge(
     survivor_id: str = typer.Argument(
@@ -5398,16 +5431,7 @@ def merge(
     # removes.
     _reject_drifted_targets(
         layout,
-        {
-            index_path: prepared.index_bytes,
-            log_path: prepared.log_bytes,
-            **{
-                layout.bundle_dir / rel: data
-                for rel, data in prepared.touched_bytes.items()
-            },
-            survivor_path: prepared.survivor_bytes,
-            absorbed_path: prepared.absorbed_bytes,
-        },
+        _merge_drift_targets(layout, prepared),
         "merge",
         # #319: the absorbed file is the one path `merge_core` UNLINKS;
         # everything else in the mapping is overwritten.
@@ -9046,3 +9070,111 @@ def doctor() -> None:
 
     if any(r.status == "fail" and r.critical for r in results):
         raise typer.Exit(code=1)
+
+
+@app.command()
+def curate(
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help=(
+            "Auto-accept every stage's cost gate (model spend, never a "
+            "per-item write consent -- see the write-consent note below)."
+        ),
+    ),
+    include_confidential: bool = typer.Option(
+        False,
+        "--include-confidential",
+        help="Include confidential concepts (excluded by default).",
+    ),
+    include_deprecated: bool = typer.Option(
+        False,
+        "--include-deprecated",
+        help="Include deprecated and superseded concepts (excluded by default).",
+    ),
+) -> None:
+    """One dependency-ordered decision session over the five kinds of
+    pending human judgment: Preconditions, Identity, Structure, Metadata,
+    Contradictions (ADR-0005/ADR-0011 ordering; issue #266).
+
+    A THIN command, mirroring `next`'s shape: the shared
+    `config.require_workspace` gate, then `config.read_config`
+    (`except (OSError, ValueError)`, the same lint parity every other verb
+    keeps), then `observability.warn_if_walk_incomplete` exactly ONCE for
+    the whole run (design D8) -- never per stage, since five identical
+    incomplete-walk paragraphs in one session would be noise. The entire
+    ranked engine -- `_STAGES`, the cost gate, the sequencer, and the
+    end-of-run summary -- lives in `cli/curate.py`; this command builds one
+    `CurateContext`, calls `run_curate`, and echoes `render_summary`
+    verbatim.
+
+    Preconditions probes `vectors.db` before Identity: missing or empty, it
+    prints the starved-candidate-edges consequence plus an `openkos
+    reindex` pointer and halts the ENTIRE run (exit 0, no later stage runs
+    -- spec: Preconditions Stage Halts The Run). Every other stage's
+    decline, empty queue, or `live=False` skip is scoped to that stage
+    alone and never aborts the rest (spec: Stage Order Is A Product
+    Invariant).
+
+    Each LLM-costing stage prints its own cost line (`{n} {noun}(s) -> {n}
+    LLM call(s)`) and asks for confirmation before contacting the model,
+    unless `--auto` is passed; `--auto` consents to model SPEND only, NEVER
+    to a per-item write. On a non-TTY run with `--auto`, a write stage
+    (`writes: true`, e.g. Identity) declines its write walk and prints the
+    corresponding standalone verb for unattended use instead
+    (`openkos adjudicate --apply-same --confirm-count <n>`), while a
+    read-only stage (Contradictions) runs and reports normally (spec:
+    Per-Stage Cost Gate).
+
+    Identity reuses the exact `find_candidates` / `adjudicate_candidates` /
+    `_prepare_one_merge` / `_commit_one_merge` / `_reject_drifted_targets`
+    building blocks `adjudicate --apply` already exercises (design D4/D6):
+    an accepted SAME 2-member pair commits per-item, auto-committing before
+    the next candidate; an N>2 group is never auto-merged -- the exact
+    pairwise `openkos merge` commands are printed instead (spec: Identity
+    Stage Reuses Merge Cores).
+
+    `--include-confidential`/`--include-deprecated` are forwarded into
+    every stage's underlying call, fail-closed by default (spec:
+    Sensitivity Threading Is Fail-Closed).
+
+    Slice 1 (design D10) implements Preconditions and Identity fully;
+    Structure, Metadata, and Contradictions are declared in `_STAGES` but
+    carry `live=False` -- skipped without any prompt or model call, and
+    labeled "not yet available in this version" in the closing summary
+    (spec: Slice Boundary). `curate` is not a CI gate: pending work never
+    sets a non-zero exit. Exit codes: 0 normal (including every decline,
+    empty queue, `live=False` skip, and the Preconditions halt), 1 on a
+    workspace/config failure, 2 on a Typer usage error, 3 on a drift
+    refusal (#319, propagated unchanged from `_reject_drifted_targets`)."""
+    root = Path.cwd()
+    reason = config.require_workspace(root)
+    if reason is not None:
+        typer.echo(f"openkos curate: refusing to run -- {reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos curate: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    observability.warn_if_walk_incomplete(
+        layout.bundle_dir, include_confidential=include_confidential
+    )
+
+    ctx = curate_module.CurateContext(
+        root=root,
+        layout=layout,
+        cfg=cfg,
+        auto=auto,
+        include_confidential=include_confidential,
+        include_deprecated=include_deprecated,
+    )
+    outcomes = curate_module.run_curate(ctx)
+    for line in curate_module.render_summary(outcomes):
+        typer.echo(line)
