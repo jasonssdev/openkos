@@ -113,6 +113,16 @@ def test_retitle_document_preserves_trailing_body_whitespace() -> None:
         ("meta:\n  title: Inner\n", "Inner", "line count is 0"),
         ("note: |\n  title: fake\n", "Notes", "line count is 0"),
         ("title: Notes  # keep me\n", "Notes", "trailing comment"),
+        # #310: a comment glued to a quoted scalar with NO preceding
+        # whitespace still parses to just "Notes", so the old ` #` substring
+        # guard never fired and the comment was silently re-emitted away --
+        # the exact third edit the guard exists to refuse.
+        ('title: "Notes"#comment\n', "Notes", "trailing comment"),
+        # #310: a TAB before `#` kills the YAML scanner outright ("found
+        # character '\\t' that cannot start any token"), so this shape is
+        # refused at the parse guard, not the comment guard -- pinned here
+        # so a future laxer parser cannot turn it into silent deletion.
+        ("title: Notes\t# comment\n", "Notes", "did not parse"),
     ],
 )
 def test_retitle_document_fails_closed_on_unrewritable_title(
@@ -129,6 +139,49 @@ def test_retitle_document_fails_closed_on_unrewritable_title(
             f"---\n{block}---\n", current_title=current_title, new_title="New Title"
         )
     assert text  # the document is never rewritten; nothing is returned
+
+
+def test_retitle_document_refuses_an_anchored_title_through_the_public_api() -> None:
+    """#311 gap 1: every other fail-closed row drives `_patch_title_line`
+    directly, so a mutant that swallowed the helper's `ValueError` INSIDE
+    `retitle_document` (e.g. a broad `except` falling back to the original
+    block) would keep the whole parametrized table green. One row through
+    the PUBLIC entry point makes that mutant die. The anchored title is the
+    load-bearing shape: it parses to `current_title`, so only the
+    scalar-shape guard can refuse it."""
+    text = "---\ntitle: &a Notes\nauthor: *a\n---\n\n# Notes\n\nBody.\n"
+
+    with pytest.raises(ValueError, match="not a rewritable scalar"):
+        source_titles.retitle_document(
+            text, current_title="Notes", new_title="New Title"
+        )
+
+
+def test_retitle_document_patches_exactly_two_lines_for_a_long_title() -> None:
+    """#310: the dumper's default width (~80 columns) folds a long title
+    onto a continuation line, turning the frontmatter patch into TWO changed
+    lines and the whole edit into three -- against "Exactly Two Byte-Level
+    Edits Per Staged Source". `_TITLE_MAX_CHARS` is 120, so a >100-char
+    title is squarely in the stageable range, not a hypothetical."""
+    new_title = (
+        "A Deliberately Overlong Title That Comfortably Exceeds One Hundred "
+        "Characters To Force The Dumper Past Its Default Wrap Width"
+    )
+    assert len(new_title) > 100
+    text = "---\ntitle: Notes\n---\n\n# Notes\n\nBody.\n"
+
+    result = source_titles.retitle_document(
+        text, current_title="Notes", new_title=new_title
+    )
+
+    before_lines = text.split("\n")
+    after_lines = result.split("\n")
+    assert len(after_lines) == len(before_lines)
+    changed = [(a, b) for a, b in zip(before_lines, after_lines, strict=True) if a != b]
+    assert len(changed) == 2  # the `title:` line and the first body line, only
+    metadata, body = okf.load_frontmatter(result)
+    assert metadata["title"] == new_title
+    assert body.split("\n")[0] == f"# {new_title}"
 
 
 def test_retitle_document_refuses_a_crlf_framed_document() -> None:
@@ -412,6 +465,39 @@ def test_resolve_source_title_backfill_files_every_non_staging_reason(
     assert len(got) == 1
     assert got[0].concept_id == "sources/notes"
     assert got[0].reason == reason
+
+
+def test_resolve_files_an_unrewritable_scalar_as_unpatchable_title() -> None:
+    """#309: `retitle_document` raises `ValueError` for ~six distinct
+    frontmatter-shape causes, and the resolver used to file them ALL under
+    `heading-mismatch` -- whose documented meaning is a hand-edited BODY
+    heading, pointing operators at a line that is perfectly fine. An
+    anchored `title:` is the sharpest such shape (it parses to the current
+    title, so only the scalar-shape guard refuses): it must land in a
+    distinct `unpatchable-title` bucket, leaving `heading-mismatch` to the
+    body-heading case it names."""
+    doc = (
+        "---\ntype: Source\ntitle: &t Notes\nresource: raw/notes.md\n---\n"
+        "\n# Notes\n\nBody.\n"
+    )
+    candidate = source_titles.SourceCandidate(
+        concept_id="sources/notes",
+        current_title="Notes",
+        resource="raw/notes.md",
+        document_text=doc,
+    )
+    scan = source_titles.ScanResult(candidates=(candidate,), skipped=(), warned=())
+
+    result = source_titles.resolve_source_title_backfill(
+        scan, {"raw/notes.md": "# New Title\n\nBody.\n"}
+    )
+
+    assert (result.staged, result.skipped) == ((), ())
+    assert result.warned == (
+        source_titles.WarnedSource(
+            concept_id="sources/notes", reason="unpatchable-title"
+        ),
+    )
 
 
 def test_resolve_source_title_backfill_skips_empty_raw_without_calling_derive(

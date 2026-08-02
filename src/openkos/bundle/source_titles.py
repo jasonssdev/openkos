@@ -39,6 +39,24 @@ def titleize(stem: str) -> str:
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 _TOP_LEVEL_TITLE_RE = re.compile(r"^title:([ \t]*.*)$", re.MULTILINE)
 
+# #310: `derive_source_title` accepts titles up to `_TITLE_MAX_CHARS` (120),
+# but the emitter's default fold width (~80 columns) would wrap such a value
+# onto a continuation line -- one changed line becoming two, breaking the
+# "Exactly Two Byte-Level Edits Per Staged Source" requirement. Any width
+# comfortably above every representable title keeps the scalar on one line;
+# the emitter only folds at this width, it never pads to it.
+_TITLE_DUMP_WIDTH = 100_000
+
+
+class HeadingMismatchError(ValueError):
+    """`retitle_document`'s body-first-line refusal (spec: "Body First-Line
+    Safety Property"), split out from its frontmatter-shape refusals (#309):
+    the resolver files this as `heading-mismatch` -- "the BODY heading was
+    hand-edited" -- and every other `ValueError` as `unpatchable-title`, so
+    an anchored or multi-line `title:` no longer points operators at a
+    first line that is perfectly fine. Subclasses `ValueError` so callers
+    catching the historical contract keep working unchanged."""
+
 
 def _split_frontmatter_verbatim(text: str) -> tuple[str, str]:
     """Split off the frontmatter block byte-for-byte, mirroring
@@ -78,13 +96,22 @@ def _patch_title_line(block: str, *, current_title: str, new_title: str) -> str:
     # A trailing YAML comment lives on the line but not in the parsed value,
     # so re-emitting the line would silently DELETE it -- a third byte-level
     # edit, exactly what this function exists to prevent. Refuse instead of
-    # guessing where the comment ends. ` #` inside the parsed value is not a
-    # comment (it was quoted), so it must not trigger the refusal.
-    if " #" in value and " #" not in current_title:
+    # guessing where the comment ends. The check compares `#` COUNTS between
+    # the raw value and the parsed title rather than looking for a ` #`
+    # substring (#310): a comment glued to a quoted scalar (`"Notes"#c`)
+    # carries no space before its `#`, so the substring guard let it through
+    # to deletion, while a `#` inside a quoted title appears in BOTH sides
+    # and keeps the counts equal. Any mismatch refuses -- a false refusal is
+    # acceptable under the design's fail-closed stance, silent deletion is
+    # not. (A TAB-separated comment never reaches this line: the tab kills
+    # the YAML scanner and the parse guard above refuses first.)
+    if value.count("#") != current_title.count("#"):
         raise ValueError(f"'title:' carries a trailing comment: {match.group(0)!r}")
 
     new_line = "\n".join(
-        okf.dump_frontmatter({"title": new_title}, "").split("\n")[1:-2]
+        okf.dump_frontmatter({"title": new_title}, "", width=_TITLE_DUMP_WIDTH).split(
+            "\n"
+        )[1:-2]
     )
     return block[: match.start()] + new_line + block[match.end() :]
 
@@ -104,10 +131,12 @@ def retitle_document(text: str, *, current_title: str, new_title: str) -> str:
     `datetime` on reload. The body is also preserved verbatim except its
     first line, so trailing whitespace a re-dump would drop now survives.
 
-    Raises `ValueError` when `metadata["title"]` != `current_title`, when
-    the first body line != `f"# {current_title}"` (spec: "Body First-Line
-    Safety Property"), or when `title:` is not a scalar
-    `_patch_title_line` can safely rewrite.
+    Raises `HeadingMismatchError` when the first body line !=
+    `f"# {current_title}"` (spec: "Body First-Line Safety Property"), and
+    plain `ValueError` when `metadata["title"]` != `current_title` or when
+    `title:` is not a scalar `_patch_title_line` can safely rewrite -- the
+    split lets the resolver report the two failure families under distinct
+    reason tokens (#309).
     """
     metadata, _ = okf.load_frontmatter(text)
     on_disk_title = metadata.get("title")
@@ -130,7 +159,13 @@ def retitle_document(text: str, *, current_title: str, new_title: str) -> str:
     first_line = first_line_raw[:-1] if trailing_cr else first_line_raw
     expected = f"# {current_title}"
     if first_line != expected:
-        raise ValueError(f"expected first body line {expected!r}, found {first_line!r}")
+        # The one refusal that is genuinely ABOUT the body heading -- typed
+        # so the resolver can keep filing it as `heading-mismatch` while
+        # every frontmatter-shape `ValueError` above becomes
+        # `unpatchable-title` (#309).
+        raise HeadingMismatchError(
+            f"expected first body line {expected!r}, found {first_line!r}"
+        )
 
     new_body = leading_ws + f"# {new_title}{trailing_cr}" + sep + rest
     return new_block + new_body
@@ -297,8 +332,17 @@ def resolve_source_title_backfill(
             content = retitle_document(
                 c.document_text, current_title=c.current_title, new_title=new_title
             )
-        except ValueError:
+        except HeadingMismatchError:
             warn(c.concept_id, "heading-mismatch")
+            continue
+        except ValueError:
+            # #309: `retitle_document` refuses for ~six distinct
+            # frontmatter-shape causes (anchor, block scalar, duplicate
+            # key, trailing comment, ...). Filing them under
+            # `heading-mismatch` -- whose documented meaning is a
+            # hand-edited BODY heading -- sent operators to a line that was
+            # fine; `unpatchable-title` names the actual refusal.
+            warn(c.concept_id, "unpatchable-title")
             continue
 
         staged.append(

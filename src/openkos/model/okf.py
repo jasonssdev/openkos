@@ -107,11 +107,23 @@ dedupes). `plan_merge` always writes V3; the reader accepts V1, V2, and V3
 bump")."""
 
 
-def dump_frontmatter(metadata: dict[str, object], body: str = "") -> str:
-    """Render `metadata` as a YAML frontmatter block over `body`, per §4.1."""
+def dump_frontmatter(
+    metadata: dict[str, object], body: str = "", *, width: int | None = None
+) -> str:
+    """Render `metadata` as a YAML frontmatter block over `body`, per §4.1.
+
+    `width` forwards to the YAML emitter's fold width when given. The one
+    caller that needs it is `bundle/source_titles._patch_title_line` (#310):
+    the emitter's default (~80 columns) folds a long scalar onto a
+    continuation line, which is fine for a freshly built document but turns
+    a single-line surgical patch into a multi-line one. `None` keeps the
+    library default so every existing document keeps its historical shape.
+    """
     post = frontmatter.Post(body)
     post.metadata = metadata
-    return frontmatter.dumps(post) + "\n"
+    if width is None:
+        return frontmatter.dumps(post) + "\n"
+    return frontmatter.dumps(post, width=width) + "\n"
 
 
 def load_frontmatter(text: str) -> tuple[dict[str, object], str]:
