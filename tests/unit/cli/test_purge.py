@@ -9,15 +9,18 @@ Most tests shell out to a REAL git repository via the `tmp_git_repo` fixture
 `git`/`git-filter-repo`, so its tests must prove that against the real
 binary, not a mock."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.bundle import index as bundle_index
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.vcs import git as vcs_git
+from tests.unit.cli.conftest import snapshot_with_mtime
 from tests.unit.vcs.conftest import TmpGitRepo, _git, isolate_git_identity, tmp_git_repo
 
 __all__ = ["tmp_git_repo"]
@@ -1041,3 +1044,268 @@ def test_purge_malformed_resource_warns_not_refuses(
     assert result.exit_code != 0  # refuses later (no --confirm-phrase), not here
     assert "malformed" in result.output.lower()
     assert f"bundle/{tmp_git_repo.source_id}.md" in result.output
+
+
+# -- #321: re-validate every write AND delete target after the typed phrase --
+
+
+def _prompt_after(
+    monkeypatch: pytest.MonkeyPatch, edit: Callable[[], object], *, answer: str
+) -> None:
+    """`confirm_after`'s analog for `purge`'s rail-6 typed-phrase prompt:
+    `purge` confirms via `typer.prompt`, never `typer.confirm`, so the
+    conftest helper cannot reach its window. The stub runs `edit` and then
+    types `answer` (the exact expected phrase) back, so a refusal after it
+    ran is the guard's own, never a mistyped phrase.
+
+    The typed phrase makes this window WIDER than any yes/no prompt in
+    wall-clock terms -- the operator re-reads the preview and types a whole
+    sentence -- which is what makes `purge` the verb where prompt-window
+    drift is likeliest, not least (#321).
+    """
+
+    def _prompt(*args: object, **kwargs: object) -> str:
+        edit()
+        return answer
+
+    monkeypatch.setattr(typer, "prompt", _prompt)
+
+
+def _cascade_child(tmp_git_repo: TmpGitRepo) -> str:
+    """One committed cascade child, so `--scope source` resolves a 2-member
+    purge set and the mapping's DYNAMIC descendant loop is exercised, not
+    just the root's fixed `concept_path` entry."""
+    child_id = "concepts/child-a"
+    _write_child_concept(
+        tmp_git_repo.root, child_id, provenance=[tmp_git_repo.source_id]
+    )
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add cascade child"], cwd=tmp_git_repo.root)
+    return child_id
+
+
+@pytest.mark.parametrize("target", ["bundle/index.md", "bundle/log.md"])
+def test_a_write_target_edited_during_the_prompt_is_refused(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """#321: rail 4 (clean tree) runs BEFORE the typed-phrase prompt, so an
+    edit landing while the operator types the phrase is invisible to every
+    rail -- and `git filter-repo` then checks out rewritten history over it.
+    `index.md`/`log.md` are the live files purge itself rewrites afterwards,
+    so they are the mapping's fixed write-target keys."""
+    _simulate_tty(monkeypatch)
+    target_path = tmp_git_repo.root / target
+    concurrent = "hand-edited while the phrase was typed\n"
+    before = snapshot_with_mtime(tmp_git_repo.root)
+    _prompt_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        answer=f"purge {tmp_git_repo.source_id}",
+    )
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    # The edit survives, nothing was expunged, history is intact.
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert _tree_contains_path(tmp_git_repo.root, "raw/notes.txt")
+    after = snapshot_with_mtime(tmp_git_repo.root)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_the_root_delete_target_edited_during_the_prompt_is_refused(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mapping's fixed `concept_path` entry, on the DEFAULT scope --
+    where the purge set collapses to the root alone, so the descendant loop
+    is empty and this one key is the entire delete-target protection
+    (mirrors `test_forget.py`'s root-concept lesson, #313 review R3)."""
+    _simulate_tty(monkeypatch)
+    target = f"bundle/{tmp_git_repo.source_id}.md"
+    target_path = tmp_git_repo.root / target
+    concurrent = "hand-edited while the phrase was typed\n"
+    before = snapshot_with_mtime(tmp_git_repo.root)
+    _prompt_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        answer=f"purge {tmp_git_repo.source_id}",
+    )
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert _blob_history_contains(
+        tmp_git_repo.root, f"bundle/{tmp_git_repo.source_id}.md"
+    )
+    after = snapshot_with_mtime(tmp_git_repo.root)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_cascade_delete_target_edited_during_the_prompt_is_refused(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mapping's DYNAMIC descendant loop: a `--scope source` cascade
+    member edited during the prompt would be expunged from history with the
+    edit inside it -- destroyed outright, strictly worse than overwritten."""
+    child_id = _cascade_child(tmp_git_repo)
+    _simulate_tty(monkeypatch)
+    target = f"bundle/{child_id}.md"
+    target_path = tmp_git_repo.root / target
+    concurrent = "hand-edited while the phrase was typed\n"
+    before = snapshot_with_mtime(tmp_git_repo.root)
+    _prompt_after(
+        monkeypatch,
+        lambda: target_path.write_text(concurrent, encoding="utf-8"),
+        answer=f"purge {tmp_git_repo.source_id} (2 concepts)",
+    )
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id, "--scope", "source"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert _blob_history_contains(tmp_git_repo.root, f"bundle/{child_id}.md")
+    after = snapshot_with_mtime(tmp_git_repo.root)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_a_delete_target_deleted_during_the_prompt_is_refused(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A member that VANISHED is drift too: the preview named it and the
+    history rewrite would still expunge it, so proceeding would erase
+    history for a live state the operator was never shown."""
+    child_id = _cascade_child(tmp_git_repo)
+    _simulate_tty(monkeypatch)
+    deleted_path = tmp_git_repo.root / "bundle" / f"{child_id}.md"
+    before = snapshot_with_mtime(tmp_git_repo.root)
+    _prompt_after(
+        monkeypatch,
+        deleted_path.unlink,
+        answer=f"purge {tmp_git_repo.source_id} (2 concepts)",
+    )
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id, "--scope", "source"])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert f"bundle/{child_id}.md" in result.stderr
+    # Nothing else was deleted and history is intact.
+    assert (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").is_file()
+    assert _tree_contains_path(tmp_git_repo.root, "raw/notes.txt")
+    after = snapshot_with_mtime(tmp_git_repo.root)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path("bundle") / f"{child_id}.md"}
+
+
+def test_a_crlf_rewrite_of_a_delete_target_during_the_prompt_is_refused(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#306's constraint, re-pinned for `purge`: a line-ending-only rewrite
+    is a real edit, `read_text`'s universal-newline translation would make
+    it compare equal to its own LF snapshot, and the history rewrite would
+    then destroy it."""
+    _simulate_tty(monkeypatch)
+    target = f"bundle/{tmp_git_repo.source_id}.md"
+    target_path = tmp_git_repo.root / target
+    concurrent = target_path.read_bytes().replace(b"\n", b"\r\n")
+    assert concurrent != target_path.read_bytes()
+    before = snapshot_with_mtime(tmp_git_repo.root)
+    _prompt_after(
+        monkeypatch,
+        lambda: target_path.write_bytes(concurrent),
+        answer=f"purge {tmp_git_repo.source_id}",
+    )
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_bytes() == concurrent
+    after = snapshot_with_mtime(tmp_git_repo.root)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
+
+
+def test_targets_that_were_already_crlf_are_not_drift(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: guarded targets already CRLF at rest, COMMITTED
+    (rail 4 requires a clean tree), untouched during the run, must not be
+    reported as drift -- otherwise `purge` refuses forever on a CRLF
+    workspace."""
+    # Repo-local, so it wins over any HOST-global `core.autocrlf` for the
+    # out-of-band `_git` commit below (whose env snapshot predates the
+    # fixture's config isolation) -- without it, `git add` on such a host
+    # normalizes the CRLF away and this test commits nothing.
+    _git(["config", "core.autocrlf", "false"], cwd=tmp_git_repo.root)
+    for rel in (
+        "bundle/index.md",
+        "bundle/log.md",
+        f"bundle/{tmp_git_repo.source_id}.md",
+    ):
+        path = tmp_git_repo.root / rel
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Normalize to CRLF"], cwd=tmp_git_repo.root)
+    phrase = f"purge {tmp_git_repo.source_id}"
+
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "refusing to write" not in result.stderr
+    assert not (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").exists()
+
+
+def test_drift_on_the_unprompted_path_is_refused(
+    tmp_git_repo: TmpGitRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#321: `--confirm-phrase` skips the prompt but not the window it stood
+    in, so the guard must run unconditionally.
+
+    There is no prompt to hang the edit on here, so it lands inside rail 6
+    itself -- via a delegating wrap of `_purge_confirm_phrase`, the last
+    pre-guard step BOTH confirmation paths share, which runs strictly after
+    rail 4's clean-tree check. That placement is the point: an edit landing
+    there is invisible to every rail, and only the drift guard is left to
+    refuse it."""
+    real_phrase = main._purge_confirm_phrase
+    target = "bundle/index.md"
+    target_path = tmp_git_repo.root / target
+    concurrent = "hand-edited after the clean-tree rail\n"
+
+    def _phrase_and_edit(
+        canonical_id: str, purge_ids: list[str], scope: main._PurgeScope
+    ) -> str:
+        target_path.write_text(concurrent, encoding="utf-8")
+        return real_phrase(canonical_id, purge_ids, scope)
+
+    monkeypatch.setattr(main, "_purge_confirm_phrase", _phrase_and_edit)
+    before = snapshot_with_mtime(tmp_git_repo.root)
+    phrase = f"purge {tmp_git_repo.source_id}"
+
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 1
+    assert "refusing to write --" in result.stderr
+    assert target in result.stderr
+    assert target_path.read_text(encoding="utf-8") == concurrent
+    assert _tree_contains_path(tmp_git_repo.root, "raw/notes.txt")
+    after = snapshot_with_mtime(tmp_git_repo.root)
+    changed = {k for k in before.keys() | after.keys() if before.get(k) != after.get(k)}
+    assert changed == {Path(target)}
