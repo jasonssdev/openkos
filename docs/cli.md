@@ -67,7 +67,7 @@ After the workspace is written, `init` runs one non-fatal, bounded-timeout Ollam
 
 Copies the source at `<path>` into `raw/` (immutable, as `raw/<name>` — only the basename is used, so directory components in `<path>`, including traversal segments, are always stripped), generates exactly **one** OKF Source concept in `bundle/sources/<slug>.md`, and attempts LLM-driven extraction of a **bounded list** of derived objects from that source's text — zero up to a hard cap of **5** (`_MAX_OBJECTS_PER_SOURCE`), each written as its own document under its type's folder. When the source decodes as UTF-8 text, its verbatim content is embedded in the Source's body under a `## Source content` heading — making it queryable via `openkos query` through the same generic body-indexing `query` already uses for every other concept. A source that is not valid UTF-8 text (binary or otherwise undecodable) still copies to `raw/`, but its content cannot be embedded as text: the body instead carries an honest fallback note, with no false claim of embedded content. A zero-length source renders a distinct "the source file is empty" note. In every case, the Source's `description` states plainly whether the content was embedded or could not be embedded. Provenance is recorded OKF-natively as each document's `provenance:` frontmatter field, with no separate provenance store. `index.md` and `log.md` are updated to reflect every new entry.
 
-Sources are stored under their own names and extensions — `notes.md` lands as `raw/notes.md` — because `raw/` sits beside the OKF bundle rather than inside it. A markdown source therefore needs no special handling and still renders as markdown in any editor.
+Sources are stored under their own names and extensions — `notes.md` lands as `raw/notes.md` — because `raw/` sits beside the OKF bundle rather than inside it. A markdown source therefore needs no special handling and still renders as markdown in any editor. `<path>` may also be a directory or a quoted glob, ingesting every matched file in one invocation — see "Batch: a directory or glob in one invocation" below.
 
 #### Extraction: zero to five derived objects, or a graceful degrade
 
@@ -104,7 +104,24 @@ Writes are **not transactional**: each individual write is create-only or atomic
 
 `review: true` in config plus a non-TTY stdin (and no `--auto`) refuses to write rather than defaulting silently — re-run with `--auto` for unattended use.
 
-**Not in this slice / planned:** a per-workspace configurable cap (the cap is fixed at 5 for now), cross-document synthesis (e.g. a `Decision` inferred from patterns spread across several sources), entity resolution/merge/reclassification on re-ingest, a typed relationship graph, `--sensitivity <level>` (the generated Source's `sensitivity` always equals config's `default_sensitivity`, currently no per-invocation override), and `--batch` (folder/glob ingestion — one source per invocation only, for now). Both flags are documented here for forward reference but are not implemented yet.
+#### Batch: a directory or glob in one invocation
+
+`<path>` may also be a **directory** or a **quoted glob** — each matched file is driven through the exact same single-file pipeline described above, once per file, in one invocation:
+
+```
+openkos ingest ./notes/           # every readable file directly inside, non-recursive
+openkos ingest './notes/**/*.md'  # explicit glob; recursion only via **
+```
+
+A directory matches every readable file **directly** inside it — subdirectories are never walked into (recursion is available only via an explicit `**` glob). A quoted glob arrives as a literal string (detected by its magic characters `*`, `?`, `[`) and is expanded relative to the current directory. Matched files are **sorted by path** — never filesystem order — so `log.md` and the per-file commits are reproducible across machines. A plain existing file path keeps the single-file behavior above, byte-identical. An empty directory or a glob matching nothing refuses with a clear message (exit `1`, nothing written).
+
+Because destination names and slugs derive **only from the basename** (the path-traversal defense above, deliberately unweakened), two matched files sharing a basename — e.g. `notes/setup.md` and `notes/archive/setup.md` — would fight over the same `raw/<name>`. The batch detects this **before any write** and refuses the whole run: exit `1`, every colliding path named, nothing written. Rename one, or ingest them separately.
+
+One up-front **cost gate** replaces the per-file prompts: before any LLM contact, `{n} file(s) -> {n} LLM call(s)` is printed and confirmed **once** — that single batch-level consent covers every file, so the per-file confirmation is suppressed the way `--auto` suppresses it today. `--auto` (or config `review: false`) skips the gate; non-TTY stdin without `--auto` refuses to write, mirroring the single-file convention. On a TTY, per-file `i/N` progress goes to stderr; piped output stays clean.
+
+Each file then runs **independently, in order**, with `--include-confidential` forwarded unchanged per file and the existing per-ingest auto-commit reused as-is — commit granularity is **per file**, so an interrupted run leaves every completed file committed (each its own checkpoint) and a re-run is idempotent for the completed ones. A per-file refusal (e.g. differing bytes under an existing `raw/` copy) skips that file with its reason on stderr and **continues** with the rest; a per-file extraction failure stays non-fatal exactly as in a single-file run (Source-only degrade, stderr note). The run closes with per-file outcome lines plus an aggregate summary — ingested / re-ingested / skipped (with reasons) / extraction-degraded — and exits `1` if any file was refused or skipped, `0` if all succeeded (idempotent re-ingests count as success).
+
+**Not in this slice / planned:** a per-workspace configurable cap (the cap is fixed at 5 for now), cross-document synthesis (e.g. a `Decision` inferred from patterns spread across several sources), entity resolution/merge/reclassification on re-ingest, a typed relationship graph, and `--sensitivity <level>` (the generated Source's `sensitivity` always equals config's `default_sensitivity`, currently no per-invocation override). The flag is documented here for forward reference but is not implemented yet.
 
 ### `openkos query "<question>"`
 

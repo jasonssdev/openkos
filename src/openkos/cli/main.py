@@ -1,6 +1,8 @@
 """Typer application object exposed as the `openkos` console script."""
 
+import glob
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -1930,10 +1932,243 @@ def _embed_after_ingest(
         )
 
 
+@dataclass(frozen=True)
+class _SingleIngestOutcome:
+    """What one `_ingest_single` run did, for `_ingest_batch`'s per-file
+    outcome lines and aggregate tally (issue #267): `regenerated` is the
+    run's own D1 flag (`True` on a byte-identical re-ingest, `False` on a
+    fresh ingest), and `extraction_degraded` is `True` exactly when
+    `_stage_derived_objects` returned a non-`None` `skip_reason` -- the
+    same Source-only degrade taxonomy `docs/cli.md` documents
+    (no-extractable-text / blocked-by-sensitivity / failed /
+    no-concepts-found). A refusal never constructs this: `_ingest_single`
+    raises `typer.Exit` before its single `return`."""
+
+    regenerated: bool
+    extraction_degraded: bool
+
+
+_GLOB_MAGIC_CHARS = frozenset("*?[")
+"""Glob magic characters (the character class `glob.has_magic` matches): a
+`src` that is neither an existing file nor a directory but contains one of
+these is treated as a quoted glob pattern, not a missing file (issue #267)."""
+
+
+def _expand_batch_sources(src: Path) -> list[Path] | None:
+    """Route `ingest`'s `src` argument (issue #267): return `None` when it
+    must take the existing single-file path unchanged, or the SORTED list
+    of matched files for the batch path.
+
+    `None` covers two cases: an existing plain FILE (single-file behavior
+    stays byte-identical -- checked FIRST, so even a filename containing a
+    glob magic character keeps today's behavior when the file exists), and
+    a nonexistent, magic-free path (which keeps today's exact "does not
+    exist or is not a readable file" refusal).
+
+    A DIRECTORY matches every readable file (`os.access(..., R_OK)`)
+    directly inside it -- non-recursive, so subdirectories (`.git/`, nested
+    workspaces, anything) are never walked into; recursion is available
+    only via an explicit `**` glob. A path containing a glob magic
+    character (`*`, `?`, `[`) is expanded with `glob.glob(...,
+    recursive=True)` relative to the cwd, keeping only matched FILES (a
+    bare `**` also matches directories; those are dropped).
+
+    Both expansions sort by the path STRING (`key=str`), never filesystem
+    order, so `log.md` entries and the per-file commits are reproducible
+    across machines (settled decision 4). May raise `OSError` (an
+    unreadable directory); the `ingest` command maps that to its usual
+    stderr refusal."""
+    if src.is_file():
+        return None
+    if src.is_dir():
+        return sorted(
+            (
+                entry
+                for entry in src.iterdir()
+                if entry.is_file() and os.access(entry, os.R_OK)
+            ),
+            key=str,
+        )
+    if any(char in str(src) for char in _GLOB_MAGIC_CHARS):
+        # `glob.glob`, deliberately not `Path.glob` (PTH207): pathlib
+        # refuses an absolute pattern outright (`NotImplementedError`) and
+        # rebases every relative match onto its base directory, where
+        # `glob.glob` accepts both forms and echoes each match in the
+        # pattern's OWN relative/absolute shape -- which is exactly what the
+        # batch report and its outcome lines print back to the user.
+        return sorted(
+            (
+                match_path
+                for match in glob.glob(str(src), recursive=True)  # noqa: PTH207
+                if (match_path := Path(match)).is_file()
+            ),
+            key=str,
+        )
+    return None
+
+
+def _refuse_basename_collisions(matches: Sequence[Path]) -> None:
+    """Batch Phase A (issue #267, settled decision 1): the destination name
+    and slug derive ONLY from each file's basename -- the single-file
+    path-traversal defense (`Path(src).name`), deliberately not weakened
+    here -- so two matched files sharing a basename would fight over the
+    same `raw/<name>`: the second would refuse against (or silently
+    re-ingest) the first's freshly written copy. Detect this BEFORE ANY
+    write and refuse the WHOLE run (exit 1), naming every colliding path;
+    nothing is written."""
+    by_name: dict[str, list[Path]] = {}
+    for path in matches:
+        by_name.setdefault(path.name, []).append(path)
+    collisions = {name: group for name, group in by_name.items() if len(group) > 1}
+    if not collisions:
+        return
+    for name, group in collisions.items():
+        paths = " and ".join(f"'{path}'" for path in group)
+        typer.echo(
+            f"openkos ingest: refusing the whole batch -- basename collision: "
+            f"{paths} would all land as 'raw/{name}' (destination names "
+            "derive only from the basename); nothing was written. Rename "
+            "one, or ingest them separately.",
+            err=True,
+        )
+    raise typer.Exit(code=1)
+
+
+def _ingest_batch(
+    src: Path, matches: list[Path], *, auto: bool, include_confidential: bool
+) -> None:
+    """Drive every file in `matches` (already expanded and sorted by
+    `_expand_batch_sources`) through the EXISTING single-file pipeline
+    (`_ingest_single`) -- reuse, never reimplementation: the per-file
+    ingestion, its per-ingest auto-commit (settled decision 3: PER-FILE
+    commit granularity, so an interrupted run leaves a committed,
+    consistent workspace and a re-run is idempotent for completed files),
+    and its post-commit embedding all run unchanged, once per file, with
+    `--include-confidential` forwarded unchanged (issue #267).
+
+    Batch Phase A, before ANY write: an empty match set refuses (exit 1);
+    the workspace check runs once up front (the same
+    `config.require_workspace` refusal each per-file run would hit, but
+    surfaced BEFORE the cost gate can prompt); then
+    `_refuse_basename_collisions` refuses the whole run on a basename
+    collision (settled decision 1).
+
+    Cost gate (settled decision 4, the #134 pattern): before any LLM
+    contact, `{n} file(s) -> {n} LLM call(s)` is printed to stderr and ONE
+    up-front confirmation is asked, with the single-file gate's exact
+    precedence mirrored -- `--auto` skips it, config `review: false` skips
+    it the same way, a TTY asks (`abort=True`: decline exits 1, nothing
+    written), and non-TTY stdin without `--auto` refuses to write. That
+    single batch-level consent covers every file: each per-file run is
+    invoked with the prompt suppressed the way `--auto` suppresses it
+    today (`auto=True`), never 40 per-file prompts.
+
+    Per-file failure isolation (settled decision 2): a per-file refusal
+    (`typer.Exit` from `_ingest_single`, its reason already on stderr --
+    including a drift refusal's exit 3) SKIPS that file and CONTINUES; a
+    per-file extraction failure stays non-fatal exactly as today
+    (Source-only degrade, stderr note) and is only TALLIED here. Progress
+    is `i/N` on stderr via the TTY-gated `observability.progress_callback`
+    (issue #190) -- silent when piped. The run ends with per-file outcome
+    lines plus an aggregate summary on stdout, and exits 1 if ANY file was
+    refused/skipped, 0 if all succeeded (idempotent re-ingests count as
+    success)."""
+    root = Path.cwd()
+    if not matches:
+        typer.echo(
+            f"openkos ingest: refusing to ingest -- no files matched '{src}'; "
+            "nothing was written.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    workspace_reason = config.require_workspace(root)
+    if workspace_reason is not None:
+        typer.echo(
+            f"openkos ingest: refusing to ingest -- {workspace_reason}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    _refuse_basename_collisions(matches)
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos ingest: failed while preparing the batch -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    total = len(matches)
+    if not auto and cfg.review:
+        typer.echo(
+            f"{total} file(s) -> {total} LLM call(s), one extraction per file "
+            "(this can take a while). Pass --auto to skip this prompt.",
+            err=True,
+        )
+        if sys.stdin.isatty():
+            typer.confirm("Proceed?", abort=True)
+        else:
+            typer.echo(
+                "openkos ingest: refusing to write without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    progress = observability.progress_callback("ingest", "ingesting file")
+    outcome_lines: list[str] = []
+    ingested_count = 0
+    reingested_count = 0
+    degraded_count = 0
+    skipped_count = 0
+    for index, path in enumerate(matches, start=1):
+        if progress is not None:
+            progress(index, total, path)
+        try:
+            outcome = _ingest_single(
+                path, auto=True, include_confidential=include_confidential
+            )
+        except typer.Exit as exc:
+            # The per-file pipeline already printed its own refusal reason
+            # to stderr (unchanged single-file wording); this line only
+            # records the skip in the batch report and moves on.
+            skipped_count += 1
+            outcome_lines.append(
+                f"  ! {path} -- skipped (refused with exit code "
+                f"{exc.exit_code}; its reason is on stderr above)"
+            )
+            continue
+        if outcome.regenerated:
+            reingested_count += 1
+            marker, label = "~", "re-ingested"
+        else:
+            ingested_count += 1
+            marker, label = "+", "ingested"
+        suffix = ""
+        if outcome.extraction_degraded:
+            degraded_count += 1
+            suffix = " (extraction degraded -- Source only; see stderr)"
+        outcome_lines.append(f"  {marker} {path} -- {label}{suffix}")
+
+    typer.echo(
+        f"openkos ingest: batch summary -- {total} file(s): "
+        f"{ingested_count} ingested, {reingested_count} re-ingested, "
+        f"{skipped_count} skipped, {degraded_count} extraction-degraded."
+    )
+    for line in outcome_lines:
+        typer.echo(line)
+    if skipped_count:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def ingest(
     src: Path = typer.Argument(
-        ..., help="Path to the raw source file to copy into the workspace."
+        ...,
+        help=(
+            "Path to a raw source file, a directory of source files, or a "
+            "quoted glob pattern to copy into the workspace."
+        ),
     ),
     auto: bool = typer.Option(
         False,
@@ -1949,6 +2184,56 @@ def ingest(
         ),
     ),
 ) -> None:
+    """Ingest one source file, a whole directory, or a glob's matches into
+    the workspace in a single invocation (issue #267).
+
+    A plain existing FILE keeps the exact single-file behavior documented
+    on `_ingest_single` -- copy into `raw/`, one OKF Source concept,
+    bounded LLM extraction, one confirm gate, per-ingest auto-commit. A
+    DIRECTORY ingests every readable file directly inside it
+    (non-recursive; subdirectories are never walked into). A quoted GLOB
+    (detected by its magic characters `*`, `?`, `[`; expanded relative to
+    the cwd, recursion only via an explicit `**`) ingests every matched
+    file. Matched files are SORTED by path string -- never filesystem
+    order -- so `log.md` and the per-file commits are reproducible across
+    machines.
+
+    The batch drives each matched file through the SAME single-file
+    pipeline, in order, each with its own per-ingest auto-commit
+    (an interrupted run leaves every completed file committed; re-running
+    is idempotent for them). Before any write: a basename collision
+    between two matched files (destination names derive only from the
+    basename -- the path-traversal defense) refuses the WHOLE run, exit 1,
+    naming both paths. Before any LLM contact: one up-front cost gate
+    prints `{n} file(s) -> {n} LLM call(s)` and asks ONCE -- that single
+    consent covers every file, so the per-file prompt is suppressed the
+    way `--auto` suppresses it today; `--auto` (or config `review: false`)
+    skips the gate, and non-TTY stdin without `--auto` refuses to write,
+    mirroring the single-file convention. A per-file refusal skips that
+    file (reason on stderr) and CONTINUES; per-file outcome lines plus an
+    aggregate summary (ingested / re-ingested / skipped /
+    extraction-degraded) close the run, exiting 1 if any file was
+    refused/skipped and 0 otherwise (re-ingests count as success). An
+    empty directory or a glob matching nothing refuses (exit 1, nothing
+    written). See `_ingest_batch` for the full batch contract.
+    """
+    try:
+        matches = _expand_batch_sources(src)
+    except OSError as exc:
+        typer.echo(
+            f"openkos ingest: failed while expanding '{src}' -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    if matches is None:
+        _ingest_single(src, auto=auto, include_confidential=include_confidential)
+        return
+    _ingest_batch(src, matches, auto=auto, include_confidential=include_confidential)
+
+
+def _ingest_single(
+    src: Path, *, auto: bool, include_confidential: bool
+) -> _SingleIngestOutcome:
     """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
     LLM extraction of zero or more distinct derived objects, up to
     `extraction.concept._MAX_OBJECTS_PER_SOURCE` (multi-object-extraction,
@@ -2068,6 +2353,16 @@ def ingest(
     not a manual unlink. Any failure -- Phase A or Phase B -- is caught and
     reported on stderr (exit 1), not a raw traceback; `except (OSError,
     ValueError)`, matching `init`'s convention.
+
+    This function IS the `ingest` command's original single-file body,
+    extracted verbatim for issue #267 so `_ingest_batch` can reuse it
+    unchanged, once per matched file -- the batch path wraps this, never
+    modifies it. It returns a `_SingleIngestOutcome` (fresh vs re-ingest,
+    and whether extraction degraded to Source-only) purely for the batch
+    summary; the `ingest` command itself ignores the return value, so
+    single-file behavior stays byte-identical. Every refusal still raises
+    `typer.Exit` exactly as before -- the batch catches it to skip that
+    file and continue.
     """
     root = Path.cwd()
     layout = config.WorkspaceLayout(root)
@@ -2483,6 +2778,11 @@ def ingest(
         layout,
         OllamaClient(model=cfg.embedding_model),
         model_tag=cfg.embedding_model,
+    )
+
+    return _SingleIngestOutcome(
+        regenerated=regenerate,
+        extraction_degraded=skip_reason is not None,
     )
 
 
