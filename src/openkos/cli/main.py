@@ -9441,7 +9441,7 @@ def doctor() -> None:
     with actionable remediation, usable even before `openkos init`.
 
     Deliberately NEW control-flow shape versus `status`/`lint`/`query`:
-    instead of exiting on the first failure, this runs ALL ten checks,
+    instead of exiting on the first failure, this runs ALL eleven checks,
     appends each to a `list[CheckResult]`, renders every line
     unconditionally, then exits ONCE (`code=1`) if any CRITICAL check
     failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
@@ -9480,10 +9480,19 @@ def doctor() -> None:
     `vcs.git.filter_repo_available()`. Checks (9)/(10) exist for the
     not-yet-wired `purge` verb (privacy-purge Slice 1, PR2): like (8), they
     have no `[SKIP]` branch -- they depend on neither workspace state nor
-    Ollama. Outside a workspace, checks (3)/(4)/(5)/(8)/(9)/(10) still run
-    against `config.DEFAULT_MODEL`/`config.DEFAULT_EMBEDDING_MODEL` and
-    (3)/(4) still determine the exit code (spec: Doctor Works Outside An
-    Initialized Workspace).
+    Ollama; (11) backend-host-locality -- informational, always, via the
+    check-(3) client's own `OllamaClient.locality` (issue #240), reporting
+    the REDACTED `display_host`, whether it is this machine, and whether the
+    confidential local exemption is consequently active. Like (8)/(9)/(10)
+    it has no `[SKIP]` branch, and unlike every other check it ALWAYS
+    `[PASS]`es: a non-local backend is a legitimate configuration, not a
+    fault, so the status only reports that the check ran and the DETAIL
+    carries the finding. It can therefore never change the exit code.
+    Outside a workspace, checks (3)/(4)/(5)/(8)/(9)/(10)/(11) still run
+    against `config.DEFAULT_MODEL`/`config.DEFAULT_EMBEDDING_MODEL`/
+    `config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION` and (3)/(4) still
+    determine the exit code (spec: Doctor Works Outside An Initialized
+    Workspace).
 
     Never creates, modifies, or deletes any file, and never runs a
     remediation command itself (spec: Doctor Is Read-Only).
@@ -9720,6 +9729,47 @@ def doctor() -> None:
                 ),
             )
         )
+
+    # 11. backend-host-locality (informational, always; NO SKIP branch --
+    # like checks 8/9/10 it depends on neither workspace state nor Ollama
+    # REACHABILITY: locality is a literal-form check over the host the chat
+    # client already resolved, so it answers even when the server is down.
+    # Reuses the SAME `client` check 3 built, so what is reported is the
+    # host `doctor` itself would have sent to, never a re-derivation.
+    #
+    # ALWAYS `pass` (issue #240). The two other shapes were considered and
+    # are both wrong: `[FAIL]` on a non-local backend would call a
+    # legitimate configuration broken, and any non-`pass` status invites a
+    # future reader to make this check critical, which would let an
+    # informational report flip an exit code that scripts gate on. The
+    # DETAIL carries the finding; the status only says the check ran.
+    #
+    # Both terms are named separately because they are distinct facts and a
+    # user debugging "why is my confidential concept in the prompt" needs to
+    # know WHICH one decided it. Outside a workspace the packaged
+    # `confidential_local_exemption` default applies, mirroring how checks
+    # 3-5 fall back to the packaged model tags.
+    locality = client.locality
+    exemption_enabled = (
+        cfg.confidential_local_exemption
+        if cfg is not None
+        else config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION
+    )
+    where = "this machine" if locality.is_local else "not this machine"
+    exemption_state = (
+        "active" if (locality.is_local and exemption_enabled) else "inactive"
+    )
+    results.append(
+        CheckResult(
+            "Backend host locality",
+            "pass",
+            critical=False,
+            detail=(
+                f"{where} ({locality.display_host}); confidential local "
+                f"exemption {exemption_state}"
+            ),
+        )
+    )
 
     # Leading version banner (cli-version-flag, #181): informational only, NOT
     # a CheckResult -- it is deliberately outside `results` so it can never
