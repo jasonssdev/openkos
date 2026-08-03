@@ -8,6 +8,7 @@ zero real Ollama process. Mirrors `_FakeLLM` in
 `tests/unit/resolution/test_edge_typing.py`.
 """
 
+import inspect
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -475,17 +476,27 @@ def test_include_confidential_true_restores_the_confidential_doc(
 def test_include_confidential_true_never_calls_the_predicate_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`include_confidential=True` skips `sensitivity.sensitive_concept_ids`
-    entirely (spy) -- the escape flag is the zero-cost path (design R1)."""
+    """`include_confidential=True` reaches
+    `sensitivity.sensitive_concept_ids` as the flag it is, so the predicate
+    short-circuits before touching `okf._iter_docs` -- the escape flag is
+    still the zero-cost path (design R1).
+
+    Issue #240 moved WHERE the skip is decided, not whether it happens: the
+    guarding `if not include_confidential:` used to live here, but a second
+    hatch (`local_exemption`) would have made that a two-term disjunction
+    restated at five call sites, which is the duplication `sensitivity.py`'s
+    module docstring exists to prevent. The walk-skip itself is pinned once,
+    centrally, by
+    `tests/unit/test_sensitivity.py::test_sensitive_concept_ids_escape_hatches_skip_the_walk_entirely`."""
     from openkos import sensitivity
 
     _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
     llm = _FakeLLM(replies=[_valid_reply()])
-    walk_calls: list[Path] = []
+    walk_calls: list[dict[str, object]] = []
     original_predicate = sensitivity.sensitive_concept_ids
 
     def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
-        walk_calls.append(bundle_dir)
+        walk_calls.append(kwargs)
         return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
@@ -494,7 +505,7 @@ def test_include_confidential_true_never_calls_the_predicate_walk(
         tmp_path, llm=llm, include_confidential=True
     )
 
-    assert walk_calls == []
+    assert walk_calls == [{"include_confidential": True, "local_exemption": False}]
 
 
 def test_default_include_confidential_false_calls_the_predicate_walk_once(
@@ -788,3 +799,58 @@ def test_suggest_volatility_on_progress_exception_propagates(tmp_path: Path) -> 
 
     with pytest.raises(RuntimeError, match="callback failed"):
         volatility_typing_mod.suggest_volatility(tmp_path, llm=llm, on_progress=_boom)
+
+
+# ---------------------------------------------------------------------------
+# issue #240: the confidential local exemption
+# ---------------------------------------------------------------------------
+
+
+def test_local_exemption_restores_the_confidential_doc_to_sampling(
+    tmp_path: Path,
+) -> None:
+    """With a verified-local backend, a `confidential` doc is sampled and its
+    body reaches the prompt -- no `--include-confidential` required (#240).
+
+    Both this verb's filters must honor the exemption: the walk-based
+    `blocked` drop before sampling, and `_reread_sensitivity_blocked` after
+    it. A doc released by only one of them still yields no suggestion."""
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        body="Alpha secret body.",
+        sensitivity_value="confidential",
+    )
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    result = volatility_typing_mod.suggest_volatility(
+        tmp_path, llm=llm, local_exemption=True
+    )
+
+    assert [s.type_name for s in result] == ["Person"]
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Alpha secret body." in message["content"]
+
+
+def test_local_exemption_defaults_to_false_on_suggest_volatility(
+    tmp_path: Path,
+) -> None:
+    """`suggest_volatility` and its `_reread_sensitivity_blocked` guard both
+    default `local_exemption` to `False` (#240)."""
+    for func in (
+        volatility_typing_mod.suggest_volatility,
+        volatility_typing_mod._reread_sensitivity_blocked,
+    ):
+        assert inspect.signature(func).parameters["local_exemption"].default is False
+
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Person",
+        title="A",
+        sensitivity_value="confidential",
+    )
+    llm = _FakeLLM()
+
+    assert volatility_typing_mod.suggest_volatility(tmp_path, llm=llm) == []
+    assert llm.calls == []

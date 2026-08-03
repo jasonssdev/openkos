@@ -260,6 +260,7 @@ def _assemble_context(
     blocked: frozenset[str] = frozenset(),
     *,
     include_confidential: bool = False,
+    local_exemption: bool = False,
 ) -> tuple[list[str], list[Citation]]:
     """Guarded per-hit re-read (D2): re-read + re-parse each fused
     `concept_id`'s doc, skipping anything unreadable or unparseable rather
@@ -298,7 +299,22 @@ def _assemble_context(
     sensitivity.blocks_llm_send(...)` directly -- behavior-preserving; the
     same 5-way-duplicated expression is now a single source of truth shared
     by every send-time re-check in the codebase (see `sensitivity.py`'s
-    module docstring)."""
+    module docstring).
+
+    `local_exemption` (issue #240) is the second escape hatch defined by
+    `sensitivity.should_block`: the caller asserting that the `llm.chat`
+    backend this run will actually reach is verifiably this machine, so a
+    `confidential` concept is not leaving anywhere and the gate has nothing
+    to protect. It is threaded, never re-derived -- the disjunction with
+    `include_confidential` lives ONLY in `sensitivity.py` (see its module
+    docstring). Defaults to `False`: a caller that cannot prove locality
+    gets today's blanket blocking, so forgetting the parameter can only ever
+    be MORE restrictive.
+
+    The exemption must be honored HERE as well as at the hit-seam filter,
+    not only there: this is the layer that actually assembles the prompt, so
+    a re-check that ignored it would drop every concept the upstream filter
+    had just admitted and make the exemption cosmetic."""
     context_blocks: list[str] = []
     citations: list[Citation] = []
     for concept_id in concept_ids:
@@ -313,7 +329,9 @@ def _assemble_context(
         except Exception:  # noqa: S112 -- broad: any parse failure skips this hit (D2)
             continue
         if sensitivity.should_block(
-            metadata, include_confidential=include_confidential
+            metadata,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
         ):
             continue
         title = str(metadata.get("title") or "") or concept_id
@@ -459,6 +477,7 @@ def answer(
     limit: int = 5,
     include_deprecated: bool = False,
     include_confidential: bool = False,
+    local_exemption: bool = False,
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
@@ -509,6 +528,16 @@ def answer(
     independently re-checks each doc's own freshly re-read frontmatter at
     the actual send point -- see its own docstring for the walk-independent
     defense-in-depth this adds.
+
+    `local_exemption` (issue #240) is the second escape hatch defined by
+    `sensitivity.should_block`: the caller asserting that the `llm.chat`
+    backend this run will actually reach is verifiably this machine, so a
+    `confidential` concept is not leaving anywhere and the gate has nothing
+    to protect. It is threaded, never re-derived -- the disjunction with
+    `include_confidential` lives ONLY in `sensitivity.py` (see its module
+    docstring). Defaults to `False`: a caller that cannot prove locality
+    gets today's blanket blocking, so forgetting the parameter can only ever
+    be MORE restrictive.
     """
     if not question.split():
         return AnswerResult(
@@ -530,17 +559,26 @@ def answer(
 
     # status-aware-retrieval (Phase 2) + sensitivity-fail-closed-filter (S3a):
     # compute each shared predicate ONCE, only when its own filtering is
-    # actually needed -- `include_deprecated=True`/`include_confidential=True`
-    # each independently skip their own walk entirely (design R1, zero-cost
-    # escape path). The two excluded-id sets are unioned before filtering, so
-    # `lifecycle.filter_hits` (axis-agnostic) is still called exactly once per
-    # hit list.
+    # actually needed. The zero-cost escape path (design R1) is unchanged,
+    # but the two axes now express it differently: `include_deprecated=True`
+    # still skips its walk with a guard HERE, while the sensitivity walk's
+    # own two hatches (`include_confidential`, and #240's `local_exemption`)
+    # are passed IN and short-circuit inside `sensitive_concept_ids` before
+    # it touches `okf._iter_docs`. That asymmetry is deliberate: the
+    # sensitivity condition is a two-term disjunction reached from five
+    # seams, and restating it at each of them is exactly the duplication
+    # `sensitivity.py`'s module docstring exists to prevent -- a guard
+    # half-updated at one seam fails OPEN. The two excluded-id sets are
+    # unioned before filtering, so `lifecycle.filter_hits` (axis-agnostic)
+    # is still called exactly once per hit list.
     deprecated: frozenset[str] = frozenset()
     if not include_deprecated:
         deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
-    confidential: frozenset[str] = frozenset()
-    if not include_confidential:
-        confidential = sensitivity.sensitive_concept_ids(bundle_dir)
+    confidential = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
     excluded = deprecated | confidential
     hits = lifecycle.filter_hits(hits, excluded)
     vec_hits = lifecycle.filter_hits(vec_hits, excluded)
@@ -561,6 +599,7 @@ def answer(
         fused_ids,
         confidential,
         include_confidential=include_confidential,
+        local_exemption=local_exemption,
     )
 
     if not context_blocks:

@@ -8,6 +8,7 @@ zero real Ollama process. Mirrors `_FakeLLM` in
 `tests/unit/resolution/test_adjudication.py`.
 """
 
+import inspect
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -807,8 +808,18 @@ def test_include_confidential_true_restores_the_confidential_edge(
 def test_include_confidential_true_never_calls_the_predicate_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`include_confidential=True` skips `sensitivity.sensitive_concept_ids`
-    entirely (spy) -- the escape flag is the zero-cost path (design R1)."""
+    """`include_confidential=True` reaches
+    `sensitivity.sensitive_concept_ids` as the flag it is, so the predicate
+    short-circuits before touching `okf._iter_docs` -- the escape flag is
+    still the zero-cost path (design R1).
+
+    Issue #240 moved WHERE the skip is decided, not whether it happens: the
+    guarding `if not include_confidential:` used to live here, but a second
+    hatch (`local_exemption`) would have made that a two-term disjunction
+    restated at five call sites, which is the duplication `sensitivity.py`'s
+    module docstring exists to prevent. The walk-skip itself is pinned once,
+    centrally, by
+    `tests/unit/test_sensitivity.py::test_sensitive_concept_ids_escape_hatches_skip_the_walk_entirely`."""
     from openkos import sensitivity
 
     bundle_dir = tmp_path / "bundle"
@@ -816,18 +827,18 @@ def test_include_confidential_true_never_calls_the_predicate_walk(
     (bundle_dir / "concepts").mkdir()
     _write_doc(bundle_dir / "concepts" / "a.md", title="A")
     llm = _FakeLLM()
-    walk_calls: list[Path] = []
+    walk_calls: list[dict[str, object]] = []
     original_predicate = sensitivity.sensitive_concept_ids
 
     def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
-        walk_calls.append(bundle_dir)
+        walk_calls.append(kwargs)
         return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
 
     edge_typing_mod.suggest_relations(bundle_dir, llm=llm, include_confidential=True)
 
-    assert walk_calls == []
+    assert walk_calls == [{"include_confidential": True, "local_exemption": False}]
 
 
 def test_default_include_confidential_false_calls_the_predicate_walk_once(
@@ -1008,3 +1019,85 @@ def test_candidate_edges_drops_a_proximity_row_with_a_confidential_endpoint(
     source = _StubCandidateSource([("concepts/a", "concepts/b")])
 
     assert edge_typing_mod.candidate_edges(bundle, candidates=source) == []
+
+
+# ---------------------------------------------------------------------------
+# issue #240: the confidential local exemption
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_edges_local_exemption_keeps_a_confidential_endpoint(
+    tmp_path: Path,
+) -> None:
+    """With a verified-local backend, an edge touching a `confidential`
+    endpoint stays a candidate without `--include-confidential` (#240)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md", title="A", sensitivity_value="confidential"
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    fake_store: GraphStore = _FakeGraphStore(
+        [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+
+    result = edge_typing_mod.candidate_edges(
+        bundle_dir, store=fake_store, local_exemption=True
+    )
+
+    assert [(e.source_id, e.target_id) for e in result] == [
+        ("concepts/a", "concepts/b")
+    ]
+
+
+def test_local_exemption_carries_confidential_body_into_the_prompt(
+    tmp_path: Path,
+) -> None:
+    """`suggest_edge_types` threads the exemption into `_load_doc`, so a
+    confidential endpoint's real title and body reach the prompt rather than
+    the `(concept_id, "")` degrade (#240).
+
+    The upstream candidate filter and the per-doc re-check must agree: if
+    only one honored the exemption, a local-backend run would still prompt
+    with an empty body and the exemption would be cosmetic."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="Alpha secret body.",
+        sensitivity_value="confidential",
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    edge = Edge(source_id="concepts/a", target_id="concepts/b")
+    llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions B")])
+
+    edge_typing_mod.suggest_edge_types(
+        [edge], bundle_dir=bundle_dir, llm=llm, local_exemption=True
+    )
+
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Alpha secret body." in message["content"]
+    assert "[concepts/a — A]" in message["content"]
+
+
+def test_local_exemption_defaults_to_false_across_the_edge_typing_seams(
+    tmp_path: Path,
+) -> None:
+    """Every #240 seam in this module defaults `local_exemption` to `False`
+    -- forgetting it can only ever be MORE restrictive (#240)."""
+    for func in (
+        edge_typing_mod.candidate_edges,
+        edge_typing_mod.suggest_relations,
+        edge_typing_mod.suggest_edge_types,
+    ):
+        assert inspect.signature(func).parameters["local_exemption"].default is False
+
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "a.md", title="A", sensitivity_value="confidential"
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    fake_store: GraphStore = _FakeGraphStore(
+        [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+
+    assert edge_typing_mod.candidate_edges(bundle_dir, store=fake_store) == []

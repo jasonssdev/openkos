@@ -96,7 +96,11 @@ class AdjudicatedCandidate:
 
 
 def _load_members(
-    bundle_dir: Path, member_ids: Sequence[str], *, include_confidential: bool = False
+    bundle_dir: Path,
+    member_ids: Sequence[str],
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
 ) -> list[tuple[str, str, str]]:
     """Read-only guarded per-member re-read (mirrors
     `retrieval/answer.py:_assemble_context`): returns `(concept_id, title,
@@ -120,6 +124,13 @@ def _load_members(
     include_confidential and sensitivity.blocks_llm_send(...)` directly --
     behavior-preserving; see `sensitivity.py`'s module docstring for the
     5-way duplication this replaces.
+
+    `local_exemption` (issue #240) is threaded here for the same reason
+    `include_confidential` is: this walk-independent re-check is the LAST
+    gate before the prompt, so if the upstream filter admitted a concept
+    under a verified-local backend and this one still degraded it to
+    skipped, the exemption would be cosmetic. Defaults to
+    `False`, fail-closed.
     """
     members: list[tuple[str, str, str]] = []
     for concept_id in member_ids:
@@ -132,7 +143,9 @@ def _load_members(
         except Exception:  # noqa: S112 -- broad: any parse failure skips this member
             continue
         if sensitivity.should_block(
-            metadata, include_confidential=include_confidential
+            metadata,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
         ):
             continue
         title = str(metadata.get("title") or "") or concept_id
@@ -216,6 +229,7 @@ def adjudicate_candidates(
     bundle_dir: Path,
     llm: LLMBackend,
     include_confidential: bool = False,
+    local_exemption: bool = False,
     on_progress: Callable[[int, int, AdjudicatedCandidate], None] | None = None,
 ) -> list[AdjudicatedCandidate]:
     """Adjudicate every `CandidateGroup` in `candidates` against `bundle_dir`
@@ -251,10 +265,22 @@ def adjudicate_candidates(
     `llm.chat` was ever called for it. It never affects the returned list;
     an exception it raises propagates to the caller (it is the caller's own
     callback).
+
+    `local_exemption` (issue #240) is the second escape hatch defined by
+    `sensitivity.should_block`: the caller asserting that the `llm.chat`
+    backend this run will actually reach is verifiably this machine, so a
+    `confidential` concept is not leaving anywhere and the gate has nothing
+    to protect. It is threaded, never re-derived -- the disjunction with
+    `include_confidential` lives ONLY in `sensitivity.py` (see its module
+    docstring). Defaults to `False`: a caller that cannot prove locality
+    gets today's blanket blocking, so forgetting the parameter can only ever
+    be MORE restrictive.
     """
-    blocked: frozenset[str] = frozenset()
-    if not include_confidential:
-        blocked = sensitivity.sensitive_concept_ids(bundle_dir)
+    blocked = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
 
     results: list[AdjudicatedCandidate] = []
     total = len(candidates)
@@ -263,7 +289,10 @@ def adjudicate_candidates(
             member_id for member_id in candidate.member_ids if member_id not in blocked
         ]
         members = _load_members(
-            bundle_dir, member_ids, include_confidential=include_confidential
+            bundle_dir,
+            member_ids,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
         )
         if not members:
             result = AdjudicatedCandidate(

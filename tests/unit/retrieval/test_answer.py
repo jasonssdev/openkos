@@ -15,6 +15,7 @@ real Ollama process.
 
 import ast
 import dataclasses
+import inspect
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
@@ -2081,9 +2082,18 @@ def test_include_confidential_true_restores_the_only_match_and_skips_the_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`include_confidential=True` restores a confidential-only match to full
-    participation AND never calls `sensitivity.sensitive_concept_ids` at all
-    (spy) -- the escape flag skips the predicate walk entirely, at zero added
-    cost (spec: `--include-confidential` Escape Flag)."""
+    participation AND reaches `sensitivity.sensitive_concept_ids` as the flag
+    it is (spy), so the predicate short-circuits before touching
+    `okf._iter_docs` -- the escape flag is still zero added cost (spec:
+    `--include-confidential` Escape Flag).
+
+    Issue #240 moved WHERE the skip is decided, not whether it happens: the
+    guarding `if not include_confidential:` used to live in `answer`, but a
+    second hatch (`local_exemption`) would have made that a two-term
+    disjunction restated at five call sites, which is the duplication
+    `sensitivity.py`'s module docstring exists to prevent. The walk-skip
+    itself is pinned once, centrally, by
+    `tests/unit/test_sensitivity.py::test_sensitive_concept_ids_escape_hatches_skip_the_walk_entirely`."""
     bundle_dir = tmp_path / "bundle"
     _write_doc(
         bundle_dir / "concepts" / "secret.md",
@@ -2094,11 +2104,11 @@ def test_include_confidential_true_restores_the_only_match_and_skips_the_walk(
         hits=[fts.FtsHit(concept_id="concepts/secret", score=1.0)]
     )
     llm = _FakeLLM(reply="restored")
-    walk_calls: list[Path] = []
+    walk_calls: list[dict[str, object]] = []
     original_predicate = sensitivity.sensitive_concept_ids
 
     def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
-        walk_calls.append(bundle_dir)
+        walk_calls.append(kwargs)
         return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
@@ -2111,7 +2121,7 @@ def test_include_confidential_true_restores_the_only_match_and_skips_the_walk(
         include_confidential=True,
     )
 
-    assert walk_calls == []
+    assert walk_calls == [{"include_confidential": True, "local_exemption": False}]
     assert result.answer == "restored"
     assert result.citations == [
         answer_mod.Citation(concept_id="concepts/secret", title="Secret")
@@ -2546,3 +2556,100 @@ def test_system_prompt_does_not_invite_inlining_concept_ids(tmp_path: Path) -> N
     system = llm.calls[0][0]["content"]
     assert "by their concept id" not in system
     assert "concept id" in system
+
+
+# --- issue #240: the confidential local exemption on the query path ----------
+
+
+def test_local_exemption_true_restores_a_confidential_concept_to_the_answer(
+    tmp_path: Path,
+) -> None:
+    """With a verified-local backend (`local_exemption=True`), a
+    `confidential` concept participates in retrieval and reaches the prompt
+    without `--include-confidential` (#240).
+
+    `sensitivity` governs what LEAVES the machine; an Ollama on loopback is
+    not egress, so the gate has nothing to protect against here."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/secret", score=1.0)]
+    )
+    llm = _FakeLLM(reply="answered from the confidential concept")
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        local_exemption=True,
+    )
+
+    assert result.citations == [
+        answer_mod.Citation(concept_id="concepts/secret", title="Secret")
+    ]
+    assert any("confidential note" in m["content"] for m in llm.calls[0])
+
+
+def test_local_exemption_defaults_to_false_on_answer(tmp_path: Path) -> None:
+    """`answer`'s `local_exemption` defaults to `False`, so a caller that
+    cannot prove the backend is local keeps today's blanket blocking (#240).
+
+    Fail-closed by omission: the CLI is the only layer that knows which
+    client the send will use, and a library caller that never says anything
+    must never be assumed to be local."""
+    parameter = inspect.signature(answer_mod.answer).parameters["local_exemption"]
+    assert parameter.default is False
+
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+    recording_index = _RecordingIndex(
+        hits=[fts.FtsHit(concept_id="concepts/secret", score=1.0)]
+    )
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="unused"),
+        fts_index=recording_index,
+    )
+
+    assert result.citations == []
+
+
+def test_assemble_context_local_exemption_skips_the_independent_recheck(
+    tmp_path: Path,
+) -> None:
+    """The walk-independent per-doc re-check honors the exemption too (#240).
+
+    Both layers must agree: if the upstream filter admitted a confidential
+    concept because the backend is local, a re-check that still dropped it
+    at the send point would make the exemption silently ineffective for
+    every concept, since this is the layer that actually assembles the
+    prompt."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        body="dichotomyzz confidential note",
+        sensitivity_value="confidential",
+    )
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir,
+        ["concepts/secret"],
+        local_exemption=True,
+    )
+
+    assert any("confidential note" in block for block in context_blocks)
+    assert [c.concept_id for c in citations] == ["concepts/secret"]
