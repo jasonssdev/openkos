@@ -34,6 +34,7 @@ from openkos import config
 from openkos.cli import curate as curate_mod
 from openkos.cli import main as main_mod
 from openkos.cli.main import app
+from openkos.graph.base import Edge
 from openkos.llm.ollama import BackendHostLocality, OllamaClient
 from openkos.resolution.adjudication import AdjudicatedCandidate
 from openkos.resolution.candidates import CandidateGroup, Tier
@@ -273,6 +274,33 @@ def test_local_backend_grants_the_exemption_at_every_seam(
 
     assert result.exit_code == 0, result.stderr
     assert spy.calls, f"{verb} never reached its seam"
+    assert spy.calls[0]["local_exemption"] is True
+
+
+def test_local_backend_grants_the_exemption_at_suggest_edge_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `suggest-relations` row of `_SEAMS` above spies `candidate_edges`
+    -- the cost-gate PROBE (issue #134) -- and stubs it to return `[]`, so
+    `suggest_relations_cmd` short-circuits at its zero-edge branch and
+    `suggest_edge_types`, the seam that actually performs the `llm.chat`
+    sends, is never reached. Pin `local_exemption` reaching THAT seam
+    directly, the way the other four verbs are pinned on their send seam,
+    by stubbing `candidate_edges` to return one edge instead."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.setattr(
+        main_mod,
+        "candidate_edges",
+        lambda *a, **k: [Edge(source_id="concepts/a", target_id="concepts/b")],
+    )
+    spy = _KwargSpy(list[object]())
+    monkeypatch.setattr(main_mod, "suggest_edge_types", spy)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    assert spy.calls, "suggest_edge_types never reached"
     assert spy.calls[0]["local_exemption"] is True
 
 
