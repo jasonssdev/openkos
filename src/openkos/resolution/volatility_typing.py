@@ -88,7 +88,10 @@ class TierSuggestion:
 
 
 def _reread_sensitivity_blocked(
-    doc: lint.LintDoc, *, include_confidential: bool = False
+    doc: lint.LintDoc,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
 ) -> bool:
     """Re-read `doc.path`'s frontmatter fresh and check its OWN
     `sensitivity` value via `sensitivity.should_block` -- `LintDoc` itself
@@ -124,8 +127,14 @@ def _reread_sensitivity_blocked(
     and future-proofs a possible index-sourced refactor. Correction batch
     FIX 3: callers now apply this guard only to the SAMPLED subset (at most
     `N_SAMPLE_CONCEPTS` docs per type, via `_sample_docs_by_type`), not the
-    full bundle -- see `suggest_volatility`'s docstring."""
-    if include_confidential:
+    full bundle -- see `suggest_volatility`'s docstring.
+
+    `local_exemption` (issue #240) is the second short-circuit, and it
+    short-circuits on exactly the same terms as `include_confidential`: a
+    verified-local backend means nothing leaves the machine, so there is
+    nothing to re-check and no reason to pay for the re-read. Defaults to
+    `False`, fail-closed."""
+    if include_confidential or local_exemption:
         return False
     try:
         text = doc.path.read_text(encoding="utf-8")
@@ -135,7 +144,11 @@ def _reread_sensitivity_blocked(
         metadata, _body = okf.load_frontmatter(text)
     except Exception:  # broad: any parse failure fails closed (return, not continue)
         return True
-    return sensitivity.should_block(metadata, include_confidential=include_confidential)
+    return sensitivity.should_block(
+        metadata,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
 
 
 def _sample_docs_by_type(docs: list[lint.LintDoc]) -> dict[str, list[lint.LintDoc]]:
@@ -222,6 +235,7 @@ def suggest_volatility(
     *,
     llm: LLMBackend,
     include_confidential: bool = False,
+    local_exemption: bool = False,
     on_progress: Callable[[int, int, TierSuggestion], None] | None = None,
 ) -> list[TierSuggestion]:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
@@ -263,10 +277,22 @@ def suggest_volatility(
     `total` is an UPPER BOUND: the final `index` ends below `total`
     whenever a type was filtered out. It never affects the returned list;
     an exception it raises propagates to the caller (it is the caller's
-    own callback)."""
-    blocked: frozenset[str] = frozenset()
-    if not include_confidential:
-        blocked = sensitivity.sensitive_concept_ids(bundle_dir)
+    own callback).
+
+    `local_exemption` (issue #240) is the second escape hatch defined by
+    `sensitivity.should_block`: the caller asserting that the `llm.chat`
+    backend this run will actually reach is verifiably this machine, so a
+    `confidential` concept is not leaving anywhere and the gate has nothing
+    to protect. It is threaded, never re-derived -- the disjunction with
+    `include_confidential` lives ONLY in `sensitivity.py` (see its module
+    docstring). Defaults to `False`: a caller that cannot prove locality
+    gets today's blanket blocking, so forgetting the parameter can only ever
+    be MORE restrictive."""
+    blocked = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
 
     docs, _skip_notices = lint.collect_docs(bundle_dir)
     docs = [doc for doc in docs if doc.identity not in blocked]
@@ -278,7 +304,9 @@ def suggest_volatility(
             doc
             for doc in sampled_docs[type_name]
             if not _reread_sensitivity_blocked(
-                doc, include_confidential=include_confidential
+                doc,
+                include_confidential=include_confidential,
+                local_exemption=local_exemption,
             )
         ]
         if not type_docs:

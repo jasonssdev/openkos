@@ -1,15 +1,18 @@
 """Unit tests for the `doctor` CLI command: read-only environment health scan.
 
-`doctor` runs ALL ten checks (workspace-initialized, config-valid,
+`doctor` runs ALL eleven checks (workspace-initialized, config-valid,
 Ollama-reachable, model-installed, embedding-model-installed,
 bundle-readable, workspace-vector-index-present, vector-extension-loadable,
-git-available, git-filter-repo-available), renders every result
+git-available, git-filter-repo-available, backend-host-locality), renders
+every result
 unconditionally (accumulate-then-exit-once, D5), and exits 1 iff any CRITICAL
 check failed. `embedding-model-installed`, `workspace-vector-index-present`,
-`vector-extension-loadable`, and the two git
-checks are all informational (non-critical): the git checks exist for the
-(not-yet-wired, PR2) `purge` verb, so a failing check must not flip the
-exit code. Every test patches `openkos.cli.main.OllamaClient` with a fake
+`vector-extension-loadable`, the two git
+checks, and `backend-host-locality` are all informational (non-critical):
+the git checks exist for the (not-yet-wired, PR2) `purge` verb, so a failing
+check must not flip the exit code, and the locality check (issue #240)
+reports rather than judges -- it always `[PASS]`es and carries its finding
+in the detail. Every test patches `openkos.cli.main.OllamaClient` with a fake
 stub (D-seam) -- zero network, zero real Ollama process.
 """
 
@@ -24,7 +27,14 @@ from typer.testing import CliRunner
 
 from openkos.cli.main import app
 from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL
-from openkos.llm.ollama import InstalledModel, OllamaError, OllamaUnavailable
+from openkos.llm.ollama import (
+    BackendHostLocality,
+    InstalledModel,
+    OllamaClient,
+    OllamaError,
+    OllamaUnavailable,
+)
+from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
 runner = CliRunner()
@@ -54,6 +64,16 @@ def _fake_ollama_client(
             self.model = model
             if record is not None:
                 record.append({"model": model, **kwargs})
+            # A REAL client, built the same way, purely so `locality`
+            # answers exactly as production would (issue #240). Only the
+            # network methods are faked here; host resolution is not
+            # something a stub should re-implement, and re-implementing it
+            # would let the fake and the real predicate drift.
+            self._real = OllamaClient(model=model, **kwargs)  # type: ignore[arg-type]
+
+        @property
+        def locality(self) -> BackendHostLocality:
+            return self._real.locality
 
         def list_models(self) -> list[InstalledModel]:
             if error is not None:
@@ -67,7 +87,8 @@ def test_doctor_all_healthy_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A fully healthy workspace prints one `[PASS]` per applicable check
-    (ten total) and exits 0 (Scenario: Healthy workspace prints all
+    (eleven total, since #240 added the informational backend-locality
+    report) and exits 0 (Scenario: Healthy workspace prints all
     applicable checks). `.openkos/vectors.db` is pre-created so the #142
     workspace-vector-index-present check also passes."""
     _init_workspace(tmp_path, monkeypatch)
@@ -85,7 +106,7 @@ def test_doctor_all_healthy_exits_zero(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 10
+    assert result.stdout.count("[PASS]") == 11
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
@@ -595,7 +616,7 @@ def test_doctor_vector_extension_loadable_shows_pass(
 
     assert result.exit_code == 0
     assert "[PASS] Vector extension loadable" in result.stdout
-    assert result.stdout.count("[PASS]") == 9
+    assert result.stdout.count("[PASS]") == 10
 
 
 def test_doctor_vector_extension_not_loadable_fails_but_exit_stays_zero(
@@ -856,4 +877,125 @@ def test_doctor_prints_version_banner_first(
     assert re.match(r"^openkos \d+\.\d+\.\d+", lines[0])
     assert lines[1] == f"openkos doctor: checking environment at {tmp_path}"
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 10
+    assert result.stdout.count("[PASS]") == 11
+
+
+# --- issue #240: the informational backend-locality check --------------------
+
+
+def _healthy_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Everything green except whatever the calling test varies."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+
+def test_doctor_reports_a_local_backend_and_an_active_exemption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a stock workspace with the default local backend, `doctor` reports
+    the backend as this machine and the confidential local exemption as
+    active (#240).
+
+    The whole point of the check is that the state becomes INSPECTABLE
+    rather than inferred: without it, a user cannot tell whether their
+    confidential concepts are reaching the model except by reading the
+    source."""
+    _healthy_doctor(tmp_path, monkeypatch)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Backend host locality — this machine (localhost:11434); " in (
+        result.stdout
+    )
+    assert "confidential local exemption active" in result.stdout
+
+
+def test_doctor_reports_a_remote_backend_without_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-local backend is REPORTED, never failed (#240).
+
+    Informational means informational: running against a remote Ollama is a
+    legitimate configuration, so `[FAIL]` would be a lie and a non-zero exit
+    would break every script that runs `doctor` as a gate. The exemption is
+    reported inactive, which is the fact that matters."""
+    _healthy_doctor(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", "http://user:s3cret@remote.example:11434")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Backend host locality — not this machine " in result.stdout
+    assert "(remote.example:11434)" in result.stdout
+    assert "confidential local exemption inactive" in result.stdout
+    assert "s3cret" not in result.stdout
+    assert "s3cret" not in result.stderr
+
+
+def test_doctor_reports_the_workspace_opt_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local backend with `confidential_local_exemption: false` reports the
+    backend as this machine AND the exemption as inactive (#240) -- the two
+    terms are distinct facts and the check must not conflate them."""
+    _healthy_doctor(tmp_path, monkeypatch)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    disable_local_exemption(tmp_path)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "this machine (localhost:11434)" in result.stdout
+    assert "confidential local exemption inactive" in result.stdout
+
+
+def test_doctor_locality_check_never_changes_the_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The locality check is informational on EVERY path, including an
+    unparseable host (#240): it never raises, never fails, and never flips
+    the exit code a critical check owns."""
+    _healthy_doctor(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", "user:s3cret@[::1")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Backend host locality — not this machine ([::1)" in result.stdout
+    assert "s3cret" not in result.stdout
+
+
+def test_doctor_reports_locality_outside_a_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside a workspace the check still runs, falling back to the packaged
+    `confidential_local_exemption` default exactly as checks 3-5 fall back to
+    the packaged model tags (#240) -- there is no `[SKIP]` branch, because
+    locality depends on neither workspace state nor Ollama reachability."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[PASS] Backend host locality — this machine (localhost:11434)" in (
+        result.stdout
+    )
+    assert "[SKIP] Backend host locality" not in result.stdout

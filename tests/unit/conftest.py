@@ -75,7 +75,12 @@ from typing import Any
 import pytest
 
 from openkos.llm.base import EMBED_DIM
-from openkos.llm.ollama import InstalledModel, OllamaClient, OllamaUnavailable
+from openkos.llm.ollama import (
+    BackendHostLocality,
+    InstalledModel,
+    OllamaClient,
+    OllamaUnavailable,
+)
 
 
 class UnitSuiteNetworkAccessError(RuntimeError):
@@ -250,6 +255,30 @@ def _no_network_by_default(
         monkeypatch.setattr(socket, function, _refusal(request, function, bound=False))
 
 
+LOCAL_BACKEND_LOCALITY = BackendHostLocality(
+    is_local=True, display_host="localhost:11434"
+)
+"""The locality every hand-rolled `OllamaClient` stand-in in this suite
+reports (issue #240).
+
+`OllamaClient` grew a `locality` property that the CLI reads for two things:
+the non-local embedding-host advisory (#199/#353) and the confidential local
+exemption (#240). A structural fake that omits it raises `AttributeError`
+deep inside a fail-open handler, which is a fixture gap masquerading as a
+degrade.
+
+LOCAL, not remote, because that is what the fixtures already simulate: the
+autouse offline fixture clears `OLLAMA_HOST`, so a real client in these
+tests resolves to the packaged loopback default. A remote value would inject
+the advisory's stderr line into every strict stderr assertion in the suite
+-- the same nondeterminism `_offline_ollama_by_default` exists to end. Tests
+that care about non-local behavior construct their own locality explicitly.
+
+`display_host` carries the port because the classifier is handed the
+RESOLVED host (`http://localhost:11434`), which is what the real property
+does."""
+
+
 class OfflineOllama(OllamaClient):
     """A real `OllamaClient` with EVERY network method stubbed.
 
@@ -320,12 +349,16 @@ def _offline_ollama_by_default(
     both take precedence, since module-level and function-level fixtures
     resolve after this one.
 
-    Also clears `OLLAMA_HOST` (#199): the non-local embedding-host advisory
-    reads it directly, so a developer's exported value would inject an
+    Also clears `OLLAMA_HOST` (#199): `OllamaClient.__init__` reads it to
+    resolve the client's own `locality`, and `_warn_if_nonlocal_embed_host`
+    (`cli/main.py`) only reads THAT already-resolved `BackendHostLocality`
+    -- it takes no environment access of its own. A developer's exported
+    value would still change what the client resolves to and inject an
     extra stderr line into every strict stderr assertion across the suite
     -- the same "green means something different on my laptop" class of
-    nondeterminism this fixture exists to end. Tests that pin the advisory
-    set the variable explicitly.
+    nondeterminism this fixture exists to end -- so the `delenv` stays
+    required even though the advisory itself is now environment-free.
+    Tests that pin the advisory set the variable explicitly.
 
     One consequence worth naming rather than discovering later:
     `test_ingest.py` overrides this with `_FakeLLM`, which serves `chat()`

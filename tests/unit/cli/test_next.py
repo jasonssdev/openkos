@@ -23,6 +23,7 @@ from openkos.llm.base import EMBED_DIM
 from openkos.resolution import CandidateGroup
 from openkos.resolution import find_exact_title_groups as _real_find_exact_title_groups
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 runner = CliRunner()
 
@@ -36,6 +37,12 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 class _OfflineOllama:
     """Serves both halves of `OllamaClient` without a network, mirroring
     `test_status.py`'s helper of the same name."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def chat(self, messages: object) -> str:
         return '{"extract": false}'

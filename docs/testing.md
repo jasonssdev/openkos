@@ -199,9 +199,9 @@ openkos doctor ; echo "exit: $?"
 ```
 
 Expect an `openkos <version>` banner, then the `openkos doctor: checking
-environment at <path>` header, a blank line, and then ten
+environment at <path>` header, a blank line, and then eleven
 `[PASS]`/`[FAIL]`/`[SKIP]` lines — the banner and the header are not checks.
-The ten checks and their criticality (exit code is `1` only if a **critical**
+The eleven checks and their criticality (exit code is `1` only if a **critical**
 check fails; a `[SKIP]` never causes exit 1):
 
 | # | Check | Critical |
@@ -216,6 +216,7 @@ check fails; a `[SKIP]` never causes exit 1):
 | 8 | Vector extension loadable | no |
 | 9 | `git` available | no |
 | 10 | `git-filter-repo` available | no |
+| 11 | Backend host locality | no |
 
 **Adversarial sub-test.** Stop Ollama (`Ctrl-C` in its terminal), re-run
 `openkos doctor`, confirm check 3 fails with an actionable remediation line and
@@ -471,8 +472,13 @@ openkos contradictions             # detects conflicts between RELATED concepts
 openkos contradictions --all
 ```
 
-**Sensitivity is fail-closed:** confidential concepts never reach the LLM unless
-`--include-confidential` is passed.
+**Sensitivity governs egress, and is fail-closed about it:** against a backend
+that is not verifiably on this machine, confidential concepts never reach the
+LLM unless `--include-confidential` is passed. Against a local Ollama — the
+default, and what this manual run uses — the confidential local exemption
+applies and they participate normally (#240). To exercise the blocked path
+here, set `confidential_local_exemption: false` in `openkos.yaml` first, and
+confirm `openkos doctor` check 11 reports the exemption inactive.
 
 Record for each whether it found what you planted. `contradictions` only inspects
 **already-related** concepts, so relate the conflicting pair first (Phase 7.3).

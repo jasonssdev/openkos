@@ -343,3 +343,30 @@ def seed_vectors_db() -> Callable[[Path], None]:
             conn.close()
 
     return _seed
+
+
+def disable_local_exemption(workspace_root: Path) -> None:
+    """Set `confidential_local_exemption: false` in `workspace_root`'s
+    `openkos.yaml` -- the documented way to restore the pre-#240 blanket
+    `confidential` gate.
+
+    Needed by every CLI test that asserts a confidential concept is EXCLUDED
+    from an `llm.chat` payload. Since issue #240 those tests are otherwise
+    asserting the wrong thing: the suite's Ollama stand-ins report a local
+    backend (`tests/unit/conftest.py::LOCAL_BACKEND_LOCALITY`), which is
+    exactly the case where the exemption applies and the concept is
+    legitimately included. Flipping the key restores the condition each of
+    those tests was written to exercise, and does it through the same public
+    switch a user has, rather than by reaching into the predicate."""
+    config_path = workspace_root / "openkos.yaml"
+    text = config_path.read_text(encoding="utf-8")
+    assert "confidential_local_exemption: true" in text, (
+        "the packaged template no longer declares 'confidential_local_exemption: true'"
+    )
+    config_path.write_text(
+        text.replace(
+            "confidential_local_exemption: true",
+            "confidential_local_exemption: false",
+        ),
+        encoding="utf-8",
+    )

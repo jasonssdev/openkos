@@ -100,6 +100,42 @@ def test_warn_if_walk_incomplete_include_confidential_suppresses_warning(
     assert captured.err == ""
 
 
+def test_warn_if_walk_incomplete_local_exemption_suppresses_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`local_exemption=True` suppresses the warning even when the walk is
+    incomplete -- the SAME reasoning as `include_confidential=True`: the
+    filter is off entirely (this time because the caller already resolved
+    the confidential local exemption, issue #240), so an incomplete walk
+    has no bearing on what gets sent."""
+    bundle_dir = _make_locked_bundle(tmp_path, monkeypatch)
+
+    observability.warn_if_walk_incomplete(bundle_dir, local_exemption=True)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_warn_if_walk_incomplete_local_exemption_skips_the_walk_entirely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`local_exemption=True` returns before `okf._walk_errors` runs the
+    walk at all -- paying for a full bundle scan whose result is then
+    discarded would defeat the zero-cost bypass `sensitivity.py` preserves
+    for this exact case (issue #240)."""
+    from openkos.model import okf
+
+    def _fail(*args: object, **kwargs: object) -> object:
+        raise AssertionError("okf._walk_errors must not run under the exemption")
+
+    monkeypatch.setattr(okf, "_walk_errors", _fail)
+
+    observability.warn_if_walk_incomplete(tmp_path, local_exemption=True)
+
+
 def test_warn_if_walk_incomplete_mode_refuse_raises_not_implemented(
     tmp_path: Path,
 ) -> None:

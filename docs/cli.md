@@ -137,7 +137,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | --- | --- |
 | `--limit <n>` | Max concepts to retrieve as context. Defaults to `5`. Each retriever is queried with a pool of `max(limit, 10)` before fusion truncates to `limit`. |
 | `--include-deprecated` | Include deprecated and superseded concepts in retrieval. Excluded by default from every channel (lexical, dense, graph) — the `retrieval:` stderr summary already reports the POST-filter counts. |
-| `--include-confidential` | Include confidential concepts in retrieval. Excluded by default from every channel (lexical, dense, graph) — a confidential concept is never sent to the LLM unless this flag is set. |
+| `--include-confidential` | Include confidential concepts in retrieval. Excluded by default from every channel (lexical, dense, graph) when the LLM backend is **not** verifiably on this machine. Against a local backend the exemption already applies and this flag is unnecessary — see [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 | `--save` | File the cited answer back into the bundle as a new derived concept (the two-output rule). Opt-in; off by default, keeping `query` read-only. Refuses when the answer cited no concepts (nothing to record provenance from). |
 | `--title <text>` | With `--save`, the title of the filed concept. Defaults to the question. Its slug is the new concept's id; a collision with an existing file refuses. |
 | `--description <text>` | With `--save`, the description of the filed concept. Defaults to the question. |
@@ -186,7 +186,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | --- | --- |
 | `--same-only` | Display-only filter: print only groups with a `SAME` verdict. `adjudicate_candidates` still judges every candidate group either way. With `--json`, filters the emitted array the same way. |
 | `--include-deprecated` | Include deprecated and superseded concepts in candidate groups. Excluded by default — shares `duplicates`'s `find_candidates` call. |
-| `--include-confidential` | Include confidential concepts. Excluded by default — a confidential member is dropped from a group before its content is ever read, and never sent to the LLM. |
+| `--include-confidential` | Include confidential concepts. Excluded by default when the LLM backend is **not** verifiably on this machine — a confidential member is then dropped from a group before its content is ever read. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 | `--json` | Emit every verdict as a single pretty-printed JSON array on stdout (`member_ids`, `okf_type`, `tier`, `verdict`, `rationale` — no confidence), suppressing all human output. Mutually exclusive with `--apply`/`--apply-same` (exit 2). A degraded run (unreachable Ollama, missing model) still exits 1 on stderr with no JSON. |
 | `--apply` | Interactive merge walk over the same adjudication results: each `SAME` two-member group is previewed and prompted `[y/N/skip]`; an accepted pair runs the same prepare/merge path `openkos merge` uses, committed per merge and reversible via `unmerge`. Groups with more than two members are skipped (merge those manually), and each pair's member ids are re-verified just before merging, since an earlier merge in the same run may already have absorbed one. A summary line (applied/skipped counts) always prints. Mutually exclusive with `--json`. |
 | `--apply-same` | Guarded batch merge of every eligible `SAME` two-member group: prints one aggregate preview plus a `Total: <n>` line, then requires the operator to type that exact count before anything is written (see `--confirm-count`) — a mismatch aborts with zero writes. Merges then commit sequentially, re-resolving each pair immediately before applying it; a mid-batch failure stops the run, reports how many of the previewed merges were applied, and leaves every prior commit intact and reversible via `unmerge`. Mutually exclusive with `--apply` and `--json`. |
@@ -200,7 +200,7 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 | --- | --- |
 | `--all` | Display-only filter: reveal every verdict regardless of type or confidence. `find_contradictions` still judges every candidate pair either way. |
 | `--include-deprecated` | Include deprecated and superseded concepts. Excluded by default — a candidate pair with either endpoint deprecated/superseded is never judged. |
-| `--include-confidential` | Include confidential concepts. Excluded by default — a candidate pair with either endpoint confidential is never judged, and never sent to the LLM. |
+| `--include-confidential` | Include confidential concepts. Excluded by default when the LLM backend is **not** verifiably on this machine — a candidate pair with either endpoint confidential is then never judged. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 
 ### `openkos reconcile <id-a> <id-b>`
 
@@ -224,7 +224,7 @@ Reconciliation is idempotent per pair: re-running the exact same request (same m
 
 | Flag | Meaning |
 | --- | --- |
-| `--include-confidential` | Include confidential concepts. Excluded by default — an untyped edge with a confidential endpoint is dropped before `llm.chat` is ever called for it. |
+| `--include-confidential` | Include confidential concepts. Excluded by default when the LLM backend is **not** verifiably on this machine — an untyped edge with a confidential endpoint is then dropped before `llm.chat` is ever called for it. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 
 ### `openkos relate <source-id> <type> <target-id>`
 
@@ -242,7 +242,7 @@ The edge is **idempotent**: an identical `(target, type)` pair already present i
 
 | Flag | Meaning |
 | --- | --- |
-| `--include-confidential` | Include confidential concepts. Excluded by default — a confidential concept is dropped from its type's sampled bodies before any content is shown to the LLM; a type whose docs are all confidential yields no suggestion at all. |
+| `--include-confidential` | Include confidential concepts. Excluded by default when the LLM backend is **not** verifiably on this machine — a confidential concept is then dropped from its type's sampled bodies, and a type whose docs are all confidential yields no suggestion at all. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 
 ### `openkos set-volatility <Type> <tier>`
 
@@ -370,7 +370,7 @@ Identity reuses `adjudicate --apply`'s exact merge walk rather than reimplementi
 | Flag | Meaning |
 | --- | --- |
 | `--auto` | Accept every stage's cost gate without prompting (model spend only — per-item write prompts are never auto-accepted). |
-| `--include-confidential` | Include confidential concepts, forwarded to every stage's underlying call. Excluded by default — a confidential concept is never sent to the LLM unless you pass this. |
+| `--include-confidential` | Include confidential concepts, forwarded to every stage's underlying call. Excluded by default when the LLM backend is **not** verifiably on this machine. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 | `--include-deprecated` | Include deprecated and superseded concepts, forwarded the same way. Excluded by default. |
 
 Exit codes: `0` for any completed or declined run — including every declined gate, empty queue, and the Preconditions halt; `1` on a workspace/config failure or a failed mid-walk write; `2` on a usage error; `3` on the post-confirm drift refusal, the one retryable failure (see Conventions).
@@ -441,7 +441,7 @@ No residual is printed or left behind: after a successful purge, the purged conc
 
 ### `openkos doctor`
 
-**Read-only.** A fixed environment health scan: ten checks against the local workspace, the local Ollama server, the local Python/SQLite build, and `git`/`git-filter-repo` availability, each printed as one `[PASS]`, `[FAIL]`, or `[SKIP]` line. Every `[FAIL]` line is immediately followed by an indented `  -> <fix command>` line naming the user's own next command (`ollama serve`, `ollama pull <model>`, `openkos init`, or an install command) — `doctor` never runs these commands itself. Output leads with the same `openkos {version}` banner as `--version`, printed before any check line, informational only and not counted among the ten checks.
+**Read-only.** A fixed environment health scan: eleven checks against the local workspace, the local Ollama server, the local Python/SQLite build, and `git`/`git-filter-repo` availability, each printed as one `[PASS]`, `[FAIL]`, or `[SKIP]` line. Every `[FAIL]` line is immediately followed by an indented `  -> <fix command>` line naming the user's own next command (`ollama serve`, `ollama pull <model>`, `openkos init`, or an install command) — `doctor` never runs these commands itself. Output leads with the same `openkos {version}` banner as `--version`, printed before any check line, informational only and not counted among the eleven checks.
 
 Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it runs and prints **all** applicable checks, then exits once. The checks, in order:
 
@@ -455,10 +455,11 @@ Unlike `status`/`lint`/`query`, `doctor` never stops at the first failure: it ru
 8. **Vector extension loadable** — informational, always runs, independent of workspace state and Ollama reachability (no `[SKIP]` branch — unlike check 5, it shares no root cause with any other check). Probes whether the `sqlite-vec` extension loads into a throwaway `:memory:` connection; on failure, the remediation names an extension-capable Python interpreter (e.g. a uv-managed interpreter) rather than the system/Homebrew Python that some platforms build without SQLite extension-loading support. The on-disk vector store this checks backs `query`'s dense retrieval, populated by `reindex`.
 9. **`git` available** — informational, always runs, independent of workspace state and Ollama reachability. Required by `purge` (right-to-be-forgotten).
 10. **`git-filter-repo` available** — informational, always runs. Required by `purge`; remediation names an install command (`pip install git-filter-repo` or your package manager).
+11. **Backend host locality** — informational, always runs, independent of workspace state and Ollama *reachability* (locality is a literal-form check over an already-resolved host, so it answers even when the server is down). Reports the redacted host, whether it is this machine, and whether the confidential local exemption is consequently active — e.g. `[PASS] Backend host locality — this machine (localhost:11434); confidential local exemption active`. Unlike every other check it **always** `[PASS]`es: running against a remote Ollama is a legitimate configuration, not a fault, so the status only says the check ran and the detail carries the finding. It can never change the exit code. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend).
 
-Exit code reflects **critical** failures only: `doctor` exits `1` if config-valid, Ollama-reachable, or model-installed failed, and `0` otherwise — the seven informational checks (workspace-initialized, embedding-model-installed, bundle-readable, workspace-vector-index-present, vector-extension-loadable, `git`-available, `git-filter-repo`-available) never affect the exit code on their own.
+Exit code reflects **critical** failures only: `doctor` exits `1` if config-valid, Ollama-reachable, or model-installed failed, and `0` otherwise — the eight informational checks (workspace-initialized, embedding-model-installed, bundle-readable, workspace-vector-index-present, vector-extension-loadable, `git`-available, `git-filter-repo`-available, backend-host-locality) never affect the exit code on their own.
 
-`doctor` also works **outside an initialized workspace**, as a pure Ollama/vector-extension preflight: the workspace-initialized check reports an informational `[FAIL]` with `openkos init` remediation, the three workspace-only checks (config-valid, bundle-readable, workspace-vector-index-present) are skipped as not applicable, and the six remaining checks (Ollama-reachable, model-installed, embedding-model-installed, vector-extension-loadable, `git`-available, `git-filter-repo`-available) still run — the Ollama-dependent checks against the packaged default model/embedding model — and Ollama-reachable/model-installed still determine the exit code.
+`doctor` also works **outside an initialized workspace**, as a pure Ollama/vector-extension preflight: the workspace-initialized check reports an informational `[FAIL]` with `openkos init` remediation, the three workspace-only checks (config-valid, bundle-readable, workspace-vector-index-present) are skipped as not applicable, and the seven remaining checks (Ollama-reachable, model-installed, embedding-model-installed, vector-extension-loadable, `git`-available, `git-filter-repo`-available, backend-host-locality) still run — the Ollama-dependent checks against the packaged default model/embedding model, the locality check against the packaged `confidential_local_exemption` default — and Ollama-reachable/model-installed still determine the exit code.
 
 `doctor` never creates, modifies, or deletes any file.
 
@@ -486,6 +487,7 @@ Structured settings for the workspace, read by the engine. It lives at the works
 model: qwen3:8b           # local model served via Ollama; see tech_stack.md
 review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
+confidential_local_exemption: true  # send confidential concepts to a LOCAL LLM backend
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
 
 # Layout — where the engine keeps things, relative to this file.
@@ -494,6 +496,26 @@ bundle: bundle/           # the OKF bundle root
 
 # type_registry is maintained by the engine (canonical + emergent types)
 ```
+
+### Sensitivity and the local backend
+
+`sensitivity` governs what **leaves the machine**, so a `confidential` concept is held back from an `llm.chat` payload only when the backend is not verifiably local. Since [#240](https://github.com/jasonssdev/openkos/issues/240):
+
+| Backend | `confidential` object | `--include-confidential` |
+|---|---|---|
+| Verified local | sent | not needed |
+| Verified remote | blocked | still the escape hatch |
+| Unknown / unparseable | blocked (fail closed) | still the escape hatch |
+
+"Verified local" means the host the client will actually send to is loopback **by literal form** — `localhost`, `127.0.0.0/8`, or `::1`. No DNS, no allowlist: a name that resolves to loopback today can resolve elsewhere tomorrow, so anything unprovable is treated as remote. The host is read from the client itself, not from `OLLAMA_HOST`, so an explicit host override cannot be granted an exemption it does not qualify for.
+
+**This is a deliberate change of behavior.** A workspace that relied on `confidential` meaning "never to any LLM" will now see those objects included when the backend is local. Set `confidential_local_exemption: false` in `openkos.yaml` to restore the old blanket gate. It is a workspace key rather than a per-command flag on purpose: a policy that depends on remembering to type a flag is not a policy. `--include-confidential` is unchanged and still works on every command.
+
+Run `openkos doctor` to see which side of the line your backend is on (check 11).
+
+**Terminal output is never gated by this.** Printing an object's title or id on your own screen is not an egress event — `list`/`status` show confidential titles in full, unredacted.
+
+**`ingest`'s extraction floor gate does NOT take this exemption.** The table above governs the per-concept `confidential` filter on the six commands that resolve and thread it into a real `llm.chat` seam: the five read verbs (`query`, `contradictions`, `adjudicate`, `suggest-relations`, `suggest-volatility`) and `curate`, which resolves its own exemption and threads it into the same underlying `adjudicate_candidates`/`suggest_volatility`/`find_contradictions` calls its Identity/Metadata/Contradictions stages reuse. `ingest`'s SEPARATE check — whether a workspace's `default_sensitivity` floor is confidential enough to skip concept extraction from a newly ingested Source entirely — refuses regardless of backend locality: it always keeps the Source-only fallback (the document is still embedded and searchable; only LLM-based concept extraction is skipped) rather than granting a local backend a pass. This is deliberate, not an oversight: extraction runs against content the operator has not yet reviewed at all, at ingest time, before any human has looked at it, so a local-backend reader should not be surprised that `ingest` still refuses here even with the exemption active elsewhere.
 
 ## Still deferred (MVP 3)
 

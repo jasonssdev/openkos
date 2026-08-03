@@ -23,8 +23,9 @@ from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
-from tests.unit.cli.conftest import changed_paths
+from tests.unit.cli.conftest import changed_paths, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -71,6 +72,12 @@ def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") ->
 
 
 class _OfflineOllama:
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
+
     def chat(self, messages: object) -> str:
         return '{"extract": false}'
 
@@ -840,6 +847,12 @@ def test_identity_confidential_member_never_reaches_the_llm_payload(
 
     monkeypatch.setattr("openkos.cli.curate.OllamaClient", _RecordingOllama)
     _simulate_tty(monkeypatch)
+    # `curate` resolves the confidential local exemption from its own
+    # client, and the suite's stand-in reports a LOCAL backend -- where #240
+    # legitimately includes confidential content. This test is about the
+    # fail-closed FILTER, so opt out through the same workspace switch a
+    # user would use.
+    disable_local_exemption(tmp_path)
 
     before = _snapshot(tmp_path)
     # One stdin answer accepts the Identity cost gate; the UNCERTAIN verdict
@@ -1399,7 +1412,11 @@ def test_metadata_gap_notice_survives_an_empty_type_list(
         "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
     )
     # `_concept_type_names` deliberately NOT patched: the doc's unset
-    # sensitivity must empty the real type list for this scenario to hold.
+    # sensitivity must empty the real type list for this scenario to hold --
+    # which, since #240, requires the local exemption to be off, because the
+    # suite's stand-in reports a local backend and the exemption would
+    # legitimately readmit the doc.
+    disable_local_exemption(tmp_path)
 
     before = _snapshot(tmp_path)
     result = runner.invoke(app, ["curate"])
@@ -1575,6 +1592,12 @@ def test_identity_all_confidential_group_makes_no_model_call(
 
     monkeypatch.setattr("openkos.cli.curate.OllamaClient", _NoChatOllama)
     _simulate_tty(monkeypatch)
+    # `curate` resolves the confidential local exemption from its own
+    # client, and the suite's stand-in reports a LOCAL backend -- where #240
+    # legitimately includes confidential content. This test is about the
+    # fail-closed FILTER, so opt out through the same workspace switch a
+    # user would use.
+    disable_local_exemption(tmp_path)
 
     result = runner.invoke(app, ["curate"], input="y\n")
 

@@ -8,6 +8,7 @@ volatility) filters against before sending concept content to the LLM -- see
 mirrors `tests/unit/test_lifecycle.py::_write_doc`.
 """
 
+import inspect
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -263,3 +264,175 @@ def test_should_block_include_confidential_true_never_blocks() -> None:
         )
         is False
     )
+
+
+# --- issue #240: the local-backend exemption -----------------------------
+
+
+def test_should_block_local_exemption_defaults_to_false() -> None:
+    """`local_exemption` defaults to `False`, so a caller that never heard of
+    the exemption keeps today's blanket blocking (#240).
+
+    This default is load-bearing, not cosmetic. `should_block` is reached
+    from five independent seams; a `True` default would hand the exemption
+    to every one of them that had not yet been taught to compute locality,
+    turning "forgot to thread a parameter" into "sent a confidential
+    concept off this machine". Pinned by inspecting the signature so the
+    guarantee survives a refactor that stops taking the parameter
+    positionally."""
+    parameter = inspect.signature(sensitivity.should_block).parameters[
+        "local_exemption"
+    ]
+    assert parameter.default is False
+    # And behaviorally: omitting it blocks, exactly as before #240.
+    assert sensitivity.should_block({"sensitivity": "confidential"}) is True
+
+
+def test_should_block_local_exemption_true_never_blocks() -> None:
+    """`local_exemption=True` means the caller PROVED the backend is this
+    machine, so a `confidential` concept is not leaving anywhere and the
+    gate has nothing to protect (#240)."""
+    assert (
+        sensitivity.should_block({"sensitivity": "confidential"}, local_exemption=True)
+        is False
+    )
+
+
+def test_should_block_local_exemption_true_also_releases_fail_closed_values() -> None:
+    """The exemption releases the fail-closed cases too -- absent, blank, and
+    unrecognized `sensitivity` values (#240).
+
+    Deliberate: those values fail closed because an unverifiable sensitivity
+    might be `confidential`, and the WORST case is exactly the one the
+    exemption already answers. Treating them more strictly than an explicit
+    `confidential` would be incoherent."""
+    assert sensitivity.should_block({}, local_exemption=True) is False
+    assert (
+        sensitivity.should_block({"sensitivity": "   "}, local_exemption=True) is False
+    )
+    assert (
+        sensitivity.should_block({"sensitivity": "top-secret"}, local_exemption=True)
+        is False
+    )
+
+
+def test_should_block_local_exemption_false_blocks_confidential() -> None:
+    """An explicit `local_exemption=False` -- a non-local or unprovable
+    backend -- keeps the gate closed (#240)."""
+    assert (
+        sensitivity.should_block({"sensitivity": "confidential"}, local_exemption=False)
+        is True
+    )
+
+
+def test_should_block_either_escape_hatch_alone_releases() -> None:
+    """The two hatches are a DISJUNCTION, not a conjunction: either one
+    alone releases the block (#240).
+
+    `--include-confidential` survives unchanged as the escape hatch on a
+    remote backend, and the exemption applies without the flag on a local
+    one."""
+    metadata = {"sensitivity": "confidential"}
+    assert sensitivity.should_block(metadata, include_confidential=True) is False
+    assert sensitivity.should_block(metadata, local_exemption=True) is False
+    assert (
+        sensitivity.should_block(
+            metadata, include_confidential=True, local_exemption=True
+        )
+        is False
+    )
+
+
+def test_blocks_llm_send_is_untouched_by_the_exemption() -> None:
+    """`blocks_llm_send` keeps its fail-closed contract with NO exemption
+    parameter of its own (#240).
+
+    The exemption is a policy about a SEND, not about a value: a raw
+    `sensitivity` string means the same thing regardless of where the
+    backend runs. Keeping the value-level authority host-blind is what lets
+    the non-send callers (the `ingest` extract floor gate, `lint`) keep
+    reading it without accidentally inheriting a send-time policy."""
+    assert (
+        "local_exemption"
+        not in inspect.signature(sensitivity.blocks_llm_send).parameters
+    )
+    assert sensitivity.blocks_llm_send(None) is True
+    assert sensitivity.blocks_llm_send("confidential") is True
+    assert sensitivity.blocks_llm_send("private") is False
+
+
+def test_sensitive_concept_ids_local_exemption_defaults_to_false(
+    tmp_path: Path,
+) -> None:
+    """`sensitive_concept_ids` also defaults `local_exemption` to `False`, so
+    an un-updated caller still gets the full blocked set (#240)."""
+    parameter = inspect.signature(sensitivity.sensitive_concept_ids).parameters[
+        "local_exemption"
+    ]
+    assert parameter.default is False
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "c" / "secret.md", sensitivity_value="confidential")
+    assert sensitivity.sensitive_concept_ids(bundle_dir) == frozenset({"c/secret"})
+
+
+def test_sensitive_concept_ids_local_exemption_returns_empty_frozenset(
+    tmp_path: Path,
+) -> None:
+    """With the exemption granted, `sensitive_concept_ids` returns an empty
+    `frozenset` -- nothing is excluded (#240)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "c" / "secret.md", sensitivity_value="confidential")
+    _write_doc(bundle_dir / "c" / "open.md", sensitivity_value="public")
+
+    assert (
+        sensitivity.sensitive_concept_ids(bundle_dir, local_exemption=True)
+        == frozenset()
+    )
+
+
+def test_sensitive_concept_ids_escape_hatches_skip_the_walk_entirely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Either escape hatch short-circuits BEFORE `okf._iter_docs` runs, so
+    the walk costs nothing (#240).
+
+    The five call sites used to guard the call with their own
+    `if not include_confidential:` precisely to avoid paying for a walk
+    whose result they would discard. Centralizing the disjunction must not
+    quietly reintroduce that cost, so the skip is pinned by proving the walk
+    is never entered -- a `frozenset()` return alone could not tell the
+    difference."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "c" / "secret.md", sensitivity_value="confidential")
+    walked: list[Path] = []
+
+    def _spy(directory: Path) -> Iterator[object]:
+        walked.append(directory)
+        yield from ()
+
+    monkeypatch.setattr(okf, "_iter_docs", _spy)
+
+    assert (
+        sensitivity.sensitive_concept_ids(bundle_dir, local_exemption=True)
+        == frozenset()
+    )
+    assert (
+        sensitivity.sensitive_concept_ids(bundle_dir, include_confidential=True)
+        == frozenset()
+    )
+    assert walked == []
+
+
+def test_sensitive_concept_ids_include_confidential_defaults_to_false(
+    tmp_path: Path,
+) -> None:
+    """`include_confidential` is the second hatch `sensitive_concept_ids`
+    grew in #240 (the walk-skip used to be the caller's own `if`), and it
+    defaults to `False` for the same fail-closed reason."""
+    parameter = inspect.signature(sensitivity.sensitive_concept_ids).parameters[
+        "include_confidential"
+    ]
+    assert parameter.default is False
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "c" / "secret.md", sensitivity_value="confidential")
+    assert sensitivity.sensitive_concept_ids(bundle_dir) == frozenset({"c/secret"})

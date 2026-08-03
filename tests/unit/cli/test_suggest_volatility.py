@@ -26,6 +26,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos.cli.main import app
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.volatility_typing import TierSuggestion
+from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -404,8 +405,16 @@ def test_suggest_volatility_warns_stderr_on_incomplete_walk_and_exits_zero(
     not refuse (spec: Incomplete walk warns and still exits 0). A freshly
     initialized, empty bundle has zero concept types, so the real
     `suggest_volatility` never calls `llm.chat` -- a real `OllamaClient` is
-    safe to construct here."""
+    safe to construct here.
+
+    The default workspace grants the confidential local exemption (#240),
+    which is the OTHER hatch that suppresses this warning -- see
+    `test_suggest_volatility_local_exemption_suppresses_the_warning` below.
+    This test is about the walk-incompleteness signal itself, so it opts
+    out of the exemption through the same workspace switch a user would
+    use."""
     _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["suggest-volatility"])
@@ -432,11 +441,39 @@ def test_suggest_volatility_include_confidential_suppresses_the_warning(
 ) -> None:
     """`--include-confidential` suppresses the incomplete-walk warning too --
     the filter is deliberately off (spec: `--include-confidential`
-    suppresses the warning)."""
+    suppresses the warning).
+
+    The default workspace ALSO grants the confidential local exemption
+    (#240), which independently suppresses the same warning -- see
+    `test_suggest_volatility_local_exemption_suppresses_the_warning` below.
+    Without opting out of that here, this test would keep passing even if
+    `--include-confidential` were silently dropped from the
+    `warn_if_walk_incomplete` call site, so it disables the exemption to
+    make the FLAG the thing that discriminates."""
     _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["suggest-volatility", "--include-confidential"])
+
+    assert result.exit_code == 0
+    assert "bundle scan was incomplete" not in result.stderr
+
+
+def test_suggest_volatility_local_exemption_suppresses_the_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confidential local exemption (#240) suppresses the incomplete-walk
+    warning too, the SAME way `--include-confidential` does: on a stock
+    workspace (default local backend, exemption active) the message never
+    prints. (This test only observes the absent message; that the walk
+    itself is skipped, not merely discarded, is pinned at the helper level
+    by `test_warn_if_walk_incomplete_local_exemption_skips_the_walk_entirely`
+    in `test_observability.py`.)"""
+    _init_workspace(tmp_path, monkeypatch)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["suggest-volatility"])
 
     assert result.exit_code == 0
     assert "bundle scan was incomplete" not in result.stderr

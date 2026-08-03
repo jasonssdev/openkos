@@ -101,10 +101,16 @@ def _normalize_host(host: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class EmbedHostLocality:
-    """`classify_embed_host`'s verdict: whether the configured embedding
-    host is literally local, plus the userinfo-REDACTED host string that is
-    the ONLY value a caller may print (issue #199)."""
+class BackendHostLocality:
+    """`classify_backend_host`'s verdict: whether a configured Ollama
+    BACKEND host is literally local, plus the userinfo-REDACTED host string
+    that is the ONLY value a caller may print (issue #199).
+
+    Named for the BACKEND, not the embedder (issue #240): the same verdict
+    now also decides whether a `confidential` concept may be included in an
+    `llm.chat` payload, so a name that said "embed" would misdescribe half
+    its consumers. Only the name changed -- the classification logic
+    hardened by #199 and #353 is frozen behavior."""
 
     is_local: bool
     display_host: str
@@ -176,10 +182,17 @@ def _is_loopback_ipv4_literal(host: str) -> bool:
     return all(part.isascii() and part.isdigit() and int(part) <= 255 for part in parts)
 
 
-def classify_embed_host(raw: str | None) -> EmbedHostLocality:
+def classify_backend_host(raw: str | None) -> BackendHostLocality:
     """Classify a configured Ollama host value as literally local or not,
     never raising, with userinfo always redacted from `display_host`
     (issue #199; the withdrawn #183-PR3 predecessor is the trap spec).
+
+    This is the ONE locality authority in the codebase: the embedding-host
+    advisory (#199/#353) and the confidential local exemption (#240) both
+    read it, so locality can never be answered two different ways by two
+    different callers. Its classification rules below are frozen -- #240
+    changed only WHAT gets passed in (the host a client actually resolved,
+    not an env var read independently), never how a value is judged.
 
     Local means loopback BY LITERAL FORM only -- `localhost` (any case, one
     optional trailing root dot), a `127.0.0.0/8` dotted quad, or `::1`
@@ -226,7 +239,7 @@ def classify_embed_host(raw: str | None) -> EmbedHostLocality:
        shape) keeps the redact-against-full-remainder treatment, and an
        empty redacted remainder displays the placeholder."""
     if raw is None or not raw.strip():
-        return EmbedHostLocality(is_local=True, display_host="localhost")
+        return BackendHostLocality(is_local=True, display_host="localhost")
     rest = raw.strip()
     if "://" in rest:
         rest = rest.split("://", 1)[1]
@@ -247,7 +260,7 @@ def classify_embed_host(raw: str | None) -> EmbedHostLocality:
         hostport = rest.rpartition("@")[2]
         for separator in "/?#":
             hostport = hostport.split(separator, 1)[0]
-        return EmbedHostLocality(
+        return BackendHostLocality(
             is_local=False, display_host=hostport or _UNPARSEABLE_DISPLAY
         )
     # Redact userinfo FIRST: everything below sees only the host[:port]
@@ -260,7 +273,7 @@ def classify_embed_host(raw: str | None) -> EmbedHostLocality:
             # Unmatched bracket: unparseable. Degrade to non-local rather
             # than raise -- this runs inside fail-open paths after ingest
             # has already committed.
-            return EmbedHostLocality(is_local=False, display_host=hostport)
+            return BackendHostLocality(is_local=False, display_host=hostport)
         host = hostport[1:closing]
         tail = hostport[closing + 1 :]
         if tail.startswith(":") and not tail[1:].isdigit():
@@ -272,7 +285,7 @@ def classify_embed_host(raw: str | None) -> EmbedHostLocality:
             # `[]:11434`) is not the unset local default: someone
             # configured it, and it names no local literal (issue #353,
             # item 2).
-            return EmbedHostLocality(is_local=False, display_host=hostport)
+            return BackendHostLocality(is_local=False, display_host=hostport)
     elif hostport.count(":") > 1 and _plausible_bracketless_ipv6(hostport):
         # Bracket-less IPv6 literal: the whole value is the host; splitting
         # at the first colon would invent a host nobody configured. Only a
@@ -293,15 +306,15 @@ def classify_embed_host(raw: str | None) -> EmbedHostLocality:
             # `http://user@`): malformed, not the local default. The
             # remainder may be empty, and an empty display reads like a
             # bug, so fall back to the placeholder (issue #353, item 3).
-            return EmbedHostLocality(
+            return BackendHostLocality(
                 is_local=False, display_host=hostport or _UNPARSEABLE_DISPLAY
             )
-        return EmbedHostLocality(is_local=True, display_host=hostport or "localhost")
+        return BackendHostLocality(is_local=True, display_host=hostport or "localhost")
     normalized = host.lower().removesuffix(".")
     is_local = normalized in _LOCAL_HOST_LITERALS or _is_loopback_ipv4_literal(
         normalized
     )
-    return EmbedHostLocality(is_local=is_local, display_host=hostport)
+    return BackendHostLocality(is_local=is_local, display_host=hostport)
 
 
 class OllamaClient:
@@ -333,6 +346,42 @@ class OllamaClient:
         self._sleep = sleep
         resolved_host = host or os.environ.get("OLLAMA_HOST") or DEFAULT_HOST
         self._host = _normalize_host(resolved_host).rstrip("/")
+
+    @property
+    def resolved_host(self) -> str:
+        """The normalized host this client will ACTUALLY send to -- the exact
+        string every request URL is built from (issue #240).
+
+        Public because locality must be decided on the fact of the real
+        send, not on a re-derivation of it. `os.environ.get("OLLAMA_HOST")`
+        read at a call site answers a DIFFERENT question: it ignores an
+        explicit `host=` argument, so a client constructed against a remote
+        host while `OLLAMA_HOST` happens to be loopback would be judged
+        local and handed the confidential local exemption for a send that
+        leaves the machine. Reading the resolved value closes that gap by
+        construction.
+
+        Never raises: it returns a string stored at construction time, with
+        no I/O, no DNS, and no parsing of its own."""
+        return self._host
+
+    @property
+    def locality(self) -> BackendHostLocality:
+        """This client's own locality verdict, from the ONE shared authority
+        (`classify_backend_host`) applied to `resolved_host` (issue #240).
+
+        Never raises and never touches the network: `classify_backend_host`
+        is a pure literal-form check that degrades an unparseable value to
+        non-local rather than raising. Both consumers depend on that --
+        the embedding-host advisory (#199/#353) must not be able to crash a
+        command it only annotates, and the confidential local exemption must
+        fail CLOSED on any host it cannot prove is loopback.
+
+        Recomputed on each access rather than cached: the classification is
+        a handful of string operations over an already-resolved host, and a
+        cached field would be one more piece of state to keep honest for no
+        measurable gain."""
+        return classify_backend_host(self._host)
 
     def chat(self, messages: Sequence[Message]) -> str:
         """POST `messages` to `{host}/api/chat` and return `message.content` (D5, D6)."""

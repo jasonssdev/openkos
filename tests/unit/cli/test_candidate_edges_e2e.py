@@ -35,6 +35,7 @@ from typer.testing import CliRunner
 
 from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM, Message
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 runner = CliRunner()
 
@@ -73,6 +74,12 @@ class _FakeOllama:
     `chat()` replies are keyed on what the prompt is asking for, so one
     instance can carry the whole run -- extraction during `ingest`, typing
     during `suggest-relations`, judging during `contradictions`."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def __init__(self) -> None:
         self.embed_calls: list[list[str]] = []

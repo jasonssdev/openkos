@@ -39,6 +39,7 @@ from tests.unit.cli.conftest import (
     snapshot_with_mtime,
 )
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -87,6 +88,12 @@ class _FakeLLM:
     (test_answer.py:41-50): records every `chat()` call and returns a fixed
     reply, or raises a fixed exception instead -- zero network, zero real
     Ollama process."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def __init__(self, reply: str = "", *, raises: Exception | None = None) -> None:
         self.reply = reply

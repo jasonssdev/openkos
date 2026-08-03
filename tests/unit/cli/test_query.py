@@ -35,6 +35,8 @@ from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state import fts, vectorstore
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import VecUnavailable
+from tests.unit.cli.conftest import disable_local_exemption
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -77,6 +79,12 @@ class _FakeOllamaClient:
     `OllamaClient` -- so the R3-pin end-to-end test below runs the REAL
     `answer()` (not mocked) through the CLI with zero network, zero real
     Ollama process (status-aware-retrieval Phase 4)."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def __init__(self, *, model: str, **kwargs: object) -> None:
         self.model = model
@@ -1493,8 +1501,15 @@ def test_query_warns_stderr_on_incomplete_walk_and_exits_zero(
     """An incomplete directory walk (`okf._walk_errors` non-empty) prints a
     self-explaining warning to STDERR and the command still exits 0 -- WARN,
     not refuse (spec: Incomplete walk warns and still exits 0). `answer()` is
-    faked (D4 pattern) so this test never depends on a real Ollama process."""
+    faked (D4 pattern) so this test never depends on a real Ollama process.
+
+    The default workspace grants the confidential local exemption (#240),
+    which is the OTHER hatch that suppresses this warning -- see
+    `test_query_local_exemption_suppresses_the_warning` below. This test is
+    about the walk-incompleteness signal itself, so it opts out of the
+    exemption through the same workspace switch a user would use."""
     _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
     monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
     _break_os_walk(monkeypatch)
 
@@ -1523,14 +1538,43 @@ def test_query_include_confidential_suppresses_the_warning(
 ) -> None:
     """`--include-confidential` suppresses the incomplete-walk warning too --
     the filter is deliberately off (spec: `--include-confidential`
-    suppresses the warning)."""
+    suppresses the warning).
+
+    The default workspace ALSO grants the confidential local exemption
+    (#240), which independently suppresses the same warning -- see
+    `test_query_local_exemption_suppresses_the_warning` below. Without
+    opting out of that here, this test would keep passing even if
+    `--include-confidential` were silently dropped from the
+    `warn_if_walk_incomplete` call site, so it disables the exemption to
+    make the FLAG the thing that discriminates."""
     _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
     monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(
         app, ["query", "what is stoicism?", "--include-confidential"]
     )
+
+    assert result.exit_code == 0
+    assert "bundle scan was incomplete" not in result.stderr
+
+
+def test_query_local_exemption_suppresses_the_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confidential local exemption (#240) suppresses the incomplete-walk
+    warning too, the SAME way `--include-confidential` does: on a stock
+    workspace (default local backend, exemption active) the message never
+    prints. (This test only observes the absent message; that the walk
+    itself is skipped, not merely discarded, is pinned at the helper level
+    by `test_warn_if_walk_incomplete_local_exemption_skips_the_walk_entirely`
+    in `test_observability.py`.)"""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
 
     assert result.exit_code == 0
     assert "bundle scan was incomplete" not in result.stderr

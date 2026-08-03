@@ -1298,3 +1298,129 @@ def test_placeholders_sharing_an_underscore_pair_are_rejected(
         config.write_config(tmp_path)
 
     assert not (tmp_path / "openkos.yaml").exists()
+
+
+# --- issue #240: the workspace-level confidential local exemption ---
+
+
+def test_default_confidential_local_exemption_is_true() -> None:
+    """The packaged default enables the exemption (#240).
+
+    Local-first is the design: on a stock install Ollama runs on loopback,
+    nothing leaves the machine, and the gate has nothing to protect. Shipping
+    the exemption OFF would leave every stock workspace in the state the
+    issue describes -- confidential objects silently dropped from every
+    retrieval and resolution pass -- so the default has to be the local-first
+    answer, with the strict behavior one key away."""
+    assert config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION is True
+
+
+def test_read_config_reads_present_confidential_local_exemption(tmp_path: Path) -> None:
+    """A `confidential_local_exemption` present in `openkos.yaml` passes
+    through verbatim (#240)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "confidential_local_exemption: false\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.confidential_local_exemption is False
+
+
+def test_read_config_preserves_explicit_confidential_local_exemption_false(
+    tmp_path: Path,
+) -> None:
+    """An explicit `confidential_local_exemption: false` is a real value, not
+    an absence, and must survive the `is not None` fallback untouched (#240).
+
+    This is the whole opt-out. A truthiness fallback would coerce `False`
+    back to the packaged `True` and silently re-enable an exemption the user
+    deliberately turned off -- the same trap `review: false` documents, but
+    with a security consequence instead of a UX one."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: gemma3\nconfidential_local_exemption: false\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.confidential_local_exemption is False
+
+
+def test_read_config_falls_back_when_confidential_local_exemption_absent(
+    tmp_path: Path,
+) -> None:
+    """An absent `confidential_local_exemption` falls back to the packaged
+    default, so a workspace created before #240 keeps working (#240)."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert (
+        result.confidential_local_exemption
+        is config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION
+    )
+
+
+@pytest.mark.parametrize(
+    "yaml_body",
+    ["confidential_local_exemption: null\n", "confidential_local_exemption:\n"],
+)
+def test_read_config_explicit_null_confidential_local_exemption_falls_back(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """A present-but-null `confidential_local_exemption` falls back to the
+    packaged default rather than slipping a bare `None` past `Config`'s
+    `bool` field (#240)."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert (
+        result.confidential_local_exemption
+        is config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION
+    )
+
+
+@pytest.mark.parametrize(
+    "yaml_body",
+    [
+        "confidential_local_exemption: maybe\n",
+        "confidential_local_exemption: 1\n",
+        "confidential_local_exemption:\n  nested: true\n",
+    ],
+)
+def test_read_config_rejects_a_non_bool_confidential_local_exemption(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """A non-bool `confidential_local_exemption` raises `ValueError` (#240).
+
+    It is validated rather than coerced for the reason `model` and
+    `embedding_model` are: a security switch that quietly accepted
+    `maybe` and evaluated it as truthy would enable an exemption the user
+    was trying to describe some other way. `1` is rejected too -- YAML
+    resolves it to `int`, and accepting int-as-bool here would make
+    `confidential_local_exemption: 0` and `: false` differ only by luck."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"confidential_local_exemption"):
+        config.read_config(tmp_path)
+
+
+def test_written_config_declares_the_confidential_local_exemption_key(
+    tmp_path: Path,
+) -> None:
+    """`write_config` writes a workspace whose `openkos.yaml` declares the
+    key and reads back as the packaged default (#240).
+
+    The key is written rather than left implicit because it is the ONLY
+    place a user learns the exemption exists: an invisible default that
+    changes what reaches an LLM is exactly the silent divergence issue #240
+    opens by describing."""
+    config.write_config(tmp_path)
+
+    text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "confidential_local_exemption:" in text
+    assert (
+        config.read_config(tmp_path).confidential_local_exemption
+        is config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION
+    )

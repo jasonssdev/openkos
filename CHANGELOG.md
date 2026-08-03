@@ -14,8 +14,38 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — `sensitivity: confidential` now gates on EGRESS, not on the LLM
+  itself**: `confidential` used to block a concept from every `llm.chat` send
+  regardless of where the backend ran. `sensitivity` governs what leaves the
+  machine, so when the backend is verifiably local nothing leaves and the gate
+  no longer fires: a `confidential` object participates normally in `query`,
+  `contradictions`, `adjudicate`, `suggest-relations`, and `suggest-volatility`
+  with no flag. "Verifiably local" means loopback **by literal form**
+  (`localhost`, `127.0.0.0/8`, `::1`) on the host the client will actually send
+  to — no DNS, no allowlist — so a remote, unknown, or unparseable host still
+  blocks, fail-closed. `--include-confidential` is unchanged and remains the
+  escape hatch on every blocked path.
+
+  **A workspace that relied on `confidential` meaning "never to any LLM" will
+  now see those objects included when the backend is local.** Set
+  `confidential_local_exemption: false` in `openkos.yaml` to restore the old
+  blanket gate. Terminal output is unaffected — `list`/`status` never redacted
+  confidential titles and still do not. (#240)
+
 ### Added
 
+- **`confidential_local_exemption` workspace key**: `openkos.yaml` gains a
+  boolean (default `true`) that opts a workspace out of the local exemption
+  above. Workspace-level rather than a per-command flag on purpose: a security
+  policy that depends on remembering to type a flag is not a policy. (config)
+  (#240)
+- **`doctor` reports backend locality**: an eleventh, informational check names
+  the redacted backend host, whether it is this machine, and whether the
+  confidential local exemption is consequently active — so the state is
+  inspectable rather than inferred. It always `[PASS]`es (a remote backend is a
+  configuration, not a fault) and can never change the exit code. (cli) (#240)
 - **`openkos --version`**: prints `openkos {version}` (read from installed
   distribution metadata) and exits 0, evaluated eagerly so it works outside a
   workspace and short-circuits before any subcommand runs; `openkos doctor`

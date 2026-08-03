@@ -30,6 +30,7 @@ from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf as okf_module
 from openkos.vcs import git as vcs_git
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -163,6 +164,12 @@ def _default_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     `test_ingest.py::_default_llm`)."""
 
     class _FakeLLM:
+        locality = LOCAL_BACKEND_LOCALITY
+        """Stands in for `OllamaClient.locality` (issue #240): the CLI reads
+        it for the embedding-host advisory and the confidential local
+        exemption, and a fake without it raises `AttributeError` inside a
+        fail-open handler -- a fixture gap that would read as a degrade."""
+
         def chat(self, messages: object) -> str:
             return '{"extract": false}'
 

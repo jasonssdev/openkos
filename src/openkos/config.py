@@ -45,6 +45,27 @@ DEFAULT_REVIEW = True
 DEFAULT_SENSITIVITY = "private"
 """Packaged default for `default_sensitivity`, matching `openkos.yaml.template`."""
 
+DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION = True
+"""Packaged default for `confidential_local_exemption` (issue #240): a
+`confidential` concept MAY be sent to an `llm.chat` backend that is
+verifiably this machine, without `--include-confidential`.
+
+`True` because local-first is the design: on a stock install Ollama runs on
+loopback, nothing leaves the machine, and `sensitivity` -- which governs
+EGRESS -- has nothing to protect against. Shipping this `False` would leave
+every stock workspace in the state #240 opens by describing: confidential
+objects silently absent from every retrieval and resolution pass, and users
+trained to pass `--include-confidential` habitually, which disables the one
+gate that would matter the day the backend is NOT local.
+
+Setting it `false` restores the pre-#240 blanket behavior (`confidential`
+means "no LLM ever, local or not"). It is deliberately a WORKSPACE-level key
+rather than a per-command flag: a security policy that depends on
+remembering to type a flag on every invocation is not a policy. It never
+weakens the fail-closed posture on its own -- the exemption also requires
+`OllamaClient.locality.is_local`, so an unknown or unparseable host is still
+treated as remote regardless of this value."""
+
 DEFAULT_FRESHNESS_WINDOW = "7d"
 """Packaged default for `freshness_window`, matching `openkos.yaml.template`.
 
@@ -481,8 +502,8 @@ class Config:
 
     Fields absent from the file fall back to the same packaged defaults
     `openkos.yaml.template` ships (D3): `DEFAULT_MODEL`, `DEFAULT_REVIEW`,
-    `DEFAULT_SENSITIVITY`, `DEFAULT_FRESHNESS_WINDOW`, and
-    `DEFAULT_EMBEDDING_MODEL`. `embedding_model` IS part of
+    `DEFAULT_SENSITIVITY`, `DEFAULT_FRESHNESS_WINDOW`,
+    `DEFAULT_EMBEDDING_MODEL`, and `DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION`. `embedding_model` IS part of
     `openkos.yaml.template`, written via its own placeholder by
     `write_config`; this fallback still applies when reading a
     pre-existing or hand-edited `openkos.yaml` that omits the key or sets
@@ -494,6 +515,13 @@ class Config:
     default_sensitivity: str
     freshness_window: str
     embedding_model: str
+    confidential_local_exemption: bool
+    """Whether a `confidential` concept may be included in an `llm.chat`
+    payload when the backend host is verifiably this machine (issue #240),
+    defaulting to `DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION` when the key is
+    absent or explicitly null. This is only ONE of the two terms: the CLI
+    ANDs it with the client's own `locality.is_local`, so `true` never
+    grants an exemption for a host that could not be proven local."""
     volatility_windows: dict[str, str]
     """Raw `volatility_windows` passthrough (freshness-lint-v1): `{}` when
     absent or explicitly null, matching every other field's `is not None`
@@ -543,6 +571,7 @@ def read_config(root: Path) -> Config:
     default_sensitivity = raw.get("default_sensitivity")
     freshness_window = raw.get("freshness_window")
     embedding_model = raw.get("embedding_model")
+    confidential_local_exemption = raw.get("confidential_local_exemption")
     volatility_windows = raw.get("volatility_windows")
     type_tiers = raw.get("type_tiers")
     if model is not None and not isinstance(model, str):
@@ -554,6 +583,22 @@ def read_config(root: Path) -> Config:
         raise ValueError(
             f"{layout.config_path.name}: 'embedding_model' must be a string, got "
             f"{type(embedding_model).__name__}"
+        )
+    if confidential_local_exemption is not None and not isinstance(
+        confidential_local_exemption, bool
+    ):
+        # Validated, never coerced (issue #240), mirroring how `model` and
+        # `embedding_model` validate their own type. This key decides whether
+        # `confidential` content may reach an LLM at all, so a value the user
+        # meant as something else -- `maybe`, `1`, a nested mapping -- must
+        # fail loudly instead of being evaluated for truthiness and silently
+        # enabling the exemption. `isinstance(x, bool)` is deliberately
+        # narrower than a truthiness test: YAML resolves `1` to `int`, and
+        # accepting int-as-bool would make `: 0` and `: false` agree only by
+        # coincidence of Python's numeric tower.
+        raise ValueError(
+            f"{layout.config_path.name}: 'confidential_local_exemption' must be "
+            f"a boolean, got {type(confidential_local_exemption).__name__}"
         )
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
@@ -570,6 +615,11 @@ def read_config(root: Path) -> Config:
         ),
         embedding_model=(
             embedding_model if embedding_model is not None else DEFAULT_EMBEDDING_MODEL
+        ),
+        confidential_local_exemption=(
+            confidential_local_exemption
+            if confidential_local_exemption is not None
+            else DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION
         ),
         volatility_windows=(
             volatility_windows if volatility_windows is not None else {}

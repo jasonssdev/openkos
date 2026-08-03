@@ -238,7 +238,11 @@ def _pair_relation_types(store: GraphStore) -> dict[tuple[str, str], str]:
 
 
 def _load_doc(
-    bundle_dir: Path, concept_id: str, *, include_confidential: bool = False
+    bundle_dir: Path,
+    concept_id: str,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
 ) -> tuple[str, str]:
     """Guarded single-doc re-read (module-local copy of
     `edge_typing._load_doc` -- no cross-import of its `_`-prefixed symbols,
@@ -264,7 +268,14 @@ def _load_doc(
     include_confidential=...)` predicate instead of inlining `not
     include_confidential and sensitivity.blocks_llm_send(...)` directly --
     behavior-preserving; see `sensitivity.py`'s module docstring for the
-    5-way duplication this replaces."""
+    5-way duplication this replaces.
+
+    `local_exemption` (issue #240) is threaded here for the same reason
+    `include_confidential` is: this walk-independent re-check is the LAST
+    gate before the prompt, so if the upstream filter admitted a concept
+    under a verified-local backend and this one still degraded it to
+    `(concept_id, "")`, the exemption would be cosmetic. Defaults to
+    `False`, fail-closed."""
     try:
         text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -273,7 +284,11 @@ def _load_doc(
         metadata, body = okf.load_frontmatter(text)
     except Exception:  # broad: any parse failure degrades this doc, never raises
         return concept_id, ""
-    if sensitivity.should_block(metadata, include_confidential=include_confidential):
+    if sensitivity.should_block(
+        metadata,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    ):
         return concept_id, ""
     title = str(metadata.get("title") or "") or concept_id
     return title, body
@@ -405,6 +420,7 @@ def find_contradictions(
     llm: LLMBackend,
     include_deprecated: bool = False,
     include_confidential: bool = False,
+    local_exemption: bool = False,
     candidates: CandidateSource | None = None,
     store: GraphStore | None = None,
     on_progress: Callable[[int, int, ContradictionVerdict], None] | None = None,
@@ -471,13 +487,25 @@ def find_contradictions(
     returns) -- a hook for a CLI to render a per-pair progress line during
     an otherwise opaque, minutes-long run. It never affects the returned
     verdicts; an exception it raises propagates to the caller (it is the
-    caller's own callback)."""
+    caller's own callback).
+
+    `local_exemption` (issue #240) is the second escape hatch defined by
+    `sensitivity.should_block`: the caller asserting that the `llm.chat`
+    backend this run will actually reach is verifiably this machine, so a
+    `confidential` concept is not leaving anywhere and the gate has nothing
+    to protect. It is threaded, never re-derived -- the disjunction with
+    `include_confidential` lives ONLY in `sensitivity.py` (see its module
+    docstring). Defaults to `False`: a caller that cannot prove locality
+    gets today's blanket blocking, so forgetting the parameter can only ever
+    be MORE restrictive."""
     deprecated: frozenset[str] = frozenset()
     if not include_deprecated:
         deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
-    confidential: frozenset[str] = frozenset()
-    if not include_confidential:
-        confidential = sensitivity.sensitive_concept_ids(bundle_dir)
+    confidential = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
     excluded = deprecated | confidential
 
     if store is not None:
@@ -491,10 +519,16 @@ def find_contradictions(
     for index, pair in enumerate(pairs, start=1):
         source_id, target_id = pair
         src_doc = _load_doc(
-            bundle_dir, source_id, include_confidential=include_confidential
+            bundle_dir,
+            source_id,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
         )
         tgt_doc = _load_doc(
-            bundle_dir, target_id, include_confidential=include_confidential
+            bundle_dir,
+            target_id,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
         )
         relation_type = relation_types.get(pair)
         messages = _build_messages(pair, src_doc, tgt_doc, relation_type)

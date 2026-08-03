@@ -145,7 +145,11 @@ def _candidate_edges(store: GraphStore) -> list[Edge]:
 
 
 def _load_doc(
-    bundle_dir: Path, concept_id: str, *, include_confidential: bool = False
+    bundle_dir: Path,
+    concept_id: str,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
 ) -> tuple[str, str]:
     """Guarded single-doc re-read (mirrors `adjudication._load_members`,
     narrowed to exactly one document): returns `(title, body)` for
@@ -169,7 +173,14 @@ def _load_doc(
     include_confidential=...)` predicate instead of inlining `not
     include_confidential and sensitivity.blocks_llm_send(...)` directly --
     behavior-preserving; see `sensitivity.py`'s module docstring for the
-    5-way duplication this replaces."""
+    5-way duplication this replaces.
+
+    `local_exemption` (issue #240) is threaded here for the same reason
+    `include_confidential` is: this walk-independent re-check is the LAST
+    gate before the prompt, so if the upstream filter admitted a concept
+    under a verified-local backend and this one still degraded it to
+    `(concept_id, "")`, the exemption would be cosmetic. Defaults to
+    `False`, fail-closed."""
     try:
         text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -178,7 +189,11 @@ def _load_doc(
         metadata, body = okf.load_frontmatter(text)
     except Exception:  # broad: any parse failure degrades this doc, never raises
         return concept_id, ""
-    if sensitivity.should_block(metadata, include_confidential=include_confidential):
+    if sensitivity.should_block(
+        metadata,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    ):
         return concept_id, ""
     title = str(metadata.get("title") or "") or concept_id
     return title, body
@@ -242,6 +257,7 @@ def suggest_edge_types(
     bundle_dir: Path,
     llm: LLMBackend,
     include_confidential: bool = False,
+    local_exemption: bool = False,
     on_progress: Callable[[int, int, EdgeSuggestion], None] | None = None,
 ) -> list[EdgeSuggestion]:
     """Suggest a relation type + rationale for every edge in `edges`
@@ -258,6 +274,16 @@ def suggest_edge_types(
     to `False`, so a caller that never passes it keeps today's fail-closed
     behavior unchanged.
 
+    `local_exemption` (issue #240) is the second escape hatch defined by
+    `sensitivity.should_block`: the caller asserting that the `llm.chat`
+    backend this run will actually reach is verifiably this machine, so a
+    `confidential` concept is not leaving anywhere and the gate has nothing
+    to protect. It is threaded, never re-derived -- the disjunction with
+    `include_confidential` lives ONLY in `sensitivity.py` (see its module
+    docstring). Defaults to `False`: a caller that cannot prove locality
+    gets today's blanket blocking, so forgetting the parameter can only ever
+    be MORE restrictive.
+
     `on_progress`, if given, is called once per edge in input order, AFTER
     that edge's `EdgeSuggestion` is built, with `(index, total, suggestion)`
     where `index` is 1-based and `total == len(edges)` -- a hook for a CLI to
@@ -268,10 +294,16 @@ def suggest_edge_types(
     total = len(edges)
     for index, edge in enumerate(edges, start=1):
         src_doc = _load_doc(
-            bundle_dir, edge.source_id, include_confidential=include_confidential
+            bundle_dir,
+            edge.source_id,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
         )
         tgt_doc = _load_doc(
-            bundle_dir, edge.target_id, include_confidential=include_confidential
+            bundle_dir,
+            edge.target_id,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
         )
         messages = _build_messages(edge, src_doc, tgt_doc)
         reply = llm.chat(messages)
@@ -297,6 +329,7 @@ def candidate_edges(
     bundle_dir: Path,
     *,
     include_confidential: bool = False,
+    local_exemption: bool = False,
     candidates: CandidateSource | None = None,
     store: GraphStore | None = None,
 ) -> list[Edge]:
@@ -336,10 +369,22 @@ def candidate_edges(
     `store` (graph-projection-reuse, issue #196): when supplied, `candidates`
     is silently unused -- the caller already consumed it building that
     store -- and `bundle_dir` is used ONLY for the confidentiality walk
-    below, never re-walked to build a second projection."""
-    blocked: frozenset[str] = frozenset()
-    if not include_confidential:
-        blocked = sensitivity.sensitive_concept_ids(bundle_dir)
+    below, never re-walked to build a second projection.
+
+    `local_exemption` (issue #240) is the second escape hatch defined by
+    `sensitivity.should_block`: the caller asserting that the `llm.chat`
+    backend this run will actually reach is verifiably this machine, so a
+    `confidential` concept is not leaving anywhere and the gate has nothing
+    to protect. It is threaded, never re-derived -- the disjunction with
+    `include_confidential` lives ONLY in `sensitivity.py` (see its module
+    docstring). Defaults to `False`: a caller that cannot prove locality
+    gets today's blanket blocking, so forgetting the parameter can only ever
+    be MORE restrictive."""
+    blocked = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
 
     if store is not None:
         edges = _edges_from(store)
@@ -354,18 +399,37 @@ def candidate_edges(
 
 
 def suggest_relations(
-    bundle_dir: Path, *, llm: LLMBackend, include_confidential: bool = False
+    bundle_dir: Path,
+    *,
+    llm: LLMBackend,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
 ) -> list[EdgeSuggestion]:
     """Orchestrate the whole read-only suggestion flow: compute the
     `candidate_edges` set (which owns the internal `build_graph` read and the
     confidential-endpoint filter) and delegate to `suggest_edge_types`. A
     library-level convenience that couples counting and typing in one call;
     the CLI verb instead calls `candidate_edges` and `suggest_edge_types`
-    separately so it can preview the count and gate on it (issue #134)."""
-    edges = candidate_edges(bundle_dir, include_confidential=include_confidential)
+    separately so it can preview the count and gate on it (issue #134).
+
+    `local_exemption` (issue #240) is the second escape hatch defined by
+    `sensitivity.should_block`: the caller asserting that the `llm.chat`
+    backend this run will actually reach is verifiably this machine, so a
+    `confidential` concept is not leaving anywhere and the gate has nothing
+    to protect. It is threaded, never re-derived -- the disjunction with
+    `include_confidential` lives ONLY in `sensitivity.py` (see its module
+    docstring). Defaults to `False`: a caller that cannot prove locality
+    gets today's blanket blocking, so forgetting the parameter can only ever
+    be MORE restrictive."""
+    edges = candidate_edges(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
     return suggest_edge_types(
         edges,
         bundle_dir=bundle_dir,
         llm=llm,
         include_confidential=include_confidential,
+        local_exemption=local_exemption,
     )

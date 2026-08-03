@@ -502,6 +502,136 @@ def test_bare_host_port_is_normalized_with_http_scheme(
     assert captured[0].full_url == "http://example.internal:11434/api/chat"
 
 
+# --- issue #240: the resolved host is reportable, and classifies ---------------
+
+
+def test_resolved_host_reports_the_packaged_default_when_nothing_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no `host` arg and no `OLLAMA_HOST`, `resolved_host` reports the
+    same normalized default the request URL is built from (#240).
+
+    The property exists so a caller can ask WHERE this client will actually
+    send, instead of re-deriving it from the environment and being wrong."""
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    client = OllamaClient("qwen3")
+
+    assert client.resolved_host == "http://localhost:11434"
+
+
+def test_resolved_host_reports_the_env_host_when_no_argument_is_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`OLLAMA_HOST` is what the send will use when no `host` arg is passed,
+    so it is what `resolved_host` reports (#240)."""
+    monkeypatch.setenv("OLLAMA_HOST", "http://remote.example:11434")
+    client = OllamaClient("qwen3")
+
+    assert client.resolved_host == "http://remote.example:11434"
+
+
+def test_resolved_host_reports_the_explicit_argument_over_the_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit `host=` wins over `OLLAMA_HOST` for the actual send, so it
+    must win here too (#240).
+
+    This is the whole point of reading the CLIENT rather than the env: a
+    caller that passes `host="http://remote.example:11434"` while
+    `OLLAMA_HOST` happens to be loopback would otherwise be told it is
+    sending locally when it is not."""
+    monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+    client = OllamaClient("qwen3", host="http://remote.example:11434")
+
+    assert client.resolved_host == "http://remote.example:11434"
+
+
+def test_resolved_host_normalizes_a_bare_host_port_exactly_like_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`resolved_host` is the SAME normalized string the request URL is built
+    from -- scheme prepended, trailing slash stripped (#240)."""
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        host="example.internal:11434/",
+        urlopen=_fake_urlopen(_ok_body("hi"), captured),
+    )
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    assert client.resolved_host == "http://example.internal:11434"
+    assert captured[0].full_url == f"{client.resolved_host}/api/chat"
+
+
+def test_locality_classifies_the_default_host_as_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The packaged default is loopback by literal form, so `locality` is
+    local -- the fact the confidential local exemption rests on (#240).
+
+    `display_host` carries the port because the classifier is handed the
+    RESOLVED host (`http://localhost:11434`), not an unset env var; the
+    scheme is stripped and the host[:port] remainder is what may be shown."""
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    client = OllamaClient("qwen3")
+
+    assert client.locality.is_local is True
+    assert client.locality.display_host == "localhost:11434"
+
+
+def test_locality_classifies_an_env_remote_host_as_non_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host inherited from `OLLAMA_HOST` that is not loopback classifies
+    non-local, so the exemption is denied (#240)."""
+    monkeypatch.setenv("OLLAMA_HOST", "http://remote.example:11434")
+    client = OllamaClient("qwen3")
+
+    assert client.locality.is_local is False
+
+
+def test_locality_follows_the_explicit_argument_not_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit non-loopback `host=` classifies non-local even when
+    `OLLAMA_HOST` is loopback (#240).
+
+    Reading the env instead of the client would grant a local exemption to
+    a client that is demonstrably sending off-machine -- the exact fail-open
+    this property exists to close."""
+    monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+    client = OllamaClient("qwen3", host="http://remote.example:11434")
+
+    assert client.locality.is_local is False
+
+
+def test_locality_never_exposes_userinfo_in_display_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A credentialed host never leaks its password through `display_host`
+    (#199/#353 contract, inherited unchanged by #240)."""
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    client = OllamaClient("qwen3", host="http://user:s3cret@remote.example:11434")
+
+    assert "s3cret" not in client.locality.display_host
+    assert "user" not in client.locality.display_host
+    assert client.locality.is_local is False
+
+
+def test_locality_never_raises_on_an_unparseable_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unmatched bracket degrades to non-local instead of raising (#240):
+    the properties are read on fail-open paths, so they must never be the
+    thing that crashes a command."""
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    client = OllamaClient("qwen3", host="[::1:11434")
+
+    assert client.locality.is_local is False
+
+
 def _tags_body(entries: list[dict[str, Any]]) -> bytes:
     """Build a well-formed `/api/tags` success body containing `entries`."""
     return json.dumps({"models": entries}).encode("utf-8")

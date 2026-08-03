@@ -11,6 +11,7 @@ zero real Ollama process. Mirrors `_FakeLLM` in
 
 import contextlib
 import dataclasses
+import inspect
 import math
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -1373,19 +1374,29 @@ def test_include_confidential_true_restores_the_confidential_pair(
 def test_include_confidential_true_never_calls_the_sensitivity_predicate_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`include_confidential=True` skips `sensitivity.sensitive_concept_ids`
-    entirely (spy) -- the escape flag is the zero-cost path (design R1)."""
+    """`include_confidential=True` reaches
+    `sensitivity.sensitive_concept_ids` as the flag it is, so the predicate
+    short-circuits before touching `okf._iter_docs` -- the escape flag is
+    still the zero-cost path (design R1).
+
+    Issue #240 moved WHERE the skip is decided, not whether it happens: the
+    guarding `if not include_confidential:` used to live here, but a second
+    hatch (`local_exemption`) would have made that a two-term disjunction
+    restated at five call sites, which is the duplication `sensitivity.py`'s
+    module docstring exists to prevent. The walk-skip itself is pinned once,
+    centrally, by
+    `tests/unit/test_sensitivity.py::test_sensitive_concept_ids_escape_hatches_skip_the_walk_entirely`."""
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
     _write_doc(bundle_dir / "concepts" / "a.md", title="A")
     _write_doc(bundle_dir / "concepts" / "b.md", title="B")
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
-    walk_calls: list[Path] = []
+    walk_calls: list[dict[str, object]] = []
     original_predicate = sensitivity.sensitive_concept_ids
 
     def _spy_predicate(bundle_dir: Path, **kwargs: object) -> frozenset[str]:
-        walk_calls.append(bundle_dir)
+        walk_calls.append(kwargs)
         return original_predicate(bundle_dir, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(sensitivity, "sensitive_concept_ids", _spy_predicate)
@@ -1394,7 +1405,7 @@ def test_include_confidential_true_never_calls_the_sensitivity_predicate_walk(
         bundle_dir, llm=llm, include_confidential=True
     )
 
-    assert walk_calls == []
+    assert walk_calls == [{"include_confidential": True, "local_exemption": False}]
 
 
 def test_default_include_confidential_false_calls_the_sensitivity_predicate_walk_once(
@@ -1677,3 +1688,82 @@ def test_find_contradictions_on_progress_exception_propagates(tmp_path: Path) ->
 
     with pytest.raises(RuntimeError, match="callback failed"):
         contradiction_mod.find_contradictions(bundle_dir, llm=llm, on_progress=_boom)
+
+
+# ---------------------------------------------------------------------------
+# issue #240: the confidential local exemption
+# ---------------------------------------------------------------------------
+
+
+def test_local_exemption_restores_the_confidential_pair_and_its_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a verified-local backend, a pair touching a `confidential`
+    concept is judged normally and that concept's real body reaches the
+    prompt -- no `--include-confidential` required (#240).
+
+    Asserting on the PROMPT, not just the verdict, is what proves the
+    exemption reached `_load_doc` too: the pair-level filter alone would
+    still have degraded the body to `""` and produced a verdict about
+    nothing."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(
+        bundle_dir / "concepts" / "a.md",
+        title="A",
+        body="Alpha secret body.",
+        sensitivity_value="confidential",
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    fake_store: GraphStore = _FakeGraphStore(
+        [Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel")]
+    )
+    monkeypatch.setattr(
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(fake_store),
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
+
+    verdicts, _total = contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, local_exemption=True
+    )
+
+    assert [v.pair_ids for v in verdicts] == [("concepts/a", "concepts/b")]
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Alpha secret body." in message["content"]
+
+
+def test_local_exemption_defaults_to_false_on_find_contradictions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`find_contradictions` defaults `local_exemption` to `False` (#240)."""
+    assert (
+        inspect.signature(contradiction_mod.find_contradictions)
+        .parameters["local_exemption"]
+        .default
+        is False
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(
+        bundle_dir / "concepts" / "a.md", title="A", sensitivity_value="confidential"
+    )
+    _write_doc(bundle_dir / "concepts" / "b.md", title="B")
+    fake_store: GraphStore = _FakeGraphStore(
+        [Edge(source_id="concepts/a", target_id="concepts/b", relation_type="rel")]
+    )
+    monkeypatch.setattr(
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(fake_store),
+    )
+    llm = _FakeLLM()
+
+    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert verdicts == []
+    assert llm.calls == []
