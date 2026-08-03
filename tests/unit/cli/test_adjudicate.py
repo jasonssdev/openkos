@@ -2467,10 +2467,15 @@ def test_adjudicate_warns_stderr_on_incomplete_walk_and_exits_zero(
     is safe to construct here.
 
     The default workspace grants the confidential local exemption (#240),
-    which is the OTHER hatch that suppresses this warning -- see
-    `test_adjudicate_local_exemption_suppresses_the_warning` below. This
-    test is about the walk-incompleteness signal itself, so it opts out of
-    the exemption through the same workspace switch a user would use."""
+    which is the OTHER hatch that suppresses the FILTER-SCOPED half of this
+    signal -- see `test_adjudicate_local_exemption_keeps_the_general_advisory`
+    below. This test is about the run where NEITHER hatch is set, so it opts
+    out of the exemption through the same workspace switch a user would use,
+    and both advisories are then true at once.
+
+    Asserted through text unique to each: since #356 both lines open with
+    `bundle scan was incomplete`, so that prefix no longer tells them
+    apart."""
     _init_workspace(tmp_path, monkeypatch)
     disable_local_exemption(tmp_path)
     _break_os_walk(monkeypatch)
@@ -2478,20 +2483,23 @@ def test_adjudicate_warns_stderr_on_incomplete_walk_and_exits_zero(
     result = runner.invoke(app, ["adjudicate"])
 
     assert result.exit_code == 0
-    assert "bundle scan was incomplete" in result.stderr
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" in result.stderr
 
 
 def test_adjudicate_no_warning_on_clean_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A fully readable bundle produces no incomplete-walk warning (spec:
-    Clean bundle produces no warning)."""
+    """A fully readable bundle produces NEITHER advisory (spec: Clean bundle
+    produces no warning) -- the walk coming back empty is the only thing
+    that silences the #356 one, which no hatch suppresses."""
     _init_workspace(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["adjudicate"])
 
     assert result.exit_code == 0
-    assert "bundle scan was incomplete" not in result.stderr
+    assert "this command's inputs are incomplete" not in result.stderr
+    assert "confidential-content filter" not in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -2804,17 +2812,19 @@ def test_adjudication_payload_same_only_filters_to_same_verdicts() -> None:
     assert payload[0]["rationale"] == "same rationale"
 
 
-def test_adjudicate_include_confidential_suppresses_the_warning(
+def test_adjudicate_include_confidential_keeps_the_general_advisory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`--include-confidential` suppresses the incomplete-walk warning too --
-    the filter is deliberately off (spec: `--include-confidential`
-    suppresses the warning).
+    """`--include-confidential` suppresses the FILTER-SCOPED advisory only:
+    the filter is deliberately off, so its message would be a claim about a
+    filter that never ran. The #356 incomplete-inputs advisory still prints,
+    and the command still exits 0 -- `find_candidates` walks the same
+    bundle, so a duplicate pair with one member in the unreadable subtree is
+    never even proposed.
 
     The default workspace ALSO grants the confidential local exemption
-    (#240), which independently suppresses the same warning -- see
-    `test_adjudicate_local_exemption_suppresses_the_warning` above. Without
-    opting out of that here, this test would keep passing even if
+    (#240), which independently suppresses the same filter-scoped message.
+    Without opting out of that here, this test would keep passing even if
     `--include-confidential` were silently dropped from the
     `warn_if_walk_incomplete` call site, so it disables the exemption to
     make the FLAG the thing that discriminates."""
@@ -2825,26 +2835,30 @@ def test_adjudicate_include_confidential_suppresses_the_warning(
     result = runner.invoke(app, ["adjudicate", "--include-confidential"])
 
     assert result.exit_code == 0
-    assert "bundle scan was incomplete" not in result.stderr
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" not in result.stderr
 
 
-def test_adjudicate_local_exemption_suppresses_the_warning(
+def test_adjudicate_local_exemption_keeps_the_general_advisory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The confidential local exemption (#240) suppresses the incomplete-walk
-    warning too, the SAME way `--include-confidential` does: on a stock
-    workspace (default local backend, exemption active) the message never
-    prints. (This test only observes the absent message; that the walk
-    itself is skipped, not merely discarded, is pinned at the helper level
-    by `test_warn_if_walk_incomplete_local_exemption_skips_the_walk_entirely`
-    in `test_observability.py`.)"""
+    """The confidential local exemption (#240) suppresses the FILTER-SCOPED
+    advisory the SAME way `--include-confidential` does, and leaves the #356
+    incomplete-inputs advisory printing.
+
+    This is the STOCK workspace -- default local backend, exemption active
+    -- which is exactly the path that emitted nothing at all before #356:
+    an unreadable subtree removed its documents from candidate generation,
+    and a clean "no candidates" report exited 0 over a bundle that was never
+    fully read."""
     _init_workspace(tmp_path, monkeypatch)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["adjudicate"])
 
     assert result.exit_code == 0
-    assert "bundle scan was incomplete" not in result.stderr
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" not in result.stderr
 
 
 # ---------------------------------------------------------------------------

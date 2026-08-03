@@ -2,11 +2,19 @@
 (directory-walk-observability, S3 follow-up).
 
 Isolated unit coverage for the CLI-layer signal helper, exercised directly
-(not through a Typer command) before it is wired into any of the five
-sensitivity-filter verbs -- see the per-verb CLI test files
-(`test_query.py`, `test_adjudicate.py`, `test_contradictions.py`,
-`test_suggest_relations.py`, `test_suggest_volatility.py`) for the
-end-to-end wiring coverage.
+(not through a Typer command) rather than through any of the six
+sensitivity-filter verbs it is wired into -- see the per-verb CLI test
+files (`test_query.py`, `test_adjudicate.py`, `test_contradictions.py`,
+`test_suggest_relations.py`, `test_suggest_volatility.py`, `test_curate.py`)
+for the end-to-end wiring coverage.
+
+Since #356 the helper carries TWO messages over one walk, so every
+assertion here names the one it is about through text unique to that
+message (`this command's inputs are incomplete` for the general advisory,
+`confidential-content filter` for the filter-scoped one). The
+`bundle scan was incomplete` prefix both share is deliberately never
+asserted on alone: it would pass for either, which is exactly the
+distinction these tests exist to hold.
 """
 
 import os
@@ -47,22 +55,30 @@ def _make_locked_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     return tmp_path
 
 
-def test_warn_if_walk_incomplete_warns_on_incomplete_walk(
+def test_warn_if_walk_incomplete_emits_both_advisories_with_no_hatch_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """An incomplete walk (`okf._walk_errors` non-empty) prints a
-    self-explaining warning to STDERR and returns normally -- no exception,
-    no exit code of its own; this helper is signal-only (spec: Incomplete
-    walk warns and still exits 0)."""
+    """With NEITHER hatch set, an incomplete walk (`okf._walk_errors`
+    non-empty) prints BOTH advisories to STDERR and returns normally -- no
+    exception, no exit code of its own; this helper is signal-only (spec:
+    Incomplete walk warns and still exits 0).
+
+    Both are true at once here, and each states its own truth: the inputs
+    to this command are incomplete (#356) AND the confidential-content
+    filter could not inspect every document (the original signal). They are
+    asserted through text UNIQUE to each, never through the prefix they
+    share -- `bundle scan was incomplete` now opens both lines, so it can no
+    longer discriminate between them."""
     bundle_dir = _make_locked_bundle(tmp_path, monkeypatch)
 
     observability.warn_if_walk_incomplete(bundle_dir)
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "bundle scan was incomplete" in captured.err
+    assert "this command's inputs are incomplete" in captured.err
+    assert "confidential-content filter" in captured.err
     assert "--include-confidential" in captured.err
 
 
@@ -82,58 +98,146 @@ def test_warn_if_walk_incomplete_silent_on_clean_bundle(
     assert captured.err == ""
 
 
-def test_warn_if_walk_incomplete_include_confidential_suppresses_warning(
+def test_warn_if_walk_incomplete_silent_on_clean_bundle_under_the_exemption(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A fully readable bundle stays silent under the exemption too (#356).
+
+    The incomplete-inputs advisory is never suppressed by a hatch, so the
+    ONLY thing keeping it quiet on a healthy bundle is the walk itself
+    coming back empty. Without this test, an advisory that fired
+    unconditionally -- on every stock run, over every readable bundle --
+    would pass the rest of this module, since the other exemption tests all
+    break the walk first."""
+    (tmp_path / "clean.md").write_text(
+        "---\ntype: concept\n---\nBody.\n", encoding="utf-8"
+    )
+
+    observability.warn_if_walk_incomplete(tmp_path, local_exemption=True)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_warn_if_walk_incomplete_include_confidential_keeps_the_general_advisory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`include_confidential=True` suppresses the warning even when the walk
-    is incomplete -- the filter is deliberately off, so an incomplete walk
-    has no bearing on what gets sent (spec: `--include-confidential`
-    suppresses the warning)."""
+    """`include_confidential=True` suppresses the FILTER-SCOPED message only
+    -- the incomplete-inputs advisory still fires (#356).
+
+    The suppression is still right for the message it governs: the filter is
+    deliberately off, so "some confidential material may not have been
+    excluded" would be a claim about a filter that never ran. It is wrong for
+    everything ELSE the same unreadable subtree truncates -- `okf._iter_docs`
+    backs the graph projection too -- and that is what the second advisory
+    now says, under both hatches."""
     bundle_dir = _make_locked_bundle(tmp_path, monkeypatch)
 
     observability.warn_if_walk_incomplete(bundle_dir, include_confidential=True)
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == ""
+    assert "this command's inputs are incomplete" in captured.err
+    assert "confidential-content filter" not in captured.err
 
 
-def test_warn_if_walk_incomplete_local_exemption_suppresses_warning(
+def test_warn_if_walk_incomplete_local_exemption_keeps_the_general_advisory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`local_exemption=True` suppresses the warning even when the walk is
-    incomplete -- the SAME reasoning as `include_confidential=True`: the
-    filter is off entirely (this time because the caller already resolved
-    the confidential local exemption, issue #240), so an incomplete walk
-    has no bearing on what gets sent."""
+    """The confidential local exemption (#240) suppresses the FILTER-SCOPED
+    message only, exactly as `include_confidential=True` does -- the
+    incomplete-inputs advisory still fires (#356).
+
+    This is the shipped DEFAULT path (local backend, exemption active), so
+    before #356 it was the case that emitted nothing at all: the verb ran
+    over a truncated bundle, printed a smaller result, and exited 0 with no
+    signal anywhere."""
     bundle_dir = _make_locked_bundle(tmp_path, monkeypatch)
 
     observability.warn_if_walk_incomplete(bundle_dir, local_exemption=True)
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == ""
+    assert "this command's inputs are incomplete" in captured.err
+    assert "confidential-content filter" not in captured.err
 
 
-def test_warn_if_walk_incomplete_local_exemption_skips_the_walk_entirely(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_incomplete_inputs_advisory_points_at_the_verb_that_names_the_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`local_exemption=True` returns before `okf._walk_errors` runs the
-    walk at all -- paying for a full bundle scan whose result is then
-    discarded would defeat the zero-cost bypass `sensitivity.py` preserves
-    for this exact case (issue #240)."""
+    """The #356 advisory's second remediation names `openkos status`, NOT
+    `openkos lint`.
+
+    It has to point somewhere, because it deliberately does not repeat the
+    unreadable paths -- it stays one line however many directories failed,
+    and the per-directory detail already exists as an
+    `<path>: unreadable directory (...)` finding from `okf.survey_bundle`.
+    `status` is what renders those findings (its `Needs attention:` section
+    folds `survey.findings` in verbatim); `lint` does NOT, despite being the
+    other read verb -- it runs on `lint.collect_docs`, which reuses
+    `okf._iter_docs`, the very walk that swallows the error in the first
+    place. A `lint` pointer would therefore send a user to a command that
+    prints "no findings" over the exact bundle the advisory just warned
+    about. `tests/unit/cli/test_status.py` pins the other end of this
+    promise: that `status` really does name the directory."""
+    bundle_dir = _make_locked_bundle(tmp_path, monkeypatch)
+
+    observability.warn_if_walk_incomplete(bundle_dir, local_exemption=True)
+
+    captured = capsys.readouterr()
+    assert "openkos status" in captured.err
+    assert "openkos lint" not in captured.err
+
+
+@pytest.mark.parametrize(
+    ("include_confidential", "local_exemption"),
+    [(False, False), (True, False), (False, True), (True, True)],
+    ids=["no-hatch", "include-confidential", "local-exemption", "both-hatches"],
+)
+def test_warn_if_walk_incomplete_walks_exactly_once_per_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_confidential: bool,
+    local_exemption: bool,
+) -> None:
+    """`okf._walk_errors` runs EXACTLY ONCE per call, whatever the hatches
+    say -- a cost pin, not a behavior one (#356).
+
+    Since #356 the walk can no longer be skipped: its result is actionable
+    even when the filter is off, because an unreadable subtree also shrinks
+    the graph projection. The accepted price is one full bundle walk per
+    invocation. What is NOT accepted is paying it twice -- one obvious way
+    to write two independent advisories is two independent `_walk_errors`
+    calls, which would silently double the cost of every one of the six
+    verbs, on the default path, for a condition that is almost always
+    absent.
+
+    This replaces `..._local_exemption_skips_the_walk_entirely`, which
+    pinned the pre-#356 zero-cost bypass that #356 deliberately gives up."""
     from openkos.model import okf
 
-    def _fail(*args: object, **kwargs: object) -> object:
-        raise AssertionError("okf._walk_errors must not run under the exemption")
+    calls: list[Path] = []
 
-    monkeypatch.setattr(okf, "_walk_errors", _fail)
+    def _counting_walk_errors(bundle_dir: Path) -> list[OSError]:
+        calls.append(bundle_dir)
+        return [OSError(13, "Permission denied", "locked")]
 
-    observability.warn_if_walk_incomplete(tmp_path, local_exemption=True)
+    monkeypatch.setattr(okf, "_walk_errors", _counting_walk_errors)
+
+    observability.warn_if_walk_incomplete(
+        tmp_path,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
+
+    assert calls == [tmp_path]
 
 
 def test_warn_if_walk_incomplete_mode_refuse_raises_not_implemented(
@@ -144,6 +248,34 @@ def test_warn_if_walk_incomplete_mode_refuse_raises_not_implemented(
     (design Decision 1)."""
     with pytest.raises(NotImplementedError):
         observability.warn_if_walk_incomplete(tmp_path, mode="refuse")
+
+
+def test_warn_if_walk_incomplete_mode_refuse_raises_before_any_walk_or_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`mode="refuse"` is decided BEFORE the walk and before either
+    advisory, so the seam never half-runs: no bundle scan is paid for, and
+    no line is printed by a call that then raises (#356).
+
+    The mode check has to sit first now that no hatch returns early. It also
+    means a hatch no longer pre-empts the seam -- pre-#356 the hatch return
+    ran first, so `mode="refuse", include_confidential=True` returned
+    silently instead of raising. That was an artifact of the early return,
+    not a decision: a future strict mode refuses on THIS condition (the
+    bundle was unreadable), which #356 established is independent of whether
+    the confidential filter ran at all."""
+    bundle_dir = _make_locked_bundle(tmp_path, monkeypatch)
+
+    with pytest.raises(NotImplementedError):
+        observability.warn_if_walk_incomplete(
+            bundle_dir, mode="refuse", include_confidential=True, local_exemption=True
+        )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 # ---------------------------------------------------------------------------

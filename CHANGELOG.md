@@ -14,6 +14,27 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- **An unreadable bundle directory is now announced even when the confidential
+  filter is off**: a directory-scan error makes part of `bundle/` impossible to
+  list, and the bundle walk drops that subtree silently — so the graph
+  projection loses nodes, edges, candidate edges and contradictions, and the
+  command still exits 0 over documents it never read. The only advisory for
+  this spoke exclusively about the confidential-content filter and was
+  suppressed whenever that filter was off, which since #240 includes the
+  shipped default (a local backend, exemption active) — so the truncated run
+  said nothing at all. `query`, `contradictions`, `adjudicate`,
+  `suggest-relations`, `suggest-volatility`, and `curate` now print a second,
+  independent stderr line stating that the command's inputs were incomplete and
+  its result may be missing content, pointing at `openkos status` for the
+  offending paths. It is never suppressed — not by `--include-confidential`,
+  not by the local exemption. The existing filter-scoped message is unchanged
+  and still suppressed by either hatch, so the two lines print together only
+  when both are true and neither ever claims something that did not happen.
+  Signal-only: no refusal, no exit-code change, and still exactly one bundle
+  walk per invocation. (cli) (#356)
+
 ### Fixed
 
 - **A failed connection no longer prints the Ollama host's credentials**: the

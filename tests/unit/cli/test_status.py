@@ -8,8 +8,9 @@ then renders three sections via `typer.echo`. Exit 0 on every successful
 read; the ONLY non-zero path is an absent/unreadable workspace.
 """
 
+import os
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -964,3 +965,52 @@ def test_status_duplicate_line_plural_wording(
 
     assert result.exit_code == 0
     assert "2 candidate groups" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# #356 -- `status` is where the incomplete-inputs advisory sends the user
+# ---------------------------------------------------------------------------
+
+
+def test_status_names_every_directory_it_could_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory-scan error is listed under `Needs attention:` by path,
+    and the run still exits 0.
+
+    This is the other end of a promise made elsewhere: the #356
+    incomplete-inputs advisory that `query`, `contradictions`, `adjudicate`,
+    `suggest-relations`, `suggest-volatility` and `curate` print on this
+    condition deliberately does not repeat the paths -- it stays one line
+    however many directories failed -- and instead tells the user to run
+    `openkos status` for the detail. That pointer is only honest while this
+    holds. It comes free from `okf.survey_bundle`, whose findings `status`
+    folds into `Needs attention:` verbatim; the point of pinning it here is
+    that it must not be refactored away under a command whose own tests
+    never mention walk errors.
+
+    `lint` deliberately has no equivalent test, because it has no equivalent
+    behavior: it reads through `lint.collect_docs` -> `okf._iter_docs`,
+    which is the walk that swallows the error, so an unlistable subtree is
+    invisible to it. That is exactly why the advisory names `status`.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    original_walk = os.walk
+    walk_error = OSError(13, "Permission denied", "locked")
+
+    def fake_walk(
+        top: str | os.PathLike[str],
+        topdown: bool = True,
+        onerror: Callable[[OSError], object] | None = None,
+        followlinks: bool = False,
+    ) -> Iterator[tuple[str, list[str], list[str]]]:
+        if onerror is not None:
+            onerror(walk_error)
+        yield from original_walk(top, topdown, onerror, followlinks)
+
+    monkeypatch.setattr(os, "walk", fake_walk)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "locked: unreadable directory" in result.stdout

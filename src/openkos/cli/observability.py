@@ -13,13 +13,44 @@ The confidential-content filter can also be off entirely with NO walk
 error involved: `--include-confidential` disables it explicitly, and the
 confidential local exemption (issue #240) disables it implicitly whenever
 `sensitivity.sensitive_concept_ids` short-circuits to `frozenset()` before
-`okf._iter_docs` -- and therefore before `okf._walk_errors` -- is ever
-touched, because the resolved client/workspace pair already proved the
-filter's whole reason for existing (stopping confidential material from
-leaving the machine) does not apply this run. Both hatches share the same
-consequence: an incomplete walk has no bearing on what gets sent, so
-`warn_if_walk_incomplete` must be told about both, and must return before
-paying for a walk whose result the caller cannot act on either way.
+`okf._iter_docs` is ever touched, because the resolved client/workspace
+pair already proved the filter's whole reason for existing (stopping
+confidential material from leaving the machine) does not apply this run.
+Both hatches share the same consequence FOR THE FILTER: no filter ran, so
+"some confidential material may not have been excluded" would be a claim
+about something that never happened, and `warn_if_walk_incomplete` must be
+told about both so it can hold that message back.
+
+Issue #356 is the correction to how far that reasoning reached. Until it,
+this module treated an incomplete walk as ONLY a filter concern and
+returned before walking at all under either hatch, on the argument that
+the walk's result would be discarded anyway. That argument was false. The
+same unlistable subdirectory truncates the whole INPUT SET, not just the
+filter's view of it: `okf._iter_docs` walks with `rglob`, which silently
+swallows `scandir()` failures, and `graph.sqlite_graph.build_graph` ->
+`_populate_graph_tables` -> `_iter_docs`, so the graph projection quietly
+loses nodes, edges, candidate edges, and contradictions -- and the command
+still exits 0 over a bundle it never fully read. On the SHIPPED DEFAULT
+path (local backend, exemption active) that produced no signal anywhere.
+So this module now carries TWO independent messages over ONE walk: a
+general "your inputs were incomplete" advisory that no hatch suppresses,
+and the original filter-scoped one that both hatches still suppress. They
+are kept separate rather than merged into one conditionally-worded line so
+that each states one truth on its own and neither lies when the other does
+not apply. The zero-cost bypass is genuinely given up -- one walk per
+invocation is now paid on every path -- which is the accepted price of the
+signal; what is not accepted is paying for it twice, hence the single
+`okf._walk_errors` call feeding both messages.
+
+`okf.survey_bundle` already reports the same condition as one
+`unreadable directory` finding per failure, which is how `status` surfaces
+it (under `Needs attention:`) and how `doctor` fails its bundle-readable
+check. #356 changed WHO ELSE reports it, not how it is detected: those
+verbs keep their finding and deliberately gain no second advisory, since a
+duplicate line would say nothing their findings do not already say. Note
+that `lint` does NOT surface it, contrary to what #356 assumed -- it reads
+through `lint.collect_docs` -> `okf._iter_docs`, the walk that drops the
+subtree silently -- which is why the advisory below points at `status`.
 
 Mirrors the existing `state/reindex.py:285` + `cli/main.py`'s
 `report.prune_skipped` self-explaining-warning precedent, generalized to
@@ -48,6 +79,42 @@ import typer
 
 from openkos.model import okf
 
+_INCOMPLETE_INPUTS_WARNING = (
+    "openkos: bundle scan was incomplete -- a directory-scan error made "
+    "part of the bundle unreadable, so this command's inputs are "
+    "incomplete and its result may be missing content. Fix the directory "
+    "permissions and re-run, or run 'openkos status' to see which "
+    "directories could not be read."
+)
+"""The general completeness advisory (#356), emitted on EVERY incomplete
+walk with no hatch able to suppress it.
+
+Deliberately says nothing about sensitivity: it is true whatever the
+confidential filter did, because what shrank is the document set every
+downstream pass reads -- concepts, edges, candidate pairs, contradictions.
+It is worded as "may be missing content" rather than a count, because the
+contents of a subtree that could not be listed are by definition unknown
+(the same reason `okf.survey_bundle` never folds a walk error into its
+`sources`/`concepts` totals).
+
+It opens with the same `bundle scan was incomplete` phrase as the
+filter-scoped message below, on purpose: when both print, they are one
+cause reported at two scopes, and a reader should see that immediately.
+The consequence for tests is that the shared prefix no longer identifies
+either message -- assert on `this command's inputs are incomplete` for
+this one, `confidential-content filter` for the other.
+
+`openkos status` is the pointer rather than a repetition of the paths,
+because `okf.survey_bundle` already names EVERY unreadable directory as a
+finding; this line stays one line no matter how many directories failed.
+It is `status` specifically, and NOT `lint`, even though both are read
+verbs and issue #356 assumed both surfaced it: `status` folds
+`survey.findings` into its `Needs attention:` section verbatim, while
+`lint` reads through `lint.collect_docs` -> `okf._iter_docs`, which is the
+very walk that swallows the error -- pointing at `lint` would send the
+user to a command that reports nothing over the exact bundle this line
+just warned about."""
+
 _INCOMPLETE_WALK_WARNING = (
     "openkos: bundle scan was incomplete -- a directory-scan error made "
     "part of the bundle unreadable, so the confidential-content filter "
@@ -57,7 +124,11 @@ _INCOMPLETE_WALK_WARNING = (
 )
 """Self-explaining STDERR message (mirrors `state/reindex.py`'s
 `prune_skipped` notice style): names the condition, its consequence, and
-both remediation paths, rather than a bare "walk incomplete" line."""
+both remediation paths, rather than a bare "walk incomplete" line.
+
+Unchanged by #356, in wording and in suppression: it is a claim about the
+FILTER, so it may only print when a filter actually ran -- neither
+`--include-confidential` nor the confidential local exemption is set."""
 
 
 def warn_if_walk_incomplete(
@@ -67,41 +138,69 @@ def warn_if_walk_incomplete(
     include_confidential: bool = False,
     local_exemption: bool = False,
 ) -> None:
-    """Warn to STDERR when the directory walk backing the sensitivity
-    fail-closed filter over `bundle_dir` is provably incomplete
-    (`okf._walk_errors` reports at least one unlistable subdirectory).
+    """Warn to STDERR when the directory walk over `bundle_dir` is provably
+    incomplete (`okf._walk_errors` reports at least one unlistable
+    subdirectory), with up to TWO independent messages over ONE walk.
 
-    Deliberately skipped when EITHER `include_confidential` or
-    `local_exemption` is `True` -- either hatch takes the filter off
-    entirely, so an incomplete walk has no bearing on what gets sent:
+    `_INCOMPLETE_INPUTS_WARNING` is emitted on EVERY incomplete walk (#356).
+    Neither hatch suppresses it, because it is not about the sensitivity
+    filter: `okf._iter_docs` is the walk behind the whole document set, and
+    `graph.sqlite_graph.build_graph` builds its projection from it, so an
+    unlistable subtree silently costs the run nodes, edges, candidate edges
+    and contradictions whatever the filter did. Before #356 that loss was
+    reported by nobody on the shipped default path -- the command printed a
+    smaller result and exited 0.
+
+    `_INCOMPLETE_WALK_WARNING` is emitted ADDITIONALLY, and only when
+    NEITHER `include_confidential` nor `local_exemption` is set. That
+    message claims the confidential-content filter could not inspect every
+    document, and either hatch takes the filter off entirely, so with one
+    set the claim would be about a filter that never ran:
     `include_confidential` is the explicit, user-requested bypass;
     `local_exemption` (issue #240) is the implicit one, already resolved by
     the caller from the verified-local client and the workspace's
     `confidential_local_exemption` key before this helper is ever called.
-    Both return EARLY, before `okf._walk_errors` runs the walk at all --
-    the walk's result would be discarded either way, and paying for a full
-    bundle scan just to throw it away would defeat the zero-cost bypass
-    `sensitivity.sensitive_concept_ids` is written to preserve for exactly
-    this case. `mode="warn"` (the only mode this slice implements) emits
-    the self-explaining STDERR line and always returns normally: it NEVER
-    raises and NEVER changes the caller's exit code, this helper is
-    signal-only (spec: Incomplete walk warns and still exits 0).
+    Suppressing THAT message under a hatch is still correct; suppressing
+    the walk itself was not, and no longer happens.
+
+    `okf._walk_errors` therefore runs exactly ONCE per call, and its single
+    result feeds both messages. #356 accepts the cost of that walk on every
+    path (the pre-#240 zero-cost bypass is deliberately given up: a result
+    that IS actionable cannot be skipped as unused), but not the cost of
+    walking twice, which is what two separately-guarded emissions would
+    have meant for all six call sites.
+
+    `mode="warn"` (the only mode this slice implements) emits and always
+    returns normally: it NEVER raises and NEVER changes the caller's exit
+    code, this helper is signal-only (spec: Incomplete walk warns and still
+    exits 0). Any unrecognized mode stays a silent no-op and pays for no
+    walk, exactly as before.
 
     `mode="refuse"` raises `NotImplementedError`: a stable seam for a
     future cloud-egress mode that REFUSES instead of warning on this
     condition, explicitly out of scope for this change (spec). The
     signature is already shaped for that future mode so its slice needs no
     re-threading -- only filling this branch in and flipping call sites to
-    `mode="refuse"`.
+    `mode="refuse"`. The mode check now runs FIRST, before the walk and
+    before either message, so the seam can never half-run (no scan paid
+    for, no line printed by a call that then raises). One consequence is
+    intended: a hatch no longer pre-empts the seam, as it did when the
+    hatch return sat above it. That pre-emption was an artifact of the old
+    early return rather than a decision, and #356 established that this
+    condition -- the bundle could not be fully read -- is independent of
+    whether the confidential filter ran at all.
     """
-    if include_confidential or local_exemption:
-        return
     if mode == "refuse":
         raise NotImplementedError(
             "mode='refuse' is a stable seam for a future cloud-egress mode; "
             "not implemented in this slice"
         )
-    if mode == "warn" and bool(okf._walk_errors(bundle_dir)):
+    if mode != "warn":
+        return
+    if not okf._walk_errors(bundle_dir):
+        return
+    typer.echo(_INCOMPLETE_INPUTS_WARNING, err=True)
+    if not (include_confidential or local_exemption):
         typer.echo(_INCOMPLETE_WALK_WARNING, err=True)
 
 
