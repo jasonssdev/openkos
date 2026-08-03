@@ -1404,7 +1404,218 @@ def test_embed_singular_key_wrong_dimension_also_raises_dimension_mismatch() -> 
         client.embed(["only"])
 
 
+# --- issue #355: a transport failure never displays credentials ----------------
+
+_CREDENTIALED_HOST = "http://user:s3cret@remote.example:11434"
+"""A host carrying userinfo, the shape a user gets by exporting `OLLAMA_HOST`
+with an inline password for some other tool. `OllamaClient` inherits that env
+var, so this is not a contrived value (issue #355)."""
+
+_PLANTED_USERINFO = "s3cret"
+
+
+def test_chat_connect_failure_never_displays_userinfo() -> None:
+    """A connect-phase transport failure against a credentialed host must not
+    put the password in the `OllamaUnavailable` message (issue #355).
+
+    The CLI handlers echo this exception verbatim to stderr, so whatever the
+    message carries is printed. `display_host` is the module's ONE authority
+    for a host string that may be shown (`BackendHostLocality`); the transport
+    error path used to bypass it and interpolate the raw resolved host."""
+    client = OllamaClient(
+        "qwen3",
+        host=_CREDENTIALED_HOST,
+        urlopen=_raising_urlopen(urllib.error.URLError("Connection refused")),
+    )
+
+    with pytest.raises(OllamaUnavailable) as excinfo:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert _PLANTED_USERINFO not in str(excinfo.value)
+    assert "user:" not in str(excinfo.value)
+
+
+def test_chat_body_read_failure_never_displays_userinfo() -> None:
+    """The read-phase branch shares `_unavailable` with the connect-phase one,
+    so it must redact identically -- pinned separately because a future edit
+    could give either branch its own message (issue #355)."""
+    client = OllamaClient(
+        "qwen3",
+        host=_CREDENTIALED_HOST,
+        urlopen=_fake_urlopen_returning(
+            _RaisingReadResponse(TimeoutError("timed out mid-read"))
+        ),
+    )
+
+    with pytest.raises(OllamaUnavailable) as excinfo:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert _PLANTED_USERINFO not in str(excinfo.value)
+
+
+def test_embed_transport_failure_never_displays_userinfo() -> None:
+    """`embed()` reaches the same `_unavailable`, after its retry ladder is
+    exhausted (issue #355)."""
+    client = OllamaClient(
+        "qwen3-embedding:0.6b",
+        host=_CREDENTIALED_HOST,
+        urlopen=_raising_urlopen(urllib.error.URLError("Connection refused")),
+        embed_retry_attempts=1,
+        sleep=lambda _seconds: None,
+    )
+
+    with pytest.raises(OllamaUnavailable) as excinfo:
+        client.embed(["anything"])
+
+    assert _PLANTED_USERINFO not in str(excinfo.value)
+
+
+def test_list_models_transport_failure_never_displays_userinfo() -> None:
+    """`list_models()` is the probe `doctor` and `init`'s preflight run, so it
+    is the most likely of the three to be hit by a misconfigured user -- and
+    the most likely to have its error surfaced (issue #355)."""
+    client = OllamaClient(
+        "qwen3",
+        host=_CREDENTIALED_HOST,
+        urlopen=_raising_urlopen(urllib.error.URLError("Connection refused")),
+    )
+
+    with pytest.raises(OllamaUnavailable) as excinfo:
+        client.list_models()
+
+    assert _PLANTED_USERINFO not in str(excinfo.value)
+
+
+def test_transport_failure_still_names_the_redacted_host() -> None:
+    """Redaction must not degrade the message into uselessness: the host is
+    still named, minus the userinfo, so "not reachable at ..." keeps telling
+    the user WHERE the attempt went (issue #355).
+
+    Without this pin, dropping the host entirely would pass every assertion
+    above while making the error undiagnosable."""
+    client = OllamaClient(
+        "qwen3",
+        host=_CREDENTIALED_HOST,
+        urlopen=_raising_urlopen(urllib.error.URLError("Connection refused")),
+    )
+
+    with pytest.raises(OllamaUnavailable) as excinfo:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert "remote.example:11434" in str(excinfo.value)
+
+
+def test_transport_failure_on_an_unparseable_host_displays_the_placeholder() -> None:
+    """A malformed host whose redacted remainder is empty displays the shared
+    `<unparseable>` placeholder rather than an empty string or the raw value --
+    the same degradation `classify_backend_host` already applies everywhere
+    else a host is shown (issues #353, #355)."""
+    client = OllamaClient(
+        "qwen3",
+        host="user:s3cret/x@",
+        urlopen=_raising_urlopen(urllib.error.URLError("Connection refused")),
+    )
+
+    with pytest.raises(OllamaUnavailable) as excinfo:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert _PLANTED_USERINFO not in str(excinfo.value)
+    assert "<unparseable>" in str(excinfo.value)
+
+
 # --- Phase 8: layering guard --------------------------------------------------
+
+
+def _raw_host_offenders(source: str) -> list[int]:
+    """Return the line numbers of every f-string in `source` that interpolates
+    the raw `self._host` outside the one sanctioned request-URL shape.
+
+    The sanctioned shape is EXACTLY two parts -- the host, then a single
+    string constant naming the endpoint (`f"{self._host}/api/chat"`). The
+    request must go to the real host, credentials included, so that one shape
+    is admitted and every other use is an offender.
+
+    "Exactly two parts" is the whole point of the check, not incidental
+    strictness. A carve-out that merely asked whether SOME constant segment
+    began with the endpoint prefix would admit
+    `f"{self._host}/api/chat unreachable: {exc}"` -- a displayable diagnostic
+    carrying the credential, which is issue #355 all over again. The near-miss
+    is pinned by `test_the_raw_host_guard_rejects_a_url_prefixed_diagnostic`."""
+
+    def _is_raw_host(node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "_host"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        )
+
+    def _is_endpoint_constant(node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.startswith("/api/")
+        )
+
+    offenders: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        if not any(
+            isinstance(part, ast.FormattedValue) and _is_raw_host(part.value)
+            for part in node.values
+        ):
+            continue
+        parts = node.values
+        is_request_url = (
+            len(parts) == 2
+            and isinstance(parts[0], ast.FormattedValue)
+            and _is_raw_host(parts[0].value)
+            and _is_endpoint_constant(parts[1])
+        )
+        if not is_request_url:
+            offenders.append(node.lineno)
+    return offenders
+
+
+def test_no_error_message_interpolates_the_raw_host() -> None:
+    """No f-string anywhere in `llm/ollama.py` interpolates `self._host`
+    outside the request-URL shape (issue #355).
+
+    The instance-level pins above prove `_unavailable` is clean today. This
+    guard proves the CLASS of bug stays closed: any future error message,
+    log line, or diagnostic that reaches for the raw resolved host instead
+    of the redacted `display_host` fails here, without anyone remembering to
+    re-audit. Written in the spirit of the sibling structural guards in this
+    file and `test_offline_stub_covers_every_network_method` -- the bug
+    #355 fixed was ONE site, but nothing stopped the next one."""
+    source = (_REPO_ROOT / "src" / "openkos" / "llm" / "ollama.py").read_text(
+        encoding="utf-8"
+    )
+
+    offenders = _raw_host_offenders(source)
+
+    assert not offenders, (
+        f"ollama.py interpolates the raw `self._host` into a non-URL string at "
+        f"line(s) {offenders}; display a host only via `locality.display_host`, "
+        f"which redacts userinfo (issue #355)"
+    )
+
+
+def test_the_raw_host_guard_rejects_a_url_prefixed_diagnostic() -> None:
+    """The guard admits the request-URL shape and NOTHING that merely looks
+    like it -- the near-miss raised by the #355 reliability review.
+
+    A guard for a credential leak is only worth its line count if it rejects
+    the shapes a future author would plausibly write. `f"{self._host}/api/chat
+    unreachable: {exc}"` reads like a URL, begins like a URL, and leaks the
+    password; an `any(... startswith("/api/"))` carve-out would have waved it
+    through while the CHANGELOG claimed the class was closed."""
+    assert _raw_host_offenders('x = f"{self._host}/api/chat"') == []
+    assert _raw_host_offenders('x = f"{self._host}/api/chat unreachable: {exc}"') == [1]
+    assert _raw_host_offenders('x = f"connecting to {self._host}/api/chat"') == [1]
+    assert _raw_host_offenders('x = f"not reachable at {self._host}: {exc}"') == [1]
+    assert _raw_host_offenders('x = f"reached {self.locality.display_host}"') == []
 
 
 def test_llm_modules_do_not_import_config() -> None:
