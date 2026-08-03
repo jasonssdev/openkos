@@ -1898,7 +1898,11 @@ def _warn_if_nonlocal_embed_host(command: str) -> None:
 
 
 def _embed_after_ingest(
-    layout: config.WorkspaceLayout, embedder: Embedder, *, model_tag: str
+    layout: config.WorkspaceLayout,
+    embedder: Embedder,
+    *,
+    model_tag: str,
+    warn_nonlocal_host: bool = True,
 ) -> None:
     """Embed the concepts `ingest` just wrote, so candidate edges are
     available in the SAME run (#183).
@@ -1929,11 +1933,18 @@ def _embed_after_ingest(
     Reuses `state.reindex.reindex` rather than embedding here (design
     Decision D), and passes NO `fts_db_path`: the FTS index is `reindex`'s
     job, not ingest's, and rebuilding it here would make every ingest pay
-    for a full-text rebuild it did not ask for."""
+    for a full-text rebuild it did not ask for.
+
+    `warn_nonlocal_host=False` suppresses ONLY the non-local embedding-host
+    advisory: `_ingest_batch` emits that advisory itself, once per batch
+    invocation (the batch cost-gate precedent), so its per-file runs must
+    not repeat it N times (issue #353, item 4). Everything else here --
+    the embed, its fail-open degrade notices -- is unchanged either way."""
     # BEFORE the embed attempt, so the notice lands even when the embed
     # itself then degrades: the advisory is about where the data is headed,
     # not about whether it arrived (#199).
-    _warn_if_nonlocal_embed_host("ingest")
+    if warn_nonlocal_host:
+        _warn_if_nonlocal_embed_host("ingest")
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
@@ -2094,6 +2105,13 @@ def _ingest_batch(
     invoked with the prompt suppressed the way `--auto` suppresses it
     today (`auto=True`), never 40 per-file prompts.
 
+    The non-local embedding-host advisory (#199) follows the same
+    once-per-run consolidation (issue #353, item 4): it is emitted here,
+    once, up front (before the loop), and every per-file run is invoked
+    with `warn_nonlocal_embed_host=False` so `_embed_after_ingest` does
+    not repeat it N times. Same wording, same stderr, still advisory-only;
+    a local (or unset) host stays silent exactly as before.
+
     Per-file failure isolation (settled decision 2): a per-file refusal
     (`typer.Exit` from `_ingest_single`, its reason already on stderr --
     including a drift refusal's exit 3) SKIPS that file and CONTINUES; a
@@ -2154,6 +2172,11 @@ def _ingest_batch(
             )
             raise typer.Exit(code=1)
 
+    # ONE advisory for the whole batch (the cost-gate precedent), before
+    # the loop: each per-file run below suppresses its own copy
+    # (issue #353, item 4).
+    _warn_if_nonlocal_embed_host("ingest")
+
     progress = observability.progress_callback("ingest", "ingesting file")
     outcome_lines: list[str] = []
     ingested_count = 0
@@ -2166,7 +2189,10 @@ def _ingest_batch(
             progress(index, total, path)
         try:
             outcome = _ingest_single(
-                path, auto=True, include_confidential=include_confidential
+                path,
+                auto=True,
+                include_confidential=include_confidential,
+                warn_nonlocal_embed_host=False,
             )
         except typer.Exit as exc:
             # The per-file pipeline already printed its own refusal reason
@@ -2285,7 +2311,11 @@ def ingest(
 
 
 def _ingest_single(
-    src: Path, *, auto: bool, include_confidential: bool
+    src: Path,
+    *,
+    auto: bool,
+    include_confidential: bool,
+    warn_nonlocal_embed_host: bool = True,
 ) -> _SingleIngestOutcome:
     """Copy `src` into `raw/`, generate one OKF Source concept, and attempt
     LLM extraction of zero or more distinct derived objects, up to
@@ -2831,6 +2861,7 @@ def _ingest_single(
         layout,
         OllamaClient(model=cfg.embedding_model),
         model_tag=cfg.embedding_model,
+        warn_nonlocal_host=warn_nonlocal_embed_host,
     )
 
     return _SingleIngestOutcome(

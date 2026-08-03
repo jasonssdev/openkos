@@ -117,6 +117,55 @@ expanded-zeros IPv6 loopback (`0:0:0:0:0:0:0:1`) deliberately does not
 count -- over-warning is the accepted failure direction (issue #199)."""
 
 
+_UNPARSEABLE_DISPLAY = "<unparseable>"
+"""`display_host` placeholder for a malformed value whose redacted remainder
+is EMPTY (`@`, `user:s3cret/x@`): the advisory must name something, an empty
+string reads like a bug, and the raw value can never be shown (issue #353)."""
+
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _plausible_bracketless_ipv6(value: str) -> bool:
+    """True when a bracket-less multi-colon value plausibly IS an IPv6
+    literal: it contains `::`, or it consists solely of hex digits and
+    colons with every segment at most 4 hex chars (issue #353, item 1).
+
+    Anything else (`user:s3cret:extra`) is NOT granted the whole-value-host
+    treatment -- the whole value would put a pasted credential on stderr."""
+    if "::" in value:
+        return True
+    return all(
+        len(segment) <= 4 and all(char in _HEX_DIGITS for char in segment)
+        for segment in value.split(":")
+    )
+
+
+def _is_clean_hostport(authority: str) -> bool:
+    """True when `authority` parses as a plain host[:numeric-port]: no `@`,
+    non-empty host, port absent or all digits (issue #353, item 5).
+
+    This is the authority-shape discriminator for a value whose only `@`
+    sits AFTER the first path/query/fragment separator: a clean authority
+    means the `@` belongs to the path and the authority is the host; a
+    suspicious one (non-numeric port -- the credential-typo shape) keeps
+    the redact-against-full-remainder treatment."""
+    if "@" in authority:
+        return False
+    if authority.startswith("["):
+        closing = authority.find("]")
+        if closing == -1:
+            return False
+        host = authority[1:closing]
+        tail = authority[closing + 1 :]
+        return bool(host) and (
+            not tail or (tail.startswith(":") and tail[1:].isdigit())
+        )
+    if authority.count(":") > 1:
+        return _plausible_bracketless_ipv6(authority)
+    host, colon, port = authority.partition(":")
+    return bool(host) and (not colon or port.isdigit())
+
+
 def _is_loopback_ipv4_literal(host: str) -> bool:
     """True for a literal `127.0.0.0/8` dotted quad: four ASCII-digit
     octets, each 0-255, the first exactly `127`. No DNS, no `ipaddress`
@@ -152,7 +201,30 @@ def classify_embed_host(raw: str | None) -> EmbedHostLocality:
     same treatment (review finding R1-userinfo-redaction-bypass): a reserved
     separator smuggled into userinfo ahead of the `@` redacts against the
     full remainder and classifies non-local, and a non-numeric "port" is
-    never displayed -- it can be a credential pasted without a host."""
+    never displayed -- it can be a credential pasted without a host.
+
+    The #199 review's deterministic follow-ups tighten the corners
+    (issue #353):
+
+    1. The bracket-less multi-colon whole-value-host treatment applies only
+       to values that plausibly ARE IPv6 literals (contain `::`, or are
+       solely hex segments of at most 4 chars and colons). Anything else
+       (`user:s3cret:extra`) falls through to plain host:port handling,
+       where the non-numeric-port guard drops everything after the host.
+    2. An empty host that came out of an EXPLICIT balanced bracket pair
+       (`[]`, `[]:11434`) is not the local default: non-local, displaying
+       the hostport.
+    3. A value that reduces to an empty host only AFTER userinfo redaction
+       (`@`, `@@@`, `http://user@`) is malformed: non-local, displayed as
+       the `<unparseable>` placeholder (never an empty string). A lone `:`
+       (no `@`) stays the local default like `:11434`.
+    4. When the only `@` sits AFTER the first `/?#` separator, the
+       AUTHORITY decides: a clean host[:numeric-port] authority means the
+       `@` belongs to the path and the authority classifies normally
+       (`http://localhost:11434/v1@x` is local and silent); only a
+       suspicious authority (non-numeric port -- the credential-typo
+       shape) keeps the redact-against-full-remainder treatment, and an
+       empty redacted remainder displays the placeholder."""
     if raw is None or not raw.strip():
         return EmbedHostLocality(is_local=True, display_host="localhost")
     rest = raw.strip()
@@ -161,18 +233,26 @@ def classify_embed_host(raw: str | None) -> EmbedHostLocality:
     authority = rest
     for separator in "/?#":
         authority = authority.split(separator, 1)[0]
-    if "@" in rest and "@" not in authority:
-        # A reserved separator sits BEFORE the `@`: the authority cut went
-        # through userinfo and discarded the `@host` remainder, which is
-        # how the R1-userinfo-redaction-bypass leaked a credential as the
-        # "host". The value is malformed, so redact against the full
-        # remainder and classify non-local outright.
+    if "@" in rest and "@" not in authority and not _is_clean_hostport(authority):
+        # A reserved separator sits BEFORE the `@` and the authority itself
+        # is suspicious (empty host, or a non-numeric "port" -- the
+        # credential-typo shape): the authority cut went through userinfo
+        # and discarded the `@host` remainder, which is how the
+        # R1-userinfo-redaction-bypass leaked a credential as the "host".
+        # The value is malformed, so redact against the full remainder and
+        # classify non-local outright. When the authority is instead a
+        # CLEAN host[:numeric-port], the `@` belongs to the PATH
+        # (`http://localhost:11434/v1@x`) and the authority classifies
+        # normally below (issue #353, item 5).
         hostport = rest.rpartition("@")[2]
         for separator in "/?#":
             hostport = hostport.split(separator, 1)[0]
-        return EmbedHostLocality(is_local=False, display_host=hostport)
+        return EmbedHostLocality(
+            is_local=False, display_host=hostport or _UNPARSEABLE_DISPLAY
+        )
     # Redact userinfo FIRST: everything below sees only the host[:port]
     # remainder, so no later branch -- parseable or not -- can leak it.
+    had_userinfo = "@" in authority
     hostport = authority.rpartition("@")[2]
     if hostport.startswith("["):
         closing = hostport.find("]")
@@ -187,18 +267,35 @@ def classify_embed_host(raw: str | None) -> EmbedHostLocality:
             # A non-numeric "port" is not a port; it can be a pasted
             # credential. Never display it.
             hostport = hostport[: closing + 1]
-    elif hostport.count(":") > 1:
+        if not host:
+            # An EXPLICIT balanced-but-empty bracket pair (`[]`,
+            # `[]:11434`) is not the unset local default: someone
+            # configured it, and it names no local literal (issue #353,
+            # item 2).
+            return EmbedHostLocality(is_local=False, display_host=hostport)
+    elif hostport.count(":") > 1 and _plausible_bracketless_ipv6(hostport):
         # Bracket-less IPv6 literal: the whole value is the host; splitting
-        # at the first colon would invent a host nobody configured.
+        # at the first colon would invent a host nobody configured. Only a
+        # PLAUSIBLE IPv6 literal earns this -- `user:s3cret:extra` would
+        # put a pasted credential on stderr (issue #353, item 1).
         host = hostport
     else:
         host, colon, port = hostport.partition(":")
         if colon and not port.isdigit():
             # Same rule as the bracketed branch: a non-numeric "port" may
-            # be a credential (`user:s3cret` pasted bare). Display only the
-            # host part that precedes it.
+            # be a credential (`user:s3cret` pasted bare, `s3cret:extra`
+            # after a multi-colon fallthrough). Display only the host part
+            # that precedes it -- EVERYTHING after the first colon drops.
             hostport = host
     if not host:
+        if had_userinfo:
+            # The host is empty only AFTER userinfo redaction (`@`, `@@@`,
+            # `http://user@`): malformed, not the local default. The
+            # remainder may be empty, and an empty display reads like a
+            # bug, so fall back to the placeholder (issue #353, item 3).
+            return EmbedHostLocality(
+                is_local=False, display_host=hostport or _UNPARSEABLE_DISPLAY
+            )
         return EmbedHostLocality(is_local=True, display_host=hostport or "localhost")
     normalized = host.lower().removesuffix(".")
     is_local = normalized in _LOCAL_HOST_LITERALS or _is_loopback_ipv4_literal(

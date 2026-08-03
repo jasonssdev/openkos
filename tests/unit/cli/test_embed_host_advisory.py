@@ -123,6 +123,65 @@ def test_ingest_redacts_credentials_split_by_path_separator(
     assert "s3cret" not in result.stdout
 
 
+def test_single_file_ingest_warns_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #353 item 4, the preserved side: the single-file path keeps
+    printing the advisory exactly once."""
+    _init_workspace(tmp_path, monkeypatch)
+    src = tmp_path / "note.txt"
+    src.write_text("stoic dichotomy of control\n", encoding="utf-8")
+    monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
+
+    result = runner.invoke(app, ["ingest", str(src), "--auto"])
+
+    assert result.exit_code == 0
+    assert result.stderr.count(_ADVISORY_FRAGMENT) == 1
+
+
+# --- ingest (batch, issue #353 item 4) ----------------------------------------
+
+
+def test_batch_ingest_warns_exactly_once_per_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #353 item 4: a directory batch prints the advisory ONCE per
+    invocation (the batch cost-gate precedent), not once per file -- three
+    files, one advisory, and the batch itself completes unchanged."""
+    _init_workspace(tmp_path, monkeypatch)
+    src_dir = tmp_path / "notes"
+    src_dir.mkdir()
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (src_dir / name).write_text("stoic dichotomy of control\n", encoding="utf-8")
+    monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
+
+    result = runner.invoke(app, ["ingest", str(src_dir), "--auto"])
+
+    assert result.exit_code == 0
+    assert result.stderr.count(_ADVISORY_FRAGMENT) == 1
+    assert "s3cret" not in result.stderr
+    assert "s3cret" not in result.stdout
+    assert "batch summary" in result.stdout
+
+
+def test_batch_ingest_stays_silent_on_local_embed_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #353 item 4: a batch with a literally-local host prints no
+    advisory at all -- neither up front nor per file."""
+    _init_workspace(tmp_path, monkeypatch)
+    src_dir = tmp_path / "notes"
+    src_dir.mkdir()
+    for name in ("a.txt", "b.txt"):
+        (src_dir / name).write_text("stoic dichotomy of control\n", encoding="utf-8")
+    monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+
+    result = runner.invoke(app, ["ingest", str(src_dir), "--auto"])
+
+    assert result.exit_code == 0
+    assert "embedding host" not in result.stderr
+
+
 # --- reindex ----------------------------------------------------------------
 
 
