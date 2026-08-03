@@ -277,18 +277,12 @@ def test_local_backend_grants_the_exemption_at_every_seam(
     assert spy.calls[0]["local_exemption"] is True
 
 
-def test_local_backend_grants_the_exemption_at_suggest_edge_types(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The `suggest-relations` row of `_SEAMS` above spies `candidate_edges`
-    -- the cost-gate PROBE (issue #134) -- and stubs it to return `[]`, so
-    `suggest_relations_cmd` short-circuits at its zero-edge branch and
+def _spy_suggest_edge_types_direct(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
+    """Stub `candidate_edges` -- the cost-gate PROBE (issue #134) -- to
+    return one edge instead of the `_SEAMS["suggest-relations"]` row's `[]`,
+    so `suggest_relations_cmd` clears its zero-edge branch and reaches
     `suggest_edge_types`, the seam that actually performs the `llm.chat`
-    sends, is never reached. Pin `local_exemption` reaching THAT seam
-    directly, the way the other four verbs are pinned on their send seam,
-    by stubbing `candidate_edges` to return one edge instead."""
-    _init_workspace(tmp_path, monkeypatch)
-    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    sends, then spies THAT seam directly."""
     monkeypatch.setattr(
         main_mod,
         "candidate_edges",
@@ -296,12 +290,77 @@ def test_local_backend_grants_the_exemption_at_suggest_edge_types(
     )
     spy = _KwargSpy(list[object]())
     monkeypatch.setattr(main_mod, "suggest_edge_types", spy)
+    return spy
+
+
+def test_local_backend_grants_the_exemption_at_suggest_edge_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin `local_exemption` reaching `suggest_edge_types` directly, the way
+    the other four verbs are pinned on their send seam (#240)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    spy = _spy_suggest_edge_types_direct(monkeypatch)
 
     result = runner.invoke(app, ["suggest-relations", "--auto"])
 
     assert result.exit_code == 0, result.stderr
     assert spy.calls, "suggest_edge_types never reached"
     assert spy.calls[0]["local_exemption"] is True
+
+
+def test_remote_backend_denies_the_exemption_at_suggest_edge_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verified-remote `OLLAMA_HOST` denies `local_exemption` at
+    `suggest_edge_types` too -- the `_SEAMS["suggest-relations"]` row only
+    ever reaches `candidate_edges`, never this seam (#240)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", _REMOTE_HOST)
+    spy = _spy_suggest_edge_types_direct(monkeypatch)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    assert spy.calls, "suggest_edge_types never reached"
+    assert spy.calls[0]["local_exemption"] is False
+    assert "s3cret" not in result.stdout
+    assert "s3cret" not in result.stderr
+
+
+def test_workspace_opt_out_denies_the_exemption_at_suggest_edge_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`confidential_local_exemption: false` denies `local_exemption` at
+    `suggest_edge_types` too, even on a local backend (#240)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    _disable_exemption(tmp_path)
+    spy = _spy_suggest_edge_types_direct(monkeypatch)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    assert spy.calls, "suggest_edge_types never reached"
+    assert spy.calls[0]["local_exemption"] is False
+
+
+def test_unparseable_host_fails_closed_at_suggest_edge_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unparseable host cannot be proven local, so `suggest_edge_types`
+    fails closed too -- and the run still completes (#240)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("OLLAMA_HOST", "user:s3cret@[::1")
+    spy = _spy_suggest_edge_types_direct(monkeypatch)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0, result.stderr
+    assert spy.calls, "suggest_edge_types never reached"
+    assert spy.calls[0]["local_exemption"] is False
+    assert "s3cret" not in result.stdout
+    assert "s3cret" not in result.stderr
 
 
 @pytest.mark.parametrize("verb", sorted(_SEAMS))
