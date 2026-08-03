@@ -20,6 +20,7 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 runner = CliRunner()
 
@@ -39,6 +40,12 @@ class _OfflineOllama:
     `test_ingest.py` already follows. Without it the assertion silently
     becomes "is an Ollama server reachable on this machine", which passes
     for a developer running one and fails in CI."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def chat(self, messages: object) -> str:
         return '{"extract": false}'

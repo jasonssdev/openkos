@@ -35,6 +35,7 @@ from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state import fts, vectorstore
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import VecUnavailable
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -77,6 +78,12 @@ class _FakeOllamaClient:
     `OllamaClient` -- so the R3-pin end-to-end test below runs the REAL
     `answer()` (not mocked) through the CLI with zero network, zero real
     Ollama process (status-aware-retrieval Phase 4)."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def __init__(self, *, model: str, **kwargs: object) -> None:
         self.model = model

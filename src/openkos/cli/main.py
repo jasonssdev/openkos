@@ -39,15 +39,15 @@ from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import build_graph
 from openkos.graph.summary import graph_edge_summary
-from openkos.llm.base import Embedder, LLMBackend
+from openkos.llm.base import LLMBackend
 from openkos.llm.ollama import (
+    BackendHostLocality,
     InstalledModel,
     OllamaClient,
     OllamaEmbeddingDimensionMismatch,
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
-    classify_backend_host,
     is_embedding_model,
     model_tag_matches,
 )
@@ -1871,11 +1871,39 @@ def _stage_derived_objects(
     return plans, None
 
 
-def _warn_if_nonlocal_embed_host(command: str) -> None:
-    """One stderr advisory when the configured embedding host is not
-    literally this machine (issue #199): document text and embedding
-    vectors are about to be POSTed to it, and a user who exported
-    `OLLAMA_HOST` for some other tool may not realize openkos inherits it.
+def _resolve_local_exemption(client: OllamaClient, cfg: config.Config) -> bool:
+    """The ONE place the confidential local exemption is decided (issue
+    #240): `True` only when `client`'s own resolved host is verifiably this
+    machine AND the workspace has not opted out.
+
+    Both terms are required and neither is inferable from the other. The
+    workspace key alone is a POLICY (`confidential_local_exemption`, default
+    `true`); the client's `locality.is_local` is a verified FACT about the
+    host this command's `llm.chat` will actually reach. An exemption granted
+    on policy alone would rest on an assumption, which is precisely what
+    #240 refuses.
+
+    `client`, not `os.environ["OLLAMA_HOST"]`, because the two answer
+    different questions: the env read ignores an explicit `host=` argument,
+    so a client aimed at a remote host while `OLLAMA_HOST` happens to be
+    loopback would be granted an exemption for a send that leaves the
+    machine. Reading the client that will do the sending closes that by
+    construction.
+
+    Fails closed on every axis and never raises: `classify_backend_host`
+    degrades an unparseable or unrecognized host to non-local, so unknown
+    locality is treated as remote. The returned boolean is threaded into the
+    five `llm.chat` seams as `local_exemption=`; what it MEANS there is
+    `sensitivity.should_block`'s contract, never re-derived at a call
+    site."""
+    return client.locality.is_local and cfg.confidential_local_exemption
+
+
+def _warn_if_nonlocal_embed_host(command: str, locality: BackendHostLocality) -> None:
+    """One stderr advisory when the embedding host is not literally this
+    machine (issue #199): document text and embedding vectors are about to
+    be POSTed to it, and a user who exported `OLLAMA_HOST` for some other
+    tool may not realize openkos inherits it.
 
     ADVISORY only, by contract: never blocks, never raises, never changes
     an exit code -- `classify_backend_host` is a pure literal check (no DNS,
@@ -1885,8 +1913,16 @@ def _warn_if_nonlocal_embed_host(command: str) -> None:
     #183-PR3 predecessor's two CRITICALs). An unset/empty `OLLAMA_HOST`
     means Ollama's own local default: silent. Over-warning is the accepted
     failure direction; staying silent about data leaving the machine is
-    not."""
-    locality = classify_backend_host(os.environ.get("OLLAMA_HOST"))
+    not.
+
+    `locality` is now PASSED IN rather than computed from `os.environ` here
+    (issue #240): it comes from the embedding client's own
+    `OllamaClient.locality`, i.e. the host the embed will actually POST to.
+    The env read this replaced ignored an explicit `host=` argument, so it
+    could stay silent about a client demonstrably sending off-machine. The
+    advisory's own contract is untouched -- only the source of the fact it
+    reports changed, and it is now the same authority the confidential local
+    exemption reads, so the two can never disagree about one host."""
     if locality.is_local:
         return
     typer.echo(
@@ -1899,7 +1935,7 @@ def _warn_if_nonlocal_embed_host(command: str) -> None:
 
 def _embed_after_ingest(
     layout: config.WorkspaceLayout,
-    embedder: Embedder,
+    embedder: OllamaClient,
     *,
     model_tag: str,
     warn_nonlocal_host: bool = True,
@@ -1944,7 +1980,7 @@ def _embed_after_ingest(
     # itself then degrades: the advisory is about where the data is headed,
     # not about whether it arrived (#199).
     if warn_nonlocal_host:
-        _warn_if_nonlocal_embed_host("ingest")
+        _warn_if_nonlocal_embed_host("ingest", embedder.locality)
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
@@ -2174,8 +2210,12 @@ def _ingest_batch(
 
     # ONE advisory for the whole batch (the cost-gate precedent), before
     # the loop: each per-file run below suppresses its own copy
-    # (issue #353, item 4).
-    _warn_if_nonlocal_embed_host("ingest")
+    # (issue #353, item 4). The client is built here ONLY to read the host
+    # it resolved (issue #240) -- construction performs no I/O, and every
+    # per-file run builds its own identical client for the actual embed.
+    _warn_if_nonlocal_embed_host(
+        "ingest", OllamaClient(model=cfg.embedding_model).locality
+    )
 
     progress = observability.progress_callback("ingest", "ingesting file")
     outcome_lines: list[str] = []
@@ -7727,6 +7767,7 @@ def adjudicate(
         layout.bundle_dir, include_deprecated=include_deprecated
     )
     llm = OllamaClient(model=cfg.model)
+    local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
@@ -7736,6 +7777,7 @@ def adjudicate(
             bundle_dir=layout.bundle_dir,
             llm=llm,
             include_confidential=include_confidential,
+            local_exemption=local_exemption,
             # TTY-gated per-group progress on stderr; `None` (silent) when
             # output is piped (issue #190, mirrors `suggest-relations`' #134
             # per-edge line).
@@ -8004,6 +8046,13 @@ def suggest_relations_cmd(
         )
         raise typer.Exit(code=1) from exc
 
+    # Built here rather than just before the run: `candidate_edges` below
+    # already filters on sensitivity, so the exemption must be resolved from
+    # the SAME client the later `suggest_edge_types` will send through
+    # (issue #240). Construction performs no I/O -- it only resolves and
+    # stores the host -- so nothing is contacted by moving it up.
+    llm = OllamaClient(model=cfg.model)
+    local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
@@ -8031,6 +8080,7 @@ def suggest_relations_cmd(
         edges = candidate_edges(
             layout.bundle_dir,
             include_confidential=include_confidential,
+            local_exemption=local_exemption,
             store=store,
         )
 
@@ -8068,8 +8118,6 @@ def suggest_relations_cmd(
             typer.echo("Aborted -- no suggestions generated.")
             return
 
-    llm = OllamaClient(model=cfg.model)
-
     def _on_progress(index: int, count: int, suggestion: EdgeSuggestion) -> None:
         """Per-edge progress line to stderr (keeps stdout the clean report)."""
         edge = suggestion.edge
@@ -8085,6 +8133,7 @@ def suggest_relations_cmd(
             bundle_dir=layout.bundle_dir,
             llm=llm,
             include_confidential=include_confidential,
+            local_exemption=local_exemption,
             on_progress=_on_progress,
         )
     except OllamaUnavailable as exc:
@@ -8191,6 +8240,7 @@ def suggest_volatility_cmd(
         raise typer.Exit(code=1) from exc
 
     llm = OllamaClient(model=cfg.model)
+    local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
@@ -8199,6 +8249,7 @@ def suggest_volatility_cmd(
             layout.bundle_dir,
             llm=llm,
             include_confidential=include_confidential,
+            local_exemption=local_exemption,
             # TTY-gated per-type progress on stderr; `None` (silent) when
             # output is piped (issue #190, mirrors `suggest-relations`' #134
             # per-edge line).
@@ -8338,6 +8389,7 @@ def contradictions(
         raise typer.Exit(code=1) from exc
 
     llm = OllamaClient(model=cfg.model)
+    local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
@@ -8362,6 +8414,7 @@ def contradictions(
                 llm=llm,
                 include_deprecated=include_deprecated,
                 include_confidential=include_confidential,
+                local_exemption=local_exemption,
                 store=store,
                 # TTY-gated per-pair progress on stderr; `None` (silent)
                 # when output is piped (issue #190, mirrors
@@ -8818,7 +8871,10 @@ def query(
 
     llm = OllamaClient(model=cfg.model)
     embedder = OllamaClient(model=cfg.embedding_model)
-    _warn_if_nonlocal_embed_host("query")
+    _warn_if_nonlocal_embed_host("query", embedder.locality)
+    # The CHAT client decides the exemption, not the embedder: the
+    # confidential concept bodies travel in the `llm.chat` payload (#240).
+    local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
@@ -8849,6 +8905,7 @@ def query(
                 limit=limit,
                 include_deprecated=include_deprecated,
                 include_confidential=include_confidential,
+                local_exemption=local_exemption,
             )
         except OllamaUnavailable as exc:
             typer.echo(
@@ -9149,7 +9206,7 @@ def reindex(
         raise typer.Exit(code=1) from exc
 
     embedder = OllamaClient(model=cfg.embedding_model)
-    _warn_if_nonlocal_embed_host("reindex")
+    _warn_if_nonlocal_embed_host("reindex", embedder.locality)
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             # Captured BEFORE the call so the summary below can name the OLD
@@ -9780,6 +9837,12 @@ def curate(
         auto=auto,
         include_confidential=include_confidential,
         include_deprecated=include_deprecated,
+        # Resolved from a client identical to the one `run_curate` builds
+        # lazily for its `needs_llm` stages (same `cfg.model`, same host
+        # resolution), because the stage PROBES apply the sensitivity filter
+        # before any client exists -- see `CurateContext.local_exemption`
+        # (issue #240). Constructing a client performs no I/O.
+        local_exemption=_resolve_local_exemption(OllamaClient(model=cfg.model), cfg),
     )
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):

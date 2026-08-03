@@ -30,6 +30,7 @@ from openkos.graph.base import Edge
 from openkos.graph.proximity import ProximityPair
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.edge_typing import EdgeSuggestion
+from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -974,6 +975,11 @@ def test_suggest_relations_all_excluded_message_counts_proximity_rows(
             return None
 
     monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
+    # The suite's Ollama stand-in reports a LOCAL backend, where #240 grants
+    # the confidential local exemption and the endpoint is legitimately kept.
+    # This test is about the confidentiality FILTER, so opt out through the
+    # same workspace switch a user would use.
+    disable_local_exemption(tmp_path)
 
     result = runner.invoke(app, ["suggest-relations"])
 

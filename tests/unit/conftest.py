@@ -75,7 +75,12 @@ from typing import Any
 import pytest
 
 from openkos.llm.base import EMBED_DIM
-from openkos.llm.ollama import InstalledModel, OllamaClient, OllamaUnavailable
+from openkos.llm.ollama import (
+    BackendHostLocality,
+    InstalledModel,
+    OllamaClient,
+    OllamaUnavailable,
+)
 
 
 class UnitSuiteNetworkAccessError(RuntimeError):
@@ -248,6 +253,30 @@ def _no_network_by_default(
         )
     for function in BLOCKED_SOCKET_FUNCTIONS:
         monkeypatch.setattr(socket, function, _refusal(request, function, bound=False))
+
+
+LOCAL_BACKEND_LOCALITY = BackendHostLocality(
+    is_local=True, display_host="localhost:11434"
+)
+"""The locality every hand-rolled `OllamaClient` stand-in in this suite
+reports (issue #240).
+
+`OllamaClient` grew a `locality` property that the CLI reads for two things:
+the non-local embedding-host advisory (#199/#353) and the confidential local
+exemption (#240). A structural fake that omits it raises `AttributeError`
+deep inside a fail-open handler, which is a fixture gap masquerading as a
+degrade.
+
+LOCAL, not remote, because that is what the fixtures already simulate: the
+autouse offline fixture clears `OLLAMA_HOST`, so a real client in these
+tests resolves to the packaged loopback default. A remote value would inject
+the advisory's stderr line into every strict stderr assertion in the suite
+-- the same nondeterminism `_offline_ollama_by_default` exists to end. Tests
+that care about non-local behavior construct their own locality explicitly.
+
+`display_host` carries the port because the classifier is handed the
+RESOLVED host (`http://localhost:11434`), which is what the real property
+does."""
 
 
 class OfflineOllama(OllamaClient):

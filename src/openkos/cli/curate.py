@@ -159,6 +159,22 @@ class CurateContext:
     auto: bool = False
     include_confidential: bool = False
     include_deprecated: bool = False
+    local_exemption: bool = False
+    """Whether a `confidential` concept may be included in this run's
+    `llm.chat` payloads because the backend is verifiably this machine
+    (issue #240), resolved ONCE by the `curate` command via
+    `cli.main._resolve_local_exemption` and threaded to every stage.
+
+    Resolved by the COMMAND rather than lazily alongside `ollama_client`
+    because the stage PROBES need it: `_structure_probe`,
+    `_concept_type_names` and `_contradiction_pairs` all apply the
+    sensitivity filter to compute their cost-gate counts, and they run
+    before any client is built. A probe that filtered on different terms
+    than the run would preview a cost the run does not pay.
+
+    Defaults to `False` so a `CurateContext` built without it -- a test
+    fixture, a future caller -- fails closed exactly like every other seam
+    in this change."""
     ollama_client: LLMBackend | None = field(default=None, init=False)
     ollama_unavailable_notice: str | None = field(default=None, init=False)
 
@@ -294,6 +310,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         bundle_dir=layout.bundle_dir,
         llm=llm,
         include_confidential=ctx.include_confidential,
+        local_exemption=ctx.local_exemption,
         on_progress=observability.progress_callback("curate", "adjudicating group"),
     )
 
@@ -384,6 +401,7 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
         edges = candidate_edges(
             ctx.layout.bundle_dir,
             include_confidential=ctx.include_confidential,
+            local_exemption=ctx.local_exemption,
             store=store,
         )
 
@@ -414,6 +432,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         bundle_dir=ctx.layout.bundle_dir,
         llm=llm,
         include_confidential=ctx.include_confidential,
+        local_exemption=ctx.local_exemption,
         on_progress=observability.progress_callback("curate", "untyped edge"),
     )
 
@@ -505,9 +524,11 @@ def _concept_type_names(ctx: CurateContext) -> list[str]:
     applies -- mirroring `candidate_edges`' role for Structure. This is a
     genuine re-derivation, not a cached count: it re-walks the bundle every
     time `run_curate` reaches Metadata (design D4's no-memoization rule)."""
-    blocked: frozenset[str] = frozenset()
-    if not ctx.include_confidential:
-        blocked = sensitivity.sensitive_concept_ids(ctx.layout.bundle_dir)
+    blocked = sensitivity.sensitive_concept_ids(
+        ctx.layout.bundle_dir,
+        include_confidential=ctx.include_confidential,
+        local_exemption=ctx.local_exemption,
+    )
     docs, _skip_notices = lint.collect_docs(ctx.layout.bundle_dir)
     return sorted(
         {doc.type for doc in docs if doc.type and doc.identity not in blocked}
@@ -585,6 +606,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         ctx.layout.bundle_dir,
         llm=llm,
         include_confidential=ctx.include_confidential,
+        local_exemption=ctx.local_exemption,
         on_progress=observability.progress_callback("curate", "concept type"),
     )
 
@@ -672,8 +694,11 @@ def _contradiction_pairs(
     excluded: set[str] = set()
     if not ctx.include_deprecated:
         excluded |= lifecycle.deprecated_concept_ids(ctx.layout.bundle_dir)
-    if not ctx.include_confidential:
-        excluded |= sensitivity.sensitive_concept_ids(ctx.layout.bundle_dir)
+    excluded |= sensitivity.sensitive_concept_ids(
+        ctx.layout.bundle_dir,
+        include_confidential=ctx.include_confidential,
+        local_exemption=ctx.local_exemption,
+    )
 
     source = cli_main._open_proximity_or_degrade(ctx.layout.vectors_db_path)
     try:
@@ -725,6 +750,7 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             llm=llm,
             include_deprecated=ctx.include_deprecated,
             include_confidential=ctx.include_confidential,
+            local_exemption=ctx.local_exemption,
             store=store,
             on_progress=observability.progress_callback("curate", "pair"),
         )

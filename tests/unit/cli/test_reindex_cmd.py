@@ -31,7 +31,11 @@ from openkos.llm.ollama import (
 from openkos.state.fts import FtsUnavailable
 from openkos.state.reindex import ReindexReport
 from openkos.state.vectorstore import VecUnavailable, open_vector_store
-from tests.unit.conftest import make_locked_error, make_non_lock_operational_error
+from tests.unit.conftest import (
+    LOCAL_BACKEND_LOCALITY,
+    make_locked_error,
+    make_non_lock_operational_error,
+)
 
 runner = CliRunner()
 
@@ -699,6 +703,12 @@ class _FakeEmbedder:
     """A hermetic stand-in for `OllamaClient` -- no network, no real Ollama
     process, deterministic vectors of `EMBED_DIM` length."""
 
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
+
     def __init__(self, *, model: str = "fake") -> None:
         self._model = model
 
@@ -765,6 +775,12 @@ class _PartiallyFaultyEmbedder:
     `state.reindex.reindex`'s per-doc embed loop end-to-end (integration:
     real `reindex()` over a temp bundle, one doc transiently fails, others
     survive)."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def __init__(self, *, model: str = "fake", poison_marker: str = "") -> None:
         self._model = model

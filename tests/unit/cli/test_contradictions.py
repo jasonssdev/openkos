@@ -27,7 +27,9 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.contradiction import ContradictionVerdict, Verdict
+from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 runner = CliRunner()
 
@@ -110,6 +112,12 @@ class _FakeOllamaClient:
     `OllamaClient` -- so the default-exclude/`--include-deprecated` behavior
     tests run the REAL (unmocked) `find_contradictions` with zero network,
     zero real Ollama process (status-aware-retrieval Phase 4)."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def __init__(self, *, model: str, **kwargs: object) -> None:
         self.model = model
@@ -863,6 +871,11 @@ def test_contradictions_include_confidential_restores_the_confidential_pair(
     )
     _write_relation_doc(bundle_dir / "concepts" / "b.md", title="B")
     monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeOllamaClient)
+    # The stand-in reports a LOCAL backend, where #240 grants the
+    # confidential local exemption and the pair is legitimately included.
+    # This test is about the gate itself, so opt out through the same
+    # workspace switch a user would use.
+    disable_local_exemption(tmp_path)
 
     default_result = runner.invoke(app, ["contradictions"])
     assert default_result.exit_code == 0

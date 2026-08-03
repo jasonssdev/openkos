@@ -41,6 +41,7 @@ from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import changed_paths
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
@@ -2415,6 +2416,12 @@ class _FakeOllamaClient:
     `OllamaClient` the verb constructs internally -- so the integration proof
     never depends on whether the real example bundle happens to contain
     candidate groups, and never touches a real Ollama process."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """Stands in for `OllamaClient.locality` (issue #240): the CLI reads it
+    for the embedding-host advisory and the confidential local exemption,
+    and a fake without it raises `AttributeError` inside a fail-open
+    handler -- a fixture gap that would read as a degrade."""
 
     def __init__(self, *, model: str, **kwargs: object) -> None:
         self.model = model
