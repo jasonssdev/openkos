@@ -347,6 +347,42 @@ class OllamaClient:
         resolved_host = host or os.environ.get("OLLAMA_HOST") or DEFAULT_HOST
         self._host = _normalize_host(resolved_host).rstrip("/")
 
+    @property
+    def resolved_host(self) -> str:
+        """The normalized host this client will ACTUALLY send to -- the exact
+        string every request URL is built from (issue #240).
+
+        Public because locality must be decided on the fact of the real
+        send, not on a re-derivation of it. `os.environ.get("OLLAMA_HOST")`
+        read at a call site answers a DIFFERENT question: it ignores an
+        explicit `host=` argument, so a client constructed against a remote
+        host while `OLLAMA_HOST` happens to be loopback would be judged
+        local and handed the confidential local exemption for a send that
+        leaves the machine. Reading the resolved value closes that gap by
+        construction.
+
+        Never raises: it returns a string stored at construction time, with
+        no I/O, no DNS, and no parsing of its own."""
+        return self._host
+
+    @property
+    def locality(self) -> BackendHostLocality:
+        """This client's own locality verdict, from the ONE shared authority
+        (`classify_backend_host`) applied to `resolved_host` (issue #240).
+
+        Never raises and never touches the network: `classify_backend_host`
+        is a pure literal-form check that degrades an unparseable value to
+        non-local rather than raising. Both consumers depend on that --
+        the embedding-host advisory (#199/#353) must not be able to crash a
+        command it only annotates, and the confidential local exemption must
+        fail CLOSED on any host it cannot prove is loopback.
+
+        Recomputed on each access rather than cached: the classification is
+        a handful of string operations over an already-resolved host, and a
+        cached field would be one more piece of state to keep honest for no
+        measurable gain."""
+        return classify_backend_host(self._host)
+
     def chat(self, messages: Sequence[Message]) -> str:
         """POST `messages` to `{host}/api/chat` and return `message.content` (D5, D6)."""
         url = f"{self._host}/api/chat"
