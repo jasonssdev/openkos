@@ -1526,21 +1526,56 @@ def test_transport_failure_on_an_unparseable_host_displays_the_placeholder() -> 
 # --- Phase 8: layering guard --------------------------------------------------
 
 
+_REQUEST_ENDPOINTS = frozenset({"/api/chat", "/api/embed", "/api/tags"})
+"""The EXACT endpoint paths `OllamaClient` builds request URLs from -- the
+whole sanctioned vocabulary, enumerated rather than characterized
+(issue #359).
+
+Every earlier version of this carve-out tried to DESCRIBE an endpoint path
+-- first "starts with the prefix", then "starts with the prefix and is the
+only constant", then "matches an endpoint-shaped pattern in full". Each
+description admitted something that merely resembled the real thing, and
+each was found by a reviewer rather than by this suite. The last one still
+admitted a hyphen- or underscore-joined continuation of the endpoint name,
+because those characters are legitimately part of endpoint names and cannot
+be excluded without also rejecting a plausible future endpoint.
+
+Set membership ends that whole class of defect: there is no pattern left to
+resemble. The cost is real and accepted -- adding an endpoint to the client
+means adding its path here -- and that friction is the point. A new URL
+built from the raw credential-bearing host should be a line someone writes
+deliberately in the security guard, not something a regex waves through."""
+
+
 def _raw_host_offenders(source: str) -> list[int]:
     """Return the line numbers of every f-string in `source` that interpolates
     the raw `self._host` outside the one sanctioned request-URL shape.
 
     The sanctioned shape is EXACTLY two parts -- the host, then a single
-    string constant naming the endpoint (`f"{self._host}/api/chat"`). The
-    request must go to the real host, credentials included, so that one shape
-    is admitted and every other use is an offender.
+    string constant that is a bare endpoint path in full
+    (`f"{self._host}/api/chat"`). The request must go to the real host,
+    credentials included, so that one shape is admitted and every other use
+    is an offender.
 
-    "Exactly two parts" is the whole point of the check, not incidental
-    strictness. A carve-out that merely asked whether SOME constant segment
-    began with the endpoint prefix would admit
-    `f"{self._host}/api/chat unreachable: {exc}"` -- a displayable diagnostic
-    carrying the credential, which is issue #355 all over again. The near-miss
-    is pinned by `test_the_raw_host_guard_rejects_a_url_prefixed_diagnostic`."""
+    Both halves of that rule were learned the hard way, each from a review
+    finding, and each time the defect was the same one: admitting something
+    that merely RESEMBLES the sanctioned shape.
+
+    - #355: a carve-out asking whether SOME constant segment began with the
+      endpoint prefix admitted `f"{self._host}/api/chat unreachable: {exc}"`.
+      Fixed by requiring exactly two parts in fixed positions.
+    - #359: that still left the two-part form, where a single trailing
+      constant begins with an endpoint name and fuses straight into prose --
+      no second interpolation needed to leak. A full match against an
+      endpoint-shaped pattern closed the space-joined form but not the
+      hyphen- or underscore-joined one, since those characters belong to
+      real endpoint names. Fixed by dropping description entirely: the
+      constant must be a member of `_REQUEST_ENDPOINTS`.
+
+    Nothing here characterizes an endpoint any more, so there is no shape
+    left to resemble and no fourth variation of this defect to find. Every
+    near-miss above is pinned by
+    `test_the_raw_host_guard_rejects_a_url_prefixed_diagnostic`."""
 
     def _is_raw_host(node: ast.expr) -> bool:
         return (
@@ -1554,7 +1589,7 @@ def _raw_host_offenders(source: str) -> list[int]:
         return (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
-            and node.value.startswith("/api/")
+            and node.value in _REQUEST_ENDPOINTS
         )
 
     offenders: list[int] = []
@@ -1604,17 +1639,44 @@ def test_no_error_message_interpolates_the_raw_host() -> None:
 
 def test_the_raw_host_guard_rejects_a_url_prefixed_diagnostic() -> None:
     """The guard admits the request-URL shape and NOTHING that merely looks
-    like it -- the near-miss raised by the #355 reliability review.
+    like it -- the near-misses raised by the #355 and #359 reviews.
 
     A guard for a credential leak is only worth its line count if it rejects
     the shapes a future author would plausibly write. `f"{self._host}/api/chat
     unreachable: {exc}"` reads like a URL, begins like a URL, and leaks the
     password; an `any(... startswith("/api/"))` carve-out would have waved it
-    through while the CHANGELOG claimed the class was closed."""
+    through while the CHANGELOG claimed the class was closed.
+
+    Issue #359 is the SAME defect one layer down, and the reason the endpoint
+    constant is now matched in full rather than by prefix. Tightening the
+    shape to exactly two parts closed the three-part form above but left the
+    two-part one open: a single trailing constant that begins with an
+    endpoint name and then continues with prose needs no second interpolation
+    to leak. Two rounds of "starts with" were two rounds of admitting
+    something that merely resembles the sanctioned shape -- which is why the
+    predicate below is an anchored full match with no prefix semantics left
+    to exploit."""
+    # The one sanctioned shape, and the three real endpoints it must admit.
     assert _raw_host_offenders('x = f"{self._host}/api/chat"') == []
+    assert _raw_host_offenders('x = f"{self._host}/api/embed"') == []
+    assert _raw_host_offenders('x = f"{self._host}/api/tags"') == []
+    # An endpoint NOT in the client's vocabulary is not sanctioned: adding
+    # one is a deliberate line in the guard, not something a shape admits.
+    assert _raw_host_offenders('x = f"{self._host}/api/show"') == [1]
+    # #359: two parts, prose fused onto the endpoint name, no second
+    # interpolation -- the shape a prefix test cannot tell from a URL.
+    assert _raw_host_offenders('x = f"{self._host}/api/chat unreachable"') == [1]
+    assert _raw_host_offenders('x = f"{self._host}/api/chat is not reachable"') == [1]
+    # #359 again: prose fused with a hyphen or underscore, the characters a
+    # real endpoint name may legitimately contain.
+    assert _raw_host_offenders('x = f"{self._host}/api/chat-unreachable"') == [1]
+    assert _raw_host_offenders('x = f"{self._host}/api/chat_unreachable"') == [1]
+    # #355: three parts, prose after the endpoint name.
     assert _raw_host_offenders('x = f"{self._host}/api/chat unreachable: {exc}"') == [1]
+    # Prose before the host, and the plain diagnostic shape the bug shipped as.
     assert _raw_host_offenders('x = f"connecting to {self._host}/api/chat"') == [1]
     assert _raw_host_offenders('x = f"not reachable at {self._host}: {exc}"') == [1]
+    # The redacted accessor is not the raw host and is never an offender.
     assert _raw_host_offenders('x = f"reached {self.locality.display_host}"') == []
 
 
