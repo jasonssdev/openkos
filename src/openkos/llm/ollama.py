@@ -100,6 +100,113 @@ def _normalize_host(host: str) -> str:
     return f"http://{host}"
 
 
+@dataclass(frozen=True, slots=True)
+class EmbedHostLocality:
+    """`classify_embed_host`'s verdict: whether the configured embedding
+    host is literally local, plus the userinfo-REDACTED host string that is
+    the ONLY value a caller may print (issue #199)."""
+
+    is_local: bool
+    display_host: str
+
+
+_LOCAL_HOST_LITERALS = frozenset({"localhost", "::1"})
+"""Non-IPv4 literal loopback spellings (after lowercasing, one optional
+trailing root dot stripped, brackets removed). LITERAL forms only: the
+expanded-zeros IPv6 loopback (`0:0:0:0:0:0:0:1`) deliberately does not
+count -- over-warning is the accepted failure direction (issue #199)."""
+
+
+def _is_loopback_ipv4_literal(host: str) -> bool:
+    """True for a literal `127.0.0.0/8` dotted quad: four ASCII-digit
+    octets, each 0-255, the first exactly `127`. No DNS, no `ipaddress`
+    equivalence -- literal form only (issue #199)."""
+    parts = host.split(".")
+    if len(parts) != 4 or parts[0] != "127":
+        return False
+    return all(part.isascii() and part.isdigit() and int(part) <= 255 for part in parts)
+
+
+def classify_embed_host(raw: str | None) -> EmbedHostLocality:
+    """Classify a configured Ollama host value as literally local or not,
+    never raising, with userinfo always redacted from `display_host`
+    (issue #199; the withdrawn #183-PR3 predecessor is the trap spec).
+
+    Local means loopback BY LITERAL FORM only -- `localhost` (any case, one
+    optional trailing root dot), a `127.0.0.0/8` dotted quad, or `::1`
+    (bracketed or not). No DNS resolution, ever: the check runs on every
+    ingest/reindex/query and a lookup can hang. `None`/empty means the
+    default local host; a port-only value (`:11434`) overrides only the
+    port, so its empty host is likewise the local default.
+
+    Deliberately does NOT use `urlsplit`: it raises `ValueError: Invalid
+    IPv6 URL` on an unmatched bracket (`[::1:11434`, a plausible typo) and
+    splits a bracket-less IPv6 literal at the FIRST colon (`fe80::1234:5678`
+    -> host `fe80`, which nobody configured). This parse degrades instead:
+    an unmatched bracket classifies as non-local (over-warning is the
+    accepted direction for an advisory) and a bracket-less multi-colon
+    value is one whole-value host. Userinfo (everything up to the LAST `@`
+    in the authority, urlsplit's own rule) is stripped BEFORE `display_host`
+    is built, on every path -- including the unparseable one, where the
+    predecessor echoed a plaintext password. Two malformed shapes get the
+    same treatment (review finding R1-userinfo-redaction-bypass): a reserved
+    separator smuggled into userinfo ahead of the `@` redacts against the
+    full remainder and classifies non-local, and a non-numeric "port" is
+    never displayed -- it can be a credential pasted without a host."""
+    if raw is None or not raw.strip():
+        return EmbedHostLocality(is_local=True, display_host="localhost")
+    rest = raw.strip()
+    if "://" in rest:
+        rest = rest.split("://", 1)[1]
+    authority = rest
+    for separator in "/?#":
+        authority = authority.split(separator, 1)[0]
+    if "@" in rest and "@" not in authority:
+        # A reserved separator sits BEFORE the `@`: the authority cut went
+        # through userinfo and discarded the `@host` remainder, which is
+        # how the R1-userinfo-redaction-bypass leaked a credential as the
+        # "host". The value is malformed, so redact against the full
+        # remainder and classify non-local outright.
+        hostport = rest.rpartition("@")[2]
+        for separator in "/?#":
+            hostport = hostport.split(separator, 1)[0]
+        return EmbedHostLocality(is_local=False, display_host=hostport)
+    # Redact userinfo FIRST: everything below sees only the host[:port]
+    # remainder, so no later branch -- parseable or not -- can leak it.
+    hostport = authority.rpartition("@")[2]
+    if hostport.startswith("["):
+        closing = hostport.find("]")
+        if closing == -1:
+            # Unmatched bracket: unparseable. Degrade to non-local rather
+            # than raise -- this runs inside fail-open paths after ingest
+            # has already committed.
+            return EmbedHostLocality(is_local=False, display_host=hostport)
+        host = hostport[1:closing]
+        tail = hostport[closing + 1 :]
+        if tail.startswith(":") and not tail[1:].isdigit():
+            # A non-numeric "port" is not a port; it can be a pasted
+            # credential. Never display it.
+            hostport = hostport[: closing + 1]
+    elif hostport.count(":") > 1:
+        # Bracket-less IPv6 literal: the whole value is the host; splitting
+        # at the first colon would invent a host nobody configured.
+        host = hostport
+    else:
+        host, colon, port = hostport.partition(":")
+        if colon and not port.isdigit():
+            # Same rule as the bracketed branch: a non-numeric "port" may
+            # be a credential (`user:s3cret` pasted bare). Display only the
+            # host part that precedes it.
+            hostport = host
+    if not host:
+        return EmbedHostLocality(is_local=True, display_host=hostport or "localhost")
+    normalized = host.lower().removesuffix(".")
+    is_local = normalized in _LOCAL_HOST_LITERALS or _is_loopback_ipv4_literal(
+        normalized
+    )
+    return EmbedHostLocality(is_local=is_local, display_host=hostport)
+
+
 class OllamaClient:
     """A chat-completion client for a locally running Ollama server (D1-D6)."""
 
