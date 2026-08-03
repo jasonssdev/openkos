@@ -23,9 +23,11 @@ paying for a walk whose result the caller cannot act on either way.
 
 Mirrors the existing `state/reindex.py:285` + `cli/main.py`'s
 `report.prune_skipped` self-explaining-warning precedent, generalized to
-one shared helper reused by all five sensitivity-filter verbs (`query`,
-`contradictions`, `adjudicate`, `suggest-relations`, `suggest-volatility`)
-instead of duplicating the STDERR message at five call sites.
+one shared helper reused by all six sensitivity-filter call sites (`query`,
+`contradictions`, `adjudicate`, `suggest-relations`, `suggest-volatility`,
+and `curate`, which resolves its own exemption once for the whole run --
+design D8 -- and calls this helper exactly once rather than per stage)
+instead of duplicating the STDERR message at six call sites.
 
 Issue #190 widens this module's charter from "walk-incompleteness signal"
 to "CLI-layer STDERR signals" generally: `progress_callback` builds the
