@@ -679,11 +679,16 @@ def test_suggest_relations_warns_stderr_on_incomplete_walk_and_exits_zero(
     safe to construct here.
 
     The default workspace grants the confidential local exemption (#240),
-    which is the OTHER hatch that suppresses this warning -- see
-    `test_suggest_relations_local_exemption_suppresses_the_warning` below.
-    This test is about the walk-incompleteness signal itself, so it opts
-    out of the exemption through the same workspace switch a user would
-    use."""
+    which is the OTHER hatch that suppresses the FILTER-SCOPED half of this
+    signal -- see
+    `test_suggest_relations_local_exemption_keeps_the_general_advisory`
+    below. This test is about the run where NEITHER hatch is set, so it opts
+    out of the exemption through the same workspace switch a user would use,
+    and both advisories are then true at once.
+
+    Asserted through text unique to each: since #356 both lines open with
+    `bundle scan was incomplete`, so that prefix no longer tells them
+    apart."""
     _init_workspace(tmp_path, monkeypatch)
     disable_local_exemption(tmp_path)
     _break_os_walk(monkeypatch)
@@ -691,32 +696,37 @@ def test_suggest_relations_warns_stderr_on_incomplete_walk_and_exits_zero(
     result = runner.invoke(app, ["suggest-relations"])
 
     assert result.exit_code == 0
-    assert "bundle scan was incomplete" in result.stderr
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" in result.stderr
 
 
 def test_suggest_relations_no_warning_on_clean_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A fully readable bundle produces no incomplete-walk warning (spec:
-    Clean bundle produces no warning)."""
+    """A fully readable bundle produces NEITHER advisory (spec: Clean bundle
+    produces no warning) -- the walk coming back empty is the only thing
+    that silences the #356 one, which no hatch suppresses."""
     _init_workspace(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["suggest-relations"])
 
     assert result.exit_code == 0
-    assert "bundle scan was incomplete" not in result.stderr
+    assert "this command's inputs are incomplete" not in result.stderr
+    assert "confidential-content filter" not in result.stderr
 
 
-def test_suggest_relations_include_confidential_suppresses_the_warning(
+def test_suggest_relations_include_confidential_keeps_the_general_advisory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`--include-confidential` suppresses the incomplete-walk warning too --
-    the filter is deliberately off (spec: `--include-confidential`
-    suppresses the warning).
+    """`--include-confidential` suppresses the FILTER-SCOPED advisory only:
+    the filter is deliberately off, so its message would be a claim about a
+    filter that never ran. The #356 incomplete-inputs advisory still prints,
+    and the command still exits 0 -- the candidate-edge count is derived
+    from the same graph projection an unreadable subtree shrinks, so the
+    cost line and the suggestions both under-report either way.
 
     The default workspace ALSO grants the confidential local exemption
-    (#240), which independently suppresses the same warning -- see
-    `test_suggest_relations_local_exemption_suppresses_the_warning` below.
+    (#240), which independently suppresses the same filter-scoped message.
     Without opting out of that here, this test would keep passing even if
     `--include-confidential` were silently dropped from the
     `warn_if_walk_incomplete` call site, so it disables the exemption to
@@ -728,26 +738,29 @@ def test_suggest_relations_include_confidential_suppresses_the_warning(
     result = runner.invoke(app, ["suggest-relations", "--include-confidential"])
 
     assert result.exit_code == 0
-    assert "bundle scan was incomplete" not in result.stderr
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" not in result.stderr
 
 
-def test_suggest_relations_local_exemption_suppresses_the_warning(
+def test_suggest_relations_local_exemption_keeps_the_general_advisory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The confidential local exemption (#240) suppresses the incomplete-walk
-    warning too, the SAME way `--include-confidential` does: on a stock
-    workspace (default local backend, exemption active) the message never
-    prints. (This test only observes the absent message; that the walk
-    itself is skipped, not merely discarded, is pinned at the helper level
-    by `test_warn_if_walk_incomplete_local_exemption_skips_the_walk_entirely`
-    in `test_observability.py`.)"""
+    """The confidential local exemption (#240) suppresses the FILTER-SCOPED
+    advisory the SAME way `--include-confidential` does, and leaves the #356
+    incomplete-inputs advisory printing.
+
+    This is the STOCK workspace -- default local backend, exemption active
+    -- which is exactly the path that emitted nothing at all before #356:
+    fewer nodes and fewer edges reached the projection, so fewer untyped
+    edges were ever offered for typing, and the run still exited 0."""
     _init_workspace(tmp_path, monkeypatch)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["suggest-relations"])
 
     assert result.exit_code == 0
-    assert "bundle scan was incomplete" not in result.stderr
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" not in result.stderr
 
 
 # --- integration proof (real bundle: examples/good-life-demo) ---------------

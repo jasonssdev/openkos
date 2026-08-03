@@ -8,8 +8,9 @@ gates, per-item confirms, exit codes, `--auto`) follow `test_adjudicate.py`'s
 `CliRunner` + `input=`/`monkeypatch` conventions.
 """
 
+import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1014,6 +1015,112 @@ def test_warn_if_walk_incomplete_fires_once_per_run(
 
     assert result.exit_code == 0
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# #356 -- the incomplete-inputs advisory, which no hatch suppresses
+# ---------------------------------------------------------------------------
+
+
+def _break_os_walk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force `okf._walk_errors` to report exactly one directory-scan error,
+    deterministically -- mirrors `tests/unit/model/test_okf.py`'s onerror
+    monkeypatch pattern, without relying on real `chmod` bits (the same
+    helper the other five sensitivity-filter verbs' modules already
+    define)."""
+    original_walk = os.walk
+    walk_error = OSError(13, "Permission denied", "locked")
+
+    def fake_walk(
+        top: str | os.PathLike[str],
+        topdown: bool = True,
+        onerror: Callable[[OSError], object] | None = None,
+        followlinks: bool = False,
+    ) -> Iterator[tuple[str, list[str], list[str]]]:
+        if onerror is not None:
+            onerror(walk_error)
+        yield from original_walk(top, topdown, onerror, followlinks)
+
+    monkeypatch.setattr(os, "walk", fake_walk)
+
+
+def test_curate_local_exemption_keeps_the_general_advisory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a STOCK workspace -- default local backend, so the confidential
+    local exemption applies (#240) -- an incomplete walk still prints the
+    #356 incomplete-inputs advisory, and the filter-scoped one stays
+    suppressed. The run exits 0: this is a signal, never a refusal.
+
+    `curate` is the verb where the gap was widest, because it fans one walk
+    out over five stages: Identity's candidates, Structure's untyped edges,
+    Metadata's per-type sampling and its missing-`sensitivity` report, and
+    Contradictions' related pairs all shrink together when a subtree cannot
+    be listed -- and every one of them still reports a confident-looking
+    zero."""
+    _init_workspace(tmp_path, monkeypatch)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["curate"])
+
+    assert result.exit_code == 0
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" not in result.stderr
+
+
+def test_curate_include_confidential_keeps_the_general_advisory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include-confidential` suppresses the FILTER-SCOPED advisory only;
+    the #356 one still prints and the run still exits 0.
+
+    The exemption is disabled first so the FLAG is what discriminates: on a
+    stock workspace the exemption would suppress the filter-scoped message
+    on its own, and this test would keep passing even if
+    `--include-confidential` were dropped from `curate`'s single
+    `warn_if_walk_incomplete` call."""
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--include-confidential"])
+
+    assert result.exit_code == 0
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" not in result.stderr
+
+
+def test_curate_emits_both_advisories_when_no_hatch_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the exemption disabled and no flag, BOTH advisories print: the
+    inputs are incomplete AND the confidential filter could not inspect
+    every document. Each is asserted through text unique to it, since the
+    two now share the `bundle scan was incomplete` opening."""
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["curate"])
+
+    assert result.exit_code == 0
+    assert "this command's inputs are incomplete" in result.stderr
+    assert "confidential-content filter" in result.stderr
+
+
+def test_curate_no_advisory_on_a_clean_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fully readable bundle produces NEITHER advisory -- the walk coming
+    back empty is the only thing that silences the #356 one, so a stock
+    `curate` over a healthy workspace stays exactly as quiet as before."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["curate"])
+
+    assert result.exit_code == 0
+    assert "this command's inputs are incomplete" not in result.stderr
+    assert "confidential-content filter" not in result.stderr
 
 
 # ===========================================================================
