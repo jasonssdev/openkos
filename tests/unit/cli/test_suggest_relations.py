@@ -712,8 +712,17 @@ def test_suggest_relations_include_confidential_suppresses_the_warning(
 ) -> None:
     """`--include-confidential` suppresses the incomplete-walk warning too --
     the filter is deliberately off (spec: `--include-confidential`
-    suppresses the warning)."""
+    suppresses the warning).
+
+    The default workspace ALSO grants the confidential local exemption
+    (#240), which independently suppresses the same warning -- see
+    `test_suggest_relations_local_exemption_suppresses_the_warning` below.
+    Without opting out of that here, this test would keep passing even if
+    `--include-confidential` were silently dropped from the
+    `warn_if_walk_incomplete` call site, so it disables the exemption to
+    make the FLAG the thing that discriminates."""
     _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["suggest-relations", "--include-confidential"])
@@ -727,9 +736,11 @@ def test_suggest_relations_local_exemption_suppresses_the_warning(
 ) -> None:
     """The confidential local exemption (#240) suppresses the incomplete-walk
     warning too, the SAME way `--include-confidential` does: on a stock
-    workspace (default local backend, exemption active) the filter is off
-    entirely, so an incomplete walk has no bearing on what gets sent and the
-    walk is never even run."""
+    workspace (default local backend, exemption active) the message never
+    prints. (This test only observes the absent message; that the walk
+    itself is skipped, not merely discarded, is pinned at the helper level
+    by `test_warn_if_walk_incomplete_local_exemption_skips_the_walk_entirely`
+    in `test_observability.py`.)"""
     _init_workspace(tmp_path, monkeypatch)
     _break_os_walk(monkeypatch)
 
