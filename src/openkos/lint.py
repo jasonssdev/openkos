@@ -103,7 +103,9 @@ class LintFinding:
     """One lint finding: a flat, warning-level signal (no error/warning tiers)."""
 
     kind: str
-    """`"stale"`, `"orphan"`, or `"dangling"`."""
+    """`"stale"`, `"orphan"`, `"dangling"`, `"unextracted"`,
+    `"below-source-sensitivity"`, `"multi-source-uncovered"`, or
+    `"dangling-provenance"`."""
     path: str
     """The finding's bundle-relative `.md` path."""
     detail: str
@@ -143,6 +145,12 @@ class LintReport:
     non-empty `provenance` that is a member of no single-Source closure and
     whose `sensitivity` sits below the high-water-mark of its cited
     concepts' levels -- explicitly NOT covered by `backfill-sensitivity`."""
+    dangling_provenance: list[LintFinding] = field(default_factory=list)
+    """`"dangling-provenance"` findings (#257): a `provenance:` entry that
+    resolves to no collected doc AND is not the doc's own raw `resource`
+    value -- the outbound-reference family `check_dangling_targets` never
+    scans, with the sensitivity consequence that earned the dedicated kind
+    (see `check_dangling_provenance`)."""
     notices: list[str] = field(default_factory=list)
 
 
@@ -600,6 +608,77 @@ def check_dangling_targets(docs: list[LintDoc]) -> list[LintFinding]:
     return findings
 
 
+def check_dangling_provenance(docs: list[LintDoc]) -> list[LintFinding]:
+    """Flag each `provenance:` entry naming an id absent from `docs` (issue
+    #257), walking `doc.provenance` the way `check_dangling_targets` walks
+    `doc.relations` -- the one outbound-reference family that scan never
+    reads, so a doc whose provenance cites a mistyped or since-removed id
+    was previously silent in every check.
+
+    The signature takes ONLY `docs` -- no `bundle_dir` parameter -- the
+    SAME structural no-fifth-walk guard `check_dangling_targets`/
+    `check_unextracted`/`check_below_source_sensitivity` follow: a function
+    that never receives a directory is incapable of opening a walk.
+
+    A doc's OWN raw `resource` entry never fires. Every Source is built
+    with `provenance=[resource]` (`cli/main.py`, ingest), and a raw
+    resource path (`raw/<name>`) never normalizes to a bundle id, so
+    without this exclusion the check would report every Source in every
+    bundle on every run -- the exact trap design D8 names for
+    `bundle.provenance.resolve_backfill_raises`, which deliberately does
+    not call `find_unresolvable_provenance` for the same reason. The
+    discriminator is `doc.resource`, matched against BOTH the raw value
+    and its `.md`-stripped form, because `collect_docs` strips `.md` off
+    every provenance entry: a Source ingested from a markdown file carries
+    `provenance=("raw/notes",)` against `resource="raw/notes.md"`. The
+    exclusion is per-ENTRY, never per-doc: any other non-resolving entry
+    on the same doc still fires.
+
+    The detail carries the sensitivity consequence that justified the
+    dedicated kind: a dangling entry excludes the doc FAIL-CLOSED from
+    every Source's provenance closure (`provenance_closure`'s subset
+    rule), so `backfill-sensitivity` will never raise it and
+    `set-sensitivity` cannot cascade to it -- it may still sit below its
+    Source, and this finding is the only surface reporting that. The
+    detail names both commands only to RULE THEM OUT; `openkos next` is
+    protected from it by filtering on `finding.kind` BEFORE extracting any
+    backtick span (`cli/next_action.py`, the same explicit gate
+    `multi-source-uncovered`'s detail relies on).
+
+    The existence set is `{d.identity for d in docs}`, and one finding is
+    produced per unique `(citing doc, missing entry)` pair in the doc's
+    own provenance order -- the SAME membership approach and
+    one-finding-per-unique-pair contract `check_dangling_targets` pins.
+    This scan is READ-ONLY and NON-GATING: it never writes and its
+    findings never affect any caller's exit code."""
+    existing = {doc.identity for doc in docs}
+    findings: list[LintFinding] = []
+    for doc in docs:
+        own_resource: set[str] = set()
+        if doc.resource:
+            own_resource = {doc.resource, doc.resource.removesuffix(".md")}
+        seen: set[str] = set()
+        for target in doc.provenance:
+            if target in own_resource:
+                continue
+            if target in existing or target in seen:
+                continue
+            seen.add(target)
+            findings.append(
+                LintFinding(
+                    kind="dangling-provenance",
+                    path=f"{doc.identity}.md",
+                    detail=(
+                        f"provenance cites missing concept '{target}' — "
+                        "unreachable from any Source's provenance closure, so "
+                        "`openkos backfill-sensitivity` will never raise it "
+                        "and `openkos set-sensitivity` cannot cascade to it"
+                    ),
+                )
+            )
+    return findings
+
+
 _UNSPELLABLE_IN_SPAN = re.compile(r"[`\r\n]")
 """The characters a `resource` value MUST NOT carry for its retry command to
 be spelled inside a single-line backtick span (issue #285).
@@ -751,12 +830,11 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
     routinely). A doc citing any unresolvable id falls into NEITHER
     category, because the sweep cannot reach it either.
 
-    That last case is currently REPORTED BY NOTHING. `check_dangling_targets`
-    does not close the gap: it scans `doc.relations` and the body's markdown
-    links only, never `doc.provenance`, so a doc whose provenance cites a
-    mistyped or since-removed id is silent in every check. It may still sit
-    below its Source. Surfacing it needs its own finding and is tracked as a
-    follow-up rather than smuggled into this change's two categories.
+    That last case is reported by `check_dangling_provenance` (issue #257),
+    not here: `check_dangling_targets` does not close the gap either -- it
+    scans `doc.relations` and the body's markdown links only, never
+    `doc.provenance`. Such a doc may still sit below its Source, which is
+    exactly the consequence the `dangling-provenance` detail names.
 
     BOTH DETAILS ARE READ BY ANOTHER MODULE (issue #278). `openkos next`
     prints tier 3's recommendation by scanning the `below-source-sensitivity`
