@@ -14,6 +14,17 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed connection no longer prints the Ollama host's credentials**: the
+  `OllamaUnavailable` message interpolated the raw resolved host, and every CLI
+  handler echoes that exception to stderr — so a user who had exported
+  `OLLAMA_HOST=http://user:s3cret@host` (openkos merely inherits the variable)
+  had the password printed by the first connection failure. The message now
+  names the userinfo-redacted host, the single authority every other displayed
+  host already used. A structural test additionally fails if any future error
+  message in `llm/ollama.py` interpolates the raw host again. (llm) (#355)
+
 ### Changed
 
 - **BREAKING — `sensitivity: confidential` now gates on EGRESS, not on the LLM

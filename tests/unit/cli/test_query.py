@@ -15,6 +15,7 @@ substitute `openkos.cli.main.OllamaClient` and drive the REAL `answer()`.
 
 import ast
 import os
+import urllib.error
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -1620,6 +1621,45 @@ def test_query_prints_tty_gated_stage_notice_before_the_answer_call(
     assert result.exit_code == 0
     assert "openkos query: answering (waiting on the LLM)..." in result.stderr
     assert "waiting on the LLM" not in result.stdout
+
+
+def test_query_transport_failure_never_prints_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A connection failure against a credentialed host prints no password
+    on stderr, and still names the redacted host (issue #355).
+
+    This is the issue's own reproduction, at the surface it was reported on:
+    the message is built by the REAL `OllamaClient` transport path (a real
+    `URLError` raised out of `urlopen`, mapped by the real `_unavailable`)
+    and then formatted by the REAL `OllamaUnavailable` handler. The
+    message-level pins live in `tests/unit/llm/test_ollama.py`; this one
+    proves the composition, because it is the handler's output -- not the
+    exception -- that a user actually sees."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _refuse(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.URLError("Connection refused")
+
+    def _answer_through_a_real_client(*args: object, **kwargs: object) -> AnswerResult:
+        client = OllamaClient(
+            "qwen3",
+            host="http://user:s3cret@remote.example:11434",
+            urlopen=_refuse,
+        )
+        return client.chat([{"role": "user", "content": "hi"}])  # type: ignore[return-value]
+
+    monkeypatch.setattr("openkos.cli.main.answer", _answer_through_a_real_client)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 1
+    assert "s3cret" not in result.stderr
+    assert "s3cret" not in result.stdout
+    # Redaction must not cost diagnosability: the user still learns where the
+    # attempt went, and still gets the handler's own remediation.
+    assert "remote.example:11434" in result.stderr
+    assert "ollama serve" in result.stderr
 
 
 def test_query_stage_notice_is_silent_without_a_tty(

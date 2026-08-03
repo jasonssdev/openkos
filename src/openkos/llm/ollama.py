@@ -590,8 +590,28 @@ class OllamaClient:
 
     def _unavailable(self, exc: BaseException) -> OllamaUnavailable:
         """Build the `OllamaUnavailable` for a transport failure, shared by
-        both the connect-phase and read-phase except branches (D4)."""
-        return OllamaUnavailable(f"Ollama not reachable at {self._host}: {exc}")
+        both the connect-phase and read-phase except branches (D4).
+
+        Names the host through `locality.display_host`, NEVER the raw
+        `self._host` (issue #355). Every CLI handler echoes this exception
+        verbatim to stderr, so the message is displayed output and is bound
+        by the same rule every other displayed host obeys: `display_host` is
+        the ONE value a caller may print, userinfo-redacted on every path
+        including the unparseable one (see `BackendHostLocality` and
+        `classify_backend_host`). Interpolating `self._host` bypassed that
+        authority, so a user who had exported
+        `OLLAMA_HOST=http://user:s3cret@host` -- for some other tool, since
+        openkos merely INHERITS the variable -- got the password printed by
+        the first connection failure. That is the same class of leak #183-PR3
+        was withdrawn for and #199/#353 hardened the advisory path against;
+        this closes the failure path, which is the one a misconfigured user
+        reaches first.
+
+        `locality` never raises and never touches the network, so building
+        this error cannot itself fail."""
+        return OllamaUnavailable(
+            f"Ollama not reachable at {self.locality.display_host}: {exc}"
+        )
 
 
 def model_tag_matches(configured: str, installed: list[str]) -> bool:
