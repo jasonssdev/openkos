@@ -2070,9 +2070,17 @@ def _ingest_batch(
     (Source-only degrade, stderr note) and is only TALLIED here. Progress
     is `i/N` on stderr via the TTY-gated `observability.progress_callback`
     (issue #190) -- silent when piped. The run ends with per-file outcome
-    lines plus an aggregate summary on stdout, and exits 1 if ANY file was
-    refused/skipped, 0 if all succeeded (idempotent re-ingests count as
-    success)."""
+    lines plus an aggregate summary on stdout -- outcome lines FIRST, the
+    summary as the batch's last word (issue #349).
+
+    Exit ladder (issue #349): 0 when every file succeeded (idempotent
+    re-ingests count as success); 3 when EVERY skip was the per-file
+    pipeline's drift refusal (exit 3, #319) -- nothing those files would
+    have written was written, so the batch inherits the single-file retry
+    guarantee a script relies on; 1 when ANY skip was a hard refusal --
+    a plain re-run would refuse again, so the batch must not advertise
+    retryability it cannot deliver (#234: distinct causes must not read
+    alike)."""
     root = Path.cwd()
     if not matches:
         typer.echo(
@@ -2121,6 +2129,7 @@ def _ingest_batch(
     reingested_count = 0
     degraded_count = 0
     skipped_count = 0
+    hard_skip_count = 0
     for index, path in enumerate(matches, start=1):
         if progress is not None:
             progress(index, total, path)
@@ -2131,8 +2140,12 @@ def _ingest_batch(
         except typer.Exit as exc:
             # The per-file pipeline already printed its own refusal reason
             # to stderr (unchanged single-file wording); this line only
-            # records the skip in the batch report and moves on.
+            # records the skip in the batch report and moves on. Whether
+            # the skip was a drift refusal (exit 3, the ONE retryable
+            # failure, #319) or a hard refusal feeds the exit ladder below.
             skipped_count += 1
+            if exc.exit_code != 3:
+                hard_skip_count += 1
             outcome_lines.append(
                 f"  ! {path} -- skipped (refused with exit code "
                 f"{exc.exit_code}; its reason is on stderr above)"
@@ -2150,15 +2163,22 @@ def _ingest_batch(
             suffix = " (extraction degraded -- Source only; see stderr)"
         outcome_lines.append(f"  {marker} {path} -- {label}{suffix}")
 
+    # Per-file outcome lines FIRST, the aggregate summary as the batch's
+    # last word -- the order the docstrings and docs/cli.md promise
+    # (issue #349).
+    for line in outcome_lines:
+        typer.echo(line)
     typer.echo(
         f"openkos ingest: batch summary -- {total} file(s): "
         f"{ingested_count} ingested, {reingested_count} re-ingested, "
         f"{skipped_count} skipped, {degraded_count} extraction-degraded."
     )
-    for line in outcome_lines:
-        typer.echo(line)
     if skipped_count:
-        raise typer.Exit(code=1)
+        # Exit ladder (issue #349): every skip a drift refusal -> exit 3,
+        # inheriting the single-file retry contract (#319); any hard
+        # refusal in the mix -> exit 1, because a plain re-run would
+        # refuse again.
+        raise typer.Exit(code=1 if hard_skip_count else 3)
 
 
 @app.command()
@@ -2212,9 +2232,11 @@ def ingest(
     mirroring the single-file convention. A per-file refusal skips that
     file (reason on stderr) and CONTINUES; per-file outcome lines plus an
     aggregate summary (ingested / re-ingested / skipped /
-    extraction-degraded) close the run, exiting 1 if any file was
-    refused/skipped and 0 otherwise (re-ingests count as success). An
-    empty directory or a glob matching nothing refuses (exit 1, nothing
+    extraction-degraded) close the run, in that order. The batch exits 0
+    when every file succeeded (re-ingests count as success), 3 when every
+    skip was a drift refusal (the retryable failure, exit 3 per file),
+    and 1 when any skip was a hard refusal (issue #349). An empty
+    directory or a glob matching nothing refuses (exit 1, nothing
     written). See `_ingest_batch` for the full batch contract.
     """
     try:

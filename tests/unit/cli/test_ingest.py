@@ -5032,3 +5032,168 @@ def test_batch_plain_file_argument_keeps_single_file_behavior(
     assert "batch summary" not in result.stdout
     assert "LLM call(s)" not in result.stderr
     assert (tmp_path / "raw" / "notes.txt").is_file()
+
+
+# --- Issue #349: batch ingest polish ----------------------------------------
+
+
+def test_batch_all_drift_skips_exit_3_preserving_retry_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When EVERY skipped file was a drift refusal (the per-file pipeline's
+    exit 3, #319), the batch itself exits 3 -- preserving the retry contract:
+    a script that treats exit 3 as "safe to re-run" must be able to trust
+    the batch exit the same way it trusts the single-file one. A generic
+    exit 1 here would silently downgrade the one retryable failure into a
+    non-retryable-looking one (issue #349)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes."})
+    index_path = tmp_path / "bundle" / "index.md"
+    hook = echo_after(
+        monkeypatch,
+        lambda: index_path.write_text(
+            index_path.read_text(encoding="utf-8") + "drifted\n", encoding="utf-8"
+        ),
+        trigger="(new dated entry)",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
+    assert result.exit_code == 3
+    assert "refusing to write --" in result.stderr
+    assert (
+        f"! {Path('notes') / 'a.txt'} -- skipped (refused with exit code 3"
+        in result.stdout
+    )
+    assert "0 ingested, 0 re-ingested, 1 skipped" in result.stdout
+
+
+def test_batch_mixed_drift_and_hard_refusal_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch mixing a drift refusal (exit 3) with a hard refusal (exit 1)
+    exits 1: the retry guarantee only holds when EVERY skip was retryable,
+    and a hard refusal in the mix means a plain re-run would refuse again --
+    so the batch must not advertise retryability it cannot deliver
+    (issue #349)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+    # b hard-refuses: an existing raw copy with DIFFERING bytes (exit 1).
+    (tmp_path / "raw").mkdir(exist_ok=True)
+    (tmp_path / "raw" / "b.txt").write_text("conflicting bytes", encoding="utf-8")
+    # a drift-refuses: an index.md edit lands inside a's preview window
+    # (exit 3); the hook fires ONCE, on a's preview -- a sorts before b.
+    index_path = tmp_path / "bundle" / "index.md"
+    hook = echo_after(
+        monkeypatch,
+        lambda: index_path.write_text(
+            index_path.read_text(encoding="utf-8") + "drifted\n", encoding="utf-8"
+        ),
+        trigger="(new dated entry)",
+    )
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert hook.fired, "echo_after trigger never matched -- stale preview wording?"
+    assert result.exit_code == 1
+    assert (
+        f"! {Path('notes') / 'a.txt'} -- skipped (refused with exit code 3"
+        in result.stdout
+    )
+    assert (
+        f"! {Path('notes') / 'b.txt'} -- skipped (refused with exit code 1"
+        in result.stdout
+    )
+    assert "0 ingested, 0 re-ingested, 2 skipped" in result.stdout
+
+
+def test_batch_hard_refusal_only_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch whose only skip was a hard refusal (exit 1) exits 1 -- the
+    exit-3 ladder rung is reserved for the all-drift case; a hard refusal
+    is not retryable and must not read as one (issue #349, #234: distinct
+    causes must not read alike)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"b.txt": "Beta notes."})
+    (tmp_path / "raw").mkdir(exist_ok=True)
+    (tmp_path / "raw" / "b.txt").write_text("conflicting bytes", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 1
+    assert (
+        f"! {Path('notes') / 'b.txt'} -- skipped (refused with exit code 1"
+        in result.stdout
+    )
+    assert "0 ingested, 0 re-ingested, 1 skipped" in result.stdout
+
+
+def test_batch_outcome_lines_precede_aggregate_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run closes with per-file outcome lines FIRST, then the aggregate
+    summary -- the order `ingest`'s docstring, `_ingest_batch`'s docstring,
+    and docs/cli.md all promise ("per-file outcome lines plus an aggregate
+    summary"): the summary is the batch's last word, not its headline
+    (issue #349)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    a_line = result.stdout.index(f"+ {Path('notes') / 'a.txt'} -- ingested")
+    b_line = result.stdout.index(f"+ {Path('notes') / 'b.txt'} -- ingested")
+    summary_line = result.stdout.index("batch summary")
+    assert a_line < summary_line
+    assert b_line < summary_line
+
+
+def test_batch_existing_file_named_with_glob_magic_keeps_single_file_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_expand_batch_sources` checks `is_file()` FIRST, so an existing file
+    whose literal name contains a glob magic character keeps today's exact
+    single-file behavior -- it is never expanded as a pattern (the docstring's
+    promise, previously untested). `notes[1].txt` doubles as the pattern
+    `notes1.txt`, so a decoy sibling by that name pins the distinction: the
+    literal file is ingested, the glob match is not (issue #349)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "notes[1].txt").write_text("Literal name.", encoding="utf-8")
+    # The decoy is what the PATTERN `notes[1].txt` would match.
+    (tmp_path / "notes1.txt").write_text("Glob decoy.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes[1].txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "notes[1].txt").read_text(
+        encoding="utf-8"
+    ) == "Literal name."
+    assert not (tmp_path / "raw" / "notes1.txt").exists()
+    assert "batch summary" not in result.stdout
+
+
+def test_batch_outside_workspace_refuses_before_cost_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside an initialized workspace, the batch's up-front workspace check
+    refuses BEFORE the cost gate can prompt (`_ingest_batch`'s Phase-A
+    promise, previously untested for the directory entry point): the refusal
+    reaches stderr and no `LLM call(s)` line or `Proceed?` prompt ever
+    appears, even on a TTY without `--auto` -- the shape that would otherwise
+    ask (issue #349)."""
+    monkeypatch.chdir(tmp_path)
+    _write_notes(tmp_path, {"a.txt": "Alpha notes."})
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["ingest", "notes"], input="y\n")
+
+    assert result.exit_code == 1
+    assert (
+        "openkos ingest: refusing to ingest -- no OpenKOS workspace found in "
+        "this directory (run 'openkos init' first)." in result.stderr
+    )
+    assert "LLM call(s)" not in result.stderr
+    assert "Proceed" not in result.output
