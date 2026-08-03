@@ -153,7 +153,7 @@ Putting `raw/` beside the bundle rather than inside it resolves this **by constr
 - **`bundle/` becomes a true unit of distribution.** Share it and you ship pure conformant OKF — no sources, no `openkos.yaml`, no operating manual mixed in. That also lines up with sensitivity: knowledge is frequently shareable when the transcript it came from is not.
 - **Text and binary sources get one treatment.** Both live in `raw/`; both are represented in the bundle by a Source concept carrying the hash and description. The bundle always holds the manifest, never the blob (see below).
 
-The concept folders inside `bundle/` are grouped by type as one sensible convention, but the layout is configurable in `openkos.yaml` (a user could prefer a flat structure — in OKF the file path is the concept's identity, not its type). `.openkos/` holds only derived, rebuildable state; it is what you `.gitignore`. What you version is `bundle/` plus the text-shaped `raw/` — which leads directly to the next section.
+The concept folders inside `bundle/` are grouped by type as one sensible convention; `openkos.yaml` declares the `raw:`/`bundle:` layout, though the engine today always resolves both to `raw/` and `bundle/` beside the config file — making the layout genuinely configurable (for example a flat structure — in OKF the file path is the concept's identity, not its type) remains future work. `.openkos/` holds only derived, rebuildable state; it is what you `.gitignore`. What you version is `bundle/` plus the text-shaped `raw/` — which leads directly to the next section.
 
 ### The one bridge out of the bundle
 

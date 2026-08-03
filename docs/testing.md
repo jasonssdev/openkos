@@ -7,7 +7,11 @@
 # End-to-End Testing Guide
 
 This is a hands-on walkthrough for testing OpenKOS the way a real user would:
-from an empty machine to a curated knowledge base, exercising all 19 commands.
+from an empty machine to a curated knowledge base, exercising the core command
+surface (the coverage checklist at the end lists exactly what is walked; the
+newer verbs `list`, `next`, `curate`, `set-sensitivity`, `backfill-sensitivity`,
+and `backfill-source-titles` are not yet scripted here — see
+[`cli.md`](cli.md) for their reference behavior).
 It complements [`user-journey.md`](user-journey.md) — that document explains the
 *philosophy*; this one is the *procedure*.
 
@@ -313,7 +317,10 @@ writing anything.
   but extraction is skipped (exit 0, Source only). **There is no PDF or DOCX
   parser** — binary files copy but yield no extracted knowledge. Use `.md`,
   `.txt`, `.csv`, `.json`, `.yaml`, `.py`, `.html`, `.log`, or extensionless text.
-- **One file per invocation.** No batch, glob, or directory ingest.
+- **Batch is one invocation.** `<path>` may also be a directory (non-recursive)
+  or a quoted glob (recursion via `**`), driving every matched file through the
+  same per-file pipeline with one up-front cost gate — see `cli.md` for the
+  batch exit ladder (all-drift → 3, any hard skip → 1).
 - **Max 5 derived objects per source.**
 - **`raw/` is immutable.** A byte-identical re-ingest is idempotent and **re-runs
   extraction** (useful to recover from a transient LLM failure). A *different*
@@ -410,8 +417,11 @@ ls -la .openkos/          # vectors.db, fts.db, graph.db now exist
 ```
 
 > **The rule for the rest of the run: re-run `reindex` after every write.**
-> Ingest, merge, forget, relate, reconcile — none update the indexes. Edits stay
-> invisible to `query` until the next `reindex`.
+> `ingest` refreshes only the dense vector store for what it just wrote (so
+> `suggest-relations` works in the same run); merge, forget, relate, reconcile
+> update no index at all, and nothing but `reindex` ever rebuilds the FTS and
+> graph stores. Edits stay invisible to `query`'s lexical and graph channels
+> until the next `reindex`.
 
 ```bash
 openkos query "a question your corpus can answer"
@@ -425,9 +435,9 @@ or does the model invent to fill gaps?
 
 ```bash
 openkos ingest /path/to/new.md --auto
-openkos query "a question only the new file answers"    # expect degraded / missing + a stderr hint
+openkos query "a question only the new file answers"    # dense may hit (ingest embeds); FTS/graph miss it — check the stderr retrieval: line
 openkos reindex
-openkos query "the same question"                       # now answers
+openkos query "the same question"                       # all three channels now see it
 ```
 
 **`query --save`** is the only writing form of query. Since #331 it
@@ -446,7 +456,7 @@ openkos reindex
 
 ```bash
 openkos status        # bundle counts, recent activity, conformance
-openkos lint          # stale stamps and orphan pages
+openkos lint          # stale stamps, orphans, dangling refs/provenance, unextracted sources, sensitivity coverage
 openkos duplicates    # candidate duplicates (difflib, no LLM)
 openkos duplicates --include-deprecated
 ```
@@ -628,8 +638,11 @@ grep -r "<distinctive string from that file>" .    # expect nothing
 
 ## Coverage checklist
 
-Twenty rows for the 19 commands — `query` appears twice, once for its read-only
-default and once for its writing `--save` form.
+Twenty rows for the 19 commands this walkthrough exercises — `query` appears
+twice, once for its read-only default and once for its writing `--save` form.
+Six shipped verbs are not yet scripted here and have no row: `list`, `next`,
+`curate`, `set-sensitivity`, `backfill-sensitivity`, and
+`backfill-source-titles` (see [`cli.md`](cli.md)).
 
 | # | Command | Writes? | LLM | ✓ |
 |---|---|---|---|---|
@@ -697,7 +710,7 @@ knowing the tool, still had to stop and guess what to do next.
 
 ## Not available yet — do not test as missing features
 
-MCP server, local REST API, full OKF import/export, batch/glob ingest, a
+MCP server, local REST API, full OKF import/export, a
 `--sensitivity` flag on ingest, a configurable extraction cap, and `--json` or
 structured output on any command other than `adjudicate` (which has `--json`).
 All deferred by design (see [`roadmap.md`](roadmap.md)).

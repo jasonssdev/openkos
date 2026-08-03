@@ -27,7 +27,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Conformance (OKF)** — The three rules of OKF §9: every non-reserved `.md` file has parseable YAML frontmatter; every frontmatter block has a non-empty `type`; and `index.md` / `log.md` follow their prescribed structure when present. Everything else is soft guidance — consumers must not reject a bundle over unknown types, extra keys, broken links, or a missing index. Distinct from the [Lint](#lint), which is OpenKOS's separate opinion about quality.
 
-**Config (`openkos.yaml`)** — A per-bundle configuration file holding the engine's settings for that bundle: the local model, review mode, default sensitivity, freshness window, and the type registry. Structured YAML, owned by the engine and edited by the user. Distinct from the [Operating manual](#operating-manual-agentsmd).
+**Config (`openkos.yaml`)** — A per-bundle configuration file holding the engine's settings for that bundle: the local chat and embedding models, review mode, default sensitivity, the confidential local exemption, the freshness window, and per-tier/per-type volatility overrides. Structured YAML, owned by the engine and edited by the user. Distinct from the [Operating manual](#operating-manual-agentsmd).
 
 **Consumer** — Any tool that reads and reasons over an OKF bundle (a viewer, a search index, an agent). OpenKOS is both a consumer and a [Producer](#producer).
 
@@ -57,7 +57,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Knowledge Object (KO)** — The fundamental unit of knowledge in OpenKOS: an OKF concept document plus a thin OpenKOS layer (provenance chain, freshness class, recommended type vocabulary). See [`knowledge-object-model.md`](knowledge-object-model.md).
 
-**Lint** — The operation that checks the health of the bundle. In MVP 1 it is mechanical: stale `as of` stamps (older than the configured freshness window) and orphan pages (concepts not referenced by any markdown link from `index.md` or another concept, found by scanning links). Volatility classification and contradiction detection arrive in MVP 2. Enforces the freshness discipline automatically. It is **not** a conformance checker: it reports OpenKOS's opinion about knowledge health, never OKF's verdict about validity. See [Conformance](#conformance-okf).
+**Lint** — The operation that checks the health of the bundle, mechanically (no LLM): stale `as of` stamps (older than the document's volatility-resolved window, shipped in MVP 2), orphan pages, dangling references and dangling provenance, unextracted sources, and sensitivity-coverage gaps. Contradiction detection is a separate LLM verb (`openkos contradictions`), also shipped in MVP 2. Enforces the freshness discipline automatically. It is **not** a conformance checker: it reports OpenKOS's opinion about knowledge health, never OKF's verdict about validity. See [Conformance](#conformance-okf).
 
 **LLM Wiki pattern** — Andrej Karpathy's idea that a language model should *incrementally build and maintain* a persistent, interlinked knowledge base between you and your sources, rather than re-retrieving raw documents on every query. The pattern OpenKOS implements.
 

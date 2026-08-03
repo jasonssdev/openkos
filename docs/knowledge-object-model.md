@@ -273,7 +273,7 @@ Enforcement is **live at the retrieval boundary today** (shipped in MVP 2): a `c
 
 ### What the gate protects against: egress, not inference
 
-`sensitivity` governs what **leaves the machine**. When the LLM backend is verifiably local, nothing leaves, so the gate has nothing to protect — and since [#240](https://github.com/jasonssdev/openkos/issues/240) it does not fire: a `confidential` concept participates normally in `query`, `contradictions`, `adjudicate`, `suggest-relations`, and `suggest-volatility` against a loopback Ollama, with no flag.
+`sensitivity` governs what **leaves the machine**. When the LLM backend is verifiably local, nothing leaves, so the gate has nothing to protect — and since [#240](https://github.com/jasonssdev/openkos/issues/240) it does not fire: a `confidential` concept participates normally in `query`, `contradictions`, `adjudicate`, `suggest-relations`, `suggest-volatility`, and `curate` against a loopback Ollama, with no flag.
 
 "Verifiably local" means loopback **by literal form** — `localhost`, a `127.0.0.0/8` address, or `::1` — checked against the host the client will actually send to. There is no DNS resolution and no allowlist: a hostname that resolves to loopback today can resolve elsewhere tomorrow, and a check that cannot prove a host is local must not grant the exemption. Unknown or unparseable hosts are therefore treated as remote.
 

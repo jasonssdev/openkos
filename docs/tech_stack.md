@@ -46,7 +46,7 @@ Introduced in MVP 2. Each engine has a simple default and a documented scale pat
 
 - **Embeddings** — served by **Ollama**, the same runtime already used for the generative model (one server, one dependency, no separate embedding stack). Default to a modern, multilingual, permissively-licensed model — **`bge-m3`** (1024-dim, 8192-token context). Multilingual matters because a personal knowledge base is often not English-only. The model is **pinned** (embeddings are not comparable across models) and recorded in the derived state — never in the OKF bundle — and because the canonical text is always available, the whole index can be **re-embedded** at any time. The default is settled in two ordered stages: **reliability first** — a candidate that crashes the Ollama runner on a realistic corpus is excluded before any quality comparison — then **quality** among the survivors, by the same spike discipline as the generative model. `qwen3-embedding:0.6b` (Apache-2.0, Matryoshka dimensions) was the original default for its truncatable dimensions, but was **discarded for reliability**: it raises non-deterministic EOF crashes with no stable token threshold (see [ADR-0006](adr/0006-default-embedding-model.md)), so it is no longer a live default option regardless of its Matryoshka advantage.
 - **Vector store** (behind a `VectorStore` interface):
-  - *Default:* **sqlite-vec** (Apache-2.0) — stays inside the same SQLite file, zero extra infrastructure. Exact brute-force search; excellent up to roughly one million vectors, and kept viable well beyond that by **filter-first retrieval** (FTS5 and the graph narrow candidates first, so we rank a small filtered set rather than the whole corpus).
+  - *Default:* **sqlite-vec** (Apache-2.0) — a SQLite extension over an ordinary local `.db` file (`.openkos/vectors.db` as shipped), zero extra infrastructure. Exact brute-force search; excellent up to roughly one million vectors, and kept viable well beyond that by **filter-first retrieval** (FTS5 and the graph narrow candidates first, so we rank a small filtered set rather than the whole corpus).
   - *Scale path:* **LanceDB** (Apache-2.0) — embedded, on-disk IVF-PQ indexing that handles datasets larger than RAM. The choice when a heavy, multi-year corpus grows into the millions of vectors.
 - **Graph store** (behind a `GraphStore` interface):
   - *Default:* **SQLite node-edge tables + recursive SQL (CTEs)** for traversal (neighbors, paths). No new dependency, and it cannot be abandoned.
@@ -61,12 +61,11 @@ Introduced in MVP 2. Each engine has a simple default and a documented scale pat
 | --- | --- | --- |
 | Language / runtime | Python 3.12+ | PSF |
 | CLI | Typer | MIT |
-| Schemas / validation | Pydantic v2 | MIT |
+| Schemas / validation | stdlib dataclasses + hand-rolled validators (Pydantic deliberately not adopted) | PSF |
 | Knowledge format | Markdown + YAML frontmatter (OKF) | — |
-| Frontmatter (round-trip) | python-frontmatter + ruamel.yaml | MIT |
-| Markdown parsing | markdown-it-py (CommonMark) | MIT |
+| Frontmatter (round-trip) | python-frontmatter + PyYAML | MIT |
 | State + lexical search | SQLite + FTS5 | Public domain |
-| History / versioning | Git (subprocess or GitPython) | — / BSD |
+| History / versioning | Git (subprocess) | — |
 | Local LLM (compile / summarize) | Ollama serving an open-weight model | MIT |
 
 **MVP 2 — The Graph and Memory** (adds the derived layer, all swappable)
@@ -74,7 +73,7 @@ Introduced in MVP 2. Each engine has a simple default and a documented scale pat
 | Role | Default (simple) | Scale path (millions+) | License |
 | --- | --- | --- | --- |
 | Embeddings | Ollama serving `bge-m3` (multilingual, 1024-dim, 8192-tok ctx; reliability-first default) | larger model (e.g. `qwen3-embedding:4b`) if measured reliable | check the vendor's terms |
-| Vector store (`VectorStore`) | sqlite-vec (same `.db` file) | LanceDB (on-disk IVF-PQ) | Apache-2.0 |
+| Vector store (`VectorStore`) | sqlite-vec (local `.db` file) | LanceDB (on-disk IVF-PQ) | Apache-2.0 |
 | Graph store (`GraphStore`) | SQLite node-edge + recursive SQL | dedicated engine only if ever needed | — |
 | In-memory graph analysis | NetworkX (on subgraphs) | NetworkX | BSD |
 | Local LLM (extraction) | Ollama (Qwen3 / Mistral Small) | larger model | check the vendor's terms |
@@ -87,7 +86,7 @@ The runtime and interoperability layer (FastAPI local API, MCP server, OKF impor
 
 - **Python 3.12+**
 - **Typer** for the command-line interface (Click, MIT, is the mature fallback if we ever want fewer abstractions)
-- **Pydantic v2** for schemas and validation
+- **Stdlib dataclasses and hand-rolled validators** for schemas and validation — Pydantic was in the original plan but has not been needed; it remains an option if validation outgrows the stdlib
 - **FastAPI** for the local API layer (introduced in MVP 3)
 - **Markdown + YAML frontmatter** using the OKF v0.1 field set (`type`, `title`, `description`, `resource`, `tags`, `timestamp`)
 

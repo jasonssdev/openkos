@@ -49,7 +49,7 @@ Every interface decision serves these:
 openkos init
 ```
 
-Creates the workspace: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (the concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`) that ships with a working local-model default (via Ollama), and an `AGENTS.md` operating manual that tells any AI agent how to work with it. Picking a different model is a one-line edit to `openkos.yaml`; an interactive model picker during `init` is deferred — see `add-model-selection`. After this, the user never thinks about setup again.
+Creates the workspace: `raw/` for immutable sources, `bundle/` for the compiled OKF bundle (the concept folders, `index.md`, `log.md`), a config file (`openkos.yaml`) that ships with a working local-model default (via Ollama), and an `AGENTS.md` operating manual that tells any AI agent how to work with it. On a TTY, `init` probes Ollama and offers a numbered picker over the chat models actually installed (`qwen3:8b` listed first and marked recommended); picking a different model later is a one-line edit to `openkos.yaml`. After this, the user never thinks about setup again.
 
 `openkos.yaml` records the defaults that shape the journey, for example:
 
@@ -72,7 +72,7 @@ openkos ingest ./call-with-maria-2026-07-14.txt
 ```
 
 - **By path.** `ingest <path>` copies the source into `raw/` for the user — they never have to organize folders by hand. Sources keep their own names and extensions, markdown included, and the compiled knowledge lands in `bundle/`.
-- **One at a time.** **In MVP 1**, `ingest` takes a single `<path>` argument; each source is captured and reviewed on its own. **Later MVPs** add batch/glob ingest (`openkos ingest ./inbox/` or `openkos ingest ./inbox/*.txt`) for users who want throughput.
+- **One file or a batch.** `ingest` takes a single `<path>` — and since #267 that path may also be a directory or a quoted glob (`openkos ingest ./inbox/` or `openkos ingest './inbox/*.txt'`), driving every matched file through the same per-file pipeline with one up-front cost gate for users who want throughput.
 - **Sensitivity at capture.** **In MVP 1**, sensitivity is not a per-command flag — it comes from `default_sensitivity` in `openkos.yaml` and applies to everything ingested. **Later MVPs** may add a per-source `--sensitivity` flag for one-off overrides.
 
 ### Step 2 — Compile
@@ -147,9 +147,9 @@ Citations:
   → sources/call-with-maria-2026-07-14 (call with maria 2026 07 14)
 ```
 
-On every run, a `retrieval: <n> FTS hit(s) → LLM invoked|skipped → <m> source(s) cited` summary also prints to stderr — separate from the stdout answer above, so scripts piping stdout never see it.
+On every run, a `retrieval: <n> FTS + <n> dense + <n> graph → <n> fused → LLM invoked|skipped → <n> cited` summary also prints to stderr — separate from the stdout answer above, so scripts piping stdout never see it.
 
-**In MVP 1**, `query` cites the `Source` concept it drew on directly (`bundle/sources/<slug>.md`), which itself embeds the raw text and points back to `raw/<name>`. The citation chain lets the user ask *how do I know this?* and get a file path. When `ingest` also extracted a derived topic page (like `concepts/apatheia.md`) from that source, it links back to the Source via `provenance`, but MVP 1's retrieval still cites whichever document its lexical search matched — the Source, the derived page, or both — rather than always preferring one over the other. **Later MVPs** make that citation chain graph-aware: running from the answer through a topic page, back through every Source it draws on, to the immutable originals — and the answer above will reflect the *corrected* understanding the base learned from later sources, not just the first one it saw.
+`query` cites whichever documents its fused retrieval matched — the Source, a derived page, or both — rather than always preferring one over the other; a cited `Source` concept (`bundle/sources/<slug>.md`) itself embeds the raw text and points back to `raw/<name>`, so the citation chain lets the user ask *how do I know this?* and get a file path. **MVP 2** made retrieval graph-aware — lexical FTS, dense vectors, and a PageRank walk over the typed graph, fused by RRF — so related pages reachable through the graph can surface even when the words do not match. **Later MVPs** deepen the compile side: the answer above will reflect the *corrected* understanding the base learned from later sources, not just the first one it saw.
 
 A good answer can be filed back as a new concept, so exploration compounds — feeding the loop again.
 
