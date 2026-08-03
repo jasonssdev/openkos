@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0012: Sensitivity backfill as an explicit per-Source sweep, not a silent migration
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-29
 
 ## Context
