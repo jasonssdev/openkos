@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0012: Sensitivity backfill as an explicit per-Source sweep, not a silent migration"
 description: An existing-bundle sensitivity gap is closed by an operator-run sweep with per-Source-closure coverage, compensated by a detection signal for the concepts it cannot reach.
-status: Proposed
+status: Accepted
 date: 2026-07-29
 tags:
   - openkos

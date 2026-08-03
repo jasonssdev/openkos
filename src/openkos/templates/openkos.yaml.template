@@ -10,8 +10,8 @@ freshness_window: 7d      # age after which a stamp is flagged for re-observatio
 # type_tiers:             # per-concept-type volatility tier overrides (overrides
 #   Person: volatile      # the built-in registry default; see docs/adr/0007)
 
-# Layout — where the engine keeps things, relative to this file.
-raw: raw/                 # immutable sources; any extension, never rewritten
-bundle: bundle/           # the OKF bundle root
+# Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF
+# bundle root) live next to this file. The engine does not read layout
+# keys from this config; making them configurable is future work.
 
 # type_registry is maintained by the engine (canonical + emergent types)
