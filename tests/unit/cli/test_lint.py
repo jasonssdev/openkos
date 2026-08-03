@@ -503,6 +503,63 @@ def test_lint_clean_bundle_reports_zero_below_source_findings(
     assert _snapshot(tmp_path) == before
 
 
+# --- issue #257: dangling-provenance ---
+
+
+def test_lint_flags_dangling_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept whose `provenance` cites an id that resolves to no bundle
+    concept is reported under a distinct dangling-provenance section with
+    the sensitivity consequence, while a Source's own raw `resource` entry
+    never fires (design D8's trap), and `lint` still exits 0 (issue #257)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "provenance:\n  - raw/a.txt\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\n"
+        "provenance:\n  - concepts/does-not-exist\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Dangling provenance:" in result.stdout
+    section = result.stdout.split("Dangling provenance:", 1)[1]
+    section = section.split("Unextracted sources:", 1)[0]
+    assert "concepts/derived: " in section
+    assert "concepts/does-not-exist" in section
+    assert "backfill-sensitivity" in section
+    assert "set-sensitivity" in section
+    # The Source's own raw `resource` entry is excluded -- never a finding
+    # SUBJECT here (it may not appear as a rendered "<id>: " prefix).
+    assert "sources/a: " not in section
+
+
+def test_lint_clean_bundle_reports_zero_dangling_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle reports the dangling-provenance empty state;
+    `lint` still exits 0 and creates no file (issue #257)."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Dangling provenance:" in result.stdout
+    assert "  No dangling provenance findings." in result.stdout
+    assert _snapshot(tmp_path) == before
+
+
 def test_lint_never_writes_to_the_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

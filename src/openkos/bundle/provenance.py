@@ -430,13 +430,12 @@ def find_unresolvable_provenance(
 
     A scoped call therefore reports strictly fewer entries, and its blind
     spot is deliberate: a concept citing ONLY an unresolvable id is
-    unreachable from any root and stays silent. NOTHING reports that case
-    today -- `lint.check_dangling_targets` scans `relations:` and body
-    markdown links only, never `provenance:`, and
-    `lint.check_below_source_sensitivity` explicitly skips a doc with an
-    unresolvable cite. Detecting it requires a bundle-wide sweep that
-    `lint` is the INTENDED FUTURE owner of, tracked as issue #257 and NOT
-    implemented here; it never belongs to a single-Source write verb.
+    unreachable from any root and stays silent HERE. That case is owned by
+    `lint.check_dangling_provenance`'s bundle-wide scan (issue #257) --
+    never by this single-Source write verb; `lint.check_dangling_targets`
+    still scans `relations:` and body markdown links only, never
+    `provenance:`, and `lint.check_below_source_sensitivity` still skips a
+    doc with an unresolvable cite.
 
     Ordering is pinned byte-identical to the original inline loop, scoped or
     not: `files` iteration order, then each file's `provenance:` list order,

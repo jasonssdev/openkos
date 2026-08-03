@@ -496,6 +496,45 @@ def test_status_marks_multi_source_uncovered_as_not_covered(
     assert "not covered by" in section
 
 
+# --- issue #257: dangling-provenance ---
+
+
+def test_status_lists_dangling_provenance_under_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept whose `provenance` cites an id that resolves to no bundle
+    concept is listed under "needs attention", labeled `dangling-provenance`
+    distinctly, while a Source's own raw `resource` entry never fires
+    (design D8's trap), and `status` still exits 0 (issue #257)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n"
+        "provenance:\n  - raw/a.txt\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\n"
+        "provenance:\n  - concepts/does-not-exist\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Needs attention:", 1)[1]
+    assert "concepts/derived: " in section
+    assert "dangling-provenance" in section
+    assert "concepts/does-not-exist" in section
+    assert "backfill-sensitivity" in section
+    # The Source's own raw `resource` entry is excluded -- never a finding
+    # SUBJECT here (it may not appear as a rendered "<id>: " prefix).
+    assert "sources/a: " not in section
+
+
 def test_status_below_source_reuses_the_single_collect_docs_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
