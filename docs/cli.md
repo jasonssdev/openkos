@@ -515,6 +515,8 @@ Run `openkos doctor` to see which side of the line your backend is on (check 11)
 
 **Terminal output is never gated by this.** Printing an object's title or id on your own screen is not an egress event — `list`/`status` show confidential titles in full, unredacted.
 
+**`ingest`'s extraction floor gate does NOT take this exemption.** The table above governs the per-concept `confidential` filter on the five read verbs (`query`, `contradictions`, `adjudicate`, `suggest-relations`, `suggest-volatility`). `ingest`'s SEPARATE check — whether a workspace's `default_sensitivity` floor is confidential enough to skip concept extraction from a newly ingested Source entirely — refuses regardless of backend locality: it always keeps the Source-only fallback (the document is still embedded and searchable; only LLM-based concept extraction is skipped) rather than granting a local backend a pass. This is deliberate, not an oversight: extraction runs against content the operator has not yet reviewed at all, at ingest time, before any human has looked at it, so a local-backend reader should not be surprised that `ingest` still refuses here even with the exemption active elsewhere.
+
 ## Still deferred (MVP 3)
 
 For orientation, these are **not** yet part of the CLI: the MCP server, the local REST API, and full OKF import/export, together with sensitivity enforcement at those new export/agent boundaries. Everything else described above — hybrid semantic/graph query, volatility-aware freshness windows, entity resolution and merge, the typed graph, reference-aware/cascade `forget`, and the `purge` verb — ships today (MVP 1 and MVP 2 complete).

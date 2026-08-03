@@ -7993,9 +7993,13 @@ def suggest_relations_cmd(
     (#196). Holding an open `openkos.graph` store here is established
     practice (`query`, `reindex`); the live layering rule forbids only
     canonical-layer imports of `openkos.graph` and a `graph` CLI verb. It
-    gates on the candidate count, and only then builds a real
-    `OllamaClient(model=cfg.model)` and injects it into
-    `suggest_edge_types`.
+    builds a real `OllamaClient(model=cfg.model)` BEFORE the candidate
+    count is known -- construction performs no I/O, it only resolves and
+    stores the host -- because the confidential local exemption (#240)
+    must be resolved from that SAME client before `candidate_edges` (the
+    pre-flight sensitivity filter) runs; the cost gate on the candidate
+    count still happens first, and only a confirmed run reaches
+    `suggest_edge_types`, which the resolved client is then injected into.
 
     Cost gate (issue #134): each untyped edge costs one LLM inference, run
     sequentially, so a large bundle can take many minutes with the model
