@@ -9,6 +9,18 @@ the fail-closed confidential-content filter was itself incomplete
 unreadable, so the filter could not inspect every document and some
 confidential material may not have been excluded.
 
+The confidential-content filter can also be off entirely with NO walk
+error involved: `--include-confidential` disables it explicitly, and the
+confidential local exemption (issue #240) disables it implicitly whenever
+`sensitivity.sensitive_concept_ids` short-circuits to `frozenset()` before
+`okf._iter_docs` -- and therefore before `okf._walk_errors` -- is ever
+touched, because the resolved client/workspace pair already proved the
+filter's whole reason for existing (stopping confidential material from
+leaving the machine) does not apply this run. Both hatches share the same
+consequence: an incomplete walk has no bearing on what gets sent, so
+`warn_if_walk_incomplete` must be told about both, and must return before
+paying for a walk whose result the caller cannot act on either way.
+
 Mirrors the existing `state/reindex.py:285` + `cli/main.py`'s
 `report.prune_skipped` self-explaining-warning precedent, generalized to
 one shared helper reused by all five sensitivity-filter verbs (`query`,
@@ -47,17 +59,30 @@ both remediation paths, rather than a bare "walk incomplete" line."""
 
 
 def warn_if_walk_incomplete(
-    bundle_dir: Path, *, mode: str = "warn", include_confidential: bool = False
+    bundle_dir: Path,
+    *,
+    mode: str = "warn",
+    include_confidential: bool = False,
+    local_exemption: bool = False,
 ) -> None:
     """Warn to STDERR when the directory walk backing the sensitivity
     fail-closed filter over `bundle_dir` is provably incomplete
     (`okf._walk_errors` reports at least one unlistable subdirectory).
 
-    Deliberately skipped when `include_confidential` is `True` -- the
-    filter is then off entirely, so an incomplete walk has no bearing on
-    what gets sent. `mode="warn"` (the only mode this slice implements)
-    emits the self-explaining STDERR line and always returns normally: it
-    NEVER raises and NEVER changes the caller's exit code, this helper is
+    Deliberately skipped when EITHER `include_confidential` or
+    `local_exemption` is `True` -- either hatch takes the filter off
+    entirely, so an incomplete walk has no bearing on what gets sent:
+    `include_confidential` is the explicit, user-requested bypass;
+    `local_exemption` (issue #240) is the implicit one, already resolved by
+    the caller from the verified-local client and the workspace's
+    `confidential_local_exemption` key before this helper is ever called.
+    Both return EARLY, before `okf._walk_errors` runs the walk at all --
+    the walk's result would be discarded either way, and paying for a full
+    bundle scan just to throw it away would defeat the zero-cost bypass
+    `sensitivity.sensitive_concept_ids` is written to preserve for exactly
+    this case. `mode="warn"` (the only mode this slice implements) emits
+    the self-explaining STDERR line and always returns normally: it NEVER
+    raises and NEVER changes the caller's exit code, this helper is
     signal-only (spec: Incomplete walk warns and still exits 0).
 
     `mode="refuse"` raises `NotImplementedError`: a stable seam for a
@@ -67,7 +92,7 @@ def warn_if_walk_incomplete(
     re-threading -- only filling this branch in and flipping call sites to
     `mode="refuse"`.
     """
-    if include_confidential:
+    if include_confidential or local_exemption:
         return
     if mode == "refuse":
         raise NotImplementedError(

@@ -35,6 +35,7 @@ from openkos.retrieval.answer import NO_MATCH, AnswerResult, Citation
 from openkos.state import fts, vectorstore
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import VecUnavailable
+from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1500,8 +1501,15 @@ def test_query_warns_stderr_on_incomplete_walk_and_exits_zero(
     """An incomplete directory walk (`okf._walk_errors` non-empty) prints a
     self-explaining warning to STDERR and the command still exits 0 -- WARN,
     not refuse (spec: Incomplete walk warns and still exits 0). `answer()` is
-    faked (D4 pattern) so this test never depends on a real Ollama process."""
+    faked (D4 pattern) so this test never depends on a real Ollama process.
+
+    The default workspace grants the confidential local exemption (#240),
+    which is the OTHER hatch that suppresses this warning -- see
+    `test_query_local_exemption_suppresses_the_warning` below. This test is
+    about the walk-incompleteness signal itself, so it opts out of the
+    exemption through the same workspace switch a user would use."""
     _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
     monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
     _break_os_walk(monkeypatch)
 
@@ -1538,6 +1546,24 @@ def test_query_include_confidential_suppresses_the_warning(
     result = runner.invoke(
         app, ["query", "what is stoicism?", "--include-confidential"]
     )
+
+    assert result.exit_code == 0
+    assert "bundle scan was incomplete" not in result.stderr
+
+
+def test_query_local_exemption_suppresses_the_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confidential local exemption (#240) suppresses the incomplete-walk
+    warning too, the SAME way `--include-confidential` does: on a stock
+    workspace (default local backend, exemption active) the filter is off
+    entirely, so an incomplete walk has no bearing on what gets sent and the
+    walk is never even run."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.cli.main.answer", _fake_no_match_answer)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
 
     assert result.exit_code == 0
     assert "bundle scan was incomplete" not in result.stderr

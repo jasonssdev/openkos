@@ -39,7 +39,7 @@ from openkos.llm.ollama import (
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, Tier
 from openkos.vcs import git as vcs_git
-from tests.unit.cli.conftest import changed_paths
+from tests.unit.cli.conftest import changed_paths, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 from tests.unit.vcs.conftest import isolate_git_identity
@@ -2464,8 +2464,15 @@ def test_adjudicate_warns_stderr_on_incomplete_walk_and_exits_zero(
     not refuse (spec: Incomplete walk warns and still exits 0). A freshly
     initialized, empty bundle has zero candidates, so the real
     `adjudicate_candidates` never calls `llm.chat` -- a real `OllamaClient`
-    is safe to construct here."""
+    is safe to construct here.
+
+    The default workspace grants the confidential local exemption (#240),
+    which is the OTHER hatch that suppresses this warning -- see
+    `test_adjudicate_local_exemption_suppresses_the_warning` below. This
+    test is about the walk-incompleteness signal itself, so it opts out of
+    the exemption through the same workspace switch a user would use."""
     _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["adjudicate"])
@@ -2807,6 +2814,23 @@ def test_adjudicate_include_confidential_suppresses_the_warning(
     _break_os_walk(monkeypatch)
 
     result = runner.invoke(app, ["adjudicate", "--include-confidential"])
+
+    assert result.exit_code == 0
+    assert "bundle scan was incomplete" not in result.stderr
+
+
+def test_adjudicate_local_exemption_suppresses_the_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The confidential local exemption (#240) suppresses the incomplete-walk
+    warning too, the SAME way `--include-confidential` does: on a stock
+    workspace (default local backend, exemption active) the filter is off
+    entirely, so an incomplete walk has no bearing on what gets sent and the
+    walk is never even run."""
+    _init_workspace(tmp_path, monkeypatch)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate"])
 
     assert result.exit_code == 0
     assert "bundle scan was incomplete" not in result.stderr

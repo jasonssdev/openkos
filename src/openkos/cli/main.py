@@ -7769,7 +7769,9 @@ def adjudicate(
     llm = OllamaClient(model=cfg.model)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
-        layout.bundle_dir, include_confidential=include_confidential
+        layout.bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
     )
     try:
         results = adjudicate_candidates(
@@ -8054,7 +8056,9 @@ def suggest_relations_cmd(
     llm = OllamaClient(model=cfg.model)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
-        layout.bundle_dir, include_confidential=include_confidential
+        layout.bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
     )
 
     # Count the candidate edges FIRST, with no LLM call, so the cost of the
@@ -8242,7 +8246,9 @@ def suggest_volatility_cmd(
     llm = OllamaClient(model=cfg.model)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
-        layout.bundle_dir, include_confidential=include_confidential
+        layout.bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
     )
     try:
         results = suggest_volatility(
@@ -8391,7 +8397,9 @@ def contradictions(
     llm = OllamaClient(model=cfg.model)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
-        layout.bundle_dir, include_confidential=include_confidential
+        layout.bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
     )
     # graph-projection-reuse (#196): source-then-build prologue, mirroring
     # `suggest_relations_cmd` -- the proximity source is closed as early as
@@ -8876,7 +8884,9 @@ def query(
     # confidential concept bodies travel in the `llm.chat` payload (#240).
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
-        layout.bundle_dir, include_confidential=include_confidential
+        layout.bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
     )
     vector_store_cm, store_was_unavailable = _open_vector_store_or_degrade(
         layout.vectors_db_path
@@ -9876,8 +9886,19 @@ def curate(
         )
         raise typer.Exit(code=1) from exc
 
+    # Resolved from a client identical to the one `run_curate` builds lazily
+    # for its `needs_llm` stages (same `cfg.model`, same host resolution),
+    # because the stage PROBES apply the sensitivity filter before any
+    # client exists -- see `CurateContext.local_exemption` (issue #240).
+    # Constructing a client performs no I/O. Resolved BEFORE
+    # `warn_if_walk_incomplete` (not just before `CurateContext`) so the
+    # advisory can be told about this hatch too, the same way the other
+    # five verbs already are.
+    local_exemption = _resolve_local_exemption(OllamaClient(model=cfg.model), cfg)
     observability.warn_if_walk_incomplete(
-        layout.bundle_dir, include_confidential=include_confidential
+        layout.bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
     )
 
     ctx = curate_module.CurateContext(
@@ -9887,12 +9908,7 @@ def curate(
         auto=auto,
         include_confidential=include_confidential,
         include_deprecated=include_deprecated,
-        # Resolved from a client identical to the one `run_curate` builds
-        # lazily for its `needs_llm` stages (same `cfg.model`, same host
-        # resolution), because the stage PROBES apply the sensitivity filter
-        # before any client exists -- see `CurateContext.local_exemption`
-        # (issue #240). Constructing a client performs no I/O.
-        local_exemption=_resolve_local_exemption(OllamaClient(model=cfg.model), cfg),
+        local_exemption=local_exemption,
     )
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):
