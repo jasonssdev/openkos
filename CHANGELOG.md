@@ -34,17 +34,20 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   when both are true and neither ever claims something that did not happen.
   Signal-only: no refusal, no exit-code change, and still exactly one bundle
   walk per invocation. (cli) (#356)
-
-### Fixed
-
-- **A failed connection no longer prints the Ollama host's credentials**: the
-  `OllamaUnavailable` message interpolated the raw resolved host, and every CLI
-  handler echoes that exception to stderr — so a user who had exported
-  `OLLAMA_HOST=http://user:s3cret@host` (openkos merely inherits the variable)
-  had the password printed by the first connection failure. The message now
-  names the userinfo-redacted host, the single authority every other displayed
-  host already used. A structural test additionally fails if any future error
-  message in `llm/ollama.py` interpolates the raw host again. (llm) (#355)
+- **`confidential_local_exemption` workspace key**: `openkos.yaml` gains a
+  boolean (default `true`) that opts a workspace out of the local exemption
+  above. Workspace-level rather than a per-command flag on purpose: a security
+  policy that depends on remembering to type a flag is not a policy. (config)
+  (#240)
+- **`doctor` reports backend locality**: an eleventh, informational check names
+  the redacted backend host, whether it is this machine, and whether the
+  confidential local exemption is consequently active — so the state is
+  inspectable rather than inferred. It always `[PASS]`es (a remote backend is a
+  configuration, not a fault) and can never change the exit code. (cli) (#240)
+- **`openkos --version`**: prints `openkos {version}` (read from installed
+  distribution metadata) and exits 0, evaluated eagerly so it works outside a
+  workspace and short-circuits before any subcommand runs; `openkos doctor`
+  now leads its output with the same version banner. (cli) (#181)
 
 ### Changed
 
@@ -66,25 +69,16 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   blanket gate. Terminal output is unaffected — `list`/`status` never redacted
   confidential titles and still do not. (#240)
 
-### Added
-
-- **`confidential_local_exemption` workspace key**: `openkos.yaml` gains a
-  boolean (default `true`) that opts a workspace out of the local exemption
-  above. Workspace-level rather than a per-command flag on purpose: a security
-  policy that depends on remembering to type a flag is not a policy. (config)
-  (#240)
-- **`doctor` reports backend locality**: an eleventh, informational check names
-  the redacted backend host, whether it is this machine, and whether the
-  confidential local exemption is consequently active — so the state is
-  inspectable rather than inferred. It always `[PASS]`es (a remote backend is a
-  configuration, not a fault) and can never change the exit code. (cli) (#240)
-- **`openkos --version`**: prints `openkos {version}` (read from installed
-  distribution metadata) and exits 0, evaluated eagerly so it works outside a
-  workspace and short-circuits before any subcommand runs; `openkos doctor`
-  now leads its output with the same version banner. (cli) (#181)
-
 ### Fixed
 
+- **A failed connection no longer prints the Ollama host's credentials**: the
+  `OllamaUnavailable` message interpolated the raw resolved host, and every CLI
+  handler echoes that exception to stderr — so a user who had exported
+  `OLLAMA_HOST=http://user:s3cret@host` (openkos merely inherits the variable)
+  had the password printed by the first connection failure. The message now
+  names the userinfo-redacted host, the single authority every other displayed
+  host already used. A structural test additionally fails if any future error
+  message in `llm/ollama.py` interpolates the raw host again. (llm) (#355)
 - **Docs: `doctor` check count**: `docs/cli.md` and `docs/testing.md` both
   documented nine environment checks and omitted `Workspace vector index
   present`; `doctor` has emitted ten since that check shipped. Both now list

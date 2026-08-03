@@ -120,7 +120,7 @@ The directory a user opens in Obsidian, VS Code, or GitHub. We call it a **works
 
 ```
 ~/knowledge/              # the WORKSPACE (the git repository, created by `openkos init`)
-├── openkos.yaml          # config: model, review, default_sensitivity, freshness window, layout…
+├── openkos.yaml          # config: model, review, default_sensitivity, freshness window…
 ├── AGENTS.md             # agent operating manual (how to work with this workspace)
 ├── raw/                  # source material — any extension (see "Source material and versioning")
 │   ├── call-with-maria-2026-07-14.txt
@@ -153,7 +153,7 @@ Putting `raw/` beside the bundle rather than inside it resolves this **by constr
 - **`bundle/` becomes a true unit of distribution.** Share it and you ship pure conformant OKF — no sources, no `openkos.yaml`, no operating manual mixed in. That also lines up with sensitivity: knowledge is frequently shareable when the transcript it came from is not.
 - **Text and binary sources get one treatment.** Both live in `raw/`; both are represented in the bundle by a Source concept carrying the hash and description. The bundle always holds the manifest, never the blob (see below).
 
-The concept folders inside `bundle/` are grouped by type as one sensible convention, but the layout is configurable in `openkos.yaml` (a user could prefer a flat structure — in OKF the file path is the concept's identity, not its type). `.openkos/` holds only derived, rebuildable state; it is what you `.gitignore`. What you version is `bundle/` plus the text-shaped `raw/` — which leads directly to the next section.
+The concept folders inside `bundle/` are grouped by type as one sensible convention; the layout itself is fixed — the engine always resolves `raw/` and `bundle/` beside `openkos.yaml`, and the config deliberately declares no layout keys it would not honor; making the layout genuinely configurable (for example a flat structure — in OKF the file path is the concept's identity, not its type) remains future work. `.openkos/` holds only derived, rebuildable state; it is what you `.gitignore`. What you version is `bundle/` plus the text-shaped `raw/` — which leads directly to the next section.
 
 ### The one bridge out of the bundle
 

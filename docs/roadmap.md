@@ -90,16 +90,16 @@ MVP 3 exposes the knowledge base to agents and to the wider world of OKF-speakin
 
 ### Orchestration hardening — a prerequisite, not an extra
 
-**This work lands before the deliverables below.** MVP 2 shipped a complete set of curation capabilities — `duplicates`, `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions`, and the write verbs that resolve each one — but it did not ship the sequencing that binds them. Which advisor to run, when, and in what order is knowledge that currently lives only in the operator's head. The engine orchestrates the knowledge; the user still orchestrates the engine.
+**This work lands before the deliverables below — and it has now shipped.** MVP 2 shipped a complete set of curation capabilities — `duplicates`, `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions`, and the write verbs that resolve each one — but it did not ship the sequencing that binds them. Which advisor to run, when, and in what order was knowledge that lived only in the operator's head. The engine orchestrated the knowledge; the user still orchestrated the engine.
 
 That gap is a prerequisite for MVP 3 rather than a parallel concern, because **an MCP server inherits it**. Exposing the verbs as agent tools moves the sequencing problem from the user's head into the agent's, where it is less reliable, not more: an agent has no better basis for knowing when to run `adjudicate` than a person does. And the resolution order is not arbitrary — identity precedes structure, because `merge` rewires typed edges (ADR-0005) and retargets third-party provenance (ADR-0011), so relations typed before a merge are relations the merge must redo. Encoding that dependency once, in the product, is what lets MVP 3 expose a workflow instead of a toolbox.
 
-Scope, tracked as its own issues:
+Scope, tracked as its own issues — **all four shipped**:
 
-- **A consolidated curation loop** (`curate`, [#266](https://github.com/jasonssdev/openkos/issues/266)) — one queue of pending decisions across every advisor, resolved in dependency order, reusing the existing write cores rather than reimplementing them.
-- **A single-action pointer** (`next`, [#265](https://github.com/jasonssdev/openkos/issues/265)) — deterministic, no model call: the one thing worth doing now, so no capability has to be discovered by reading `--help`.
-- **Progress feedback** ([#190](https://github.com/jasonssdev/openkos/issues/190)) on the verbs that wait on a model or rebuild an index, so latency is legible rather than indistinguishable from a hang.
-- **Batch ingestion** (folder or glob, [#267](https://github.com/jasonssdev/openkos/issues/267)), so populating a base is not one invocation per source.
+- **A consolidated curation loop** (`curate`, [#266](https://github.com/jasonssdev/openkos/issues/266), shipped) — one queue of pending decisions across every advisor, resolved in dependency order, reusing the existing write cores rather than reimplementing them.
+- **A single-action pointer** (`next`, [#265](https://github.com/jasonssdev/openkos/issues/265), shipped) — deterministic, no model call: the one thing worth doing now, so no capability has to be discovered by reading `--help`.
+- **Progress feedback** ([#190](https://github.com/jasonssdev/openkos/issues/190), shipped) on the verbs that wait on a model or rebuild an index, so latency is legible rather than indistinguishable from a hang.
+- **Batch ingestion** (folder or glob, [#267](https://github.com/jasonssdev/openkos/issues/267), shipped), so populating a base is not one invocation per source.
 
 The shared theme is the same principle already stated in the philosophy — *the human curates, the engine maintains* — applied to the engine's own operation: work the engine can carry should not be bookkeeping the user carries, and work the engine already does on the user's behalf should be reported rather than silent.
 

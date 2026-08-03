@@ -7324,8 +7324,9 @@ def list_objects_cmd(
 
     Read-only: no file under the workspace is ever created, modified, or
     deleted, and no `--json` or other structured output mode is offered
-    (spec: Read-Only, No Structured Output; deferred, not banned -- issue
-    #240).
+    (spec: Read-Only, No Structured Output; deferred, not banned -- the
+    deferral was recorded in the list-verb work, #184, and no issue tracks
+    it yet).
     """
     resolved_type: str | None = None
     if concept_type is not None:
