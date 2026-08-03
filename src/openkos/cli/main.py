@@ -47,7 +47,7 @@ from openkos.llm.ollama import (
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
-    classify_embed_host,
+    classify_backend_host,
     is_embedding_model,
     model_tag_matches,
 )
@@ -1878,7 +1878,7 @@ def _warn_if_nonlocal_embed_host(command: str) -> None:
     `OLLAMA_HOST` for some other tool may not realize openkos inherits it.
 
     ADVISORY only, by contract: never blocks, never raises, never changes
-    an exit code -- `classify_embed_host` is a pure literal check (no DNS,
+    an exit code -- `classify_backend_host` is a pure literal check (no DNS,
     no network) that degrades unparseable values to "warn" instead of
     raising, and its `display_host` is userinfo-redacted on every path, so
     a credentialed value can never leak a password here (the withdrawn
@@ -1886,7 +1886,7 @@ def _warn_if_nonlocal_embed_host(command: str) -> None:
     means Ollama's own local default: silent. Over-warning is the accepted
     failure direction; staying silent about data leaving the machine is
     not."""
-    locality = classify_embed_host(os.environ.get("OLLAMA_HOST"))
+    locality = classify_backend_host(os.environ.get("OLLAMA_HOST"))
     if locality.is_local:
         return
     typer.echo(

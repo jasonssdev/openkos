@@ -8,7 +8,7 @@ machine. It is ADVISORY only: it never blocks the operation, never changes
 the exit code, and never raises. When the host is local (or unset, meaning
 the default local host), the advisory is absent.
 
-The locality/redaction logic itself is `classify_embed_host`, pinned
+The locality/redaction logic itself is `classify_backend_host`, pinned
 exhaustively in `tests/unit/llm/test_embed_host.py`; these tests pin the
 three CLI wiring sites and the degrade-not-raise contract around them.
 """
