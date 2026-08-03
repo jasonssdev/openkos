@@ -47,6 +47,7 @@ from openkos.llm.ollama import (
     OllamaError,
     OllamaModelNotFound,
     OllamaUnavailable,
+    classify_embed_host,
     is_embedding_model,
     model_tag_matches,
 )
@@ -1870,6 +1871,32 @@ def _stage_derived_objects(
     return plans, None
 
 
+def _warn_if_nonlocal_embed_host(command: str) -> None:
+    """One stderr advisory when the configured embedding host is not
+    literally this machine (issue #199): document text and embedding
+    vectors are about to be POSTed to it, and a user who exported
+    `OLLAMA_HOST` for some other tool may not realize openkos inherits it.
+
+    ADVISORY only, by contract: never blocks, never raises, never changes
+    an exit code -- `classify_embed_host` is a pure literal check (no DNS,
+    no network) that degrades unparseable values to "warn" instead of
+    raising, and its `display_host` is userinfo-redacted on every path, so
+    a credentialed value can never leak a password here (the withdrawn
+    #183-PR3 predecessor's two CRITICALs). An unset/empty `OLLAMA_HOST`
+    means Ollama's own local default: silent. Over-warning is the accepted
+    failure direction; staying silent about data leaving the machine is
+    not."""
+    locality = classify_embed_host(os.environ.get("OLLAMA_HOST"))
+    if locality.is_local:
+        return
+    typer.echo(
+        f"openkos {command}: note -- embedding host '{locality.display_host}' "
+        "is not this machine (OLLAMA_HOST); document text and embedding "
+        "vectors will leave this machine.",
+        err=True,
+    )
+
+
 def _embed_after_ingest(
     layout: config.WorkspaceLayout, embedder: Embedder, *, model_tag: str
 ) -> None:
@@ -1903,6 +1930,10 @@ def _embed_after_ingest(
     Decision D), and passes NO `fts_db_path`: the FTS index is `reindex`'s
     job, not ingest's, and rebuilding it here would make every ingest pay
     for a full-text rebuild it did not ask for."""
+    # BEFORE the embed attempt, so the notice lands even when the embed
+    # itself then degrades: the advisory is about where the data is headed,
+    # not about whether it arrived (#199).
+    _warn_if_nonlocal_embed_host("ingest")
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             report = reindex_module.reindex(
@@ -8756,6 +8787,7 @@ def query(
 
     llm = OllamaClient(model=cfg.model)
     embedder = OllamaClient(model=cfg.embedding_model)
+    _warn_if_nonlocal_embed_host("query")
     observability.warn_if_walk_incomplete(
         layout.bundle_dir, include_confidential=include_confidential
     )
@@ -9086,6 +9118,7 @@ def reindex(
         raise typer.Exit(code=1) from exc
 
     embedder = OllamaClient(model=cfg.embedding_model)
+    _warn_if_nonlocal_embed_host("reindex")
     try:
         with open_vector_store(layout.vectors_db_path) as db:
             # Captured BEFORE the call so the summary below can name the OLD

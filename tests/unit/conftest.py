@@ -320,6 +320,13 @@ def _offline_ollama_by_default(
     both take precedence, since module-level and function-level fixtures
     resolve after this one.
 
+    Also clears `OLLAMA_HOST` (#199): the non-local embedding-host advisory
+    reads it directly, so a developer's exported value would inject an
+    extra stderr line into every strict stderr assertion across the suite
+    -- the same "green means something different on my laptop" class of
+    nondeterminism this fixture exists to end. Tests that pin the advisory
+    set the variable explicitly.
+
     One consequence worth naming rather than discovering later:
     `test_ingest.py` overrides this with `_FakeLLM`, which serves `chat()`
     but NOT `embed()`. Its tests therefore reach `_embed_after_ingest`, raise
@@ -333,6 +340,7 @@ def _offline_ollama_by_default(
     """
     if _wants_live_backend(request):
         return
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
     monkeypatch.setattr("openkos.cli.main.OllamaClient", OfflineOllama)
 
 
