@@ -147,7 +147,7 @@ def test_userinfo_is_always_redacted_from_display(
         ("user:s3cret?x@host:11434", "host:11434"),
         ("user:s3cret#x@host:11434", "host:11434"),
         ("http://user:s3cret/x@host:11434", "host:11434"),
-        ("remote.example/x@localhost", "localhost"),
+        ("remote.example/x@localhost", "remote.example"),
     ],
 )
 def test_separator_inside_userinfo_never_leaks_and_warns(
@@ -156,9 +156,12 @@ def test_separator_inside_userinfo_never_leaks_and_warns(
     """Review finding R1-userinfo-redaction-bypass: a reserved separator
     (`/`, `?`, `#`) smuggled into userinfo ahead of the `@` must not let the
     authority cut discard the `@host` remainder and hand the credential to
-    `display_host`. Such a value is malformed, so it classifies non-local
-    outright (over-warning is the accepted direction) and the display comes
-    from the redacted remainder -- never the credential fragment."""
+    `display_host`. A value whose authority is credential-shaped (non-numeric
+    port) is malformed, so it classifies non-local outright (over-warning is
+    the accepted direction) and the display comes from the redacted remainder
+    -- never the credential fragment. When the authority is instead a CLEAN
+    host[:port] (`remote.example/x@localhost`), the `@` belongs to the path,
+    so the authority itself is what the warning names (issue #353, item 5)."""
     result = classify_embed_host(raw)
     assert result.is_local is False
     assert result.display_host == expected_display
@@ -181,6 +184,145 @@ def test_non_numeric_port_is_never_displayed(raw: str, expected_display: str) ->
     display never includes it; only the host part survives."""
     result = classify_embed_host(raw)
     assert result.display_host == expected_display
+    assert "s3cret" not in result.display_host
+
+
+# --- issue #353 item 1: multi-colon bare credential ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_display", "secret"),
+    [
+        ("user:s3cret:extra", "user", "s3cret"),
+        ("token:abc123:x", "token", "abc123"),
+    ],
+)
+def test_multicolon_bare_credential_never_leaks(
+    raw: str, expected_display: str, secret: str
+) -> None:
+    """Issue #353 item 1 (same class as the corrected CRITICAL): a bare
+    multi-colon value that is NOT a plausible IPv6 literal must not take the
+    whole-value-host branch -- `user:s3cret:extra` would put the secret on
+    stderr. It falls through to plain host:port handling, where the
+    non-numeric-port guard drops EVERYTHING after the host part."""
+    result = classify_embed_host(raw)
+    assert result.is_local is False
+    assert result.display_host == expected_display
+    assert secret not in result.display_host
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_local"),
+    [
+        ("fe80::1234:5678", False),
+        ("0:0:0:0:0:0:0:1", False),
+        ("::1", True),
+    ],
+)
+def test_plausible_bracketless_ipv6_keeps_whole_value_host(
+    raw: str, expected_local: bool
+) -> None:
+    """Issue #353 item 1, the preserved side: a value that plausibly IS a
+    bracket-less IPv6 literal (contains `::`, or is solely hex segments of
+    at most 4 chars and colons) keeps the whole-value-host behavior."""
+    result = classify_embed_host(raw)
+    assert result.is_local is expected_local
+    assert result.display_host == raw
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_local", "expected_display"),
+    [
+        ("127.0.0.1:port:extra", True, "127.0.0.1"),
+        ("a:b:c:d", False, "a:b:c:d"),
+    ],
+)
+def test_hostile_multicolon_inputs_pin_locality(
+    raw: str, expected_local: bool, expected_display: str
+) -> None:
+    """Issue #353 item 1 fallout, pinned deliberately: a loopback host with
+    multi-colon non-numeric-port garbage falls through and classifies by
+    its host (local, remainder dropped -- consistent with
+    `localhost:s3cret`), while an all-hex multi-colon value stays a
+    plausible whole-value IPv6 host (non-local)."""
+    result = classify_embed_host(raw)
+    assert result.is_local is expected_local
+    assert result.display_host == expected_display
+
+
+# --- issue #353 item 2: balanced empty bracket pair ----------------------------
+
+
+@pytest.mark.parametrize("raw", ["[]", "[]:11434"])
+def test_balanced_empty_bracket_pair_is_nonlocal(raw: str) -> None:
+    """Issue #353 item 2: `[]`/`[]:11434` compute an empty host, but that
+    emptiness came from an EXPLICIT bracket pair, not from an unset value --
+    it is not the local default. Classify non-local, display the hostport."""
+    result = classify_embed_host(raw)
+    assert result.is_local is False
+    assert result.display_host == raw
+
+
+# --- issue #353 item 3: userinfo-only degenerate values ------------------------
+
+
+@pytest.mark.parametrize("raw", ["@", "@@@", "http://user@"])
+def test_userinfo_only_value_is_nonlocal_with_placeholder(raw: str) -> None:
+    """Issue #353 item 3: a value that reduces to an empty host only AFTER
+    userinfo redaction (`@`, `@@@`, `http://user@`) is malformed, not the
+    local default -- non-local, displayed as the safe placeholder (never an
+    empty string, never the userinfo)."""
+    result = classify_embed_host(raw)
+    assert result.is_local is False
+    assert result.display_host == "<unparseable>"
+    assert "user" not in result.display_host
+
+
+def test_lone_colon_stays_local_default() -> None:
+    """Issue #353 item 3, the preserved side: a lone `:` (empty host, empty
+    port, NO `@`) stays the local default exactly like `:11434`."""
+    result = classify_embed_host(":")
+    assert result.is_local is True
+
+
+# --- issue #353 item 5: `@` in the path, judged by authority shape --------------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "http://localhost:11434/v1@x",
+        "localhost:11434/v1@x",
+        "http://[::1]:11434/v1@x",
+    ],
+)
+def test_path_at_with_clean_local_authority_is_local(raw: str) -> None:
+    """Issue #353 item 5: when the `@` appears only AFTER the first
+    separator and the AUTHORITY parses as a clean host[:numeric-port], the
+    `@` belongs to the path -- classify by the authority normally. A local
+    authority stays local (and silent); the path fragment (`x`) must never
+    be the display."""
+    result = classify_embed_host(raw)
+    assert result.is_local is True
+
+
+def test_path_at_with_clean_nonlocal_authority_names_the_authority() -> None:
+    """Issue #353 item 5: `remote.example/x@localhost` has a clean non-local
+    authority, so the display names the AUTHORITY -- never `localhost`, which
+    is a path fragment nobody configured as the host."""
+    result = classify_embed_host("remote.example/x@localhost")
+    assert result.is_local is False
+    assert result.display_host == "remote.example"
+
+
+def test_suspicious_authority_with_empty_at_remainder_uses_placeholder() -> None:
+    """Issue #353 item 5, the degenerate corner: `user:s3cret/x@` has a
+    credential-shaped authority (non-numeric port) so it takes the
+    redact-against-full-remainder path -- but that remainder strips to
+    empty, so the display is the placeholder, never an empty string."""
+    result = classify_embed_host("user:s3cret/x@")
+    assert result.is_local is False
+    assert result.display_host == "<unparseable>"
     assert "s3cret" not in result.display_host
 
 
