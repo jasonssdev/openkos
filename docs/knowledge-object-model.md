@@ -260,7 +260,7 @@ Every object carries a `sensitivity` level. Three levels are defined to start, a
 
 - **public** — safe to share, export, or publish; any model, local or cloud, may process it.
 - **private** (default) — stays in your bundle; processed by local models; not exported or shared unless you explicitly choose to.
-- **confidential** — never sent to a cloud model, and excluded from exports and sharing; local models only; still readable by local agents.
+- **confidential** — never sent to a cloud model, and excluded from exports and sharing; local models only; still readable by local agents. "Local models only" is literal: see [egress, not inference](#what-the-gate-protects-against-egress-not-inference) for how a local backend is verified.
 
 The default for unlabeled objects is **private** (fail-closed): nothing is treated as public unless declared so.
 
@@ -269,7 +269,23 @@ Two rules make the label meaningful:
 1. **Enforcement lives in the engine, not the label.** The `sensitivity` field only declares intent. The engine enforces it at every boundary — most importantly at context assembly, so a confidential object cannot be pulled into a prompt destined for a cloud model. A label without enforcement is only documentation.
 2. **Sensitivity propagates along provenance.** A derived object is at least as sensitive as the most sensitive source it was compiled from — a high-water-mark rule. A synthesis that merges a confidential source with a public one becomes confidential. This propagation travels along the [provenance](#provenance) chain.
 
-Enforcement is **live at the retrieval boundary today** (shipped in MVP 2): a `confidential` concept is filtered out of context assembly before anything reaches the LLM — it is never pulled into a prompt — with an explicit `--include-confidential` escape for the local user who deliberately wants it in. The remaining boundaries — cloud-model options, agents (MCP), and export/import — arrive in MVP 3, and the same field governs them when they land. The field was defined early so knowledge could be labeled from the start.
+Enforcement is **live at the retrieval boundary today** (shipped in MVP 2): a `confidential` concept is filtered out of context assembly before anything reaches the LLM, with an explicit `--include-confidential` escape for the local user who deliberately wants it in. The remaining boundaries — cloud-model options, agents (MCP), and export/import — arrive in MVP 3, and the same field governs them when they land. The field was defined early so knowledge could be labeled from the start.
+
+### What the gate protects against: egress, not inference
+
+`sensitivity` governs what **leaves the machine**. When the LLM backend is verifiably local, nothing leaves, so the gate has nothing to protect — and since [#240](https://github.com/jasonssdev/openkos/issues/240) it does not fire: a `confidential` concept participates normally in `query`, `contradictions`, `adjudicate`, `suggest-relations`, and `suggest-volatility` against a loopback Ollama, with no flag.
+
+"Verifiably local" means loopback **by literal form** — `localhost`, a `127.0.0.0/8` address, or `::1` — checked against the host the client will actually send to. There is no DNS resolution and no allowlist: a hostname that resolves to loopback today can resolve elsewhere tomorrow, and a check that cannot prove a host is local must not grant the exemption. Unknown or unparseable hosts are therefore treated as remote.
+
+| Backend | `confidential` object | `--include-confidential` |
+|---|---|---|
+| Verified local | sent | not needed |
+| Verified remote | blocked | still the escape hatch |
+| Unknown / unparseable | blocked (fail closed) | still the escape hatch |
+
+This is a **deliberate change of behavior**, not a relaxation of the policy. It sharpens `confidential` from the blunt "must never reach an LLM" to the precise "must not leave this machine", and it removes the habit the old rule trained — passing `--include-confidential` on every local invocation, which disables the one gate that matters the day the backend is *not* local.
+
+To restore the old blanket behavior for a workspace, set `confidential_local_exemption: false` in `openkos.yaml`. It is a workspace-level key rather than a per-command flag on purpose: a policy that depends on remembering to type a flag is not a policy. `openkos doctor` reports the backend's locality and whether the exemption is consequently active, so the state is inspectable rather than inferred.
 
 ---
 
