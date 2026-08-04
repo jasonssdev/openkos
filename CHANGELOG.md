@@ -14,6 +14,22 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Source` documents no longer propose or receive candidate edges**: the
+  third, embedding-proximity pass of `build_graph()` fed its full node set —
+  including every `sources/` document — to the candidate source, so a
+  `Source` could both anchor and receive an untyped candidate edge. The seed
+  node set handed to `pairs(...)`, and both endpoint guards on the returned
+  pairs, now exclude any document whose OKF `type` is `Source`, mirroring
+  the existing exclusion in `resolution/candidates.py`. Passes one
+  (bundle-relative markdown links) and two (`relations:` frontmatter typing,
+  including the Concept→Source `derived_from` provenance mirror) are
+  unaffected. `graph/proximity.py` is untouched — the exclusion lives in
+  projection policy, not proximity policy. First slice of a two-part fix for
+  the `curate` stability issue that motivated this change; a hard per-run
+  cap on candidate-edge output is tracked separately. (graph) (#378)
+
 ## [0.2.1] - 2026-08-03
 
 ### Added

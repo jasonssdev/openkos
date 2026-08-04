@@ -1597,6 +1597,101 @@ def test_pass_three_row_order_is_deterministic_and_canonical(
     assert forward.received == [["concepts/a", "concepts/b", "concepts/c"]]
 
 
+# --- Phase 1 (#378 slice 1): Source-exclusion from the pass-3 seed set -----
+
+
+def test_pass_three_excludes_source_docs_from_the_seed_node_set(
+    tmp_path: Path,
+) -> None:
+    """A `Source` document must never be offered to `candidates.pairs(...)`
+    as an anchor -- only Concept-typed (non-Source) ids reach the seed set,
+    proving the exclusion narrows the ANCHOR LIST, not just the row guards."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", doc_type="Concept", title="A")
+    _write_doc(bundle / "concepts" / "b.md", doc_type="Concept", title="B")
+    _write_doc(bundle / "sources" / "call.md", doc_type="Source", title="Call")
+    stub = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        _edge_rows(store)
+
+    assert stub.received == [["concepts/a", "concepts/b"]]
+
+
+def test_pass_three_drops_a_candidate_pair_originating_from_a_source(
+    tmp_path: Path,
+) -> None:
+    """Even if a candidate source nominates a pair with a Source as the
+    proposing endpoint, pass 3 must drop it -- a Source MUST NOT propose a
+    candidate edge."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", doc_type="Concept", title="A")
+    _write_doc(bundle / "sources" / "call.md", doc_type="Source", title="Call")
+    stub = _StubCandidateSource([("sources/call", "concepts/a")])
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+
+    assert rows == []
+
+
+def test_pass_three_drops_a_candidate_pair_targeting_a_source(
+    tmp_path: Path,
+) -> None:
+    """The receiving-direction case: `VectorProximitySource.pairs` queries
+    the whole `vectors.db` and never filters its own hits against the
+    `concept_ids` it was handed, so a Source can still come back as a
+    *neighbor* even when it was never offered as an anchor. The row guards
+    (not the anchor list alone) must catch this -- a Source MUST NOT receive
+    a candidate edge."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", doc_type="Concept", title="A")
+    _write_doc(bundle / "sources" / "call.md", doc_type="Source", title="Call")
+    stub = _StubCandidateSource([("concepts/a", "sources/call")])
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+
+    assert rows == []
+
+
+def test_pass_three_still_seeds_concept_to_concept_pairs(tmp_path: Path) -> None:
+    """A Source document elsewhere in the bundle must not perturb an
+    unrelated Concept<->Concept candidate pair."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", doc_type="Concept", title="A")
+    _write_doc(bundle / "concepts" / "b.md", doc_type="Concept", title="B")
+    _write_doc(bundle / "sources" / "call.md", doc_type="Source", title="Call")
+    stub = _StubCandidateSource([("concepts/a", "concepts/b")])
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+
+    assert rows == [("concepts/a", "concepts/b", None)]
+
+
+def test_source_exclusion_leaves_the_derived_from_provenance_mirror_intact(
+    tmp_path: Path,
+) -> None:
+    """Passes 1 and 2 -- including the Concept->Source `derived_from`
+    provenance mirror -- must remain unaffected by the pass-3 Source
+    exclusion filter."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "sources" / "foo.md", doc_type="Source", title="Foo")
+    _write_doc_with_provenance(
+        bundle / "concepts" / "a.md",
+        title="A",
+        provenance=["sources/foo"],
+        body="## Related\n\nSee [foo](/sources/foo.md).\n",
+    )
+    stub = _StubCandidateSource([])
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+
+    assert rows == [("concepts/a", "sources/foo", "derived_from")]
+
+
 # --- Phase 3.4 (#183): zero-candidate success path, through the real seam --
 
 
