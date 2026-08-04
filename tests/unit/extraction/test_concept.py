@@ -762,6 +762,25 @@ def test_prompt_new_opening_frames_extraction_as_a_list_decision() -> None:
     assert "as ONE derived knowledge object" not in system_content
 
 
+def test_prompt_repoints_rubric_to_candidate_objects_not_the_whole_source() -> None:
+    """D2: the framing above the nine type bullets no longer asks "what is
+    the source about" as one per-source question -- a framing with exactly
+    one answer by construction. It now instructs the model to first
+    identify the candidate distinct objects the source contains, then
+    classify EACH candidate independently -- so the rubric below can be
+    applied N times, not collapsed to one."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert (
+        "identify the candidate distinct objects the source contains" in system_content
+    )
+    assert "classify EACH candidate" in system_content
+    assert "Classify by what the source is fundamentally about:" not in system_content
+
+
 def test_prompt_contains_anti_enumeration_paragraph_verbatim() -> None:
     """Phase 1 (D1): the anti-enumeration paragraph is present verbatim,
     including the meeting-transcript -> Event+Decisions-not-5-Persons

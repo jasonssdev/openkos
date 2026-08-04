@@ -40,14 +40,14 @@ Chain strategy: pending
 - [x] 2.1 RED: add a prompt-text test asserting the reframed non-authoritative `SOURCE TITLE` label in `_build_messages`'s user content; confirm it fails first. `test_prompt_frames_source_title_as_non_authoritative_metadata` added, confirmed failing before the edit.
 - [x] 2.2 GREEN: edit `_build_messages` in `concept.py` per DD1; `derive_source_title`/`main.py:2688` untouched.
 - [x] 2.3 Update the `_build_messages` docstring.
-- [ ] 2.4 Operator-assisted: `run_title_ab.py --arms h1` vs baseline; confirm no regression (DD1 shouldn't move rates).
+- [x] 2.4 Operator-assisted: `run_title_ab.py --arms h1` vs baseline; confirm no regression (DD1 shouldn't move rates). Gate run 20260804T162351Z (8-source subset × 3 runs, per-source comparison vs the frozen 151148Z h1 column): no source below its baseline count; call-with-maria still 1 (expected), notes-on-enchiridion still 3; 02-how-claude-code-works enumerated 5 in 2 of 3 runs (above baseline); twins unchanged (D4's gate); 1 empty run within baseline empty rate (4 of 90).
 
 ## Phase 3: PR 2 / D2 — re-point rubric per candidate (RED-first)
 
-- [ ] 3.1 RED: test asserting `concept.py:37` no longer asks "what the source is about" as one question, instead frames per-candidate application; confirm fails first.
-- [ ] 3.2 GREEN: edit the framing line per DD2; nine bullets and `CLASSIFIABLE_TYPES` untouched.
-- [ ] 3.3 Update `_SYSTEM_PROMPT` docstring.
-- [ ] 3.4 Confirm the three DD3 alarm tests still pass unedited.
+- [x] 3.1 RED: test asserting `concept.py:37` no longer asks "what the source is about" as one question, instead frames per-candidate application; confirm fails first. `test_prompt_repoints_rubric_to_candidate_objects_not_the_whole_source` added, confirmed failing before the edit.
+- [x] 3.2 GREEN: edit the framing line per DD2; nine bullets and `CLASSIFIABLE_TYPES` untouched. New framing: "First identify the candidate distinct objects the source contains, then classify EACH candidate independently against the type rubric below:".
+- [x] 3.3 Update `_SYSTEM_PROMPT` docstring to describe the per-candidate framing (design D2).
+- [x] 3.4 Confirm the three DD3 alarm tests still pass unedited (3 passed, unmodified).
 - [ ] 3.5 Operator-assisted: `--arms h1` vs baseline; `multi_obj_rate` > 0.09, `call-with-maria` > 1; record run.
 
 ## Phase 4: PR 2 / D3 — multiplicity test paragraph (RED-first)

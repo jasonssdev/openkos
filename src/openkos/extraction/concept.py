@@ -33,8 +33,9 @@ _SYSTEM_PROMPT = (
     "tie-breaks below to EACH object independently.\n\n"
     'Vocabulary: the derived object\'s "type" MUST be one of exactly nine '
     'values: "Person", "Organization", "Place", "Event", "Procedure", '
-    '"Decision", "Project", "Concept", or "Entity". Classify by what the '
-    "source is fundamentally about:\n"
+    '"Decision", "Project", "Concept", or "Entity". First identify the '
+    "candidate distinct objects the source contains, then classify EACH "
+    "candidate independently against the type rubric below:\n"
     '- "Person": the source is fundamentally about ONE specific, named '
     "individual human -- their identity, role, work, or biography.\n"
     '- "Organization": the source is fundamentally about ONE specific, '
@@ -152,8 +153,11 @@ _SYSTEM_PROMPT = (
     "Do NOT wrap the array in an outer object."
 )
 """Stable system half of the 2-message prompt: the closed 9-value
-vocabulary, the aboutness heuristic (classify by subject, not by a
-borrowed name), the Person/Organization/Place/Event/Procedure/Decision/
+vocabulary, the per-candidate framing (design D2: identify the candidate
+distinct objects first, then classify EACH one independently, rather than
+asking once what the whole source is about), the aboutness heuristic
+(classify by subject, not by a borrowed name), the Person/Organization/
+Place/Event/Procedure/Decision/
 Project/Concept-outrank-Entity tie-break chain -- including the bespoke
 KOM-silent sub-rules for a landmark named after a person/org, an
 organization sited at a location, an event at a place, the occurrent
