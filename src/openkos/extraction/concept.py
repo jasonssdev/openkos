@@ -140,6 +140,23 @@ _SYSTEM_PROMPT = (
     "idea corrected, a decision made -- yields one object per subject, "
     "each classified independently. A source developing only one subject "
     "still yields exactly ONE object.\n\n"
+    # Anti-twin clause (design D4): additive, placed after the D3
+    # multiplicity paragraph and before the positive default, never inside
+    # the verbatim-pinned anti-enumeration paragraph. Suppresses the
+    # specific defect measured in 4b.6's diagnostic probe: a fourth
+    # candidate that exactly restated the SOURCE TITLE metadata value
+    # (Event:Call with Maria Salazar -- 2026-07-14) alongside genuine
+    # candidates like Person:Maria Salazar. Must not suppress a candidate
+    # that only shares WORDS with the source title while targeting one
+    # specific subject within it.
+    "A candidate whose title and scope merely restate the SOURCE's own "
+    'title and scope as a whole -- a "twin" that mirrors the source '
+    "itself rather than one specific subject within it -- is not distinct "
+    "and MUST NOT be produced. This does not suppress a candidate that "
+    "shares WORDS with the source title while still targeting one specific "
+    "subject inside it (e.g. a Person named in the title): only a "
+    "candidate whose title and scope restate the SOURCE as a whole is a "
+    "twin.\n\n"
     # Positive default. This replaces a stack of three suppression levers
     # ("When in doubt, leave it out", plus TWO separate invitations to
     # return []) that together made the model answer a bare `[]` for any
@@ -180,8 +197,12 @@ reference, FAQ) to Procedure or Concept, the anti-enumeration paragraph
 plus the adjacent stated multiplicity test (design D3: multiplicity is
 decided per subject, not per source -- a source developing several
 distinct subjects yields one object per subject, each classified
-independently, while a single-subject source still yields exactly one),
-the positive default (a substantive source yields at least one object;
+independently, while a single-subject source still yields exactly one)
+and the adjacent anti-twin clause (design D4: a candidate whose title and
+scope merely restate the SOURCE's own title and scope as a whole is not
+distinct and MUST NOT be produced, without suppressing a candidate that
+only shares words with the source title while targeting one specific
+subject within it), the positive default (a substantive source yields at least one object;
 `[]` is a last resort mentioned exactly once, never an invitation), and the
 JSON-only instruction baked into system text; the `user` message carries
 the raw source text."""

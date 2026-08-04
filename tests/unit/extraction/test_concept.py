@@ -871,6 +871,51 @@ def test_prompt_states_multiplicity_decision_test_adjacent_to_anti_enumeration()
     assert anti_enumeration_end < multiplicity_start < positive_default_start
 
 
+def test_prompt_states_anti_twin_clause_after_multiplicity_paragraph() -> None:
+    """D4: a candidate whose title and scope merely restate the SOURCE's own
+    title and scope as a whole -- a "twin" of the source rather than one
+    subject within it -- MUST NOT be produced. This is the direct
+    suppression for the empirically observed defect (4b.6 diagnostic probe):
+    a fourth candidate titled `Event:Call with Maria Salazar --
+    2026-07-14`, an exact restatement of the user turn's SOURCE TITLE value,
+    alongside genuine candidates like `Person:Maria Salazar`. The clause is
+    ADDITIVE, placed adjacent to (never inside) the verbatim-pinned
+    anti-enumeration paragraph, after the D3 multiplicity paragraph and
+    before the positive default paragraph (design D4/DD3)."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert (
+        "restate the SOURCE's own title and scope" in system_content
+        or "restate the Source's own title and scope" in system_content
+    )
+    assert "twin" in system_content.lower()
+    assert "MUST NOT be produced" in system_content
+    # Not a blanket ban on shared words: a candidate that shares words with
+    # the source title while still targeting one specific subject inside it
+    # (e.g. a Person named in the title) remains distinct.
+    assert "specific subject" in system_content
+
+    anti_enumeration_end = system_content.index(
+        "A document explaining one topic usually yields exactly ONE object."
+    )
+    multiplicity_start = system_content.index(
+        "Multiplicity is decided per subject, not per source"
+    )
+    twin_clause_start = system_content.index("twin")
+    positive_default_start = system_content.index(
+        "Restraint means FEWER objects, never ZERO"
+    )
+    assert (
+        anti_enumeration_end
+        < multiplicity_start
+        < twin_clause_start
+        < positive_default_start
+    )
+
+
 def test_prompt_repoints_named_entity_bullets_to_the_candidate() -> None:
     """Fourth axis (design open question #1, resolved 2026-08-04): the seven
     named-entity type bullets (Person, Organization, Place, Event, Procedure,
@@ -895,6 +940,23 @@ def test_prompt_repoints_named_entity_bullets_to_the_candidate() -> None:
     assert '"Procedure": the candidate is ONE repeatable how-to' in system_content
     assert '"Decision": the candidate is ONE choice that was made' in system_content
     assert '"Project": the candidate is ONE ongoing effort' in system_content
+
+
+def test_prompt_concept_bullet_repoints_aboutness_clause_to_the_candidate() -> None:
+    """Review WARNING (4b): the Concept bullet's aboutness clause must
+    discriminate CANDIDATE vs SOURCE, not just repeat the word "candidate"
+    incidentally -- pin the exact clause so a future edit can't silently
+    revert it to "classify by what the source is actually about"."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert (
+        "classify by what the candidate is actually about, not by whose "
+        "name it carries" in system_content
+    )
+    assert "classify by what the source is actually about" not in system_content
 
 
 def test_prompt_json_array_template_shape() -> None:
