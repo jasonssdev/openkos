@@ -140,23 +140,24 @@ _SYSTEM_PROMPT = (
     "idea corrected, a decision made -- yields one object per subject, "
     "each classified independently. A source developing only one subject "
     "still yields exactly ONE object.\n\n"
-    # Anti-twin clause (design D4): additive, placed after the D3
-    # multiplicity paragraph and before the positive default, never inside
-    # the verbatim-pinned anti-enumeration paragraph. Suppresses the
-    # specific defect measured in 4b.6's diagnostic probe: a fourth
-    # candidate that exactly restated the SOURCE TITLE metadata value
-    # (Event:Call with Maria Salazar -- 2026-07-14) alongside genuine
-    # candidates like Person:Maria Salazar. Must not suppress a candidate
-    # that only shares WORDS with the source title while targeting one
-    # specific subject within it.
+    # Anti-twin clause (design D4/5b, narrowed): prompt wording alone could
+    # not carry the unconditional rule at the 8B tier -- a narrower clause
+    # carrying a CONCRETE forbidden-title example made the defect WORSE
+    # (5.6 probe: twinned in 4 of 4, twice as the ONLY object -- priming).
+    # The rule is now enforced deterministically in
+    # `_drop_source_title_twins` (design D4/5b); this soft, example-free
+    # restatement only asks the model to prefer not emitting the twin
+    # ALONGSIDE genuine subjects, and explicitly preserves the floor: a
+    # source whose one genuine subject IS what its own title names still
+    # yields that subject.
     "A candidate whose title and scope merely restate the SOURCE's own "
-    'title and scope as a whole -- a "twin" that mirrors the source '
-    "itself rather than one specific subject within it -- is not distinct "
-    "and MUST NOT be produced. This does not suppress a candidate that "
-    "shares WORDS with the source title while still targeting one specific "
-    "subject inside it (e.g. a Person named in the title): only a "
-    "candidate whose title and scope restate the SOURCE as a whole is a "
-    "twin.\n\n"
+    'title and scope as a whole -- a "twin" that mirrors the source itself '
+    "rather than one specific subject within it -- MUST NOT be produced "
+    "ALONGSIDE another genuine candidate: when the source develops more "
+    "than one distinct subject, drop any candidate that only restates the "
+    "source as a whole and keep the specific ones. A source whose ONE "
+    "genuine subject is what its own title already names is not redundant "
+    "with anything and still yields that specific subject.\n\n"
     # Positive default. This replaces a stack of three suppression levers
     # ("When in doubt, leave it out", plus TWO separate invitations to
     # return []) that together made the model answer a bare `[]` for any
@@ -198,11 +199,14 @@ plus the adjacent stated multiplicity test (design D3: multiplicity is
 decided per subject, not per source -- a source developing several
 distinct subjects yields one object per subject, each classified
 independently, while a single-subject source still yields exactly one)
-and the adjacent anti-twin clause (design D4: a candidate whose title and
-scope merely restate the SOURCE's own title and scope as a whole is not
-distinct and MUST NOT be produced, without suppressing a candidate that
-only shares words with the source title while targeting one specific
-subject within it), the positive default (a substantive source yields at least one object;
+and the adjacent, soft, example-free anti-twin clause (design D4/5b: a
+candidate that merely restates the SOURCE's own title and scope as a whole
+should not be produced ALONGSIDE another genuine candidate, and a source
+whose one genuine subject IS what its own title names still yields that
+subject -- the unconditional rule is enforced deterministically in
+`_drop_source_title_twins`, not by prompt wording, since a narrower prompt
+clause carrying a concrete forbidden example measurably made the defect
+worse via priming), the positive default (a substantive source yields at least one object;
 `[]` is a last resort mentioned exactly once, never an invitation), and the
 JSON-only instruction baked into system text; the `user` message carries
 the raw source text."""
@@ -281,6 +285,41 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     )
 
 
+def _drop_source_title_twins(
+    results: list[ExtractionResult], *, source_title: str
+) -> list[ExtractionResult]:
+    """Deterministic anti-twin enforcement (design D4/5b): prompt wording
+    alone could not carry this rule at the 8B tier (5.5-5.6 probes -- the
+    committed clause left the exact-title twin in 2 of 5 harness runs, and a
+    narrowed clause carrying a concrete forbidden example made it WORSE,
+    twinning in 4 of 4 and twice as the ONLY object -- priming). Enforced
+    here instead, after per-item validation and before the
+    `_MAX_OBJECTS_PER_SOURCE` cap.
+
+    Compares each validated object's `title` to `source_title` using an
+    exact, normalized comparison (strip + casefold + collapsed internal
+    whitespace) -- no fuzzy/semantic matching. If one or more objects match
+    AND at least one non-matching object also exists, the matching
+    (redundant) objects are dropped. If EVERY object matches, or only one
+    object exists at all, the list is returned unchanged: a genuinely
+    single-subject source (the measured `mcp-launch` shape -- H1 "MCP
+    Launching" -> `Event:MCP Launching`) must keep its only object, since
+    suppressing it would emit `[]` for genuine content. The floor always
+    wins over the anti-twin rule."""
+    if len(results) <= 1:
+        return results
+
+    def _normalize(value: str) -> str:
+        return " ".join(value.strip().casefold().split())
+
+    normalized_title = _normalize(source_title)
+    non_twins = [r for r in results if _normalize(r.title) != normalized_title]
+
+    if not non_twins or len(non_twins) == len(results):
+        return results
+    return non_twins
+
+
 _MAX_OBJECTS_PER_SOURCE = 5
 """Hard ceiling on validated objects returned per source (design D4): a
 safety ceiling applied AFTER per-item validation, not a target -- the
@@ -294,14 +333,16 @@ def extract_concept(
     """Prompt `llm` to classify zero or more distinct derived objects from
     `source_text`.
 
-    Returns a list of validated `ExtractionResult`s, in reply order,
-    truncated to `_MAX_OBJECTS_PER_SOURCE` (keeping the first N). `[]` means
-    nothing was worth extracting -- the model returned an empty array, or
-    every candidate failed validation; this layer does not distinguish the
-    two (fail-closed). Any `OllamaError`-family exception raised by
-    `llm.chat` propagates unswallowed to the caller (see module docstring).
-    The caller loops `openkos.model.okf.build_concept` once per returned
-    object.
+    Returns a list of validated `ExtractionResult`s, in reply order, with any
+    source-title twin dropped (`_drop_source_title_twins`, design D4/5b --
+    deterministic, not prompt-carried) unless it is the only surviving
+    object, then truncated to `_MAX_OBJECTS_PER_SOURCE` (keeping the first
+    N). `[]` means nothing was worth extracting -- the model returned an
+    empty array, or every candidate failed validation; this layer does not
+    distinguish the two (fail-closed). Any `OllamaError`-family exception
+    raised by `llm.chat` propagates unswallowed to the caller (see module
+    docstring). The caller loops `openkos.model.okf.build_concept` once per
+    returned object.
     """
     reply = llm.chat(_build_messages(source_text, source_title))
     items = parsing.extract_json_items(reply)
@@ -310,4 +351,5 @@ def extract_concept(
         result = _validate(item)
         if result is not None:
             results.append(result)
+    results = _drop_source_title_twins(results, source_title=source_title)
     return results[:_MAX_OBJECTS_PER_SOURCE]

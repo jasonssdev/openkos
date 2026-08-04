@@ -661,6 +661,86 @@ def test_cap_applies_after_validation_not_before() -> None:
     assert [r.title for r in result] == [f"Item {i}" for i in range(cap)]
 
 
+# --- Deterministic anti-twin enforcement (5b) --------------------------------
+
+_MARIA_ITEM = (
+    '{"type": "Person", "title": "Maria Salazar", '
+    '"description": "A friend discussing her move.", "body": ""}'
+)
+
+_APATHEIA_ITEM = (
+    '{"type": "Concept", "title": "Apatheia", '
+    '"description": "A Stoic term for freedom from destructive emotion.", '
+    '"body": ""}'
+)
+
+_DICHOTOMY_ITEM = (
+    '{"type": "Concept", "title": "Dichotomy of Control", '
+    '"description": "The Stoic distinction between what is and is not up to us.", '
+    '"body": ""}'
+)
+
+_CALL_WITH_MARIA_TWIN_ITEM = (
+    '{"type": "Event", "title": "Call with Maria Salazar — 2026-07-14", '
+    '"description": "A phone call between the author and Maria Salazar.", '
+    '"body": ""}'
+)
+
+_MCP_LAUNCHING_EVENT_ITEM = (
+    '{"type": "Event", "title": "MCP Launching", '
+    '"description": "The launch of the Model Context Protocol.", "body": ""}'
+)
+
+
+def test_source_title_twin_dropped_when_genuine_objects_survive() -> None:
+    """5b: a reply carrying a fourth candidate whose title exactly restates
+    `source_title` (the measured `call-with-maria` shape, 4b.6 diagnostic
+    probe) alongside three genuine objects yields only the three genuine
+    ones, in reply order -- the twin is dropped because it is redundant
+    with surviving objects."""
+    llm = _FakeLLM(
+        reply=_array(
+            _MARIA_ITEM,
+            _APATHEIA_ITEM,
+            _DICHOTOMY_ITEM,
+            _CALL_WITH_MARIA_TWIN_ITEM,
+        )
+    )
+
+    result = concept_mod.extract_concept(
+        "Maria and I talked about her move, then about apatheia and the "
+        "dichotomy of control.",
+        source_title="Call with Maria Salazar — 2026-07-14",
+        llm=llm,
+    )
+
+    assert [r.title for r in result] == [
+        "Maria Salazar",
+        "Apatheia",
+        "Dichotomy of Control",
+    ]
+    assert all(r.title != "Call with Maria Salazar — 2026-07-14" for r in result)
+
+
+def test_source_title_twin_kept_when_it_is_the_only_object() -> None:
+    """5b floor guard: a reply whose ONLY object restates `source_title`
+    (the measured `mcp-launch` shape -- a genuinely single-subject source
+    whose only subject IS what its title names) is kept unchanged.
+    Suppressing it would emit `[]` for genuine content, which the floor
+    (design D4/5b) forbids. This may pass trivially before the 5b.3
+    implementation exists -- it is the regression alarm for the floor
+    rule, not proof of the drop behavior on its own."""
+    llm = _FakeLLM(reply=_array(_MCP_LAUNCHING_EVENT_ITEM))
+
+    result = concept_mod.extract_concept(
+        "MCP is launching next week.", source_title="MCP Launching", llm=llm
+    )
+
+    assert len(result) == 1
+    assert result[0].title == "MCP Launching"
+    assert result[0].type == "Event"
+
+
 # --- extract_concept: zero / one / N results, OllamaError propagation -------
 
 
@@ -872,16 +952,19 @@ def test_prompt_states_multiplicity_decision_test_adjacent_to_anti_enumeration()
 
 
 def test_prompt_states_anti_twin_clause_after_multiplicity_paragraph() -> None:
-    """D4: a candidate whose title and scope merely restate the SOURCE's own
-    title and scope as a whole -- a "twin" of the source rather than one
-    subject within it -- MUST NOT be produced. This is the direct
-    suppression for the empirically observed defect (4b.6 diagnostic probe):
-    a fourth candidate titled `Event:Call with Maria Salazar --
-    2026-07-14`, an exact restatement of the user turn's SOURCE TITLE value,
-    alongside genuine candidates like `Person:Maria Salazar`. The clause is
-    ADDITIVE, placed adjacent to (never inside) the verbatim-pinned
-    anti-enumeration paragraph, after the D3 multiplicity paragraph and
-    before the positive default paragraph (design D4/DD3)."""
+    """D4/5b (narrowed 2026-08-04, was 5.5-5.6's unconditional wording):
+    prompt wording alone cannot carry the anti-twin rule at the 8B tier --
+    the unconditional clause left the exact-title twin in 2 of 5 harness
+    runs, and a narrower clause carrying a CONCRETE forbidden-title example
+    made it WORSE (twinned in 4 of 4, twice as the ONLY object -- priming).
+    The rule is now enforced deterministically in
+    `_drop_source_title_twins` (5b.3); this soft, example-free clause only
+    asks the model to prefer not producing a source-restating "twin"
+    ALONGSIDE another genuine candidate, and explicitly preserves the floor
+    (a source whose one genuine subject IS what its own title names still
+    yields that subject). The clause is ADDITIVE, placed adjacent to (never
+    inside) the verbatim-pinned anti-enumeration paragraph, after the D3
+    multiplicity paragraph and before the positive default paragraph."""
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
 
     concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
