@@ -170,26 +170,59 @@ Every report ends with one extra line, pooled across arms:
 > runs landing on a named-entity type average **N** objects; runs landing on
 > `Concept`/`Entity` average **M**
 
-It exists because the first run showed the collapse is **not global**:
-`call-with-maria` gave 1 object in every arm and every run (always a `Person`),
-while `notes-on-enchiridion` gave 3–4 in every arm (always `Concept`s). That
-split lands exactly on the rubric's line — seven of the nine types read *"the
-source is fundamentally about ONE specific, named X"*; `Concept` and `Entity`
-are exempt (`concept.py:38-63`, and the code's own comment at `concept.py:68`).
-The probe declines to report when only one side of the line is present.
+It exists because the collapse is **not global**. Seven of the nine types read
+*"the source is fundamentally about ONE specific, named X"*; `Concept` and
+`Entity` are exempt (`concept.py:38-63`, and the code's own comment at
+`concept.py:68`).
 
-Two metrics decide it, on top of the shared scoring above:
+The corpus run measured a **hard cap on the named-entity side**: n=24, mean
+exactly 1.00, max 1 — every single run produced one object, zero variance. The
+exempt side averaged 1.54 with spikes to 5.
 
-- **`avg_objects`** — mean produced-object count per run. The primary signal,
-  because the regression is a count.
+So the probe reports **spread, not a difference of means**. That 1.00-vs-1.54
+gap failed an earlier `≥1.0` mean threshold and printed "does NOT split", when
+zero variance on one side *was* the finding. It also refuses to read the cap as
+the cause while the exempt side still mostly yields one object — the wording
+explains those capped runs, not the collapse as a whole. The probe declines
+entirely when only one side of the line is present.
+
+Two **independent** signals decide it, because the anchor turned out to act on
+more than one thing:
+
+- **`multi_obj_rate`** — fraction of runs producing ≥2 objects. How *often* the
+  model enumerates. The primary signal.
 - **`twin_rate`** — fraction of produced objects whose title merely restates the
-  SOURCE TITLE the arm sent. The anchor's fingerprint. `none` reads `0.00` by
+  SOURCE TITLE the arm sent. *What* it produces. `none` reads `0.00` by
   construction, not by merit.
 
-The report ends with a **Verdict** that refuses to overclaim: below a 0.5-object
-spread across arms it reports the anchor as innocent and tells you *not* to
-rewrite the prompt on that evidence. Writes `report-title-ab.md` plus a
-timestamped copy under `results/`.
+Either one moving implicates the anchor; both flat clears it.
+
+**`avg_objects` is reported but is not the criterion**, and the first corpus run
+is why. The distribution is bimodal — the mode is 1, the tail spikes to 3–5 — so
+the mean barely moves when the rare event doubles in frequency:
+
+| Arm | mean | multi-object rate | twin_rate |
+|---|---|---|---|
+| `h1` (v0.2.1) | 1.22 | 0.08 (3/36, 2 sources) | **0.30** |
+| `stem` (v0.2.0) | 1.50 | **0.17** (6/36, 5 sources) | 0.11 |
+
+An earlier version of this harness applied a 0.5 threshold to that 0.28 mean
+spread and reported the anchor innocent, while its own `twin_rate` said the
+opposite. The clearest single case:
+
+```
+[h1]   05-workflow → Concept:Workflow
+[stem] 05-workflow → Concept:Explore, Plan, Code, and Commit Workflow
+```
+
+Same document, same prompt. Under `h1` the model echoes the heading; under
+`stem` it has to read the document and name what it found. A mean cannot see
+that.
+
+The report ends with a **Verdict** that reads both signals, prints the raw event
+counts so small `n` stays visible, and flags itself **underpowered** when fewer
+than 10 multi-object runs are pooled across arms. Writes `report-title-ab.md`
+plus a timestamped copy under `results/`.
 
 The `none` arm swaps `concept._build_messages` for a title-free builder and
 restores it in a `finally`, because proposal slice 1 writes no production code.

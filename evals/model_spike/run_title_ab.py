@@ -45,13 +45,24 @@ from the body too would vary two things at once and make the result unreadable.
 
 READING THE RESULT
 ------------------
-`avg_objects` is the primary signal, because the regression is a count (3 -> 1).
-`twin_rate` is the mechanism: the fraction of produced objects whose title
-merely restates the SOURCE TITLE. If the anchor is guilty, `h1` shows the
-lowest `avg_objects` and the highest `twin_rate`, and `none` shows the highest
-count with a `twin_rate` near zero. If the three arms are flat, the anchor is
-innocent, the search widens inside slice 1, and no prompt gets rewritten
-against a guess.
+Two independent signals, because the anchor turned out to act on more than one
+thing:
+
+- `multi_object_rate` -- how OFTEN the model enumerates (>= 2 objects in a run).
+- `twin_rate` -- WHAT it produces: the fraction of objects whose title merely
+  restates the SOURCE TITLE this arm sent.
+
+Either one moving implicates the anchor; both flat clears it.
+
+`avg_objects` is reported but is NOT the criterion, and the first corpus run is
+why. The distribution is bimodal -- the mode is 1, the tail spikes to 3-5 -- so
+the mean barely moves when the rare event doubles in frequency. Measured: means
+1.22 (`h1`) vs 1.50 (`stem`), a spread an earlier version of this file called
+noise, while the underlying rates were 8% vs 17% over 2 vs 5 distinct sources
+and twin_rate ran 0.30 vs 0.11. The single clearest case was `05-workflow`:
+`h1` produced `Concept:Workflow`, echoing the heading verbatim; `stem` produced
+`Concept:Explore, Plan, Code, and Commit Workflow`. Same document, same prompt.
+That is the anchor flattening content, and a mean cannot see it.
 
 USAGE
 -----
@@ -232,11 +243,52 @@ class ArmReport:
 
     @property
     def avg_objects(self) -> float:
-        """Mean produced-object count over responded runs. THE primary signal."""
+        """Mean produced-object count over responded runs.
+
+        NOT the primary signal, despite the obvious reading. The distribution
+        is bimodal -- the mode is 1 and the tail spikes to 3-5 -- so the mean
+        is dominated by the mode and moves barely at all when the rare event
+        doubles in frequency. Measured: 1.22 vs 1.50 across arms whose
+        multi-object RATES were 8% and 17%. Use `multi_object_rate`.
+        """
         responded = self.responded
         if not responded:
             return 0.0
         return statistics.fmean(len(o.produced) for o in responded)
+
+    @property
+    def multi_object_events(self) -> int:
+        """Responded runs that produced two or more objects."""
+        return sum(1 for o in self.responded if len(o.produced) >= 2)
+
+    @property
+    def multi_object_rate(self) -> float:
+        """Fraction of responded runs producing >= 2 objects. THE primary signal.
+
+        Extraction does not fail by shaving a fraction off every source; it
+        fails by enumerating on far fewer of them. A rate reads that directly
+        where a mean cannot.
+        """
+        responded = self.responded
+        if not responded:
+            return 0.0
+        return self.multi_object_events / len(responded)
+
+    @property
+    def enumerating_sources(self) -> int:
+        """Distinct sources that enumerated at least once under this arm.
+
+        Guards against one chatty source carrying the whole rate: three
+        multi-object runs on one file is a very different claim from three
+        spread over three files.
+        """
+        return len({o.fixture for o in self.responded if len(o.produced) >= 2})
+
+    @property
+    def max_objects(self) -> int:
+        """Largest object count seen in any responded run under this arm."""
+        counts = [len(o.produced) for o in self.responded]
+        return max(counts) if counts else 0
 
     @property
     def avg_latency_s(self) -> float:
@@ -419,12 +471,33 @@ def _fmt(value: float) -> str:
     return f"{value:.2f}"
 
 
+# A rare-event rate needs a ratio, not an absolute gap: 8% -> 17% is a doubling
+# that an absolute threshold tuned for means would discard. Both must hold, so a
+# 1% -> 2% flicker on tiny n cannot pass.
+_RATE_RATIO = 1.5
+_RATE_MIN_GAP = 0.05
+# Twins are per-object, not per-run, so their denominator is large enough for an
+# absolute threshold. Measured 0.30 vs 0.11 when the anchor was acting.
+_TWIN_MIN_GAP = 0.10
+# Below this many multi-object runs pooled across arms, the rate is a handful of
+# events and cannot carry a conclusion on its own.
+_RATE_MIN_EVENTS = 10
+
+
 def verdict(reports: Sequence[ArmReport], by_name: dict[str, Fixture]) -> str:
     """State what the numbers support, and refuse to overclaim when flat.
 
-    The threshold is deliberate: a spread below 0.5 objects per run over a
-    handful of non-deterministic samples is noise, and calling it a cause is
-    exactly the mistake this harness exists to prevent.
+    Reads TWO independent signals, because the anchor turned out to act on
+    more than one thing:
+
+    - `multi_object_rate` -- how OFTEN the model enumerates. Replaces the mean
+      object count, which is blind here: measured 1.22 vs 1.50 for arms whose
+      rates were 8% and 17%.
+    - `twin_rate` -- WHAT it produces. An arm can enumerate just as often and
+      still collapse every title onto the source's own heading, which is the
+      failure #377 actually describes.
+
+    Either signal alone implicates the anchor. Both flat clears it.
     """
     usable = [r for r in reports if r.responded]
     if len(usable) < 2:
@@ -432,36 +505,91 @@ def verdict(reports: Sequence[ArmReport], by_name: dict[str, Fixture]) -> str:
             "**Inconclusive.** Fewer than two arms produced a usable run. Check "
             "that Ollama is running and the model is pulled, then re-run."
         )
-    ranked = sorted(usable, key=lambda r: r.avg_objects)
-    lowest, highest = ranked[0], ranked[-1]
-    spread = highest.avg_objects - lowest.avg_objects
-    lines = [
-        f"- Object-count spread across arms: **{_fmt(spread)}** "
-        f"(`{lowest.arm}` {_fmt(lowest.avg_objects)} -> "
-        f"`{highest.arm}` {_fmt(highest.avg_objects)}).",
-    ]
+
+    by_rate = sorted(usable, key=lambda r: r.multi_object_rate)
+    rate_low, rate_high = by_rate[0], by_rate[-1]
+    by_twin = sorted(usable, key=lambda r: r.twin_rate())
+    twin_low, twin_high = by_twin[0], by_twin[-1]
+
+    total_events = sum(r.multi_object_events for r in usable)
+    rate_gap = rate_high.multi_object_rate - rate_low.multi_object_rate
+    rate_ratio = (
+        rate_high.multi_object_rate / rate_low.multi_object_rate
+        if rate_low.multi_object_rate
+        else float("inf")
+        if rate_high.multi_object_rate
+        else 1.0
+    )
+    twin_gap = twin_high.twin_rate() - twin_low.twin_rate()
+
+    lines = []
     for r in usable:
-        lines.append(f"- `{r.arm}` twin_rate: **{_fmt(r.twin_rate())}**.")
+        lines.append(
+            f"- `{r.arm}`: multi-object rate **{_fmt(r.multi_object_rate)}** "
+            f"({r.multi_object_events}/{len(r.responded)} runs, across "
+            f"{r.enumerating_sources} source(s), max {r.max_objects}); "
+            f"twin_rate **{_fmt(r.twin_rate())}**; mean {_fmt(r.avg_objects)}."
+        )
     lines.append("")
     lines.append(_type_conditional_note(usable))
     lines.append("")
-    if spread < 0.5:
+
+    rate_moves = rate_gap >= _RATE_MIN_GAP and rate_ratio >= _RATE_RATIO
+    twin_moves = twin_gap >= _TWIN_MIN_GAP
+    underpowered = total_events < _RATE_MIN_EVENTS
+
+    if not rate_moves and not twin_moves:
         lines.append(
-            "**The anchor looks innocent.** The arms are within noise of each "
-            "other, so the `SOURCE TITLE:` value does not carry the 3->1 "
-            "regression. Do NOT rewrite the prompt on this evidence: widen the "
-            "search inside slice 1. The measured baseline recorded here is "
-            "still what #379's gate needs."
+            "**The anchor looks innocent.** Neither how often the model "
+            "enumerates nor what it titles moved across arms, so the "
+            "`SOURCE TITLE:` value does not carry the regression. Do NOT "
+            "rewrite the prompt on this evidence: widen the search inside "
+            "slice 1. The measured baseline recorded here is still what "
+            "#379's gate needs."
         )
-    else:
+        return "\n".join(lines)
+
+    lines.append("**The anchor moves extraction.** With `_SYSTEM_PROMPT` held")
+    lines.append("byte-identical across arms:")
+    lines.append("")
+    if rate_moves:
         lines.append(
-            f"**The anchor moves extraction.** Removing or weakening the title "
-            f"changes the object count by {_fmt(spread)} per run with "
-            f"`_SYSTEM_PROMPT` held byte-identical, which is the D1 hypothesis "
-            f"surviving its test. Record this in `design.md` before any prompt "
-            f"edit, and let it decide whether `_build_messages`' title framing "
-            f"changes."
+            f"- It changes **how often** the model enumerates: "
+            f"`{rate_low.arm}` {_fmt(rate_low.multi_object_rate)} -> "
+            f"`{rate_high.arm}` {_fmt(rate_high.multi_object_rate)} "
+            f"({rate_ratio:.1f}x), over "
+            f"{rate_low.enumerating_sources} vs "
+            f"{rate_high.enumerating_sources} distinct sources."
         )
+    if twin_moves:
+        lines.append(
+            f"- It changes **what** the model produces: twin_rate "
+            f"`{twin_low.arm}` {_fmt(twin_low.twin_rate())} -> "
+            f"`{twin_high.arm}` {_fmt(twin_high.twin_rate())}. Objects under "
+            f"`{twin_high.arm}` restate the source's own heading instead of "
+            f"naming what the document contains -- the twin #377 describes."
+        )
+    lines.append("")
+    if underpowered:
+        lines.append(
+            f"**Underpowered on the rate signal:** only {total_events} "
+            f"multi-object runs pooled across arms (threshold "
+            f"{_RATE_MIN_EVENTS}). Re-run with more `--runs` before treating "
+            f"the rate as settled."
+            + (
+                " The twin signal has a per-object denominator and is not "
+                "subject to this caveat."
+                if twin_moves
+                else ""
+            )
+        )
+        lines.append("")
+    lines.append(
+        "Record this in `design.md` before any prompt edit. Note what it "
+        "implicates: a title-framing change lives in `_build_messages`, not in "
+        "the rubric -- which per the proposal is an ingest/extraction interface "
+        "decision and returns through the ADR gate."
+    )
     return "\n".join(lines)
 
 
@@ -471,11 +599,31 @@ def verdict(reports: Sequence[ArmReport], by_name: dict[str, Fixture]) -> str:
 _UNCAPPED_TYPES = frozenset({"Concept", "Entity"})
 
 
+def _side_summary(label: str, counts: list[int]) -> str:
+    """Describe one side of the rubric line by spread, not by mean alone.
+
+    A mean hides the finding that matters most here. Measured: named-entity
+    runs came back n=24, mean 1.00, max 1 -- every single run produced exactly
+    one object. Zero variance IS the result, and a mean difference of 0.54
+    against a noisier other side got reported as "no split".
+    """
+    n = len(counts)
+    top = max(counts)
+    if top == min(counts):
+        return f"`{label}` n={n}, **every run produced exactly {top}** (zero variance)"
+    return (
+        f"`{label}` n={n}, mean {_fmt(statistics.fmean(counts))}, max {top}, "
+        f"{sum(1 for c in counts if c >= 2)} run(s) enumerated"
+    )
+
+
 def _type_conditional_note(reports: Sequence[ArmReport]) -> str:
     """Report object counts split by the rubric's seven-vs-two type line.
 
-    Pooled across arms on purpose: the arms are the title variable, and this
-    probe asks a different question that the title was shown not to move.
+    Pooled across arms on purpose: this probe asks about the rubric, not the
+    title. It reports SPREAD rather than ranking means, because the meaningful
+    outcomes here are "one side never enumerates" and "both sides mostly
+    produce one" -- neither of which a difference of means expresses.
     """
     capped: list[int] = []
     uncapped: list[int] = []
@@ -484,25 +632,40 @@ def _type_conditional_note(reports: Sequence[ArmReport]) -> str:
             target = uncapped if first_type in _UNCAPPED_TYPES else capped
             target.extend(counts)
     if not capped or not uncapped:
-        seen = "only capped-type runs" if capped else "only Concept/Entity runs"
+        seen = "only named-entity runs" if capped else "only Concept/Entity runs"
         return (
             f"- Type-conditional probe: **not testable here** ({seen}). Add "
             f"sources on both sides of the line to read it."
         )
-    cap_mean = statistics.fmean(capped)
-    unc_mean = statistics.fmean(uncapped)
-    verdict_word = (
-        "**splits along the rubric line**"
-        if unc_mean - cap_mean >= 1.0
-        else "does NOT split along the rubric line"
-    )
+
+    cap_hard = max(capped) == 1
+    unc_enumerates = any(c >= 2 for c in uncapped)
+    unc_mostly_one = statistics.fmean(uncapped) < 2.0
+    if cap_hard and unc_enumerates:
+        reading = (
+            "**A hard cap on the named-entity side.** No run landing on one of "
+            "the seven types phrased ONE-specific-named-X ever produced a "
+            "second object, while the exempt side did."
+        )
+        if unc_mostly_one:
+            reading += (
+                " But the exempt side still produces one object most of the "
+                "time, so the rubric wording explains those capped runs and "
+                "NOT the collapse as a whole. Do not read this as the cause."
+            )
+    elif not cap_hard:
+        reading = (
+            "**No cap.** Named-entity runs did produce multiple objects, so "
+            "that wording is not constraining them."
+        )
+    else:
+        reading = (
+            "**Not readable.** Neither side enumerated, so the line cannot be "
+            "tested on this sample. More sources, or more runs."
+        )
     return (
-        f"- Type-conditional probe: runs landing on a named-entity type average "
-        f"**{_fmt(cap_mean)}** objects (n={len(capped)}); runs landing on "
-        f"`Concept`/`Entity` average **{_fmt(unc_mean)}** (n={len(uncapped)}). "
-        f"Extraction {verdict_word} "
-        f'(seven of nine types read "the source is fundamentally about ONE '
-        f'specific, named X"; `Concept` and `Entity` are exempt).'
+        f"- Type-conditional probe: {_side_summary('named-entity', capped)}; "
+        f"{_side_summary('Concept/Entity', uncapped)}. {reading}"
     )
 
 
@@ -561,27 +724,39 @@ def build_report(
     lines.append("## Per-arm summary")
     lines.append("")
     lines.append(
-        "| Arm | avg_objects | twin_rate | schema_valid | type_acc | "
-        "anti_enum | avg_lat_s | errors |"
+        "| Arm | multi_obj_rate | twin_rate | avg_objects | max | schema_valid | "
+        "type_acc | anti_enum | avg_lat_s | errors |"
     )
-    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for r in reports:
         lines.append(
-            f"| `{r.arm}` | **{_fmt(r.avg_objects)}** | {_fmt(r.twin_rate())} | "
+            f"| `{r.arm}` | **{_fmt(r.multi_object_rate)}** "
+            f"({r.multi_object_events}/{len(r.responded)}, "
+            f"{r.enumerating_sources} src) | **{_fmt(r.twin_rate())}** | "
+            f"{_fmt(r.avg_objects)} | {r.max_objects} | "
             f"{_fmt(r.schema_valid_rate)} | {_fmt(r.type_accuracy(by_name))} | "
             f"{_fmt(r.anti_enumeration_score(by_name))} | "
             f"{_fmt(r.avg_latency_s)} | {r.backend_errors} |"
         )
     lines.append("")
     lines.append(
-        "- **avg_objects**: mean produced-object count per run. The primary "
-        "signal, because the regression is a count (3 -> 1)."
+        "- **multi_obj_rate**: fraction of runs producing >= 2 objects, with the "
+        "raw event count and how many distinct sources contributed. THE primary "
+        "signal -- extraction does not fail by shaving a fraction off every "
+        "source, it fails by enumerating on far fewer of them."
     )
     lines.append(
         "- **twin_rate**: fraction of produced objects whose title merely "
         "restates the SOURCE TITLE this arm sent (proposal D4). The anchor's "
-        "fingerprint. The `none` arm has no title to echo, so it reads 0.00 by "
-        "construction, not by merit."
+        "fingerprint, and independent of the rate: an arm can enumerate just as "
+        "often and still collapse every title onto the heading. The `none` arm "
+        "has no title to echo, so it reads 0.00 by construction, not by merit."
+    )
+    lines.append(
+        "- **avg_objects**: reported for continuity, NOT the criterion. The "
+        "distribution is bimodal (mode 1, tail to 3-5), so the mean barely moves "
+        "when the rare event doubles: measured 1.22 vs 1.50 for arms whose rates "
+        "were 0.08 and 0.17."
     )
     lines.append("")
 
@@ -687,9 +862,22 @@ def _self_test() -> int:
             "none.anti_enumeration_score: expected 1.0 against the corrected "
             f"3-object target, got {none.anti_enumeration_score(by_name)}"
         )
+    if h1.multi_object_rate != 0.0:
+        failures.append(
+            f"h1.multi_object_rate: expected 0.0, got {h1.multi_object_rate}"
+        )
+    if none.multi_object_rate != 1.0 or none.max_objects != 3:
+        failures.append(
+            f"none rate/max: expected 1.0/3, got "
+            f"{none.multi_object_rate}/{none.max_objects}"
+        )
+
     guilty = verdict([h1, none], by_name)
     if "anchor moves extraction" not in guilty:
-        failures.append("verdict: a 2.0 spread should read as the anchor moving")
+        failures.append("verdict: a 0.0 -> 1.0 rate jump should implicate the anchor")
+    if "Underpowered" not in guilty:
+        failures.append("verdict: 1 pooled multi-object run must flag underpowered")
+
     flat = verdict(
         [
             h1,
@@ -700,7 +888,41 @@ def _self_test() -> int:
         by_name,
     )
     if "anchor looks innocent" not in flat:
-        failures.append("verdict: a 0.0 spread should read as innocent")
+        failures.append("verdict: two identical arms should read as innocent")
+
+    # REGRESSION GUARD for the defect this replaced. These are the real
+    # 2026-08-04 corpus numbers: means 1.22 vs 1.50 (a spread the old
+    # 0.5-threshold called noise) over rates of 8% vs 17%, with twin_rate
+    # 0.30 vs 0.11. Both signals must now fire.
+    def _arm(name: str, counts: list[int], twins: int) -> ArmReport:
+        rep = ArmReport(
+            arm=name, titles_used={f"s{i}": "T" for i in range(len(counts))}
+        )
+        for i, c in enumerate(counts):
+            produced = tuple(
+                ("Concept", "T" if j < twins else f"x{i}{j}") for j in range(c)
+            )
+            rep.outcomes.append(RunOutcome(name, f"s{i}", 1, _OK, produced, 1.0, None))
+            twins -= min(twins, c)
+        return rep
+
+    real_h1 = _arm(ARM_H1, [1] * 33 + [3, 3, 5], 13)
+    real_stem = _arm(ARM_STEM, [1] * 30 + [3, 3, 3, 5, 5, 5], 6)
+    if abs(real_h1.avg_objects - 1.22) > 0.02:
+        failures.append(f"guard: h1 mean should be ~1.22, got {real_h1.avg_objects}")
+    if abs(real_stem.avg_objects - 1.50) > 0.02:
+        failures.append(
+            f"guard: stem mean should be ~1.50, got {real_stem.avg_objects}"
+        )
+    real = verdict([real_h1, real_stem], by_name)
+    if "anchor moves extraction" not in real:
+        failures.append(
+            "REGRESSION: the real corpus numbers must implicate the anchor. A "
+            "mean-spread criterion called them noise; that is the bug this "
+            "guard exists to catch."
+        )
+    if "how often" not in real:
+        failures.append("guard: the rate signal should fire on 8% vs 17%")
 
     report = build_report([h1, none], FIXTURES, "self-test", 1, datetime.now(UTC))
     for needle in ("## Verdict", "## Object count per source", "## Arms"):
@@ -747,10 +969,39 @@ def _self_test() -> int:
             f"avg_objects must count unlabeled runs, got {mixed.avg_objects}"
         )
 
-    # Type-conditional probe: Person runs cap at 1, Concept runs spread.
-    probe_note = _type_conditional_note([h1, none, mixed])
-    if "splits along the rubric line" not in probe_note:
-        failures.append(f"type-conditional probe misread the split: {probe_note!r}")
+    # Type-conditional probe. The branch that matters is the real one: the
+    # named-entity side capped at exactly 1 across every run while the exempt
+    # side enumerated. A mean-difference criterion scored that 1.00 vs 1.54 and
+    # reported "no split"; zero variance on one side IS the finding.
+    capped_arm = ArmReport(arm=ARM_H1, titles_used={})
+    capped_arm.outcomes = [
+        RunOutcome(ARM_H1, f"p{i}", 1, _OK, (("Person", f"P{i}"),), 1.0, None)
+        for i in range(8)
+    ] + [
+        RunOutcome(ARM_H1, "c0", 1, _OK, (("Concept", "A"),), 1.0, None),
+        RunOutcome(
+            ARM_H1, "c1", 1, _OK, (("Concept", "A"), ("Concept", "B")), 1.0, None
+        ),
+    ]
+    probe_note = _type_conditional_note([capped_arm])
+    if "hard cap on the named-entity side" not in probe_note:
+        failures.append(f"probe missed the zero-variance cap: {probe_note!r}")
+    if "zero variance" not in probe_note:
+        failures.append("probe must name zero variance rather than report a mean")
+    if "NOT the collapse as a whole" not in probe_note:
+        failures.append(
+            "probe must refuse to read the cap as the cause while the exempt "
+            "side also mostly yields one object"
+        )
+
+    uncapped_arm = ArmReport(arm=ARM_H1, titles_used={})
+    uncapped_arm.outcomes = [
+        RunOutcome(ARM_H1, "p0", 1, _OK, (("Person", "A"), ("Person", "B")), 1.0, None),
+        RunOutcome(ARM_H1, "c0", 1, _OK, (("Concept", "A"),), 1.0, None),
+    ]
+    if "No cap." not in _type_conditional_note([uncapped_arm]):
+        failures.append("probe must report no cap when named-entity runs enumerate")
+
     one_sided = _type_conditional_note([none])
     if "not testable here" not in one_sided:
         failures.append("probe must decline when only one side of the line is present")
