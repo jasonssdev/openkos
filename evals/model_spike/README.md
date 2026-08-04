@@ -25,8 +25,8 @@ each (models are non-deterministic), and scores:
 - **type_accuracy** — multiset recall of the target types.
 - **anti_enumeration_score** — penalty for over-producing shallow stubs (the
   `call-with-maria` fixture is the probe: a good model extracts the rich
-  `Decision` + the one salient `Person`, not a `Person`/`Entity` stub for every
-  name mentioned).
+  `Decision`, the apatheia `Concept`, and the one salient `Person`, not a
+  `Person`/`Entity` stub for every name mentioned).
 - **avg_latency_s** — mean extraction latency per run.
 
 It writes a markdown comparison report (`report.md`, plus a timestamped copy in
@@ -40,8 +40,26 @@ Two `good-life-demo` raw sources with known-correct derived objects:
 
 | Fixture | Raw source | Target |
 | --- | --- | --- |
-| `call-with-maria` | `examples/good-life-demo/raw/call-with-maria-2026-07-14.txt` | 2 → `Decision` + `Person` |
+| `call-with-maria` | `examples/good-life-demo/raw/call-with-maria-2026-07-14.txt` | 3 → `Decision` + `Person` + `Concept` (apatheia) |
 | `notes-on-enchiridion` | `examples/good-life-demo/raw/notes-on-the-enchiridion-2026-07-05.txt` | 2 → `Concept` × 2 (Stoicism, Epicureanism) |
+
+**The reference bundle is the ground truth, not this table.** An object belongs
+to a fixture's target when extracting *that raw alone* should produce it. Read
+the `provenance:` of `examples/good-life-demo/bundle/` to check.
+
+`call-with-maria` read `2 → Decision + Person` until #377. That was
+under-specified by exactly one object, `concepts/stoicism.md`, which cites this
+call as `[2]` twice in its body for the two apatheia paragraphs. The
+consequence was not cosmetic: the harness **penalized the correct answer**, since
+a run producing all three scored `anti_enumeration_score = 2/3` instead of
+`1.0`.
+
+The mirror-image trap is `notes-on-enchiridion`. The decision object lists that
+raw in its `provenance:` too, so it looks like it should also target a
+`Decision`. It must not: provenance means "this object's content draws on that
+source", not "extracting that source alone yields this object". The decision is
+*made* in `call-with-maria`; the Enchiridion notes only supply the
+dichotomy-of-control background it cites.
 
 ## How to run
 
