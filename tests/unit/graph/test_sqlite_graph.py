@@ -1442,7 +1442,9 @@ class _StubCandidateSource:
     `(source, target, distance)` 3-tuple, for slice 2's rank/cap tests
     (#378 slice 2, task 2.1.1)."""
 
-    def __init__(self, pairs: list[tuple[str, str] | tuple[str, str, float]]) -> None:
+    def __init__(
+        self, pairs: Sequence[tuple[str, str] | tuple[str, str, float]]
+    ) -> None:
         self._pairs = pairs
         self.received: list[list[str]] = []
 
