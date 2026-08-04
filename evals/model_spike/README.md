@@ -112,6 +112,90 @@ The **composite** used to pick the default is the equal-weight mean of
 `schema_valid_rate`, `type_accuracy`, and `anti_enumeration_score`, with
 `avg_latency_s` as the tie-breaker.
 
+## Sibling harness: the title-anchor A/B (`run_title_ab.py`)
+
+`run_spike.py` answers "which model?". `run_title_ab.py` answers a different
+question, for [#377](https://github.com/jasonssdev/openkos/issues/377): **is the
+`SOURCE TITLE:` value what collapsed extraction to one object per source?**
+
+It holds corpus, model, `_SYSTEM_PROMPT` and sample count constant and varies
+exactly one thing, the title handed to the user turn:
+
+| Arm | Title sent | Reproduces |
+| --- | --- | --- |
+| `h1` | `derive_source_title(raw)` → `"Call with Maria Salazar — 2026-07-14"` | v0.2.1 (today) |
+| `stem` | `titleize(path.stem)` → `"call with maria 2026 07 14"` | v0.2.0 |
+| `none` | no `SOURCE TITLE:` line at all | the control |
+
+Why those arms: `git diff v0.2.0 v0.2.1 -- src/openkos/extraction/` is **empty**,
+so the prompt cannot explain a 3→1 regression between them. What landed in
+v0.2.1 alone is `7f29cdd` (#248), which changed that title and feeds it to the
+extraction prompt.
+
+```sh
+uv run python evals/model_spike/run_title_ab.py                       # all three arms
+uv run python evals/model_spike/run_title_ab.py --model qwen3:8b --runs 5
+uv run python evals/model_spike/run_title_ab.py --arms h1,none
+uv run python evals/model_spike/run_title_ab.py --self-test           # no Ollama needed
+```
+
+### Measuring an external corpus (`--corpus`)
+
+The two `good-life-demo` fixtures **never reproduced the 3→1 regression** — in
+the first run, `call-with-maria` yielded exactly one object in all three arms,
+including the arm that reproduces v0.2.0's title. The regression #377 documents
+lives on its 15-source tutorial corpus, which is not in this repository.
+
+`--corpus DIR` loads every `.md`/`.txt` under `DIR` as an **unlabeled** source:
+
+```sh
+uv run python evals/model_spike/run_title_ab.py --corpus ~/path/to/raw/
+uv run python evals/model_spike/run_title_ab.py --corpus ~/path/to/raw/ --with-fixtures
+```
+
+No target types are invented for those sources. #377's evidence is *counts*
+("3 objects under v0.2.0, 1 under v0.2.1"), so counts are what gets measured:
+`avg_objects`, `twin_rate`, the per-source count table, and the type-conditional
+probe all apply; `type_acc` and `anti_enum` exclude unlabeled sources rather
+than reporting a meaningless number. Declaring guessed targets would manufacture
+a ground truth nobody verified — the exact defect this harness already had to
+fix once.
+
+A run over 100 calls prints a time forecast before it starts.
+
+### The type-conditional probe
+
+Every report ends with one extra line, pooled across arms:
+
+> runs landing on a named-entity type average **N** objects; runs landing on
+> `Concept`/`Entity` average **M**
+
+It exists because the first run showed the collapse is **not global**:
+`call-with-maria` gave 1 object in every arm and every run (always a `Person`),
+while `notes-on-enchiridion` gave 3–4 in every arm (always `Concept`s). That
+split lands exactly on the rubric's line — seven of the nine types read *"the
+source is fundamentally about ONE specific, named X"*; `Concept` and `Entity`
+are exempt (`concept.py:38-63`, and the code's own comment at `concept.py:68`).
+The probe declines to report when only one side of the line is present.
+
+Two metrics decide it, on top of the shared scoring above:
+
+- **`avg_objects`** — mean produced-object count per run. The primary signal,
+  because the regression is a count.
+- **`twin_rate`** — fraction of produced objects whose title merely restates the
+  SOURCE TITLE the arm sent. The anchor's fingerprint. `none` reads `0.00` by
+  construction, not by merit.
+
+The report ends with a **Verdict** that refuses to overclaim: below a 0.5-object
+spread across arms it reports the anchor as innocent and tells you *not* to
+rewrite the prompt on that evidence. Writes `report-title-ab.md` plus a
+timestamped copy under `results/`.
+
+The `none` arm swaps `concept._build_messages` for a title-free builder and
+restores it in a `finally`, because proposal slice 1 writes no production code.
+It removes the *anchor*, not the information: both raws open with their own
+title line, which still reaches the model inside `SOURCE TEXT:`.
+
 ## Notes
 
 - The harness imports and drives the real pipeline; it does **not** reimplement
