@@ -52,7 +52,11 @@ pair:
    pass 2 -- a pair the bundle already links, or that a human already typed,
    needs no candidate. Rows are collapsed to one canonical `(min, max)`
    direction, because k-NN is near-symmetric and two rows would double every
-   suggestion a human is asked to review.
+   suggestion a human is asked to review. A document whose OKF `type` is
+   `Source` is excluded from the seeding node set on BOTH ends (#378 slice
+   1): a Source MUST NOT propose a candidate edge and MUST NOT receive one.
+   This exclusion applies ONLY to pass 3 -- passes 1 and 2, including the
+   Concept->Source `derived_from` provenance mirror, are unaffected.
 
 Each pass dedupes its own rows before insert -- the untyped pass on
 `(source_id, target_id)`, the typed pass on `(source_id, target_id,
@@ -307,9 +311,12 @@ def _populate_graph_tables(
     only); the second, from `relations:` frontmatter, always carries that
     entry's explicit `type`; the third runs ONLY when `candidates` is given
     (#183) and writes one untyped row per nominated pair that neither
-    earlier pass already claimed, in either direction. With
-    `candidates=None` -- the default -- the third pass does not run and the
-    output is byte-identical to the two-pass build. Callers own `conn`'s
+    earlier pass already claimed, in either direction, EXCLUDING any pair
+    where either endpoint's OKF `type` is `Source` (#378 slice 1) -- a
+    Source document must not propose or receive a candidate edge, though it
+    still participates fully in passes 1 and 2. With `candidates=None` --
+    the default -- the third pass does not run and the output is
+    byte-identical to the two-pass build. Callers own `conn`'s
     lifecycle -- any exception raised here propagates to the caller
     unchanged, closing/cleanup is the caller's responsibility.
     """
@@ -399,11 +406,24 @@ def _populate_graph_tables(
         for source_id, target_id, _ in typed_edges:
             seen.add((source_id, target_id))
             seen.add((target_id, source_id))
+        # Source-exclusion (#378 slice 1): a `Source` document must not
+        # propose (anchor list) or receive (row guards) a candidate edge.
+        # Narrowing the anchor list alone is not enough --
+        # `VectorProximitySource.pairs` queries the whole `vectors.db` and
+        # never filters its own hits against the ids it was handed, so a
+        # Source can still come back as a neighbor even when it was never
+        # offered as an anchor. Both endpoints must be checked against the
+        # Source-free `seed_node_ids`, not the full `node_ids`.
+        seed_node_ids = {
+            concept_id
+            for concept_id, metadata in metadatas
+            if metadata.get("type") != "Source"
+        }
         candidate_rows = {
             (min(pair.source_id, pair.target_id), max(pair.source_id, pair.target_id))
-            for pair in candidates.pairs(sorted(node_ids))
-            if pair.source_id in node_ids
-            and pair.target_id in node_ids
+            for pair in candidates.pairs(sorted(seed_node_ids))
+            if pair.source_id in seed_node_ids
+            and pair.target_id in seed_node_ids
             and pair.source_id != pair.target_id
             and (pair.source_id, pair.target_id) not in seen
         }
