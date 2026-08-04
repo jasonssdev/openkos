@@ -53,9 +53,13 @@ class Fixture:
     """A raw source with its known-correct derived objects (ground truth).
 
     `target_types` is a MULTISET of the expected `ExtractionResult.type`
-    values; `target_count` is its length. The `call-with-maria` fixture is the
-    anti-enumeration probe: the correct answer is the rich `Decision` plus the
-    one salient `Person`, NOT a `Person`/`Entity` stub for every name mentioned.
+    values; `target_count` is its length. Ground truth is the reference bundle
+    under `examples/good-life-demo/`, never a guess: an object belongs to a
+    fixture's target when extracting THAT raw alone should produce it.
+
+    The `call-with-maria` fixture is also the anti-enumeration probe: the
+    correct answer is the rich `Decision`, the apatheia `Concept`, and the one
+    salient `Person`, NOT a `Person`/`Entity` stub for every name mentioned.
     """
 
     name: str
@@ -83,14 +87,36 @@ FIXTURES: tuple[Fixture, ...] = (
         name="call-with-maria",
         raw_path=_RAW / "call-with-maria-2026-07-14.txt",
         source_title="Call with Maria Salazar — 2026-07-14",
-        # Anti-enumeration probe: one Decision + one salient Person, not a
-        # flood of shallow Person/Entity stubs for every name mentioned.
-        target_types=("Decision", "Person"),
+        # Ground truth comes from the reference bundle, which is the acceptance
+        # fixture (issue #377): THREE objects cite this raw in their
+        # `provenance:` -- `people/maria-salazar.md` (Person),
+        # `concepts/stoicism.md` (Concept), and
+        # `decisions/frame-the-essay-on-the-dichotomy-of-control.md` (Decision).
+        # The Concept is not a stub: `concepts/stoicism.md` cites this call as
+        # `[2]` twice in its body, for the two apatheia paragraphs it supplies.
+        #
+        # This target read `("Decision", "Person")` until #377. That was
+        # under-specified by exactly the multi-source object, and it made the
+        # harness PENALIZE the correct answer: a run producing all three scored
+        # anti_enumeration_score = 2/3 instead of 1.0. Anti-enumeration is still
+        # probed here -- the wrong answer is a Person/Entity stub for every name
+        # mentioned, which this target still punishes.
+        target_types=("Decision", "Person", "Concept"),
     ),
     Fixture(
         name="notes-on-enchiridion",
         raw_path=_RAW / "notes-on-the-enchiridion-2026-07-05.txt",
         source_title="Reading notes — Enchiridion, 2026-07-05",
+        # Stays at TWO, deliberately. `decisions/frame-the-essay-...` also lists
+        # this raw in its `provenance:`, so a reader correcting the fixture above
+        # from the bundle will be tempted to add a `Decision` here too. Do not:
+        # provenance means "this object's content draws on that source", not
+        # "extracting that source alone yields this object". The decision is
+        # MADE in `call-with-maria` ("She suggested framing the essay on the
+        # dichotomy of control instead of on apatheia", with rationale and the
+        # alternative considered). This raw only supplies the dichotomy-of-
+        # control background the decision cites, plus "Ask Maria about this
+        # one" -- an open question, not a decision record.
         target_types=("Concept", "Concept"),
     ),
 )
@@ -548,7 +574,11 @@ def self_test() -> int:
         if abs(got - want) > 1e-9:
             failures.append(f"{label}: got {got!r}, want {want!r}")
 
-    maria = Counter(("Decision", "Person"))  # target multiset
+    # A synthetic 2-type target used ONLY to exercise the scoring formulas in
+    # sections 1-3. Deliberately NOT the `call-with-maria` fixture target (which
+    # is three types since #377) -- these checks pin the arithmetic, and hard
+    # numbers below are hand-computed against this multiset.
+    two_type_target = Counter(("Decision", "Person"))
     concepts = Counter(("Concept", "Concept"))
 
     # 1. Prove ExtractionResult flows through unchanged: build real dataclasses,
@@ -558,8 +588,8 @@ def self_test() -> int:
         ExtractionResult("Person", "Maria Salazar", "p", ""),
     ]
     ideal_ms = Counter(r.type for r in ideal)
-    check("ideal type_acc", type_accuracy(ideal_ms, maria), 1.0)
-    check("ideal anti_enum", anti_enumeration_score(ideal_ms, maria), 1.0)
+    check("ideal type_acc", type_accuracy(ideal_ms, two_type_target), 1.0)
+    check("ideal anti_enum", anti_enumeration_score(ideal_ms, two_type_target), 1.0)
 
     # 2. type_accuracy: multiset recall.
     check("concept full", type_accuracy(Counter(("Concept", "Concept")), concepts), 1.0)
@@ -570,16 +600,18 @@ def self_test() -> int:
     # 3. anti_enumeration_score: over-production penalty.
     flood = Counter(("Decision", "Person", "Person", "Person", "Entity", "Event"))
     # over = Person(3-1=2) + Entity(1) + Event(1) = 4; target_count=2 -> 2/6.
-    check("flood anti_enum", anti_enumeration_score(flood, maria), 2.0 / 6.0)
+    check("flood anti_enum", anti_enumeration_score(flood, two_type_target), 2.0 / 6.0)
     check(
         "under anti_enum",
-        anti_enumeration_score(Counter(("Decision",)), maria),
+        anti_enumeration_score(Counter(("Decision",)), two_type_target),
         1.0,
     )
     # One extra off-target stub: over=1 -> 2/3.
     single_extra = Counter(("Decision", "Person", "Entity"))
     check(
-        "single_extra anti_enum", anti_enumeration_score(single_extra, maria), 2.0 / 3.0
+        "single_extra anti_enum",
+        anti_enumeration_score(single_extra, two_type_target),
+        2.0 / 3.0,
     )
 
     # 4. Aggregation + composite over synthetic runs (two models, two fixtures).
@@ -605,7 +637,8 @@ def self_test() -> int:
     check("good type_acc", good.type_accuracy(fixtures), 1.0)
     check("good anti_enum", good.anti_enumeration_score(fixtures), 1.0)
     check("good composite", good.composite(fixtures), 1.0)
-    check("good avg_objs", good.avg_object_count, 2.0)
+    # 3 objects per call-with-maria run, 2 per enchiridion run -> mean 2.5.
+    check("good avg_objs", good.avg_object_count, 2.5)
 
     noisy = ModelReport(model="noisy", installed=True)
     noisy.outcomes = [
@@ -620,10 +653,12 @@ def self_test() -> int:
         _synthetic_outcome("noisy", "notes-on-enchiridion", 1, []),
     ]
     check("noisy schema_valid", noisy.schema_valid_rate, 0.5)
-    # call-maria: over = Person(2-1=1)+Entity(1)=2 -> 2/4=0.5; enchiridion empty -> 1.0
-    check("noisy anti_enum", noisy.anti_enumeration_score(fixtures), (0.5 + 1.0) / 2)
-    # call-maria type_acc: Decision+Person present -> 2/2=1.0; enchiridion 0.0
-    check("noisy type_acc", noisy.type_accuracy(fixtures), (1.0 + 0.0) / 2)
+    # call-with-maria target is 3 since #377 ({Decision, Person, Concept}).
+    # over = Person(2-1=1)+Entity(1) = 2 -> 3/(3+2) = 0.6; enchiridion empty -> 1.0
+    check("noisy anti_enum", noisy.anti_enumeration_score(fixtures), (0.6 + 1.0) / 2)
+    # call-with-maria type_acc: Decision + Person fill 2 of 3 slots, the Concept
+    # slot stays empty -> 2/3; enchiridion empty -> 0.0
+    check("noisy type_acc", noisy.type_accuracy(fixtures), (2.0 / 3.0 + 0.0) / 2)
 
     # 5. Recommendation prefers the higher-composite model.
     rec = _recommendation([good, noisy], fixtures)
@@ -641,7 +676,7 @@ def self_test() -> int:
     ]
     check("err schema_valid", erroring.schema_valid_rate, 0.5)
     check("err backend_errors", float(erroring.backend_errors), 1.0)
-    check("err avg_objs", erroring.avg_object_count, 2.0)  # only responded run
+    check("err avg_objs", erroring.avg_object_count, 3.0)  # only responded run
 
     # 7. Report renders without raising and includes the recommendation.
     text = build_report(
@@ -673,8 +708,16 @@ def self_test() -> int:
 
 
 def ideal_ms_list() -> list[tuple[str, str]]:
-    """The ideal `call-with-maria` extraction as (type, title) pairs."""
-    return [("Decision", "Frame the essay"), ("Person", "Maria Salazar")]
+    """The ideal `call-with-maria` extraction as (type, title) pairs.
+
+    Three objects since #377, matching the reference bundle's provenance: the
+    Person, the apatheia Concept, and the Decision.
+    """
+    return [
+        ("Decision", "Frame the essay"),
+        ("Person", "Maria Salazar"),
+        ("Concept", "Apatheia"),
+    ]
 
 
 # --------------------------------------------------------------------------- #
