@@ -48,14 +48,14 @@ Chain strategy: pending
 - [x] 3.2 GREEN: edit the framing line per DD2; nine bullets and `CLASSIFIABLE_TYPES` untouched. New framing: "First identify the candidate distinct objects the source contains, then classify EACH candidate independently against the type rubric below:".
 - [x] 3.3 Update `_SYSTEM_PROMPT` docstring to describe the per-candidate framing (design D2).
 - [x] 3.4 Confirm the three DD3 alarm tests still pass unedited (3 passed, unmodified).
-- [ ] 3.5 Operator-assisted: `--arms h1` vs baseline; `multi_obj_rate` > 0.09, `call-with-maria` > 1; record run.
+- [x] 3.5 Operator-assisted: `--arms h1` vs baseline; `multi_obj_rate` > 0.09, `call-with-maria` > 1; record run. Gate run 20260804T164504Z (8-source subset × 3): HALF-MET. Multi-object rate clearly above baseline (02-how-claude-code-works 5,5,1; 08-the-claude-file 5,3,1 — a former solid twin now decomposes; enchiridion stable 3,3,3). call-with-maria still 1,1,1 — deferred to D3's gate per design DD2. YELLOW FLAG: empties rose to 3 of 24 (06-mcp-client twice, 05-workflow once) vs 4 of 90 baseline — the #129 pendulum direction; D3's positive multiplicity test must bring instructional sources back to >=1 or D2 gets re-evaluated.
 
 ## Phase 4: PR 2 / D3 — multiplicity test paragraph (RED-first)
 
-- [ ] 4.1 RED: test asserting the new single-vs-multi-topic paragraph exists, additive next to (not inside) the anti-enumeration block; confirm fails first.
-- [ ] 4.2 GREEN: add the paragraph near `concept.py:122-134`.
-- [ ] 4.3 Add a fake-backend test: multi-topic reply parses to N `ExtractionResult`s.
-- [ ] 4.4 Confirm the three DD3 alarm tests still pass unedited.
+- [x] 4.1 RED: test asserting the new single-vs-multi-topic paragraph exists, additive next to (not inside) the anti-enumeration block; confirm fails first. `test_prompt_states_multiplicity_decision_test_adjacent_to_anti_enumeration` added, confirmed failing before the edit.
+- [x] 4.2 GREEN: add the paragraph near `concept.py:122-134`. New paragraph: "Multiplicity is decided per subject, not per source: a source developing several distinct subjects -- e.g. a person discussed, an idea corrected, a decision made -- yields one object per subject, each classified independently. A source developing only one subject still yields exactly ONE object." Placed after the verbatim-pinned anti-enumeration paragraph, before the positive default paragraph. Byte delta: +298 bytes (6662 -> 6960); cumulative delta from the 6,573 baseline is +387 bytes (5.89%), still well under the 15% axis budget with D4 still pending.
+- [x] 4.3 Add a fake-backend test: multi-topic reply parses to N `ExtractionResult`s. `test_multi_topic_reply_parses_to_n_extraction_results` added (Person+Concept+Decision, mirroring the call-with-maria fixture) — 3 results, distinct types, order preserved.
+- [x] 4.4 Confirm the three DD3 alarm tests still pass unedited (3 passed, unmodified).
 - [ ] 4.5 Operator-assisted: `--arms h1`; `call-with-maria` reaches 3 (Person+Concept+Decision); the five #129 instructional files still yield >=1; record run.
 
 ## Phase 5: PR 2 / D4 — anti-twin clause (RED-first)

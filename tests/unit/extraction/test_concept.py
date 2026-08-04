@@ -695,6 +695,28 @@ def test_extract_concept_returns_list_of_length_n_under_cap() -> None:
     assert [r.type for r in result] == ["Person", "Event", "Decision"]
 
 
+def test_multi_topic_reply_parses_to_n_extraction_results() -> None:
+    """D3: a source developing several distinct subjects (spec scenario
+    "Multi-topic source yields one object per distinct subject" -- the
+    `call-with-maria` fixture, discussing a person, a philosophical
+    correction, and a choice made) parses to 3 `ExtractionResult`s of
+    distinct types, one per subject -- not collapsed to a single object."""
+    llm = _FakeLLM(reply=_array(_PERSON_ITEM, _CONCEPT_ITEM, _DECISION_ITEM))
+
+    result = concept_mod.extract_concept(
+        "Maria and I talked about her move, then about Stoicism and the "
+        "dichotomy of control, and decided to frame the essay around it.",
+        source_title="Call with Maria",
+        llm=llm,
+    )
+
+    assert len(result) == 3
+    assert [r.type for r in result] == ["Person", "Concept", "Decision"]
+    assert result[0].title == "Epictetus"
+    assert result[1].title == "Stoicism"
+    assert result[2].title == "Frame the Essay Around Control"
+
+
 def test_ollama_error_propagates_unswallowed() -> None:
     """An `OllamaError`-family exception raised by `chat` is never caught here
     (mirrors `retrieval/answer.py`'s `chat` boundary) -- it propagates to the
@@ -813,6 +835,40 @@ def test_prompt_contains_anti_enumeration_paragraph_verbatim() -> None:
         "only to EXPLAIN the source's main subject is part of that object's "
         "body, not a separate object" in system_content
     )
+
+
+def test_prompt_states_multiplicity_decision_test_adjacent_to_anti_enumeration() -> (
+    None
+):
+    """D3: a stated test that decides single-topic vs multi-topic PER
+    SUBJECT -- a source developing several distinct subjects (a person
+    discussed, an idea corrected, a decision made) yields one object per
+    subject, while a source developing only one subject still yields
+    exactly ONE object. This paragraph is ADDITIVE, placed adjacent to the
+    verbatim-pinned anti-enumeration paragraph (never edited inside it) and
+    before the positive default paragraph (design DD2/D3)."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "Multiplicity is decided per subject, not per source" in system_content
+    assert "a person discussed, an idea corrected, a decision made" in system_content
+    assert (
+        "A source developing only one subject still yields exactly ONE "
+        "object." in system_content
+    )
+
+    anti_enumeration_end = system_content.index(
+        "A document explaining one topic usually yields exactly ONE object."
+    )
+    multiplicity_start = system_content.index(
+        "Multiplicity is decided per subject, not per source"
+    )
+    positive_default_start = system_content.index(
+        "Restraint means FEWER objects, never ZERO"
+    )
+    assert anti_enumeration_end < multiplicity_start < positive_default_start
 
 
 def test_prompt_json_array_template_shape() -> None:

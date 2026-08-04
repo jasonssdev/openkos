@@ -133,6 +133,14 @@ _SYSTEM_PROMPT = (
     "term that exists only to EXPLAIN the source's main subject is part of "
     "that object's body, not a separate object. A document explaining one "
     "topic usually yields exactly ONE object.\n\n"
+    # Stated multiplicity test (design D3): decides single-topic vs
+    # multi-topic PER SUBJECT, additive next to (never inside) the
+    # verbatim-pinned anti-enumeration paragraph above.
+    "Multiplicity is decided per subject, not per source: a source "
+    "developing several distinct subjects -- e.g. a person discussed, an "
+    "idea corrected, a decision made -- yields one object per subject, "
+    "each classified independently. A source developing only one subject "
+    "still yields exactly ONE object.\n\n"
     # Positive default. This replaces a stack of three suppression levers
     # ("When in doubt, leave it out", plus TWO separate invitations to
     # return []) that together made the model answer a bare `[]` for any
