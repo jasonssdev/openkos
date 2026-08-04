@@ -30,16 +30,16 @@ Chain strategy: pending
 ## Phase 1: PR 1 — Package the D1 measurement (already run)
 
 - [x] 1.1 `git status`; confirmed set: `report-title-ab.md` (modified), `design.md`/`specs/`/`tasks.md` (untracked); `proposal.md` already committed (a36b3dc).
-- [ ] 1.2 Commit `report-title-ab.md`. Note: `results/` is gitignored by design (`evals/model_spike/.gitignore:3`) — timestamped snapshots are local harness baselines, never committed; git history of the report is the durable record. The earlier `142601Z` local snapshot is superseded by `151148Z` (5 runs vs 2).
-- [ ] 1.3 Commit `design.md`, `specs/ingestion/spec.md`, `tasks.md` as the D1-verdict artifact commit.
-- [ ] 1.4 Open PR 1; body cites the Verdict section (twin_rate 0.34 vs 0.13; multi_obj_rate flat).
+- [x] 1.2 Commit `report-title-ab.md`. Note: `results/` is gitignored by design (`evals/model_spike/.gitignore:3`) — timestamped snapshots are local harness baselines, never committed; git history of the report is the durable record. The earlier `142601Z` local snapshot is superseded by `151148Z` (5 runs vs 2). Delivered via PR #390, single squash commit — receipt froze all four files as one candidate.
+- [x] 1.3 Commit `design.md`, `specs/ingestion/spec.md`, `tasks.md` as the D1-verdict artifact commit. Delivered via PR #390, single squash commit — receipt froze all four files as one candidate.
+- [x] 1.4 Open PR 1; body cites the Verdict section (twin_rate 0.34 vs 0.13; multi_obj_rate flat). Delivered via PR #390, single squash commit — receipt froze all four files as one candidate.
 - [x] 1.5 Quality gate green: 3421 passed, coverage 97.20%, ruff check + format clean, mypy strict clean (2026-08-04).
 
 ## Phase 2: PR 2 / DD1 — reframe the title label (RED-first)
 
-- [ ] 2.1 RED: add a prompt-text test asserting the reframed non-authoritative `SOURCE TITLE` label in `_build_messages`'s user content; confirm it fails first.
-- [ ] 2.2 GREEN: edit `_build_messages` in `concept.py` per DD1; `derive_source_title`/`main.py:2688` untouched.
-- [ ] 2.3 Update the `_build_messages` docstring.
+- [x] 2.1 RED: add a prompt-text test asserting the reframed non-authoritative `SOURCE TITLE` label in `_build_messages`'s user content; confirm it fails first. `test_prompt_frames_source_title_as_non_authoritative_metadata` added, confirmed failing before the edit.
+- [x] 2.2 GREEN: edit `_build_messages` in `concept.py` per DD1; `derive_source_title`/`main.py:2688` untouched.
+- [x] 2.3 Update the `_build_messages` docstring.
 - [ ] 2.4 Operator-assisted: `run_title_ab.py --arms h1` vs baseline; confirm no regression (DD1 shouldn't move rates).
 
 ## Phase 3: PR 2 / D2 — re-point rubric per candidate (RED-first)

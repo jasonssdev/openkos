@@ -185,8 +185,18 @@ class ExtractionResult:
 
 def _build_messages(source_text: str, source_title: str) -> list[Message]:
     """Assemble the 2-message prompt: system classification rules + the raw
-    source text (labeled with its title) as the user turn."""
-    user_content = f"SOURCE TITLE: {source_title}\n\nSOURCE TEXT:\n{source_text}"
+    source text as the user turn, prefixed with its title labeled as
+    non-authoritative metadata (design DD1) -- the title is still handed
+    off from ingest and still shown to the model, but its label no longer
+    reads as the pre-computed answer to "what is this source about", since
+    an H1-derived title anchoring that hard produced twin objects (D1
+    verdict, `twin_rate` 0.34 under the H1 title vs 0.13 under the
+    filename-stem title)."""
+    user_content = (
+        f"SOURCE TITLE (metadata only, not authoritative -- treat as "
+        f"context, not the pre-computed topic): {source_title}\n\n"
+        f"SOURCE TEXT:\n{source_text}"
+    )
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_content},

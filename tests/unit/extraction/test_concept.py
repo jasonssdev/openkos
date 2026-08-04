@@ -1010,6 +1010,26 @@ def test_prompt_carries_source_text_and_title() -> None:
     assert "a distinctive phrase zzqq" in user_content
 
 
+def test_prompt_frames_source_title_as_non_authoritative_metadata() -> None:
+    """DD1: the title stays (it is still handed off from ingest and still
+    appears in the user turn), but its label must stop presenting it as the
+    pre-computed answer to "what is this document about" -- a bare `SOURCE
+    TITLE:` prefix reads as an authoritative topic statement, which is what
+    caused the H1-derived title to produce twin objects (D1 verdict,
+    `twin_rate` 0.34 vs 0.13). The label must mark the title as
+    context/metadata the model should weigh, not defer to."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept(
+        "a distinctive phrase zzqq", source_title="My Notes", llm=llm
+    )
+
+    user_content = llm.calls[0][1]["content"]
+    assert "My Notes" in user_content
+    assert "SOURCE TITLE: My Notes" not in user_content
+    assert "not authoritative" in user_content
+
+
 # --- Layering guard ------------------------------------------------------------
 
 
