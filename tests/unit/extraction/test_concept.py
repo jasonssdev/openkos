@@ -871,6 +871,32 @@ def test_prompt_states_multiplicity_decision_test_adjacent_to_anti_enumeration()
     assert anti_enumeration_end < multiplicity_start < positive_default_start
 
 
+def test_prompt_repoints_named_entity_bullets_to_the_candidate() -> None:
+    """Fourth axis (design open question #1, resolved 2026-08-04): the seven
+    named-entity type bullets (Person, Organization, Place, Event, Procedure,
+    Decision, Project) still phrased per-source aboutness ("the source is
+    fundamentally about ONE specific, named X"), which is inconsistent with
+    D2's per-candidate framing above the rubric ("identify the candidate
+    distinct objects ... then classify EACH candidate independently").
+    Measured consequence (gate run 170255Z): every named-entity-typed source
+    is pinned at exactly 1 object with zero variance, because the bullet
+    itself still asks a per-source question with exactly one answer. The
+    bullets must describe the CANDIDATE, not the source."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "the source is fundamentally about" not in system_content
+    assert '"Person": the candidate is ONE specific, named' in system_content
+    assert '"Organization": the candidate is ONE specific, named' in system_content
+    assert '"Place": the candidate is ONE specific, named' in system_content
+    assert '"Event": the candidate is ONE bounded, dated happening' in system_content
+    assert '"Procedure": the candidate is ONE repeatable how-to' in system_content
+    assert '"Decision": the candidate is ONE choice that was made' in system_content
+    assert '"Project": the candidate is ONE ongoing effort' in system_content
+
+
 def test_prompt_json_array_template_shape() -> None:
     """Phase 1 (D1): the JSON shape moved from a single `{...}` object to a
     top-level `[{...}, ...]` array, and the per-item `extract` field was

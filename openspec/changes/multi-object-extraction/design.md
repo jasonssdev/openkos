@@ -126,7 +126,15 @@ Rollback is a one-file revert of `concept.py`; `_MAX_OBJECTS_PER_SOURCE` remains
 
 ## Open questions
 
-- [ ] If D2 lifts the exempt side but the named-entity side stays capped at exactly 1, do the seven
-      per-type bullets come into scope as a fourth axis, or into a follow-up change?
+- [x] If D2 lifts the exempt side but the named-entity side stays capped at exactly 1, do the seven
+      per-type bullets come into scope as a fourth axis, or into a follow-up change? **Answered
+      (maintainer decision, Jason, 2026-08-04): fourth axis, in this change (Phase 4b), not a
+      follow-up.** Evidence: gate run `20260804T170255Z` — D3 failed on its central criterion
+      (`call-with-maria` still 1,1,1; empties still 3 of 24) while showing every multi-object run
+      of the whole campaign was Concept/Procedure only and every named-entity-typed source was
+      pinned at exactly 1 with zero variance. Mechanism: the seven per-type bullets still phrased
+      per-source aboutness ("the source is fundamentally about ONE specific, named X"), inconsistent
+      with D2's per-candidate framing — explaining both the cap and the empties in one mechanism, so
+      deferring it would leave D3's own gate unexplained.
 - [ ] Is a `none`-arm run worth commissioning as a control after D4, purely to confirm the reframed
       label captured the anchor's benefit without losing the title's information?

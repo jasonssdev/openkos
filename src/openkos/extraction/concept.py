@@ -36,33 +36,32 @@ _SYSTEM_PROMPT = (
     '"Decision", "Project", "Concept", or "Entity". First identify the '
     "candidate distinct objects the source contains, then classify EACH "
     "candidate independently against the type rubric below:\n"
-    '- "Person": the source is fundamentally about ONE specific, named '
-    "individual human -- their identity, role, work, or biography.\n"
-    '- "Organization": the source is fundamentally about ONE specific, '
-    "named group, company, institution, team, or agency.\n"
-    '- "Place": the source is fundamentally about ONE specific, named '
-    "geographic location or physical site -- a city, region, building, "
-    "landmark, or venue -- treated AS a location.\n"
-    '- "Event": the source is fundamentally about ONE bounded, dated '
-    "happening -- an occurrence tied to a specific time or span (a "
-    "meeting, launch, battle, incident, or conference).\n"
-    '- "Procedure": the source is fundamentally about ONE repeatable '
-    "how-to -- a method, protocol, recipe, or step-by-step process meant "
-    "to be performed again.\n"
-    '- "Decision": the source is fundamentally about ONE choice that was '
-    "made -- carrying its rationale, the alternatives considered, and its "
-    "current status -- a self-contained decision record, not a general "
-    "idea or a dated happening.\n"
-    '- "Project": the source is fundamentally about ONE ongoing effort '
-    "defined by a goal and a timespan -- a multi-step undertaking spanning "
-    "time toward that goal, not a single bounded happening or a repeatable "
-    "how-to.\n"
+    '- "Person": the candidate is ONE specific, named individual human -- '
+    "their identity, role, work, or biography.\n"
+    '- "Organization": the candidate is ONE specific, named group, '
+    "company, institution, team, or agency.\n"
+    '- "Place": the candidate is ONE specific, named geographic location '
+    "or physical site -- a city, region, building, landmark, or venue -- "
+    "treated AS a location.\n"
+    '- "Event": the candidate is ONE bounded, dated happening -- an '
+    "occurrence tied to a specific time or span (a meeting, launch, "
+    "battle, incident, or conference).\n"
+    '- "Procedure": the candidate is ONE repeatable how-to -- a method, '
+    "protocol, recipe, or step-by-step process meant to be performed "
+    "again.\n"
+    '- "Decision": the candidate is ONE choice that was made -- carrying '
+    "its rationale, the alternatives considered, and its current status -- "
+    "a self-contained decision record, not a general idea or a dated "
+    "happening.\n"
+    '- "Project": the candidate is ONE ongoing effort defined by a goal '
+    "and a timespan -- a multi-step undertaking spanning time toward that "
+    "goal, not a single bounded happening or a repeatable how-to.\n"
     '- "Concept": the source describes an idea, topic, theory, term, or '
     "framework -- INCLUDING one named after a person, organization, or "
     "place (a named method, system, principle, or law). A name borrowed "
     "from a person, organization, or place is a label, not the subject: "
-    "classify by what the source is actually about, not by whose name it "
-    "carries.\n"
+    "classify by what the candidate is actually about, not by whose name "
+    "it carries.\n"
     '- "Entity": a fallback for a concrete tool, product, or artifact that '
     "is neither a who, a where, nor an idea -- Entity is never the first "
     "choice, only what remains when nothing else fits.\n\n"
@@ -163,8 +162,13 @@ _SYSTEM_PROMPT = (
 """Stable system half of the 2-message prompt: the closed 9-value
 vocabulary, the per-candidate framing (design D2: identify the candidate
 distinct objects first, then classify EACH one independently, rather than
-asking once what the whole source is about), the aboutness heuristic
-(classify by subject, not by a borrowed name), the Person/Organization/
+asking once what the whole source is about) -- carried all the way down
+into the rubric itself (design open question #1, resolved as a fourth axis:
+the seven named-entity type bullets describe the CANDIDATE ("the candidate
+is ONE specific, named X"), not the source, so a multi-subject source is no
+longer capped at exactly one named-entity object by the bullet's own
+phrasing), the aboutness heuristic (classify by subject, not by a borrowed
+name), the Person/Organization/
 Place/Event/Procedure/Decision/
 Project/Concept-outrank-Entity tie-break chain -- including the bespoke
 KOM-silent sub-rules for a landmark named after a person/org, an
@@ -172,11 +176,15 @@ organization sited at a location, an event at a place, the occurrent
 Event-vs-Procedure distinction, positive Decision-vs-Concept-vs-Event
 disambiguation, and Project-vs-Event/Procedure disambiguation -- the
 unnamed-subject clarifier routing instructional sources (how-to, tutorial,
-reference, FAQ) to Procedure or Concept, the positive default (a
-substantive source yields at least one object; `[]` is a last resort
-mentioned exactly once, never an invitation), and the JSON-only
-instruction baked into system text; the `user` message carries the raw
-source text."""
+reference, FAQ) to Procedure or Concept, the anti-enumeration paragraph
+plus the adjacent stated multiplicity test (design D3: multiplicity is
+decided per subject, not per source -- a source developing several
+distinct subjects yields one object per subject, each classified
+independently, while a single-subject source still yields exactly one),
+the positive default (a substantive source yields at least one object;
+`[]` is a last resort mentioned exactly once, never an invitation), and the
+JSON-only instruction baked into system text; the `user` message carries
+the raw source text."""
 
 
 @dataclass(frozen=True)
