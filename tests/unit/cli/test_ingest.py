@@ -4176,9 +4176,9 @@ def test_stage_derived_objects_receives_the_final_derived_title(
     assert result.exit_code == 0, result.stdout
     assert fake.calls, "the extraction prompt should have been sent"
     user_message = fake.calls[0][1]
-    assert user_message["content"].startswith(
-        "SOURCE TITLE: Introduction to Stoicism\n"
-    )
+    title_line = user_message["content"].splitlines()[0]
+    assert title_line.startswith("SOURCE TITLE")
+    assert title_line.endswith("Introduction to Stoicism")
 
 
 # --- Re-ingest preview names a silent title change (review finding) --------

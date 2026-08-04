@@ -33,35 +33,35 @@ _SYSTEM_PROMPT = (
     "tie-breaks below to EACH object independently.\n\n"
     'Vocabulary: the derived object\'s "type" MUST be one of exactly nine '
     'values: "Person", "Organization", "Place", "Event", "Procedure", '
-    '"Decision", "Project", "Concept", or "Entity". Classify by what the '
-    "source is fundamentally about:\n"
-    '- "Person": the source is fundamentally about ONE specific, named '
-    "individual human -- their identity, role, work, or biography.\n"
-    '- "Organization": the source is fundamentally about ONE specific, '
-    "named group, company, institution, team, or agency.\n"
-    '- "Place": the source is fundamentally about ONE specific, named '
-    "geographic location or physical site -- a city, region, building, "
-    "landmark, or venue -- treated AS a location.\n"
-    '- "Event": the source is fundamentally about ONE bounded, dated '
-    "happening -- an occurrence tied to a specific time or span (a "
-    "meeting, launch, battle, incident, or conference).\n"
-    '- "Procedure": the source is fundamentally about ONE repeatable '
-    "how-to -- a method, protocol, recipe, or step-by-step process meant "
-    "to be performed again.\n"
-    '- "Decision": the source is fundamentally about ONE choice that was '
-    "made -- carrying its rationale, the alternatives considered, and its "
-    "current status -- a self-contained decision record, not a general "
-    "idea or a dated happening.\n"
-    '- "Project": the source is fundamentally about ONE ongoing effort '
-    "defined by a goal and a timespan -- a multi-step undertaking spanning "
-    "time toward that goal, not a single bounded happening or a repeatable "
-    "how-to.\n"
+    '"Decision", "Project", "Concept", or "Entity". First identify the '
+    "candidate distinct objects the source contains, then classify EACH "
+    "candidate independently against the type rubric below:\n"
+    '- "Person": the candidate is ONE specific, named individual human -- '
+    "their identity, role, work, or biography.\n"
+    '- "Organization": the candidate is ONE specific, named group, '
+    "company, institution, team, or agency.\n"
+    '- "Place": the candidate is ONE specific, named geographic location '
+    "or physical site -- a city, region, building, landmark, or venue -- "
+    "treated AS a location.\n"
+    '- "Event": the candidate is ONE bounded, dated happening -- an '
+    "occurrence tied to a specific time or span (a meeting, launch, "
+    "battle, incident, or conference).\n"
+    '- "Procedure": the candidate is ONE repeatable how-to -- a method, '
+    "protocol, recipe, or step-by-step process meant to be performed "
+    "again.\n"
+    '- "Decision": the candidate is ONE choice that was made -- carrying '
+    "its rationale, the alternatives considered, and its current status -- "
+    "a self-contained decision record, not a general idea or a dated "
+    "happening.\n"
+    '- "Project": the candidate is ONE ongoing effort defined by a goal '
+    "and a timespan -- a multi-step undertaking spanning time toward that "
+    "goal, not a single bounded happening or a repeatable how-to.\n"
     '- "Concept": the source describes an idea, topic, theory, term, or '
     "framework -- INCLUDING one named after a person, organization, or "
     "place (a named method, system, principle, or law). A name borrowed "
     "from a person, organization, or place is a label, not the subject: "
-    "classify by what the source is actually about, not by whose name it "
-    "carries.\n"
+    "classify by what the candidate is actually about, not by whose name "
+    "it carries.\n"
     '- "Entity": a fallback for a concrete tool, product, or artifact that '
     "is neither a who, a where, nor an idea -- Entity is never the first "
     "choice, only what remains when nothing else fits.\n\n"
@@ -132,6 +132,32 @@ _SYSTEM_PROMPT = (
     "term that exists only to EXPLAIN the source's main subject is part of "
     "that object's body, not a separate object. A document explaining one "
     "topic usually yields exactly ONE object.\n\n"
+    # Stated multiplicity test (design D3): decides single-topic vs
+    # multi-topic PER SUBJECT, additive next to (never inside) the
+    # verbatim-pinned anti-enumeration paragraph above.
+    "Multiplicity is decided per subject, not per source: a source "
+    "developing several distinct subjects -- e.g. a person discussed, an "
+    "idea corrected, a decision made -- yields one object per subject, "
+    "each classified independently. A source developing only one subject "
+    "still yields exactly ONE object.\n\n"
+    # Anti-twin clause (design D4/5b, narrowed): prompt wording alone could
+    # not carry the unconditional rule at the 8B tier -- a narrower clause
+    # carrying a CONCRETE forbidden-title example made the defect WORSE
+    # (5.6 probe: twinned in 4 of 4, twice as the ONLY object -- priming).
+    # The rule is now enforced deterministically in
+    # `_drop_source_title_twins` (design D4/5b); this soft, example-free
+    # restatement only asks the model to prefer not emitting the twin
+    # ALONGSIDE genuine subjects, and explicitly preserves the floor: a
+    # source whose one genuine subject IS what its own title names still
+    # yields that subject.
+    "A candidate whose title and scope merely restate the SOURCE's own "
+    'title and scope as a whole -- a "twin" that mirrors the source itself '
+    "rather than one specific subject within it -- MUST NOT be produced "
+    "ALONGSIDE another genuine candidate: when the source develops more "
+    "than one distinct subject, drop any candidate that only restates the "
+    "source as a whole and keep the specific ones. A source whose ONE "
+    "genuine subject is what its own title already names is not redundant "
+    "with anything and still yields that specific subject.\n\n"
     # Positive default. This replaces a stack of three suppression levers
     # ("When in doubt, leave it out", plus TWO separate invitations to
     # return []) that together made the model answer a bare `[]` for any
@@ -152,19 +178,38 @@ _SYSTEM_PROMPT = (
     "Do NOT wrap the array in an outer object."
 )
 """Stable system half of the 2-message prompt: the closed 9-value
-vocabulary, the aboutness heuristic (classify by subject, not by a
-borrowed name), the Person/Organization/Place/Event/Procedure/Decision/
+vocabulary, the per-candidate framing (design D2: identify the candidate
+distinct objects first, then classify EACH one independently, rather than
+asking once what the whole source is about) -- carried all the way down
+into the rubric itself (design open question #1, resolved as a fourth axis:
+the seven named-entity type bullets describe the CANDIDATE ("the candidate
+is ONE specific, named X"), not the source, so a multi-subject source is no
+longer capped at exactly one named-entity object by the bullet's own
+phrasing), the aboutness heuristic (classify by subject, not by a borrowed
+name), the Person/Organization/
+Place/Event/Procedure/Decision/
 Project/Concept-outrank-Entity tie-break chain -- including the bespoke
 KOM-silent sub-rules for a landmark named after a person/org, an
 organization sited at a location, an event at a place, the occurrent
 Event-vs-Procedure distinction, positive Decision-vs-Concept-vs-Event
 disambiguation, and Project-vs-Event/Procedure disambiguation -- the
 unnamed-subject clarifier routing instructional sources (how-to, tutorial,
-reference, FAQ) to Procedure or Concept, the positive default (a
-substantive source yields at least one object; `[]` is a last resort
-mentioned exactly once, never an invitation), and the JSON-only
-instruction baked into system text; the `user` message carries the raw
-source text."""
+reference, FAQ) to Procedure or Concept, the anti-enumeration paragraph
+plus the adjacent stated multiplicity test (design D3: multiplicity is
+decided per subject, not per source -- a source developing several
+distinct subjects yields one object per subject, each classified
+independently, while a single-subject source still yields exactly one)
+and the adjacent, soft, example-free anti-twin clause (design D4/5b: a
+candidate that merely restates the SOURCE's own title and scope as a whole
+should not be produced ALONGSIDE another genuine candidate, and a source
+whose one genuine subject IS what its own title names still yields that
+subject -- the unconditional rule is enforced deterministically in
+`_drop_source_title_twins`, not by prompt wording, since a narrower prompt
+clause carrying a concrete forbidden example measurably made the defect
+worse via priming), the positive default (a substantive source yields at least one object;
+`[]` is a last resort mentioned exactly once, never an invitation), and the
+JSON-only instruction baked into system text; the `user` message carries
+the raw source text."""
 
 
 @dataclass(frozen=True)
@@ -185,8 +230,18 @@ class ExtractionResult:
 
 def _build_messages(source_text: str, source_title: str) -> list[Message]:
     """Assemble the 2-message prompt: system classification rules + the raw
-    source text (labeled with its title) as the user turn."""
-    user_content = f"SOURCE TITLE: {source_title}\n\nSOURCE TEXT:\n{source_text}"
+    source text as the user turn, prefixed with its title labeled as
+    non-authoritative metadata (design DD1) -- the title is still handed
+    off from ingest and still shown to the model, but its label no longer
+    reads as the pre-computed answer to "what is this source about", since
+    an H1-derived title anchoring that hard produced twin objects (D1
+    verdict, `twin_rate` 0.34 under the H1 title vs 0.13 under the
+    filename-stem title)."""
+    user_content = (
+        f"SOURCE TITLE (metadata only, not authoritative -- treat as "
+        f"context, not the pre-computed topic): {source_title}\n\n"
+        f"SOURCE TEXT:\n{source_text}"
+    )
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
@@ -230,6 +285,41 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     )
 
 
+def _drop_source_title_twins(
+    results: list[ExtractionResult], *, source_title: str
+) -> list[ExtractionResult]:
+    """Deterministic anti-twin enforcement (design D4/5b): prompt wording
+    alone could not carry this rule at the 8B tier (5.5-5.6 probes -- the
+    committed clause left the exact-title twin in 2 of 5 harness runs, and a
+    narrowed clause carrying a concrete forbidden example made it WORSE,
+    twinning in 4 of 4 and twice as the ONLY object -- priming). Enforced
+    here instead, after per-item validation and before the
+    `_MAX_OBJECTS_PER_SOURCE` cap.
+
+    Compares each validated object's `title` to `source_title` using an
+    exact, normalized comparison (strip + casefold + collapsed internal
+    whitespace) -- no fuzzy/semantic matching. If one or more objects match
+    AND at least one non-matching object also exists, the matching
+    (redundant) objects are dropped. If EVERY object matches, or only one
+    object exists at all, the list is returned unchanged: a genuinely
+    single-subject source (the measured `mcp-launch` shape -- H1 "MCP
+    Launching" -> `Event:MCP Launching`) must keep its only object, since
+    suppressing it would emit `[]` for genuine content. The floor always
+    wins over the anti-twin rule."""
+    if len(results) <= 1:
+        return results
+
+    def _normalize(value: str) -> str:
+        return " ".join(value.strip().casefold().split())
+
+    normalized_title = _normalize(source_title)
+    non_twins = [r for r in results if _normalize(r.title) != normalized_title]
+
+    if not non_twins or len(non_twins) == len(results):
+        return results
+    return non_twins
+
+
 _MAX_OBJECTS_PER_SOURCE = 5
 """Hard ceiling on validated objects returned per source (design D4): a
 safety ceiling applied AFTER per-item validation, not a target -- the
@@ -243,14 +333,16 @@ def extract_concept(
     """Prompt `llm` to classify zero or more distinct derived objects from
     `source_text`.
 
-    Returns a list of validated `ExtractionResult`s, in reply order,
-    truncated to `_MAX_OBJECTS_PER_SOURCE` (keeping the first N). `[]` means
-    nothing was worth extracting -- the model returned an empty array, or
-    every candidate failed validation; this layer does not distinguish the
-    two (fail-closed). Any `OllamaError`-family exception raised by
-    `llm.chat` propagates unswallowed to the caller (see module docstring).
-    The caller loops `openkos.model.okf.build_concept` once per returned
-    object.
+    Returns a list of validated `ExtractionResult`s, in reply order, with any
+    source-title twin dropped (`_drop_source_title_twins`, design D4/5b --
+    deterministic, not prompt-carried) unless it is the only surviving
+    object, then truncated to `_MAX_OBJECTS_PER_SOURCE` (keeping the first
+    N). `[]` means nothing was worth extracting -- the model returned an
+    empty array, or every candidate failed validation; this layer does not
+    distinguish the two (fail-closed). Any `OllamaError`-family exception
+    raised by `llm.chat` propagates unswallowed to the caller (see module
+    docstring). The caller loops `openkos.model.okf.build_concept` once per
+    returned object.
     """
     reply = llm.chat(_build_messages(source_text, source_title))
     items = parsing.extract_json_items(reply)
@@ -259,4 +351,5 @@ def extract_concept(
         result = _validate(item)
         if result is not None:
             results.append(result)
+    results = _drop_source_title_twins(results, source_title=source_title)
     return results[:_MAX_OBJECTS_PER_SOURCE]

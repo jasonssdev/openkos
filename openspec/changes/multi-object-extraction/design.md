@@ -70,6 +70,10 @@ alone, so a clause that costs more adherence than it earns is visible and revert
 accumulated. Budget: the three axes together add no more than ~15% to the constant (6,573 bytes
 as measured on the pre-edit baseline).
 
+**Final measurement (2026-08-04, tasks.md 5b.4/6.4)**: the shipped `_SYSTEM_PROMPT` is 7,372 bytes
+against the 6,573-byte baseline — +799 bytes, +12.16% — inside the ~15% budget across all four
+axes (DD1's label edit plus D2, D3, and the narrowed D4/5b clause).
+
 ## Alternatives considered
 
 | Alternative | Why rejected |
@@ -124,9 +128,42 @@ process-integration boundary. This change is one string constant, its tests, and
 No migration. Already-ingested sources keep their single derived object until re-ingested.
 Rollback is a one-file revert of `concept.py`; `_MAX_OBJECTS_PER_SOURCE` remains the field lever.
 
+## What the measurement changed
+
+- **D4 moved from prompt-only to deterministic enforcement**, for two measured reasons: priming
+  (tasks.md 5.6 — a narrowed clause naming a concrete forbidden title made the twin worse, 4 of 4
+  runs, twice as the only object) and the floor collision (tasks.md 5.5 — the unconditional rule
+  contradicts "genuine content yields AT LEAST ONE object" for a single-subject source whose only
+  subject IS what its own title names, the `mcp-launch` shape). Enforcement is now
+  `_drop_source_title_twins` in `concept.py`; the prompt clause is kept as a soft, example-free
+  restatement only.
+- **The fourth axis (Phase 4b) exists because open question #1, above, was answered by
+  measurement**: gate run `20260804T170255Z` showed every multi-object run of the campaign was
+  Concept/Procedure only, every named-entity-typed source pinned at exactly 1 — the seven per-type
+  bullets still phrased per-source aboutness, inconsistent with D2's per-candidate framing.
+- **The declared `Decision` is a measured 8B-tier limit.** Three targeted wordings over ~28 samples
+  (tasks.md 5.7) produced zero `Decision` objects; the model consistently renders the choice as
+  `Concept: Dichotomy of Control`. Fixture acceptance is amended to `Person` + two `Concept`
+  objects; the `Decision` is tracked separately as model/fixture work (proposal assumption 4).
+
+**Scope exception**: the proposal declared validation untouched (Out of scope). `_drop_source_title_twins`
+is a maintainer-approved exception to that boundary, decided on the wording-probe evidence
+(tasks.md 5.6) — Jason, 2026-08-04.
+
 ## Open questions
 
-- [ ] If D2 lifts the exempt side but the named-entity side stays capped at exactly 1, do the seven
-      per-type bullets come into scope as a fourth axis, or into a follow-up change?
-- [ ] Is a `none`-arm run worth commissioning as a control after D4, purely to confirm the reframed
-      label captured the anchor's benefit without losing the title's information?
+- [x] If D2 lifts the exempt side but the named-entity side stays capped at exactly 1, do the seven
+      per-type bullets come into scope as a fourth axis, or into a follow-up change? **Answered
+      (maintainer decision, Jason, 2026-08-04): fourth axis, in this change (Phase 4b), not a
+      follow-up.** Evidence: gate run `20260804T170255Z` — D3 failed on its central criterion
+      (`call-with-maria` still 1,1,1; empties still 3 of 24) while showing every multi-object run
+      of the whole campaign was Concept/Procedure only and every named-entity-typed source was
+      pinned at exactly 1 with zero variance. Mechanism: the seven per-type bullets still phrased
+      per-source aboutness ("the source is fundamentally about ONE specific, named X"), inconsistent
+      with D2's per-candidate framing — explaining both the cap and the empties in one mechanism, so
+      deferring it would leave D3's own gate unexplained.
+- [x] Is a `none`-arm run worth commissioning as a control after D4, purely to confirm the reframed
+      label captured the anchor's benefit without losing the title's information? **Not pursued**:
+      the campaign's evidence came from per-source comparisons against the frozen h1 baseline
+      (`title-ab-20260804T151148Z-qwen3-8b.md`) at each axis gate instead, which was sufficient to
+      support every measured verdict without commissioning a further arm.

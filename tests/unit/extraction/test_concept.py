@@ -661,6 +661,86 @@ def test_cap_applies_after_validation_not_before() -> None:
     assert [r.title for r in result] == [f"Item {i}" for i in range(cap)]
 
 
+# --- Deterministic anti-twin enforcement (5b) --------------------------------
+
+_MARIA_ITEM = (
+    '{"type": "Person", "title": "Maria Salazar", '
+    '"description": "A friend discussing her move.", "body": ""}'
+)
+
+_APATHEIA_ITEM = (
+    '{"type": "Concept", "title": "Apatheia", '
+    '"description": "A Stoic term for freedom from destructive emotion.", '
+    '"body": ""}'
+)
+
+_DICHOTOMY_ITEM = (
+    '{"type": "Concept", "title": "Dichotomy of Control", '
+    '"description": "The Stoic distinction between what is and is not up to us.", '
+    '"body": ""}'
+)
+
+_CALL_WITH_MARIA_TWIN_ITEM = (
+    '{"type": "Event", "title": "Call with Maria Salazar — 2026-07-14", '
+    '"description": "A phone call between the author and Maria Salazar.", '
+    '"body": ""}'
+)
+
+_MCP_LAUNCHING_EVENT_ITEM = (
+    '{"type": "Event", "title": "MCP Launching", '
+    '"description": "The launch of the Model Context Protocol.", "body": ""}'
+)
+
+
+def test_source_title_twin_dropped_when_genuine_objects_survive() -> None:
+    """5b: a reply carrying a fourth candidate whose title exactly restates
+    `source_title` (the measured `call-with-maria` shape, 4b.6 diagnostic
+    probe) alongside three genuine objects yields only the three genuine
+    ones, in reply order -- the twin is dropped because it is redundant
+    with surviving objects."""
+    llm = _FakeLLM(
+        reply=_array(
+            _MARIA_ITEM,
+            _APATHEIA_ITEM,
+            _DICHOTOMY_ITEM,
+            _CALL_WITH_MARIA_TWIN_ITEM,
+        )
+    )
+
+    result = concept_mod.extract_concept(
+        "Maria and I talked about her move, then about apatheia and the "
+        "dichotomy of control.",
+        source_title="Call with Maria Salazar — 2026-07-14",
+        llm=llm,
+    )
+
+    assert [r.title for r in result] == [
+        "Maria Salazar",
+        "Apatheia",
+        "Dichotomy of Control",
+    ]
+    assert all(r.title != "Call with Maria Salazar — 2026-07-14" for r in result)
+
+
+def test_source_title_twin_kept_when_it_is_the_only_object() -> None:
+    """5b floor guard: a reply whose ONLY object restates `source_title`
+    (the measured `mcp-launch` shape -- a genuinely single-subject source
+    whose only subject IS what its title names) is kept unchanged.
+    Suppressing it would emit `[]` for genuine content, which the floor
+    (design D4/5b) forbids. This may pass trivially before the 5b.3
+    implementation exists -- it is the regression alarm for the floor
+    rule, not proof of the drop behavior on its own."""
+    llm = _FakeLLM(reply=_array(_MCP_LAUNCHING_EVENT_ITEM))
+
+    result = concept_mod.extract_concept(
+        "MCP is launching next week.", source_title="MCP Launching", llm=llm
+    )
+
+    assert len(result) == 1
+    assert result[0].title == "MCP Launching"
+    assert result[0].type == "Event"
+
+
 # --- extract_concept: zero / one / N results, OllamaError propagation -------
 
 
@@ -693,6 +773,28 @@ def test_extract_concept_returns_list_of_length_n_under_cap() -> None:
     assert len(result) == 3
     assert all(isinstance(r, concept_mod.ExtractionResult) for r in result)
     assert [r.type for r in result] == ["Person", "Event", "Decision"]
+
+
+def test_multi_topic_reply_parses_to_n_extraction_results() -> None:
+    """D3: a source developing several distinct subjects (spec scenario
+    "Multi-topic source yields one object per distinct subject" -- the
+    `call-with-maria` fixture, discussing a person, a philosophical
+    correction, and a choice made) parses to 3 `ExtractionResult`s of
+    distinct types, one per subject -- not collapsed to a single object."""
+    llm = _FakeLLM(reply=_array(_PERSON_ITEM, _CONCEPT_ITEM, _DECISION_ITEM))
+
+    result = concept_mod.extract_concept(
+        "Maria and I talked about her move, then about Stoicism and the "
+        "dichotomy of control, and decided to frame the essay around it.",
+        source_title="Call with Maria",
+        llm=llm,
+    )
+
+    assert len(result) == 3
+    assert [r.type for r in result] == ["Person", "Concept", "Decision"]
+    assert result[0].title == "Epictetus"
+    assert result[1].title == "Stoicism"
+    assert result[2].title == "Frame the Essay Around Control"
 
 
 def test_ollama_error_propagates_unswallowed() -> None:
@@ -762,6 +864,25 @@ def test_prompt_new_opening_frames_extraction_as_a_list_decision() -> None:
     assert "as ONE derived knowledge object" not in system_content
 
 
+def test_prompt_repoints_rubric_to_candidate_objects_not_the_whole_source() -> None:
+    """D2: the framing above the nine type bullets no longer asks "what is
+    the source about" as one per-source question -- a framing with exactly
+    one answer by construction. It now instructs the model to first
+    identify the candidate distinct objects the source contains, then
+    classify EACH candidate independently -- so the rubric below can be
+    applied N times, not collapsed to one."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert (
+        "identify the candidate distinct objects the source contains" in system_content
+    )
+    assert "classify EACH candidate" in system_content
+    assert "Classify by what the source is fundamentally about:" not in system_content
+
+
 def test_prompt_contains_anti_enumeration_paragraph_verbatim() -> None:
     """Phase 1 (D1): the anti-enumeration paragraph is present verbatim,
     including the meeting-transcript -> Event+Decisions-not-5-Persons
@@ -794,6 +915,131 @@ def test_prompt_contains_anti_enumeration_paragraph_verbatim() -> None:
         "only to EXPLAIN the source's main subject is part of that object's "
         "body, not a separate object" in system_content
     )
+
+
+def test_prompt_states_multiplicity_decision_test_adjacent_to_anti_enumeration() -> (
+    None
+):
+    """D3: a stated test that decides single-topic vs multi-topic PER
+    SUBJECT -- a source developing several distinct subjects (a person
+    discussed, an idea corrected, a decision made) yields one object per
+    subject, while a source developing only one subject still yields
+    exactly ONE object. This paragraph is ADDITIVE, placed adjacent to the
+    verbatim-pinned anti-enumeration paragraph (never edited inside it) and
+    before the positive default paragraph (design DD2/D3)."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "Multiplicity is decided per subject, not per source" in system_content
+    assert "a person discussed, an idea corrected, a decision made" in system_content
+    assert (
+        "A source developing only one subject still yields exactly ONE "
+        "object." in system_content
+    )
+
+    anti_enumeration_end = system_content.index(
+        "A document explaining one topic usually yields exactly ONE object."
+    )
+    multiplicity_start = system_content.index(
+        "Multiplicity is decided per subject, not per source"
+    )
+    positive_default_start = system_content.index(
+        "Restraint means FEWER objects, never ZERO"
+    )
+    assert anti_enumeration_end < multiplicity_start < positive_default_start
+
+
+def test_prompt_states_anti_twin_clause_after_multiplicity_paragraph() -> None:
+    """D4/5b (narrowed 2026-08-04, was 5.5-5.6's unconditional wording):
+    prompt wording alone cannot carry the anti-twin rule at the 8B tier --
+    the unconditional clause left the exact-title twin in 2 of 5 harness
+    runs, and a narrower clause carrying a CONCRETE forbidden-title example
+    made it WORSE (twinned in 4 of 4, twice as the ONLY object -- priming).
+    The rule is now enforced deterministically in
+    `_drop_source_title_twins` (5b.3); this soft, example-free clause only
+    asks the model to prefer not producing a source-restating "twin"
+    ALONGSIDE another genuine candidate, and explicitly preserves the floor
+    (a source whose one genuine subject IS what its own title names still
+    yields that subject). The clause is ADDITIVE, placed adjacent to (never
+    inside) the verbatim-pinned anti-enumeration paragraph, after the D3
+    multiplicity paragraph and before the positive default paragraph."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert (
+        "restate the SOURCE's own title and scope" in system_content
+        or "restate the Source's own title and scope" in system_content
+    )
+    assert "twin" in system_content.lower()
+    assert "MUST NOT be produced" in system_content
+    # Not a blanket ban on shared words: a candidate that shares words with
+    # the source title while still targeting one specific subject inside it
+    # (e.g. a Person named in the title) remains distinct.
+    assert "specific subject" in system_content
+
+    anti_enumeration_end = system_content.index(
+        "A document explaining one topic usually yields exactly ONE object."
+    )
+    multiplicity_start = system_content.index(
+        "Multiplicity is decided per subject, not per source"
+    )
+    twin_clause_start = system_content.index("twin")
+    positive_default_start = system_content.index(
+        "Restraint means FEWER objects, never ZERO"
+    )
+    assert (
+        anti_enumeration_end
+        < multiplicity_start
+        < twin_clause_start
+        < positive_default_start
+    )
+
+
+def test_prompt_repoints_named_entity_bullets_to_the_candidate() -> None:
+    """Fourth axis (design open question #1, resolved 2026-08-04): the seven
+    named-entity type bullets (Person, Organization, Place, Event, Procedure,
+    Decision, Project) still phrased per-source aboutness ("the source is
+    fundamentally about ONE specific, named X"), which is inconsistent with
+    D2's per-candidate framing above the rubric ("identify the candidate
+    distinct objects ... then classify EACH candidate independently").
+    Measured consequence (gate run 170255Z): every named-entity-typed source
+    is pinned at exactly 1 object with zero variance, because the bullet
+    itself still asks a per-source question with exactly one answer. The
+    bullets must describe the CANDIDATE, not the source."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "the source is fundamentally about" not in system_content
+    assert '"Person": the candidate is ONE specific, named' in system_content
+    assert '"Organization": the candidate is ONE specific, named' in system_content
+    assert '"Place": the candidate is ONE specific, named' in system_content
+    assert '"Event": the candidate is ONE bounded, dated happening' in system_content
+    assert '"Procedure": the candidate is ONE repeatable how-to' in system_content
+    assert '"Decision": the candidate is ONE choice that was made' in system_content
+    assert '"Project": the candidate is ONE ongoing effort' in system_content
+
+
+def test_prompt_concept_bullet_repoints_aboutness_clause_to_the_candidate() -> None:
+    """Review WARNING (4b): the Concept bullet's aboutness clause must
+    discriminate CANDIDATE vs SOURCE, not just repeat the word "candidate"
+    incidentally -- pin the exact clause so a future edit can't silently
+    revert it to "classify by what the source is actually about"."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert (
+        "classify by what the candidate is actually about, not by whose "
+        "name it carries" in system_content
+    )
+    assert "classify by what the source is actually about" not in system_content
 
 
 def test_prompt_json_array_template_shape() -> None:
@@ -1008,6 +1254,26 @@ def test_prompt_carries_source_text_and_title() -> None:
     user_content = llm.calls[0][1]["content"]
     assert "My Notes" in user_content
     assert "a distinctive phrase zzqq" in user_content
+
+
+def test_prompt_frames_source_title_as_non_authoritative_metadata() -> None:
+    """DD1: the title stays (it is still handed off from ingest and still
+    appears in the user turn), but its label must stop presenting it as the
+    pre-computed answer to "what is this document about" -- a bare `SOURCE
+    TITLE:` prefix reads as an authoritative topic statement, which is what
+    caused the H1-derived title to produce twin objects (D1 verdict,
+    `twin_rate` 0.34 vs 0.13). The label must mark the title as
+    context/metadata the model should weigh, not defer to."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept(
+        "a distinctive phrase zzqq", source_title="My Notes", llm=llm
+    )
+
+    user_content = llm.calls[0][1]["content"]
+    assert "My Notes" in user_content
+    assert "SOURCE TITLE: My Notes" not in user_content
+    assert "not authoritative" in user_content
 
 
 # --- Layering guard ------------------------------------------------------------

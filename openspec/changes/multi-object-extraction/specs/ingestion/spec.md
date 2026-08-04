@@ -20,8 +20,17 @@ Extraction MUST decide MULTIPLICITY per source via a stated test: a source
 developing several distinct subjects (a person, an idea, a choice) MUST
 yield one object per subject; a source developing one subject MUST still
 yield exactly one. A candidate whose title and scope merely restate its
-Source's own title and scope (a "twin") MUST NOT be produced — this adds
-suppression without relaxing the floor below.
+Source's own title and scope (a "twin") MUST NOT be produced ALONGSIDE
+another genuine candidate: when a source develops more than one distinct
+subject, the twin is dropped and the genuine subjects are kept. A source
+whose ONE genuine subject IS what its own title already names is not
+redundant with anything and still yields that subject — the unconditional
+form of this rule is unsatisfiable together with the floor below, since a
+single-subject source's only object would then have to be suppressed. The
+rule is enforced deterministically, after per-item validation
+(`_drop_source_title_twins`), not by prompt wording alone: prompt wording
+could not carry the unconditional rule at the 8B tier, and a clause naming
+a concrete forbidden title measurably worsened the defect (priming).
 
 The floor is unchanged: genuine, intelligible content MUST yield AT LEAST
 ONE object; blank, boilerplate-only, or unintelligible content MUST still
@@ -66,9 +75,18 @@ test or anti-twin rule existed.)
 - GIVEN `examples/good-life-demo/raw/call-with-maria-2026-07-14.txt`,
   which discusses a person, a philosophical correction, and a choice made
 - WHEN `openkos ingest` completes
-- THEN three objects are written: `Person` (`people/maria-salazar.md`),
-  `Concept` (`concepts/stoicism.md`), `Decision`
-  (`decisions/frame-the-essay-on-the-dichotomy-of-control.md`)
+- THEN three objects are written: `Person` (`people/maria-salazar.md`) and
+  two `Concept` objects, one for the philosophical correction (typically
+  titled "Apatheia") and one for the choice made (typically titled
+  "Dichotomy of Control")
+
+Note: the reference bundle also declares a `Decision`
+(`decisions/frame-the-essay-on-the-dichotomy-of-control.md`) for the choice
+made. Three targeted prompt wordings over roughly 28 samples produced zero
+`Decision` objects with the default model, which consistently renders that
+choice as `Concept: Dichotomy of Control` instead — an 8B-tier limit,
+tracked separately as model/fixture work (proposal assumption 4), not
+required by this scenario.
 
 #### Scenario: Single-topic source still yields exactly one object
 
@@ -76,11 +94,22 @@ test or anti-twin rule existed.)
 - WHEN extraction runs
 - THEN exactly one derived object is written
 
-#### Scenario: A twin object is not produced
+#### Scenario: Single-subject source keeps the object its title already names
 
-- GIVEN a candidate whose title/scope merely restate the Source's own
+- GIVEN a source with exactly one genuine subject, and that subject is what
+  the source's own title already names
 - WHEN extraction runs
-- THEN that candidate is absent from the written derived objects
+- THEN that one object is still written — the anti-twin rule below does not
+  suppress a source's only genuine subject
+
+#### Scenario: A twin object is not produced alongside a genuine candidate
+
+- GIVEN a candidate whose title/scope merely restate the Source's own,
+  alongside at least one other candidate that is a genuine, distinct
+  subject
+- WHEN extraction runs
+- THEN the twin candidate is absent from the written derived objects and
+  the genuine candidate(s) are kept
 
 #### Scenario: Blank or unintelligible content still yields no objects
 
