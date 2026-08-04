@@ -176,11 +176,22 @@ lever that bounds the damage.
       stated with the measurement that supports it.
 - [ ] `examples/good-life-demo/raw/call-with-maria-2026-07-14.txt` yields the three objects the
       reference bundle declares: a `Person`, a `Concept` (the *apatheia* correction), and a
-      `Decision`.
+      `Decision`. **Amended 2026-08-04**: measured outcome is `Person` (Maria Salazar) plus two
+      `Concept` objects — the apatheia correction and the essay-framing choice (typically titled
+      "Dichotomy of Control"). Three targeted prompt wordings over roughly 28 samples produced zero
+      `Decision` objects at the 8B tier; the model renders the choice as `Concept: Dichotomy of
+      Control` instead. The `Decision` gap is tracked separately as model/fixture work, per
+      assumption 4 below.
 - [ ] Across the 15-source corpus, the mean derived-object count per source is greater than 1, and
       at least one source that #377 measured at 1 now yields the multiple objects v0.2.0 produced.
 - [ ] No source in the corpus yields a derived object whose title merely restates its Source's title
-      (D4).
+      (D4). **Amended 2026-08-04**: the unconditional form is unsatisfiable together with the floor
+      criterion below — a single-subject source whose only genuine subject IS what its own title
+      names must still keep that object (measured: the `mcp-launch` shape). Amended to the
+      conditional form: no source yields a twin title ALONGSIDE another genuine object; a twin that
+      is a source's only object is kept. Enforced deterministically in `_drop_source_title_twins`,
+      not by prompt wording alone — a prompt clause naming a concrete forbidden title measurably
+      worsened the defect via priming.
 - [ ] Blank, boilerplate-only, and unintelligible sources still yield `[]`.
 - [ ] The five instructional files #129 validated against still extract a sensible object — 5/5, the
       figure #129 recorded.

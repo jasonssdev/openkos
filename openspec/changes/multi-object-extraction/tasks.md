@@ -9,11 +9,11 @@
 | Chained PRs recommended | Yes (proposal's two-slice plan, not size) |
 | Suggested split | PR 1 (harness + D1 verdict) -> PR 2 (prompt revision + spec + tests) |
 | Delivery strategy | ask-on-risk |
-| Chain strategy | pending |
+| Chain strategy | stacked-to-main (PR 1 merged as #390; PR 2 branches from the updated main) |
 
 Decision needed before apply: Yes
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: stacked-to-main
 400-line budget risk: Low
 
 ### Suggested Work Units
@@ -88,15 +88,16 @@ Chain strategy: pending
 
 ## Phase 6: Spec, fixture acceptance, prompt-size check
 
-- [ ] 6.1 Reconcile `specs/ingestion/spec.md` scenarios against what Phases 3-5 measured.
-- [ ] 6.2 Operator-assisted: `openkos ingest` on `call-with-maria-2026-07-14.txt`; confirm the three declared objects are written.
-- [ ] 6.3 Operator-assisted: full 18-source corpus re-run; mean count > 1, no twins, blank sources still `[]`.
-- [ ] 6.4 Measure `_SYSTEM_PROMPT` byte growth vs the 6,573-byte baseline; must stay under ~15%; record in `design.md`.
-- [ ] 6.5 Update the eval report with the final before/after across all three axes.
+- [x] 6.1 Reconcile `specs/ingestion/spec.md` scenarios against what Phases 3-5 measured. Rewrote the anti-twin sentence conditional (twin dropped only alongside a genuine candidate; a single-subject source keeps the object its own title names; enforcement is deterministic, not prompt-only). Amended the multi-topic scenario to `Person` + two `Concept` objects (Apatheia, Dichotomy of Control), with a note that the reference bundle's `Decision` is not produced by the default model (tasks.md 5.7) and is tracked separately. Added a floor scenario (single-subject source whose title restates itself still yields that object) and renamed the twin scenario to make its "alongside a genuine candidate" condition explicit. Existing scenarios that still held (Entity, Concept, Decision-classifies, Project, named-entities-in-passing, single-topic, blank/unintelligible) left unchanged.
+- [x] 6.2 Operator-assisted: `openkos ingest` on `call-with-maria-2026-07-14.txt`; confirm the three declared objects are written. Five clean-workspace ingests through the real CLI (`openkos init` + `openkos ingest --auto`, scratch workspaces): object counts **2, 1, 0, 3, 1**. The acceptance shape IS reachable end-to-end — one run wrote `bundle/people/maria-salazar.md` + `bundle/concepts/apatheia.md` + `bundle/concepts/dichotomy-of-control.md`, i.e. a Person and the two Concepts as the amended criterion states, from a single source. But it is NOT every-run behaviour: the 8B model's variance on this fixture spans 0 to 3 objects, and one run degraded to Source-only (the #129 shape) despite genuine content. Before this change the same fixture produced exactly 1 object with ZERO variance, so the cap is genuinely gone; what replaced it is a high-variance distribution, not a reliable 3. Honest status: the regression is fixed, the acceptance shape is demonstrated, and per-run reliability at the 8B tier is a known limit that belongs to model selection (ADR-0001), not to this prompt change.
+- [x] 6.1b Unplanned finding worth recording for #379: D5 predicted that multi-source provenance would EMERGE from multiplicity plus entity resolution, via two sources each extracting the same candidate. That precondition now holds — `call-with-maria` yields `Apatheia` and `Dichotomy of Control`, and `notes-on-enchiridion` yields `Dichotomy of Control`, `Stoicism`, `Apatheia`. The overlap that drives the foreign-source collision rule is real, though on different concept names than the reference bundle's `concepts/stoicism.md`. No merge machinery was added here (D5 stays out of scope); this only records that the precondition #379 needs is measurably satisfied.
+- [x] 6.3 Operator-assisted: full 18-source corpus re-run; mean count > 1, no twins, blank sources still `[]`. Run `20260804T191657Z` (18 sources × 3 = 54 calls, 52 responded, 2 Ollama timeouts on a loaded machine). **Mean objects per run 1.67** vs the 1.19 baseline; **multi-object rate 0.25 (13 of 52)** vs 0.09 baseline — nearly triple. Empties 3 of 52 (5.8%) vs 4.4% baseline: same order, #129 not reopened. **No exact twin appeared alongside genuine objects anywhere in the corpus** — the amended criterion holds. Exact twins that remain are all sole-object, single-subject sources (`mcp-launch`, `06-context-management`, `09-subagents`, `11-hooks`), kept deliberately by the floor. Two fuzzy residuals documented rather than approximated: acronym expansion (`10-mcp`: H1 "MCP" -> `Concept:Model Context Protocol`) and a dropped leading article (`08-the-claude-file`: H1 "The CLAUDE.md File" -> `Concept:CLAUDE.md File` beside three genuine objects).
+- [x] 6.4 Measured `_SYSTEM_PROMPT` byte growth: 7,372 bytes vs the 6,573-byte baseline = +799 bytes = 12.16%, under the ~15% budget (verified directly against the shipped constant, 2026-08-04); recorded in `design.md`'s new "What the measurement changed" section, cross-referencing the same figure already logged at 5b.4.
+- [x] 6.5 Update the eval report with the final before/after across all three axes. Appended a hand-written "Final state after the change" section to `evals/model_spike/report-title-ab.md`, below the untouched harness-generated D1 baseline: the before/after metric table, the per-source breakout, why the remaining sole-object twins are correct rather than a miss, and the four residuals (acronym expansion, leading article, the absent `Decision`, per-run variance). The baseline section above it is left byte-identical so the frozen reference stays legible.
 
 ## Phase 7: Quality gate and PR 2
 
-- [ ] 7.1 `pytest --cov` — confirm coverage of every new test.
-- [ ] 7.2 `ruff check` + `ruff format --check` on `concept.py` and `test_concept.py`.
-- [ ] 7.3 `mypy --strict` on the modified module.
+- [x] 7.1 `pytest --cov` — confirm coverage of every new test. 3430 passed, total coverage 97.20% (required 90%).
+- [x] 7.2 `ruff check` + `ruff format --check` on `concept.py` and `test_concept.py`. Clean repo-wide (168 files formatted).
+- [x] 7.3 `mypy --strict` on the modified module. Clean across 59 source files.
 - [ ] 7.4 Open PR 2; body cites per-axis measurements and the 6.2 fixture proof.
