@@ -64,24 +64,24 @@ Satisfies: `specs/graph-projection/spec.md` ADDED requirement "Third Pass — Bo
 
 ### Phase 2.1 — RED: distance-retaining dedup, rank, cap
 
-- [ ] 2.1.1 `tests/unit/graph/test_sqlite_graph.py::_StubCandidateSource` — extend to accept `(source, target, distance)` triples (currently hardcodes `distance=0.1`), keeping existing 2-tuple call sites working via a default.
-- [ ] 2.1.2 `test_pass_three_truncates_to_the_candidate_cap` — 60 stub pairs -> exactly `_MAX_CANDIDATE_EDGES` (50) rows.
-- [ ] 2.1.3 `test_pass_three_retains_the_closest_candidates_by_distance` — over-cap set with mixed distances -> retained ids are the smallest-distance ones.
-- [ ] 2.1.4 `test_pass_three_breaks_distance_ties_by_pair_id` — equal distances -> lexicographic `(source_id, target_id)` selection.
-- [ ] 2.1.5 `test_pass_three_reports_the_pre_cap_total_when_truncating` — `store.candidate_report == CandidateReport(produced=60, retained=50)`.
-- [ ] 2.1.6 `test_pass_three_reports_no_truncation_under_the_cap` — `produced == retained`; notice suppressed downstream.
-- [ ] 2.1.7 `test_dedup_against_earlier_passes_runs_before_the_cap` — a duplicate of a pass-1/pass-2 edge at the closest distance does not consume a cap slot (proves ordering: dedup BEFORE truncation, per `contradiction.py`'s post-review HIGH correction).
-- [ ] 2.1.8 `test_under_cap_insertion_order_is_unchanged` — under-cap rows byte-identical to the pre-slice-2 build (retained slice re-sorted by id before insert).
+- [x] 2.1.1 `tests/unit/graph/test_sqlite_graph.py::_StubCandidateSource` — extend to accept `(source, target, distance)` triples (currently hardcodes `distance=0.1`), keeping existing 2-tuple call sites working via a default.
+- [x] 2.1.2 `test_pass_three_truncates_to_the_candidate_cap` — 60 stub pairs -> exactly `_MAX_CANDIDATE_EDGES` (50) rows.
+- [x] 2.1.3 `test_pass_three_retains_the_closest_candidates_by_distance` — over-cap set with mixed distances -> retained ids are the smallest-distance ones.
+- [x] 2.1.4 `test_pass_three_breaks_distance_ties_by_pair_id` — equal distances -> lexicographic `(source_id, target_id)` selection.
+- [x] 2.1.5 `test_pass_three_reports_the_pre_cap_total_when_truncating` — `store.candidate_report == CandidateReport(produced=60, retained=50)`.
+- [x] 2.1.6 `test_pass_three_reports_no_truncation_under_the_cap` — `produced == retained`; notice suppressed downstream.
+- [x] 2.1.7 `test_dedup_against_earlier_passes_runs_before_the_cap` — a duplicate of a pass-1/pass-2 edge at the closest distance does not consume a cap slot (proves ordering: dedup BEFORE truncation, per `contradiction.py`'s post-review HIGH correction).
+- [x] 2.1.8 `test_under_cap_insertion_order_is_unchanged` — under-cap rows byte-identical to the pre-slice-2 build (retained slice re-sorted by id before insert).
 
 ### Phase 2.2 — GREEN: `_MAX_CANDIDATE_EDGES`, `CandidateReport`, ranked dedup
 
-- [ ] 2.2.1 `src/openkos/graph/sqlite_graph.py` — add `_MAX_CANDIDATE_EDGES: Final[int] = 50` module constant with the docstring from design's Interfaces/Contracts section.
-- [ ] 2.2.2 `src/openkos/graph/sqlite_graph.py` — add `@dataclass(frozen=True) class CandidateReport: produced: int = 0; retained: int = 0`.
-- [ ] 2.2.3 `src/openkos/graph/sqlite_graph.py:402-409` — replace the `set[tuple[str, str]]` comprehension with a `dict[tuple[str, str], float]` keyed by the canonical `(min, max)` pair, keeping the smallest `distance` per pair (mirrors `proximity.py:143-144`'s tie rule). Order: `pairs()` -> endpoint guard (seed_node_ids) -> self-pair drop -> `seen` dedup -> best-distance collapse -> rank -> slice `[:_MAX_CANDIDATE_EDGES]` -> re-sort by id -> insert.
-- [ ] 2.2.4 `src/openkos/graph/sqlite_graph.py` — `ranked = sorted(best, key=lambda key: (best[key], key))`; `retained = sorted(ranked[:_MAX_CANDIDATE_EDGES])`; insert `retained` in that (id-sorted) order.
-- [ ] 2.2.5 `src/openkos/graph/sqlite_graph.py` — `_populate_graph_tables` returns `tuple[list[str], CandidateReport]`; update both call sites (`build_graph`, `write_graph_store`) and `SqliteGraphStore.__init__` to accept `candidate_report: CandidateReport | None = None` (defaulted so `open_graph_store_readonly` is untouched).
-- [ ] 2.2.6 Run 2.1.1-2.1.8 green.
-- [ ] 2.2.7 Update module + `_populate_graph_tables` docstrings for the ranked/capped/reported behavior.
+- [x] 2.2.1 `src/openkos/graph/sqlite_graph.py` — add `_MAX_CANDIDATE_EDGES: Final[int] = 50` module constant with the docstring from design's Interfaces/Contracts section.
+- [x] 2.2.2 `src/openkos/graph/sqlite_graph.py` — add `@dataclass(frozen=True) class CandidateReport: produced: int = 0; retained: int = 0`.
+- [x] 2.2.3 `src/openkos/graph/sqlite_graph.py:402-409` — replace the `set[tuple[str, str]]` comprehension with a `dict[tuple[str, str], float]` keyed by the canonical `(min, max)` pair, keeping the smallest `distance` per pair (mirrors `proximity.py:143-144`'s tie rule). Order: `pairs()` -> endpoint guard (seed_node_ids) -> self-pair drop -> `seen` dedup -> best-distance collapse -> rank -> slice `[:_MAX_CANDIDATE_EDGES]` -> re-sort by id -> insert.
+- [x] 2.2.4 `src/openkos/graph/sqlite_graph.py` — `ranked = sorted(best, key=lambda key: (best[key], key))`; `retained = sorted(ranked[:_MAX_CANDIDATE_EDGES])`; insert `retained` in that (id-sorted) order.
+- [x] 2.2.5 `src/openkos/graph/sqlite_graph.py` — `_populate_graph_tables` returns `tuple[list[str], CandidateReport]`; update both call sites (`build_graph`, `write_graph_store`) and `SqliteGraphStore.__init__` to accept `candidate_report: CandidateReport | None = None` (defaulted so `open_graph_store_readonly` is untouched).
+- [x] 2.2.6 Run 2.1.1-2.1.8 green.
+- [x] 2.2.7 Update module + `_populate_graph_tables` docstrings for the ranked/capped/reported behavior.
 
 ### Phase 2.3 — RED: truncation notice at CLI call sites
 
@@ -103,15 +103,15 @@ Satisfies: `specs/graph-projection/spec.md` ADDED requirement "Third Pass — Bo
 
 ### Phase 2.6 — Regression tasks (must pass UNEDITED)
 
-- [ ] 2.6.1 `tests/unit/graph/test_proximity.py` (all) — unedited, green.
-- [ ] 2.6.2 Slice 1's five tests (Phase 1.1 + 1.3.3) — unedited, green.
-- [ ] 2.6.3 Existing pass-1/pass-2 tests (`test_sqlite_graph.py:105-1428`) — unedited, green.
-- [ ] 2.6.4 Two-build determinism: `test_pass_three_row_order_is_deterministic_and_canonical` plus a new `test_pass_three_ranking_and_truncation_is_deterministic_across_two_builds` (mirrors design's Deterministic-ranking scenario) — over-cap fixture, two `build_graph` calls, identical retained set/order/notice.
+- [x] 2.6.1 `tests/unit/graph/test_proximity.py` (all) — unedited, green.
+- [x] 2.6.2 Slice 1's five tests (Phase 1.1 + 1.3.3) — unedited, green.
+- [x] 2.6.3 Existing pass-1/pass-2 tests (`test_sqlite_graph.py:105-1428`) — unedited, green.
+- [x] 2.6.4 Two-build determinism: `test_pass_three_row_order_is_deterministic_and_canonical` plus a new `test_pass_three_ranking_and_truncation_is_deterministic_across_two_builds` (mirrors design's Deterministic-ranking scenario) — over-cap fixture, two `build_graph` calls, identical retained set/order/notice.
 
 ### Phase 2.7 — Acceptance criterion (ii) + PR2 gate
 
-- [ ] 2.7.1 Explicit assertion: candidate output never exceeds `_MAX_CANDIDATE_EDGES` at any bundle size (2.1.2), and when truncation occurs the report carries the correct pre-cap total (2.1.5).
-- [ ] 2.7.2 Run `uv run pytest`; record pass/fail. Confirm branch coverage gate (`fail_under = 90`) still passes.
-- [ ] 2.7.3 Confirm PR2's diff targets PR1's branch cleanly (Feature Branch Chain) — no PR1 changes leaking into the PR2 diff.
-- [ ] 2.7.4 `ruff check` + `ruff format` + `mypy strict` green.
+- [x] 2.7.1 Explicit assertion: candidate output never exceeds `_MAX_CANDIDATE_EDGES` at any bundle size (2.1.2), and when truncation occurs the report carries the correct pre-cap total (2.1.5).
+- [x] 2.7.2 Run `uv run pytest`; record pass/fail. Confirm branch coverage gate (`fail_under = 90`) still passes.
+- [x] 2.7.3 Delivery correction: PR1 merged to `main` first, so slice 2 branches from and targets `main` (stacked-to-main), not PR1's branch. Slice 2 measured 740 insertions against the 400-line PR budget, so it ships as two PRs: **2a** (graph — cap, ranking, `CandidateReport`, phases 2.1/2.2/2.6) and **2b** (CLI — truncation notice, docs, phases 2.3/2.4/2.5). Each targets `main` in sequence.
+- [x] 2.7.4 `ruff check` + `ruff format` + `mypy strict` green.
 - [ ] 2.7.5 Verify proposal success criteria: reported bundle's candidate count ~74 -> ~25 (slice 1) confirmed unaffected by slice 2's cap (25 < 50, no-op); `status`'s count and `suggest-relations`'s candidate count agree.

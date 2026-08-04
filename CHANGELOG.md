@@ -29,6 +29,19 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   projection policy, not proximity policy. First slice of a two-part fix for
   the `curate` stability issue that motivated this change; a hard per-run
   cap on candidate-edge output is tracked separately. (graph) (#378)
+- **A per-run ceiling now bounds candidate-edge output**: the third,
+  embedding-proximity pass could nominate an unbounded number of candidate
+  edges as a bundle grew, feeding a one-LLM-call-per-candidate `curate` run
+  that once took 17m19s over a 74-candidate bundle. Candidates are now
+  ranked by proximity distance (closest first, ties broken by pair id) and
+  truncated to a fixed ceiling of 50 per `build_graph()` call, after both
+  the Source-exclusion filter and dedup against the bundle-link and
+  `relations:` passes — a discarded duplicate never displaces an eligible
+  candidate. The retained slice is re-sorted by pair id before insertion, so
+  an under-ceiling bundle still projects byte-identically to before. The
+  graph store now carries a `CandidateReport` recording how many candidates
+  were produced and how many were retained; the commands that render that
+  report to the reader land in the following slice. (graph) (#378)
 
 ## [0.2.1] - 2026-08-03
 
