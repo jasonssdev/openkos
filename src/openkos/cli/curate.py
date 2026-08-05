@@ -213,9 +213,11 @@ def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
     - a TTY, no `--auto`: `typer.confirm` asks and returns its answer.
     - non-TTY, no `--auto`: declines unconditionally, with no exception for
       a read-only stage (spec: Non-TTY without --auto declines every
-      LLM-costing stage) -- there is no consent channel at all here."""
-    if probe.notice is not None:
-        typer.echo(probe.notice, err=True)
+      LLM-costing stage) -- there is no consent channel at all here.
+
+    `probe.notice` is deliberately NOT printed here: `run_curate` echoes it
+    the moment the probe returns, so it survives the branches that never
+    reach this gate (#378)."""
     typer.echo(cost_line(stage, probe), err=True)
     if ctx.auto:
         return True
@@ -902,6 +904,18 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
 
         observability.stage_notice("curate", f"{stage.name}: checking...")
         probe = stage.probe(ctx)
+
+        # #378: echo the probe's advisory HERE, not inside `gate()`, because
+        # three of the branches below return before `gate()` is ever reached
+        # -- an unavailable probe, an empty queue, and a stage skipped
+        # because Ollama already went down. The candidate-edge cap notice is
+        # exactly the case that exposed this: a run whose candidates were
+        # truncated but whose survivors were then all filtered out lands on
+        # the empty-queue branch, and the reader would have been told
+        # nothing. "Truncation is never silent" has to hold on every path,
+        # not only the one that asks to spend.
+        if probe.notice is not None:
+            typer.echo(probe.notice, err=True)
 
         if probe.unavailable is not None:
             outcomes.append(

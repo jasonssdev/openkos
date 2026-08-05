@@ -288,9 +288,12 @@ def test_gate_non_tty_auto_writes_true_is_accepted_by_gate_itself(
 # ---------------------------------------------------------------------------
 
 
-def test_gate_echoes_probe_notice_before_cost_line(
+def test_gate_does_not_echo_the_probe_notice(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The gate prints the cost line and nothing else. `run_curate` owns the
+    notice, so it survives the branches that never reach the gate (#378
+    correction)."""
     _patch_stdin_isatty(monkeypatch, True)
     ctx = _fake_ctx(Path("unused-root"), auto=True)
     stage = _fake_stage("Structure", noun="untyped edge")
@@ -301,23 +304,64 @@ def test_gate_echoes_probe_notice_before_cost_line(
     assert curate.gate(stage, probe, ctx) is True
 
     err = capsys.readouterr().err
-    notice_line = "50 of 60 candidate edge(s) shown (cap reached)"
-    assert notice_line in err
-    assert err.index(notice_line) < err.index("1 untyped edge(s) -> 1 LLM call(s)")
+    assert "cap reached" not in err
+    assert "1 untyped edge(s) -> 1 LLM call(s)" in err
 
 
-def test_gate_prints_nothing_extra_when_probe_notice_is_none(
+def test_run_curate_reports_truncation_even_when_the_queue_is_empty(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _patch_stdin_isatty(monkeypatch, True)
-    ctx = _fake_ctx(Path("unused-root"), auto=True)
-    stage = _fake_stage("Structure", noun="untyped edge")
-    probe = curate.StageProbe(items=(1,), llm_calls=1)
+    """The branch the review caught: the cap truncated the candidate set, but
+    every survivor was then filtered out downstream, so the stage takes the
+    empty-queue exit and never reaches the gate. The reader must still be
+    told the set was truncated -- otherwise "truncation is never silent"
+    holds only on the path that asks to spend (#378 correction)."""
+    _patch_stdin_isatty(monkeypatch, False)
+    notice = "50 of 60 candidate edge(s) shown (cap reached)"
 
-    assert curate.gate(stage, probe, ctx) is True
+    def _probe(ctx: curate.CurateContext) -> curate.StageProbe:
+        return curate.StageProbe(
+            items=(),
+            llm_calls=0,
+            empty_message="Structure: nothing to do.",
+            notice=notice,
+        )
 
+    monkeypatch.setattr(
+        curate,
+        "_STAGES",
+        (_fake_stage("Structure", probe=_probe, noun="untyped edge"),),
+    )
+
+    outcomes = curate.run_curate(_fake_ctx(Path("unused-root"), auto=True))
+
+    assert [o.status for o in outcomes] == ["empty"]
     err = capsys.readouterr().err
-    assert "cap reached" not in err
+    assert notice in err
+    # The gate never ran, so no spend was previewed -- the notice reached the
+    # reader on its own, not as a side effect of the cost line.
+    assert "LLM call(s)" not in err
+
+
+def test_run_curate_prints_nothing_extra_when_the_probe_has_no_notice(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_stdin_isatty(monkeypatch, False)
+
+    def _probe(ctx: curate.CurateContext) -> curate.StageProbe:
+        return curate.StageProbe(
+            items=(), llm_calls=0, empty_message="Structure: nothing to do."
+        )
+
+    monkeypatch.setattr(
+        curate,
+        "_STAGES",
+        (_fake_stage("Structure", probe=_probe, noun="untyped edge"),),
+    )
+
+    curate.run_curate(_fake_ctx(Path("unused-root"), auto=True))
+
+    assert "cap reached" not in capsys.readouterr().err
 
 
 class _FakeCandidateStore:

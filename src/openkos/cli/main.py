@@ -8097,6 +8097,14 @@ def suggest_relations_cmd(
         typer.echo()
         # #378 slice 2: pass 3's candidate-edge cap truncation, never silent.
         # Read here, INSIDE the `with` block, since `store` closes below.
+        #
+        # The counts are deliberately NOT gated on `include_confidential` /
+        # `local_exemption`: that gate governs what leaves for `llm.chat`,
+        # not what a reader sees about their own workspace. A confidential
+        # endpoint is degraded to an empty body by `edge_typing._load_doc`
+        # and still counted in `edges`, so `total` below already discloses
+        # the same aggregate unconditionally -- suppressing only this line
+        # would hide the truncation without hiding anything else.
         report = store.candidate_report
         if report.produced > report.retained:
             typer.echo(
@@ -8475,6 +8483,14 @@ def contradictions(
         # -- distinct from `total_pairs > len(verdicts)` below, which
         # reports the contradiction-engine's OWN pair cap. Read here, INSIDE
         # the `with` block, since `store` closes below.
+        #
+        # The two lines legitimately follow different filtering rules
+        # because they count different things: `total_pairs` comes from
+        # `_candidate_pairs`, which IS deprecation-filtered, while this one
+        # counts the seeding pass's own output, which no consumer filters
+        # before typing. Neither is gated on `include_confidential` --
+        # that gate governs `llm.chat` egress, not what a reader sees about
+        # their own workspace.
         candidate_report = store.candidate_report
         if candidate_report.produced > candidate_report.retained:
             typer.echo(
