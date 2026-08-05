@@ -250,14 +250,28 @@ work EXECUTED. Truncation is NEVER silent -- see `CandidateReport`."""
 @dataclass(frozen=True)
 class CandidateReport:
     """The pass-3 candidate-edge truncation report (#378 slice 2, design
-    D4). `produced` is the ranked, Source-excluded, DEDUPED count BEFORE the
-    `_MAX_CANDIDATE_EDGES` cap is applied; `retained` is the count actually
-    inserted. `produced > retained` is the cap-reached signal a caller
-    checks to decide whether to render a truncation notice; the two default
-    to `0` for a build with `candidates=None`, where pass 3 never runs."""
+    D4; `pairs` added by the #378 post-review correction). `produced` is the
+    ranked, Source-excluded, DEDUPED count BEFORE the `_MAX_CANDIDATE_EDGES`
+    cap is applied; `retained` is the count actually inserted. `produced >
+    retained` is the RAW (unfiltered) cap-reached signal; all three default
+    to `0`/`()` for a build with `candidates=None`, where pass 3 never runs.
+
+    `pairs` is the full pre-cap candidate set as canonical `(source_id,
+    target_id)` tuples, in the SAME ranked order (distance ascending,
+    `(source_id, target_id)` tie-break) the cap slices -- `len(pairs) ==
+    produced` and `pairs[:retained]` is exactly the slice pass 3 actually
+    inserted. Pass 3 has NO sensitivity awareness of its own (it runs before
+    any confidentiality filter), so `produced`/`retained` here can count
+    pairs a given caller is not allowed to see. A caller that must respect
+    the sensitivity-fail-closed-filter (e.g. a CLI truncation notice) MUST
+    NOT render `produced`/`retained` directly -- it must re-derive both
+    counts by filtering `pairs` through its own `sensitivity
+    .sensitive_concept_ids` walk first (see
+    `resolution.edge_typing.candidate_truncation_notice`)."""
 
     produced: int = 0
     retained: int = 0
+    pairs: tuple[tuple[str, str], ...] = ()
 
 
 class SqliteGraphStore:
@@ -511,8 +525,11 @@ def _populate_graph_tables(
         # projection's byte identity (insertion order) matches the
         # pre-slice-2 build for any under-cap bundle.
         ranked = sorted(best, key=lambda pair_key: (best[pair_key], pair_key))
-        retained = sorted(ranked[:_MAX_CANDIDATE_EDGES])
-        candidate_report = CandidateReport(produced=len(best), retained=len(retained))
+        retained_keys = ranked[:_MAX_CANDIDATE_EDGES]
+        retained = sorted(retained_keys)
+        candidate_report = CandidateReport(
+            produced=len(best), retained=len(retained_keys), pairs=tuple(ranked)
+        )
         for source_id, target_id in retained:
             conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
 

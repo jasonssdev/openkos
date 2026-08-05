@@ -16,7 +16,7 @@ import pytest
 
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.proximity import ProximityPair
-from openkos.graph.sqlite_graph import build_graph
+from openkos.graph.sqlite_graph import CandidateReport, build_graph
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
 from openkos.resolution import edge_typing as edge_typing_mod
@@ -1101,3 +1101,179 @@ def test_local_exemption_defaults_to_false_across_the_edge_typing_seams(
     )
 
     assert edge_typing_mod.candidate_edges(bundle_dir, store=fake_store) == []
+
+
+# ---------------------------------------------------------------------------
+# `candidate_truncation_notice` (#378 post-review correction): the pass-3
+# candidate-edge cap notice, restricted to what THIS caller may see. Pass 3
+# has no sensitivity awareness of its own, so `CandidateReport.produced`/
+# `.retained` can count pairs with a confidential endpoint; rendering those
+# raw ints would disclose an aggregate volume the same command's printed
+# edge list deliberately withholds. These tests build a `CandidateReport`
+# directly (no real graph/proximity source needed) and a bundle carrying
+# only the sensitivity frontmatter the function's `sensitive_concept_ids`
+# walk reads.
+# ---------------------------------------------------------------------------
+
+
+def _confidential_doc(bundle_dir: Path, concept_id: str) -> None:
+    _write_doc(
+        bundle_dir / f"{concept_id}.md",
+        title=concept_id,
+        sensitivity_value="confidential",
+    )
+
+
+def test_candidate_truncation_notice_none_when_visible_produced_equals_visible_retained(
+    tmp_path: Path,
+) -> None:
+    """No truncation once the counts are re-derived from `pairs` -- mirrors
+    the pre-cap `produced == retained` case, nothing to disclose."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    report = CandidateReport(
+        produced=1,
+        retained=1,
+        pairs=(("concepts/a", "concepts/b"),),
+    )
+
+    assert edge_typing_mod.candidate_truncation_notice(report, bundle_dir) is None
+
+
+def test_candidate_truncation_notice_full_notice_when_no_endpoint_is_confidential(
+    tmp_path: Path,
+) -> None:
+    """With nothing confidential in the drop, the visible counts equal the
+    raw counts -- byte-identical wording to the pre-correction behavior."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    pairs = tuple((f"concepts/a{i:03d}", f"concepts/b{i:03d}") for i in range(1, 4))
+    report = CandidateReport(produced=3, retained=2, pairs=pairs)
+
+    notice = edge_typing_mod.candidate_truncation_notice(report, bundle_dir)
+
+    assert notice == "2 of 3 candidate edge(s) shown (cap reached)"
+
+
+def test_candidate_truncation_notice_suppressed_when_every_dropped_pair_is_confidential(
+    tmp_path: Path,
+) -> None:
+    """A run truncated PURELY in material the caller cannot see must stay
+    silent -- the reader must never learn an aggregate volume the same
+    command's printed edge list withholds. Without `--include-confidential`,
+    the dropped pair vanishes from both the produced and retained counts,
+    so `visible_produced == visible_retained` and nothing is printed."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(bundle_dir / "concepts" / "keep1.md", title="keep1")
+    _write_doc(bundle_dir / "concepts" / "keep2.md", title="keep2")
+    _confidential_doc(bundle_dir, "concepts/secret")
+    report = CandidateReport(
+        produced=3,
+        retained=2,
+        pairs=(
+            ("concepts/hub", "concepts/keep1"),
+            ("concepts/hub", "concepts/keep2"),
+            ("concepts/hub", "concepts/secret"),
+        ),
+    )
+
+    notice = edge_typing_mod.candidate_truncation_notice(report, bundle_dir)
+
+    assert notice is None
+
+
+def test_candidate_truncation_notice_full_notice_with_include_confidential(
+    tmp_path: Path,
+) -> None:
+    """The SAME confidential-only-drop fixture, but with
+    `include_confidential=True`: the escape hatch restores every pair, so
+    the full raw-count notice is rendered -- proves suppression is
+    sensitivity-gated, not a silent regression of the notice itself."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(bundle_dir / "concepts" / "keep1.md", title="keep1")
+    _write_doc(bundle_dir / "concepts" / "keep2.md", title="keep2")
+    _confidential_doc(bundle_dir, "concepts/secret")
+    report = CandidateReport(
+        produced=3,
+        retained=2,
+        pairs=(
+            ("concepts/hub", "concepts/keep1"),
+            ("concepts/hub", "concepts/keep2"),
+            ("concepts/hub", "concepts/secret"),
+        ),
+    )
+
+    notice = edge_typing_mod.candidate_truncation_notice(
+        report, bundle_dir, include_confidential=True
+    )
+
+    assert notice == "2 of 3 candidate edge(s) shown (cap reached)"
+
+
+def test_candidate_truncation_notice_reports_only_visible_counts_for_a_mixed_drop(
+    tmp_path: Path,
+) -> None:
+    """A mixed drop -- some dropped pairs confidential, some not -- must
+    report the counts a caller without `--include-confidential` can
+    actually see, not the raw pre-cap totals. Two retained pairs, three
+    dropped: one confidential (invisible, vanishes from `produced`), two
+    visible (still counted as dropped)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    for name in ("keep1", "keep2", "visible-drop-1", "visible-drop-2"):
+        _write_doc(bundle_dir / "concepts" / f"{name}.md", title=name)
+    _confidential_doc(bundle_dir, "concepts/secret-drop")
+    report = CandidateReport(
+        produced=5,
+        retained=2,
+        pairs=(
+            ("concepts/hub", "concepts/keep1"),
+            ("concepts/hub", "concepts/keep2"),
+            ("concepts/hub", "concepts/secret-drop"),
+            ("concepts/hub", "concepts/visible-drop-1"),
+            ("concepts/hub", "concepts/visible-drop-2"),
+        ),
+    )
+
+    notice = edge_typing_mod.candidate_truncation_notice(report, bundle_dir)
+
+    # Visible produced: 4 (5 raw minus the 1 confidential-endpoint pair).
+    # Visible retained: 2 (unaffected -- the confidential pair was already
+    # in the dropped, not retained, slice).
+    assert notice == "2 of 4 candidate edge(s) shown (cap reached)"
+
+
+def test_candidate_truncation_notice_suppressed_when_confidentiality_removes_a_retained_pair(
+    tmp_path: Path,
+) -> None:
+    """A confidential endpoint inside the RETAINED prefix must also drop out
+    of the visible retained count, not just the visible produced count --
+    proves the function filters `pairs[:retained]` independently rather
+    than assuming every confidential pair sits in the dropped tail."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    _write_doc(bundle_dir / "concepts" / "keep1.md", title="keep1")
+    _write_doc(bundle_dir / "concepts" / "visible-drop.md", title="visible-drop")
+    _confidential_doc(bundle_dir, "concepts/secret-retained")
+    report = CandidateReport(
+        produced=3,
+        retained=2,
+        pairs=(
+            ("concepts/hub", "concepts/keep1"),
+            ("concepts/hub", "concepts/secret-retained"),
+            ("concepts/hub", "concepts/visible-drop"),
+        ),
+    )
+
+    notice = edge_typing_mod.candidate_truncation_notice(report, bundle_dir)
+
+    # Visible produced: 2 (secret-retained excluded). Visible retained: 1
+    # (only keep1 survives from the retained prefix). 2 > 1, so the notice
+    # still fires, with the reduced counts.
+    assert notice == "1 of 2 candidate edge(s) shown (cap reached)"

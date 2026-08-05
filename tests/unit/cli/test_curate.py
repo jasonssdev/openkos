@@ -284,6 +284,180 @@ def test_gate_non_tty_auto_writes_true_is_accepted_by_gate_itself(
 
 
 # ---------------------------------------------------------------------------
+# StageProbe.notice (#378 slice 2): Structure's candidate-edge cap notice
+# ---------------------------------------------------------------------------
+
+
+def test_gate_does_not_echo_the_probe_notice(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate prints the cost line and nothing else. `run_curate` owns the
+    notice, so it survives the branches that never reach the gate (#378
+    correction)."""
+    _patch_stdin_isatty(monkeypatch, True)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+    stage = _fake_stage("Structure", noun="untyped edge")
+    probe = curate.StageProbe(
+        items=(1,), llm_calls=1, notice="50 of 60 candidate edge(s) shown (cap reached)"
+    )
+
+    assert curate.gate(stage, probe, ctx) is True
+
+    err = capsys.readouterr().err
+    assert "cap reached" not in err
+    assert "1 untyped edge(s) -> 1 LLM call(s)" in err
+
+
+def test_run_curate_reports_truncation_even_when_the_queue_is_empty(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The branch the review caught: the cap truncated the candidate set, but
+    every survivor was then filtered out downstream, so the stage takes the
+    empty-queue exit and never reaches the gate. The reader must still be
+    told the set was truncated -- otherwise "truncation is never silent"
+    holds only on the path that asks to spend (#378 correction)."""
+    _patch_stdin_isatty(monkeypatch, False)
+    notice = "50 of 60 candidate edge(s) shown (cap reached)"
+
+    def _probe(ctx: curate.CurateContext) -> curate.StageProbe:
+        return curate.StageProbe(
+            items=(),
+            llm_calls=0,
+            empty_message="Structure: nothing to do.",
+            notice=notice,
+        )
+
+    monkeypatch.setattr(
+        curate,
+        "_STAGES",
+        (_fake_stage("Structure", probe=_probe, noun="untyped edge"),),
+    )
+
+    outcomes = curate.run_curate(_fake_ctx(Path("unused-root"), auto=True))
+
+    assert [o.status for o in outcomes] == ["empty"]
+    err = capsys.readouterr().err
+    assert notice in err
+    # The gate never ran, so no spend was previewed -- the notice reached the
+    # reader on its own, not as a side effect of the cost line.
+    assert "LLM call(s)" not in err
+
+
+def test_run_curate_prints_nothing_extra_when_the_probe_has_no_notice(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_stdin_isatty(monkeypatch, False)
+
+    def _probe(ctx: curate.CurateContext) -> curate.StageProbe:
+        return curate.StageProbe(
+            items=(), llm_calls=0, empty_message="Structure: nothing to do."
+        )
+
+    monkeypatch.setattr(
+        curate,
+        "_STAGES",
+        (_fake_stage("Structure", probe=_probe, noun="untyped edge"),),
+    )
+
+    curate.run_curate(_fake_ctx(Path("unused-root"), auto=True))
+
+    assert "cap reached" not in capsys.readouterr().err
+
+
+class _FakeCandidateStore:
+    def __init__(self, candidate_report: object) -> None:
+        self.candidate_report = candidate_report
+
+    def __enter__(self) -> "_FakeCandidateStore":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def test_structure_probe_notice_set_when_the_candidate_cap_truncates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.graph.sqlite_graph import CandidateReport
+
+    ctx = _fake_ctx(tmp_path)
+    pairs = tuple((f"concepts/a{i:03d}", f"concepts/b{i:03d}") for i in range(1, 61))
+    monkeypatch.setattr(
+        "openkos.cli.curate.build_graph",
+        lambda *a, **k: _FakeCandidateStore(
+            CandidateReport(produced=60, retained=50, pairs=pairs)
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+
+    probe = curate._structure_probe(ctx)
+
+    assert probe.notice == "50 of 60 candidate edge(s) shown (cap reached)"
+
+
+def test_structure_probe_notice_is_none_under_the_candidate_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.graph.sqlite_graph import CandidateReport
+
+    ctx = _fake_ctx(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.curate.build_graph",
+        lambda *a, **k: _FakeCandidateStore(
+            CandidateReport(
+                produced=1, retained=1, pairs=(("concepts/a", "concepts/b"),)
+            )
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+
+    probe = curate._structure_probe(ctx)
+
+    assert probe.notice is None
+
+
+def test_structure_probe_notice_suppressed_when_every_dropped_pair_is_confidential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#378 post-review correction: `curate`'s Structure gate must observe
+    the SAME sensitivity-restricted notice as `suggest-relations` and
+    `contradictions` -- a truncated run whose dropped pairs are all
+    confidential must stay silent."""
+    from openkos.graph.sqlite_graph import CandidateReport
+
+    ctx = _fake_ctx(tmp_path)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "keep.md").write_text(
+        "---\ntype: Concept\ntitle: keep\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "secret.md").write_text(
+        "---\ntype: Concept\ntitle: secret\nsensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    report = CandidateReport(
+        produced=2,
+        retained=1,
+        pairs=(
+            ("concepts/hub", "concepts/keep"),
+            ("concepts/hub", "concepts/secret"),
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.build_graph",
+        lambda *a, **k: _FakeCandidateStore(report),
+    )
+    monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+
+    probe = curate._structure_probe(ctx)
+
+    assert probe.notice is None
+
+
+# ---------------------------------------------------------------------------
 # 1.7 -- stage order
 # ---------------------------------------------------------------------------
 

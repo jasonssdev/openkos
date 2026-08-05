@@ -85,21 +85,21 @@ Satisfies: `specs/graph-projection/spec.md` ADDED requirement "Third Pass — Bo
 
 ### Phase 2.3 — RED: truncation notice at CLI call sites
 
-- [ ] 2.3.1 `tests/unit/cli/test_suggest_relations.py` — over-cap fixture emits `"{retained} of {produced} candidate edge(s) shown (cap reached)"`; under-cap fixture emits nothing.
-- [ ] 2.3.2 `tests/unit/cli/test_contradictions.py` — same two cases at `main.py:8418`.
-- [ ] 2.3.3 `tests/unit/cli/` (curate test module) — over-cap fixture: `curate`'s Structure gate line carries the same notice via `StageProbe.notice`; under-cap: no notice.
+- [x] 2.3.1 `tests/unit/cli/test_suggest_relations.py` — over-cap fixture emits `"{retained} of {produced} candidate edge(s) shown (cap reached)"`; under-cap fixture emits nothing.
+- [x] 2.3.2 `tests/unit/cli/test_contradictions.py` — same two cases at `main.py:8418`.
+- [x] 2.3.3 `tests/unit/cli/` (curate test module) — over-cap fixture: `curate`'s Structure gate line carries the same notice via `StageProbe.notice`; under-cap: no notice.
 
 ### Phase 2.4 — GREEN: CLI/curate wiring
 
-- [ ] 2.4.1 `src/openkos/cli/main.py:8088-8095` (`suggest-relations`) — render the notice from `store.candidate_report` when `produced > retained`.
-- [ ] 2.4.2 `src/openkos/cli/main.py:8418` (`contradictions`) — same rendering.
-- [ ] 2.4.3 `src/openkos/cli/curate.py` — add `StageProbe.notice: str | None = None`; set it from `_structure_probe`; echo it in `gate()` (`curate.py:212`) immediately before `cost_line`.
-- [ ] 2.4.4 Run 2.3.1-2.3.3 green. If `curate` wiring exceeds ~20 lines beyond the design's estimate, stop and flag for a slice 3 rather than growing PR2 (per design's Open Questions).
+- [x] 2.4.1 `src/openkos/cli/main.py:8088-8095` (`suggest-relations`) — render the notice from `store.candidate_report` when `produced > retained`.
+- [x] 2.4.2 `src/openkos/cli/main.py:8418` (`contradictions`) — same rendering.
+- [x] 2.4.3 `src/openkos/cli/curate.py` — add `StageProbe.notice: str | None = None`; set it from `_structure_probe`; echo it in `gate()` (`curate.py:212`) immediately before `cost_line`.
+- [x] 2.4.4 Run 2.3.1-2.3.3 green. If `curate` wiring exceeds ~20 lines beyond the design's estimate, stop and flag for a slice 3 rather than growing PR2 (per design's Open Questions).
 
 ### Phase 2.5 — Docs / CHANGELOG
 
-- [ ] 2.5.1 `CHANGELOG.md`, under `## [Unreleased]` — add an entry describing the bounded candidate-edge output and the new truncation notice, referencing issue #378 (this repo's `[Unreleased]` section is actively used per-issue; the archived `concept-edge-seeding` change did not touch `docs/`, only `CHANGELOG.md`-equivalent release notes at the time — confirm current convention still routes through `CHANGELOG.md`).
-- [ ] 2.5.2 `docs/cli.md` (curate section, `:381`, the cost-gate paragraph) — add one sentence noting the Structure gate can carry a truncation notice when candidate edges exceed the cap.
+- [x] 2.5.1 `CHANGELOG.md`, under `## [Unreleased]` — add an entry describing the bounded candidate-edge output and the new truncation notice, referencing issue #378 (this repo's `[Unreleased]` section is actively used per-issue; the archived `concept-edge-seeding` change did not touch `docs/`, only `CHANGELOG.md`-equivalent release notes at the time — confirm current convention still routes through `CHANGELOG.md`).
+- [x] 2.5.2 `docs/cli.md` (curate section, `:381`, the cost-gate paragraph) — add one sentence noting the Structure gate can carry a truncation notice when candidate edges exceed the cap.
 
 ### Phase 2.6 — Regression tasks (must pass UNEDITED)
 

@@ -81,6 +81,7 @@ from openkos.resolution.contradiction import (
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
     candidate_edges,
+    candidate_truncation_notice,
     suggest_edge_types,
 )
 from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
@@ -107,6 +108,11 @@ class StageProbe:
     llm_calls: int = 0
     unavailable: str | None = None
     empty_message: str | None = None
+    notice: str | None = None
+    """A one-line, non-blocking advisory `gate()` echoes to stderr
+    immediately before `cost_line` (design D4, #378 slice 2) -- Structure's
+    probe sets this to the candidate-edge cap truncation notice when pass 3
+    truncated its output; `None` (the default) prints nothing extra."""
 
 
 @dataclass(frozen=True)
@@ -208,7 +214,11 @@ def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
     - a TTY, no `--auto`: `typer.confirm` asks and returns its answer.
     - non-TTY, no `--auto`: declines unconditionally, with no exception for
       a read-only stage (spec: Non-TTY without --auto declines every
-      LLM-costing stage) -- there is no consent channel at all here."""
+      LLM-costing stage) -- there is no consent channel at all here.
+
+    `probe.notice` is deliberately NOT printed here: `run_curate` echoes it
+    the moment the probe returns, so it survives the branches that never
+    reach this gate (#378)."""
     typer.echo(cost_line(stage, probe), err=True)
     if ctx.auto:
         return True
@@ -404,11 +414,27 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
             local_exemption=ctx.local_exemption,
             store=store,
         )
+        # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
+        # truncation, never silent -- read here, INSIDE the `with` block,
+        # since `store` closes below. `store.candidate_report.produced`/
+        # `.retained` are RAW, unfiltered by pass 3 itself;
+        # `candidate_truncation_notice` re-derives both from
+        # `report.pairs` through the SAME `sensitivity
+        # .sensitive_concept_ids` walk `candidate_edges` above just ran, so
+        # this notice never discloses a pre-cap volume that includes a
+        # confidential endpoint the `edges` queue above already excluded.
+        notice = candidate_truncation_notice(
+            store.candidate_report,
+            ctx.layout.bundle_dir,
+            include_confidential=ctx.include_confidential,
+            local_exemption=ctx.local_exemption,
+        )
 
     return StageProbe(
         items=tuple(edges),
         llm_calls=len(edges),
         empty_message="No untyped edges found." if not edges else None,
+        notice=notice,
     )
 
 
@@ -885,6 +911,18 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
 
         observability.stage_notice("curate", f"{stage.name}: checking...")
         probe = stage.probe(ctx)
+
+        # #378: echo the probe's advisory HERE, not inside `gate()`, because
+        # three of the branches below return before `gate()` is ever reached
+        # -- an unavailable probe, an empty queue, and a stage skipped
+        # because Ollama already went down. The candidate-edge cap notice is
+        # exactly the case that exposed this: a run whose candidates were
+        # truncated but whose survivors were then all filtered out lands on
+        # the empty-queue branch, and the reader would have been told
+        # nothing. "Truncation is never silent" has to hold on every path,
+        # not only the one that asks to spend.
+        if probe.notice is not None:
+            typer.echo(probe.notice, err=True)
 
         if probe.unavailable is not None:
             outcomes.append(

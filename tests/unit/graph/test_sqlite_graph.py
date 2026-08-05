@@ -1667,6 +1667,30 @@ def test_pass_three_drops_a_candidate_pair_targeting_a_source(
     assert rows == []
 
 
+def test_candidate_report_is_empty_when_every_nomination_is_filtered_out(
+    tmp_path: Path,
+) -> None:
+    """The zero-survivor branch: a candidate source ran, but every pair it
+    nominated was dropped by the Source guards. `produced` counts what
+    survived filtering, not what was nominated, so both counts must read
+    zero -- and the CLI verbs must therefore stay silent rather than print a
+    "0 of 0" notice. Distinct from the `candidates=None` case, where pass 3
+    never runs at all (#378)."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", doc_type="Concept", title="A")
+    _write_doc(bundle / "sources" / "call.md", doc_type="Source", title="Call")
+    stub = _StubCandidateSource(
+        [("sources/call", "concepts/a"), ("concepts/a", "sources/call")]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    assert rows == []
+    assert report == sqlite_graph.CandidateReport(produced=0, retained=0)
+
+
 def test_pass_three_still_seeds_concept_to_concept_pairs(tmp_path: Path) -> None:
     """A Source document elsewhere in the bundle must not perturb an
     unrelated Concept<->Concept candidate pair."""
@@ -1795,7 +1819,9 @@ def test_pass_three_collapses_a_duplicate_nomination_to_its_smaller_distance(
         report = store.candidate_report
 
     assert rows == [("concepts/a", "concepts/b", None)]
-    assert report == sqlite_graph.CandidateReport(produced=1, retained=1)
+    assert report.produced == 1
+    assert report.retained == 1
+    assert report.pairs == (("concepts/a", "concepts/b"),)
 
 
 def test_pass_three_keeps_the_first_distance_when_a_later_duplicate_is_farther(
@@ -1819,7 +1845,9 @@ def test_pass_three_keeps_the_first_distance_when_a_later_duplicate_is_farther(
         report = store.candidate_report
 
     assert rows == [("concepts/a", "concepts/b", None)]
-    assert report == sqlite_graph.CandidateReport(produced=1, retained=1)
+    assert report.produced == 1
+    assert report.retained == 1
+    assert report.pairs == (("concepts/a", "concepts/b"),)
 
 
 def test_pass_three_drops_a_self_pair(tmp_path: Path) -> None:
@@ -1840,7 +1868,9 @@ def test_pass_three_drops_a_self_pair(tmp_path: Path) -> None:
         report = store.candidate_report
 
     assert rows == [("concepts/a", "concepts/b", None)]
-    assert report == sqlite_graph.CandidateReport(produced=1, retained=1)
+    assert report.produced == 1
+    assert report.retained == 1
+    assert report.pairs == (("concepts/a", "concepts/b"),)
 
 
 def test_pass_three_reports_the_pre_cap_total_when_truncating(
@@ -1860,7 +1890,9 @@ def test_pass_three_reports_the_pre_cap_total_when_truncating(
     with sqlite_graph.build_graph(bundle, candidates=stub) as store:
         report = store.candidate_report
 
-    assert report == sqlite_graph.CandidateReport(produced=60, retained=50)
+    assert report.produced == 60
+    assert report.retained == 50
+    assert len(report.pairs) == 60
 
 
 def test_pass_three_reports_no_truncation_under_the_cap(tmp_path: Path) -> None:
@@ -1874,7 +1906,9 @@ def test_pass_three_reports_no_truncation_under_the_cap(tmp_path: Path) -> None:
     with sqlite_graph.build_graph(bundle, candidates=stub) as store:
         report = store.candidate_report
 
-    assert report == sqlite_graph.CandidateReport(produced=1, retained=1)
+    assert report.produced == 1
+    assert report.retained == 1
+    assert report.pairs == (("concepts/a", "concepts/b"),)
 
 
 def test_dedup_against_earlier_passes_runs_before_the_cap(tmp_path: Path) -> None:
@@ -1914,7 +1948,8 @@ def test_dedup_against_earlier_passes_runs_before_the_cap(tmp_path: Path) -> Non
     # cap), so `produced` reflects 54, not 55 -- and the cap still retains
     # exactly 50, the 50 CLOSEST leaves, INCLUDING leaf050 -- which a
     # cap-before-dedup bug would have displaced with the duplicate.
-    assert report == sqlite_graph.CandidateReport(produced=54, retained=50)
+    assert report.produced == 54
+    assert report.retained == 50
     assert dup_rows == [("concepts/hub", "concepts/dup", None)]
     assert "concepts/leaf050" in candidate_targets
     assert len(candidate_targets) == 50
@@ -1946,6 +1981,37 @@ def test_under_cap_insertion_order_is_unchanged(tmp_path: Path) -> None:
     ]
 
 
+def test_candidate_report_pairs_are_ranked_pre_cap_and_slice_to_retained(
+    tmp_path: Path,
+) -> None:
+    """`CandidateReport.pairs` carries every deduped, Source-excluded
+    candidate pair BEFORE the cap, ranked by distance ascending / id
+    tie-break -- the SAME order the cap slices -- so `pairs[:retained]`
+    reproduces exactly the retained set (#378 correction: a caller needs the
+    raw pairs, not just the two counts, to re-derive a sensitivity-filtered
+    truncation notice without a second graph read)."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "hub.md", title="Hub")
+    pairs: list[tuple[str, str, float]] = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        _write_doc(bundle / "concepts" / f"{leaf_id}.md", title=leaf_id)
+        pairs.append(("concepts/hub", f"concepts/{leaf_id}", index * 0.001))
+    stub = _StubCandidateSource(pairs)
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        report = store.candidate_report
+
+    assert len(report.pairs) == report.produced == 60
+    retained_pairs = report.pairs[: report.retained]
+    assert len(retained_pairs) == report.retained == 50
+    # Canonical pair key is (min, max); "concepts/hub" < "concepts/leafNNN"
+    # lexically, so it is always the first element of every pair.
+    retained_targets = {target for _source, target in retained_pairs}
+    expected_targets = {f"concepts/leaf{index:03d}" for index in range(1, 51)}
+    assert retained_targets == expected_targets
+
+
 def test_pass_three_ranking_and_truncation_is_deterministic_across_two_builds(
     tmp_path: Path,
 ) -> None:
@@ -1973,11 +2039,9 @@ def test_pass_three_ranking_and_truncation_is_deterministic_across_two_builds(
         second_report = store.candidate_report
 
     assert first_rows == second_rows
-    assert (
-        first_report
-        == second_report
-        == sqlite_graph.CandidateReport(produced=60, retained=50)
-    )
+    assert first_report == second_report
+    assert first_report.produced == 60
+    assert first_report.retained == 50
 
 
 # --- Phase 3.4 (#183): zero-candidate success path, through the real seam --
