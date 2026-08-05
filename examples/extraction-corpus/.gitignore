@@ -1,0 +1,16 @@
+# The raw sources stay LOCAL and are never committed.
+#
+# This repository is public and Apache-2.0. The measurement fixtures are real
+# third-party course material, which this project holds no right to relicense
+# -- committing it would make LICENSE assert something false about those files.
+#
+# What IS committed is the part that carries the judgment: `corpus.py`, this
+# README, and every hand-written file under `ground-truth/`. That analysis is
+# original work, and it is also the reusable half -- another contributor
+# reproduces the METHOD by pointing `corpus.py survey` at their own material,
+# not by re-reading these bytes.
+#
+# The cost, stated plainly: nobody else can reproduce the exact numbers, only
+# the procedure. For a manual harness that never runs in CI, that is the right
+# trade.
+sources/
