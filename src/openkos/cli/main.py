@@ -996,17 +996,26 @@ def _format_type_tally(counts: dict[str, int]) -> str:
     return f"extracted {total} object{_plural(total)} — {parts}"
 
 
-def _format_group_tally(high: int, low: int) -> str:
+def _format_group_tally(high: int, acronym: int, low: int) -> str:
     """Render the leading candidate-group tally line from per-tier counts,
     decoupled from `CandidateGroup` internals so callers pass primitive
     counts (spec: Reusable Group-Tally Formatting Helper).
 
     Returns `""` for all-zero counts, signaling "no line to print" to the
-    caller. Otherwise returns `N candidate group(s) (X exact, Y near)`."""
-    total = high + low
+    caller. Otherwise returns
+    `N candidate group(s) (X exact, Y acronym, Z near)`.
+
+    ACRONYM is counted separately rather than folded into `near` (#397
+    follow-up): it is a distinct match METHOD, and reporting a
+    deterministic initials match as a fuzzy similarity score misdescribes
+    the evidence a reader is about to adjudicate."""
+    total = high + acronym + low
     if total == 0:
         return ""
-    return f"{total} candidate group{_plural(total)} ({high} exact, {low} near)"
+    return (
+        f"{total} candidate group{_plural(total)} "
+        f"({high} exact, {acronym} acronym, {low} near)"
+    )
 
 
 def _format_verdict_tally(same: int, different: int, uncertain: int) -> str:
@@ -7682,15 +7691,17 @@ def duplicates(
         return
 
     high_count = sum(1 for group in groups if group.tier is Tier.HIGH)
-    low_count = len(groups) - high_count
-    typer.echo(_format_group_tally(high_count, low_count))
+    acronym_count = sum(1 for group in groups if group.tier is Tier.ACRONYM)
+    low_count = len(groups) - high_count - acronym_count
+    typer.echo(_format_group_tally(high_count, acronym_count, low_count))
     typer.echo(
         "Legend: [tier] type -- trigger. The tier is the MATCH METHOD, "
         "not a strength ranking: HIGH = exact normalized key, "
-        "LOW = near-match similarity score."
+        "ACRONYM = one title's token is the initials of a word run in the "
+        "other, LOW = near-match similarity score."
     )
     for group in groups:
-        tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
+        tier_label = group.tier.name
         typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
         for member_id in group.member_ids:
             typer.echo(f"  - {member_id}")
@@ -7940,7 +7951,7 @@ def adjudicate(
     )
     for result in displayed:
         group = result.candidate
-        tier_label = "HIGH" if group.tier is Tier.HIGH else "LOW"
+        tier_label = group.tier.name
         typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
         for member_id in group.member_ids:
             typer.echo(f"  - {member_id}")
