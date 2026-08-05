@@ -148,6 +148,7 @@ def _cfg(exemption: bool) -> config.Config:
         default_sensitivity=config.DEFAULT_SENSITIVITY,
         freshness_window=config.DEFAULT_FRESHNESS_WINDOW,
         embedding_model=config.DEFAULT_EMBEDDING_MODEL,
+        chat_timeout=config.DEFAULT_CHAT_TIMEOUT,
         confidential_local_exemption=exemption,
         volatility_windows={},
         type_tiers={},

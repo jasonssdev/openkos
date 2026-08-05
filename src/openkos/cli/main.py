@@ -96,6 +96,33 @@ app = typer.Typer()
 # blocking on OllamaClient's DEFAULT_TIMEOUT.
 _PREFLIGHT_TIMEOUT = 5.0
 
+
+def _chat_client(cfg: config.Config) -> OllamaClient:
+    """Build the CHAT client for a workspace, honoring its `chat_timeout`.
+
+    Every chat verb goes through here (issue #405). Constructing
+    `OllamaClient(model=cfg.model)` inline instead reads fine and silently
+    ignores the workspace's `chat_timeout`, falling back to the transport
+    default -- a defect no type checker or ordinary test can see, across the
+    eight-odd verbs that make chat calls. One seam means a workspace that
+    raises its deadline raises it for `ingest`, `curate`, `query`,
+    `adjudicate`, `suggest-relations`, and `contradictions` alike, rather
+    than for whichever verbs someone remembered.
+
+    Deliberately NOT used for the two other client kinds: embedding clients
+    (`model=cfg.embedding_model`) keep the transport default, and the
+    liveness probes keep `_PREFLIGHT_TIMEOUT`, which answers "is anything
+    listening" and must stay short -- a 600s probe would hang the CLI on a
+    firewalled host instead of failing fast.
+
+    `curate.py` builds its own client from `ctx.cfg` rather than calling
+    this: `main.py` already imports `curate`, so the dependency cannot run
+    the other way. `tests/unit/cli/test_chat_timeout_wiring.py` pins both
+    sites so the pair cannot drift.
+    """
+    return OllamaClient(model=cfg.model, timeout=cfg.chat_timeout)
+
+
 # Shared remediation clause appended to the OllamaUnavailable handlers of
 # query, adjudicate, and suggest-relations -- kept as a single constant so
 # the three verbs cannot drift from each other in wording.
@@ -2771,7 +2798,7 @@ def _ingest_single(
             stamp_sensitivity=source_sensitivity,
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             bundle_dir=layout.bundle_dir,
-            llm=OllamaClient(model=cfg.model),
+            llm=_chat_client(cfg),
             include_confidential=include_confidential,
         )
         if skip_reason is not None:
@@ -7862,7 +7889,7 @@ def adjudicate(
     candidates = find_candidates(
         layout.bundle_dir, include_deprecated=include_deprecated
     )
-    llm = OllamaClient(model=cfg.model)
+    llm = _chat_client(cfg)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -8153,7 +8180,7 @@ def suggest_relations_cmd(
     # the SAME client the later `suggest_edge_types` will send through
     # (issue #240). Construction performs no I/O -- it only resolves and
     # stores the host -- so nothing is contacted by moving it up.
-    llm = OllamaClient(model=cfg.model)
+    llm = _chat_client(cfg)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -8366,7 +8393,7 @@ def suggest_volatility_cmd(
         )
         raise typer.Exit(code=1) from exc
 
-    llm = OllamaClient(model=cfg.model)
+    llm = _chat_client(cfg)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -8517,7 +8544,7 @@ def contradictions(
         )
         raise typer.Exit(code=1) from exc
 
-    llm = OllamaClient(model=cfg.model)
+    llm = _chat_client(cfg)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -9024,7 +9051,7 @@ def query(
         )
         raise typer.Exit(code=1) from exc
 
-    llm = OllamaClient(model=cfg.model)
+    llm = _chat_client(cfg)
     embedder = OllamaClient(model=cfg.embedding_model)
     _warn_if_nonlocal_embed_host("query", embedder.locality)
     # The CHAT client decides the exemption, not the embedder: the
@@ -10054,7 +10081,7 @@ def curate(
     # `warn_if_walk_incomplete` (not just before `CurateContext`) so the
     # advisory can be told about this hatch too, the same way the other
     # five verbs already are.
-    local_exemption = _resolve_local_exemption(OllamaClient(model=cfg.model), cfg)
+    local_exemption = _resolve_local_exemption(_chat_client(cfg), cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
         include_confidential=include_confidential,

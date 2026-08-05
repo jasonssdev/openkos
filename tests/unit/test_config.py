@@ -1424,3 +1424,122 @@ def test_written_config_declares_the_confidential_local_exemption_key(
         config.read_config(tmp_path).confidential_local_exemption
         is config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION
     )
+
+
+# --- chat_timeout: the configurable chat deadline (#405) ---------------------
+
+
+def test_default_chat_timeout_is_generous_for_real_sources() -> None:
+    """The packaged default is 600s, not the 120s that shipped before (#405).
+
+    120s was measured too low for the documents this product targets: a
+    temperature sweep over 9 sources timed out on 8 calls, every one of them
+    on a 6-17 KB real document, while none of the 700-800 B demo fixtures ever
+    timed out. A knowledge compiler must not fall over on a 6 KB markdown
+    file.
+
+    This is deliberately NOT a fix for runaway generation. The same issue
+    measured a fixture that timed out 5 of 5 at 120s AND 5 of 5 again at
+    300s under greedy decoding -- no deadline rescues a model that never
+    terminates. That belongs with the anti-enumeration work in #404.
+    """
+    assert config.DEFAULT_CHAT_TIMEOUT == 600.0
+
+
+def test_read_config_reads_present_chat_timeout(tmp_path: Path) -> None:
+    """A `chat_timeout` present in `openkos.yaml` passes through (#405)."""
+    (tmp_path / "openkos.yaml").write_text("chat_timeout: 900.5\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.chat_timeout == 900.5
+
+
+def test_read_config_coerces_integer_chat_timeout_to_float(tmp_path: Path) -> None:
+    """`chat_timeout: 900` is YAML-int; the field is typed `float`.
+
+    Coerced rather than rejected: an operator writing a whole number of
+    seconds means exactly what a float means, and refusing it would be
+    pedantry. The coercion happens at the boundary so `Config.chat_timeout`
+    is uniformly `float` for every consumer.
+    """
+    (tmp_path / "openkos.yaml").write_text("chat_timeout: 900\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.chat_timeout == 900.0
+    assert isinstance(result.chat_timeout, float)
+
+
+def test_read_config_falls_back_to_default_chat_timeout_when_absent(
+    tmp_path: Path,
+) -> None:
+    """An `openkos.yaml` omitting `chat_timeout` falls back to the packaged
+    default, like every other field (D3)."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.chat_timeout == config.DEFAULT_CHAT_TIMEOUT
+
+
+def test_read_config_falls_back_to_default_chat_timeout_on_explicit_null(
+    tmp_path: Path,
+) -> None:
+    """An explicit `chat_timeout:` (YAML null) falls back too, matching the
+    `is not None` convention every other field follows."""
+    (tmp_path / "openkos.yaml").write_text("chat_timeout:\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.chat_timeout == config.DEFAULT_CHAT_TIMEOUT
+
+
+def test_read_config_rejects_non_numeric_chat_timeout(tmp_path: Path) -> None:
+    """A non-numeric `chat_timeout` fails loudly rather than being coerced."""
+    (tmp_path / "openkos.yaml").write_text("chat_timeout: soon\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'chat_timeout' must be a positive number"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_boolean_chat_timeout(tmp_path: Path) -> None:
+    """`chat_timeout: true` is rejected, not read as `1.0` second.
+
+    `bool` is a subclass of `int` in Python, so a bare numeric check would
+    silently accept `true` and resolve it to a one-second deadline -- which
+    would make every chat call fail instantly and look like a dead backend.
+    The check must exclude `bool` explicitly, mirroring how
+    `confidential_local_exemption` refuses int-as-bool in the other
+    direction.
+    """
+    (tmp_path / "openkos.yaml").write_text("chat_timeout: true\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'chat_timeout' must be a positive number"):
+        config.read_config(tmp_path)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "-0.5"])
+def test_read_config_rejects_non_positive_chat_timeout(
+    tmp_path: Path, value: str
+) -> None:
+    """A zero or negative deadline is refused at read time.
+
+    `urllib` treats a non-positive timeout as an immediate expiry, so this
+    would disable the LLM entirely while reading like a valid setting.
+    """
+    (tmp_path / "openkos.yaml").write_text(f"chat_timeout: {value}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'chat_timeout' must be a positive number"):
+        config.read_config(tmp_path)
+
+
+def test_written_config_carries_chat_timeout(tmp_path: Path) -> None:
+    """`write_config` ships the key, and reading it back yields the packaged
+    default -- the template and `DEFAULT_CHAT_TIMEOUT` must not drift."""
+    config.write_config(tmp_path, model="qwen3:8b", embedding_model="bge-m3")
+
+    text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+
+    assert "chat_timeout:" in text
+    assert config.read_config(tmp_path).chat_timeout == config.DEFAULT_CHAT_TIMEOUT
