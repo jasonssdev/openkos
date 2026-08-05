@@ -145,3 +145,91 @@ def test_is_near_match_false_just_below_threshold() -> None:
 
     assert is_near_match("cart", "charter") is False
     assert near_match_score("cart", "charter") is None
+
+
+# --- Acronym expansion (#397) -----------------------------------------------
+
+
+def test_acronym_matches_the_initials_of_a_word_run() -> None:
+    """#397's exact miss: `Google ADK` and `ADK (Agent Development Kit)` share
+    only the token `adk`, which the subset-containment rule rejects because
+    `google` finds no near-match in the longer title. The acronym IS the
+    expansion's initials, and that is the signal the lexical gate lacked."""
+    assert (
+        similarity.acronym_expansion_match("adk agent development kit", "google adk")
+        == "adk"
+    )
+
+
+def test_acronym_match_is_symmetric() -> None:
+    """Candidate detection compares unordered pairs, so which title is passed
+    first must never change the verdict."""
+    forward = similarity.acronym_expansion_match(
+        "mcp workflows", "model context protocol"
+    )
+    backward = similarity.acronym_expansion_match(
+        "model context protocol", "mcp workflows"
+    )
+    assert forward == backward == "mcp"
+
+
+def test_acronym_run_may_start_anywhere_in_the_title() -> None:
+    """The expansion is rarely the whole title -- in the measured case it sits
+    inside `ADK (Agent Development Kit)` after the acronym itself. Anchoring
+    to the first word would miss every real instance."""
+    assert (
+        similarity.acronym_expansion_match(
+            "the agent development kit explained", "google adk"
+        )
+        == "adk"
+    )
+
+
+def test_near_match_shapes_are_not_acronym_matches() -> None:
+    """`Stoicism`/`Stoic Philosophy` is the LOW tier's own documented case.
+    This rule must not claim it -- overlapping tiers would double-report one
+    pair and inflate the adjudication cost #382 is about."""
+    assert similarity.acronym_expansion_match("stoicism", "stoic philosophy") is None
+
+
+def test_unrelated_neighbouring_topics_do_not_match() -> None:
+    """Measured false positives of the embedding-proximity alternative, which
+    this rule exists to avoid paying for: topically adjacent, not the same
+    thing."""
+    assert (
+        similarity.acronym_expansion_match("agent tools", "agent instructions") is None
+    )
+    assert similarity.acronym_expansion_match("mcp launching", "mcp origin") is None
+
+
+def test_a_run_of_one_word_is_never_an_expansion() -> None:
+    """An acronym abbreviates SEVERAL words. Matching a single word's initial
+    would make every title starting with the same letter a candidate."""
+    assert similarity.acronym_expansion_match("abc", "alpha") is None
+
+
+def test_tokens_shorter_than_the_minimum_are_ignored() -> None:
+    """A two-letter token carries too little signal: `ai` would match the
+    initials of any two words beginning a-i, which on a corpus about agents
+    is most of them."""
+    assert (
+        similarity.acronym_expansion_match("ai systems", "agent infrastructure") is None
+    )
+
+
+def test_identical_titles_are_not_reported_as_acronym_matches() -> None:
+    """An exact match is the HIGH tier's business. Reporting it here too
+    would put one pair in two tiers."""
+    assert (
+        similarity.acronym_expansion_match(
+            "agent development kit", "agent development kit"
+        )
+        is None
+    )
+
+
+def test_empty_and_single_token_keys_never_match() -> None:
+    """Mirrors `near_match_score`'s degrade posture: a key that normalizes to
+    nothing yields no candidate rather than raising."""
+    assert similarity.acronym_expansion_match("", "agent development kit") is None
+    assert similarity.acronym_expansion_match("adk", "") is None

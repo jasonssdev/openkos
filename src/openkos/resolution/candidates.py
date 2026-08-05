@@ -37,7 +37,7 @@ from openkos import lifecycle
 from openkos.model import okf
 
 from .normalize import normalize_key
-from .similarity import near_match_score
+from .similarity import acronym_expansion_match, near_match_score
 
 _TIER_ORDER: dict["Tier", int] = {}
 """Populated after `Tier` is defined -- HIGH sorts before LOW within a type
@@ -50,13 +50,18 @@ class Tier(Enum):
 
     HIGH = "high"
     """Exact shared normalized key -- see `normalize.normalize_key`."""
+    ACRONYM = "acronym"
+    """One title's token IS the initials of a word run in the other, per
+    `similarity.acronym_expansion_match` -- `Google ADK` against `ADK (Agent
+    Development Kit)` (#397). Always exactly a pair."""
     LOW = "low"
-    """Near-match per `similarity.is_near_match`, not already HIGH for the
-    same pair."""
+    """Near-match per `similarity.is_near_match`, not already HIGH or
+    ACRONYM for the same pair."""
 
 
 _TIER_ORDER[Tier.HIGH] = 0
-_TIER_ORDER[Tier.LOW] = 1
+_TIER_ORDER[Tier.ACRONYM] = 1
+_TIER_ORDER[Tier.LOW] = 2
 
 
 @dataclass(frozen=True)
@@ -72,10 +77,11 @@ class CandidateGroup:
     A HIGH group may have more than 2 members (all sharing one exact
     normalized key); a LOW group is always exactly a pair."""
     tier: Tier
-    """`Tier.HIGH` or `Tier.LOW`."""
+    """`Tier.HIGH`, `Tier.ACRONYM`, or `Tier.LOW`."""
     trigger: str
-    """HIGH: the shared normalized key. LOW: the near-match score
-    (`near_match_score`) formatted to 3 decimal places."""
+    """HIGH: the shared normalized key. ACRONYM: the matched acronym itself.
+    LOW: the near-match score (`near_match_score`) formatted to 3 decimal
+    places."""
 
 
 def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str]]:
@@ -248,6 +254,22 @@ def find_candidates(
         for (id_a, key_a), (id_b, key_b) in combinations(keyed, 2):
             pair = frozenset((id_a, id_b))
             if pair in high_pairs:
+                continue
+            # ACRONYM is evaluated BEFORE the near-match rule so a pair
+            # qualifying under both is emitted once, under the stronger of
+            # the two (#397). Every group costs one adjudication call
+            # (#382), so double-reporting one pair would buy nothing and
+            # charge twice.
+            acronym = acronym_expansion_match(key_a, key_b)
+            if acronym is not None:
+                groups.append(
+                    CandidateGroup(
+                        okf_type=okf_type,
+                        member_ids=tuple(sorted((id_a, id_b))),
+                        tier=Tier.ACRONYM,
+                        trigger=acronym,
+                    )
+                )
                 continue
             score = near_match_score(key_a, key_b)
             if score is None:

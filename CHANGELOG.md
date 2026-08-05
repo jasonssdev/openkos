@@ -14,6 +14,26 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+### Added
+
+- **Entity resolution now sees acronym-expansion duplicates**: a new
+  `ACRONYM` candidate tier pairs two same-type titles when a token of one IS
+  the initials of a contiguous word run in the other — `Google ADK` with
+  `ADK (Agent Development Kit)`. The existing subset-containment rule
+  structurally could not see that shape (`google` finds no near-match in
+  `agent development kit`, so containment fails and the pair never reached
+  the adjudicator), which made it a recall failure in the gate rather than a
+  judgment failure downstream. Deterministic and stdlib-only, like the tiers
+  beside it; sorts between HIGH and LOW, and a pair qualifying under more
+  than one rule is emitted once under the strongest, since every group costs
+  one adjudication call. An embedding-proximity tier was measured as the
+  alternative and rejected: it surfaced the same true positive but would have
+  added 18 same-type pairs on a 19-document bundle to deliver it, because
+  embedding distance measures topical relatedness rather than identity. The
+  acronym rule fired on 2 of those 18 — the genuine duplicate and one
+  expansion twin already documented as a known residue — and on nothing else
+  (#397).
+
 ### Fixed
 
 - **The extraction object cap no longer discards candidates silently**:

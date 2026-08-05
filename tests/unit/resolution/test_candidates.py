@@ -775,3 +775,84 @@ def test_find_exact_title_groups_degrades_on_malformed_frontmatter(
 
     assert len(groups) == 1
     assert groups[0].member_ids == ("concepts/a", "concepts/b")
+
+
+# --- ACRONYM tier (#397) ----------------------------------------------------
+
+
+def test_acronym_expansion_pair_becomes_its_own_tier(tmp_path: Path) -> None:
+    """#397's measured miss: these two are the same toolkit, and the lexical
+    LOW tier structurally cannot see it -- `google` finds no near-match in
+    `agent development kit`, so containment fails and the adjudicator was
+    never shown the pair."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "adk.md", title="ADK (Agent Development Kit)")
+    _write_doc(bundle / "concepts" / "google-adk.md", title="Google ADK")
+
+    groups = candidates_mod.find_candidates(bundle)
+
+    assert [(g.tier, g.member_ids, g.trigger) for g in groups] == [
+        (
+            candidates_mod.Tier.ACRONYM,
+            ("concepts/adk", "concepts/google-adk"),
+            "adk",
+        )
+    ]
+
+
+def test_acronym_tier_sorts_between_high_and_low(tmp_path: Path) -> None:
+    """An acronym match is exact and deterministic -- stronger evidence than
+    a fuzzy near-match, weaker than an identical normalized key -- so it
+    ranks between them in the review queue."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle / "concepts" / "b.md", title="Stoicism")
+    _write_doc(bundle / "concepts" / "c.md", title="MCP Workflows")
+    _write_doc(bundle / "concepts" / "d.md", title="Model Context Protocol")
+    _write_doc(bundle / "concepts" / "e.md", title="Stoic Philosophy")
+
+    tiers = [g.tier for g in candidates_mod.find_candidates(bundle)]
+
+    assert tiers.index(candidates_mod.Tier.HIGH) < tiers.index(
+        candidates_mod.Tier.ACRONYM
+    )
+    assert tiers.index(candidates_mod.Tier.ACRONYM) < tiers.index(
+        candidates_mod.Tier.LOW
+    )
+
+
+def test_a_pair_is_never_reported_in_two_tiers(tmp_path: Path) -> None:
+    """Every group costs one adjudication call (#382), so a pair that
+    qualifies under more than one rule must be emitted once, under the
+    strongest."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="ADK (Agent Development Kit)")
+    _write_doc(bundle / "concepts" / "b.md", title="Agent Development Kit")
+
+    groups = candidates_mod.find_candidates(bundle)
+    pairs = [frozenset(g.member_ids) for g in groups]
+
+    assert len(pairs) == len(set(pairs))
+
+
+def test_acronym_pairs_must_share_a_type(tmp_path: Path) -> None:
+    """A Person is never a duplicate of a Concept, whatever their titles
+    share -- the acronym tier partitions by type exactly like the others."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "adk.md", title="ADK (Agent Development Kit)")
+    _write_doc(
+        bundle / "people" / "google-adk.md", doc_type="Person", title="Google ADK"
+    )
+
+    assert candidates_mod.find_candidates(bundle) == []
+
+
+def test_exact_title_groups_entry_point_ignores_acronym_pairs(tmp_path: Path) -> None:
+    """`find_exact_title_groups` backs `status`' "identical titles" line and
+    `next`'s duplicate tier (#216). An acronym pair does NOT have an
+    identical title, so surfacing it there would make both surfaces lie."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "adk.md", title="ADK (Agent Development Kit)")
+    _write_doc(bundle / "concepts" / "google-adk.md", title="Google ADK")
+
+    assert candidates_mod.find_exact_title_groups(bundle) == []

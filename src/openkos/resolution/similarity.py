@@ -83,3 +83,73 @@ def is_near_match(key_a: str, key_b: str) -> bool:
     """`True` when `key_a`/`key_b` qualify as a LOW-confidence near-match
     (see `near_match_score`)."""
     return near_match_score(key_a, key_b) is not None
+
+
+MIN_ACRONYM_LENGTH: Final[int] = 3
+"""Shortest token treated as a candidate acronym. Two letters carry too
+little signal -- `ai` matches the initials of any two words beginning a-i,
+which on a corpus about agents is most of them. Both measured real cases
+(`adk`, `mcp`) are three letters."""
+
+
+def _initialisms(key: str) -> set[str]:
+    """Every contiguous run of two or more words in `key`, as its initials.
+
+    Runs may start anywhere: in the one case this rule was built from, the
+    expansion sits INSIDE the title that also carries the acronym (`ADK
+    (Agent Development Kit)`), so anchoring to the first word would miss
+    every real instance. Runs of one word are excluded by construction --
+    an acronym abbreviates several words, and matching a single initial
+    would make every title sharing a first letter a candidate.
+    """
+    words = key.split()
+    found: set[str] = set()
+    for start in range(len(words)):
+        for end in range(start + 2, len(words) + 1):
+            initials = "".join(word[0] for word in words[start:end])
+            if len(initials) >= MIN_ACRONYM_LENGTH:
+                found.add(initials)
+    return found
+
+
+def acronym_expansion_match(key_a: str, key_b: str) -> str | None:
+    """Return the acronym linking `key_a` and `key_b`, or `None` (#397).
+
+    Two normalized titles match when a token of one IS the initials of a
+    contiguous word run in the other -- `google adk` against `adk agent
+    development kit`, or `mcp workflows` against `model context protocol`.
+    Symmetric: the pair is unordered, so which key arrives first never
+    changes the verdict. When several acronyms qualify, the
+    lexicographically smallest is returned, so the reported trigger is
+    deterministic.
+
+    This exists because subset containment (`near_match_score`) structurally
+    cannot see this shape. Every token of the smaller title must find a
+    near-match in the larger one, so `google adk` fails on `google` and the
+    pair never reaches the adjudicator at all -- a recall failure in the
+    gate, not a judgment failure downstream.
+
+    Case is irrelevant here even though the acronym is usually written in
+    caps: the comparison is a token's LETTERS against a word run's
+    initials, which survives `normalize.normalize_key`'s casefold intact.
+    Working on normalized keys is what lets this tier reuse the existing
+    shared prelude rather than threading raw titles through it.
+
+    Deliberately narrow. Measured over one real 19-document bundle against
+    the 18 same-type pairs an embedding-proximity tier would have added,
+    this rule fired on exactly two -- the genuine duplicate #397 reports and
+    the `MCP`/`Model Context Protocol` expansion twin recorded as a known
+    residue elsewhere -- and on nothing else. That precision is the whole
+    point: the proximity alternative surfaced the same true positive but
+    cost 18 adjudication calls to deliver it, because embedding distance
+    measures topical relatedness rather than identity.
+
+    Returns `None` for identical keys: an exact match is the HIGH tier's
+    business, and reporting it here would put one pair in two tiers.
+    """
+    if key_a == key_b:
+        return None
+    tokens_a = {token for token in key_a.split() if len(token) >= MIN_ACRONYM_LENGTH}
+    tokens_b = {token for token in key_b.split() if len(token) >= MIN_ACRONYM_LENGTH}
+    matches = (tokens_a & _initialisms(key_b)) | (tokens_b & _initialisms(key_a))
+    return min(matches) if matches else None
