@@ -56,7 +56,16 @@ pair:
    `Source` is excluded from the seeding node set on BOTH ends (#378 slice
    1): a Source MUST NOT propose a candidate edge and MUST NOT receive one.
    This exclusion applies ONLY to pass 3 -- passes 1 and 2, including the
-   Concept->Source `derived_from` provenance mirror, are unaffected.
+   Concept->Source `derived_from` provenance mirror, are unaffected. The
+   surviving, deduped candidates are then RANKED by `distance` ascending
+   (closest first), tie-broken by `(source_id, target_id)`, and truncated to
+   `_MAX_CANDIDATE_EDGES` (#378 slice 2) -- a fixed per-run ceiling on
+   candidate output. Truncation is never silent: `SqliteGraphStore
+   .candidate_report` (a `CandidateReport(produced, retained)`) reports the
+   pre-cap and post-cap counts on every build, `produced == retained` when
+   the ceiling was not reached. The retained slice is inserted in
+   ID-sorted, not distance-sorted, order, so an under-cap bundle's output
+   stays byte-identical to the pre-#378-slice-2 build.
 
 Each pass dedupes its own rows before insert -- the untyped pass on
 `(source_id, target_id)`, the typed pass on `(source_id, target_id,
@@ -106,6 +115,7 @@ importing `openkos.state.derived` (canonical) below is the ALLOWED direction
 import re
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Final, Protocol
@@ -130,6 +140,9 @@ class ProximityPairLike(Protocol):
 
     @property
     def target_id(self) -> str: ...
+
+    @property
+    def distance(self) -> float: ...
 
 
 class CandidateSource(Protocol):
@@ -225,6 +238,28 @@ def _skip_note(concept_id: str, *, reason: str) -> str:
     return f"{concept_id}.md: skipped ({reason})"
 
 
+_MAX_CANDIDATE_EDGES: Final[int] = 50
+"""Hard ceiling on candidate edges one build may emit. Bounds `curate`'s
+one-LLM-call-per-untyped-edge run to ~2-4 minutes at 3-5s/call instead of the
+17m19s a 74-candidate run cost (#378). Sits above the reported bundle's ~25
+post-Source-filter volume (so today's output is unchanged) and below
+`contradiction._MAX_PAIRS = 200`, which remains the downstream backstop on
+work EXECUTED. Truncation is NEVER silent -- see `CandidateReport`."""
+
+
+@dataclass(frozen=True)
+class CandidateReport:
+    """The pass-3 candidate-edge truncation report (#378 slice 2, design
+    D4). `produced` is the ranked, Source-excluded, DEDUPED count BEFORE the
+    `_MAX_CANDIDATE_EDGES` cap is applied; `retained` is the count actually
+    inserted. `produced > retained` is the cap-reached signal a caller
+    checks to decide whether to render a truncation notice; the two default
+    to `0` for a build with `candidates=None`, where pass 3 never runs."""
+
+    produced: int = 0
+    retained: int = 0
+
+
 class SqliteGraphStore:
     """A rebuild-per-run node-edge projection; owns its `sqlite3` connection.
 
@@ -240,10 +275,25 @@ class SqliteGraphStore:
     """One note per unreadable/unparseable doc skipped during the build,
     shaped like `fts.py`'s skip notices."""
 
-    def __init__(self, conn: sqlite3.Connection, skipped: list[str]) -> None:
-        """Wrap an already-populated `conn` and its build-time `skipped` notes."""
+    candidate_report: CandidateReport
+    """The pass-3 truncation report (#378 slice 2). Defaults to
+    `CandidateReport()` (0/0) so `open_graph_store_readonly` -- which never
+    runs pass 3 -- stays untouched."""
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        skipped: list[str],
+        candidate_report: CandidateReport | None = None,
+    ) -> None:
+        """Wrap an already-populated `conn` and its build-time `skipped` notes
+        and `candidate_report` (defaulted so every pre-#378-slice-2 caller,
+        including `open_graph_store_readonly`, needs no change)."""
         self._conn = conn
         self.skipped = skipped
+        self.candidate_report = (
+            candidate_report if candidate_report is not None else CandidateReport()
+        )
 
     def nodes(self) -> list[str]:
         """Return every node id (OKF concept id) in the projection, sorted."""
@@ -292,12 +342,13 @@ def _populate_graph_tables(
     bundle_dir: Path,
     *,
     candidates: CandidateSource | None = None,
-) -> list[str]:
+) -> tuple[list[str], CandidateReport]:
     """Shared node/edge-population core (D-refactor, dedupes the in-memory/
     on-disk writer paths): creates the `nodes`/`edges` tables + indexes on
     `conn`, then walks `okf._iter_docs(bundle_dir)` once and extracts nodes
     and edges exactly as documented at module level, returning the skip
-    notices for anything that could not be projected.
+    notices for anything that could not be projected, plus the pass-3
+    truncation report (#378 slice 2).
 
     A `read_error`/`parse_error` doc is skipped and noted, never crashing
     the build (mirrors `fts.build_index`); a valid doc has its body AND
@@ -314,9 +365,14 @@ def _populate_graph_tables(
     earlier pass already claimed, in either direction, EXCLUDING any pair
     where either endpoint's OKF `type` is `Source` (#378 slice 1) -- a
     Source document must not propose or receive a candidate edge, though it
-    still participates fully in passes 1 and 2. With `candidates=None` --
-    the default -- the third pass does not run and the output is
-    byte-identical to the two-pass build. Callers own `conn`'s
+    still participates fully in passes 1 and 2. The surviving candidates are
+    then RANKED by `ProximityPair.distance` ascending, tie-broken by
+    `(source_id, target_id)`, and truncated to `_MAX_CANDIDATE_EDGES` (#378
+    slice 2) -- the retained slice is re-sorted by id before insert, so an
+    under-cap bundle's output stays byte-identical to the pre-slice-2 build.
+    With `candidates=None` -- the default -- the third pass does not run,
+    the output is byte-identical to the two-pass build, and the returned
+    `CandidateReport` is the zero-valued default. Callers own `conn`'s
     lifecycle -- any exception raised here propagates to the caller
     unchanged, closing/cleanup is the caller's responsibility.
     """
@@ -390,6 +446,7 @@ def _populate_graph_tables(
     for source_id, target_id, relation_type in sorted(typed_edges):
         conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, relation_type))
 
+    candidate_report = CandidateReport()
     if candidates is not None:
         # Dedup against BOTH prior passes, in both directions. The design
         # sketch deduped only against body links; that is not enough. A pair
@@ -419,18 +476,47 @@ def _populate_graph_tables(
             for concept_id, metadata in metadatas
             if metadata.get("type") != "Source"
         }
-        candidate_rows = {
-            (min(pair.source_id, pair.target_id), max(pair.source_id, pair.target_id))
-            for pair in candidates.pairs(sorted(seed_node_ids))
-            if pair.source_id in seed_node_ids
-            and pair.target_id in seed_node_ids
-            and pair.source_id != pair.target_id
-            and (pair.source_id, pair.target_id) not in seen
-        }
-        for source_id, target_id in sorted(candidate_rows):
+        # #378 slice 2: a `dict` keyed by the canonical `(min, max)` pair,
+        # retaining the SMALLEST distance per pair -- mirroring
+        # `proximity.py`'s own tie rule -- rather than the bare
+        # `set[tuple[str, str]]` slice 1 used, which discarded `distance`,
+        # the ranking key the cap needs. Endpoint guard, self-pair drop, and
+        # `seen` dedup ALL run here, inside this single comprehension, so
+        # `best` already holds the fully deduped candidate set BEFORE any
+        # ranking or truncation happens -- dedup runs before the cap, never
+        # after (`contradiction.py`'s post-review HIGH correction: filtering
+        # after a cap lets discarded rows consume cap slots and starve
+        # eligible ones).
+        best: dict[tuple[str, str], float] = {}
+        for pair in candidates.pairs(sorted(seed_node_ids)):
+            if (
+                pair.source_id not in seed_node_ids
+                or pair.target_id not in seed_node_ids
+            ):
+                continue
+            if pair.source_id == pair.target_id:
+                continue
+            if (pair.source_id, pair.target_id) in seen:
+                continue
+            key = (
+                min(pair.source_id, pair.target_id),
+                max(pair.source_id, pair.target_id),
+            )
+            if key not in best or pair.distance < best[key]:
+                best[key] = pair.distance
+        # Rank by distance ascending, tie-broken by `(source_id, target_id)`
+        # -- matching `pairs()`'s own `sorted(best)` determinism guarantee
+        # -- THEN slice to the cap. Select by distance, insert by id: the
+        # retained slice is re-sorted by id before insert so the on-disk
+        # projection's byte identity (insertion order) matches the
+        # pre-slice-2 build for any under-cap bundle.
+        ranked = sorted(best, key=lambda pair_key: (best[pair_key], pair_key))
+        retained = sorted(ranked[:_MAX_CANDIDATE_EDGES])
+        candidate_report = CandidateReport(produced=len(best), retained=len(retained))
+        for source_id, target_id in retained:
             conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
 
-    return skipped
+    return skipped, candidate_report
 
 
 def build_graph(
@@ -450,12 +536,14 @@ def build_graph(
     """
     conn = sqlite3.connect(":memory:")
     try:
-        skipped = _populate_graph_tables(conn, bundle_dir, candidates=candidates)
+        skipped, candidate_report = _populate_graph_tables(
+            conn, bundle_dir, candidates=candidates
+        )
     except BaseException:
         conn.close()
         raise
 
-    return SqliteGraphStore(conn, skipped)
+    return SqliteGraphStore(conn, skipped, candidate_report)
 
 
 def write_graph_store(

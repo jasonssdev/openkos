@@ -1435,18 +1435,30 @@ class _StubCandidateSource:
     `graph.proximity.VectorProximitySource` -- no `vectors.db`, no sqlite-vec.
 
     Records the node ids it was handed so tests can prove pass 3 offers the
-    source a deterministic, sorted view of the projection."""
+    source a deterministic, sorted view of the projection.
 
-    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+    Each entry is either a `(source, target)` 2-tuple -- defaulting to
+    `distance=0.1`, preserving every slice-1 call site unedited -- or a
+    `(source, target, distance)` 3-tuple, for slice 2's rank/cap tests
+    (#378 slice 2, task 2.1.1)."""
+
+    def __init__(
+        self, pairs: Sequence[tuple[str, str] | tuple[str, str, float]]
+    ) -> None:
         self._pairs = pairs
         self.received: list[list[str]] = []
 
     def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
         self.received.append(list(concept_ids))
-        return [
-            ProximityPair(source_id=s, target_id=t, distance=0.1)
-            for s, t in self._pairs
-        ]
+        result = []
+        for entry in self._pairs:
+            if len(entry) == 3:
+                s, t, distance = entry
+            else:
+                s, t = entry
+                distance = 0.1
+            result.append(ProximityPair(source_id=s, target_id=t, distance=distance))
+        return result
 
 
 def test_pass_three_inserts_untyped_candidate_rows(tmp_path: Path) -> None:
@@ -1690,6 +1702,282 @@ def test_source_exclusion_leaves_the_derived_from_provenance_mirror_intact(
         rows = _edge_rows(store)
 
     assert rows == [("concepts/a", "sources/foo", "derived_from")]
+
+
+# --- Phase 2.1 (#378 slice 2): rank, cap, and report candidate output ------
+
+
+def test_pass_three_truncates_to_the_candidate_cap(tmp_path: Path) -> None:
+    """60 stub pairs must never yield more than `_MAX_CANDIDATE_EDGES` (50)
+    candidate rows -- the ceiling bounds output at any bundle size."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "hub.md", title="Hub")
+    pairs: list[tuple[str, str, float]] = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        _write_doc(bundle / "concepts" / f"{leaf_id}.md", title=leaf_id)
+        pairs.append(("concepts/hub", f"concepts/{leaf_id}", index * 0.001))
+    stub = _StubCandidateSource(pairs)
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+
+    assert len(rows) == sqlite_graph._MAX_CANDIDATE_EDGES
+
+
+def test_pass_three_retains_the_closest_candidates_by_distance(
+    tmp_path: Path,
+) -> None:
+    """An over-cap set with mixed distances must retain the SMALLEST-distance
+    candidates -- the farthest, weakest pairs are the ones dropped."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "hub.md", title="Hub")
+    pairs: list[tuple[str, str, float]] = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        _write_doc(bundle / "concepts" / f"{leaf_id}.md", title=leaf_id)
+        pairs.append(("concepts/hub", f"concepts/{leaf_id}", index * 0.001))
+    stub = _StubCandidateSource(pairs)
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+
+    retained_targets = {row[1] for row in rows}
+    expected_targets = {f"concepts/leaf{index:03d}" for index in range(1, 51)}
+    assert retained_targets == expected_targets
+
+
+def test_pass_three_breaks_distance_ties_by_pair_id(tmp_path: Path) -> None:
+    """Equal distances must be broken by lexicographic `(source_id,
+    target_id)` ordering, matching `pairs()`'s own `sorted(best)` tie rule."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "hub.md", title="Hub")
+    pairs: list[tuple[str, str, float]] = []
+    for index in range(1, 56):
+        leaf_id = f"leaf{index:03d}"
+        _write_doc(bundle / "concepts" / f"{leaf_id}.md", title=leaf_id)
+        pairs.append(("concepts/hub", f"concepts/{leaf_id}", 0.1))
+    stub = _StubCandidateSource(pairs)
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+
+    retained_targets = {row[1] for row in rows}
+    expected_targets = {f"concepts/leaf{index:03d}" for index in range(1, 51)}
+    assert retained_targets == expected_targets
+
+
+def test_pass_three_collapses_a_duplicate_nomination_to_its_smaller_distance(
+    tmp_path: Path,
+) -> None:
+    """A single canonical `(min, max)` pair can be nominated more than once
+    -- e.g. from both anchors' own k-NN queries -- with different
+    distances. The smaller distance must be kept, mirroring
+    `proximity.py`'s own tie rule, so `produced`/ranking reflect the pair's
+    TRUE closeness rather than whichever nomination happened to be seen
+    last."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    # Same canonical pair nominated twice: once far, once close. The close
+    # nomination is listed SECOND, so a naive "last write wins" collapse
+    # would happen to get this right by accident -- the report's count
+    # (one pair, not two rows) is the real proof the collapse ran.
+    stub = _StubCandidateSource(
+        [
+            ("concepts/a", "concepts/b", 0.9),
+            ("concepts/a", "concepts/b", 0.1),
+        ]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    assert rows == [("concepts/a", "concepts/b", None)]
+    assert report == sqlite_graph.CandidateReport(produced=1, retained=1)
+
+
+def test_pass_three_keeps_the_first_distance_when_a_later_duplicate_is_farther(
+    tmp_path: Path,
+) -> None:
+    """The other half of the best-distance collapse: a duplicate nomination
+    with a LARGER distance than the one already kept must not overwrite
+    it."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    stub = _StubCandidateSource(
+        [
+            ("concepts/a", "concepts/b", 0.1),
+            ("concepts/a", "concepts/b", 0.9),
+        ]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    assert rows == [("concepts/a", "concepts/b", None)]
+    assert report == sqlite_graph.CandidateReport(produced=1, retained=1)
+
+
+def test_pass_three_drops_a_self_pair(tmp_path: Path) -> None:
+    """A candidate source that (mis)nominates a concept paired with itself
+    must never produce a self-loop edge or count toward the report."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    stub = _StubCandidateSource(
+        [
+            ("concepts/a", "concepts/a", 0.01),
+            ("concepts/a", "concepts/b", 0.5),
+        ]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    assert rows == [("concepts/a", "concepts/b", None)]
+    assert report == sqlite_graph.CandidateReport(produced=1, retained=1)
+
+
+def test_pass_three_reports_the_pre_cap_total_when_truncating(
+    tmp_path: Path,
+) -> None:
+    """`store.candidate_report` must carry the exact pre-cap (`produced`) and
+    post-cap (`retained`) counts when the ceiling truncates the set."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "hub.md", title="Hub")
+    pairs: list[tuple[str, str, float]] = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        _write_doc(bundle / "concepts" / f"{leaf_id}.md", title=leaf_id)
+        pairs.append(("concepts/hub", f"concepts/{leaf_id}", index * 0.001))
+    stub = _StubCandidateSource(pairs)
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        report = store.candidate_report
+
+    assert report == sqlite_graph.CandidateReport(produced=60, retained=50)
+
+
+def test_pass_three_reports_no_truncation_under_the_cap(tmp_path: Path) -> None:
+    """Under the ceiling, `produced == retained` -- the truncation notice a
+    caller derives from this report must be suppressed."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    stub = _StubCandidateSource([("concepts/a", "concepts/b", 0.1)])
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        report = store.candidate_report
+
+    assert report == sqlite_graph.CandidateReport(produced=1, retained=1)
+
+
+def test_dedup_against_earlier_passes_runs_before_the_cap(tmp_path: Path) -> None:
+    """A duplicate of a pass-1/pass-2 edge at the CLOSEST distance must not
+    consume a ceiling slot -- it must be dropped BEFORE the cap is applied,
+    per `contradiction.py`'s post-review HIGH correction. If the cap ran
+    first, the duplicate would displace the 50th-closest genuinely eligible
+    leaf; this test pins that the leaf survives instead."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "hub.md",
+        title="Hub",
+        body="See [Dup](/concepts/dup.md).\n",
+    )
+    _write_doc(bundle / "concepts" / "dup.md", title="Dup")
+    pairs: list[tuple[str, str, float]] = [
+        # Duplicates the pass-1 body-link edge above, at the closest
+        # distance of the whole stub set.
+        ("concepts/hub", "concepts/dup", 0.0001),
+    ]
+    for index in range(1, 55):
+        leaf_id = f"leaf{index:03d}"
+        _write_doc(bundle / "concepts" / f"{leaf_id}.md", title=leaf_id)
+        pairs.append(("concepts/hub", f"concepts/{leaf_id}", 0.01 + index * 0.001))
+    stub = _StubCandidateSource(pairs)
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    # The only "dup" row present is the pass-1 body-link edge itself
+    # (relation_type=None from the link pass) -- the candidate duplicate
+    # must never appear as a second row for the same pair.
+    dup_rows = [row for row in rows if row[1] == "concepts/dup"]
+    candidate_targets = {row[1] for row in rows if row[1] != "concepts/dup"}
+    # 54 leaf candidates survive dedup (the duplicate is dropped before the
+    # cap), so `produced` reflects 54, not 55 -- and the cap still retains
+    # exactly 50, the 50 CLOSEST leaves, INCLUDING leaf050 -- which a
+    # cap-before-dedup bug would have displaced with the duplicate.
+    assert report == sqlite_graph.CandidateReport(produced=54, retained=50)
+    assert dup_rows == [("concepts/hub", "concepts/dup", None)]
+    assert "concepts/leaf050" in candidate_targets
+    assert len(candidate_targets) == 50
+
+
+def test_under_cap_insertion_order_is_unchanged(tmp_path: Path) -> None:
+    """Under the cap, retained rows must be byte-identical to the
+    pre-slice-2 build: inserted in ID-sorted order, never distance order --
+    the on-disk projection's byte identity depends on insertion order, so
+    the retained slice is re-sorted by id before insert."""
+    bundle = tmp_path / "bundle"
+    for name in ("a", "b", "c"):
+        _write_doc(bundle / "concepts" / f"{name}.md", title=name.upper())
+    # Farthest pair listed first, closest listed second -- id order must win
+    # over both distance order and stub emission order.
+    stub = _StubCandidateSource(
+        [
+            ("concepts/c", "concepts/a", 0.5),
+            ("concepts/b", "concepts/a", 0.05),
+        ]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+
+    assert rows == [
+        ("concepts/a", "concepts/b", None),
+        ("concepts/a", "concepts/c", None),
+    ]
+
+
+def test_pass_three_ranking_and_truncation_is_deterministic_across_two_builds(
+    tmp_path: Path,
+) -> None:
+    """An over-cap bundle must retain the SAME candidate edges, in the same
+    order, with the same `candidate_report`, across two independent builds
+    -- mirrors `test_pass_three_row_order_is_deterministic_and_canonical`
+    for the ranked/capped path (#378 slice 2)."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "hub.md", title="Hub")
+    pairs: list[tuple[str, str, float]] = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        _write_doc(bundle / "concepts" / f"{leaf_id}.md", title=leaf_id)
+        pairs.append(("concepts/hub", f"concepts/{leaf_id}", index * 0.001))
+
+    with sqlite_graph.build_graph(
+        bundle, candidates=_StubCandidateSource(pairs)
+    ) as store:
+        first_rows = _edge_rows(store)
+        first_report = store.candidate_report
+    with sqlite_graph.build_graph(
+        bundle, candidates=_StubCandidateSource(pairs)
+    ) as store:
+        second_rows = _edge_rows(store)
+        second_report = store.candidate_report
+
+    assert first_rows == second_rows
+    assert (
+        first_report
+        == second_report
+        == sqlite_graph.CandidateReport(produced=60, retained=50)
+    )
 
 
 # --- Phase 3.4 (#183): zero-candidate success path, through the real seam --
