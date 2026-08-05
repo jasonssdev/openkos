@@ -101,6 +101,17 @@ def _array(*items: str) -> str:
     return "[" + ", ".join(items) + "]"
 
 
+def _objects(*args: object, **kwargs: object) -> "list[concept_mod.ExtractionResult]":
+    """`extract_concept(...).objects`.
+
+    Every test below predates the #404 cap report and asserts on the object
+    list alone; routing them through one accessor keeps those assertions
+    about what they were written to check, instead of restating `.objects`
+    forty-five times.
+    """
+    return concept_mod.extract_concept(*args, **kwargs).objects  # type: ignore[arg-type]
+
+
 # --- Scaffold ---------------------------------------------------------------
 
 
@@ -125,7 +136,7 @@ def test_valid_concept_json_returns_extraction_result() -> None:
     """A well-formed `type: Concept` item parses into a matching `ExtractionResult`."""
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "Stoicism is a school of philosophy.", source_title="Notes", llm=llm
     )
 
@@ -143,9 +154,7 @@ def test_valid_entity_json_returns_extraction_result() -> None:
     """A well-formed `type: Entity` item parses with `type == "Entity"`."""
     llm = _FakeLLM(reply=_array(_ENTITY_ITEM))
 
-    result = concept_mod.extract_concept(
-        "A note-taking tool.", source_title="Notes", llm=llm
-    )
+    result = _objects("A note-taking tool.", source_title="Notes", llm=llm)
 
     assert len(result) == 1
     assert result[0].type == "Entity"
@@ -158,7 +167,7 @@ def test_valid_person_json_returns_extraction_result() -> None:
     (spec: Person preferred over Entity for a named individual)."""
     llm = _FakeLLM(reply=_array(_PERSON_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "Epictetus was a Stoic philosopher.", source_title="Notes", llm=llm
     )
 
@@ -174,7 +183,7 @@ def test_valid_organization_json_returns_extraction_result() -> None:
     company/institution)."""
     llm = _FakeLLM(reply=_array(_ORGANIZATION_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "The Praxis Foundation researches Stoicism.", source_title="Notes", llm=llm
     )
 
@@ -189,7 +198,7 @@ def test_valid_place_json_returns_extraction_result() -> None:
     (spec: "Source about a location classifies as Place")."""
     llm = _FakeLLM(reply=_array(_PLACE_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "Yellowstone is a national park known for its geysers.",
         source_title="Notes",
         llm=llm,
@@ -206,7 +215,7 @@ def test_valid_event_json_returns_extraction_result() -> None:
     (spec: "Source about a bounded happening classifies as Event")."""
     llm = _FakeLLM(reply=_array(_EVENT_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "Stoicon 2026 is an annual conference on Stoic philosophy.",
         source_title="Notes",
         llm=llm,
@@ -224,7 +233,7 @@ def test_valid_procedure_json_returns_extraction_result() -> None:
     Procedure")."""
     llm = _FakeLLM(reply=_array(_PROCEDURE_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "A daily morning journaling routine.", source_title="Notes", llm=llm
     )
 
@@ -239,7 +248,7 @@ def test_valid_decision_json_returns_extraction_result() -> None:
     (spec: "Single-source self-narrating decision classifies as Decision")."""
     llm = _FakeLLM(reply=_array(_DECISION_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "We decided to frame the essay around the dichotomy of control.",
         source_title="Notes",
         llm=llm,
@@ -257,7 +266,7 @@ def test_valid_project_json_returns_extraction_result() -> None:
     Project")."""
     llm = _FakeLLM(reply=_array(_PROJECT_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "A multi-month series of essays on Stoic practice.",
         source_title="Notes",
         llm=llm,
@@ -279,7 +288,7 @@ def test_second_array_item_resolves_decision_type() -> None:
     per-object tie-break application; regression guard for Phase 5)."""
     llm = _FakeLLM(reply=_array(_PERSON_ITEM, _DECISION_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "Epictetus's biography, and the decision to frame the essay around "
         "the dichotomy of control.",
         source_title="Notes",
@@ -298,7 +307,7 @@ def test_second_array_item_resolves_organization_type() -> None:
     dropped or mis-typed."""
     llm = _FakeLLM(reply=_array(_PLACE_ITEM, _ORGANIZATION_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "Yellowstone National Park, and the Praxis Foundation.",
         source_title="Notes",
         llm=llm,
@@ -317,7 +326,7 @@ def test_clean_json_array_is_parsed() -> None:
     """A clean top-level JSON array reply parses directly (parse step 1)."""
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert [r.title for r in result] == ["Stoicism", "Zettelkasten App"]
 
@@ -327,7 +336,7 @@ def test_json_array_wrapped_in_code_fence_is_parsed() -> None:
     fenced = f"Here is the classification:\n```json\n{_array(_CONCEPT_ITEM)}\n```\n"
     llm = _FakeLLM(reply=fenced)
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].title == "Stoicism"
@@ -338,7 +347,7 @@ def test_json_array_embedded_in_prose_without_fence_is_parsed() -> None:
     prose = f"Sure, here you go: {_array(_CONCEPT_ITEM)} -- hope that helps!"
     llm = _FakeLLM(reply=prose)
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].title == "Stoicism"
@@ -351,7 +360,7 @@ def test_lone_top_level_object_is_recovered_as_single_item_list() -> None:
     is valid content on a shape technicality, not invalid data."""
     llm = _FakeLLM(reply=_CONCEPT_ITEM)
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].title == "Stoicism"
@@ -363,7 +372,7 @@ def test_lone_top_level_object_in_code_fence_is_recovered() -> None:
     fenced = f"```json\n{_CONCEPT_ITEM}\n```"
     llm = _FakeLLM(reply=fenced)
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].title == "Stoicism"
@@ -378,7 +387,7 @@ def test_bare_object_embedded_in_prose_without_brackets_is_recovered_by_step_fou
     prose = f"Sure, here is the object: {_CONCEPT_ITEM} hope this helps."
     llm = _FakeLLM(reply=prose)
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].title == "Stoicism"
@@ -395,7 +404,7 @@ def test_two_bare_objects_back_to_back_without_array_wrapping_returns_empty_list
     object)."""
     llm = _FakeLLM(reply=_CONCEPT_ITEM + _CONCEPT_ITEM)
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -405,7 +414,7 @@ def test_array_with_non_dict_elements_filters_them_out() -> None:
     the dict elements rather than failing the whole reply closed."""
     llm = _FakeLLM(reply=f"[1, {_CONCEPT_ITEM}, 2]")
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].title == "Stoicism"
@@ -417,7 +426,7 @@ def test_array_of_non_dict_items_returns_empty_list() -> None:
     value; now item-level filtering yields an empty list instead)."""
     llm = _FakeLLM(reply="[1, 2, 3]")
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -426,7 +435,7 @@ def test_malformed_json_returns_empty_list() -> None:
     """A reply that is not JSON in any recoverable form fails closed to `[]`."""
     llm = _FakeLLM(reply="not json at all, sorry")
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -439,7 +448,7 @@ def test_non_string_chat_reply_returns_empty_list() -> None:
         def chat(self, messages: Sequence[Message]) -> str:
             return None  # type: ignore[return-value]
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=_NonStringLLM())
+    result = _objects("text", source_title="t", llm=_NonStringLLM())
 
     assert result == []
 
@@ -449,7 +458,7 @@ def test_empty_array_reply_returns_empty_list() -> None:
     extracting" signal -- returns `[]`."""
     llm = _FakeLLM(reply="[]")
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -462,7 +471,7 @@ def test_item_without_extract_field_still_validates() -> None:
     no `extract` key at all (the new item shape) still validates normally."""
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].title == "Stoicism"
@@ -477,7 +486,7 @@ def test_item_with_explicit_extract_true_still_validates() -> None:
     )
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].title == "Stoicism"
@@ -492,7 +501,7 @@ def test_item_with_explicit_extract_false_is_dropped() -> None:
     )
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -505,7 +514,7 @@ def test_invalid_type_item_is_dropped() -> None:
     item = '{"type": "Animal", "title": "T", "description": "D"}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -515,7 +524,7 @@ def test_missing_title_item_is_dropped() -> None:
     item = '{"type": "Concept", "title": "", "description": "D"}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -525,7 +534,7 @@ def test_missing_description_item_is_dropped() -> None:
     item = '{"type": "Concept", "title": "T", "description": ""}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -535,7 +544,7 @@ def test_non_string_body_item_is_dropped() -> None:
     item = '{"type": "Concept", "title": "T", "description": "D", "body": 42}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -552,7 +561,7 @@ def test_non_string_type_item_is_dropped() -> None:
         )
         llm = _FakeLLM(reply=_array(item))
 
-        result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+        result = _objects("text", source_title="t", llm=llm)
 
         assert result == []
 
@@ -562,7 +571,7 @@ def test_lowercase_type_item_is_dropped() -> None:
     item = '{"type": "concept", "title": "T", "description": "D", "body": ""}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -572,7 +581,7 @@ def test_whitespace_only_title_item_is_dropped() -> None:
     item = '{"type": "Concept", "title": "   ", "description": "D", "body": ""}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -583,7 +592,7 @@ def test_blank_body_is_kept_as_empty_string() -> None:
     item = '{"type": "Concept", "title": "T", "description": "D", "body": ""}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
     assert result[0].body == ""
@@ -596,7 +605,7 @@ def test_mixed_valid_and_malformed_items_keeps_only_valid_ones() -> None:
     malformed = '{"type": "Concept", "title": "", "description": "D"}'
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM, malformed, _ENTITY_ITEM))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert [r.title for r in result] == ["Stoicism", "Zettelkasten App"]
 
@@ -608,7 +617,7 @@ def test_all_items_malformed_returns_empty_list() -> None:
     bad_2 = '{"type": "Concept", "title": "", "description": "D"}'
     llm = _FakeLLM(reply=_array(bad_1, bad_2))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -625,7 +634,7 @@ def test_exactly_five_valid_items_are_all_kept() -> None:
     ]
     llm = _FakeLLM(reply=_array(*items))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert [r.title for r in result] == [f"Item {i}" for i in range(cap)]
 
@@ -640,7 +649,7 @@ def test_more_than_five_valid_items_are_truncated_to_first_five_in_order() -> No
     ]
     llm = _FakeLLM(reply=_array(*items))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert [r.title for r in result] == [f"Item {i}" for i in range(cap)]
 
@@ -656,7 +665,7 @@ def test_cap_applies_after_validation_not_before() -> None:
     ]
     llm = _FakeLLM(reply=_array(malformed, *valid_items))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert [r.title for r in result] == [f"Item {i}" for i in range(cap)]
 
@@ -707,7 +716,7 @@ def test_source_title_twin_dropped_when_genuine_objects_survive() -> None:
         )
     )
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "Maria and I talked about her move, then about apatheia and the "
         "dichotomy of control.",
         source_title="Call with Maria Salazar — 2026-07-14",
@@ -732,7 +741,7 @@ def test_source_title_twin_kept_when_it_is_the_only_object() -> None:
     rule, not proof of the drop behavior on its own."""
     llm = _FakeLLM(reply=_array(_MCP_LAUNCHING_EVENT_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "MCP is launching next week.", source_title="MCP Launching", llm=llm
     )
 
@@ -748,7 +757,7 @@ def test_extract_concept_returns_empty_list_when_nothing_worth_extracting() -> N
     """spec: "No objects worth extracting" -- `extract_concept` returns `[]`."""
     llm = _FakeLLM(reply="[]")
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert result == []
 
@@ -757,7 +766,7 @@ def test_extract_concept_returns_list_of_length_one() -> None:
     """spec: "Exactly one object extracted" -- a list of length 1."""
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 1
 
@@ -768,7 +777,7 @@ def test_extract_concept_returns_list_of_length_n_under_cap() -> None:
     `ExtractionResult`."""
     llm = _FakeLLM(reply=_array(_PERSON_ITEM, _EVENT_ITEM, _DECISION_ITEM))
 
-    result = concept_mod.extract_concept("text", source_title="t", llm=llm)
+    result = _objects("text", source_title="t", llm=llm)
 
     assert len(result) == 3
     assert all(isinstance(r, concept_mod.ExtractionResult) for r in result)
@@ -783,7 +792,7 @@ def test_multi_topic_reply_parses_to_n_extraction_results() -> None:
     distinct types, one per subject -- not collapsed to a single object."""
     llm = _FakeLLM(reply=_array(_PERSON_ITEM, _CONCEPT_ITEM, _DECISION_ITEM))
 
-    result = concept_mod.extract_concept(
+    result = _objects(
         "Maria and I talked about her move, then about Stoicism and the "
         "dichotomy of control, and decided to frame the essay around it.",
         source_title="Call with Maria",
@@ -1302,3 +1311,121 @@ def test_extraction_and_llm_modules_do_not_import_config() -> None:
         assert not any("config" in name for name in imported), (
             f"{path} imports config: {imported}"
         )
+
+
+# --- Cap reporting (#404) ---------------------------------------------------
+
+
+def _n_valid_items(n: int) -> list[str]:
+    return [
+        f'{{"type": "Concept", "title": "Item {i}", "description": "D"}}'
+        for i in range(n)
+    ]
+
+
+def test_extraction_report_is_a_frozen_dataclass() -> None:
+    """`ExtractionReport` carries the pre-cap count, the post-cap count, and
+    the titles the cap discarded -- and is immutable, like every other
+    report shape in the codebase."""
+    report = concept_mod.ExtractionReport(
+        produced=7, retained=5, discarded_titles=("Item 5", "Item 6")
+    )
+
+    assert report.produced == 7
+    assert report.retained == 5
+    assert report.discarded_titles == ("Item 5", "Item 6")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        report.produced = 1  # type: ignore[misc]
+
+
+def test_outcome_reports_nothing_discarded_when_under_the_cap() -> None:
+    """The healthy path must stay silent: `produced == retained` and no
+    discarded titles, so a caller can render a notice on truncation alone
+    without special-casing."""
+    llm = _FakeLLM(reply=_array(*_n_valid_items(3)))
+
+    outcome = concept_mod.extract_concept("text", source_title="t", llm=llm)
+
+    assert len(outcome.objects) == 3
+    assert outcome.report.produced == 3
+    assert outcome.report.retained == 3
+    assert outcome.report.discarded_titles == ()
+
+
+def test_outcome_reports_produced_and_retained_when_truncated() -> None:
+    """#404: the whole point -- a source proposing 20 objects and one
+    proposing 5 were indistinguishable downstream, because only the
+    truncated list survived the call."""
+    cap = concept_mod._MAX_OBJECTS_PER_SOURCE
+    llm = _FakeLLM(reply=_array(*_n_valid_items(cap + 15)))
+
+    outcome = concept_mod.extract_concept("text", source_title="t", llm=llm)
+
+    assert len(outcome.objects) == cap
+    assert outcome.report.produced == cap + 15
+    assert outcome.report.retained == cap
+
+
+def test_outcome_names_the_discarded_titles_in_reply_order() -> None:
+    """Naming what was lost is what makes the loss attributable -- a bare
+    count tells a user something vanished but not what, and the measurement
+    behind #404 showed the discarded tail is exactly what a reader needs to
+    judge whether the cap hurt them."""
+    cap = concept_mod._MAX_OBJECTS_PER_SOURCE
+    llm = _FakeLLM(reply=_array(*_n_valid_items(cap + 3)))
+
+    outcome = concept_mod.extract_concept("text", source_title="t", llm=llm)
+
+    assert outcome.report.discarded_titles == tuple(
+        f"Item {i}" for i in range(cap, cap + 3)
+    )
+
+
+def test_report_counts_validated_objects_not_raw_reply_items() -> None:
+    """The cap already applies post-validation, so the report must too: a
+    malformed item is not something the cap discarded, it is something
+    validation rejected, and conflating the two would report a loss that
+    never happened."""
+    cap = concept_mod._MAX_OBJECTS_PER_SOURCE
+    items = [
+        '{"type": "NotAType", "title": "X", "description": "D"}',
+        *_n_valid_items(cap + 1),
+    ]
+    llm = _FakeLLM(reply=_array(*items))
+
+    outcome = concept_mod.extract_concept("text", source_title="t", llm=llm)
+
+    assert outcome.report.produced == cap + 1
+    assert outcome.report.retained == cap
+    assert outcome.report.discarded_titles == (f"Item {cap}",)
+
+
+def test_report_is_computed_after_source_title_twin_dropping() -> None:
+    """`_drop_source_title_twins` runs BEFORE the cap, so a dropped twin was
+    never a cap casualty. Reporting it as one would blame the cap for a
+    deliberate, separate rule."""
+    cap = concept_mod._MAX_OBJECTS_PER_SOURCE
+    items = [
+        '{"type": "Concept", "title": "The Source", "description": "D"}',
+        *_n_valid_items(cap),
+    ]
+    llm = _FakeLLM(reply=_array(*items))
+
+    outcome = concept_mod.extract_concept("text", source_title="The Source", llm=llm)
+
+    assert outcome.report.produced == cap
+    assert outcome.report.retained == cap
+    assert outcome.report.discarded_titles == ()
+
+
+def test_empty_extraction_reports_zero_produced() -> None:
+    """`[]` is a valid answer, not a truncation -- it must not render a
+    notice."""
+    llm = _FakeLLM(reply="[]")
+
+    outcome = concept_mod.extract_concept("text", source_title="t", llm=llm)
+
+    assert outcome.objects == []
+    assert outcome.report.produced == 0
+    assert outcome.report.retained == 0
+    assert outcome.report.discarded_titles == ()

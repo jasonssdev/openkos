@@ -322,9 +322,15 @@ def run_one(
     """
     started = time.perf_counter()
     try:
+        # `.objects` is the POST-cap list, preserving this harness's
+        # existing scoring exactly. Note for whoever revisits the
+        # anti-enumeration penalty: `extract_concept` now also returns
+        # `.report.produced`, the PRE-cap count -- this score has never been
+        # able to see over-production above `_MAX_OBJECTS_PER_SOURCE`, which
+        # is a measured confound in ADR-0001 (#404), not a hypothetical.
         results: list[ExtractionResult] = extract_concept(
             source_text, source_title=fixture.source_title, llm=client
-        )
+        ).objects
     except OllamaError as exc:
         latency = time.perf_counter() - started
         return RunOutcome(

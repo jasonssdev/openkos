@@ -386,7 +386,7 @@ def run_one(
     try:
         results: list[ExtractionResult] = extract_concept(
             source_text, source_title=title or "", llm=client
-        )
+        ).objects
     except OllamaError as exc:
         return RunOutcome(
             model=arm,

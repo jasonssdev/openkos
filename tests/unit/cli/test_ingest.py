@@ -5204,3 +5204,83 @@ def test_batch_outside_workspace_refuses_before_cost_gate(
     )
     assert "LLM call(s)" not in result.stderr
     assert "Proceed" not in result.output
+
+
+# --- Cap truncation notice (#404) -------------------------------------------
+
+
+def _many_concepts_reply(n: int) -> str:
+    items = ", ".join(
+        f'{{"type": "Concept", "title": "Topic {i}", '
+        f'"description": "Description {i}.", "body": "Body {i}."}}'
+        for i in range(n)
+    )
+    return f"[{items}]"
+
+
+def test_ingest_reports_when_the_object_cap_discarded_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#404: a source proposing 20 objects and one proposing 5 were
+    indistinguishable in the output -- both simply wrote 5 documents. The
+    loss is now named, so a reader can tell the difference."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _many_concepts_reply(20))
+    source = tmp_path / "notes.txt"
+    source.write_text("A long document about many topics.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "5 of 20 extracted object(s) kept (cap reached)" in result.stderr
+
+
+def test_ingest_cap_notice_names_the_discarded_titles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare count says something vanished but not what. The measurement
+    behind #404 showed the discarded tail is exactly what a reader needs to
+    judge whether the cap cost them anything real."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _many_concepts_reply(8))
+    source = tmp_path / "notes.txt"
+    source.write_text("A long document about many topics.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "Topic 5" in result.stderr
+    assert "Topic 6" in result.stderr
+    assert "Topic 7" in result.stderr
+
+
+def test_ingest_cap_notice_bounds_how_many_titles_it_echoes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source proposing 61 objects would otherwise dump 56 titles into the
+    terminal. Name enough to judge, then count the rest."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _many_concepts_reply(20))
+    source = tmp_path / "notes.txt"
+    source.write_text("A long document about many topics.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert "(+12 more)" in result.stderr
+    assert "Topic 19" not in result.stderr
+
+
+def test_ingest_says_nothing_about_the_cap_when_it_did_not_fire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An advisory that fires on the healthy path is noise. A source under
+    the cap must produce no notice at all."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _many_concepts_reply(3))
+    source = tmp_path / "notes.txt"
+    source.write_text("A short document.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "cap reached" not in result.stderr

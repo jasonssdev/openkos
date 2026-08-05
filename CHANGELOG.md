@@ -16,6 +16,27 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- **The extraction object cap no longer discards candidates silently**:
+  `_MAX_OBJECTS_PER_SOURCE` truncated inside `extract_concept`, which
+  returned only the surviving list — so a source that proposed 20 objects
+  and one that proposed 5 were indistinguishable to every caller, and the
+  loss was unattributable. It was the one drop in extraction that reported
+  nothing; empty slug, in-batch collision, existing file, and failed build
+  all report per candidate. `extract_concept` now returns an
+  `ExtractionOutcome` carrying both the objects and an `ExtractionReport`
+  (pre-cap `produced`, post-cap `retained`, and the `discarded_titles`),
+  and `ingest` prints `5 of 13 extracted object(s) kept (cap reached);
+  discarded: …` — the same shape #378 established for candidate edges.
+  Advisory only: the cap, extraction behaviour, and exit codes are all
+  unchanged, and nothing prints when the cap did not fire. The report is a
+  required return shape rather than an optional sibling call precisely
+  because an entry point that could discard it is what let this hide; that
+  also closes the same blindness in `evals/model_spike/run_spike.py`, whose
+  anti-enumeration penalty had been scoring post-cap counts and therefore
+  could not see over-production above 5 — a measured confound in ADR-0001.
+  Measured against real sources, 13–17 KB documents routinely propose 7–20
+  objects and one 6 KB fixture produced 41 and 61 on separate runs (#404).
+
 - **Stale derived indexes are now named instead of silently degrading
   answers**: only `reindex` and `purge` ever write `.openkos/fts.db` and
   `.openkos/graph.db`. Every other bundle-writing verb — `relate`,
