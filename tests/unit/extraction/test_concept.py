@@ -1429,3 +1429,109 @@ def test_empty_extraction_reports_zero_produced() -> None:
     assert outcome.report.produced == 0
     assert outcome.report.retained == 0
     assert outcome.report.discarded_titles == ()
+
+
+# --- type_alternative: the runner-up type the model also weighed (#401) ------
+
+
+def test_validate_reads_a_type_alternative() -> None:
+    """A well-formed `type_alternative` is carried onto the result (#401).
+
+    The type decides the bundle subdirectory, the `index.md` catalog
+    section, and the default volatility tier. When the model was genuinely
+    torn between two of them, that is load-bearing information, and today it
+    is discarded the instant the reply is parsed.
+    """
+    result = concept_mod._validate(
+        {
+            "type": "Event",
+            "title": "Hellenistic Ethics Seminar",
+            "description": "A seminar taught this term.",
+            "body": "",
+            "type_alternative": "Project",
+        }
+    )
+
+    assert result is not None
+    assert result.type == "Event"
+    assert result.type_alternative == "Project"
+
+
+def test_validate_defaults_type_alternative_to_none() -> None:
+    """An absent `type_alternative` means the model was not torn -- the
+    common case, and the one that must stay byte-identical to today."""
+    result = concept_mod._validate(
+        {
+            "type": "Concept",
+            "title": "Apatheia",
+            "description": "A Stoic concept.",
+            "body": "",
+        }
+    )
+
+    assert result is not None
+    assert result.type_alternative is None
+
+
+@pytest.mark.parametrize(
+    "alternative",
+    ["Sandwich", "", "   ", 7, None, ["Project"], {"type": "Project"}],
+)
+def test_validate_degrades_a_bad_type_alternative_without_dropping_the_object(
+    alternative: object,
+) -> None:
+    """A malformed `type_alternative` degrades to `None`; the object SURVIVES.
+
+    This is the one place the module's usual fail-closed-per-item rule is
+    deliberately softened, and the asymmetry is the point. `type`, `title`
+    and `description` are load-bearing: a bad one makes the object
+    unusable, so the whole candidate is dropped. `type_alternative` is
+    ADVISORY -- it changes nothing about where the document lands or what it
+    says. Dropping a genuine, well-formed object because the model garbled
+    an optional advisory field would trade real knowledge for a diagnostic,
+    which is a strictly worse bundle.
+    """
+    result = concept_mod._validate(
+        {
+            "type": "Event",
+            "title": "Hellenistic Ethics Seminar",
+            "description": "A seminar taught this term.",
+            "body": "",
+            "type_alternative": alternative,
+        }
+    )
+
+    assert result is not None
+    assert result.type == "Event"
+    assert result.type_alternative is None
+
+
+def test_validate_ignores_a_type_alternative_equal_to_the_chosen_type() -> None:
+    """`type_alternative` echoing `type` carries no information.
+
+    "I chose Event, and my runner-up was Event" describes no boundary. It is
+    normalized to `None` here rather than propagated, so a downstream reader
+    never has to special-case it and no document ever claims a near-boundary
+    call that did not happen.
+    """
+    result = concept_mod._validate(
+        {
+            "type": "Event",
+            "title": "Hellenistic Ethics Seminar",
+            "description": "A seminar taught this term.",
+            "body": "",
+            "type_alternative": "Event",
+        }
+    )
+
+    assert result is not None
+    assert result.type_alternative is None
+
+
+def test_system_prompt_offers_the_optional_alternative_field() -> None:
+    """The reply shape the model is handed names the optional field.
+
+    Without this the model never emits it and the whole signal is dead --
+    the validation above would be correct and permanently inert.
+    """
+    assert "type_alternative" in concept_mod._SYSTEM_PROMPT

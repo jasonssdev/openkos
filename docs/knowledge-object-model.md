@@ -194,6 +194,23 @@ This is a recommendation, not a constraint, and it is the **stable core (tier 1)
 
 > Note: earlier drafts listed `Observation` as a core type. It was removed because it collides with `Event` (an observation is something that happened) and with the `snapshot` freshness class (a dated observation) — mixing the "what it is" axis with the "how it behaves in time" axis.
 
+### When the classification was a close call
+
+Some subjects genuinely sit on a boundary. A seminar someone is teaching this term is defensibly an `Event` (a bounded happening) and defensibly a `Project` (an ongoing effort with a goal and a timespan). The rubric does not resolve that, because the ambiguity is in the subject, not in the rubric.
+
+The type is not cosmetic. It decides the bundle subdirectory, the `index.md` catalog section, and the default volatility tier — `Event` is `static`, `Project` is `volatile`. So the same sentence, classified twice, can land in a different directory under a different refresh expectation.
+
+When the compiler reports that it weighed a runner-up, the object carries an optional `type_alternative` field naming it:
+
+```yaml
+type: Event
+type_alternative: Project
+```
+
+`type` remains the answer: nothing reads `type_alternative` to route or file a document. The field exists so that a close call is **recorded as a close call** rather than filed as a settled fact. It is absent — no sentinel value — whenever the classification was clear, which is the normal case.
+
+This does not make classification deterministic, and is not meant to. It makes the uncertainty legible to whoever reads the bundle later, which is the same posture the format takes toward provenance and freshness: record what is actually known, including how firmly.
+
 ### Schema versus vocabulary, and two families of types
 
 Two things are easy to conflate. The **frontmatter schema** — the fields themselves (`type`, `title`, `description`, and so on) — is universal: every concept document carries it. The **type vocabulary** is the set of *values* the `type` field may take, and that is what the canonical core, domain extensions, and personal types above govern. The schema is the carrier; the classification is the value of `type`.

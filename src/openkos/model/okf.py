@@ -52,6 +52,24 @@ MERGED_FROM_KEY: Final = "merged_from"
 """The survivor frontmatter key holding the reversibility ledger (ADR-0002):
 an ordinary OKF data key, not a new file type, per §4.1 tolerance."""
 
+TYPE_ALTERNATIVE_KEY: Final = "type_alternative"
+"""The optional frontmatter key a derived object carries WHEN the model
+reported a runner-up type it also weighed (issue #401); ABSENT otherwise --
+no sentinel, so absence means "the classification was not near a boundary",
+mirroring `EXTRACTION_STATUS_KEY`'s convention.
+
+The type is not cosmetic: it decides the bundle subdirectory, the `index.md`
+catalog section, and the default volatility tier (`model/types.py` gives
+`Event` the `static` tier and `Project` the `volatile` one). The same
+sentence classified twice can land in different directories under different
+refresh expectations, and today each run records its own answer as
+definitive. This key does not make the classification stable -- an ambiguous
+subject genuinely is ambiguous -- it stops a coin flip from being recorded
+as a settled fact.
+
+`type` remains the engine's answer. This is a note beside it, never a
+competing value: nothing reads it to route a document."""
+
 EXTRACTION_STATUS_KEY: Final = "extraction_status"
 """The optional frontmatter key a Source concept carries WHEN a single
 `ingest` run wrote zero derived objects (issue #187); ABSENT when at least
@@ -240,6 +258,7 @@ def build_concept(
     sensitivity: str,
     timestamp: str,
     related_note: str = "source this was extracted from",
+    type_alternative: str | None = None,
 ) -> str:
     """Build a conformant OKF derived-object document from LLM-extracted,
     UNTRUSTED fields (design: "Builder validation").
@@ -279,6 +298,25 @@ def build_concept(
         raise ValueError("description must not contain newlines")
     if not provenance:
         raise ValueError("provenance must be non-empty for a derived object")
+    if type_alternative is not None:
+        # Validated as strictly as `type`: this value arrives from the same
+        # untrusted LLM reply. `extraction._validate` already degrades a
+        # malformed one to `None`, so anything reaching here is either
+        # genuine or a caller bug -- and silently writing
+        # `type_alternative: Sandwich` would make the bundle non-conformant
+        # on the strength of a typo.
+        if type_alternative not in _CONCEPT_TYPES:
+            raise ValueError(
+                f"type_alternative must be one of {sorted(_CONCEPT_TYPES)}, "
+                f"got {type_alternative!r}"
+            )
+        if type_alternative == type:
+            # Not silently dropped: a caller holding both values equal has
+            # lost track of its own data, and the document would otherwise
+            # assert a boundary between a type and itself.
+            raise ValueError(
+                f"type_alternative must differ from type, both were {type!r}"
+            )
 
     metadata: dict[str, object] = {
         "type": type,
@@ -292,6 +330,10 @@ def build_concept(
         "sensitivity": sensitivity,
         "provenance": provenance,
     }
+    if type_alternative is not None:
+        # Set only when present, so a document with no near-boundary call
+        # stays byte-identical to what this builder emitted before #401.
+        metadata[TYPE_ALTERNATIVE_KEY] = type_alternative
     related = "\n".join(f"- [{ref}](/{ref}.md) — {related_note}" for ref in provenance)
     # `description` is a one-line lede; append `body` only when it adds content,
     # so a blank-body fallback does not render the description paragraph twice.
