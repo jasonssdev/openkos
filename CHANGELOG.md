@@ -36,6 +36,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- **`duplicates` and `adjudicate` now name the ACRONYM tier**: the tier
+  landed in the data model but both rendering sites still bucketed every
+  non-HIGH group as `LOW`, and the tally line folded them into `near`. A
+  deterministic initials match was therefore reported to the reader as a
+  fuzzy similarity score, at the exact moment they adjudicate it. The tally
+  now reads `(X exact, Y acronym, Z near)`, the legend names the new method,
+  and both labels come from the tier itself rather than a two-way
+  conditional that cannot represent a third tier (#397).
+
 - **The extraction object cap no longer discards candidates silently**:
   `_MAX_OBJECTS_PER_SOURCE` truncated inside `extract_concept`, which
   returned only the surviving list — so a source that proposed 20 objects

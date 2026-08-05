@@ -25,24 +25,33 @@ runner = CliRunner()
 def test_format_group_tally_empty_returns_empty_string() -> None:
     """`_format_group_tally(0, 0)` returns `""` -- signals "no line to
     print" (spec: Reusable Group-Tally Formatting Helper, zero counts)."""
-    assert main._format_group_tally(0, 0) == ""
+    assert main._format_group_tally(0, 0, 0) == ""
 
 
 def test_format_group_tally_single_high() -> None:
     """A single HIGH-tier group renders singular `"group"` wording (spec:
     Leading Candidate-Group Tally Line, single group scenario)."""
-    assert main._format_group_tally(1, 0) == "1 candidate group (1 exact, 0 near)"
+    assert (
+        main._format_group_tally(1, 0, 0)
+        == "1 candidate group (1 exact, 0 acronym, 0 near)"
+    )
 
 
 def test_format_group_tally_single_low() -> None:
     """A single LOW-tier group renders singular `"group"` wording."""
-    assert main._format_group_tally(0, 1) == "1 candidate group (0 exact, 1 near)"
+    assert (
+        main._format_group_tally(0, 0, 1)
+        == "1 candidate group (0 exact, 0 acronym, 1 near)"
+    )
 
 
 def test_format_group_tally_mixed_plural() -> None:
     """Mixed HIGH/LOW counts pluralize and sum correctly (spec: Multiple
     mixed exact/near groups)."""
-    assert main._format_group_tally(2, 3) == "5 candidate groups (2 exact, 3 near)"
+    assert (
+        main._format_group_tally(2, 0, 3)
+        == "5 candidate groups (2 exact, 0 acronym, 3 near)"
+    )
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,7 +191,7 @@ def test_duplicates_prints_leading_tally_line_for_mixed_groups(
     result = runner.invoke(app, ["duplicates"])
 
     assert result.exit_code == 0
-    tally = "2 candidate groups (1 exact, 1 near)"
+    tally = "2 candidate groups (1 exact, 0 acronym, 1 near)"
     assert tally in result.stdout
     lines = result.stdout.splitlines()
     tally_idx = lines.index(tally)
@@ -219,7 +228,7 @@ def test_duplicates_prints_legend_once_before_the_group_loop(
     legend = (
         "Legend: [tier] type -- trigger. The tier is the MATCH METHOD, "
         "not a strength ranking: HIGH = exact normalized key, "
-        "LOW = near-match similarity score."
+        "ACRONYM = one title's token is the initials of a word run in the other, LOW = near-match similarity score."
     )
     assert result.stdout.count(legend) == 1
     lines = result.stdout.splitlines()
@@ -435,3 +444,28 @@ def test_duplicates_over_good_life_demo_is_read_only_and_exits_zero(
     assert result.exit_code == 0
     assert "openkos duplicates: workspace at" in result.stdout
     assert _snapshot(bundle_dir) == before
+
+
+# --- ACRONYM tier rendering (#397 follow-up) --------------------------------
+
+
+def test_format_group_tally_counts_acronym_separately() -> None:
+    """The ACRONYM tier is a distinct match method, not a flavour of
+    near-match: folding it into `near` told the reader a deterministic
+    initials match was a fuzzy similarity score."""
+    assert (
+        main._format_group_tally(1, 2, 3)
+        == "6 candidate groups (1 exact, 2 acronym, 3 near)"
+    )
+
+
+def test_format_group_tally_still_empty_for_all_zero() -> None:
+    """Unchanged contract: no groups means no line to print."""
+    assert main._format_group_tally(0, 0, 0) == ""
+
+
+def test_format_group_tally_singular_acronym_only() -> None:
+    assert (
+        main._format_group_tally(0, 1, 0)
+        == "1 candidate group (0 exact, 1 acronym, 0 near)"
+    )
