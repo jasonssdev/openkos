@@ -16,12 +16,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openkos import config
 from openkos import lint as lint_check
 from openkos.cli import next_action
 from openkos.cli.main import app
+from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
 from openkos.resolution import CandidateGroup
 from openkos.resolution import find_exact_title_groups as _real_find_exact_title_groups
+from openkos.state import fts, vectorstore
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
@@ -1223,3 +1226,96 @@ def test_tier_1_reports_no_declination_and_still_pays_no_walk(
     assert "Run: openkos reindex" in result.stdout
     assert calls == 0
     assert "sources/notes" not in result.stdout
+
+
+# --- stale derived indexes (#381) ---------------------------------------
+
+
+def _write_stale_indexes(tmp_path: Path) -> None:
+    """Write both manifest-gated stores, then edit the bundle underneath
+    them -- the state every curation verb leaves, none of which reindex."""
+    bundle_dir = tmp_path / "bundle"
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    sqlite_graph.write_graph_store(tmp_path / ".openkos" / "graph.db", bundle_dir)
+    concepts = bundle_dir / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / "new.md").write_text(
+        "---\ntype: Concept\ntitle: New\ndescription: ''\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+
+def test_next_recommends_reindex_when_the_derived_indexes_are_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#381: `next` exists to answer "what should I do now", and after a
+    curation session the honest answer is `reindex` -- otherwise every later
+    retrieval silently answers from an older bundle."""
+    _init_workspace(tmp_path, monkeypatch)
+    vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db").close()
+    _write_stale_indexes(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.next_action.vector_store_is_empty", lambda _path: False
+    )
+
+    result = next_action.next_action(config.WorkspaceLayout(tmp_path))
+
+    assert result.action is not None
+    assert result.action.command == "openkos reindex"
+    assert "older than the bundle" in result.action.reason
+    assert "fts, graph" in result.action.reason
+
+
+def test_next_prefers_the_missing_vector_index_over_staleness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both tiers recommend the same command, so only the REASON can differ.
+    Missing outranks stale: an absent index blocks retrieval outright, while
+    a stale one merely degrades it, and the user should be told the worse
+    of the two."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_stale_indexes(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.next_action.vector_store_is_empty", lambda _path: True
+    )
+
+    result = next_action.next_action(config.WorkspaceLayout(tmp_path))
+
+    assert result.action is not None
+    assert result.action.command == "openkos reindex"
+    assert "missing or empty" in result.action.reason
+    assert "older than the bundle" not in result.action.reason
+
+
+def test_next_does_not_recommend_reindex_for_staleness_on_a_fresh_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#386 guard: `init` writes no derived store, and absence is not
+    staleness. This tier must not become a second source of the very defect
+    #386 reports -- recommending `reindex` over an empty workspace."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.next_action.vector_store_is_empty", lambda _path: False
+    )
+
+    result = next_action.next_action(config.WorkspaceLayout(tmp_path))
+
+    assert result.action is None or "older than the bundle" not in result.action.reason
+
+
+def test_next_stays_silent_about_staleness_when_the_indexes_are_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Indexes written over the bundle they describe are fresh, and a fresh
+    pair must produce no recommendation of its own."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    sqlite_graph.write_graph_store(tmp_path / ".openkos" / "graph.db", bundle_dir)
+    monkeypatch.setattr(
+        "openkos.cli.next_action.vector_store_is_empty", lambda _path: False
+    )
+
+    result = next_action.next_action(config.WorkspaceLayout(tmp_path))
+
+    assert result.action is None or "older than the bundle" not in result.action.reason

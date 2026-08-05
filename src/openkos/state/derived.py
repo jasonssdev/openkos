@@ -23,13 +23,25 @@ on-disk footprint -- only artifacts THIS call created are removed. Unlike
 generic `meta(key, value)` table rather than a domain-specific schema --
 `fts.py`/`graph/sqlite_graph.py` layer their own tables on top of the SAME
 connection this returns. The `manifest_hash` row in that table is the ONLY
-place staleness is gated; query-time code never calls
-`bundle_manifest_hash` at all.
+place staleness is decided.
+
+`stale_derived_stores` (#381) is the read-only ADVISORY counterpart to
+`reindex_gate`: same stored row, same comparison, but it never rebuilds and
+never writes. It exists because only `reindex` and `purge` ever write
+`fts.db`/`graph.db` -- every other bundle-writing verb (`relate`,
+`reconcile`, `merge`, `curate`, and `ingest`, which embeds vectors only)
+leaves them behind, and the sole symptom was a quietly worse answer. Callers
+use it to SAY so; the decision of what is stale stays here, in one place.
+
+The D2 binding contract is unchanged by that addition: `retrieval/answer.py`
+still never computes or compares a manifest hash. The advisory lives at the
+CLI seam that already owns the open-failure-to-`None` decision, so the
+answering core keeps treating whatever handle it is given as fresh.
 """
 
 import hashlib
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -174,6 +186,59 @@ def write_manifest_hash(conn: sqlite3.Connection, digest: str) -> None:
     commit -- callers commit once alongside their own writes (reindex-command:
     single commit per store per run)."""
     conn.execute(_UPSERT_META_SQL, (MANIFEST_HASH_KEY, digest))
+
+
+def stale_derived_stores(
+    bundle_dir: Path, stores: Sequence[tuple[str, Path]]
+) -> tuple[str, ...]:
+    """Return the names of `stores` whose stored `manifest_hash` no longer
+    matches `bundle_dir`'s current one, in the order given (#381).
+
+    The read-only advisory twin of `reindex_gate`: identical comparison,
+    zero writes, no rebuild. Callers render the returned names, so the order
+    is the CALLER's, never discovery's.
+
+    What counts as stale, and what deliberately does not:
+
+    - **Absent store: not reported.** Absence is a different fault, and each
+      caller already surfaces it on its own path (`query`'s unavailable
+      hint, `status`' missing-`vectors.db` line). Reporting it here too
+      would render one fault as two contradictory lines.
+    - **No stored hash: reported.** A store predating the `manifest_hash`
+      key, or created but never written, cannot PROVE it matches. Fail safe
+      -- an index of unknown age is exactly what #381 is about.
+    - **Unreadable/corrupt store: reported, never raised.** It cannot answer
+      the question either, and an advisory must never be what breaks the
+      command it advises (mirrors `_open_fts_or_degrade`'s degrade posture).
+
+    Opened `mode=ro` through a URI so the check cannot create the very index
+    it was asked about -- `open_derived_connection` lazily CREATES both
+    `.openkos/` and the database file, which would turn merely ASKING
+    `status` whether the indexes are stale into materializing an empty one.
+    The `path.exists()` guard runs first for the same reason, and doubles as
+    the short-circuit that skips `bundle_manifest_hash` entirely when no
+    store is on disk: with nothing to compare against, the walk buys
+    nothing.
+    """
+    present = [(name, path) for name, path in stores if path.exists()]
+    if not present:
+        return ()
+
+    current = bundle_manifest_hash(bundle_dir)
+    stale: list[str] = []
+    for name, path in present:
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                stored = read_manifest_hash(conn)
+            finally:
+                conn.close()
+        except Exception:  # broad: any unreadable store degrades to "stale"
+            stale.append(name)
+            continue
+        if stored != current:
+            stale.append(name)
+    return tuple(stale)
 
 
 class DerivedStoreWriter(Protocol):

@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from openkos import config
 from openkos import lint as lint_check
 from openkos.resolution import CandidateGroup, find_exact_title_groups
+from openkos.state.derived import stale_derived_stores
 from openkos.state.vectorstore import vector_store_is_empty
 
 _STATUS_POINTER = "For everything else, run `openkos status`."
@@ -138,6 +139,7 @@ class _BundleSignals:
         self._skip_notices: tuple[str, ...] = ()
         self._declinations: list[str] = []
         self._exact_title_groups: list[CandidateGroup] | None = None
+        self._stale_indexes: tuple[str, ...] | None = None
 
     def record_declination(self, notice: str) -> None:
         """Note a real finding this run deliberately refused to turn into a
@@ -158,6 +160,26 @@ class _BundleSignals:
     def vector_store_empty(self) -> bool:
         """0 walks: a single `vector_meta` row-count check."""
         return vector_store_is_empty(self._layout.vectors_db_path)
+
+    @property
+    def stale_indexes(self) -> tuple[str, ...]:
+        """1 walk (`bundle_manifest_hash`), memoized, and skipped entirely
+        when neither manifest-gated store is on disk -- read only by tier 2,
+        so tier 1's zero-walk cost contract is untouched. Never raises: an
+        advisory that breaks `next` would be worse than the staleness it
+        reports."""
+        if self._stale_indexes is None:
+            try:
+                self._stale_indexes = stale_derived_stores(
+                    self._layout.bundle_dir,
+                    (
+                        ("fts", self._layout.fts_db_path),
+                        ("graph", self._layout.graph_db_path),
+                    ),
+                )
+            except Exception:  # broad: an advisory never breaks its command
+                self._stale_indexes = ()
+        return self._stale_indexes
 
     @property
     def docs(self) -> list[lint_check.LintDoc]:
@@ -245,6 +267,37 @@ def _tier_missing_vector_index(signals: _BundleSignals) -> NextAction | None:
         reason=(
             "Dense retrieval and candidate edges are unavailable -- the "
             "vector index is missing or empty."
+        ),
+    )
+
+
+def _tier_stale_derived_indexes(signals: _BundleSignals) -> NextAction | None:
+    """Rank 2: `fts.db`/`graph.db` describing an older bundle than the one on
+    disk (#381). Ranked directly BELOW the missing-vector-index tier because
+    both recommend the same command and only the reason can differ: an absent
+    index blocks retrieval outright, a stale one merely degrades it, and the
+    user should be told the worse of the two. Ranked ABOVE the content tiers
+    because judging documents through indexes that predate them is work that
+    may have to be redone.
+
+    Only `reindex` and `purge` ever write these two stores; `relate`,
+    `reconcile`, `merge`, `curate` and `ingest` all leave them behind. Until
+    #381 the sole symptom was a quietly worse answer, which is precisely the
+    kind of finding `next` exists to surface.
+
+    Absence is deliberately not staleness (see `stale_derived_stores`): a
+    freshly `init`ed workspace has no derived store at all, so this tier
+    cannot become a second source of the empty-workspace `reindex`
+    recommendation #386 already reports.
+    """
+    stale = signals.stale_indexes
+    if not stale:
+        return None
+    return NextAction(
+        command="openkos reindex",
+        reason=(
+            f"Retrieval is answering from indexes older than the bundle "
+            f"({', '.join(stale)})."
         ),
     )
 
@@ -368,13 +421,17 @@ Tier = Callable[[_BundleSignals], NextAction | None]
 
 _TIERS: tuple[Tier, ...] = (
     _tier_missing_vector_index,
+    _tier_stale_derived_indexes,
     _tier_unextracted_source,
     _tier_below_source_sensitivity,
     _tier_duplicate_groups,
 )
-"""D1 order: reindex, ingest, backfill-sensitivity, duplicates. A
-higher-ranked tier's finding always wins; a lower-ranked tier is never even
-evaluated once a higher one fires (first-hit short-circuit)."""
+"""D1 order: reindex (missing), reindex (stale, #381), ingest,
+backfill-sensitivity, duplicates. A higher-ranked tier's finding always
+wins; a lower-ranked tier is never even evaluated once a higher one fires
+(first-hit short-circuit) -- which is also what keeps the two reindex tiers
+from ever both firing: a missing index short-circuits before the stale
+check's bundle walk is ever paid."""
 
 
 def next_action(layout: config.WorkspaceLayout) -> NextResult:
