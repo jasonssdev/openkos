@@ -107,6 +107,11 @@ class StageProbe:
     llm_calls: int = 0
     unavailable: str | None = None
     empty_message: str | None = None
+    notice: str | None = None
+    """A one-line, non-blocking advisory `gate()` echoes to stderr
+    immediately before `cost_line` (design D4, #378 slice 2) -- Structure's
+    probe sets this to the candidate-edge cap truncation notice when pass 3
+    truncated its output; `None` (the default) prints nothing extra."""
 
 
 @dataclass(frozen=True)
@@ -209,6 +214,8 @@ def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
     - non-TTY, no `--auto`: declines unconditionally, with no exception for
       a read-only stage (spec: Non-TTY without --auto declines every
       LLM-costing stage) -- there is no consent channel at all here."""
+    if probe.notice is not None:
+        typer.echo(probe.notice, err=True)
     typer.echo(cost_line(stage, probe), err=True)
     if ctx.auto:
         return True
@@ -404,11 +411,21 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
             local_exemption=ctx.local_exemption,
             store=store,
         )
+        # #378 slice 2: pass 3's candidate-edge cap truncation, never silent
+        # -- read here, INSIDE the `with` block, since `store` closes below.
+        report = store.candidate_report
+        notice = (
+            f"{report.retained} of {report.produced} candidate edge(s) "
+            "shown (cap reached)"
+            if report.produced > report.retained
+            else None
+        )
 
     return StageProbe(
         items=tuple(edges),
         llm_calls=len(edges),
         empty_message="No untyped edges found." if not edges else None,
+        notice=notice,
     )
 
 

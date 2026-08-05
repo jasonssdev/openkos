@@ -553,6 +553,99 @@ def test_contradictions_no_cap_reached_line_when_under_cap(
 
 
 # ---------------------------------------------------------------------------
+# Candidate-edge cap truncation notice (#378 slice 2)
+# ---------------------------------------------------------------------------
+
+
+def test_contradictions_reports_candidate_truncation_when_the_cap_is_reached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When pass 3's candidate cap truncates the set, the truncation notice
+    ("{retained} of {produced} candidate edge(s) shown (cap reached)") must
+    be rendered -- distinct from the contradiction pair-cap notice above,
+    and never silent."""
+    from openkos.graph.proximity import ProximityPair
+
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "hub.md").write_text(
+        "---\ntype: Concept\ntitle: Hub\n---\nBody.\n", encoding="utf-8"
+    )
+    pairs = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        (tmp_path / "bundle" / "concepts" / f"{leaf_id}.md").write_text(
+            f"---\ntype: Concept\ntitle: {leaf_id}\n---\nBody.\n", encoding="utf-8"
+        )
+        pairs.append(
+            ProximityPair(
+                source_id="concepts/hub",
+                target_id=f"concepts/{leaf_id}",
+                distance=index * 0.001,
+            )
+        )
+
+    class _StubSource:
+        def pairs(self, concept_ids: object) -> list[ProximityPair]:
+            return pairs
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        contradiction_main, "_open_proximity_or_degrade", lambda p: _StubSource()
+    )
+    monkeypatch.setattr(
+        contradiction_main, "find_contradictions", lambda *a, **k: ([], 0)
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "50 of 60 candidate edge(s) shown (cap reached)" in result.stdout
+
+
+def test_contradictions_no_candidate_truncation_notice_under_the_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under the candidate cap, `produced == retained` -- the candidate
+    truncation notice must NOT appear."""
+    from openkos.graph.proximity import ProximityPair
+
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "a.md").write_text(
+        "---\ntype: Concept\ntitle: A\n---\nBody.\n", encoding="utf-8"
+    )
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\ntype: Concept\ntitle: B\n---\nBody.\n", encoding="utf-8"
+    )
+
+    class _StubSource:
+        def pairs(self, concept_ids: object) -> list[ProximityPair]:
+            return [
+                ProximityPair(
+                    source_id="concepts/a", target_id="concepts/b", distance=0.1
+                )
+            ]
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        contradiction_main, "_open_proximity_or_degrade", lambda p: _StubSource()
+    )
+    monkeypatch.setattr(
+        contradiction_main, "find_contradictions", lambda *a, **k: ([], 0)
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "candidate edge(s) shown" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
 # Zero writes
 # ---------------------------------------------------------------------------
 

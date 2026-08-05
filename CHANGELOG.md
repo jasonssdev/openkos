@@ -42,6 +42,15 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   graph store now carries a `CandidateReport` recording how many candidates
   were produced and how many were retained; the commands that render that
   report to the reader land in the following slice. (graph) (#378)
+- **Candidate-edge truncation is never silent**: reaching the per-run ceiling
+  used to be invisible — the graph simply held fewer candidates than the
+  bundle could justify, with nothing saying so. `suggest-relations`,
+  `contradictions` and `curate`'s Structure gate now each print an explicit
+  "N of M candidate edge(s) shown (cap reached)" notice when the ceiling is
+  reached, and print nothing extra when it is not, so a reader can tell
+  "there is nothing more to propose" apart from "there is more, but it was
+  set aside". Mirrors how `contradictions` already reports its own
+  `_MAX_PAIRS` cap. (cli) (#378)
 
 ## [0.2.1] - 2026-08-03
 

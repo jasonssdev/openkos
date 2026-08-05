@@ -284,6 +284,90 @@ def test_gate_non_tty_auto_writes_true_is_accepted_by_gate_itself(
 
 
 # ---------------------------------------------------------------------------
+# StageProbe.notice (#378 slice 2): Structure's candidate-edge cap notice
+# ---------------------------------------------------------------------------
+
+
+def test_gate_echoes_probe_notice_before_cost_line(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_stdin_isatty(monkeypatch, True)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+    stage = _fake_stage("Structure", noun="untyped edge")
+    probe = curate.StageProbe(
+        items=(1,), llm_calls=1, notice="50 of 60 candidate edge(s) shown (cap reached)"
+    )
+
+    assert curate.gate(stage, probe, ctx) is True
+
+    err = capsys.readouterr().err
+    notice_line = "50 of 60 candidate edge(s) shown (cap reached)"
+    assert notice_line in err
+    assert err.index(notice_line) < err.index("1 untyped edge(s) -> 1 LLM call(s)")
+
+
+def test_gate_prints_nothing_extra_when_probe_notice_is_none(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_stdin_isatty(monkeypatch, True)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+    stage = _fake_stage("Structure", noun="untyped edge")
+    probe = curate.StageProbe(items=(1,), llm_calls=1)
+
+    assert curate.gate(stage, probe, ctx) is True
+
+    err = capsys.readouterr().err
+    assert "cap reached" not in err
+
+
+class _FakeCandidateStore:
+    def __init__(self, candidate_report: object) -> None:
+        self.candidate_report = candidate_report
+
+    def __enter__(self) -> "_FakeCandidateStore":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def test_structure_probe_notice_set_when_the_candidate_cap_truncates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.graph.sqlite_graph import CandidateReport
+
+    ctx = _fake_ctx(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.curate.build_graph",
+        lambda *a, **k: _FakeCandidateStore(CandidateReport(produced=60, retained=50)),
+    )
+    monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+
+    probe = curate._structure_probe(ctx)
+
+    assert probe.notice == "50 of 60 candidate edge(s) shown (cap reached)"
+
+
+def test_structure_probe_notice_is_none_under_the_candidate_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.graph.sqlite_graph import CandidateReport
+
+    ctx = _fake_ctx(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.curate.build_graph",
+        lambda *a, **k: _FakeCandidateStore(CandidateReport(produced=1, retained=1)),
+    )
+    monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+
+    probe = curate._structure_probe(ctx)
+
+    assert probe.notice is None
+
+
+# ---------------------------------------------------------------------------
 # 1.7 -- stage order
 # ---------------------------------------------------------------------------
 

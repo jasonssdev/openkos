@@ -8095,6 +8095,15 @@ def suggest_relations_cmd(
 
         typer.echo(f"openkos suggest-relations: workspace at {root}")
         typer.echo()
+        # #378 slice 2: pass 3's candidate-edge cap truncation, never silent.
+        # Read here, INSIDE the `with` block, since `store` closes below.
+        report = store.candidate_report
+        if report.produced > report.retained:
+            typer.echo(
+                f"{report.retained} of {report.produced} candidate edge(s) "
+                "shown (cap reached)"
+            )
+            typer.echo()
         total = len(edges)
         if total == 0:
             typer.echo(
@@ -8462,6 +8471,17 @@ def contradictions(
 
         typer.echo(f"openkos contradictions: workspace at {root}")
         typer.echo()
+        # #378 slice 2: pass 3's candidate-edge cap truncation, never silent
+        # -- distinct from `total_pairs > len(verdicts)` below, which
+        # reports the contradiction-engine's OWN pair cap. Read here, INSIDE
+        # the `with` block, since `store` closes below.
+        candidate_report = store.candidate_report
+        if candidate_report.produced > candidate_report.retained:
+            typer.echo(
+                f"{candidate_report.retained} of {candidate_report.produced} "
+                "candidate edge(s) shown (cap reached)"
+            )
+            typer.echo()
         if not verdicts:
             typer.echo(
                 _zero_edge_state_message(

@@ -1667,6 +1667,30 @@ def test_pass_three_drops_a_candidate_pair_targeting_a_source(
     assert rows == []
 
 
+def test_candidate_report_is_empty_when_every_nomination_is_filtered_out(
+    tmp_path: Path,
+) -> None:
+    """The zero-survivor branch: a candidate source ran, but every pair it
+    nominated was dropped by the Source guards. `produced` counts what
+    survived filtering, not what was nominated, so both counts must read
+    zero -- and the CLI verbs must therefore stay silent rather than print a
+    "0 of 0" notice. Distinct from the `candidates=None` case, where pass 3
+    never runs at all (#378)."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", doc_type="Concept", title="A")
+    _write_doc(bundle / "sources" / "call.md", doc_type="Source", title="Call")
+    stub = _StubCandidateSource(
+        [("sources/call", "concepts/a"), ("concepts/a", "sources/call")]
+    )
+
+    with sqlite_graph.build_graph(bundle, candidates=stub) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    assert rows == []
+    assert report == sqlite_graph.CandidateReport(produced=0, retained=0)
+
+
 def test_pass_three_still_seeds_concept_to_concept_pairs(tmp_path: Path) -> None:
     """A Source document elsewhere in the bundle must not perturb an
     unrelated Concept<->Concept candidate pair."""
