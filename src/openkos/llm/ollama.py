@@ -19,8 +19,18 @@ from openkos.llm.base import EMBED_DIM, Message
 
 DEFAULT_HOST = "http://localhost:11434"
 """Ollama's own local default, used when no override is given (D2)."""
-DEFAULT_TIMEOUT = 120.0
-"""Generous default: model inference is slow, avoid premature timeouts (D6)."""
+DEFAULT_TIMEOUT = 600.0
+"""Generous default: model inference is slow, avoid premature timeouts (D6).
+
+Raised from 120s (issue #405). 120s was measured too low for real sources:
+across 9 sources x 4 sampling arms x 5 runs, 8 calls timed out, all of them
+on 6-17 KB real documents and none on the 700-800 B demo fixtures. This is
+the floor every caller inherits; a workspace tunes the CHAT seams through
+`config.Config.chat_timeout`, which defaults to this same value.
+
+A longer deadline does not rescue a model that never terminates -- the same
+measurement saw 5 of 5 timeouts at 120s and 5 of 5 again at 300s under
+greedy decoding. That is #404's territory, not this constant's."""
 DEFAULT_EMBED_RETRY_ATTEMPTS = 3
 """Default number of `embed()` attempts (1 initial + 2 retries) before
 raising a persistent `OllamaError`-family failure to the caller (D3)."""

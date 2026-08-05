@@ -511,6 +511,7 @@ review: true              # show proposed changes and confirm before saving
 default_sensitivity: private
 confidential_local_exemption: true  # send confidential concepts to a LOCAL LLM backend
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
+chat_timeout: 600         # seconds an LLM chat call may take before giving up
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
@@ -523,6 +524,20 @@ bundle: bundle/           # the OKF bundle root
 
 # type_registry is maintained by the engine (canonical + emergent types)
 ```
+
+### `chat_timeout`
+
+How long a single `llm.chat` request may take before the transport gives up, in seconds. Default `600`.
+
+It governs the **chat** seams only — `ingest`'s extraction, `curate`, `query`, `adjudicate`, `suggest-relations`, and `contradictions`. Embedding calls keep the transport default, and the startup liveness probes keep their own short deadline: those answer "is anything listening", and a ten-minute probe would hang the CLI on a firewalled host instead of failing fast.
+
+The default was raised from `120` in [#405](https://github.com/jasonssdev/openkos/issues/405). 120s was measured too low for the documents this product targets: across 9 sources × 4 sampling arms × 5 runs, 8 calls timed out, every one of them on a 6–17 KB real document and none on the sub-kilobyte demo fixtures.
+
+Raise it for large sources or a slow machine. It will **not** rescue a model that fails to terminate — the same measurement saw a fixture time out 5 of 5 at 120s and 5 of 5 again at 300s under greedy decoding. A run that still times out at a generous deadline is reporting a generation problem, not an impatient client.
+
+A value that is absent or explicitly null falls back to the default. A non-numeric, boolean, zero, or negative value is refused when the config is read, rather than silently coerced: `chat_timeout: true` would otherwise resolve to a one-second deadline and make every call look like a dead backend, and `chat_timeout: 0` would disable the LLM entirely while reading like a deliberate setting.
+
+A source whose extraction times out is recorded on the Source document as `extraction_status: failed` and surfaced by `openkos lint` with a retry command — it is not confused with a source the model legitimately found nothing in.
 
 ### Sensitivity and the local backend
 

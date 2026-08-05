@@ -95,9 +95,15 @@ class _RaisingOllamaClient:
 
 
 class _FakeConfig:
-    def __init__(self, model: str = "stub-model", review: bool = True) -> None:
+    def __init__(
+        self,
+        model: str = "stub-model",
+        review: bool = True,
+        chat_timeout: float = config.DEFAULT_CHAT_TIMEOUT,
+    ) -> None:
         self.model = model
         self.review = review
+        self.chat_timeout = chat_timeout
 
 
 class _FakeLayout:

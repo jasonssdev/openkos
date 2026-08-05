@@ -72,6 +72,22 @@ DEFAULT_FRESHNESS_WINDOW = "7d"
 Raw passthrough only -- the `"7d"`/`"2w"` duration grammar is parsed by
 `lint.parse_window`, not here (policy stays out of `config`)."""
 
+DEFAULT_CHAT_TIMEOUT = 600.0
+"""Packaged default for `chat_timeout`, in seconds, matching
+`openkos.yaml.template` and `llm.ollama.DEFAULT_TIMEOUT` (issue #405).
+
+Raised from the 120s that shipped before. 120s was measured too low for the
+documents this product targets: across a sweep of 9 sources x 4 sampling
+arms x 5 runs, 8 calls timed out, every one of them on a 6-17 KB real
+document, while none of the 700-800 B demo fixtures ever did.
+
+This deadline is NOT a lever against runaway generation. The same
+measurement found a fixture that timed out 5 of 5 at 120s and 5 of 5 again
+at 300s under greedy decoding -- a model that never terminates is not
+rescued by a longer wait, and raising this value further would only make the
+failure slower to observe. That failure mode belongs to the prompt's
+anti-enumeration instruction (#404), not here."""
+
 DEFAULT_VOLATILITY_WINDOWS: dict[str, str] = {"slow": "90d", "volatile": "7d"}
 """Packaged per-tier default windows (freshness-lint-v1, design: "Per-tier
 windows (CONCRETE, FINAL)"): `slow` = 90d, `volatile` = 7d -- continuity
@@ -515,6 +531,14 @@ class Config:
     default_sensitivity: str
     freshness_window: str
     embedding_model: str
+    chat_timeout: float
+    """Seconds an `llm.chat` request may take before the transport gives up
+    (issue #405), defaulting to `DEFAULT_CHAT_TIMEOUT` when the key is absent
+    or explicitly null. Validated as a positive number and coerced to
+    `float` at read time, so every consumer sees one type. Governs the CHAT
+    seams only -- embedding calls keep `OllamaClient`'s own default, and the
+    liveness probes keep `_PREFLIGHT_TIMEOUT`, which answers a different
+    question (is anything listening) and must stay short."""
     confidential_local_exemption: bool
     """Whether a `confidential` concept may be included in an `llm.chat`
     payload when the backend host is verifiably this machine (issue #240),
@@ -571,6 +595,7 @@ def read_config(root: Path) -> Config:
     default_sensitivity = raw.get("default_sensitivity")
     freshness_window = raw.get("freshness_window")
     embedding_model = raw.get("embedding_model")
+    chat_timeout = raw.get("chat_timeout")
     confidential_local_exemption = raw.get("confidential_local_exemption")
     volatility_windows = raw.get("volatility_windows")
     type_tiers = raw.get("type_tiers")
@@ -583,6 +608,25 @@ def read_config(root: Path) -> Config:
         raise ValueError(
             f"{layout.config_path.name}: 'embedding_model' must be a string, got "
             f"{type(embedding_model).__name__}"
+        )
+    if chat_timeout is not None and (
+        isinstance(chat_timeout, bool)
+        or not isinstance(chat_timeout, int | float)
+        or chat_timeout <= 0
+    ):
+        # `bool` is excluded FIRST and explicitly, because it subclasses
+        # `int`: without that term `chat_timeout: true` would resolve to a
+        # one-second deadline, so every chat call would fail instantly and
+        # look like a dead backend rather than a bad config value. This is
+        # the same int-as-bool hazard `confidential_local_exemption` guards
+        # below, pointed the other way.
+        #
+        # Non-positive values are refused for a related reason: `urllib`
+        # treats them as an immediate expiry, so `chat_timeout: 0` would
+        # disable the LLM entirely while reading like a deliberate setting.
+        raise ValueError(
+            f"{layout.config_path.name}: 'chat_timeout' must be a positive "
+            f"number of seconds, got {chat_timeout!r}"
         )
     if confidential_local_exemption is not None and not isinstance(
         confidential_local_exemption, bool
@@ -615,6 +659,12 @@ def read_config(root: Path) -> Config:
         ),
         embedding_model=(
             embedding_model if embedding_model is not None else DEFAULT_EMBEDDING_MODEL
+        ),
+        # Coerced, not merely passed through: `chat_timeout: 900` is a YAML
+        # int and the field is typed `float`, so the boundary normalizes it
+        # once instead of leaving every consumer to handle both.
+        chat_timeout=(
+            float(chat_timeout) if chat_timeout is not None else DEFAULT_CHAT_TIMEOUT
         ),
         confidential_local_exemption=(
             confidential_local_exemption

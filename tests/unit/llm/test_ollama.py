@@ -22,6 +22,7 @@ import pytest
 
 from openkos.llm.base import EMBED_DIM, Embedder, Message
 from openkos.llm.ollama import (
+    DEFAULT_TIMEOUT,
     InstalledModel,
     OllamaClient,
     OllamaEmbeddingDimensionMismatch,
@@ -413,7 +414,14 @@ def test_non_string_message_content_raises_ollama_error() -> None:
 
 
 def test_default_timeout_is_forwarded_to_urlopen() -> None:
-    """The default `120.0` timeout (D6) is forwarded to `urlopen` unchanged."""
+    """`DEFAULT_TIMEOUT` (D6) is forwarded to `urlopen` unchanged.
+
+    Asserted against the constant rather than a literal: this test is about
+    the value reaching the transport untouched, not about what the value
+    happens to be. `DEFAULT_TIMEOUT` moved from 120s to 600s in #405, and a
+    hardcoded literal here would fail for the wrong reason -- the number
+    itself is pinned by `test_config.py`, next to the rationale.
+    """
     captured_timeouts: list[float | None] = []
     client = OllamaClient(
         "qwen3",
@@ -422,7 +430,7 @@ def test_default_timeout_is_forwarded_to_urlopen() -> None:
 
     client.chat([{"role": "user", "content": "hi"}])
 
-    assert captured_timeouts == [120.0]
+    assert captured_timeouts == [DEFAULT_TIMEOUT]
 
 
 def test_custom_timeout_is_forwarded_to_urlopen() -> None:

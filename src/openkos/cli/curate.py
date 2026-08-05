@@ -974,7 +974,9 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             continue
 
         if stage.needs_llm and ctx.ollama_client is None:
-            ctx.ollama_client = OllamaClient(model=ctx.cfg.model)
+            ctx.ollama_client = OllamaClient(
+                model=ctx.cfg.model, timeout=ctx.cfg.chat_timeout
+            )
 
         try:
             outcome = stage.run(ctx, probe)
