@@ -381,9 +381,12 @@ def test_structure_probe_notice_set_when_the_candidate_cap_truncates(
     from openkos.graph.sqlite_graph import CandidateReport
 
     ctx = _fake_ctx(tmp_path)
+    pairs = tuple((f"concepts/a{i:03d}", f"concepts/b{i:03d}") for i in range(1, 61))
     monkeypatch.setattr(
         "openkos.cli.curate.build_graph",
-        lambda *a, **k: _FakeCandidateStore(CandidateReport(produced=60, retained=50)),
+        lambda *a, **k: _FakeCandidateStore(
+            CandidateReport(produced=60, retained=50, pairs=pairs)
+        ),
     )
     monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
@@ -401,7 +404,50 @@ def test_structure_probe_notice_is_none_under_the_candidate_cap(
     ctx = _fake_ctx(tmp_path)
     monkeypatch.setattr(
         "openkos.cli.curate.build_graph",
-        lambda *a, **k: _FakeCandidateStore(CandidateReport(produced=1, retained=1)),
+        lambda *a, **k: _FakeCandidateStore(
+            CandidateReport(
+                produced=1, retained=1, pairs=(("concepts/a", "concepts/b"),)
+            )
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+
+    probe = curate._structure_probe(ctx)
+
+    assert probe.notice is None
+
+
+def test_structure_probe_notice_suppressed_when_every_dropped_pair_is_confidential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#378 post-review correction: `curate`'s Structure gate must observe
+    the SAME sensitivity-restricted notice as `suggest-relations` and
+    `contradictions` -- a truncated run whose dropped pairs are all
+    confidential must stay silent."""
+    from openkos.graph.sqlite_graph import CandidateReport
+
+    ctx = _fake_ctx(tmp_path)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "keep.md").write_text(
+        "---\ntype: Concept\ntitle: keep\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "secret.md").write_text(
+        "---\ntype: Concept\ntitle: secret\nsensitivity: confidential\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    report = CandidateReport(
+        produced=2,
+        retained=1,
+        pairs=(
+            ("concepts/hub", "concepts/keep"),
+            ("concepts/hub", "concepts/secret"),
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.build_graph",
+        lambda *a, **k: _FakeCandidateStore(report),
     )
     monkeypatch.setattr("openkos.cli.main._open_proximity_or_degrade", lambda p: None)
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])

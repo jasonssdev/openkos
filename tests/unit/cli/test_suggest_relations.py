@@ -70,6 +70,15 @@ def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") ->
     )
 
 
+def _write_confidential_doc(path: Path, *, title: str = "Stub") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Concept\ntitle: {title}\nsensitivity: confidential\n---\n"
+        f"# {title}\n",
+        encoding="utf-8",
+    )
+
+
 def _suggestion(
     *,
     source: str = "concepts/a",
@@ -1117,3 +1126,123 @@ def test_suggest_relations_no_truncation_notice_under_the_cap(
 
     assert result.exit_code == 0
     assert "cap reached" not in result.stdout
+
+
+def test_suggest_relations_suppresses_notice_when_every_dropped_pair_is_confidential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#378 post-review correction: a truncated run whose dropped candidates
+    are ALL confidential must print NO notice to a caller without
+    `--include-confidential` -- the reader must never learn a pre-cap total
+    that counts material the same command's edge list already withholds."""
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "hub.md").write_text(
+        "---\ntype: Concept\ntitle: Hub\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    pairs = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        # The 10 farthest leaves (051-060) are exactly the ones the cap
+        # drops -- mark all of them confidential so the WHOLE dropped set
+        # is invisible to a caller without the escape flag. Every OTHER doc
+        # (including the hub) explicitly declares `sensitivity: private` --
+        # a missing field fails closed too (`blocks_llm_send`), which would
+        # block everything and make this fixture prove nothing.
+        if index > 50:
+            _write_confidential_doc(
+                tmp_path / "bundle" / "concepts" / f"{leaf_id}.md", title=leaf_id
+            )
+        else:
+            (tmp_path / "bundle" / "concepts" / f"{leaf_id}.md").write_text(
+                f"---\ntype: Concept\ntitle: {leaf_id}\nsensitivity: private\n---\n"
+                "Body.\n",
+                encoding="utf-8",
+            )
+        pairs.append(
+            ProximityPair(
+                source_id="concepts/hub",
+                target_id=f"concepts/{leaf_id}",
+                distance=index * 0.001,
+            )
+        )
+
+    class _StubSource:
+        def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+            return pairs
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types", lambda edges, **kwargs: []
+    )
+
+    default_run = runner.invoke(app, ["suggest-relations", "--auto"])
+    flagged_run = runner.invoke(
+        app, ["suggest-relations", "--auto", "--include-confidential"]
+    )
+
+    assert default_run.exit_code == 0
+    assert "cap reached" not in default_run.stdout
+    assert flagged_run.exit_code == 0
+    assert "50 of 60 candidate edge(s) shown (cap reached)" in flagged_run.stdout
+
+
+def test_suggest_relations_reports_only_visible_counts_for_a_mixed_drop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#378 post-review correction: when only SOME of the dropped candidates
+    are confidential, the notice must report the VISIBLE counts, not the
+    raw pre-cap totals."""
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "hub.md").write_text(
+        "---\ntype: Concept\ntitle: Hub\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    pairs = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        # Of the 10 dropped leaves (051-060), only 051-055 are confidential
+        # -- 056-060 stay visible, so the drop is a MIX. Every OTHER doc
+        # explicitly declares `sensitivity: private` -- a missing field
+        # fails closed too, which would block everything.
+        if 50 < index <= 55:
+            _write_confidential_doc(
+                tmp_path / "bundle" / "concepts" / f"{leaf_id}.md", title=leaf_id
+            )
+        else:
+            (tmp_path / "bundle" / "concepts" / f"{leaf_id}.md").write_text(
+                f"---\ntype: Concept\ntitle: {leaf_id}\nsensitivity: private\n---\n"
+                "Body.\n",
+                encoding="utf-8",
+            )
+        pairs.append(
+            ProximityPair(
+                source_id="concepts/hub",
+                target_id=f"concepts/{leaf_id}",
+                distance=index * 0.001,
+            )
+        )
+
+    class _StubSource:
+        def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+            return pairs
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types", lambda edges, **kwargs: []
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert "50 of 55 candidate edge(s) shown (cap reached)" in result.stdout

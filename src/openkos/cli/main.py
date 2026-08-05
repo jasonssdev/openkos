@@ -70,6 +70,7 @@ from openkos.resolution.contradiction import (
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
     candidate_edges,
+    candidate_truncation_notice,
     suggest_edge_types,
 )
 from openkos.resolution.volatility_typing import suggest_volatility
@@ -8095,22 +8096,28 @@ def suggest_relations_cmd(
 
         typer.echo(f"openkos suggest-relations: workspace at {root}")
         typer.echo()
-        # #378 slice 2: pass 3's candidate-edge cap truncation, never silent.
-        # Read here, INSIDE the `with` block, since `store` closes below.
+        # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
+        # truncation, never silent -- but restricted to what THIS caller may
+        # see. Read here, INSIDE the `with` block, since `store` closes
+        # below.
         #
-        # The counts are deliberately NOT gated on `include_confidential` /
-        # `local_exemption`: that gate governs what leaves for `llm.chat`,
-        # not what a reader sees about their own workspace. A confidential
-        # endpoint is degraded to an empty body by `edge_typing._load_doc`
-        # and still counted in `edges`, so `total` below already discloses
-        # the same aggregate unconditionally -- suppressing only this line
-        # would hide the truncation without hiding anything else.
-        report = store.candidate_report
-        if report.produced > report.retained:
-            typer.echo(
-                f"{report.retained} of {report.produced} candidate edge(s) "
-                "shown (cap reached)"
-            )
+        # `store.candidate_report.produced`/`.retained` are RAW counts: pass
+        # 3 has no sensitivity awareness, so they can include pairs with a
+        # confidential endpoint that `candidate_edges` above already
+        # excluded from `edges`. Printing them directly would disclose a
+        # pre-cap volume the edge list below deliberately withholds --
+        # `candidate_truncation_notice` re-derives both counts from
+        # `report.pairs` through the SAME `sensitivity.sensitive_concept_ids`
+        # walk `candidate_edges` just ran, so this line and `total` below
+        # agree on what a caller without `--include-confidential` may see.
+        notice = candidate_truncation_notice(
+            store.candidate_report,
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+        if notice is not None:
+            typer.echo(notice)
             typer.echo()
         total = len(edges)
         if total == 0:
@@ -8479,24 +8486,29 @@ def contradictions(
 
         typer.echo(f"openkos contradictions: workspace at {root}")
         typer.echo()
-        # #378 slice 2: pass 3's candidate-edge cap truncation, never silent
-        # -- distinct from `total_pairs > len(verdicts)` below, which
-        # reports the contradiction-engine's OWN pair cap. Read here, INSIDE
-        # the `with` block, since `store` closes below.
+        # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
+        # truncation, never silent -- distinct from `total_pairs >
+        # len(verdicts)` below, which reports the contradiction-engine's OWN
+        # pair cap. Read here, INSIDE the `with` block, since `store` closes
+        # below.
         #
-        # The two lines legitimately follow different filtering rules
-        # because they count different things: `total_pairs` comes from
-        # `_candidate_pairs`, which IS deprecation-filtered, while this one
-        # counts the seeding pass's own output, which no consumer filters
-        # before typing. Neither is gated on `include_confidential` --
-        # that gate governs `llm.chat` egress, not what a reader sees about
-        # their own workspace.
-        candidate_report = store.candidate_report
-        if candidate_report.produced > candidate_report.retained:
-            typer.echo(
-                f"{candidate_report.retained} of {candidate_report.produced} "
-                "candidate edge(s) shown (cap reached)"
-            )
+        # The two lines count genuinely different things -- `total_pairs`
+        # comes from `_candidate_pairs`, which is deprecation-filtered, this
+        # one from pass 3's own seeding -- but BOTH must now respect the
+        # sensitivity-fail-closed-filter before being printed:
+        # `candidate_truncation_notice` re-derives its counts from
+        # `store.candidate_report.pairs` (RAW, unfiltered by pass 3 itself)
+        # through `sensitivity.sensitive_concept_ids`, so this line never
+        # discloses a pre-cap volume that includes a confidential endpoint
+        # `find_contradictions` above already excluded from its own results.
+        notice = candidate_truncation_notice(
+            store.candidate_report,
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+        if notice is not None:
+            typer.echo(notice)
             typer.echo()
         if not verdicts:
             typer.echo(

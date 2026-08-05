@@ -645,6 +645,67 @@ def test_contradictions_no_candidate_truncation_notice_under_the_cap(
     assert "candidate edge(s) shown" not in result.stdout
 
 
+def test_contradictions_suppresses_candidate_notice_when_every_dropped_pair_is_confidential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#378 post-review correction: a truncated candidate set whose dropped
+    pairs are ALL confidential must print NO notice by default -- mirrors
+    `suggest-relations`'s parallel fixture."""
+    from openkos.graph.proximity import ProximityPair
+
+    _init_workspace(tmp_path, monkeypatch)
+    disable_local_exemption(tmp_path)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "hub.md").write_text(
+        "---\ntype: Concept\ntitle: Hub\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    pairs = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        if index > 50:
+            (tmp_path / "bundle" / "concepts" / f"{leaf_id}.md").write_text(
+                f"---\ntype: Concept\ntitle: {leaf_id}\n"
+                "sensitivity: confidential\n---\nBody.\n",
+                encoding="utf-8",
+            )
+        else:
+            (tmp_path / "bundle" / "concepts" / f"{leaf_id}.md").write_text(
+                f"---\ntype: Concept\ntitle: {leaf_id}\nsensitivity: private\n---\n"
+                "Body.\n",
+                encoding="utf-8",
+            )
+        pairs.append(
+            ProximityPair(
+                source_id="concepts/hub",
+                target_id=f"concepts/{leaf_id}",
+                distance=index * 0.001,
+            )
+        )
+
+    class _StubSource:
+        def pairs(self, concept_ids: object) -> list[ProximityPair]:
+            return pairs
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        contradiction_main, "_open_proximity_or_degrade", lambda p: _StubSource()
+    )
+    monkeypatch.setattr(
+        contradiction_main, "find_contradictions", lambda *a, **k: ([], 0)
+    )
+
+    default_run = runner.invoke(app, ["contradictions"])
+    flagged_run = runner.invoke(app, ["contradictions", "--include-confidential"])
+
+    assert default_run.exit_code == 0
+    assert "candidate edge(s) shown" not in default_run.stdout
+    assert flagged_run.exit_code == 0
+    assert "50 of 60 candidate edge(s) shown (cap reached)" in flagged_run.stdout
+
+
 # ---------------------------------------------------------------------------
 # Zero writes
 # ---------------------------------------------------------------------------

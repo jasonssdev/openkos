@@ -40,7 +40,7 @@ from pathlib import Path
 
 from openkos import sensitivity
 from openkos.graph.base import Edge, GraphStore
-from openkos.graph.sqlite_graph import CandidateSource, build_graph
+from openkos.graph.sqlite_graph import CandidateReport, CandidateSource, build_graph
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import okf
@@ -396,6 +396,61 @@ def candidate_edges(
         for edge in edges
         if edge.source_id not in blocked and edge.target_id not in blocked
     ]
+
+
+def candidate_truncation_notice(
+    report: CandidateReport,
+    bundle_dir: Path,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
+) -> str | None:
+    """Render pass 3's candidate-edge cap truncation notice restricted to
+    what THIS caller may see (#378 slice 2, post-review correction).
+
+    `report.produced`/`.retained` are RAW, unfiltered counts -- pass 3 ranks
+    and caps candidate pairs before any sensitivity filter ever runs
+    (`CandidateReport`'s own docstring), so a truncated run can carry pairs
+    with a confidential endpoint. Printing those raw ints would disclose an
+    aggregate volume the same command's printed edge list deliberately
+    withholds elsewhere -- exactly the defect this function replaces: a
+    caller that omitted `--include-confidential` learning a pre-cap total
+    that counts material the same command refuses to show.
+
+    Both counts are instead RE-DERIVED from `report.pairs` -- the ranked,
+    pre-cap candidate set, in the same order the cap was applied -- filtered
+    through the SAME `sensitivity.sensitive_concept_ids` walk every other
+    read-only candidate-edge caller already runs. `report.pairs[:
+    report.retained]` is exactly the slice pass 3 actually inserted
+    (`CandidateReport.pairs`'s own invariant: `pairs[:retained]` == the
+    retained set), so filtering that prefix reproduces the visible retained
+    count without a second graph read or re-deriving which pairs survived
+    the cap.
+
+    Returns `None` -- print nothing -- whenever the VISIBLE produced count
+    does not exceed the VISIBLE retained count. This includes the case
+    where EVERY dropped pair is confidential: a run truncated purely in
+    material the caller cannot see must stay silent, exactly like the edge
+    list printed beside this notice already is."""
+    blocked = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
+    visible_pairs = [
+        pair
+        for pair in report.pairs
+        if pair[0] not in blocked and pair[1] not in blocked
+    ]
+    visible_retained = sum(
+        1
+        for pair in report.pairs[: report.retained]
+        if pair[0] not in blocked and pair[1] not in blocked
+    )
+    visible_produced = len(visible_pairs)
+    if visible_produced <= visible_retained:
+        return None
+    return f"{visible_retained} of {visible_produced} candidate edge(s) shown (cap reached)"
 
 
 def suggest_relations(

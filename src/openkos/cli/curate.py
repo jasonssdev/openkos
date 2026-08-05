@@ -81,6 +81,7 @@ from openkos.resolution.contradiction import (
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
     candidate_edges,
+    candidate_truncation_notice,
     suggest_edge_types,
 )
 from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
@@ -413,14 +414,20 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
             local_exemption=ctx.local_exemption,
             store=store,
         )
-        # #378 slice 2: pass 3's candidate-edge cap truncation, never silent
-        # -- read here, INSIDE the `with` block, since `store` closes below.
-        report = store.candidate_report
-        notice = (
-            f"{report.retained} of {report.produced} candidate edge(s) "
-            "shown (cap reached)"
-            if report.produced > report.retained
-            else None
+        # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
+        # truncation, never silent -- read here, INSIDE the `with` block,
+        # since `store` closes below. `store.candidate_report.produced`/
+        # `.retained` are RAW, unfiltered by pass 3 itself;
+        # `candidate_truncation_notice` re-derives both from
+        # `report.pairs` through the SAME `sensitivity
+        # .sensitive_concept_ids` walk `candidate_edges` above just ran, so
+        # this notice never discloses a pre-cap volume that includes a
+        # confidential endpoint the `edges` queue above already excluded.
+        notice = candidate_truncation_notice(
+            store.candidate_report,
+            ctx.layout.bundle_dir,
+            include_confidential=ctx.include_confidential,
+            local_exemption=ctx.local_exemption,
         )
 
     return StageProbe(
