@@ -324,25 +324,93 @@ _MAX_OBJECTS_PER_SOURCE = 5
 """Hard ceiling on validated objects returned per source (design D4): a
 safety ceiling applied AFTER per-item validation, not a target -- the
 prompt's anti-enumeration instruction (D1) is the real lever against
-greedy over-extraction; this cap only guards against a pathological reply."""
+greedy over-extraction; this cap only guards against a pathological reply.
+
+Measured against real sources (#404), that last sentence no longer describes
+what happens: a 13-17 KB document routinely produces 7-20 validated objects,
+and one 6 KB fixture produced 41 and 61 on separate runs. The pathological
+reply is the norm for real material, not the exception. The cap is NOT
+changed here -- raising it would admit the decayed tail along with the
+genuine subjects -- but it no longer discards silently."""
+
+
+@dataclass(frozen=True)
+class ExtractionReport:
+    """What the `_MAX_OBJECTS_PER_SOURCE` cap discarded on one call (#404).
+
+    `produced` is the VALIDATED, twin-dropped object count BEFORE the cap;
+    `retained` is what survived it. `produced > retained` is the truncation
+    signal, and `discarded_titles` names the casualties in reply order.
+
+    Both counts are post-validation and post-twin-drop by construction, so
+    neither a malformed item nor a source-title twin is ever reported as a
+    cap casualty -- those are separate rules with separate causes, and
+    blaming the cap for them would misdirect whoever reads the notice.
+
+    `discarded_titles` carries titles rather than whole `ExtractionResult`s:
+    the caller renders them, and the bodies of 15 discarded objects are not
+    something anyone wants echoed to a terminal.
+    """
+
+    produced: int = 0
+    retained: int = 0
+    discarded_titles: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExtractionOutcome:
+    """One `extract_concept` call's objects, alongside the report that says
+    what the cap took (#404).
+
+    Deliberately a REQUIRED return shape rather than an optional sibling
+    entry point. `extract_concept` used to hand back the truncated list
+    alone, which meant every caller -- `ingest`, and both `evals/model_spike/`
+    harnesses -- was structurally unable to tell a source that proposed 5
+    objects from one that proposed 61. A second entry point that discarded
+    the report would leave that same hole open for the next caller; making
+    the report unavoidable is what closes it.
+
+    That blindness had a measurable cost beyond `ingest`: `run_spike.py`
+    scores an anti-enumeration (over-production) penalty, and it was scoring
+    POST-cap counts, so the model comparison behind ADR-0001 could not see
+    over-production above 5 at all.
+    """
+
+    objects: list[ExtractionResult]
+    report: ExtractionReport
 
 
 def extract_concept(
     source_text: str, *, source_title: str, llm: LLMBackend
-) -> list[ExtractionResult]:
+) -> ExtractionOutcome:
     """Prompt `llm` to classify zero or more distinct derived objects from
     `source_text`.
 
-    Returns a list of validated `ExtractionResult`s, in reply order, with any
-    source-title twin dropped (`_drop_source_title_twins`, design D4/5b --
-    deterministic, not prompt-carried) unless it is the only surviving
-    object, then truncated to `_MAX_OBJECTS_PER_SOURCE` (keeping the first
-    N). `[]` means nothing was worth extracting -- the model returned an
-    empty array, or every candidate failed validation; this layer does not
-    distinguish the two (fail-closed). Any `OllamaError`-family exception
-    raised by `llm.chat` propagates unswallowed to the caller (see module
-    docstring). The caller loops `openkos.model.okf.build_concept` once per
-    returned object.
+    Returns an `ExtractionOutcome`: the validated `ExtractionResult`s in
+    reply order -- with any source-title twin dropped
+    (`_drop_source_title_twins`, design D4/5b -- deterministic, not
+    prompt-carried) unless it is the only surviving object, then truncated to
+    `_MAX_OBJECTS_PER_SOURCE` (keeping the first N) -- alongside the
+    `ExtractionReport` naming what that truncation took (#404).
+
+    `outcome.objects == []` means nothing was worth extracting -- the model
+    returned an empty array, or every candidate failed validation; this layer
+    does not distinguish the two (fail-closed). An empty result is never a
+    truncation, so its report reads `produced == retained == 0` and renders
+    no notice.
+
+    The report is built from the SAME list the cap slices, after twin
+    dropping, so `produced` can never count a malformed item or a dropped
+    twin as a cap casualty. Keeping the first N is preserved deliberately
+    and is not merely incidental: measured against real sources (#404), the
+    model front-loads genuine subjects and degrades into facets of the last
+    one afterwards, so reply order correlates with quality. Any future
+    ranking has to be measured AGAINST this prefix rather than assumed
+    better than it.
+
+    Any `OllamaError`-family exception raised by `llm.chat` propagates
+    unswallowed to the caller (see module docstring). The caller loops
+    `openkos.model.okf.build_concept` once per returned object.
     """
     reply = llm.chat(_build_messages(source_text, source_title))
     items = parsing.extract_json_items(reply)
@@ -352,4 +420,14 @@ def extract_concept(
         if result is not None:
             results.append(result)
     results = _drop_source_title_twins(results, source_title=source_title)
-    return results[:_MAX_OBJECTS_PER_SOURCE]
+    retained = results[:_MAX_OBJECTS_PER_SOURCE]
+    return ExtractionOutcome(
+        objects=retained,
+        report=ExtractionReport(
+            produced=len(results),
+            retained=len(retained),
+            discarded_titles=tuple(
+                result.title for result in results[_MAX_OBJECTS_PER_SOURCE:]
+            ),
+        ),
+    )

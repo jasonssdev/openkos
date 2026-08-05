@@ -34,7 +34,7 @@ from openkos.bundle import relations as bundle_relations
 from openkos.cli import curate as curate_module
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
-from openkos.extraction.concept import extract_concept
+from openkos.extraction.concept import ExtractionReport, extract_concept
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import build_graph
@@ -1617,6 +1617,40 @@ def _first_free_disambiguated_slug(
     return f"{base_slug}-{n}"
 
 
+_CAP_NOTICE_TITLE_LIMIT = 3
+"""How many discarded titles the cap notice names before counting the rest.
+A source that proposed 61 objects would otherwise dump 56 titles into the
+terminal -- name enough to judge whether the loss mattered, then count."""
+
+
+def _extraction_cap_notice(report: ExtractionReport) -> str | None:
+    """Render the `_MAX_OBJECTS_PER_SOURCE` truncation notice, or `None` when
+    the cap did not fire (#404).
+
+    Mirrors `resolution.edge_typing.candidate_truncation_notice` -- the same
+    `"{retained} of {produced} ... (cap reached)"` shape #378 established for
+    candidate edges, so the two truncations in this product read alike -- and
+    extends it with the discarded titles, because the measurement behind #404
+    showed a bare count cannot tell a reader whether the cap cost them a real
+    subject or trimmed a decayed tail of near-duplicates.
+
+    Returns `None` on the healthy path rather than an empty string, so the
+    caller renders on truncation alone with no special-casing, and an
+    advisory never fires when there is nothing to advise.
+    """
+    if report.produced <= report.retained:
+        return None
+    shown = report.discarded_titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(report.discarded_titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return (
+        f"{report.retained} of {report.produced} extracted object(s) kept "
+        f"(cap reached); discarded: {listed}"
+    )
+
+
 def _stale_index_names(layout: config.WorkspaceLayout) -> tuple[str, ...]:
     """The manifest-gated derived stores whose contents predate the bundle,
     named for a user-facing advisory (#381) -- shared by `query`, `status`
@@ -1789,9 +1823,7 @@ def _stage_derived_objects(
 
     try:
         with Console(stderr=True).status("openkos ingest: extracting concepts…"):
-            extractions = extract_concept(
-                raw_content, source_title=source_title, llm=llm
-            )
+            outcome = extract_concept(raw_content, source_title=source_title, llm=llm)
     except OllamaError as exc:
         typer.echo(
             f"openkos ingest: concept extraction skipped -- {exc}; "
@@ -1799,6 +1831,16 @@ def _stage_derived_objects(
             err=True,
         )
         return [], "failed"
+
+    extractions = outcome.objects
+    # #404: the cap was the ONE drop in this function that said nothing --
+    # empty slug, in-batch collision, existing file and failed build all
+    # report per candidate below. A source proposing 20 objects and one
+    # proposing 5 were indistinguishable in the output, since only the
+    # truncated list ever reached this layer.
+    cap_notice = _extraction_cap_notice(outcome.report)
+    if cap_notice is not None:
+        typer.echo(f"openkos ingest: {cap_notice}", err=True)
 
     if not extractions:
         typer.echo(
