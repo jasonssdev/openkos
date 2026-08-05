@@ -5284,3 +5284,74 @@ def test_ingest_says_nothing_about_the_cap_when_it_did_not_fire(
 
     assert result.exit_code == 0
     assert "cap reached" not in result.stderr
+
+
+# --- near-boundary type reporting (#401) -------------------------------------
+
+_NEAR_BOUNDARY_REPLY = (
+    '[{"type": "Event", "title": "Hellenistic Ethics Seminar", '
+    '"description": "A seminar taught this term.", "body": "", '
+    '"type_alternative": "Project"}]'
+)
+
+
+def test_stage_derived_objects_records_the_alternative_in_frontmatter(
+    tmp_path: Path,
+) -> None:
+    """The runner-up type reaches the written document, not just the echo.
+
+    The stderr line scrolls away; the frontmatter is what a human reading
+    the bundle later, or `lint`, can still act on.
+    """
+    plans, reason = main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=_FakeLLM(_NEAR_BOUNDARY_REPLY))  # type: ignore[arg-type]
+    )
+
+    assert reason is None
+    assert len(plans) == 1
+    metadata, _ = okf.load_frontmatter(plans[0].content)
+    assert metadata["type"] == "Event"
+    assert metadata[okf.TYPE_ALTERNATIVE_KEY] == "Project"
+
+
+def test_stage_derived_objects_reports_a_near_boundary_call(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A near-boundary classification is named on stderr, per candidate.
+
+    Every other consequential choice this function makes -- empty slug,
+    in-batch collision, existing file, disambiguation, failed build, the
+    #404 cap -- is reported per candidate. Picking one of two plausible
+    types silently is the same class of omission: the type decides the
+    directory, the catalog section, and the volatility tier.
+    """
+    main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=_FakeLLM(_NEAR_BOUNDARY_REPLY))  # type: ignore[arg-type]
+    )
+
+    err = capsys.readouterr().err
+    assert "Hellenistic Ethics Seminar" in err
+    assert "Event" in err
+    assert "Project" in err
+
+
+def test_stage_derived_objects_stays_silent_when_the_type_was_clear(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No alternative means no notice and no frontmatter key.
+
+    The common path must stay exactly as loud -- and the document exactly as
+    shaped -- as before #401, or the signal drowns in its own noise.
+    """
+    reply = (
+        '[{"type": "Concept", "title": "Apatheia", '
+        '"description": "A Stoic concept.", "body": ""}]'
+    )
+
+    plans, _ = main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=_FakeLLM(reply))  # type: ignore[arg-type]
+    )
+
+    metadata, _ = okf.load_frontmatter(plans[0].content)
+    assert okf.TYPE_ALTERNATIVE_KEY not in metadata
+    assert "also weighed" not in capsys.readouterr().err

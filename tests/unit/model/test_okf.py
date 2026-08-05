@@ -2168,3 +2168,134 @@ def test_check_conformance_passes_on_well_formed_relations(tmp_path: Path) -> No
     )
 
     assert okf.check_conformance(tmp_path) == []
+
+
+# --- type_alternative: the runner-up type, recorded not resolved (#401) ------
+
+
+def test_build_concept_omits_type_alternative_when_absent() -> None:
+    """No alternative means no key -- absence is the healthy state (#401).
+
+    Mirrors `extraction_status`'s convention: there is no `none` sentinel,
+    because a key present on every document would be noise on the common
+    path and would make a real near-boundary call harder to spot, not
+    easier.
+    """
+    text = okf.build_concept(
+        type="Concept",
+        title="Apatheia",
+        description="A Stoic concept.",
+        body="",
+        provenance=["sources/notes"],
+        sensitivity="private",
+        timestamp="2026-08-05T00:00:00Z",
+    )
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert okf.TYPE_ALTERNATIVE_KEY not in metadata
+
+
+def test_build_concept_records_a_type_alternative() -> None:
+    """A near-boundary classification is recorded on the document itself.
+
+    The stderr echo scrolls away; the frontmatter is what a human or a later
+    tool can still read. `type` remains the engine's answer -- the
+    alternative is a note beside it, never a competing value.
+    """
+    text = okf.build_concept(
+        type="Event",
+        title="Hellenistic Ethics Seminar",
+        description="A seminar taught this term.",
+        body="",
+        provenance=["sources/call-with-maria"],
+        sensitivity="private",
+        timestamp="2026-08-05T00:00:00Z",
+        type_alternative="Project",
+    )
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["type"] == "Event"
+    assert metadata[okf.TYPE_ALTERNATIVE_KEY] == "Project"
+
+
+def test_build_concept_rejects_a_type_alternative_outside_the_vocabulary() -> None:
+    """An unknown alternative is refused, like `type` itself.
+
+    This value reaches the builder from the same untrusted LLM reply as
+    every other field. `_validate` already degrades a malformed one to
+    `None`, so anything arriving here is either genuine or a programming
+    error in a caller -- and a builder that silently wrote
+    `type_alternative: Sandwich` into a bundle would make the format
+    non-conformant on the strength of a typo.
+    """
+    with pytest.raises(ValueError, match="type_alternative must be one of"):
+        okf.build_concept(
+            type="Event",
+            title="Hellenistic Ethics Seminar",
+            description="A seminar taught this term.",
+            body="",
+            provenance=["sources/call-with-maria"],
+            sensitivity="private",
+            timestamp="2026-08-05T00:00:00Z",
+            type_alternative="Sandwich",
+        )
+
+
+def test_build_concept_rejects_a_type_alternative_equal_to_the_type() -> None:
+    """An alternative equal to the chosen type is refused, not silently
+    dropped.
+
+    `_validate` normalizes that case to `None` upstream, so a caller
+    reaching the builder with both equal has lost track of its own data.
+    Accepting it would write a document asserting a boundary between a type
+    and itself.
+    """
+    with pytest.raises(ValueError, match="type_alternative must differ"):
+        okf.build_concept(
+            type="Event",
+            title="Hellenistic Ethics Seminar",
+            description="A seminar taught this term.",
+            body="",
+            provenance=["sources/call-with-maria"],
+            sensitivity="private",
+            timestamp="2026-08-05T00:00:00Z",
+            type_alternative="Event",
+        )
+
+
+def test_type_alternative_keeps_the_bundle_conformant(tmp_path: Path) -> None:
+    """A document carrying `type_alternative` still passes §9 conformance.
+
+    This is the contract risk in #401's fix: the bundle is the portable
+    artifact, and a new frontmatter key that made it non-conformant would
+    trade a diagnostic for the format guarantee the whole project rests on.
+    OKF §4.1's unknown-key tolerance is what makes this safe -- pinned here
+    so a future conformance rule that closes the key set has to confront
+    this document rather than silently invalidating every bundle that ever
+    recorded a near-boundary call.
+    """
+    bundle = tmp_path / "bundle"
+    (bundle / "events").mkdir(parents=True)
+    (bundle / "index.md").write_text(
+        "---\nokf_version: 0.1\n---\n\n# Index\n", encoding="utf-8"
+    )
+    (bundle / "log.md").write_text(
+        "# Log\n\n## 2026-08-05\n\n- start\n", encoding="utf-8"
+    )
+    (bundle / "events" / "seminar.md").write_text(
+        okf.build_concept(
+            type="Event",
+            title="Hellenistic Ethics Seminar",
+            description="A seminar taught this term.",
+            body="",
+            provenance=["sources/call-with-maria"],
+            sensitivity="private",
+            timestamp="2026-08-05T00:00:00Z",
+            type_alternative="Project",
+        ),
+        encoding="utf-8",
+    )
+
+    assert okf.check_conformance(bundle) == []

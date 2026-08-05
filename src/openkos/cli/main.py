@@ -1951,6 +1951,7 @@ def _stage_derived_objects(
                 provenance=[f"sources/{source_slug}"],
                 sensitivity=stamp_sensitivity,
                 timestamp=timestamp,
+                type_alternative=extraction.type_alternative,
             )
         except ValueError as exc:
             typer.echo(
@@ -1959,6 +1960,26 @@ def _stage_derived_objects(
                 err=True,
             )
             continue
+
+        if extraction.type_alternative is not None:
+            # #401: the type is not cosmetic -- it decides the bundle
+            # subdirectory, the `index.md` catalog section, and the default
+            # volatility tier (`model/types.py` gives Event the `static`
+            # tier and Project the `volatile` one). When the model reports
+            # it was torn, saying so puts this choice on the same footing as
+            # every other consequential call this function makes (empty
+            # slug, in-batch collision, existing file, disambiguation,
+            # failed build, the #404 cap) -- all of which report per
+            # candidate. Recording the alternative does NOT resolve the
+            # ambiguity; a genuinely ambiguous subject stays ambiguous. It
+            # stops a coin flip from being filed as a settled fact.
+            typer.echo(
+                f"openkos ingest: '{extraction.title}' classified as "
+                f"{extraction.type}, but the model also weighed "
+                f"{extraction.type_alternative}; recorded as "
+                f"{okf.TYPE_ALTERNATIVE_KEY} on the document.",
+                err=True,
+            )
 
         seen_slugs.add(derived_slug)
         plans.append(

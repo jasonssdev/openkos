@@ -170,11 +170,28 @@ _SYSTEM_PROMPT = (
     "Return an empty array [] only as a last resort, for a source with no "
     "substantive content at all (blank, boilerplate-only, or "
     "unintelligible).\n\n"
+    # Near-boundary reporting (issue #401). Asked for as an OPTIONAL,
+    # omit-by-default field rather than a required one: the anti-twin
+    # experience (D4/5b) is that adding a rule the 8B tier must satisfy on
+    # every item can degrade the fields that already work. Framed as
+    # "only when genuinely torn" and "omit it otherwise" so the common,
+    # unambiguous case stays exactly the reply shape measured today, and
+    # `_validate` treats a missing, malformed, or self-equal value as
+    # simply no alternative.
+    "One further OPTIONAL field: if -- and ONLY if -- you were genuinely "
+    "torn between two types for a candidate, add "
+    '"type_alternative" naming the runner-up you weighed and rejected. '
+    "OMIT it entirely when the classification was clear, which is the "
+    'normal case. It must never equal that candidate\'s own "type". This '
+    "field records the closeness of the call; it does not change your "
+    "answer, so choose the better type exactly as you would have "
+    "otherwise.\n\n"
     "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
     "fences around it. Each element matches exactly this shape:\n"
     '[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"'
     '|"Decision"|"Project"|"Concept"|"Entity", "title": "...", '
-    '"description": "...", "body": "..."}, ...]\n'
+    '"description": "...", "body": "...", "type_alternative": '
+    '"<optional, omit when the classification was clear>"}, ...]\n'
     "Do NOT wrap the array in an outer object."
 )
 """Stable system half of the 2-message prompt: the closed 9-value
@@ -226,6 +243,15 @@ class ExtractionResult:
     body: str
     """Additional body text; may be blank -- the builder (a later slice)
     falls back to `description` when this is blank."""
+    type_alternative: str | None = None
+    """The runner-up type the model also weighed, when it reported one
+    (issue #401); `None` when it did not, which is the common case.
+
+    Defaulted so every existing construction site -- including both
+    `evals/model_spike/` harnesses -- keeps working unchanged. Guaranteed by
+    `_validate` to be a member of the closed vocabulary AND different from
+    `type`; anything else is normalized to `None` there rather than carried
+    forward."""
 
 
 def _build_messages(source_text: str, source_title: str) -> list[Message]:
@@ -277,11 +303,31 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     if not isinstance(body, str):
         return None
 
+    # `type_alternative` (#401) is ADVISORY, and is the one field here whose
+    # failure does NOT drop the candidate. `type`/`title`/`description` are
+    # load-bearing -- a bad one makes the object unusable, so the whole item
+    # goes. This one changes nothing about where the document lands or what
+    # it says, so discarding a genuine, well-formed object because the model
+    # garbled an optional diagnostic would trade real knowledge for a note.
+    # It degrades to `None` instead.
+    #
+    # An alternative EQUAL to the chosen type is normalized to `None` too:
+    # "I chose Event and my runner-up was Event" describes no boundary, and
+    # normalizing here means no downstream reader has to special-case it.
+    type_alternative = data.get("type_alternative")
+    if (
+        not isinstance(type_alternative, str)
+        or type_alternative not in _VALID_TYPES
+        or type_alternative == doc_type
+    ):
+        type_alternative = None
+
     return ExtractionResult(
         type=doc_type,
         title=title.strip(),
         description=description.strip(),
         body=body,
+        type_alternative=type_alternative,
     )
 
 
