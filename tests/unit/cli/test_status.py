@@ -20,6 +20,7 @@ from openkos import lint as lint_check
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
+from openkos.state import fts
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
@@ -1014,3 +1015,69 @@ def test_status_names_every_directory_it_could_not_read(
 
     assert result.exit_code == 0
     assert "locked: unreadable directory" in result.stdout
+
+
+# --- stale derived indexes (#381) ---------------------------------------
+
+
+def _stale_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A workspace whose `fts.db`/`graph.db` were written, then left behind
+    by a bundle edit -- exactly the state `relate`/`reconcile`/`merge`/
+    `curate` leave, none of which reindex."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    sqlite_graph.write_graph_store(tmp_path / ".openkos" / "graph.db", bundle_dir)
+    concepts = bundle_dir / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / "new.md").write_text(
+        "---\ntype: Concept\ntitle: New\ndescription: ''\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+
+def test_status_flags_stale_derived_indexes_as_needing_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#381: staleness is ACTIONABLE -- it names a command that fixes it --
+    so it belongs in `Needs attention` rather than among the informational
+    lines (mirrors the missing-`vectors.db` precedent, issue #183)."""
+    _stale_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert (
+        "Derived indexes are stale (fts, graph) — run `openkos reindex` to "
+        "refresh retrieval." in result.stdout
+    )
+
+
+def test_status_says_nothing_about_staleness_when_the_indexes_are_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An advisory that fires on the healthy path is noise. A freshly
+    written pair of indexes over an unedited bundle stays silent."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", bundle_dir)
+    sqlite_graph.write_graph_store(tmp_path / ".openkos" / "graph.db", bundle_dir)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "stale" not in result.stdout
+
+
+def test_status_says_nothing_about_staleness_on_a_freshly_initialized_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#386 guard: `init` writes no derived store at all, and absence is not
+    staleness. Recommending a refresh of indexes that were never built would
+    be the same defect #386 already reports for `next`."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "stale" not in result.stdout

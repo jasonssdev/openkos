@@ -78,6 +78,7 @@ from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
 from openkos.sensitivity import blocks_llm_send
 from openkos.state import derived, fts
 from openkos.state import reindex as reindex_module
+from openkos.state.derived import stale_derived_stores
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import (
     VectorStoreDB,
@@ -1614,6 +1615,33 @@ def _first_free_disambiguated_slug(
     while f"{base_slug}-{n}" in taken:
         n += 1
     return f"{base_slug}-{n}"
+
+
+def _stale_index_names(layout: config.WorkspaceLayout) -> tuple[str, ...]:
+    """The manifest-gated derived stores whose contents predate the bundle,
+    named for a user-facing advisory (#381) -- shared by `query`, `status`
+    and `next` so all three agree on what "stale" means and on the wording
+    of the names they print.
+
+    Only `fts.db` and `graph.db` are checked, because only those two are
+    gated by a whole-bundle `manifest_hash`. `vectors.db` is maintained
+    per-document (`reindex` compares each doc's own `content_hash`), so an
+    edited bundle leaves it PARTIALLY current rather than wholesale stale --
+    which is exactly the asymmetry #381's evidence recorded, where dense
+    retrieval still returned 9 hits while FTS and graph returned 0.
+
+    Never raises: a failing advisory must not be what breaks the command it
+    advises, so any error degrades to "nothing to report" rather than
+    propagating. The cost is one bundle walk (~4ms over 29 docs), and
+    `stale_derived_stores` skips even that when neither store is on disk.
+    """
+    try:
+        return stale_derived_stores(
+            layout.bundle_dir,
+            (("fts", layout.fts_db_path), ("graph", layout.graph_db_path)),
+        )
+    except Exception:  # broad: an advisory never breaks its own command
+        return ()
 
 
 @dataclass(frozen=True)
@@ -7191,6 +7219,19 @@ def status() -> None:
             "Dense retrieval and candidate edges unavailable — run "
             "`openkos reindex` (vectors.db missing)."
         )
+    # #381: an index older than the bundle is ACTIONABLE in exactly the way
+    # the missing-`vectors.db` line above is -- it names the command that
+    # fixes it -- so it belongs here rather than among the informational
+    # lines. Absence is deliberately NOT reported as staleness (see
+    # `_stale_index_names`): a freshly `init`ed workspace has no derived
+    # store at all, and recommending a refresh of indexes that were never
+    # built is the same defect #386 reports against `next`.
+    stale_indexes = _stale_index_names(layout)
+    if stale_indexes:
+        needs_attention.append(
+            f"Derived indexes are stale ({', '.join(stale_indexes)}) — run "
+            "`openkos reindex` to refresh retrieval."
+        )
     if not needs_attention:
         typer.echo("  Nothing needs attention.")
     else:
@@ -8951,6 +8992,19 @@ def query(
         fts_index_cm as fts_index,
         graph_index_cm as graph_index,
     ):
+        # #381: named BEFORE the LLM call, not after it -- the user is told
+        # their answer is suspect while they are still waiting for it,
+        # rather than after having read it and trusted it. This is the CLI
+        # seam that already owns the open-failure-to-`None` decision, so the
+        # D2 binding contract holds: `answer()` below still never computes
+        # or compares a manifest hash of its own.
+        stale_stores = _stale_index_names(layout)
+        if stale_stores:
+            typer.echo(
+                f"warning: derived indexes are stale ({', '.join(stale_stores)}) "
+                "-- this answer may be degraded; run `openkos reindex`.",
+                err=True,
+            )
         # ONE TTY-gated stage notice before the single long retrieval+answer
         # call (issue #190) -- `query`'s `llm.chat` runs inside `answer()`,
         # so this CLI seam is where the wait becomes visible; `stage_notice`

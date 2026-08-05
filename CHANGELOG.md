@@ -16,6 +16,25 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- **Stale derived indexes are now named instead of silently degrading
+  answers**: only `reindex` and `purge` ever write `.openkos/fts.db` and
+  `.openkos/graph.db`. Every other bundle-writing verb — `relate`,
+  `reconcile`, `merge`, `curate`, and `ingest`, which maintains
+  `vectors.db` alone — left them describing an older document set, and the
+  sole symptom was a quietly worse answer nobody could attribute. A new
+  read-only `state.derived.stale_derived_stores` compares each store's
+  recorded `manifest_hash` against the bundle's current one and names the
+  ones that disagree; `query` prints a stderr warning before contacting the
+  model, `status` lists it under **Needs attention**, and `next` gains a
+  tier recommending `openkos reindex`. Purely advisory: no retrieval
+  behavior changes, nothing is blocked, no exit code moves, and a failure
+  in the check itself degrades to silence rather than breaking the command
+  it advises. The D2 binding contract is intact — `retrieval/answer.py`
+  still never computes or compares a manifest hash; the check lives at the
+  CLI seam that already owns the open-failure-to-`None` decision. An
+  *absent* store is deliberately not reported as stale, so a freshly
+  `init`ed workspace stays silent (#381).
+
 - **`Source` documents no longer propose or receive candidate edges**: the
   third, embedding-proximity pass of `build_graph()` fed its full node set —
   including every `sources/` document — to the candidate source, so a

@@ -1687,3 +1687,111 @@ def test_query_stage_notice_is_silent_without_a_tty(
     assert result.exit_code == 0
     assert "waiting on the LLM" not in result.stderr
     assert "waiting on the LLM" not in result.stdout
+
+
+# --- stale derived indexes (#381) ---------------------------------------
+
+
+def _stale_answer_result() -> AnswerResult:
+    return AnswerResult(
+        answer="An answer.",
+        citations=[],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=1,
+        fused_count=1,
+        dense_degraded=False,
+    )
+
+
+def test_query_warns_when_the_derived_indexes_are_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#381: a bundle edited since the last reindex leaves `fts.db`/`graph.db`
+    describing an older document set, and until now the ONLY symptom was a
+    quietly worse answer. `query` names the stale stores before answering, so
+    the degradation is attributable rather than invisible."""
+    _init_workspace(tmp_path, monkeypatch)
+    # Edit the bundle AFTER the indexes were written -- exactly what `relate`,
+    # `reconcile`, `merge` and `curate` do, none of which reindex.
+    concepts = tmp_path / "bundle" / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / "new.md").write_text(
+        "---\ntype: Concept\ntitle: New\ndescription: ''\n---\nbody\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert (
+        "warning: derived indexes are stale (fts, graph) -- this answer may "
+        "be degraded; run `openkos reindex`.\n"
+    ) in result.stderr
+
+
+def test_query_stale_warning_precedes_the_retrieval_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The warning is emitted BEFORE the LLM call, not after it: the user is
+    told their answer is suspect while they are still waiting for it, rather
+    than after having read it."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts = tmp_path / "bundle" / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / "new.md").write_text(
+        "---\ntype: Concept\ntitle: New\ndescription: ''\n---\nbody\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.stderr.index(
+        "warning: derived indexes are stale"
+    ) < result.stderr.index("retrieval: ")
+
+
+def test_query_says_nothing_when_the_indexes_are_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshly reindexed workspace must stay silent -- an advisory that
+    fires on the healthy path is noise, and noise is what gets ignored."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "stale" not in result.stderr
+
+
+def test_query_stale_check_never_breaks_the_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The advisory is strictly additive: if the staleness check itself
+    fails, the answer still lands. An advisory must never be what breaks the
+    command it advises."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _boom(*args: object, **kwargs: object) -> tuple[str, ...]:
+        raise RuntimeError("manifest walk exploded")
+
+    monkeypatch.setattr("openkos.cli.main.stale_derived_stores", _boom)
+    monkeypatch.setattr(
+        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "An answer." in result.stdout

@@ -295,3 +295,128 @@ def test_is_lock_contention_false_when_errorcode_was_never_set() -> None:
     exc = sqlite3.OperationalError("some other failure")
 
     assert derived.is_lock_contention(exc) is False
+
+
+# --- stale_derived_stores (#381) ----------------------------------------
+
+
+def _seed_store(path: Path, digest: str | None) -> None:
+    """Create a derived store at `path`, optionally stamping `digest` as its
+    stored manifest hash."""
+    conn = derived.open_derived_connection(path)
+    try:
+        if digest is not None:
+            derived.write_manifest_hash(conn, digest)
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def test_stale_reports_a_store_whose_stored_hash_no_longer_matches(
+    tmp_path: Path,
+) -> None:
+    """The whole point of #381: a bundle edited after the last reindex leaves
+    the store's stored digest behind, and that disagreement is what
+    `stale_derived_stores` names."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="one")
+    db = tmp_path / ".openkos" / "fts.db"
+    _seed_store(db, derived.bundle_manifest_hash(bundle))
+
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="two")
+
+    assert derived.stale_derived_stores(bundle, (("fts", db),)) == ("fts",)
+
+
+def test_stale_reports_nothing_when_the_stored_hash_still_matches(
+    tmp_path: Path,
+) -> None:
+    """A store written by the last reindex over an unchanged bundle is fresh,
+    and a fresh store must produce no warning anywhere."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="one")
+    db = tmp_path / ".openkos" / "fts.db"
+    _seed_store(db, derived.bundle_manifest_hash(bundle))
+
+    assert derived.stale_derived_stores(bundle, (("fts", db),)) == ()
+
+
+def test_stale_ignores_a_store_that_does_not_exist(tmp_path: Path) -> None:
+    """Absence is NOT staleness. A missing store is a different condition,
+    already surfaced by each caller's own degrade path (`query`'s
+    unavailable hint, `status`' missing-vectors line) -- reporting it here
+    too would double-report one fault as two."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="one")
+
+    assert derived.stale_derived_stores(bundle, (("fts", tmp_path / "gone.db"),)) == ()
+
+
+def test_stale_never_creates_the_store_it_was_asked_about(tmp_path: Path) -> None:
+    """A read-only check must leave no footprint. `open_derived_connection`
+    lazily CREATES both `.openkos/` and the database file, so the existence
+    guard has to run before it -- otherwise merely asking `status` whether
+    the indexes are stale would materialize an empty index."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="one")
+    absent = tmp_path / ".openkos" / "fts.db"
+
+    derived.stale_derived_stores(bundle, (("fts", absent),))
+
+    assert not absent.exists()
+    assert not absent.parent.exists()
+
+
+def test_stale_reports_a_store_that_has_no_stored_hash_at_all(
+    tmp_path: Path,
+) -> None:
+    """A store predating the manifest key, or created but never written,
+    cannot PROVE it matches the bundle. Fail safe: report it, so the user is
+    told to reindex rather than silently trusting an index of unknown age."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="one")
+    db = tmp_path / ".openkos" / "fts.db"
+    _seed_store(db, None)
+
+    assert derived.stale_derived_stores(bundle, (("fts", db),)) == ("fts",)
+
+
+def test_stale_reports_multiple_stores_in_the_order_given(tmp_path: Path) -> None:
+    """Callers render these names in a message, so the order must be the
+    caller's, not discovery's."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="one")
+    fts_db = tmp_path / ".openkos" / "fts.db"
+    graph_db = tmp_path / ".openkos" / "graph.db"
+    _seed_store(fts_db, "stale-digest")
+    _seed_store(graph_db, "stale-digest")
+
+    assert derived.stale_derived_stores(
+        bundle, (("graph", graph_db), ("fts", fts_db))
+    ) == ("graph", "fts")
+
+
+def test_stale_reports_an_unreadable_store_rather_than_raising(
+    tmp_path: Path,
+) -> None:
+    """A corrupt store cannot answer the question either, and an advisory
+    check must never be what breaks the command it advises. Degrade to
+    "stale", mirroring `_open_fts_or_degrade`'s posture."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A", body="one")
+    db = tmp_path / ".openkos" / "fts.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(b"this is not a sqlite database")
+
+    assert derived.stale_derived_stores(bundle, (("fts", db),)) == ("fts",)
+
+
+def test_stale_skips_the_bundle_walk_when_no_store_exists(tmp_path: Path) -> None:
+    """With nothing on disk to compare against, the manifest walk buys
+    nothing. Proven by pointing the check at a bundle whose walk would raise
+    if it were attempted."""
+    db = tmp_path / ".openkos" / "fts.db"
+
+    assert (
+        derived.stale_derived_stores(tmp_path / "no-such-bundle", (("fts", db),)) == ()
+    )
