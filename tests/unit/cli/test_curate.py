@@ -23,7 +23,7 @@ from openkos.cli.main import app
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
-from openkos.resolution.candidates import CandidateGroup, Tier
+from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from tests.unit.cli.conftest import changed_paths, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
@@ -829,7 +829,10 @@ def test_accepted_identity_pair_commits_via_shared_merge_cores(
         tier=Tier.HIGH,
         trigger="stub",
     )
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
     monkeypatch.setattr(
         "openkos.cli.curate.adjudicate_candidates",
         lambda *a, **k: [
@@ -871,7 +874,10 @@ def test_identity_n_gt2_group_prints_pairwise_commands_no_merge(
         tier=Tier.HIGH,
         trigger="stub",
     )
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
     monkeypatch.setattr(
         "openkos.cli.curate.adjudicate_candidates",
         lambda *a, **k: [
@@ -915,7 +921,10 @@ def test_identity_toctou_drift_exits_three_nothing_written(
         tier=Tier.HIGH,
         trigger="stub",
     )
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
     monkeypatch.setattr(
         "openkos.cli.curate.adjudicate_candidates",
         lambda *a, **k: [
@@ -977,7 +986,10 @@ def test_identity_non_tty_auto_declines_write_walk_with_hint(
         tier=Tier.HIGH,
         trigger="stub",
     )
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
     # The write-decline must fire BEFORE the client is ever built: a
     # constructed client here means model spend leaked past the consent
     # boundary (the sentinel raises on construction).
@@ -1069,7 +1081,10 @@ def test_identity_probe_reads_find_candidates(
     group = CandidateGroup(
         okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
     )
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
     ctx = curate.CurateContext(
         root=tmp_path,
         layout=config.WorkspaceLayout(tmp_path),
@@ -1078,6 +1093,100 @@ def test_identity_probe_reads_find_candidates(
     probe = curate._identity_probe(ctx)
     assert probe.items == (group,)
     assert probe.llm_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# curate-call-budget: Identity's cost line discloses `find_candidates_report`
+# truncation (curate-command delta: Identity Cost Line Discloses Truncation,
+# Below-Cap Cost-Line Output Is Byte-Identical To Pre-Change Behavior)
+# ---------------------------------------------------------------------------
+
+
+def test_identity_probe_notice_and_bounded_llm_calls_above_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Above the cap, the Identity probe's `notice` carries the "N of M ...
+    shown (cap reached)" disclosure and `probe.llm_calls` reflects the
+    bounded (`retained`) count, not the pre-cap (`produced`) count."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+    report = CandidateGroupReport(groups=(group,) * 50, produced=80, retained=50)
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report", lambda *a, **k: report
+    )
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+    )
+
+    probe = curate._identity_probe(ctx)
+
+    assert probe.llm_calls == 50
+    assert probe.notice == "50 of 80 candidate group(s) shown (cap reached)"
+
+
+def test_identity_notice_prints_before_the_cost_line_via_run_curate(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end through `run_curate`'s SAME notice-then-gate ordering
+    `test_gate_does_not_echo_the_probe_notice`/`test_run_curate_reports_
+    truncation_even_when_the_queue_is_empty` already pin for Structure: an
+    Identity probe carrying a truncation notice prints it BEFORE the cost
+    line, never inside `gate()` itself."""
+    _patch_stdin_isatty(monkeypatch, False)
+    notice = "50 of 80 candidate group(s) shown (cap reached)"
+
+    def _probe(ctx: curate.CurateContext) -> curate.StageProbe:
+        return curate.StageProbe(items=(1,) * 50, llm_calls=50, notice=notice)
+
+    def _run(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        return curate.StageOutcome(status="declined")
+
+    monkeypatch.setattr(
+        curate,
+        "_STAGES",
+        (_fake_stage("Identity", probe=_probe, run=_run, noun="candidate group"),),
+    )
+
+    curate.run_curate(_fake_ctx(Path("unused-root"), auto=True))
+
+    err = capsys.readouterr().err
+    notice_index = err.index(notice)
+    cost_line_index = err.index("50 candidate group(s) -> 50 LLM call(s)")
+    assert notice_index < cost_line_index
+
+
+def test_identity_probe_below_cap_notice_is_none_and_cost_line_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Below the cap, the Identity probe prints no truncation notice, and
+    the cost line stays byte-identical to its pre-change wording."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+    report = CandidateGroupReport(groups=(group,) * 6, produced=6, retained=6)
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report", lambda *a, **k: report
+    )
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+    )
+
+    probe = curate._identity_probe(ctx)
+
+    assert probe.notice is None
+    assert probe.llm_calls == 6
+    assert curate.cost_line(curate._STAGES[1], probe) == (
+        "6 candidate group(s) -> 6 LLM call(s)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1462,7 +1571,10 @@ def test_structure_accepted_suggestion_writes_via_extracted_relate_core(
     from openkos.resolution.edge_typing import EdgeSuggestion
 
     edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
@@ -1508,7 +1620,10 @@ def test_structure_declined_suggestion_writes_nothing(
     from openkos.resolution.edge_typing import EdgeSuggestion
 
     edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
     monkeypatch.setattr(
         "openkos.cli.curate.suggest_edge_types",
@@ -1553,7 +1668,10 @@ def test_structure_sees_post_merge_identity_state(
         tier=Tier.HIGH,
         trigger="stub",
     )
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
     monkeypatch.setattr(
         "openkos.cli.curate.adjudicate_candidates",
         lambda *a, **k: [
@@ -1603,7 +1721,10 @@ def test_metadata_accepted_tier_writes_via_extracted_set_volatility_core(
 
     from openkos.resolution.volatility_typing import TierSuggestion
 
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
     monkeypatch.setattr(
         "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
@@ -1652,7 +1773,10 @@ def test_metadata_sensitivity_gap_reported_never_written(
     _write_doc(gap_path, title="Concept A")
     _reindexed_workspace(tmp_path, monkeypatch)
 
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
     monkeypatch.setattr(
         "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
@@ -1693,7 +1817,10 @@ def test_metadata_gap_notice_survives_an_empty_type_list(
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _reindexed_workspace(tmp_path, monkeypatch)
 
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
     monkeypatch.setattr(
         "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
@@ -1737,7 +1864,10 @@ def test_contradictions_runs_last_and_never_writes(
         Verdict as CVerdict,
     )
 
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
@@ -1866,7 +1996,10 @@ def test_identity_all_confidential_group_makes_no_model_call(
         tier=Tier.HIGH,
         trigger="stub",
     )
-    monkeypatch.setattr("openkos.cli.curate.find_candidates", lambda *a, **k: [group])
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
 
     class _NoChatOllama:
         def __init__(self, *args: object, **kwargs: object) -> None:

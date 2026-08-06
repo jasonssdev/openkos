@@ -65,7 +65,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.model import okf
-from openkos.resolution import find_candidates
+from openkos.resolution import candidate_group_truncation_notice, find_candidates_report
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     Verdict,
@@ -269,16 +269,24 @@ def _preconditions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
 
 def _identity_probe(ctx: CurateContext) -> StageProbe:
-    """`resolution.find_candidates` (design D4) -- one LLM call per
-    candidate group, since `adjudicate_candidates` issues exactly one
-    `llm.chat` per group (`resolution/adjudication.py`)."""
-    groups = find_candidates(
+    """`resolution.find_candidates_report` (design D1/D4) -- one LLM call
+    per RETAINED candidate group, since `adjudicate_candidates` issues
+    exactly one `llm.chat` per group (`resolution/adjudication.py`).
+    `_MAX_CANDIDATE_GROUPS` bounds `probe.llm_calls` transitively
+    (entity-resolution delta: Bounded Candidate-Group Output Per Call);
+    `probe.notice` carries `candidate_group_truncation_notice`'s "N of M
+    ... shown (cap reached)" disclosure when `report.produced >
+    report.retained`, and is `None` (unchanged wiring) otherwise
+    (curate-command delta: Identity Cost Line Discloses Truncation,
+    Below-Cap Cost-Line Output Is Byte-Identical To Pre-Change Behavior)."""
+    report = find_candidates_report(
         ctx.layout.bundle_dir, include_deprecated=ctx.include_deprecated
     )
     return StageProbe(
-        items=tuple(groups),
-        llm_calls=len(groups),
-        empty_message="No candidate groups found." if not groups else None,
+        items=tuple(report.groups),
+        llm_calls=report.retained,
+        empty_message="No candidate groups found." if not report.groups else None,
+        notice=candidate_group_truncation_notice(report),
     )
 
 
