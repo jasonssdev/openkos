@@ -92,6 +92,69 @@ withheld from the prompt entirely. Offering `derived_from` is what invited a
 model to use it in its colloquial "builds upon" sense and write an edge
 indistinguishable from real provenance."""
 
+_RELATION_RUBRIC: dict[str, str] = {
+    "caused_by": (
+        "TARGET brought SOURCE about. SOURCE happened, or came to exist, "
+        "BECAUSE of TARGET"
+    ),
+    "depends_on": (
+        "SOURCE requires TARGET to work or to hold. Remove TARGET and SOURCE "
+        "stops functioning -- but SOURCE is not inside TARGET"
+    ),
+    "member_of": (
+        "SOURCE is one of TARGET's members -- one item in a collection, group, "
+        "or set of like things, where the other members are interchangeable "
+        "with it in kind"
+    ),
+    "part_of": (
+        "SOURCE is a structural component of TARGET. TARGET is a whole that is "
+        "incomplete without SOURCE, and SOURCE is not merely one of many "
+        "interchangeable members"
+    ),
+    "produced_by": (
+        "TARGET made, authored, or generated SOURCE. TARGET is the agent or "
+        "process; SOURCE is the artifact it output"
+    ),
+    "references": (
+        "SOURCE explicitly points at, cites, or names TARGET, without SOURCE "
+        "being caused by, made by, inside, or dependent on it"
+    ),
+    "related_to": (
+        "the honest answer when none of the above holds. The two are "
+        "connected, and the documents do not support saying how"
+    ),
+}
+"""One meaning per suggestable relation type, phrased directionally
+(SOURCE -> TARGET), for the classification rubric (#388).
+
+The prompt used to hand the model seven bare NAMES -- `caused_by,
+depends_on, member_of, ...` -- and nothing else, while
+`extraction/concept.py`'s prompt defines all nine of ITS types and adds a
+three-level tie-break chain. A model given words with no meanings has nothing
+to discriminate with, so it takes the one escape the prompt does spell out.
+Measured on a real bundle: 12 of 18 accepted edges (67%) were `related_to`,
+11 of those 12 between two `Concept`s.
+
+Definitions target the confusions that vocabulary actually has: `part_of`
+against `member_of` (component of a whole vs one of many like things),
+`depends_on` against `part_of` (needs it vs is inside it), `caused_by`
+against `produced_by` (brought about vs authored), and `references` against
+`related_to` (explicitly names it vs merely connected).
+
+`related_to` is defined as an ANSWER, not as a shrug. The aim of this rubric
+is NOT to drive its share down -- see `_SYSTEM_PROMPT`."""
+
+_RUBRIC_LINES = "\n".join(
+    f"- {name}: {_RELATION_RUBRIC[name]}."
+    for name in sorted(SUGGESTABLE_RELATION_TYPES)
+)
+"""The rubric rendered in the vocabulary's own sorted order.
+
+Built by indexing `_RELATION_RUBRIC` with `SUGGESTABLE_RELATION_TYPES` rather
+than by iterating the rubric: a type added to `REGISTRY` without a definition
+raises `KeyError` at IMPORT, instead of silently reaching the model as a bare
+name and quietly reintroducing #388."""
+
 _SYSTEM_PROMPT = (
     "You are a relation-type suggester in a local-first knowledge engine. "
     "Given a SOURCE and a TARGET concept connected by an existing untyped "
@@ -100,16 +163,54 @@ _SYSTEM_PROMPT = (
     "You MUST choose `type` from exactly this fixed vocabulary, and use the "
     "string verbatim:\n"
     f"{_SEEDED_VOCAB_LINE}.\n"
-    "Pick the single best fit. If none clearly fits, use related_to. Do NOT "
-    "invent a type outside this list.\n\n"
+    "Do NOT invent a type outside this list.\n\n"
+    "What each one means, read as SOURCE -> TARGET:\n"
+    f"{_RUBRIC_LINES}\n\n"
+    "Tie-breaks, applied in this order:\n"
+    "(1) Containment before connection: if SOURCE sits INSIDE TARGET, choose "
+    "part_of or member_of, not depends_on or references. Use member_of when "
+    "TARGET is a collection of like things and SOURCE is one of them; use "
+    "part_of when TARGET is a single whole and SOURCE is a component of it.\n"
+    "(2) Origin before mention: if TARGET brought SOURCE about, choose "
+    "caused_by (an outcome or event) or produced_by (an artifact and its "
+    "maker), not references -- naming something is weaker than owing your "
+    "existence to it.\n"
+    "(3) A specific type beats related_to whenever the two documents actually "
+    "state the relationship. Do not reach for related_to just because more "
+    "than one type is plausible; decide between them using (1) and (2).\n\n"
+    "Then the opposite guard, which matters just as much: if the documents do "
+    "NOT support a specific claim, related_to is the CORRECT answer. Do not "
+    "guess a stronger type to seem decisive. A wrong part_of or caused_by "
+    "asserts something false about how the knowledge fits together, and "
+    "anything reading this graph will believe it; an honest related_to only "
+    "declines to say more.\n\n"
     "Return ONLY a JSON object, with NO prose, NO markdown, and NO code "
     "fences around it, matching exactly this shape:\n"
     '{"type": "...", "rationale": "..."}'
 )
 """Stable system half of the 2-message prompt (mirrors
-`adjudication._SYSTEM_PROMPT`): the closed seeded vocabulary plus the
-JSON-only instruction baked into system text; the `user` message carries the
-source/target concept ids, titles, and bodies."""
+`adjudication._SYSTEM_PROMPT`): the closed suggestable vocabulary, a
+definition per type, an ordered tie-break chain, and the JSON-only
+instruction, baked into system text; the `user` message carries the
+source/target concept ids, titles, and bodies.
+
+The rubric and tie-breaks are #388's first lever. This prompt previously
+listed seven bare type names and one instruction -- "Pick the single best
+fit. If none clearly fits, use related_to" -- which names an escape without
+supplying anything to discriminate with. Measured on a real bundle, 12 of 18
+accepted edges were `related_to`, 11 of them between two `Concept`s.
+
+The closing guard is deliberate and is NOT a hedge. Success here is not a
+lower `related_to` share: pushing the model off the fallback with no better
+basis would trade an honest "these are connected" for a confident lie, and a
+knowledge graph traversed on false precision is worse than one traversed on
+admitted vagueness -- a wrong `part_of` is asserted structure that every
+downstream reader believes. What the rubric changes is WHY `related_to` gets
+chosen: as a decision made against six definitions, rather than as the only
+lit exit in an unlit room.
+
+That also means the fix cannot be evaluated by counting `related_to`. It has
+to be judged per edge, against what the two documents actually say."""
 
 
 @dataclass(frozen=True)
