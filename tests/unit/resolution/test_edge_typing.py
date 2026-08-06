@@ -422,6 +422,71 @@ def test_system_prompt_constrains_to_the_seeded_relation_vocabulary(
         assert engine_owned not in system
 
 
+def test_every_suggestable_type_carries_a_definition_in_the_rubric() -> None:
+    """#388: the prompt listed seven bare NAMES and no definitions, while
+    `extraction/concept.py`'s prompt defines all nine of its types and gives a
+    tie-break chain. A model handed `caused_by, depends_on, member_of, ...`
+    with no meanings has nothing to discriminate WITH, so it falls to the
+    explicit `related_to` escape -- 67% of the accepted edges in the measured
+    bundle.
+
+    Keys must equal the suggestable vocabulary EXACTLY. A type added to
+    `REGISTRY` without a definition here would otherwise reach the model as a
+    bare name again, silently reintroducing the defect."""
+    from openkos.model.relations import SUGGESTABLE_RELATION_TYPES
+
+    assert set(edge_typing_mod._RELATION_RUBRIC) == set(SUGGESTABLE_RELATION_TYPES)
+    for definition in edge_typing_mod._RELATION_RUBRIC.values():
+        assert definition.strip()
+
+
+def test_the_rubric_never_defines_an_engine_owned_type() -> None:
+    """Defining `derived_from` would put it back in front of the model in
+    everything but name, undoing #380."""
+    from openkos.model.relations import ENGINE_OWNED_RELATION_TYPES
+
+    for engine_owned in ENGINE_OWNED_RELATION_TYPES:
+        assert engine_owned not in edge_typing_mod._RELATION_RUBRIC
+
+
+def test_the_prompt_states_each_type_with_its_definition(tmp_path: Path) -> None:
+    """The rubric has to actually reach the model, not merely exist."""
+    _write_doc(tmp_path / "a.md", title="A", body="x")
+    _write_doc(tmp_path / "b.md", title="B", body="y")
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    edge_typing_mod.suggest_edge_types(
+        [Edge(source_id="a", target_id="b")], bundle_dir=tmp_path, llm=llm
+    )
+
+    system = llm.calls[0][0]["content"]
+    for name, definition in edge_typing_mod._RELATION_RUBRIC.items():
+        assert name in system
+        assert definition in system
+
+
+def test_the_prompt_protects_the_honest_fallback(tmp_path: Path) -> None:
+    """The goal is NOT to drive `related_to` down.
+
+    Forcing a specific type where the documents do not support one would trade
+    an honest "related" for a confident lie, and a knowledge graph traversed on
+    false precision is worse than one traversed on admitted vagueness. The
+    rubric must therefore still tell the model to choose `related_to` when
+    nothing fits -- what changes is that it now has definitions to decide
+    AGAINST, instead of seven bare words."""
+    _write_doc(tmp_path / "a.md", title="A", body="x")
+    _write_doc(tmp_path / "b.md", title="B", body="y")
+    llm = _FakeLLM(replies=[_valid_reply()])
+
+    edge_typing_mod.suggest_edge_types(
+        [Edge(source_id="a", target_id="b")], bundle_dir=tmp_path, llm=llm
+    )
+
+    system = llm.calls[0][0]["content"].lower()
+    assert "related_to" in system
+    assert "do not guess" in system
+
+
 def test_engine_owned_type_is_rejected_even_when_the_model_proposes_it(
     tmp_path: Path,
 ) -> None:
