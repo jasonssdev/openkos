@@ -1,0 +1,25 @@
+# Generated inputs and the unpacked archive stay LOCAL.
+#
+# Unlike `examples/extraction-corpus/`, this is NOT a licensing workaround --
+# AMI is CC BY 4.0 (see `LICENCE.txt` in the archive) and could be redistributed
+# with attribution. These files stay out because they are DERIVED:
+# `ami_public_manual_1.6.2.sha256` pins the exact archive and
+# `manifests/ami_selected_28.txt` pins the exact meetings, so
+# `scripts/build_sources.py` regenerates them byte for byte. Committing them
+# would duplicate bytes the checksum already guarantees.
+#
+# That is the difference worth keeping: `examples/extraction-corpus/` admits
+# "nobody else can reproduce the exact numbers, only the procedure." Here the
+# numbers reproduce too.
+#
+# `ground_truth/` IS committed even though it is equally derived, and the
+# distinction is deliberate rather than an oversight: it is the reference
+# `report.md`'s verdict rests on, so committing ~1 KB of it makes that verdict
+# auditable without downloading a 22 MB archive first. `sources/` buys no such
+# thing and runs to tens of KB. Both are CC BY 4.0 AMI content, attributed in
+# README.md as that licence requires.
+#
+# `results/` is ignored by the ROOT .gitignore, mirroring the other harnesses:
+# per-run output is ephemeral and the canonical run is committed as report.md.
+sources/
+.ami-unpacked/

@@ -261,3 +261,7 @@ $RECYCLE.BIN/
 # it must never be committed or shared between worktrees (its stored paths and
 # indexed bytes are specific to one checkout).
 .codegraph/
+
+# External evaluation datasets
+/data/ami/raw/
+/evals/decision_extraction/results/
