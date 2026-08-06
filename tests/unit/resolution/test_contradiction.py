@@ -2449,7 +2449,9 @@ def test_typed_edges_keep_the_budget_they_do_not_owe_the_floor(
     assert edge_judged == contradiction_mod._MAX_PAIRS - 2
 
 
-def _plan(*, edge_total: int, merged_total: int, judged_edges: int, judged_merged: int):
+def _plan(
+    *, edge_total: int, merged_total: int, judged_edges: int, judged_merged: int
+) -> contradiction_mod.CandidatePlan:
     specs = [
         contradiction_mod._CandidateSpec(
             pair_ids=(f"c{i:04d}", f"c{i + 1:04d}"), relation_type="references"
