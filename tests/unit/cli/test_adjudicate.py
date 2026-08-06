@@ -37,7 +37,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
-from openkos.resolution.candidates import CandidateGroup, Tier
+from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import changed_paths, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
@@ -286,10 +286,15 @@ def test_adjudicate_prints_leading_verdict_tally_line(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [same_group, different_group]
+    ) -> CandidateGroupReport:
+        groups = [same_group, different_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate"])
@@ -323,8 +328,11 @@ def test_adjudicate_prints_uncertain_segment_when_present(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [same_group, different_group, uncertain_group]
+    ) -> CandidateGroupReport:
+        groups = [same_group, different_group, uncertain_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -342,7 +350,9 @@ def test_adjudicate_prints_uncertain_segment_when_present(
             ),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate"])
@@ -370,8 +380,11 @@ def test_adjudicate_tally_counts_full_results_under_same_only(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [same_group, different_group, uncertain_group]
+    ) -> CandidateGroupReport:
+        groups = [same_group, different_group, uncertain_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -386,7 +399,9 @@ def test_adjudicate_tally_counts_full_results_under_same_only(
             ),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--same-only"])
@@ -413,8 +428,11 @@ def test_adjudicate_prints_legend_once_before_the_results_loop(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group_a, group_b]
+    ) -> CandidateGroupReport:
+        groups = [group_a, group_b]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -424,7 +442,9 @@ def test_adjudicate_prints_legend_once_before_the_results_loop(
             _adjudicated(group_b, verdict=Verdict.DIFFERENT, rationale="rationale b"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate"])
@@ -456,15 +476,20 @@ def test_adjudicate_prints_next_hint_as_the_last_line(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group]
+    ) -> CandidateGroupReport:
+        groups = [group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
     ) -> list[AdjudicatedCandidate]:
         return [_adjudicated(group, verdict=Verdict.SAME, rationale="rationale")]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate"])
@@ -504,8 +529,11 @@ def test_adjudicate_same_only_empty_suppresses_tally_legend_and_next(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [different_group]
+    ) -> CandidateGroupReport:
+        groups = [different_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -516,7 +544,9 @@ def test_adjudicate_same_only_empty_suppresses_tally_legend_and_next(
             )
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--same-only"])
@@ -550,8 +580,11 @@ def test_adjudicate_same_only_hides_non_same_verdicts_from_output_only(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return fake_groups
+    ) -> CandidateGroupReport:
+        groups = fake_groups
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -567,7 +600,9 @@ def test_adjudicate_same_only_hides_non_same_verdicts_from_output_only(
             ),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--same-only"])
@@ -596,8 +631,11 @@ def test_adjudicate_same_only_with_no_same_verdicts_prints_empty_notice(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [different_group]
+    ) -> CandidateGroupReport:
+        groups = [different_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -608,7 +646,9 @@ def test_adjudicate_same_only_with_no_same_verdicts_prints_empty_notice(
             )
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--same-only"])
@@ -803,11 +843,13 @@ def test_adjudicate_include_deprecated_flag_forwarded(
 
     def _recording_find_candidates(
         bundle_dir: Path, **kwargs: object
-    ) -> list[CandidateGroup]:
+    ) -> CandidateGroupReport:
         captured["kwargs"] = kwargs
-        return []
+        return CandidateGroupReport()
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _recording_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _recording_find_candidates
+    )
 
     result = runner.invoke(app, ["adjudicate", "--include-deprecated"])
 
@@ -828,11 +870,13 @@ def test_adjudicate_omitted_include_deprecated_defaults_to_false(
 
     def _recording_find_candidates(
         bundle_dir: Path, **kwargs: object
-    ) -> list[CandidateGroup]:
+    ) -> CandidateGroupReport:
         captured["kwargs"] = kwargs
-        return []
+        return CandidateGroupReport()
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _recording_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _recording_find_candidates
+    )
 
     result = runner.invoke(app, ["adjudicate"])
 
@@ -1040,15 +1084,20 @@ def test_adjudicate_apply_offers_a_same_two_member_group(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group]
+    ) -> CandidateGroupReport:
+        groups = [group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
     ) -> list[AdjudicatedCandidate]:
         return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
@@ -1073,8 +1122,11 @@ def test_adjudicate_apply_never_prompts_different_or_uncertain_groups(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [different_group, uncertain_group]
+    ) -> CandidateGroupReport:
+        groups = [different_group, uncertain_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1084,7 +1136,9 @@ def test_adjudicate_apply_never_prompts_different_or_uncertain_groups(
             _adjudicated(uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"])
@@ -1108,15 +1162,20 @@ def test_adjudicate_apply_same_group_with_three_members_is_skipped_not_prompted(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group]
+    ) -> CandidateGroupReport:
+        groups = [group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
     ) -> list[AdjudicatedCandidate]:
         return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"])
@@ -1151,15 +1210,20 @@ def test_adjudicate_apply_n_gt2_skip_prints_pairwise_merge_commands_in_order(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group]
+    ) -> CandidateGroupReport:
+        groups = [group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
     ) -> list[AdjudicatedCandidate]:
         return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"])
@@ -1206,8 +1270,11 @@ def test_adjudicate_apply_overlapping_groups_second_reports_already_merged(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1, group2]
+    ) -> CandidateGroupReport:
+        groups = [group1, group2]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1217,7 +1284,9 @@ def test_adjudicate_apply_overlapping_groups_second_reports_already_merged(
             _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
@@ -1232,7 +1301,7 @@ def _seed_one_same_group(
     tmp_path: Path,
 ) -> tuple[
     CandidateGroup,
-    Callable[..., list[CandidateGroup]],
+    Callable[..., CandidateGroupReport],
     Callable[..., list[AdjudicatedCandidate]],
 ]:
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
@@ -1246,8 +1315,11 @@ def _seed_one_same_group(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group]
+    ) -> CandidateGroupReport:
+        groups = [group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1266,7 +1338,7 @@ def test_adjudicate_apply_preview_precedes_the_exact_prompt_text(
     (spec: Preview precedes the exact prompt text)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
@@ -1291,7 +1363,7 @@ def test_adjudicate_apply_accepts_merge_updates_filesystem_and_ledger(
     `y` applies the merge / Applied merge updates filesystem and ledger)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
@@ -1318,7 +1390,7 @@ def test_adjudicate_apply_declining_inputs_do_not_merge_and_continue(
     merge)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input=declining_input)
@@ -1366,8 +1438,11 @@ def test_adjudicate_apply_two_accepted_merges_produce_two_separate_commits(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1, group2]
+    ) -> CandidateGroupReport:
+        groups = [group1, group2]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1377,7 +1452,9 @@ def test_adjudicate_apply_two_accepted_merges_produce_two_separate_commits(
             _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
     before_commits = _commit_count(tmp_path)
 
@@ -1398,7 +1475,7 @@ def test_adjudicate_apply_then_unmerge_restores_the_absorbed_member(
     Applied merge is unmerge-reversible)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
@@ -1442,8 +1519,11 @@ def test_adjudicate_apply_mid_run_merge_core_failure_stops_the_run(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1, group2]
+    ) -> CandidateGroupReport:
+        groups = [group1, group2]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1456,7 +1536,9 @@ def test_adjudicate_apply_mid_run_merge_core_failure_stops_the_run(
     def _raise_merge_core(*args: object, **kwargs: object) -> object:
         raise OSError("disk full")
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
     monkeypatch.setattr("openkos.cli.main.merge_core", _raise_merge_core)
 
@@ -1492,8 +1574,11 @@ def test_adjudicate_apply_prepare_merge_failure_stops_the_run(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1]
+    ) -> CandidateGroupReport:
+        groups = [group1]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1503,7 +1588,9 @@ def test_adjudicate_apply_prepare_merge_failure_stops_the_run(
     def _raise_prepare_merge(*args: object, **kwargs: object) -> object:
         raise OSError("disk full")
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
     monkeypatch.setattr("openkos.cli.main.prepare_merge", _raise_prepare_merge)
 
@@ -1542,7 +1629,7 @@ def test_adjudicate_apply_toctou_drift_exits_three_nothing_written(
     test, the established pattern for this window)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     survivor_path = tmp_path / "bundle" / "concepts" / "a.md"
@@ -1578,7 +1665,7 @@ def test_adjudicate_apply_clean_accepted_pair_still_merges_after_drift_guard(
     drifted case."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
@@ -1619,8 +1706,11 @@ def test_adjudicate_apply_summary_reflects_applied_and_skipped_counts(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [applied_group, n_gt2_group, declined_group]
+    ) -> CandidateGroupReport:
+        groups = [applied_group, n_gt2_group, declined_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1631,7 +1721,9 @@ def test_adjudicate_apply_summary_reflects_applied_and_skipped_counts(
             _adjudicated(declined_group, verdict=Verdict.SAME, rationale="r3"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="y\nn\n")
@@ -1658,8 +1750,11 @@ def test_adjudicate_apply_no_eligible_groups_prints_nothing_to_apply(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [different_group]
+    ) -> CandidateGroupReport:
+        groups = [different_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1668,7 +1763,9 @@ def test_adjudicate_apply_no_eligible_groups_prints_nothing_to_apply(
             _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff")
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
     before = _snapshot(tmp_path)
 
@@ -1689,7 +1786,7 @@ def test_adjudicate_apply_same_only_is_a_no_op_composition(
     plain_root = tmp_path_factory.mktemp("apply-plain")
     _init_apply_workspace(plain_root, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(plain_root)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     plain_result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
@@ -1697,7 +1794,7 @@ def test_adjudicate_apply_same_only_is_a_no_op_composition(
     same_only_root = tmp_path_factory.mktemp("apply-same-only")
     _init_apply_workspace(same_only_root, tmp_path_factory, monkeypatch)
     _, fake_find2, fake_adjudicate2 = _seed_one_same_group(same_only_root)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find2)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find2)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate2)
 
     same_only_result = runner.invoke(
@@ -1800,8 +1897,11 @@ def test_adjudicate_apply_same_eligibility_filters_to_same_two_member_groups(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [same_pair, same_triple, different_group, uncertain_group]
+    ) -> CandidateGroupReport:
+        groups = [same_pair, same_triple, different_group, uncertain_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1813,7 +1913,9 @@ def test_adjudicate_apply_same_eligibility_filters_to_same_two_member_groups(
             _adjudicated(uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
@@ -1848,15 +1950,20 @@ def test_adjudicate_apply_same_n_gt2_skip_prints_pairwise_merge_commands_in_orde
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group]
+    ) -> CandidateGroupReport:
+        groups = [group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
     ) -> list[AdjudicatedCandidate]:
         return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply-same"])
@@ -1892,8 +1999,11 @@ def test_adjudicate_apply_same_aggregate_preview_precedes_gate_and_writes(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1, group2]
+    ) -> CandidateGroupReport:
+        groups = [group1, group2]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1903,7 +2013,9 @@ def test_adjudicate_apply_same_aggregate_preview_precedes_gate_and_writes(
             _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
     before = _snapshot(tmp_path)
 
@@ -1948,8 +2060,11 @@ def test_adjudicate_apply_same_confirm_count_exact_applies_all(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1, group2]
+    ) -> CandidateGroupReport:
+        groups = [group1, group2]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -1959,7 +2074,9 @@ def test_adjudicate_apply_same_confirm_count_exact_applies_all(
             _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
     before_commits = _commit_count(tmp_path)
 
@@ -1984,7 +2101,7 @@ def test_adjudicate_apply_same_confirm_count_mismatch_aborts_with_zero_writes(
     <wrong/empty/non-numeric>` aborts with zero writes)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
     before = _snapshot(tmp_path)
 
@@ -2008,7 +2125,7 @@ def test_adjudicate_apply_same_tty_prompt_exact_count_applies(
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _simulate_tty(monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply-same"], input="1\n")
@@ -2031,7 +2148,7 @@ def test_adjudicate_apply_same_tty_prompt_wrong_input_aborts_with_zero_writes(
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _simulate_tty(monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
     before = _snapshot(tmp_path)
 
@@ -2051,7 +2168,7 @@ def test_adjudicate_apply_same_non_tty_without_confirm_count_refuses(
     refuses)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
     before = _snapshot(tmp_path)
 
@@ -2085,8 +2202,11 @@ def test_adjudicate_apply_same_mid_batch_merge_core_failure_keeps_prior_commit(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1, group2, group3]
+    ) -> CandidateGroupReport:
+        groups = [group1, group2, group3]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2097,7 +2217,9 @@ def test_adjudicate_apply_same_mid_batch_merge_core_failure_keeps_prior_commit(
             _adjudicated(group3, verdict=Verdict.SAME, rationale="r3"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     original_merge_core = main.merge_core
@@ -2148,7 +2270,7 @@ def test_adjudicate_apply_same_toctou_drift_exits_three_with_partial_summary(
     the write."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
-    monkeypatch.setattr("openkos.cli.main.find_candidates", fake_find)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
 
     survivor_path = tmp_path / "bundle" / "concepts" / "a.md"
@@ -2198,8 +2320,11 @@ def test_adjudicate_apply_same_chained_shared_member_skips_second_pair(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1, group2]
+    ) -> CandidateGroupReport:
+        groups = [group1, group2]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2209,7 +2334,9 @@ def test_adjudicate_apply_same_chained_shared_member_skips_second_pair(
             _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "2"])
@@ -2239,8 +2366,11 @@ def test_adjudicate_apply_same_batch_round_trips_via_sequential_unmerge(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group1, group2]
+    ) -> CandidateGroupReport:
+        groups = [group1, group2]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2250,7 +2380,9 @@ def test_adjudicate_apply_same_batch_round_trips_via_sequential_unmerge(
             _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "2"])
@@ -2281,8 +2413,11 @@ def test_adjudicate_apply_same_zero_eligible_non_tty_exits_zero_nothing_to_apply
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [different_group]
+    ) -> CandidateGroupReport:
+        groups = [different_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2291,7 +2426,9 @@ def test_adjudicate_apply_same_zero_eligible_non_tty_exits_zero_nothing_to_apply
             _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff")
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
     before = _snapshot(tmp_path)
 
@@ -2317,8 +2454,11 @@ def test_adjudicate_apply_same_zero_eligible_tty_exits_zero_without_prompt(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [different_group]
+    ) -> CandidateGroupReport:
+        groups = [different_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2327,7 +2467,9 @@ def test_adjudicate_apply_same_zero_eligible_tty_exits_zero_without_prompt(
             _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff")
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     # No `input=` supplied: if the code ever reached `typer.prompt`, this
@@ -2362,8 +2504,11 @@ def test_adjudicate_apply_same_total_matches_resolvable_preview_count(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [resolvable_group, unresolvable_group]
+    ) -> CandidateGroupReport:
+        groups = [resolvable_group, unresolvable_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2373,7 +2518,9 @@ def test_adjudicate_apply_same_total_matches_resolvable_preview_count(
             _adjudicated(unresolvable_group, verdict=Verdict.SAME, rationale="r2"),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
@@ -2524,8 +2671,11 @@ def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [same_group, different_group]
+    ) -> CandidateGroupReport:
+        groups = [same_group, different_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2537,7 +2687,9 @@ def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
             ),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--json"])
@@ -2587,8 +2739,11 @@ def test_adjudicate_json_same_only_composability_filters_to_same_verdicts(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [same_group, different_group, uncertain_group]
+    ) -> CandidateGroupReport:
+        groups = [same_group, different_group, uncertain_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2603,7 +2758,9 @@ def test_adjudicate_json_same_only_composability_filters_to_same_verdicts(
             ),
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--json", "--same-only"])
@@ -2644,8 +2801,11 @@ def test_adjudicate_json_same_only_all_filtered_out_emits_empty_array_not_prose(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [different_group]
+    ) -> CandidateGroupReport:
+        groups = [different_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2656,7 +2816,9 @@ def test_adjudicate_json_same_only_all_filtered_out_emits_empty_array_not_prose(
             )
         ]
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate", "--json", "--same-only"])
@@ -2882,8 +3044,11 @@ def test_adjudicate_wires_tty_gated_progress_callback_into_the_library(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group]
+    ) -> CandidateGroupReport:
+        groups = [group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
@@ -2895,7 +3060,9 @@ def test_adjudicate_wires_tty_gated_progress_callback_into_the_library(
             on_progress(index, len(results), result)
         return results
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
     result = runner.invoke(app, ["adjudicate"])
@@ -2926,3 +3093,68 @@ def test_adjudicate_passes_no_progress_hook_when_stderr_is_not_a_tty(
 
     assert result.exit_code == 0
     assert captured["on_progress"] is None
+
+
+# ---------------------------------------------------------------------------
+# curate-call-budget: `adjudicate` discloses `find_candidates_report`
+# truncation (entity-resolution delta: Truncation Is Never Silent)
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_over_cap_bundle_emits_the_truncation_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `find_candidates_report` reports `produced > retained`,
+    `adjudicate` echoes `candidate_group_truncation_notice` to stderr
+    before the LLM pass begins."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+    report = CandidateGroupReport(groups=(group,) * 50, produced=80, retained=50)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", lambda *a, **k: report
+    )
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(c, verdict=Verdict.SAME, rationale="same") for c in candidates
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "50 of 80 candidate group(s) shown (cap reached)" in result.stderr
+
+
+def test_adjudicate_below_cap_bundle_emits_no_truncation_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `produced == retained` (the cap does not bind), `adjudicate`
+    emits no truncation notice on stderr."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+    report = CandidateGroupReport(groups=(group,) * 6, produced=6, retained=6)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", lambda *a, **k: report
+    )
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> list[AdjudicatedCandidate]:
+        return [
+            _adjudicated(c, verdict=Verdict.SAME, rationale="same") for c in candidates
+        ]
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 0
+    assert "cap reached" not in result.stderr

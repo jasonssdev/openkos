@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 
 from openkos.cli import main
 from openkos.cli.main import app
-from openkos.resolution.candidates import CandidateGroup, Tier
+from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
@@ -183,10 +183,15 @@ def test_duplicates_prints_leading_tally_line_for_mixed_groups(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [high_group, low_group]
+    ) -> CandidateGroupReport:
+        groups = [high_group, low_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
 
     result = runner.invoke(app, ["duplicates"])
 
@@ -217,10 +222,15 @@ def test_duplicates_prints_legend_once_before_the_group_loop(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group_a, group_b]
+    ) -> CandidateGroupReport:
+        groups = [group_a, group_b]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
 
     result = runner.invoke(app, ["duplicates"])
 
@@ -251,10 +261,15 @@ def test_duplicates_prints_next_hint_as_the_last_line(
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
-    ) -> list[CandidateGroup]:
-        return [group]
+    ) -> CandidateGroupReport:
+        groups = [group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _fake_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
 
     result = runner.invoke(app, ["duplicates"])
 
@@ -339,11 +354,15 @@ def test_duplicates_include_deprecated_flag_forwarded(
     _init_workspace(tmp_path, monkeypatch)
     captured: dict[str, object] = {}
 
-    def _recording_find_candidates(bundle_dir: Path, **kwargs: object) -> list[object]:
+    def _recording_find_candidates(
+        bundle_dir: Path, **kwargs: object
+    ) -> CandidateGroupReport:
         captured["kwargs"] = kwargs
-        return []
+        return CandidateGroupReport()
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _recording_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _recording_find_candidates
+    )
 
     result = runner.invoke(app, ["duplicates", "--include-deprecated"])
 
@@ -362,11 +381,15 @@ def test_duplicates_omitted_include_deprecated_defaults_to_false(
     _init_workspace(tmp_path, monkeypatch)
     captured: dict[str, object] = {}
 
-    def _recording_find_candidates(bundle_dir: Path, **kwargs: object) -> list[object]:
+    def _recording_find_candidates(
+        bundle_dir: Path, **kwargs: object
+    ) -> CandidateGroupReport:
         captured["kwargs"] = kwargs
-        return []
+        return CandidateGroupReport()
 
-    monkeypatch.setattr("openkos.cli.main.find_candidates", _recording_find_candidates)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _recording_find_candidates
+    )
 
     result = runner.invoke(app, ["duplicates"])
 
@@ -469,3 +492,49 @@ def test_format_group_tally_singular_acronym_only() -> None:
         main._format_group_tally(0, 1, 0)
         == "1 candidate group (0 exact, 1 acronym, 0 near)"
     )
+
+
+# ---------------------------------------------------------------------------
+# curate-call-budget: `duplicates` discloses `find_candidates_report`
+# truncation (entity-resolution delta: Truncation Is Never Silent)
+# ---------------------------------------------------------------------------
+
+
+def test_duplicates_over_cap_bundle_emits_the_truncation_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `find_candidates_report` reports `produced > retained`,
+    `duplicates` echoes `candidate_group_truncation_notice` to stderr."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+    report = CandidateGroupReport(groups=(group,) * 50, produced=80, retained=50)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", lambda *a, **k: report
+    )
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    assert result.stderr == "50 of 80 candidate group(s) shown (cap reached)\n"
+
+
+def test_duplicates_below_cap_bundle_emits_no_truncation_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `produced == retained` (the cap does not bind), `duplicates`
+    emits no truncation notice on stderr."""
+    _init_workspace(tmp_path, monkeypatch)
+    group = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub"
+    )
+    report = CandidateGroupReport(groups=(group,) * 6, produced=6, retained=6)
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", lambda *a, **k: report
+    )
+
+    result = runner.invoke(app, ["duplicates"])
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
