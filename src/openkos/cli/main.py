@@ -1604,13 +1604,27 @@ def _collision_family(link_dir: Path, base_slug: str) -> list[Path]:
     first). Matched via a REGEX anchored on the full filename stem
     (`^{base}(-\\d+)?$`), NEVER a glob, so an unrelated sibling like
     `<base>-word.md` never joins the family (design: Collision loop
-    mechanics; #131)."""
+    mechanics; #131).
+
+    Both sides are NFC-normalized before matching (#414). `_slugify` emits
+    NFC, but HFS+ (and some SMB mounts) rewrite a filename to NFD on write
+    while APFS preserves whatever spelling it is handed, so `glob` can
+    legitimately return the NFD stem of a file created under the NFC slug.
+    Matching the raw stems would miss it -- while `derived_path.exists()`,
+    which is normalization-INSENSITIVE on macOS, still reports True. The
+    caller would then read an EMPTY family, misread the slug as belonging to
+    a foreign source, and disambiguate to `<slug>-2` on every re-ingest
+    until `write_exclusive` raised `FileExistsError`. Unreachable while
+    slugs were ASCII (ASCII has no NFD form); reachable now that they carry
+    accents.
+    """
     if not link_dir.is_dir():
         return []
-    pattern = re.compile(rf"^{re.escape(base_slug)}(?:-(\d+))?$")
+    base = unicodedata.normalize("NFC", base_slug)
+    pattern = re.compile(rf"^{re.escape(base)}(?:-(\d+))?$")
     members: list[tuple[int, Path]] = []
     for path in link_dir.glob("*.md"):
-        match = pattern.match(path.stem)
+        match = pattern.match(unicodedata.normalize("NFC", path.stem))
         if match is None:
             continue
         suffix_n = int(match.group(1)) if match.group(1) else 0
@@ -1710,8 +1724,13 @@ def _first_free_disambiguated_slug(
     on disk (a stem present in `family`) nor already claimed by an earlier
     candidate in THIS batch (`reserved`) -- deterministic, ascending scan
     (design: Collision loop mechanics -- batch-local `seen_slugs` guard;
-    #131)."""
-    taken = {path.stem for path in family} | reserved
+    #131).
+
+    On-disk stems are NFC-normalized before the comparison, for the same
+    reason `_collision_family` normalizes (#414): an NFD `<base>-2.md` must
+    still count as taken, or this would hand back a name that already
+    exists."""
+    taken = {unicodedata.normalize("NFC", path.stem) for path in family} | reserved
     n = 2
     while f"{base_slug}-{n}" in taken:
         n += 1
