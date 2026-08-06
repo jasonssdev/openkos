@@ -331,6 +331,18 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     )
 
 
+_TWIN_EXEMPT_TYPE = "Procedure"
+"""The one object type `_drop_source_title_twins` never treats as a twin
+(#413).
+
+Named rather than inlined so the exemption is greppable from both sides of
+the collision it resolves -- the prompt clause that asks for a `Procedure`
+on an instructional source, and the rule that used to delete it. A member of
+`_VALID_TYPES` by construction; `test_twin_exempt_type_is_in_the_vocabulary`
+is the alarm if the vocabulary ever renames it, since a typo here would
+silently restore the deletion rather than fail."""
+
+
 def _drop_source_title_twins(
     results: list[ExtractionResult], *, source_title: str
 ) -> list[ExtractionResult]:
@@ -344,14 +356,41 @@ def _drop_source_title_twins(
 
     Compares each validated object's `title` to `source_title` using an
     exact, normalized comparison (strip + casefold + collapsed internal
-    whitespace) -- no fuzzy/semantic matching. If one or more objects match
-    AND at least one non-matching object also exists, the matching
-    (redundant) objects are dropped. If EVERY object matches, or only one
-    object exists at all, the list is returned unchanged: a genuinely
-    single-subject source (the measured `mcp-launch` shape -- H1 "MCP
-    Launching" -> `Event:MCP Launching`) must keep its only object, since
-    suppressing it would emit `[]` for genuine content. The floor always
-    wins over the anti-twin rule."""
+    whitespace) -- no fuzzy/semantic matching. If one or more objects are
+    twins AND at least one non-twin also exists, the twins are dropped. If
+    EVERY object is a twin, or only one object exists at all, the list is
+    returned unchanged: a genuinely single-subject source (the measured
+    `mcp-launch` shape -- H1 "MCP Launching" -> `Event:MCP Launching`) must
+    keep its only object, since suppressing it would emit `[]` for genuine
+    content. The floor always wins over the anti-twin rule.
+
+    A `Procedure` is NEVER a twin, whatever its title (#413). The prompt
+    tells the model to choose `Procedure` when a source "teaches a
+    repeatable how-to", and for a tutorial the title IS the procedure -- so
+    title equality alone made the two rules collide by construction across
+    the whole class of instructional documents, and collide in the wrong
+    direction: a THIN tutorial yielding only its `Procedure` kept it via the
+    floor above, while a RICH one yielding the `Procedure` plus its genuine
+    secondary subjects lost the primary object precisely BECAUSE it was
+    richer. The document was punished for being informative, with no
+    recovery path -- the how-to survived only inside the Source's embedded
+    verbatim text, so the bundle could no longer answer "how do I do X" from
+    its own objects.
+
+    The exemption keys on the object's ROLE, not on its body or its title.
+    Source and `Procedure` are different roles: the Source is the
+    bibliographic anchor the bundle points back at, the `Procedure` is the
+    how-to a reader retrieves and connects. What this rule was built to stop
+    is a lazy restatement emitted INSTEAD of doing the work, and a
+    `Procedure` carrying the steps is not that, even when its title
+    coincides with the document's. Every other type is unaffected: a
+    content-free `Concept`/`Entity`/`Event` echo of the source title
+    alongside genuine objects is still dropped, including when the object
+    keeping it company is an exempt `Procedure` sharing the same title.
+
+    When the exemption and the drop conflict, the object is preserved. A
+    spurious near-duplicate is cosmetic -- a human can merge it later -- and
+    a deleted primary subject is silent data loss."""
     if len(results) <= 1:
         return results
 
@@ -359,7 +398,14 @@ def _drop_source_title_twins(
         return " ".join(value.strip().casefold().split())
 
     normalized_title = _normalize(source_title)
-    non_twins = [r for r in results if _normalize(r.title) != normalized_title]
+
+    def _is_twin(result: ExtractionResult) -> bool:
+        return (
+            result.type != _TWIN_EXEMPT_TYPE
+            and _normalize(result.title) == normalized_title
+        )
+
+    non_twins = [r for r in results if not _is_twin(r)]
 
     if not non_twins or len(non_twins) == len(results):
         return results

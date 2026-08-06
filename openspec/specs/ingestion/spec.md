@@ -391,6 +391,20 @@ rule is enforced deterministically, after per-item validation
 could not carry the unconditional rule at the 8B tier, and a clause naming
 a concrete forbidden title measurably worsened the defect (priming).
 
+A `Procedure` MUST NOT be treated as a twin, whatever its title. Extraction
+already instructs the model to choose `Procedure` when an instructional
+source teaches a repeatable how-to, and for a tutorial the title IS the
+procedure — so a title-equality test collided with that instruction across
+the whole class of instructional documents, and collided in the wrong
+direction: a source yielding only its `Procedure` kept it via the floor
+below, while a source ALSO yielding genuine secondary subjects lost the
+primary object precisely because it was richer. The exemption keys on the
+object's ROLE, not on its body or its title: the Source is the
+bibliographic anchor, the `Procedure` is the how-to a reader retrieves.
+Every other type is unaffected — a content-free echo of the source title
+alongside genuine objects MUST still be dropped, including when the object
+sharing its title is an exempt `Procedure`.
+
 The floor is unchanged: genuine, intelligible content MUST yield AT LEAST
 ONE object; blank, boilerplate-only, or unintelligible content MUST still
 yield `[]`.
@@ -465,6 +479,24 @@ required by this scenario.
 - WHEN extraction runs
 - THEN the twin candidate is absent from the written derived objects and
   the genuine candidate(s) are kept
+
+#### Scenario: A tutorial's primary Procedure survives its own secondary subjects
+
+- GIVEN an instructional source whose primary `Procedure` is titled the way
+  the document titles itself, alongside the genuine secondary subjects the
+  same source yields
+- WHEN extraction runs
+- THEN the `Procedure` is written together with those secondary subjects —
+  the anti-twin rule never deletes it
+
+#### Scenario: A non-Procedure echo is still dropped beside an exempt Procedure
+
+- GIVEN a candidate of any other type whose title merely restates the
+  Source's own, alongside both an exempt `Procedure` sharing that title and
+  a genuine, distinct subject
+- WHEN extraction runs
+- THEN the echo is absent from the written derived objects, and both the
+  `Procedure` and the genuine subject are kept
 
 #### Scenario: Blank or unintelligible content still yields no objects
 
