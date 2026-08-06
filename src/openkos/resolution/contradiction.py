@@ -152,16 +152,19 @@ class ContradictionVerdict:
     the `MergeLedgerEntry.absorbed_id` this candidate was built from.
 
     WARNING: this field is the SOLE discriminator between a typed-edge
-    candidate and a merged-body candidate. `pair_ids` may ALSO be
-    `(concept_id, concept_id)` for a typed-edge candidate today, independent
-    of this field and independent of this change: `_pair_key` has no
-    self-pair guard, a pre-existing survivor-side self-loop is left
-    untouched by `okf.merge_relations`, and a typed self-loop reaches
-    `store.edges()` and therefore `_candidate_pairs` unchanged (tracked
-    separately as #411). A consumer that branches on `pair_ids[0] ==
-    pair_ids[1]` instead of `merged_absorbed_id is not None` WILL conflate a
-    self-loop-derived verdict with a merged-content verdict for the same
-    concept id -- NEVER fall back to `pair_ids` equality."""
+    candidate and a merged-body candidate. Branch on `merged_absorbed_id is
+    not None` -- NEVER fall back to `pair_ids` equality.
+
+    `pair_ids[0] == pair_ids[1]` is NOT a safe stand-in even though, since
+    #411, a merged-body candidate is the only thing that produces it: that
+    is a property of one filter line in `_candidate_pairs`
+    (`edge.source_id != edge.target_id`), not of this dataclass. `_pair_key`
+    still has no self-pair guard, and `okf.merge_relations` still leaves a
+    pre-existing survivor-side self-loop untouched, so a `(x, x)` typed-edge
+    pair remains one relaxed filter away from being reachable again. A
+    consumer keyed on pair shape would silently start conflating
+    self-loop-derived and merged-content verdicts on the day that happens;
+    a consumer keyed on this field never can."""
 
 
 def _pair_key(source_id: str, target_id: str) -> tuple[str, str]:
@@ -187,7 +190,27 @@ def _candidate_pairs(
     graph-projection provenance-mirror typing or hand-authored in
     `relations:` frontmatter, since this function has no signal to
     distinguish the two and a derivation is never a contradiction candidate
-    either way. The remaining typed edges are deduped by
+    either way. A typed SELF-LOOP (`source_id == target_id`) is excluded on
+    the same line and for the same kind of reason (issue #411): a document
+    cannot be a contradiction candidate against itself, and judging one loads
+    the same body twice to spend a call on a question with no answer.
+
+    Self-loops are filtered here rather than assumed impossible upstream
+    because they are genuinely reachable: the `Relation` codec accepts them
+    (only the interactive `relate` verb refuses to CREATE one), and
+    `okf.merge_relations` deliberately leaves a pre-existing one untouched
+    -- it drops only a self-loop a merge itself would newly synthesize while
+    retargeting `absorbed_id -> survivor_id`.
+
+    The drop is silent in `total_count` by construction, since it happens
+    before that count is taken. This is deliberate: `total_count` feeds the
+    "N of M pairs shown (cap reached)" truncation notice, whose job is to
+    say that judgeable work was cut off. A self-pair was never judgeable
+    work, so counting it there would make the notice claim a truncation that
+    did not happen. Surfacing the malformed relation to the operator belongs
+    to `lint`, which has no self-loop check today.
+
+    The remaining typed edges are deduped by
     `frozenset({source_id, target_id})` so symmetric, duplicate, and
     multi-edge pairs collapse to exactly one candidate (spec: Symmetric and
     multi-edge pairs judged once).
@@ -222,7 +245,9 @@ def _candidate_pairs(
     typed_edges = [
         edge
         for edge in store.edges()
-        if edge.relation_type is not None and edge.relation_type != "derived_from"
+        if edge.relation_type is not None
+        and edge.relation_type != "derived_from"
+        and edge.source_id != edge.target_id
     ]
     pair_keys = {_pair_key(edge.source_id, edge.target_id) for edge in typed_edges}
     ordered = sorted(pair_keys)
