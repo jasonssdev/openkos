@@ -2,7 +2,7 @@
 
 ## `good-life-demo`
 
-A small, hand-written OpenKOS **workspace** used as a **reference** and a **test fixture**. It shows what the MVP 1 `ingest` should produce.
+A small, hand-written OpenKOS **workspace** used as a **reference** and a **test fixture**. It shows what MVP 1 `ingest` plus entity resolution should produce: `ingest` alone writes each concept with a single-source `provenance`, and the two-source `provenance` seen here is the result of a `SAME` merge.
 
 The scenario is deliberately ordinary: someone reading philosophy to write an essay. On 5 July they take notes on Epictetus's *Enchiridion*. On 14 July a friend who studies the subject corrects one of their readings on a call, and the base changes accordingly. That is the whole loop — capture, compile, learn, correct.
 

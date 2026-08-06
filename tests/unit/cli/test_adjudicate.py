@@ -36,6 +36,7 @@ from openkos.llm.ollama import (
     OllamaModelNotFound,
     OllamaUnavailable,
 )
+from openkos.model import okf
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.vcs import git as vcs_git
@@ -1376,6 +1377,61 @@ def test_adjudicate_apply_accepts_merge_updates_filesystem_and_ledger(
     assert "merged_from" in survivor_text
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert "concepts/b" not in index_text
+
+
+def test_adjudicate_apply_merge_unions_provenance_from_both_sources(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard for #379 criterion 1: two `Concept` documents that
+    share an exact normalized title (the HIGH tier's trigger), each with a
+    single-element `provenance:` naming a DIFFERENT source, flow end to end
+    through the real (unmocked) `find_candidates` -> `adjudicate_candidates`
+    -> merge chain -- only the `LLMBackend` is a stub returning `SAME`, per
+    the module docstring's convention (never a real Ollama call). The
+    assertion that matters is the UNION: the surviving document's
+    `provenance` must cite BOTH source files, not merely that a merge
+    happened (a test asserting only the latter would pass while criterion 1
+    silently regressed)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _FakeOllamaClient)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "a.md").write_text(
+        "---\n"
+        "type: Concept\n"
+        "title: Stoicism\n"
+        "sensitivity: private\n"
+        "provenance:\n"
+        "  - sources/notes-on-the-enchiridion\n"
+        "---\n"
+        "# Stoicism\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "b.md").write_text(
+        "---\n"
+        "type: Concept\n"
+        "title: Stoicism\n"
+        "sensitivity: private\n"
+        "provenance:\n"
+        "  - sources/call-with-maria\n"
+        "---\n"
+        "# Stoicism\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    survivor_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    metadata, _ = okf.load_frontmatter(survivor_text)
+    assert metadata["provenance"] == [
+        "sources/notes-on-the-enchiridion",
+        "sources/call-with-maria",
+    ]
 
 
 @pytest.mark.parametrize("declining_input", ["\n", "n\n", "skip\n"])
