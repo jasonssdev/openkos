@@ -56,7 +56,14 @@ listing this application's three child agents. Contrast `Claude Agent SDK`,
 which owns `## Architecture Overview` outright. A reader would not want a
 document on the pattern built from this source. It is a facet.
 
-## KNOWN RULE COLLISION — this fixture exposes it on purpose
+## KNOWN RULE COLLISION — this fixture exposed it on purpose, and it is fixed
+
+**RESOLVED (#413).** `_drop_source_title_twins` now exempts `Procedure`
+outright: a `Procedure` is never a twin, whatever its title. The primary
+object below survives alongside `Claude Agent SDK` and
+`Human-in-the-Loop Guardrails`, and a miss on it is once again a plain
+extraction miss — score it as one. The rest of this section is kept as the
+record of what the fixture caught and why the exemption keys on the type.
 
 `openkos.source_title.derive_source_title` returns, for this exact file:
 
