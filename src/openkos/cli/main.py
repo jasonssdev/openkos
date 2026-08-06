@@ -69,8 +69,10 @@ from openkos.resolution.candidates import (
     candidate_group_truncation_notice,
 )
 from openkos.resolution.contradiction import (
+    contradiction_truncation_notice,
     find_contradictions,
     is_high_confidence_contradiction,
+    plan_candidates,
 )
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
@@ -8798,14 +8800,25 @@ def contradictions(
             source.close()
 
     with graph as store:
+        # Built here, not inside `find_contradictions`, because the cap-reached
+        # line below has to name WHICH KIND was truncated (#444) -- and passing
+        # it in means that line describes the exact list that was judged.
+        plan = plan_candidates(
+            layout.bundle_dir,
+            store=store,
+            include_deprecated=include_deprecated,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
         try:
-            verdicts, total_pairs = find_contradictions(
+            verdicts, _total_pairs = find_contradictions(
                 layout.bundle_dir,
                 llm=llm,
                 include_deprecated=include_deprecated,
                 include_confidential=include_confidential,
                 local_exemption=local_exemption,
                 store=store,
+                plan=plan,
                 # TTY-gated per-pair progress on stderr; `None` (silent)
                 # when output is piped (issue #190, mirrors
                 # `suggest-relations`' #134 per-edge line).
@@ -8840,13 +8853,13 @@ def contradictions(
         typer.echo(f"openkos contradictions: workspace at {root}")
         typer.echo()
         # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
-        # truncation, never silent -- distinct from `total_pairs >
-        # len(verdicts)` below, which reports the contradiction-engine's OWN
-        # pair cap. Read here, INSIDE the `with` block, since `store` closes
-        # below.
+        # truncation, never silent -- distinct from
+        # `contradiction_truncation_notice(plan)` below, which reports the
+        # contradiction-engine's OWN candidate cap. Read here, INSIDE the
+        # `with` block, since `store` closes below.
         #
-        # The two lines count genuinely different things -- `total_pairs`
-        # comes from `_candidate_pairs`, which is deprecation-filtered, this
+        # The two lines count genuinely different things -- the plan's totals
+        # come from `plan_candidates`, which is deprecation-filtered, this
         # one from pass 3's own seeding -- but BOTH must now respect the
         # sensitivity-fail-closed-filter before being printed:
         # `candidate_truncation_notice` re-derives its counts from
@@ -8877,8 +8890,9 @@ def contradictions(
             )
             return
 
-    if total_pairs > len(verdicts):
-        typer.echo(f"{len(verdicts)} of {total_pairs} pairs shown (cap reached)")
+    truncation = contradiction_truncation_notice(plan)
+    if truncation is not None:
+        typer.echo(truncation)
         typer.echo()
 
     displayed = (
