@@ -7363,6 +7363,10 @@ def status() -> None:
     # issue #257: reuses this SAME in-memory `docs` list again -- no
     # fourth `collect_docs()` call (the structural no-fifth-walk guard).
     dangling_provenance = lint_check.check_dangling_provenance(docs)
+    # issue #421: and again -- an engine-owned `derived_from` no
+    # `provenance:` entry backs. Pure and deterministic: `status` calls no
+    # model for it, and the SAME `docs` list still serves every check.
+    unbacked_provenance = lint_check.check_unbacked_provenance(docs)
     needs_attention: list[str] = [*survey.findings]
     needs_attention.extend(
         f"{finding.concept_id}: {finding.detail}" for finding in dangling
@@ -7377,6 +7381,10 @@ def status() -> None:
     needs_attention.extend(
         f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
         for finding in dangling_provenance
+    )
+    needs_attention.extend(
+        f"{finding.concept_id}: [{finding.kind}] {finding.detail}"
+        for finding in unbacked_provenance
     )
     # #186: pending duplicate groups are ACTIONABLE -- name `duplicates` as
     # the next step. Exact-title matches only; near-match (LOW) is a
@@ -7649,9 +7657,13 @@ def lint() -> None:
     `lint_check.check_dangling_provenance`, reusing this SAME `docs` list --
     no new walk), `Unextracted sources:` (issue #187:
     `lint_check.check_unextracted`, reusing this SAME `docs` list -- no new
-    walk), `Below-source sensitivity:`, and `Multi-source uncovered:`
+    walk), `Below-source sensitivity:`, `Multi-source uncovered:`
     (issue #231, PR2: `lint_check.check_below_source_sensitivity`, reusing
-    this SAME `docs` list too -- design D3's no-fifth-walk guard), each
+    this SAME `docs` list too -- design D3's no-fifth-walk guard), and
+    `Unbacked provenance:` (issue #421:
+    `lint_check.check_unbacked_provenance`, this SAME `docs` list again --
+    an engine-owned `relations:` type, `derived_from`, naming a target the
+    document's own `provenance:` never records), each
     with its own empty-state line when there is nothing to report. Every
     successful read exits 0, whether the bundle is clean or
     has findings (spec: Non-Gating Exit Contract) -- `lint` is NOT a CI
@@ -7698,6 +7710,8 @@ def lint() -> None:
     # issue #257: reuses this SAME `docs` list again -- no new bundle walk
     # (the structural no-fifth-walk guard holds).
     dangling_provenance = lint_check.check_dangling_provenance(docs)
+    # issue #421: and again -- pure, deterministic, no LLM, no clock.
+    unbacked_provenance = lint_check.check_unbacked_provenance(docs)
     notices = window_notices + skip_notices
     report = lint_check.LintReport(
         stale=stale,
@@ -7707,6 +7721,7 @@ def lint() -> None:
         below_source=below_source,
         multi_source_uncovered=multi_source_uncovered,
         dangling_provenance=dangling_provenance,
+        unbacked_provenance=unbacked_provenance,
         notices=notices,
     )
 
@@ -7761,6 +7776,13 @@ def lint() -> None:
         typer.echo("  No multi-source uncovered findings.")
     else:
         for finding in report.multi_source_uncovered:
+            typer.echo(f"  {finding.concept_id}: {finding.detail}")
+    typer.echo()
+    typer.echo("Unbacked provenance:")
+    if not report.unbacked_provenance:
+        typer.echo("  No unbacked provenance claims.")
+    else:
+        for finding in report.unbacked_provenance:
             typer.echo(f"  {finding.concept_id}: {finding.detail}")
 
 

@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from openkos import config
 from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf, types
+from openkos.model import relations as relation_vocabulary
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,24 @@ class LintDoc:
     omits it is unaffected. Feeds `check_dangling_targets` as one of its two
     outbound-reference sources."""
 
+    engine_owned_relations: tuple[tuple[str, str], ...] = ()
+    """This doc's `relations:` entries whose `type` is engine-owned, as
+    `(type, target)` pairs in frontmatter order (issue #421).
+
+    A NARROWING of `relations`, not a duplicate of it: `relations` keeps
+    every target and drops every type, which is all `check_dangling_targets`
+    needs; this keeps the type, but only for
+    `relations.ENGINE_OWNED_RELATION_TYPES` -- today exactly
+    `derived_from`. The filter is applied in `collect_docs` against the
+    registry rather than against a literal, so a second engine-derived type
+    is FOLLOWED here with no edit to this module (issue #421's third open
+    question). Feeds `check_unbacked_provenance`.
+
+    Types outside that set are deliberately absent: an open-vocabulary
+    relation (`related_to`, `references`, ...) carries no provenance
+    meaning, so its target has no reason to appear in `provenance:` and
+    checking it would flag every typed edge in every bundle."""
+
     extraction_status: str = ""
     """The doc's frontmatter `extraction_status` field, or `""` if absent
     (issue #187). Only a Source can carry this key
@@ -104,8 +123,8 @@ class LintFinding:
 
     kind: str
     """`"stale"`, `"orphan"`, `"dangling"`, `"unextracted"`,
-    `"below-source-sensitivity"`, `"multi-source-uncovered"`, or
-    `"dangling-provenance"`."""
+    `"below-source-sensitivity"`, `"multi-source-uncovered"`,
+    `"dangling-provenance"`, or `"unbacked-provenance"`."""
     path: str
     """The finding's bundle-relative `.md` path."""
     detail: str
@@ -151,6 +170,15 @@ class LintReport:
     value -- the outbound-reference family `check_dangling_targets` never
     scans, with the sensitivity consequence that earned the dedicated kind
     (see `check_dangling_provenance`)."""
+    unbacked_provenance: list[LintFinding] = field(default_factory=list)
+    """`"unbacked-provenance"` findings (#421): a `relations:` entry whose
+    type is engine-owned (`derived_from`) naming a target the SAME
+    document's `provenance:` does not record -- a provenance claim no
+    recorded provenance backs. The graph projection synthesizes
+    `derived_from` from `provenance:` (#135), so once written such an edge
+    is indistinguishable downstream from a synthesized one; this finding is
+    the only surface that still tells them apart (see
+    `check_unbacked_provenance`)."""
     notices: list[str] = field(default_factory=list)
 
 
@@ -197,12 +225,20 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
             skip_notices.append(f"{identity}.md: skipped (unparseable frontmatter)")
             continue
         try:
-            relations = tuple(
-                relation.target for relation in okf.decode_relations(metadata)
-            )
+            decoded_relations = okf.decode_relations(metadata)
         except ValueError:
             skip_notices.append(f"{identity}.md: skipped (invalid relations)")
             continue
+        relations = tuple(relation.target for relation in decoded_relations)
+        # #421: the SAME already-decoded list, filtered against the registry
+        # rather than a literal `derived_from`, so a second engine-derived
+        # type is followed here with no edit. No second `decode_relations`
+        # call and no second read -- one decode, two projections.
+        engine_owned_relations = tuple(
+            (relation.type, relation.target)
+            for relation in decoded_relations
+            if relation.type in relation_vocabulary.ENGINE_OWNED_RELATION_TYPES
+        )
         raw_provenance = metadata.get("provenance")
         if raw_provenance is None:
             provenance: tuple[str, ...] = ()
@@ -223,6 +259,7 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
                 type=str(metadata.get("type", "")),
                 volatility=str(metadata.get("volatility", "")),
                 relations=relations,
+                engine_owned_relations=engine_owned_relations,
                 extraction_status=str(metadata.get("extraction_status", "")),
                 resource=str(metadata.get("resource", "")),
                 sensitivity=str(metadata.get("sensitivity", "")),
@@ -673,6 +710,110 @@ def check_dangling_provenance(docs: list[LintDoc]) -> list[LintFinding]:
                         "unreachable from any Source's provenance closure, so "
                         "`openkos backfill-sensitivity` will never raise it "
                         "and `openkos set-sensitivity` cannot cascade to it"
+                    ),
+                )
+            )
+    return findings
+
+
+def check_unbacked_provenance(docs: list[LintDoc]) -> list[LintFinding]:
+    """Flag each ENGINE-OWNED `relations:` entry whose target the SAME
+    document's `provenance:` does not record (issue #421) -- a provenance
+    claim no recorded provenance backs.
+
+    `derived_from` MEANS provenance -- "this object was compiled from that
+    source" -- and it is the guarantee behind citations and behind
+    sensitivity propagation under the high-water-mark rule. The graph
+    projection SYNTHESIZES it from each document's `provenance:` frontmatter
+    (`graph/sqlite_graph.py`, #135), so a hand-written or model-suggested
+    `derived_from` lands in the same graph, with the same type string, as
+    the synthesized ones. Nothing downstream can tell the two apart -- which
+    is what makes this silent corruption rather than a visible mistake, and
+    it is why the projection itself cannot be the detector: by the time it
+    reads the edge, the distinction is already gone. This check is the only
+    place the two are still separable, because it reads the document, where
+    `relations:` and `provenance:` are still distinct fields.
+
+    #380/#418 closed the INGRESS (`SUGGESTABLE_RELATION_TYPES` withholds the
+    type from the suggester, and `_parse_reply` refuses it anyway); this is
+    the DETECTION half, for the claims already on disk.
+
+    PURE AND DETERMINISTIC, deliberately: no LLM, no clock, no config. The
+    signature takes ONLY `docs` -- no `bundle_dir` -- the SAME structural
+    no-fifth-walk guard `check_dangling_targets`/`check_unextracted`/
+    `check_below_source_sensitivity`/`check_dangling_provenance` follow: a
+    function that never receives a directory is incapable of opening a
+    walk. A provenance-integrity check that depended on a model would not
+    be a check.
+
+    The subject set is `relations.ENGINE_OWNED_RELATION_TYPES`, applied in
+    `collect_docs` when `LintDoc.engine_owned_relations` is built, never a
+    literal `derived_from` written here. Today that set has exactly one
+    member, so this check has exactly one subject; if the engine ever
+    derives a second type, this check FOLLOWS it rather than being
+    re-written (issue #421). The `kind` string stays type-agnostic for the
+    same reason -- the offending type is named in the DETAIL, where a human
+    reads it, not in the kind, where a second member would make it a lie.
+
+    A target that IS in `provenance:` is never flagged: that entry states
+    exactly what the projection would synthesize anyway, so it is redundant
+    at worst, never false. Comparison is by exact id: both fields are
+    already canonical, `.md`-stripped bundle ids by the time they reach
+    `LintDoc` (`okf.decode_relations`/`Relation.target` for one,
+    `collect_docs`'s strip for the other), so no normalization is needed --
+    the same equality `check_dangling_targets` relies on.
+
+    A document with an EMPTY `provenance:` is checked like any other, not
+    skipped: nothing backs an engine-owned claim there, which is the
+    maximal case of this defect rather than an exemption. Existence of the
+    target is NOT tested and is not this check's business --
+    `check_dangling_targets` already reports a `relations:` target absent
+    from the bundle, and a claim can be perfectly unbacked while pointing
+    at a document that exists (both real occurrences in #421 target live
+    Concepts).
+
+    REPORT ONLY. The finding names the citing document, the relation type,
+    the offending target, and the provenance the document does record --
+    enough to judge the claim without reopening the file -- and it names NO
+    command: removing a human-accepted `relations:` entry is a destructive
+    edit no read-only verb may make, and no repair verb exists for it. The
+    detail deliberately contains no backtick-spanned `openkos <verb>`
+    command at all, so `cli/next_action.py`'s `_command_from_detail` has
+    nothing to extract even if this kind were ever passed to it -- a
+    stronger guard than `multi-source-uncovered`'s, which relies on its
+    consumer's `finding.kind` filter.
+
+    One finding per unique `(citing doc, type, target)` triple, in doc order
+    then each doc's own `relations:` order -- the SAME
+    one-finding-per-unique-pair contract `check_dangling_targets` and
+    `check_dangling_provenance` pin. This scan is READ-ONLY and NON-GATING:
+    it never writes and its findings never affect any caller's exit code."""
+    findings: list[LintFinding] = []
+    for doc in docs:
+        backing = set(doc.provenance)
+        recorded = (
+            ", ".join(repr(entry) for entry in doc.provenance)
+            if doc.provenance
+            else "none recorded"
+        )
+        seen: set[tuple[str, str]] = set()
+        for rel_type, target in doc.engine_owned_relations:
+            if target in backing or (rel_type, target) in seen:
+                continue
+            seen.add((rel_type, target))
+            findings.append(
+                LintFinding(
+                    kind="unbacked-provenance",
+                    path=f"{doc.identity}.md",
+                    detail=(
+                        f"relations: asserts {rel_type} '{target}', which this "
+                        f"document's own provenance does not record "
+                        f"(provenance: {recorded}) — an unbacked provenance "
+                        "claim: the graph projection synthesizes "
+                        f"{rel_type} from provenance, so this edge is "
+                        "indistinguishable from a real one once projected. "
+                        "Nothing removes it automatically; judge it and edit "
+                        "the document yourself"
                     ),
                 )
             )

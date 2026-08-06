@@ -19,8 +19,8 @@ skipped findings anywhere in its output; recommendations for
 require a live model backend and are out of scope); the informational
 concept-to-concept edge-count line (`next` never calls `build_graph`);
 remedies for findings that name no command (`conformance`, `dangling`,
-`multi-source-uncovered` — these remain visible only through
-`openkos status`/`openkos lint`).
+`multi-source-uncovered`, `unbacked-provenance` — these remain visible only
+through `openkos status`/`openkos lint`).
 
 ## Requirements
 

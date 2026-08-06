@@ -1081,3 +1081,81 @@ def test_status_says_nothing_about_staleness_on_a_freshly_initialized_workspace(
 
     assert result.exit_code == 0
     assert "stale" not in result.stdout
+
+
+# --- issue #421: unbacked provenance claims ---
+
+
+def test_status_lists_unbacked_provenance_under_needs_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `relations:`-written `derived_from` no `provenance:` entry backs is
+    listed under "needs attention", labeled `unbacked-provenance` distinctly
+    and naming the offending edge, and `status` still exits 0 (issue #421).
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "pre-built-skills.md").write_text(
+        "---\ntype: Concept\ntitle: Pre-built Skills\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "document-skills.md").write_text(
+        "---\ntype: Concept\ntitle: Document Skills\n"
+        "provenance:\n  - sources/a\n"
+        "relations:\n  - type: derived_from\n"
+        "    target: concepts/pre-built-skills.md\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Needs attention:", 1)[1]
+    assert "concepts/document-skills: " in section
+    assert "unbacked-provenance" in section
+    assert "derived_from" in section
+    assert "concepts/pre-built-skills" in section
+
+
+def test_status_unbacked_provenance_reuses_the_single_collect_docs_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`status` still calls `lint_check.collect_docs` exactly ONCE with the
+    unbacked-provenance check wired in -- it reuses the SAME in-memory
+    `docs` list every other folded lint check already shares (issue #421;
+    the structural no-fifth-walk guard)."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "invented.md").write_text(
+        "---\ntype: Concept\ntitle: Invented\n"
+        "relations:\n  - type: derived_from\n    target: concepts/other.md\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+    calls = {"n": 0}
+    real = lint_check.collect_docs
+
+    def _counting_collect_docs(
+        bundle_dir: Path,
+    ) -> tuple[list[lint_check.LintDoc], list[str]]:
+        calls["n"] += 1
+        return real(bundle_dir)
+
+    monkeypatch.setattr(
+        "openkos.cli.main.lint_check.collect_docs", _counting_collect_docs
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert calls["n"] == 1
+    assert "[unbacked-provenance]" in result.stdout
