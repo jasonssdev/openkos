@@ -13,6 +13,7 @@ import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
@@ -20,6 +21,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos import config
 from openkos.cli import curate, observability
 from openkos.cli.main import app
+from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
@@ -2178,3 +2180,88 @@ def test_contradictions_stage_runs_for_a_bundle_whose_only_candidates_are_merges
     assert probe.llm_calls == 1
     assert probe.items, "an empty queue here makes run_curate skip the stage"
     assert probe.empty_message is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #450: the Contradictions stage built a graph it never used, and told
+# the operator about cap truncation only after the spend it describes.
+# ---------------------------------------------------------------------------
+
+
+def test_contradictions_run_builds_no_graph_it_does_not_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_contradictions_run` builds exactly ONE graph: the one behind the plan
+    it hands to `find_contradictions`.
+
+    It used to build a second one purely to obtain a `store` argument --
+    dead work, because `find_contradictions` reads `store` only inside its
+    `if plan is None:` branch, and the plan is always supplied here. Each
+    `build_graph` is a full in-memory SQLite build over the bundle, so the
+    waste is real rather than notional (issue #450)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    builds: list[Path] = []
+    real_build_graph = sqlite_graph.build_graph
+
+    def _counting_build_graph(bundle_dir: Path, **kwargs: Any) -> Any:
+        builds.append(bundle_dir)
+        return real_build_graph(bundle_dir, **kwargs)
+
+    monkeypatch.setattr(curate, "build_graph", _counting_build_graph)
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions", lambda *a, **k: ([], 0)
+    )
+
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+        auto=True,
+    )
+    ctx.ollama_client = _OfflineOllama()
+
+    curate._contradictions_run(ctx, curate.StageProbe())
+
+    assert len(builds) == 1, f"expected one graph build, got {len(builds)}"
+
+
+def test_contradictions_probe_carries_the_truncation_notice_to_the_cost_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`gate()` echoes `StageProbe.notice` immediately before `cost_line`, so
+    a truncation advisory set there reaches the operator BEFORE they consent
+    to the spend -- the same place `_structure_probe` puts its own cap notice.
+
+    The Contradictions probe holds the plan the notice is computed from, so
+    withholding it until `run` told the operator only after the calls it
+    describes had been paid for (issue #450)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    truncated = CandidatePlan(
+        specs=(
+            _CandidateSpec(
+                pair_ids=("concepts/a", "concepts/b"), relation_type="related_to"
+            ),
+        ),
+        edge_total=250,
+        merged_total=40,
+    )
+    monkeypatch.setattr(curate, "_contradiction_plan", lambda _ctx: truncated)
+
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+        auto=True,
+    )
+
+    probe = curate._contradictions_probe(ctx)
+
+    assert probe.notice is not None
+    assert "cap reached" in probe.notice
+    assert "typed-edge" in probe.notice
+    assert "merged-body" in probe.notice
