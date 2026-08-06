@@ -25,6 +25,7 @@ from openkos.graph.sqlite_graph import build_graph
 from openkos.llm import parsing
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
+from openkos.model import okf
 from openkos.resolution import contradiction as contradiction_mod
 
 
@@ -160,6 +161,21 @@ def test_contradiction_verdict_carries_all_expected_fields() -> None:
     assert verdict.confidence == 0.9
     assert verdict.rationale == "explicit conflict"
     assert verdict.conflicting_claims == ("A says X", "B says not X")
+
+
+def test_contradiction_verdict_merged_absorbed_id_defaults_to_none() -> None:
+    """`merged_absorbed_id` (surface-merged-body-contradictions, Correction
+    2) defaults to `None` for a typed-edge candidate -- every existing
+    construction site that never passes it keeps working unchanged."""
+    verdict = contradiction_mod.ContradictionVerdict(
+        pair_ids=("a", "b"),
+        verdict=contradiction_mod.Verdict.CONSISTENT,
+        confidence=0.5,
+        rationale="",
+        conflicting_claims=(),
+    )
+
+    assert verdict.merged_absorbed_id is None
 
 
 def test_contradiction_verdict_is_frozen() -> None:
@@ -1767,3 +1783,506 @@ def test_local_exemption_defaults_to_false_on_find_contradictions(
 
     assert verdicts == []
     assert llm.calls == []
+
+
+# ---------------------------------------------------------------------------
+# surface-merged-body-contradictions (issue #409, detection half): intra-
+# document candidates built from `merged_from`. A merge stacks the absorbed
+# body under a `## Merged content` heading, which hides the disagreement
+# from the typed-edge candidate walk above -- these candidates pair
+# `entry.survivor_before`'s body against `entry.absorbed_snapshot`'s body,
+# recovered deterministically from the survivor's own ledger alone.
+# ---------------------------------------------------------------------------
+
+
+def _write_survivor_with_merges(
+    path: Path,
+    *,
+    title: str = "Survivor",
+    body: str = "Current body.",
+    sensitivity_value: str | None = "private",
+    entries: Sequence[okf.MergeLedgerEntry] = (),
+) -> None:
+    """Write a concept `.md` file whose `merged_from` ledger is `entries`,
+    encoded through the real `okf.encode_merge_ledger_entry` codec (never
+    hand-spliced YAML)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {"type": "Concept", "title": title}
+    if sensitivity_value is not None:
+        metadata["sensitivity"] = sensitivity_value
+    if entries:
+        metadata["merged_from"] = [okf.encode_merge_ledger_entry(e) for e in entries]
+    path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+
+def _ledger_entry(
+    *,
+    absorbed_id: str = "concepts/absorbed",
+    survivor_before_body: str = "Survivor before.",
+    absorbed_body: str = "Absorbed body.",
+    survivor_title: str = "Survivor",
+    absorbed_title: str = "Absorbed",
+    sensitivity_before: str = "private",
+    sensitivity_after: str = "private",
+    merged_at: str = "2026-01-01T00:00:00Z",
+) -> okf.MergeLedgerEntry:
+    """`MergeLedgerEntry` fixture whose `survivor_before`/`absorbed_snapshot`
+    are real, parseable `.md` document texts -- both bodies an intra-
+    document candidate must recover deterministically from the ledger
+    alone."""
+    return okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at=merged_at,
+        absorbed_id=absorbed_id,
+        absorbed_snapshot=okf.dump_frontmatter(
+            {"type": "Concept", "title": absorbed_title}, absorbed_body
+        ),
+        survivor_before=okf.dump_frontmatter(
+            {"type": "Concept", "title": survivor_title}, survivor_before_body
+        ),
+        index_before="",
+        log_before="",
+        link_rewrites=[],
+        sensitivity_before=sensitivity_before,
+        sensitivity_after=sensitivity_after,
+        relation_rewrites=[],
+        provenance_rewrites=[],
+    )
+
+
+def test_merged_body_candidates_builds_one_candidate_per_ledger_entry(
+    tmp_path: Path,
+) -> None:
+    """One `MergeLedgerEntry` on a survivor yields exactly one intra-document
+    candidate, pairing that entry's `survivor_before`/`absorbed_snapshot`
+    bodies."""
+    bundle_dir = tmp_path / "bundle"
+    entry = _ledger_entry(absorbed_id="concepts/apatheia-2")
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "apatheia.md", entries=[entry]
+    )
+
+    candidates = contradiction_mod._merged_body_candidates(bundle_dir, frozenset())
+
+    assert len(candidates) == 1
+    (candidate,) = candidates
+    assert candidate.pair_ids == ("concepts/apatheia", "concepts/apatheia")
+    assert candidate.merge_entry == entry
+
+
+def test_merged_body_candidates_nested_merges_are_linear_not_quadratic(
+    tmp_path: Path,
+) -> None:
+    """N ledger entries on one survivor produce exactly N candidates --
+    `merged_from` is a flat LIFO list, so no recursion, and never the
+    fully-stacked current body compared against every fragment nor
+    all-pairs-of-fragments."""
+    bundle_dir = tmp_path / "bundle"
+    entries = [_ledger_entry(absorbed_id=f"concepts/absorbed-{i}") for i in range(5)]
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md", entries=entries
+    )
+
+    candidates = contradiction_mod._merged_body_candidates(bundle_dir, frozenset())
+
+    assert len(candidates) == 5
+    absorbed_ids = [c.merge_entry.absorbed_id for c in candidates if c.merge_entry]
+    assert absorbed_ids == [f"concepts/absorbed-{i}" for i in range(5)]
+
+
+def test_merged_body_candidates_no_merges_yields_none(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_survivor_with_merges(bundle_dir / "concepts" / "plain.md", entries=[])
+
+    candidates = contradiction_mod._merged_body_candidates(bundle_dir, frozenset())
+
+    assert candidates == []
+
+
+def test_merged_body_candidates_excludes_deprecated_survivor(tmp_path: Path) -> None:
+    """A deprecated/superseded survivor contributes no merged-body
+    candidates, mirroring `_candidate_pairs`'s own deprecation treatment."""
+    bundle_dir = tmp_path / "bundle"
+    entry = _ledger_entry()
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md", entries=[entry]
+    )
+
+    candidates = contradiction_mod._merged_body_candidates(
+        bundle_dir, frozenset({"concepts/survivor"})
+    )
+
+    assert candidates == []
+
+
+def test_merged_body_candidates_corrupt_ledger_degrades_that_survivor_only(
+    tmp_path: Path,
+) -> None:
+    """A survivor whose `merged_from` frontmatter is corrupt (non-list)
+    contributes zero candidates for THAT survivor rather than raising or
+    aborting the whole walk -- a sibling survivor with a valid ledger is
+    unaffected."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / "corrupt.md").write_text(
+        "---\ntype: Concept\ntitle: Corrupt\nmerged_from: not-a-list\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    entry = _ledger_entry()
+    _write_survivor_with_merges(bundle_dir / "concepts" / "clean.md", entries=[entry])
+
+    candidates = contradiction_mod._merged_body_candidates(bundle_dir, frozenset())
+
+    assert len(candidates) == 1
+    assert candidates[0].pair_ids == ("concepts/clean", "concepts/clean")
+
+
+def test_find_contradictions_judges_merged_body_candidate_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """A survivor with one ledger entry and no typed edges at all still
+    yields exactly one judged verdict, carrying `merged_absorbed_id`."""
+    bundle_dir = tmp_path / "bundle"
+    entry = _ledger_entry(
+        absorbed_id="concepts/apatheia-2",
+        survivor_before_body=(
+            "Apatheia is freedom from the pathe, the destructive passions."
+        ),
+        absorbed_body=(
+            "Apatheia is the Stoic goal of emotional indifference, freedom "
+            "from passion."
+        ),
+    )
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "apatheia.md",
+        body="Apatheia is freedom from the pathe, the destructive passions.",
+        entries=[entry],
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="contradicts")])
+
+    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert total == 1
+    assert len(verdicts) == 1
+    (verdict,) = verdicts
+    assert verdict.pair_ids == ("concepts/apatheia", "concepts/apatheia")
+    assert verdict.merged_absorbed_id == "concepts/apatheia-2"
+    assert verdict.verdict is contradiction_mod.Verdict.CONTRADICTS
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "freedom from the pathe" in message["content"]
+    assert "emotional indifference" in message["content"]
+
+
+# ---------------------------------------------------------------------------
+# `merged_absorbed_id` as the SOLE discriminator (Correction 2): a `(x, x)`
+# `pair_ids` is producible TODAY from an ordinary typed self-loop
+# (independent of this change, #411) -- so a self-loop-derived verdict and a
+# merged-content verdict for the SAME id must never be conflated, and every
+# renderer must branch on `merged_absorbed_id is not None`, never on
+# `pair_ids` shape.
+# ---------------------------------------------------------------------------
+
+
+def test_self_loop_and_merged_content_verdicts_for_same_id_render_distinctly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand-authored typed self-loop on `concepts/x` (reachable today, see
+    #411) and a merged-body candidate on the SAME `concepts/x` in the SAME
+    run produce two verdicts sharing the identical `pair_ids == ("concepts/x",
+    "concepts/x")` -- distinguishable ONLY via `merged_absorbed_id`."""
+    bundle_dir = tmp_path / "bundle"
+    entry = _ledger_entry(absorbed_id="concepts/absorbed")
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "x.md",
+        title="X",
+        entries=[entry],
+    )
+    self_loop_edge = Edge(
+        source_id="concepts/x", target_id="concepts/x", relation_type="related_to"
+    )
+    fake_store: GraphStore = _FakeGraphStore([self_loop_edge])
+    monkeypatch.setattr(
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(fake_store),
+    )
+    llm = _FakeLLM(
+        replies=[_valid_reply(verdict="consistent"), _valid_reply(verdict="consistent")]
+    )
+
+    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert len(verdicts) == 2
+    same_id_verdicts = [
+        v for v in verdicts if v.pair_ids == ("concepts/x", "concepts/x")
+    ]
+    assert len(same_id_verdicts) == 2
+    self_loop_verdicts = [v for v in verdicts if v.merged_absorbed_id is None]
+    merged_verdicts = [v for v in verdicts if v.merged_absorbed_id is not None]
+    assert len(self_loop_verdicts) == 1
+    assert len(merged_verdicts) == 1
+    assert merged_verdicts[0].merged_absorbed_id == "concepts/absorbed"
+
+
+# ---------------------------------------------------------------------------
+# `_MAX_PAIRS` over a MIXED candidate list (Requirement 3): typed-edge and
+# merged-body candidates merge into ONE ordered list before a SINGLE cap
+# slice -- one `total_pair_count`, one truncation signal, never a second
+# parallel cap.
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_candidate_list_shares_a_single_cap_and_truncation_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    max_pairs = contradiction_mod._MAX_PAIRS
+    edge_count = max_pairs - 2
+    merged_count = 5  # pushes the combined total 3 past the cap
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    for i in range(merged_count):
+        _write_survivor_with_merges(
+            bundle_dir / "concepts" / f"survivor{i:04d}.md",
+            entries=[_ledger_entry(absorbed_id=f"concepts/absorbed{i:04d}")],
+        )
+    store: GraphStore = _FakeGraphStore(_chain_edges(edge_count))
+    monkeypatch.setattr(
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(store),
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * max_pairs)
+
+    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert total == edge_count + merged_count
+    assert len(verdicts) == max_pairs
+    assert total > len(verdicts)
+
+
+def test_mixed_candidate_list_under_cap_judges_every_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md",
+        entries=[_ledger_entry()],
+    )
+    store: GraphStore = _FakeGraphStore(_chain_edges(3))
+    monkeypatch.setattr(
+        contradiction_mod,
+        "build_graph",
+        lambda _bundle_dir, **_kw: _store_context(store),
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * 4)
+
+    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert total == 4
+    assert len(verdicts) == 4
+
+
+# ---------------------------------------------------------------------------
+# The ledger-aware sensitivity gate wired into `find_contradictions`
+# (Correction 1): a candidate whose `sensitivity_before`/`sensitivity_after`
+# is confidential stays blocked even after the survivor's CURRENT value was
+# lowered via `set-sensitivity --allow-downgrade`.
+# ---------------------------------------------------------------------------
+
+
+def test_merged_candidate_stays_blocked_after_survivor_downgraded(
+    tmp_path: Path,
+) -> None:
+    """The whole point of Correction 1: a survivor absorbed a confidential
+    document (frozen in the ledger at merge time), then was later downgraded
+    to `public` via `set-sensitivity --allow-downgrade`. The CURRENT on-disk
+    frontmatter now reads `public`, but the ledger-aware gate must still
+    block -- proven by asserting the body NEVER reaches the LLM prompt."""
+    bundle_dir = tmp_path / "bundle"
+    entry = _ledger_entry(
+        absorbed_id="concepts/secret-source",
+        survivor_before_body="Secret pre-merge body.",
+        absorbed_body="Secret absorbed body.",
+        sensitivity_before="confidential",
+        sensitivity_after="confidential",
+    )
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md",
+        body="Current public body.",
+        sensitivity_value="public",  # downgraded via --allow-downgrade
+        entries=[entry],
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="uncertain")])
+
+    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert len(verdicts) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Secret pre-merge body." not in message["content"]
+    assert "Secret absorbed body." not in message["content"]
+
+
+def test_merged_candidate_include_confidential_restores_the_blocked_body(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    entry = _ledger_entry(
+        absorbed_id="concepts/secret-source",
+        survivor_before_body="Secret pre-merge body.",
+        absorbed_body="Secret absorbed body.",
+        sensitivity_before="confidential",
+        sensitivity_after="confidential",
+    )
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md",
+        body="Current public body.",
+        sensitivity_value="public",
+        entries=[entry],
+    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="uncertain")])
+
+    verdicts, _total = contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, include_confidential=True
+    )
+
+    assert len(verdicts) == 1
+    (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
+    assert "Secret pre-merge body." in message["content"]
+    assert "Secret absorbed body." in message["content"]
+
+
+# ---------------------------------------------------------------------------
+# `_load_ledger_bodies` -- the ledger-body sibling of `_load_doc`
+# (Requirement 4): same degrade-on-parse-failure contract, parsing via
+# `okf.load_frontmatter` instead of reading a path, calling the new
+# ledger-aware gate instead of `should_block`.
+# ---------------------------------------------------------------------------
+
+
+def test_load_ledger_bodies_returns_both_bodies_when_unblocked(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    entry = _ledger_entry(
+        absorbed_id="concepts/absorbed",
+        survivor_before_body="Before body.",
+        absorbed_body="Absorbed body.",
+    )
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md", entries=[entry]
+    )
+
+    before_doc, absorbed_doc = contradiction_mod._load_ledger_bodies(
+        bundle_dir, "concepts/survivor", entry
+    )
+
+    assert before_doc == ("Survivor", "Before body.")
+    assert absorbed_doc == ("Absorbed", "Absorbed body.")
+
+
+def test_load_ledger_bodies_drops_previously_absorbed_sections_from_before_body(
+    tmp_path: Path,
+) -> None:
+    """`build_merged_document` APPENDS, so a later entry's `survivor_before`
+    already embeds every earlier absorbed body. Sending that accumulated body
+    is quadratic in cost across a survivor's ledger AND attributes an earlier
+    candidate's disagreement to this one, so the before-body is cut at the
+    first `## Merged content (` heading.
+
+    Found by this change's 4R review; the exploration's linearity analysis
+    covered candidate COUNT only, never per-candidate payload size."""
+    accumulated = (
+        "Own content at this point.\n\n"
+        "## Merged content (concepts/absorbed-earlier)\n\n"
+        "Earlier absorbed body that belongs to an earlier candidate."
+    )
+    entry = _ledger_entry(
+        absorbed_id="concepts/absorbed",
+        survivor_before_body=accumulated,
+        absorbed_body="Absorbed body.",
+    )
+    bundle_dir = tmp_path / "bundle"
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md", entries=[entry]
+    )
+
+    before_doc, absorbed_doc = contradiction_mod._load_ledger_bodies(
+        bundle_dir, "concepts/survivor", entry
+    )
+
+    assert before_doc == ("Survivor", "Own content at this point.")
+    assert "Earlier absorbed body" not in before_doc[1]
+    assert "concepts/absorbed-earlier" not in before_doc[1]
+    assert absorbed_doc == ("Absorbed", "Absorbed body.")
+
+
+def test_own_body_before_merge_returns_a_first_merge_body_unchanged() -> None:
+    """A survivor's FIRST merge has no prior `## Merged content (` section,
+    so nothing is cut -- the split must not truncate ordinary content."""
+    body = "Ordinary body mentioning merged content in prose, unheaded."
+
+    assert contradiction_mod._own_body_before_merge(body) == body
+
+
+def test_load_ledger_bodies_degrades_only_the_unparseable_side(
+    tmp_path: Path,
+) -> None:
+    """A ledger string that fails `okf.load_frontmatter` degrades ONLY its
+    own side; the healthy side is still sent, so one corrupt snapshot does
+    not silently discard a judgeable half. The review flagged both broad
+    `except` branches as reachable but unasserted."""
+    entry = _ledger_entry(absorbed_id="concepts/absorbed")
+    broken = dataclasses.replace(
+        entry, survivor_before="---\nthis: [is not: valid yaml\n---\nbody"
+    )
+    bundle_dir = tmp_path / "bundle"
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md", entries=[broken]
+    )
+
+    before_doc, absorbed_doc = contradiction_mod._load_ledger_bodies(
+        bundle_dir, "concepts/survivor", broken
+    )
+
+    assert before_doc == ("concepts/survivor", "")
+    assert absorbed_doc == ("Absorbed", "Absorbed body.")
+
+
+def test_load_ledger_bodies_degrades_when_survivor_current_doc_missing(
+    tmp_path: Path,
+) -> None:
+    """No current on-disk survivor document (dangling/deleted) degrades both
+    bodies to `(id, "")`, exactly like `_load_doc`'s own missing-document
+    contract -- fail-closed, since the current sensitivity cannot be read."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    entry = _ledger_entry(absorbed_id="concepts/absorbed")
+
+    before_doc, absorbed_doc = contradiction_mod._load_ledger_bodies(
+        bundle_dir, "concepts/missing-survivor", entry
+    )
+
+    assert before_doc == ("concepts/missing-survivor", "")
+    assert absorbed_doc == ("concepts/absorbed", "")
+
+
+def test_load_ledger_bodies_degrades_when_gate_blocks(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    entry = _ledger_entry(
+        absorbed_id="concepts/absorbed",
+        survivor_before_body="Before body.",
+        absorbed_body="Absorbed body.",
+        sensitivity_before="confidential",
+        sensitivity_after="confidential",
+    )
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md",
+        sensitivity_value="public",
+        entries=[entry],
+    )
+
+    before_doc, absorbed_doc = contradiction_mod._load_ledger_bodies(
+        bundle_dir, "concepts/survivor", entry
+    )
+
+    assert before_doc == ("concepts/survivor", "")
+    assert absorbed_doc == ("concepts/absorbed", "")

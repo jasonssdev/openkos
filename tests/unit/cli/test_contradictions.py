@@ -137,6 +137,7 @@ def _verdict(
     confidence: float = 0.9,
     rationale: str = "stub rationale",
     conflicting_claims: tuple[str, ...] = ("claim one", "claim two"),
+    merged_absorbed_id: str | None = None,
 ) -> ContradictionVerdict:
     return ContradictionVerdict(
         pair_ids=(source, target),
@@ -144,6 +145,7 @@ def _verdict(
         confidence=confidence,
         rationale=rationale,
         conflicting_claims=conflicting_claims,
+        merged_absorbed_id=merged_absorbed_id,
     )
 
 
@@ -796,6 +798,42 @@ def test_contradictions_renders_pair_verdict_confidence_and_cited_claims(
     assert "dates conflict" in result.stdout
     assert "meeting is Tuesday" in result.stdout
     assert "meeting is Wednesday" in result.stdout
+
+
+def test_contradictions_renders_merged_body_verdict_distinctly_from_pair_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """surface-merged-body-contradictions (#409): a merged-body verdict
+    (`merged_absorbed_id is not None`) is rendered distinctly from an
+    ordinary pair verdict -- the survivor id once, with an explicit "merged
+    content, absorbed <id>" annotation, never the `a <-> b` pair shape."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[list[ContradictionVerdict], int]:
+        return (
+            [
+                _verdict(
+                    source="concepts/apatheia",
+                    target="concepts/apatheia",
+                    confidence=0.9,
+                    rationale="the two readings disagree",
+                    merged_absorbed_id="concepts/apatheia-2",
+                )
+            ],
+            1,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "concepts/apatheia" in result.stdout
+    assert "concepts/apatheia-2" in result.stdout
+    assert "merged content" in result.stdout
+    assert "concepts/apatheia <-> concepts/apatheia" not in result.stdout
 
 
 def test_contradictions_builds_ollama_client_from_configured_model(

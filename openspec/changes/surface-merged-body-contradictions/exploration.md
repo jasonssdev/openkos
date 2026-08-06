@@ -248,8 +248,8 @@ a real follow-up question, explicitly out of scope.
 **Report-half placement.** `okf.build_merged_document` stays pure and returns
 `(metadata, body)` only. The body-stacking report is recomputed in
 `prepare_merge` / `_prepare_one_merge`, surfaced via new `PreparedMerge` fields,
-and echoed by the `merge` command block (`cli/main.py:6092-6110`) and
-`_format_merge_preview_line` (`:1106-1115`) — following the established
+and echoed by the `merge` command block (`cli/main.py:6307`) and
+`_format_merge_preview_line` (`:1146`) — following the established
 `dropped_self_loops` / `deduped_collisions` pattern exactly. Whether
 `_adjudication_payload`'s `--json` shape also gains the signal is an open
 compatibility call for `sdd-propose`.
@@ -260,7 +260,7 @@ compatibility call for `sdd-propose`.
   (`combine_sensitivity`), `:454-499` (`MergeLedgerEntry`)
 - `src/openkos/bundle/merge.py` (`plan_merge` / `plan_unmerge`)
 - `src/openkos/cli/main.py:5447-5658` (`PreparedMerge` / `prepare_merge`),
-  `:6092-6110` (merge echo), `:1106-1115` (`_format_merge_preview_line`),
+  `:6307` (merge echo), `:1146` (`_format_merge_preview_line`),
   `:1037-1059` (`_adjudication_payload`), `:8431-8643` (`contradictions`)
 - `src/openkos/resolution/contradiction.py` — `ContradictionVerdict`
   (`:130-147`), `_pair_key` / `_candidate_pairs` (`:150-206`), `_pairs_and_types`

@@ -436,3 +436,137 @@ def test_sensitive_concept_ids_include_confidential_defaults_to_false(
     bundle_dir = tmp_path / "bundle"
     _write_doc(bundle_dir / "c" / "secret.md", sensitivity_value="confidential")
     assert sensitivity.sensitive_concept_ids(bundle_dir) == frozenset({"c/secret"})
+
+
+# ---------------------------------------------------------------------------
+# `merged_content_blocked` -- the ledger-aware gate (surface-merged-body-
+# contradictions, Correction 1). `sensitive_concept_ids` reads only the
+# CURRENT on-disk sensitivity per file and cannot see this: a survivor
+# absorbing a `confidential` document, later downgraded via
+# `set-sensitivity --allow-downgrade`, still embeds the original
+# confidential body inside `entry.absorbed_snapshot`.
+# ---------------------------------------------------------------------------
+
+
+def _entry(
+    *,
+    sensitivity_before: str = "private",
+    sensitivity_after: str = "private",
+    absorbed_id: str = "concepts/absorbed",
+) -> okf.MergeLedgerEntry:
+    """Minimal `MergeLedgerEntry` fixture -- only the three fields
+    `merged_content_blocked` reads are varied; the rest are inert."""
+    return okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at="2026-01-01T00:00:00Z",
+        absorbed_id=absorbed_id,
+        absorbed_snapshot="---\ntype: Concept\ntitle: Absorbed\n---\nBody.\n",
+        survivor_before="---\ntype: Concept\ntitle: Survivor\n---\nBody.\n",
+        index_before="",
+        log_before="",
+        link_rewrites=[],
+        sensitivity_before=sensitivity_before,
+        sensitivity_after=sensitivity_after,
+        relation_rewrites=[],
+        provenance_rewrites=[],
+    )
+
+
+def test_merged_content_blocked_all_private_is_not_blocked() -> None:
+    entry = _entry(sensitivity_before="private", sensitivity_after="private")
+    assert sensitivity.merged_content_blocked("private", entry) is False
+
+
+def test_merged_content_blocked_current_confidential_blocks() -> None:
+    entry = _entry(sensitivity_before="private", sensitivity_after="private")
+    assert sensitivity.merged_content_blocked("confidential", entry) is True
+
+
+def test_merged_content_blocked_sensitivity_before_confidential_blocks() -> None:
+    """The survivor's CURRENT value is public, but the entry's own frozen
+    `sensitivity_before` was confidential -- the ledger-aware gate must
+    still block, since `sensitivity_before` is an independent floor."""
+    entry = _entry(sensitivity_before="confidential", sensitivity_after="private")
+    assert sensitivity.merged_content_blocked("public", entry) is True
+
+
+def test_merged_content_blocked_sensitivity_after_confidential_blocks() -> None:
+    """`sensitivity_after` already dominates the absorbed document's own
+    original sensitivity by construction (`combine_sensitivity`) -- a
+    confidential `sensitivity_after` alone must block."""
+    entry = _entry(sensitivity_before="private", sensitivity_after="confidential")
+    assert sensitivity.merged_content_blocked("public", entry) is True
+
+
+def test_merged_content_blocked_survivor_downgraded_after_confidential_merge() -> None:
+    """The exact Correction 1 scenario: a survivor absorbed a confidential
+    document (recorded in the ledger at merge time), then a human later ran
+    `set-sensitivity <survivor> public --allow-downgrade`. The CURRENT
+    on-disk value is now `public`, but the frozen ledger entry still floors
+    the gate at confidential."""
+    entry = _entry(sensitivity_before="confidential", sensitivity_after="confidential")
+    assert sensitivity.merged_content_blocked("public", entry) is True
+
+
+def test_merged_content_blocked_evaluated_per_entry_not_once_per_survivor() -> None:
+    """A later downgrade can have lowered the CURRENT value below what one
+    specific historical entry established -- each entry is its own
+    independent floor, so an old confidential-touching entry stays blocked
+    even while a newer, fully-private entry on the SAME survivor does not."""
+    old_confidential_entry = _entry(
+        sensitivity_before="confidential", sensitivity_after="confidential"
+    )
+    new_private_entry = _entry(
+        sensitivity_before="private", sensitivity_after="private"
+    )
+
+    assert sensitivity.merged_content_blocked("public", old_confidential_entry) is True
+    assert sensitivity.merged_content_blocked("public", new_private_entry) is False
+
+
+def test_merged_content_blocked_blank_sensitivity_before_sentinel_fails_closed() -> (
+    None
+):
+    """`sensitivity_before` uses `""` as the sentinel for "survivor had no
+    `sensitivity` key at merge time" -- treated fail-closed (as confidential),
+    never silently as the `okf._rank` absent-default of private."""
+    entry = _entry(sensitivity_before="", sensitivity_after="private")
+    assert sensitivity.merged_content_blocked("private", entry) is True
+
+
+def test_merged_content_blocked_include_confidential_short_circuits() -> None:
+    """`include_confidential=True` releases the gate immediately, before any
+    ledger entry field is inspected -- same contract as `should_block` /
+    `sensitive_concept_ids`."""
+    entry = _entry(sensitivity_before="confidential", sensitivity_after="confidential")
+    assert (
+        sensitivity.merged_content_blocked(
+            "confidential", entry, include_confidential=True
+        )
+        is False
+    )
+
+
+def test_merged_content_blocked_local_exemption_short_circuits() -> None:
+    entry = _entry(sensitivity_before="confidential", sensitivity_after="confidential")
+    assert (
+        sensitivity.merged_content_blocked("confidential", entry, local_exemption=True)
+        is False
+    )
+
+
+def test_merged_content_blocked_custom_threshold() -> None:
+    """A `threshold` of `"private"` blocks anything at or above private,
+    same `okf._rank` semantics `blocks_llm_send` already exposes."""
+    entry = _entry(sensitivity_before="private", sensitivity_after="private")
+    assert (
+        sensitivity.merged_content_blocked("public", entry, threshold="private") is True
+    )
+    assert (
+        sensitivity.merged_content_blocked(
+            "public",
+            _entry(sensitivity_before="public", sensitivity_after="public"),
+            threshold="private",
+        )
+        is False
+    )

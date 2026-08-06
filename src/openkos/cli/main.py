@@ -8891,11 +8891,26 @@ def contradictions(
         return
 
     for result in displayed:
-        source_id, target_id = result.pair_ids
-        typer.echo(
-            f"[{result.verdict.value.upper()}] {source_id} <-> {target_id} "
-            f"(confidence: {result.confidence:.2f})"
-        )
+        # surface-merged-body-contradictions (#409): `merged_absorbed_id` is
+        # the SOLE discriminator between a typed-edge verdict and an
+        # intra-document (merged-body) verdict -- NEVER `pair_ids` shape
+        # (`ContradictionVerdict.merged_absorbed_id`'s docstring warning). A
+        # `(x, x)` `pair_ids` is separately reachable today via an ordinary
+        # typed self-loop (#411), so branching on pair equality here would
+        # conflate the two.
+        if result.merged_absorbed_id is not None:
+            survivor_id, _ = result.pair_ids
+            typer.echo(
+                f"[{result.verdict.value.upper()}] {survivor_id} "
+                f"(merged content, absorbed {result.merged_absorbed_id}) "
+                f"(confidence: {result.confidence:.2f})"
+            )
+        else:
+            source_id, target_id = result.pair_ids
+            typer.echo(
+                f"[{result.verdict.value.upper()}] {source_id} <-> {target_id} "
+                f"(confidence: {result.confidence:.2f})"
+            )
         for claim in result.conflicting_claims:
             typer.echo(f"  - {claim}")
         typer.echo(f"  rationale: {result.rationale}")
