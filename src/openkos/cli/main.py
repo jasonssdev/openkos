@@ -9307,10 +9307,19 @@ def query(
 
     cited_count = len(result.citations)
     llm_status = "invoked" if result.llm_invoked else "skipped"
+    # The graph term reports `graph_contributed_count` -- the concepts the
+    # graph channel actually ADDED -- not `graph_hit_count`, its raw
+    # personalized-PageRank candidate pool (issue #402). The candidate count
+    # was misleading in both directions: a workspace with zero typed edges
+    # still reported `10 graph`, and even a well-connected one usually
+    # contributes nothing of its own, because the graph channel may only
+    # fill reserved slots with concepts FTS and dense never found. The
+    # `-added` suffix keeps the term from being read as a hit count like the
+    # two before it.
     typer.echo(
         f"retrieval: {result.fts_hit_count} FTS + {result.dense_hit_count} "
-        f"dense + {result.graph_hit_count} graph → {result.fused_count} "
-        f"fused → LLM {llm_status} → {cited_count} cited",
+        f"dense + {result.graph_contributed_count} graph-added → "
+        f"{result.fused_count} fused → LLM {llm_status} → {cited_count} cited",
         err=True,
     )
     if (

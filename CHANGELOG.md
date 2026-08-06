@@ -55,6 +55,37 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- **The graph retrieval channel is now additive instead of a reordering**:
+  it used to be folded into the same reciprocal-rank-fusion sum as FTS and
+  dense, which made it structurally incapable of the one thing a typed graph
+  exists for. RRF scores by rank position with `k = 60`, so a concept only
+  the graph can see, at graph rank 1, scores `1/61 ≈ 0.0164` and can never
+  outscore one both retrievers agree on at rank 10 each, `2/70 ≈ 0.0286` —
+  no matter how central PageRank found it. Measured over 10 questions on an
+  8-source bundle, the graph promoted 26 concepts into the top-5 and every
+  one of them was already inside the FTS+dense pool, while the same list
+  reshuffled and evicted real hits — including dropping `concepts/google-adk`
+  out of the top-5 for *"What should I know about ADK?"*, its exact-title
+  match. The graph got to move things down without ever earning the right to
+  move anything new up. The FTS+dense fusion is now the base ranking, which
+  the graph cannot permute; the graph may only contribute concepts absent
+  from that pool, into `GRAPH_RESERVED_SLOTS` reserved slots at the tail of
+  the final top-k. Re-running the same measurement afterwards: 10 of 10
+  contributions from outside the pool, and `concepts/google-adk` survives.
+  A graph that adds nothing now leaves the answer byte-identical to FTS+dense
+  alone. `k = 60` and the FTS/dense fusion itself are untouched — tuning the
+  constant does not fix an asymmetry that follows from list membership
+  (#402).
+
+- **`query`'s retrieval summary now reports what the graph contributed**:
+  the graph term printed `graph_hit_count`, the raw personalized-PageRank
+  CANDIDATE pool, so a workspace with zero typed edges still reported
+  `10 graph` — a number every reader takes for a contribution. It now reads
+  `<n> graph-added` from the new `AnswerResult.graph_contributed_count`, the
+  count of reserved slots the graph actually filled, which is the number that
+  says whether the channel earned its place. `graph_hit_count` is unchanged
+  and still carries the candidate pool for callers that want it (#402).
+
 - **`duplicates` and `adjudicate` now name the ACRONYM tier**: the tier
   landed in the data model but both rendering sites still bucketed every
   non-HIGH group as `LOW`, and the tally line folded them into `near`. A

@@ -1281,6 +1281,151 @@ def test_graph_hit_count_equals_raw_pool_size_before_truncation(
     assert result.graph_hit_count == 6
 
 
+# --- #402: the graph channel is additive, never a reordering --------------
+
+
+def _pooled_bundle(bundle_dir: Path, size: int) -> list[fts.FtsHit]:
+    """Write `size` `concepts/p{i}` docs and return the matching FTS hit
+    list, ordered `p0` best -- so the FTS+dense base ranking is exactly
+    `["concepts/p0", ..., f"concepts/p{size-1}"]`."""
+    for i in range(size):
+        _write_doc(
+            bundle_dir / "concepts" / f"p{i}.md", title=f"P{i}", body=f"body {i}"
+        )
+    return [
+        fts.FtsHit(concept_id=f"concepts/p{i}", score=float(i)) for i in range(size)
+    ]
+
+
+def test_graph_never_evicts_a_pooled_concept_it_ranks_highly(tmp_path: Path) -> None:
+    """Issue #402: `concepts/p5` sits at FTS rank 6 -- inside the candidate
+    pool but outside the top-`limit` -- and is the ONLY non-seed the graph
+    can reach, so it comes back at graph rank 1. It MUST NOT be promoted
+    into the answer context, and MUST NOT displace `concepts/p4`."""
+    bundle_dir = tmp_path / "bundle"
+    fts_hits = _pooled_bundle(bundle_dir, 6)
+    fake_store = _FakeGraphStore(
+        nodes=[f"concepts/p{i}" for i in range(6)],
+        edges=[Edge(source_id="concepts/p0", target_id="concepts/p5")],
+    )
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="the base ranking survives"),
+        fts_index=_RecordingIndex(hits=fts_hits),
+        graph_index=fake_store,
+        limit=5,
+    )
+
+    assert [citation.concept_id for citation in result.citations] == [
+        f"concepts/p{i}" for i in range(5)
+    ]
+    assert result.graph_contributed_count == 0
+
+
+def test_a_graph_only_concept_claims_a_reserved_tail_slot(tmp_path: Path) -> None:
+    """A concept only the graph can see joins the answer context in a
+    reserved TAIL slot, displacing the weakest base concept but permuting
+    none of the survivors."""
+    bundle_dir = tmp_path / "bundle"
+    fts_hits = _pooled_bundle(bundle_dir, 6)
+    _write_doc(
+        bundle_dir / "concepts" / "graph-only.md",
+        title="Graph Only",
+        body="reachable only via the graph",
+    )
+    fake_store = _FakeGraphStore(
+        nodes=[f"concepts/p{i}" for i in range(6)] + ["concepts/graph-only"],
+        edges=[Edge(source_id="concepts/p0", target_id="concepts/graph-only")],
+    )
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="the graph added one"),
+        fts_index=_RecordingIndex(hits=fts_hits),
+        graph_index=fake_store,
+        limit=5,
+    )
+
+    assert [citation.concept_id for citation in result.citations] == [
+        "concepts/p0",
+        "concepts/p1",
+        "concepts/p2",
+        "concepts/p3",
+        "concepts/graph-only",
+    ]
+    assert result.graph_contributed_count == 1
+
+
+def test_graph_contributed_count_is_capped_at_the_reserved_slots(
+    tmp_path: Path,
+) -> None:
+    """Four graph-only neighbors still contribute only
+    `fusion.GRAPH_RESERVED_SLOTS` concepts."""
+    bundle_dir = tmp_path / "bundle"
+    fts_hits = _pooled_bundle(bundle_dir, 6)
+    for i in range(4):
+        _write_doc(
+            bundle_dir / "concepts" / f"g{i}.md", title=f"G{i}", body=f"graph only {i}"
+        )
+    fake_store = _FakeGraphStore(
+        nodes=[f"concepts/p{i}" for i in range(6)]
+        + [f"concepts/g{i}" for i in range(4)],
+        edges=[
+            Edge(source_id="concepts/p0", target_id=f"concepts/g{i}") for i in range(4)
+        ],
+    )
+
+    result = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="bounded contribution"),
+        fts_index=_RecordingIndex(hits=fts_hits),
+        graph_index=fake_store,
+        limit=5,
+    )
+
+    assert result.graph_contributed_count == fusion.GRAPH_RESERVED_SLOTS
+    cited = [citation.concept_id for citation in result.citations]
+    assert cited[:3] == ["concepts/p0", "concepts/p1", "concepts/p2"]
+
+
+def test_an_edgeless_graph_contributes_nothing_and_reports_zero(
+    tmp_path: Path,
+) -> None:
+    """A workspace whose graph has nodes but no edges leaves the FTS+dense
+    citation list byte-identical and reports `graph_contributed_count == 0`
+    -- never the raw candidate-pool size."""
+    bundle_dir = tmp_path / "bundle"
+    fts_hits = _pooled_bundle(bundle_dir, 6)
+    recording_index = _RecordingIndex(hits=fts_hits)
+
+    without_graph = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="identical"),
+        fts_index=recording_index,
+        limit=5,
+    )
+    with_edgeless_graph = answer_mod.answer(
+        "dichotomyzz",
+        bundle_dir=bundle_dir,
+        llm=_FakeLLM(reply="identical"),
+        fts_index=recording_index,
+        graph_index=_FakeGraphStore(
+            nodes=[f"concepts/p{i}" for i in range(6)], edges=[]
+        ),
+        limit=5,
+    )
+
+    assert [c.concept_id for c in with_edgeless_graph.citations] == [
+        c.concept_id for c in without_graph.citations
+    ]
+    assert with_edgeless_graph.graph_contributed_count == 0
+
+
 def test_graph_rank_raising_degrades_gracefully(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
