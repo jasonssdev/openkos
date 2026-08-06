@@ -22,6 +22,7 @@ import pytest
 from openkos.extraction import concept as concept_mod
 from openkos.llm.base import Message
 from openkos.llm.ollama import OllamaUnavailable
+from openkos.model.types import CLASSIFIABLE_TYPES
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -773,6 +774,150 @@ def test_source_title_twin_kept_when_it_is_the_only_object() -> None:
     assert len(result) == 1
     assert result[0].title == "MCP Launching"
     assert result[0].type == "Event"
+
+
+# --- The Procedure exemption (#413) -----------------------------------------
+
+_RESEARCH_AGENT_PROCEDURE_ITEM = (
+    '{"type": "Procedure", "title": "Building a Research Agent with the '
+    'Claude Agent SDK", "description": "How to build a research agent on the '
+    'SDK.", "body": "Install the SDK, define the subagents, add guardrails."}'
+)
+
+_AGENT_SDK_ITEM = (
+    '{"type": "Concept", "title": "Claude Agent SDK", '
+    '"description": "The toolkit the tutorial builds on.", "body": ""}'
+)
+
+_GUARDRAILS_ITEM = (
+    '{"type": "Concept", "title": "Human-in-the-Loop Guardrails", '
+    '"description": "Approval checkpoints around an agent\'s actions.", '
+    '"body": ""}'
+)
+
+_RESEARCH_AGENT_CONCEPT_TWIN_ITEM = (
+    '{"type": "Concept", "title": "Building a Research Agent with the '
+    'Claude Agent SDK", "description": "This document describes building a '
+    'research agent.", "body": ""}'
+)
+
+
+def test_primary_procedure_survives_alongside_the_subjects_it_yields() -> None:
+    """#413: a tutorial's primary `Procedure` is NOT a source-title twin.
+
+    The prompt asks the model to choose `Procedure` when a source "teaches a
+    repeatable how-to", and for a tutorial the title IS the procedure. The
+    twin rule then deleted exactly that object whenever the source was rich
+    enough to also yield its secondary subjects -- so the richer the source,
+    the more likely its central object was the one discarded. The Source and
+    the Procedure are different roles: one is the bibliographic anchor, the
+    other is the how-to a reader retrieves.
+    """
+    llm = _FakeLLM(
+        reply=_array(
+            _RESEARCH_AGENT_PROCEDURE_ITEM,
+            _AGENT_SDK_ITEM,
+            _GUARDRAILS_ITEM,
+        )
+    )
+
+    result = _objects(
+        "A walkthrough of building a research agent.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert [r.title for r in result] == [
+        "Building a Research Agent with the Claude Agent SDK",
+        "Claude Agent SDK",
+        "Human-in-the-Loop Guardrails",
+    ]
+    assert result[0].type == "Procedure"
+
+
+def test_non_procedure_twin_still_dropped_beside_an_exempt_procedure() -> None:
+    """#413 does not widen the rule beyond the `Procedure` role: a
+    content-free `Concept` echo of the source title is still a twin and is
+    still dropped, even when the exempt `Procedure` sharing that title is
+    what keeps it company. The exemption keys on the object's role, not on
+    the title having been claimed by something."""
+    llm = _FakeLLM(
+        reply=_array(
+            _RESEARCH_AGENT_PROCEDURE_ITEM,
+            _RESEARCH_AGENT_CONCEPT_TWIN_ITEM,
+            _AGENT_SDK_ITEM,
+        )
+    )
+
+    result = _objects(
+        "A walkthrough of building a research agent.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert [(r.type, r.title) for r in result] == [
+        ("Procedure", "Building a Research Agent with the Claude Agent SDK"),
+        ("Concept", "Claude Agent SDK"),
+    ]
+
+
+def test_procedure_exemption_does_not_rescue_a_non_procedure_twin_alone() -> None:
+    """#413 regression alarm for the case the twin rule was built on: the
+    measured `call-with-maria` shape has no `Procedure` in it at all, so the
+    exemption must not change its outcome."""
+    llm = _FakeLLM(reply=_array(_MARIA_ITEM, _CALL_WITH_MARIA_TWIN_ITEM))
+
+    result = _objects(
+        "Maria and I talked about her move.",
+        source_title="Call with Maria Salazar — 2026-07-14",
+        llm=llm,
+    )
+
+    assert [r.title for r in result] == ["Maria Salazar"]
+
+
+def test_exempt_procedure_alone_is_not_a_survivor_that_drops_others() -> None:
+    """#413 floor guard: when the ONLY object is the exempt `Procedure`
+    twin, nothing is dropped and nothing else must be invented -- the same
+    single-subject floor that already protected the `mcp-launch` shape."""
+    llm = _FakeLLM(reply=_array(_RESEARCH_AGENT_PROCEDURE_ITEM))
+
+    result = _objects(
+        "A walkthrough of building a research agent.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert len(result) == 1
+    assert result[0].type == "Procedure"
+
+
+def test_exempt_procedure_is_not_reported_as_a_cap_casualty() -> None:
+    """#413 x #404: the exempt `Procedure` counts as a produced, retained
+    object, so the cap report must not learn about it as either a twin drop
+    or a discard."""
+    procedure = concept_mod.ExtractionResult(
+        type="Procedure",
+        title="The Source",
+        description="How to do the thing the source teaches.",
+        body="",
+    )
+    concept = concept_mod.ExtractionResult(
+        type="Concept", title="Something Else", description="D", body=""
+    )
+
+    kept = concept_mod._drop_source_title_twins(
+        [procedure, concept], source_title="  the   SOURCE  "
+    )
+
+    assert kept == [procedure, concept]
+
+
+def test_twin_exempt_type_is_in_the_vocabulary() -> None:
+    """A typo in `_TWIN_EXEMPT_TYPE` would not raise -- it would silently
+    restore the deletion the exemption exists to stop, because no validated
+    object could ever equal it. Pin it to the closed vocabulary instead."""
+    assert concept_mod._TWIN_EXEMPT_TYPE in CLASSIFIABLE_TYPES
 
 
 # --- extract_concept: zero / one / N results, OllamaError propagation -------

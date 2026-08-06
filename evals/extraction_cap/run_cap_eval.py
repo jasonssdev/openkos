@@ -86,7 +86,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from openkos.extraction.concept import ExtractionOutcome, extract_concept
+from openkos.extraction.concept import (
+    _TWIN_EXEMPT_TYPE,
+    ExtractionOutcome,
+    extract_concept,
+)
 from openkos.llm.ollama import OllamaClient, OllamaError
 from openkos.source_title import derive_source_title
 
@@ -586,12 +590,20 @@ def twin_deleted_subjects(source_text: str, truth: GroundTruth) -> tuple[str, ..
     "Whoever scores a run here must check which of the two happened before
     recording a miss, or the number will blame the extractor for a rule
     interaction." This function is that check, made automatic.
+
+    A `Procedure` subject is NOT at risk since #413: `_drop_source_title_twins`
+    exempts that type outright, exactly because a tutorial's primary object is
+    the one the title names. Excusing a miss on it here would now hide a real
+    extraction failure behind a rule that no longer fires -- the opposite of
+    what this flag is for.
     """
     derived = derive_source_title(source_text)
     if derived is None:
         return ()
     key = normalize(derived)
-    return tuple(s.title for s in truth.subjects if key in s.keys)
+    return tuple(
+        s.title for s in truth.subjects if key in s.keys and s.type != _TWIN_EXEMPT_TYPE
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1570,7 +1582,8 @@ def self_test() -> int:
     opener(embed)
     check("embed untouched", "options" in seen[-1], False)
 
-    # 10. The twin-rule collision flag fires on the documented shape.
+    # 10. The twin-rule collision flag fires on a non-exempt shape, and no
+    #     longer on the `Procedure` the rule stopped deleting in #413.
     tutorial = _gt(
         "## Genuinely distinct subjects\n\n"
         "- Procedure | Building a Research Agent with the Claude Agent SDK\n"
@@ -1578,9 +1591,16 @@ def self_test() -> int:
         "twin",
     )
     source = "# Building a Research Agent with the Claude Agent SDK\n\nBody.\n"
+    check("procedure no longer at risk", twin_deleted_subjects(source, tutorial), ())
+    echo = _gt(
+        "## Genuinely distinct subjects\n\n"
+        "- Concept | Building a Research Agent with the Claude Agent SDK\n"
+        "- Concept | Claude Agent SDK\n",
+        "twin-echo",
+    )
     check(
-        "twin flagged",
-        twin_deleted_subjects(source, tutorial),
+        "non-procedure twin flagged",
+        twin_deleted_subjects(source, echo),
         ("Building a Research Agent with the Claude Agent SDK",),
     )
     check(

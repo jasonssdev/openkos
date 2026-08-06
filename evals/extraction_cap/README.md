@@ -166,6 +166,11 @@ another survives. `medium-08-sdk-skills` documents that collision on purpose
 and demands the check; the harness performs it automatically so a miss there is
 never recorded as an extraction failure.
 
+Since #413 the flag excludes `Procedure` subjects: the rule exempts that type
+outright, exactly because a tutorial's primary object is the one its title
+names. Excusing a miss on a `Procedure` would now hide a real extraction
+failure behind a rule that cannot fire on it.
+
 ## Sampling arms
 
 `OllamaClient` exposes no temperature knob, and this harness does not add one —
