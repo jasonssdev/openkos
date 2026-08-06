@@ -10,16 +10,15 @@ ranked by combined position alone. Magnitudes (`score`, `distance`) are never
 read; only rank position matters. That two-list ranking is the BASE, and
 nothing else may permute it.
 
-`fuse_with_graph()` layers the graph channel on top of that base ADDITIVELY:
-the graph may only contribute concepts the two retrievers never saw, into a
-bounded number of reserved slots at the tail of the final top-`limit`.
+`fuse()` is the WHOLE of retrieval ranking: nothing is layered on top of it.
 
 ## Non-Goals
 
 Weighted or normalized score fusion; distance-to-similarity conversion;
-graph/link ranking as a third RRF input (see "The Graph Channel Is Additive,
-Never A Reordering"); truncation of `fuse()`'s own output to a caller `limit`
-(the caller truncates); any I/O, model call, or config access.
+graph/link ranking in ANY position — as a third RRF input, or as an additive
+reserved-slot channel on top of the base (see "Retrieval Fusion Has No Graph
+Channel"); truncation of `fuse()`'s own output to a caller `limit` (the
+caller truncates); any I/O, model call, or config access.
 
 ## Requirements
 
@@ -115,116 +114,60 @@ the identical ordered output for identical inputs across repeated calls.
 - WHEN `fuse(...)` is called twice
 - THEN both calls return byte-identical ordered output
 
-### Requirement: The Graph Channel Is Additive, Never A Reordering
+### Requirement: Retrieval Fusion Has No Graph Channel
 
-The graph list MUST NOT be folded into `fuse`'s RRF sum. `fuse` MUST take
-exactly two lists; the graph channel MUST be applied by a separate
-`fuse_with_graph(fts_hits, vec_hits, graph_hits, *, limit)`, which returns
-the final top-`limit` `concept_id` list. A `GraphHit` dataclass MUST carry
-`concept_id` plus a rank-determining field (score or rank), mirroring
-`FtsHit`/`VecHit`'s shape; only its list POSITION is read, never its score
-magnitude. `fuse_with_graph` MUST obey three rules, in order:
+`fuse` MUST take exactly two lists — the lexical `FtsHit` list and the dense
+`VecHit` list — and its output, sliced by the caller to a display `limit`,
+MUST be the final ranking. The module MUST NOT expose a `fuse_with_graph`
+function, a `GRAPH_RESERVED_SLOTS` constant, or a `GraphHit` dataclass, and
+MUST NOT reserve any slot of the final top-`limit` for a channel other than
+those two lists.
 
-1. `fuse(fts_hits, vec_hits)` is the BASE ranking and MUST NOT be permuted —
-   the base concepts that survive MUST appear in exactly that relative order.
-2. `graph_hits` MUST contribute ONLY `concept_id`s absent from the FTS+dense
-   pool, filling up to `min(GRAPH_RESERVED_SLOTS, limit // 2)` reserved slots
-   at the TAIL of the returned list, in `graph_hits` order.
-3. A `concept_id` already present in the FTS+dense pool MUST draw NOTHING
-   from `graph_hits` — the graph can neither promote nor demote it.
+(Previously: `fuse_with_graph(fts_hits, vec_hits, graph_hits, *, limit)`
+layered a seeded personalized-PageRank list on top of the two-list base,
+additively — it could contribute only `concept_id`s absent from the FTS+dense
+pool, into `min(GRAPH_RESERVED_SLOTS, limit // 2)` reserved slots at the
+tail, and could neither promote nor demote a concept the base already
+contained. That shape was itself the fix for an even earlier design, where
+the graph was folded into the same `Σ 1/(K_RRF + rank)` sum and reshuffled
+what FTS and dense had already found without ever contributing a concept of
+its own — 0 in 26 promotions over 10 questions.
 
-(Previously: `fuse(fts_hits, vec_hits, graph_hits=None)` folded an optional
-third graph list into the same `Σ 1/(K_RRF + rank)` sum. That was strictly
-negative on a measured corpus (issue #402): a concept present only in the
-graph list at graph rank 1 scores `1/61 ≈ 0.0164` and could never outscore
-one present in both FTS and dense at rank 10 in each, `2/70 ≈ 0.0286` — so
-the graph never contributed a concept of its own, 0 in 26 promotions over 10
-questions, while its list still reshuffled the concepts the other two had
-already found and evicted real hits. Tuning `K_RRF` does not fix that
-asymmetry; a concept in two lists still beats one in a single list at
-comparable ranks.)
+Bounding the channel is what made it countable, and counting it is what
+ended it. Two A/B measurements, 10 questions each, taken with the channel
+already bounded: on a 21-node/23-edge graph every question's ranking changed
+and the SAME concept, `concepts/document-skills`, was the contribution on 6
+of 10 questions — MCP origin, BigQuery, agent building and productionizing
+alike. On a 27-node/38-edge graph the concentration fell to 4 of 10 across 7
+distinct concepts, but per-question judgement was 7 harmful, 3 neutral, 0
+beneficial. Asked "When did MCP originate?", the graph evicted
+`sources/mcp-origin` — the document containing the answer — to insert
+`concepts/document-skills`; it did the same to `sources/10-mcp` on a question
+about which protocol BigQuery belongs to.
 
-#### Scenario: A concept the FTS+dense pool already contains gets no graph contribution
+THE DEFECT IS THE RANKING FUNCTION, NOT THE TYPED GRAPH. Seeded personalized
+PageRank ranks by GLOBAL CENTRALITY, a property of the corpus rather than of
+the question. A larger graph changes WHICH central node wins the reserved
+slot; it does not stop the slot costing a base hit, and it does not turn
+centrality into relevance. The typed graph is deliberately retained
+elsewhere — contradiction-candidate derivation reads typed edges and caught a
+planted contradictory pair at confidence 1.00. What would justify a graph
+channel returning is a DIFFERENT ranking function — traversal from the
+question's own matched concepts along typed edges — proposed and measured on
+its own terms, never as a revert of this requirement.)
 
-- GIVEN `cid` is in `fts_hits` at a rank below the final `limit`, and is
-  rank 1 in `graph_hits`
-- WHEN `fuse_with_graph(fts_hits, vec_hits, graph_hits, limit=5)` is called
-- THEN `cid` is neither promoted into the top-`limit` nor allowed to displace
-  any base concept ranked above it
+#### Scenario: Fusion exposes no graph surface
 
-#### Scenario: A graph-only concept claims a reserved tail slot
+- GIVEN the `retrieval/fusion` module
+- WHEN its public names are inspected
+- THEN `fuse_with_graph`, `GRAPH_RESERVED_SLOTS`, and `GraphHit` are all
+  absent, and `fuse` accepts exactly `fts_hits` and `vec_hits`
 
-- GIVEN `cid` appears in `graph_hits` only — absent from both `fts_hits` and
-  `vec_hits` — and the base ranking is at least `limit` long
-- WHEN `fuse_with_graph(..., limit=5)` is called
-- THEN the output is the first `limit - 1` base concepts, in base order,
-  followed by `cid` in the reserved tail slot
+#### Scenario: The top-`limit` is entirely FTS+dense
 
-#### Scenario: The base ranking is never permuted
-
-- GIVEN a `graph_hits` list that ranks several base concepts in an order
-  contradicting the base ranking
-- WHEN `fuse_with_graph(...)` is called
-- THEN the base concepts present in the output appear in exactly their
-  `fuse(fts_hits, vec_hits)` relative order
-
-### Requirement: The Graph's Reserved Slots Are Bounded And Named
-
-The reserved-slot count MUST be a named, module-level `Final[int]`
-(`GRAPH_RESERVED_SLOTS`), never a silent literal, and MUST additionally be
-capped at `limit // 2` so the base ranking keeps at least half of any
-`limit`. Reserved slots are a CAP, not a quota: a base ranking shorter than
-`limit` MUST NOT be padded with more than the reserved number of graph
-concepts.
-
-#### Scenario: A large graph pool still claims only the reserved slots
-
-- GIVEN a `graph_hits` list of 10 concepts, none of them in the FTS+dense
-  pool
-- WHEN `fuse_with_graph(..., limit=5)` is called
-- THEN exactly `GRAPH_RESERVED_SLOTS` of them appear in the output
-
-#### Scenario: A limit of 1 reserves nothing
-
-- GIVEN a non-empty `graph_hits` of concepts absent from the pool
-- WHEN `fuse_with_graph(..., limit=1)` is called
-- THEN the output is the single top base concept — `limit // 2` is `0`, so
-  the graph claims no slot
-
-#### Scenario: A repeated graph-only concept occupies one slot
-
-- GIVEN the same `concept_id` appears twice within `graph_hits` and is absent
-  from the pool
-- WHEN `fuse_with_graph(...)` is called
-- THEN it appears exactly once in the output
-
-### Requirement: A Graph That Adds Nothing Changes Nothing
-
-WHEN `graph_hits` is empty, or every one of its entries is already inside the
-FTS+dense pool, `fuse_with_graph` MUST return output byte-identical to
-`fuse(fts_hits, vec_hits)[:limit]`.
-
-#### Scenario: Empty graph list matches two-list fusion
-
-- GIVEN `graph_hits = []`
-- WHEN `fuse_with_graph(fts_hits, vec_hits, [], limit=5)` is called
-- THEN the output equals `fuse(fts_hits, vec_hits)[:5]` exactly
-
-#### Scenario: An all-pooled graph list matches two-list fusion
-
-- GIVEN every `graph_hits` entry's `concept_id` is already in `fts_hits` or
-  `vec_hits`
-- WHEN `fuse_with_graph(..., limit=5)` is called
-- THEN the output equals `fuse(fts_hits, vec_hits)[:5]` exactly
-
-### Requirement: Graph-Augmented Fusion Stays Pure And Deterministic
-
-`fuse_with_graph` MUST perform no file, network, or database access and MUST
-invoke no model — it is ranking arithmetic only — and MUST return identical
-ordered output for identical inputs across repeated calls.
-
-#### Scenario: Same inputs yield the same output every call
-
-- GIVEN a fixed `fts_hits`, `vec_hits`, `graph_hits`, and `limit`
-- WHEN `fuse_with_graph(...)` is called twice
-- THEN both calls return byte-identical ordered output
+- GIVEN a bundle whose typed graph would rank some concept highly by
+  centrality, and that concept is absent from both the FTS and the dense hit
+  list
+- WHEN the caller fuses and slices to `limit`
+- THEN the result is exactly the first `limit` entries of
+  `fuse(fts_hits, vec_hits)`, and the graph-only concept does not appear

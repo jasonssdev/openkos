@@ -53,6 +53,46 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   expansion twin already documented as a known residue — and on nothing else
   (#397).
 
+### Removed
+
+- **The graph channel is gone from retrieval fusion**: `query` now fuses
+  exactly two lists, lexical FTS and dense vectors, and that ranking —
+  truncated to `--limit` — is the answer's context. The seeded
+  personalized-PageRank stage, `fusion.fuse_with_graph`,
+  `GRAPH_RESERVED_SLOTS`, `retrieval/graph_retrieve.py`, and the
+  `graph_hit_count`/`graph_contributed_count`/`graph_degraded` fields on
+  `AnswerResult` are all removed, along with the `<n> graph-added` term and
+  the graph-degrade note on the `retrieval:` stderr line.
+
+  Making the channel additive and bounded (#402/#433) is what made its
+  contribution countable, and counting it is what ended it. Two A/B runs over
+  the same 10 questions, with the channel already fixed: on a 21-node/23-edge
+  graph all 10 rankings changed and one concept, `concepts/document-skills`,
+  was the contribution on **6 of 10** questions — offered to questions about
+  MCP origin, BigQuery, agent building and productionizing alike. On a
+  27-node/38-edge graph the concentration did fall, to 4 of 10 across 7
+  distinct concepts, but per-question judgement was **7 harmful, 3 neutral, 0
+  beneficial**. Asked *"When did MCP originate?"*, the graph evicted
+  `sources/mcp-origin` — the document containing the answer — to insert
+  `concepts/document-skills`; it did the same to `sources/10-mcp` on a
+  question about which protocol BigQuery belongs to.
+
+  **This is not a finding that the typed graph was a mistake.** It is that
+  centrality is the wrong ranking function for retrieval. Seeded personalized
+  PageRank ranks by how central a node is in the *corpus*, which is not a
+  property of the *question*; a larger graph changes which central node wins
+  the reserved slot, but it does not stop the slot costing a base hit. The
+  typed graph, `graph/sqlite_graph.py`, the projection, `suggest-relations`,
+  `relate`, and typed relations in frontmatter are all untouched and still
+  earn their keep: `resolution/contradiction.py` derives its candidate pairs
+  from typed edges and caught a planted contradictory pair at confidence 1.00.
+  `reindex` still writes `.openkos/graph.db`; `query` simply no longer opens
+  it, so an absent or corrupt graph store no longer produces a retrieval
+  degrade or a reindex hint. Bringing a graph channel back would take a
+  *different* ranking function — traversal from the question's own matched
+  concepts along typed edges — proposed and measured on its own terms, not a
+  revert of this change (#434).
+
 ### Fixed
 
 - **The graph retrieval channel is now additive instead of a reordering**:
@@ -75,7 +115,9 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   A graph that adds nothing now leaves the answer byte-identical to FTS+dense
   alone. `k = 60` and the FTS/dense fusion itself are untouched — tuning the
   constant does not fix an asymmetry that follows from list membership
-  (#402).
+  (#402). (Superseded within this same release by #434, above: bounding the
+  channel made it measurable, and the measurement removed it. The FTS/dense
+  fusion this entry left untouched is what remains.)
 
 - **`query`'s retrieval summary now reports what the graph contributed**:
   the graph term printed `graph_hit_count`, the raw personalized-PageRank
@@ -85,6 +127,9 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   count of reserved slots the graph actually filled, which is the number that
   says whether the channel earned its place. `graph_hit_count` is unchanged
   and still carries the candidate pool for callers that want it (#402).
+  (Superseded within this same release by #434, above: the honest number it
+  introduced is what showed the channel had not earned its place, and both
+  fields went with the channel.)
 
 - **`duplicates` and `adjudicate` now name the ACRONYM tier**: the tier
   landed in the data model but both rendering sites still bucketed every
