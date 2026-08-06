@@ -67,7 +67,7 @@ def deprecated_concept_ids(bundle_dir: Path) -> frozenset[str]:
     for scan in okf._iter_docs(bundle_dir):
         if scan.read_error is not None or scan.parse_error is not None:
             continue
-        cid = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        cid = okf.concept_id_for(scan.path, bundle_dir)
         meta = scan.metadata or {}
         status_by_id[cid] = str(meta.get("status") or "")
         try:

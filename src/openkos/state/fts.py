@@ -210,7 +210,7 @@ def _populate_docs_table(conn: sqlite3.Connection, bundle_dir: Path) -> list[str
 
     skipped: list[str] = []
     for scan in okf._iter_docs(bundle_dir):
-        concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        concept_id = okf.concept_id_for(scan.path, bundle_dir)
         if scan.read_error is not None:
             skipped.append(_skip_note(concept_id, reason="unreadable"))
             continue

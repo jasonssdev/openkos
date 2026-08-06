@@ -176,7 +176,7 @@ def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str]]:
         title = metadata.get("title")
         if not isinstance(title, str) or not title.strip():
             continue
-        concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        concept_id = okf.concept_id_for(scan.path, bundle_dir)
         eligible.append((concept_id, str(okf_type), title))
     return eligible
 

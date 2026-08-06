@@ -400,7 +400,7 @@ def _populate_graph_tables(
     bodies: list[tuple[str, str]] = []
     metadatas: list[tuple[str, dict[str, object]]] = []
     for scan in okf._iter_docs(bundle_dir):
-        concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        concept_id = okf.concept_id_for(scan.path, bundle_dir)
         if scan.read_error is not None:
             skipped.append(_skip_note(concept_id, reason="unreadable"))
             continue

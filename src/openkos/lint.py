@@ -204,7 +204,7 @@ def collect_docs(bundle_dir: Path) -> tuple[list[LintDoc], list[str]]:
     docs: list[LintDoc] = []
     skip_notices: list[str] = []
     for scan in okf._iter_docs(bundle_dir):
-        identity = scan.path.relative_to(bundle_dir).as_posix().removesuffix(".md")
+        identity = okf.concept_id_for(scan.path, bundle_dir)
         if scan.read_error is not None:
             skip_notices.append(f"{identity}.md: skipped (unreadable)")
             continue

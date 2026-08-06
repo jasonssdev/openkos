@@ -1086,6 +1086,62 @@ class DocScan:
     parse_error: str | None
 
 
+def concept_id_for(path: Path, bundle_dir: Path) -> str:
+    """The concept id for `path` within `bundle_dir`: its bundle-relative
+    POSIX path without the `.md` suffix.
+
+    THE ONE derivation. Eleven readers -- `lint`, `lifecycle`, `sensitivity`,
+    `state/derived`, `state/fts`, `state/reindex`, `graph/sqlite_graph`,
+    `bundle/listing`, `resolution/candidates`, `resolution/contradiction`,
+    `cli/curate` -- each spelled it inline, and `graph/analysis.py` already
+    flagged the duplication and asked for exactly this helper.
+
+    Ten sites spelled it `.relative_to(bundle_dir).with_suffix("").as_posix()`
+    and `lint` spelled it `.as_posix().removesuffix(".md")`. This adopts the
+    ten-site spelling, which is byte-identical for those ten and for `lint` on
+    every input except ONE, disclosed here rather than glossed:
+
+    A document named literally `.md` has no stem. `pathlib` treats such a name
+    as a dotfile, so `Path("notes/.md").suffix` is `""` and `with_suffix("")`
+    is a no-op yielding `notes/.md`, while `removesuffix(".md")` yields
+    `notes/`. `_iter_docs` globs `*.md` and `rglob` DOES return such a file, so
+    the input is reachable -- but not from openkos: `_slugify` can return `""`
+    and every caller branches on that rather than writing an empty stem, so
+    only a hand-authored file reaches it.
+
+    `lint` is the one affected reader, and the effect reaches its OUTPUT: it
+    rebuilds displayed paths as `f"{identity}.md"`, so a finding about such a
+    file now reads `notes/.md.md` where it used to read `notes/.md`. That is
+    the cost of this choice, taken deliberately: NO spelling leaves all eleven
+    readers unchanged, since the two genuinely differ here, so the question is
+    only which side absorbs it. `with_suffix("")` wins because the ten other
+    readers use these ids as KEYS -- for graph nodes, FTS rows, manifest
+    hashes -- and `notes/` is a keyless id naming a directory, while
+    `notes/.md` at least names the file. A doubled suffix in one lint line
+    about a document with no name is the cheaper defect.
+
+    Pinned by `test_concept_id_for_leaves_a_bare_dot_md_name_unstripped` and,
+    for the display consequence, by
+    `test_lint_identity_for_a_bare_dot_md_name_doubles_the_suffix`.
+
+    WHY IT EXISTS BEYOND TIDINESS (issue #430). These ids are compared against
+    ids spelled elsewhere -- a `relations:` target, a `provenance:` entry --
+    and on a filesystem that normalizes filenames (HFS+ writes NFD, SMB
+    varies) the two spellings of the same logical id do not compare equal.
+    Graph edges are dropped, `lint` invents orphans, and entity-resolution
+    candidates are missed, all silently.
+
+    This helper deliberately does NOT normalize. It makes the decision
+    POSSIBLE in one place instead of eleven, which is the whole of its job
+    here. Normalizing turned out to need a matching inverse for the ~9 sites
+    that rebuild a path from an id, plus a symlink guard and a cost guard on
+    that inverse -- a change with its own design surface, tracked separately
+    on #430.
+
+    Pure: no I/O, and `path` need not exist."""
+    return path.relative_to(bundle_dir).with_suffix("").as_posix()
+
+
 def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:
     """Walk every non-reserved `.md` file under `bundle_dir` exactly once (D2).
 

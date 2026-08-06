@@ -425,7 +425,7 @@ def _merged_body_candidates(
     for scan in okf._iter_docs(bundle_dir):
         if scan.read_error is not None or scan.parse_error is not None:
             continue
-        survivor_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        survivor_id = okf.concept_id_for(scan.path, bundle_dir)
         if survivor_id in deprecated:
             continue
         metadata = scan.metadata or {}

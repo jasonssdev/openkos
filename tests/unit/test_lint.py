@@ -1488,3 +1488,41 @@ def test_window_for_doc_absent_type_tiers_reproduces_s1_precedence_table() -> No
     for doc_type, volatility, expected in cases:
         doc = _doc("concepts/x", "body", type=doc_type, volatility=volatility)
         assert lint.window_for_doc(doc, windows) == expected
+
+
+def test_lint_identity_for_a_bare_dot_md_name_doubles_the_suffix(
+    tmp_path: Path,
+) -> None:
+    """A document named literally `.md` is the one input where consolidating
+    onto `okf.concept_id_for` changed `lint` (#430).
+
+    `pathlib` sees `.md` as a dotfile with no suffix, so the adopted
+    `with_suffix("")` spelling leaves it whole and `identity` becomes
+    `concepts/.md` where `lint`'s old `removesuffix(".md")` gave `concepts/`.
+    `lint` rebuilds displayed paths as `f"{identity}.md"`, so that line now
+    reads `concepts/.md.md`.
+
+    Pinned rather than fixed, and the reasoning lives on `concept_id_for`: no
+    spelling leaves all eleven readers unchanged, the other ten use these ids
+    as keys where `concepts/` is worse, and openkos cannot write a file with
+    an empty stem -- only a hand-authored one reaches here. This test exists
+    so the trade is a recorded decision, and so a future change that
+    "corrects" the doubling knows it is moving the cost, not removing it."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    (bundle_dir / "concepts" / ".md").write_text(
+        okf.dump_frontmatter({"type": "Concept", "title": "Nameless"}, "Body."),
+        encoding="utf-8",
+    )
+
+    docs, _skips = lint.collect_docs(bundle_dir)
+    (doc,) = docs
+    assert doc.identity == "concepts/.md"
+
+    # Assert on a REAL finding's `path`, not on a re-derived f-string: the
+    # doubling lives in lint's own `f"{doc.identity}.md"` construction, and
+    # re-deriving it here would only restate the line above.
+    (orphan,) = lint.check_orphans(docs, index_text="")
+
+    assert orphan.path == "concepts/.md.md"
+    assert orphan.concept_id == "concepts/.md"
