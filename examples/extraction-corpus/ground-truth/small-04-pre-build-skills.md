@@ -60,6 +60,24 @@ That matters for what this fixture tests. The expected answer is the same 7 in
 both versions, so a run producing fewer here than on `large-03` is evidence
 about compression or language, not about the subjects being absent.
 
+## Aliases
+
+Alternate phrasings that name a subject above, for the exact-only matcher in
+`evals/extraction_cap/`. Each line reads `Canonical Title | alias [| alias]`.
+
+- PowerPoint Presentation Skill | PowerPoint Skill
+
+Inherited from `large-03-skills-vs-tools.md`, where it was adjudicated off a
+real run. It carries over because the subject list here is *the same seven* —
+the judgment is about what names that subject, not about which document it was
+observed in. Withholding it here would manufacture a difference between the
+pair that is an artifact of which file happened to be measured first.
+
+Spanish rephrasings are NOT pre-listed. This is the corpus's only non-English
+source and how the extractor names these subjects in Spanish is unmeasured;
+guessing the aliases in advance would decide that question instead of
+observing it. They get adjudicated from a real run's queue, like this one was.
+
 ## Facets, not subjects
 
 Steps, components and section scaffolding, not knowledge objects. An extractor
