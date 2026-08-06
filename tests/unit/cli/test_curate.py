@@ -24,6 +24,7 @@ from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
 from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
+from openkos.resolution.contradiction import CandidatePlan, _CandidateSpec
 from tests.unit.cli.conftest import changed_paths, disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
@@ -62,6 +63,22 @@ def _init_apply_workspace(
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+
+
+def _empty_plan() -> CandidatePlan:
+    """A Contradictions plan with nothing to judge -- the stub every test
+    that stubs out later stages installs."""
+    return CandidatePlan(specs=(), edge_total=0, merged_total=0)
+
+
+def _edge_plan(*pairs: tuple[str, str]) -> CandidatePlan:
+    """A Contradictions plan carrying one typed-edge candidate per pair,
+    built through the real `_CandidateSpec` so the stub cannot drift from
+    the shape `find_contradictions` consumes."""
+    specs = tuple(
+        _CandidateSpec(pair_ids=pair, relation_type="related_to") for pair in pairs
+    )
+    return CandidatePlan(specs=specs, edge_total=len(specs), merged_total=0)
 
 
 def _write_doc(path: Path, *, doc_type: str = "Concept", title: str = "Stub") -> None:
@@ -189,7 +206,7 @@ def _stub_later_stages_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
 
 
@@ -1580,7 +1597,7 @@ def test_structure_accepted_suggestion_writes_via_extracted_relate_core(
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
 
     def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
@@ -1635,7 +1652,7 @@ def test_structure_declined_suggestion_writes_nothing(
     )
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
     _simulate_tty(monkeypatch)
 
@@ -1695,7 +1712,7 @@ def test_structure_sees_post_merge_identity_state(
     )
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
     _simulate_tty(monkeypatch)
 
@@ -1732,7 +1749,7 @@ def test_metadata_accepted_tier_writes_via_extracted_set_volatility_core(
         "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
     )
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
 
     def _fake_suggest_volatility(
@@ -1785,7 +1802,7 @@ def test_metadata_sensitivity_gap_reported_never_written(
     )
     monkeypatch.setattr("openkos.cli.curate.suggest_volatility", lambda *a, **k: [])
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
     _simulate_tty(monkeypatch)
 
@@ -1825,7 +1842,7 @@ def test_metadata_gap_notice_survives_an_empty_type_list(
     )
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
     # `_concept_type_names` deliberately NOT patched: the doc's unset
     # sensitivity must empty the real type list for this scenario to hold --
@@ -1873,8 +1890,8 @@ def test_contradictions_runs_last_and_never_writes(
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs",
-        lambda *a, **k: ([("concepts/a", "concepts/b")], 1),
+        "openkos.cli.curate._contradiction_plan",
+        lambda *a, **k: _edge_plan(("concepts/a", "concepts/b")),
     )
 
     order: list[str] = []
@@ -1944,7 +1961,7 @@ def test_identity_probe_empty_queue_renders_no_candidate_groups_found(
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
-        "openkos.cli.curate._contradiction_pairs", lambda *a, **k: ([], 0)
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
 
     result = runner.invoke(app, ["curate"])
@@ -2025,3 +2042,139 @@ def test_identity_all_confidential_group_makes_no_model_call(
 
     assert result.exit_code == 0
     assert "Identity: applied 0, skipped 0." in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# The Contradictions cost gate must state the spend the stage actually makes
+# (issue #446). `cost_line` prints `probe.llm_calls` and `gate()` asks the
+# operator to approve exactly that number before any model call, so the probe
+# and `find_contradictions` must count the same candidate list.
+# ---------------------------------------------------------------------------
+
+
+def _merge_ledger_entry(absorbed_id: str) -> object:
+    """One real `MergeLedgerEntry` whose `survivor_before`/`absorbed_snapshot`
+    are parseable `.md` texts, built through the real codec rather than
+    hand-spliced YAML (mirrors `test_contradiction.py`'s helper)."""
+    from openkos.model import okf
+
+    return okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at="2026-01-01T00:00:00Z",
+        absorbed_id=absorbed_id,
+        absorbed_snapshot=okf.dump_frontmatter(
+            {"type": "Concept", "title": "Absorbed"}, "Absorbed body."
+        ),
+        survivor_before=okf.dump_frontmatter(
+            {"type": "Concept", "title": "Survivor"}, "Survivor before."
+        ),
+        index_before="",
+        log_before="",
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+    )
+
+
+def _write_survivor_with_merges(path: Path, *, title: str, absorbed: list[str]) -> None:
+    from openkos.model import okf
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": title,
+        "sensitivity": "private",
+        "merged_from": [
+            okf.encode_merge_ledger_entry(_merge_ledger_entry(a))  # type: ignore[arg-type]
+            for a in absorbed
+        ],
+    }
+    path.write_text(okf.dump_frontmatter(metadata, "Current body."), encoding="utf-8")
+
+
+class _CountingLLM:
+    """Counts `chat` calls and always returns a well-formed verdict."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: object) -> str:
+        self.calls += 1
+        return (
+            '{"verdict": "consistent", "confidence": 0.0, '
+            '"conflicting_claims": [], "rationale": "stub"}'
+        )
+
+
+def test_contradictions_cost_gate_counts_the_merged_body_candidates_it_spends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle carrying merge-ledger entries: the number `cost_line` states
+    must equal the number of `llm.chat` calls the stage actually makes.
+
+    `_contradictions_probe` counted typed-edge pairs only, while
+    `_contradictions_run`'s `find_contradictions` judges `edge_specs +
+    merged_specs` -- so the gate understated the spend by exactly the
+    merge-ledger count (issue #446)."""
+    from openkos.resolution.contradiction import find_contradictions
+
+    _init_workspace(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundle"
+    _write_survivor_with_merges(
+        bundle / "concepts" / "survivor.md",
+        title="Survivor",
+        absorbed=["concepts/absorbed-one", "concepts/absorbed-two"],
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+        auto=True,
+    )
+
+    stated = curate._contradictions_probe(ctx).llm_calls
+
+    llm = _CountingLLM()
+    find_contradictions(bundle, llm=llm, local_exemption=True)
+
+    assert llm.calls == 2, "fixture must produce two merged-body candidates"
+    assert stated == llm.calls
+
+
+def test_contradictions_stage_runs_for_a_bundle_whose_only_candidates_are_merges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run_curate` skips a stage entirely when `probe.items` is empty
+    (`status="empty"`, `run` never invoked). Because the Contradictions probe
+    counted typed-edge pairs only, a bundle whose ONLY candidates are
+    merged-body ones probed empty -- so `curate` reported "No candidate pairs
+    found." and never ran the stage, and #409's detection never fired through
+    `curate` at all for that bundle shape.
+
+    This is the severe half of issue #446: not merely an understated number,
+    but a stage that silently did not run."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundle"
+    _write_survivor_with_merges(
+        bundle / "concepts" / "survivor.md",
+        title="Survivor",
+        absorbed=["concepts/absorbed-one"],
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    ctx = curate.CurateContext(
+        root=tmp_path,
+        layout=config.WorkspaceLayout(tmp_path),
+        cfg=config.read_config(tmp_path),
+        auto=True,
+    )
+
+    probe = curate._contradictions_probe(ctx)
+
+    # No typed edges anywhere in this bundle -- the sole candidate is the
+    # merge-ledger entry.
+    assert probe.llm_calls == 1
+    assert probe.items, "an empty queue here makes run_curate skip the stage"
+    assert probe.empty_message is None
