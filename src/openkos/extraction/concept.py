@@ -366,7 +366,7 @@ def _drop_source_title_twins(
     return non_twins
 
 
-_MAX_OBJECTS_PER_SOURCE = 5
+_MAX_OBJECTS_PER_SOURCE = 6
 """Hard ceiling on validated objects returned per source (design D4): a
 safety ceiling applied AFTER per-item validation, not a target -- the
 prompt's anti-enumeration instruction (D1) is the real lever against
@@ -375,9 +375,32 @@ greedy over-extraction; this cap only guards against a pathological reply.
 Measured against real sources (#404), that last sentence no longer describes
 what happens: a 13-17 KB document routinely produces 7-20 validated objects,
 and one 6 KB fixture produced 41 and 61 on separate runs. The pathological
-reply is the norm for real material, not the exception. The cap is NOT
-changed here -- raising it would admit the decayed tail along with the
-genuine subjects -- but it no longer discards silently."""
+reply is the norm for real material, not the exception.
+
+RAISED 5 -> 6, and the value is a measured boundary rather than a round
+number. `evals/extraction_cap/` scores what each reply POSITION held against
+hand-written ground truth. Over two English sources, 15 runs per cell, at
+both model-default sampling and temperature 0.1:
+
+    position 6:  39 genuine subjects,  0 known facets
+    position 7:   9 genuine subjects, 24 known facets
+
+Position 6 did not hold a known facet once, in any of the four cells;
+position 7 is where enumeration decay begins. At 5 the cap was discarding
+real material -- `Brand Guidelines Skill` in 12 of 14 runs on one fixture,
+and on the other the primary `Procedure` the whole document teaches, in 13
+of 13. Raising to 7 would not have that property.
+
+This is deliberately a PARTIAL fix, and the same measurement says so. A
+higher ceiling does not clean the retained prefix: on `medium-08-sdk-skills`
+positions 2 and 4 held known facets in 14/15 and 12/15 runs, so the bundle
+goes from 3 subjects plus 2 facets to 4 subjects plus 2 facets. Decay INSIDE
+the prefix is a separate defect, and it is the argument for ranking rather
+than truncating -- see `extract_concept`'s note on reply order.
+
+Scope of the evidence: `qwen3:8b`, two English documents. Not measured on
+other models, and not in Spanish, where the third corpus fixture showed a
+markedly different profile."""
 
 
 @dataclass(frozen=True)
@@ -447,12 +470,28 @@ def extract_concept(
 
     The report is built from the SAME list the cap slices, after twin
     dropping, so `produced` can never count a malformed item or a dropped
-    twin as a cap casualty. Keeping the first N is preserved deliberately
-    and is not merely incidental: measured against real sources (#404), the
-    model front-loads genuine subjects and degrades into facets of the last
-    one afterwards, so reply order correlates with quality. Any future
-    ranking has to be measured AGAINST this prefix rather than assumed
-    better than it.
+    twin as a cap casualty.
+
+    Keeping the first N is retained, but the reason has narrowed. This
+    docstring used to claim that the model front-loads genuine subjects and
+    degrades into facets afterwards, "so reply order correlates with
+    quality", and that any future ranking "has to be measured AGAINST this
+    prefix rather than assumed better than it". Measured (#404,
+    `evals/extraction_cap/`), that claim is document-dependent, not general:
+
+    - On `large-03-skills-vs-tools` it holds. Positions 1-5 were genuine
+      subjects in 14 of 14 runs, so the prefix IS the right prefix there and
+      no ranking can improve on it.
+    - On `medium-08-sdk-skills` it fails. The retained objects ran
+      subject/facet/subject/facet/subject -- known facets at positions 2 and
+      4 in 14/15 and 12/15 runs -- while position 6 held a genuine subject in
+      13 of 13. A ranking that merely prefers subjects over facets beats this
+      prefix on that document, in every run.
+
+    So reply order is still the default, and it is still the baseline a
+    ranking must beat rather than a thing to discard on intuition -- but it
+    is no longer assumed correct. On at least one real source it provably
+    keeps the wrong objects.
 
     Any `OllamaError`-family exception raised by `llm.chat` propagates
     unswallowed to the caller (see module docstring). The caller loops

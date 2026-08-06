@@ -622,11 +622,36 @@ def test_all_items_malformed_returns_empty_list() -> None:
     assert result == []
 
 
-# --- CAP = 5, applied post-validation, first-5-in-reply-order ----------------
+# --- CAP, applied post-validation, first-N-in-reply-order --------------------
 
 
-def test_exactly_five_valid_items_are_all_kept() -> None:
-    """5 valid candidates -- exactly at the cap -- are all kept."""
+def test_cap_is_six_the_last_position_measured_free_of_decay() -> None:
+    """The cap is 6, and that is a MEASURED boundary, not a round number.
+
+    `evals/extraction_cap/` scores reply POSITION against the hand-written
+    ground truth in `examples/extraction-corpus/`. Over two English sources,
+    15 runs per cell, at both model-default sampling and temperature 0.1
+    (#404):
+
+        position 6:  39 genuine subjects,  0 known facets
+        position 7:   9 genuine subjects, 24 known facets
+
+    Position 6 did not hold a known facet once, in any of the four cells.
+    Position 7 is where enumeration decay starts. So 6 admits real material
+    that 5 was discarding -- `Brand Guidelines Skill` on one fixture, the
+    primary `Procedure` on the other, the latter in 13 of 13 runs -- while 7
+    would start admitting the tail.
+
+    Pinned as a LITERAL on purpose. Every other test in this section reads the
+    constant symbolically, which is right for behaviour but means all of them
+    would keep passing if someone rounded this to 10. The value is the finding,
+    so the value is what gets asserted.
+    """
+    assert concept_mod._MAX_OBJECTS_PER_SOURCE == 6
+
+
+def test_exactly_cap_valid_items_are_all_kept() -> None:
+    """Candidates exactly at the cap are all kept."""
     cap = concept_mod._MAX_OBJECTS_PER_SOURCE
     items = [
         f'{{"type": "Concept", "title": "Item {i}", "description": "D"}}'
