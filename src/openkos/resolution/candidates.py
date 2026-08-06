@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from enum import Enum
 from itertools import combinations
 from pathlib import Path
+from typing import Final
 
 from openkos import lifecycle
 from openkos.model import okf
@@ -82,6 +83,75 @@ class CandidateGroup:
     """HIGH: the shared normalized key. ACRONYM: the matched acronym itself.
     LOW: the near-match score (`near_match_score`) formatted to 3 decimal
     places."""
+
+
+_MAX_CANDIDATE_GROUPS: Final[int] = 50
+"""Hard ceiling on candidate groups one `find_candidates`/`find_candidates_
+report` call may return, applied to the FULL cross-type group set before
+either entry point returns (curate-call-budget, entity-resolution delta:
+Bounded Candidate-Group Output Per Call). Matches
+`sqlite_graph._MAX_CANDIDATE_EDGES` (`graph/sqlite_graph.py:241`) -- the
+house idiom this cap extends to the one stage that never received it. This
+is a SAFETY RAIL against a pathological corpus, NOT a per-session curation
+budget: it must rarely bind on a representative corpus, and MUST NOT be
+retuned into an iterative-curation mechanism. Truncation is NEVER silent --
+see `CandidateGroupReport`/`candidate_group_truncation_notice`."""
+
+
+@dataclass(frozen=True)
+class CandidateGroupReport:
+    """The `_MAX_CANDIDATE_GROUPS` truncation report (curate-call-budget,
+    design D1/D2). `produced` is the FULL cross-type group count BEFORE the
+    cap is applied; `retained` is the count actually returned, `== len
+    (groups)`. `groups` is the retained slice in the module's existing
+    canonical output order (`okf_type` ascending, then tier, then
+    `member_ids` ascending) -- NEVER in rank order, which governs only which
+    groups survive the cap (see `_cap_rank_key`). All three default to the
+    empty/zero below-cap-equivalent shape.
+
+    Deliberately a NEW type rather than `graph.sqlite_graph.CandidateReport`
+    reused (design D2): that type's `pairs` field exists to satisfy a
+    sensitivity re-derivation duty (`sqlite_graph.py:264-270`) this report
+    has no equivalent of -- today's Identity cost line already prints the
+    raw `len(groups)` unfiltered by sensitivity, so disclosing `produced`
+    here reveals no aggregate the pre-change line did not already reveal."""
+
+    groups: tuple[CandidateGroup, ...] = ()
+    produced: int = 0
+    retained: int = 0
+
+
+def _cap_rank_key(group: CandidateGroup) -> tuple[int, float, str, tuple[str, ...]]:
+    """The total order `find_candidates_report` ranks the FULL cross-type
+    group set by before truncating (entity-resolution delta: Deterministic
+    Ranking For Truncation): tier priority first (`_TIER_ORDER`, GLOBAL
+    across the whole set), then -- LOW only -- `near_match_score` descending,
+    then the SAME `(okf_type, member_ids)` ascending tie-break
+    `find_candidates` already establishes as its final sort key.
+
+    The tier branch on `score` is MANDATORY, not cosmetic: only a LOW
+    `trigger` is the `near_match_score` formatted to 3 decimals
+    (`candidates.py:282`); a HIGH `trigger` is a normalized key and an
+    ACRONYM `trigger` is the matched acronym string, so an unconditional
+    `float(group.trigger)` would raise `ValueError` on either. `0.0` is an
+    inert placeholder for HIGH/ACRONYM: `_TIER_ORDER[group.tier]` alone
+    already separates every HIGH/ACRONYM group from every LOW group, so the
+    placeholder never participates in an actual tie-break."""
+    score = float(group.trigger) if group.tier is Tier.LOW else 0.0
+    return (_TIER_ORDER[group.tier], -score, group.okf_type, group.member_ids)
+
+
+def candidate_group_truncation_notice(report: CandidateGroupReport) -> str | None:
+    """The Identity/`duplicates`/`adjudicate` truncation notice (design D3),
+    `None` unless `report.produced > report.retained`. Wording matches
+    `edge_typing.candidate_truncation_notice` (`edge_typing.py:589`)
+    byte-for-byte apart from the noun -- direct precedent for the SAME
+    "cap reached" shape, a different resource."""
+    if report.produced <= report.retained:
+        return None
+    return (
+        f"{report.retained} of {report.produced} candidate group(s) shown (cap reached)"
+    )
 
 
 def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str]]:
@@ -217,17 +287,24 @@ def _pairs_covered_by_high_groups(
     }
 
 
-def find_candidates(
+def find_candidates_report(
     bundle_dir: Path, *, include_deprecated: bool = False
-) -> list[CandidateGroup]:
-    """Scan `bundle_dir` and return every candidate group, read-only.
+) -> CandidateGroupReport:
+    """Scan `bundle_dir` and return the `_MAX_CANDIDATE_GROUPS`-bounded
+    candidate-group report, read-only (curate-call-budget, design D1).
 
-    Never writes a byte of the bundle and creates no persisted state.
-    Given an unchanged bundle, repeated calls return the SAME candidate
-    set in the SAME stable order: grouped by `okf_type` ascending, HIGH
-    groups before LOW within each type, ties broken by ascending
-    `member_ids` (i.e. by concept_id). An empty or single-document bundle
-    (per type) yields no candidates and never raises.
+    Builds the FULL cross-type group set exactly as `find_candidates` always
+    has -- same walk, same HIGH/ACRONYM/LOW passes, same per-type ordering --
+    then, if that set exceeds `_MAX_CANDIDATE_GROUPS`, ranks it with
+    `_cap_rank_key` and slices to the cap BEFORE re-sorting the retained
+    subset back into the module's canonical output order (entity-resolution
+    delta: Deterministic Ranking For Truncation). Below the cap, the slice is
+    a no-op: `report.groups` is byte-identical to today's unbounded
+    `find_candidates` output, and `report.produced == report.retained`.
+
+    Never writes a byte of the bundle and creates no persisted state. Given
+    an unchanged bundle, repeated calls return the identical report
+    (extends the existing determinism guarantee).
 
     Unless `include_deprecated=True`, the shared
     `lifecycle.deprecated_concept_ids(bundle_dir)` predicate is computed
@@ -238,9 +315,10 @@ def find_candidates(
     `include_deprecated=True` skips the predicate walk entirely, restoring
     today's status-blind behavior byte-for-byte.
 
-    A caller that needs only the `Tier.HIGH` groups should call
-    `find_exact_title_groups` instead (issue #216): it returns the identical
-    HIGH groups in the identical order without paying for the O(n^2)
+    `find_candidates` delegates to `list(find_candidates_report(...).groups)`
+    -- the two cannot drift. A caller that needs only the `Tier.HIGH` groups
+    should call `find_exact_title_groups` instead (issue #216): it is NEVER
+    capped (see its own docstring) and never pays for the O(n^2)
     `near_match_score` pass below.
     """
     groups: list[CandidateGroup] = []
@@ -283,8 +361,42 @@ def find_candidates(
                 )
             )
 
-    groups.sort(key=lambda g: (g.okf_type, _TIER_ORDER[g.tier], g.member_ids))
-    return groups
+    produced = len(groups)
+    retained_groups = sorted(groups, key=_cap_rank_key)[:_MAX_CANDIDATE_GROUPS]
+    retained_groups.sort(key=lambda g: (g.okf_type, _TIER_ORDER[g.tier], g.member_ids))
+    return CandidateGroupReport(
+        groups=tuple(retained_groups),
+        produced=produced,
+        retained=len(retained_groups),
+    )
+
+
+def find_candidates(
+    bundle_dir: Path, *, include_deprecated: bool = False
+) -> list[CandidateGroup]:
+    """Scan `bundle_dir` and return every RETAINED candidate group,
+    read-only -- `list(find_candidates_report(bundle_dir,
+    include_deprecated=include_deprecated).groups)` (curate-call-budget,
+    design D1). Signature and return type are unchanged; a caller that also
+    needs the pre-cap `produced` count should call `find_candidates_report`
+    directly.
+
+    Given an unchanged bundle, repeated calls return the SAME candidate
+    set in the SAME stable order: grouped by `okf_type` ascending, HIGH
+    groups before LOW within each type, ties broken by ascending
+    `member_ids` (i.e. by concept_id). An empty or single-document bundle
+    (per type) yields no candidates and never raises. The returned list is
+    bounded to `_MAX_CANDIDATE_GROUPS`; below that ceiling this is
+    byte-identical to the pre-cap behavior.
+
+    A caller that needs only the `Tier.HIGH` groups should call
+    `find_exact_title_groups` instead (issue #216): it returns the identical
+    HIGH groups in the identical order without paying for the O(n^2)
+    `near_match_score` pass, and is never capped.
+    """
+    return list(
+        find_candidates_report(bundle_dir, include_deprecated=include_deprecated).groups
+    )
 
 
 def find_exact_title_groups(
@@ -293,16 +405,28 @@ def find_exact_title_groups(
     """Scan `bundle_dir` and return only its exact-title (`Tier.HIGH`)
     candidate groups, read-only -- the cheap entry point (issue #216).
 
-    EQUIVALENCE (the contract, and the whole safety argument): the result is
-    exactly `[g for g in find_candidates(bundle_dir,
-    include_deprecated=include_deprecated) if g.tier is Tier.HIGH]`,
-    INCLUDING list order. Both functions share `_keyed_docs_by_type` and
-    `_high_candidate_groups`, then apply the SAME final sort key, and within
-    one type HIGH groups have disjoint member sets -- so
-    `(okf_type, member_ids)` is a strict total order over them and no tie
-    is left for the sort to break arbitrarily. Pinned by
+    EQUIVALENCE (the contract, and the whole safety argument), AMENDED for
+    `_MAX_CANDIDATE_GROUPS` (curate-call-budget): this function is NEVER
+    capped -- it costs zero LLM calls and feeds `status`/`next_action`
+    counts, which must stay truthful regardless of Identity's adjudication
+    budget. WHILE THE CAP DOES NOT BIND, the result is exactly `[g for g in
+    find_candidates(bundle_dir, include_deprecated=include_deprecated) if
+    g.tier is Tier.HIGH]`, INCLUDING list order, holding verbatim. WHEN THE
+    CAP BINDS, `find_candidates`'s retained HIGH set is always a PREFIX of
+    this function's (uncapped) output, in the SAME order: HIGH ranks first,
+    globally, in `_cap_rank_key`'s ordering, so no HIGH group is ever
+    evicted in favour of an ACRONYM or LOW group competing for the same cap
+    slots, and both functions apply the SAME `(okf_type, member_ids)`
+    tie-break to the surviving HIGH groups. Both functions share
+    `_keyed_docs_by_type` and `_high_candidate_groups`, then apply the SAME
+    final sort key, and within one type HIGH groups have disjoint member
+    sets -- so `(okf_type, member_ids)` is a strict total order over them
+    and no tie is left for the sort to break arbitrarily. The verbatim
+    (below-cap) equivalence is pinned by
     `tests/unit/resolution/test_candidates.py::
-    test_find_exact_title_groups_equals_the_high_slice_in_order`.
+    test_find_exact_title_groups_equals_the_high_slice_in_order`; the
+    amended (above-cap) prefix relation is pinned by
+    `test_high_slice_is_a_prefix_of_find_exact_title_groups`.
 
     WHAT THIS SAVES: the pairwise LOW pass. `find_candidates` runs
     `near_match_score` over `combinations(keyed, 2)` for every type -- an

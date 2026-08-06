@@ -8,10 +8,15 @@ OKF type or `bundle`/`state` file, and this package never writes a byte of
 the bundle.
 
 Public surface of this package: `CandidateGroup`, `Tier`,
-`find_candidates` (both tiers), and `find_exact_title_groups` (issue #216 --
-the exact-title/`Tier.HIGH`-only pass, which skips `find_candidates`'s
-O(n^2) pairwise near-match work; see `candidates.py` for the equivalence
-contract and for why it is a separate name rather than a `tier=` filter).
+`find_candidates` (both tiers, bounded to `_MAX_CANDIDATE_GROUPS`),
+`find_candidates_report` (the same scan plus the pre-cap `produced`/
+post-cap `retained` counts, as `CandidateGroupReport`),
+`candidate_group_truncation_notice` (the "cap reached" notice a caller
+renders when `produced > retained`), and `find_exact_title_groups` (issue
+#216 -- the exact-title/`Tier.HIGH`-only pass, NEVER capped, which skips
+`find_candidates`'s O(n^2) pairwise near-match work; see `candidates.py`
+for the equivalence contract, amended for the cap (curate-call-budget),
+and for why it is a separate name rather than a `tier=` filter).
 
 Layering boundary: the canonical layer (`openkos.model`, `openkos.bundle`,
 `openkos.state`) MUST NOT import `openkos.resolution`. This package may
@@ -25,14 +30,20 @@ forbidden (see `edge_typing.py`'s own docstring, and
 
 from .candidates import (
     CandidateGroup,
+    CandidateGroupReport,
     Tier,
+    candidate_group_truncation_notice,
     find_candidates,
+    find_candidates_report,
     find_exact_title_groups,
 )
 
 __all__ = [
     "CandidateGroup",
+    "CandidateGroupReport",
     "Tier",
+    "candidate_group_truncation_notice",
     "find_candidates",
+    "find_candidates_report",
     "find_exact_title_groups",
 ]

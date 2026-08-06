@@ -21,8 +21,11 @@ from openkos.resolution import candidates as candidates_mod
 from openkos.resolution import similarity
 from openkos.resolution.candidates import (
     CandidateGroup,
+    CandidateGroupReport,
     Tier,
+    candidate_group_truncation_notice,
     find_candidates,
+    find_candidates_report,
     find_exact_title_groups,
 )
 
@@ -856,3 +859,253 @@ def test_exact_title_groups_entry_point_ignores_acronym_pairs(tmp_path: Path) ->
     _write_doc(bundle / "concepts" / "google-adk.md", title="Google ADK")
 
     assert candidates_mod.find_exact_title_groups(bundle) == []
+
+
+# ---------------------------------------------------------------------------
+# curate-call-budget: `_MAX_CANDIDATE_GROUPS` cap, `_cap_rank_key`,
+# `find_candidates_report`, `candidate_group_truncation_notice`.
+# ---------------------------------------------------------------------------
+
+
+def test_max_candidate_groups_constant_is_50() -> None:
+    """House idiom (`test_contradiction.py:179`): the cap is a pinned
+    `Final[int]`, matching `sqlite_graph._MAX_CANDIDATE_EDGES`."""
+    assert candidates_mod._MAX_CANDIDATE_GROUPS == 50
+
+
+def test_below_cap_produced_equals_retained_and_groups_match_uncapped(
+    tmp_path: Path,
+) -> None:
+    """A below-cap bundle is unaffected: `produced == retained` and the
+    report's groups equal today's unbounded `find_candidates` output."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="STOICISM")
+    _write_doc(bundle_dir / "concepts" / "c.md", title="Stoic Philosophy")
+
+    report = find_candidates_report(bundle_dir)
+    uncapped = find_candidates(bundle_dir)
+
+    assert isinstance(report, CandidateGroupReport)
+    assert report.produced == report.retained == len(uncapped)
+    assert report.groups == tuple(uncapped)
+
+
+@pytest.fixture(scope="module")
+def high_only_over_cap_bundle_dir(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Path:
+    """60 HIGH-tier candidate groups (cap+10) in one `okf_type`, real files
+    written ONCE via `tmp_path_factory` and shared read-only by every
+    over-cap ranking test below (house idiom, `test_contradiction.py:179`:
+    do NOT monkeypatch `_MAX_CANDIDATE_GROUPS`). Member ids sort ascending
+    in the SAME order as the fixture's own construction (`g000` < `g001` <
+    ... < `g059`), so "the first 50 by `(okf_type, member_ids)`" is simply
+    groups 0-49. Each group's title is a 2-letter code (`aa`, `ab`, ...):
+    shorter than `similarity.MIN_TOKEN_LENGTH`, so `tokenize` drops it and
+    `near_match_score` returns `None` for every CROSS-group combination --
+    the fixture stays purely HIGH-tier, with no incidental LOW noise from
+    the real (unmocked) near-match pass this scan also runs."""
+    bundle_dir = tmp_path_factory.mktemp("over_cap_bundle") / "bundle"
+    for index in range(60):
+        key = f"{chr(97 + index // 26)}{chr(97 + index % 26)}"
+        _write_doc(bundle_dir / "concepts" / f"g{index:03d}a.md", title=key)
+        _write_doc(bundle_dir / "concepts" / f"g{index:03d}b.md", title=key)
+    return bundle_dir
+
+
+def test_over_cap_module_scoped_fixture_retains_exactly_the_cap(
+    high_only_over_cap_bundle_dir: Path,
+) -> None:
+    """60 HIGH-tier groups produced, only `_MAX_CANDIDATE_GROUPS` (50)
+    retained -- the adjudication call count never exceeds the cap."""
+    report = find_candidates_report(high_only_over_cap_bundle_dir)
+
+    assert report.produced == 60
+    assert report.retained == candidates_mod._MAX_CANDIDATE_GROUPS
+    assert len(report.groups) == candidates_mod._MAX_CANDIDATE_GROUPS
+
+
+def test_high_fills_before_low_global_tier_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """45 HIGH-tier groups + 30 LOW-tier groups (75 total, over cap): all
+    45 HIGH groups are retained and exactly 5 LOW groups are retained,
+    chosen by highest `near_match_score` -- tier priority is GLOBAL, never
+    shadowed by an earlier `okf_type`."""
+    bundle_dir = tmp_path / "bundle"
+    for index in range(45):
+        title = f"hpair{index:03d}"
+        _write_doc(bundle_dir / "concepts" / f"h{index:03d}a.md", title=title)
+        _write_doc(bundle_dir / "concepts" / f"h{index:03d}b.md", title=title)
+
+    scores: dict[frozenset[str], float] = {}
+    for index in range(30):
+        key_a = f"lowa{index:03d}"
+        key_b = f"lowb{index:03d}"
+        _write_doc(bundle_dir / "concepts" / f"l{index:03d}a.md", title=key_a)
+        _write_doc(bundle_dir / "concepts" / f"l{index:03d}b.md", title=key_b)
+        scores[frozenset((key_a, key_b))] = 1.0 - index * 0.01
+
+    def _fake_score(key_a: str, key_b: str) -> float | None:
+        return scores.get(frozenset((key_a, key_b)))
+
+    monkeypatch.setattr(candidates_mod, "near_match_score", _fake_score)
+
+    report = find_candidates_report(bundle_dir)
+
+    assert report.produced == 75
+    assert report.retained == 50
+    high_groups = [g for g in report.groups if g.tier is Tier.HIGH]
+    low_groups = [g for g in report.groups if g.tier is Tier.LOW]
+    assert len(high_groups) == 45
+    assert len(low_groups) == 5
+    assert {g.trigger for g in low_groups} == {
+        f"{1.0 - index * 0.01:.3f}" for index in range(5)
+    }
+
+
+def test_high_only_excess_tie_broken_by_okf_type_member_ids(
+    high_only_over_cap_bundle_dir: Path,
+) -> None:
+    """60 HIGH-tier groups, zero ACRONYM/LOW: the 50 retained groups are
+    exactly the first 50 in `(okf_type, member_ids)` ascending order."""
+    report = find_candidates_report(high_only_over_cap_bundle_dir)
+
+    expected = tuple((f"concepts/g{i:03d}a", f"concepts/g{i:03d}b") for i in range(50))
+    assert tuple(group.member_ids for group in report.groups) == expected
+
+
+def test_low_tier_ties_broken_deterministically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """48 HIGH groups leave exactly 2 cap slots for 3 competing LOW pairs:
+    the clear winner by score is retained outright, and of the two tied at
+    the identical score, the one that sorts first by `(okf_type,
+    member_ids)` ascending is the one retained."""
+    bundle_dir = tmp_path / "bundle"
+    for index in range(48):
+        title = f"hpair{index:03d}"
+        _write_doc(bundle_dir / "concepts" / f"h{index:03d}a.md", title=title)
+        _write_doc(bundle_dir / "concepts" / f"h{index:03d}b.md", title=title)
+
+    _write_doc(bundle_dir / "concepts" / "hi-a.md", title="hiscorea")
+    _write_doc(bundle_dir / "concepts" / "hi-b.md", title="hiscoreb")
+    _write_doc(bundle_dir / "concepts" / "tie1-a.md", title="tie1a")
+    _write_doc(bundle_dir / "concepts" / "tie1-b.md", title="tie1b")
+    _write_doc(bundle_dir / "concepts" / "tie2-a.md", title="tie2a")
+    _write_doc(bundle_dir / "concepts" / "tie2-b.md", title="tie2b")
+
+    scores = {
+        frozenset(("hiscorea", "hiscoreb")): 0.9,
+        frozenset(("tie1a", "tie1b")): 0.8,
+        frozenset(("tie2a", "tie2b")): 0.8,
+    }
+
+    def _fake_score(key_a: str, key_b: str) -> float | None:
+        return scores.get(frozenset((key_a, key_b)))
+
+    monkeypatch.setattr(candidates_mod, "near_match_score", _fake_score)
+
+    report = find_candidates_report(bundle_dir)
+
+    assert report.produced == 51
+    assert report.retained == 50
+    low_members = {
+        group.member_ids for group in report.groups if group.tier is Tier.LOW
+    }
+    assert ("concepts/hi-a", "concepts/hi-b") in low_members
+    assert ("concepts/tie1-a", "concepts/tie1-b") in low_members
+    assert ("concepts/tie2-a", "concepts/tie2-b") not in low_members
+
+
+def test_retained_slice_is_canonical_order_and_calls_are_deterministic(
+    high_only_over_cap_bundle_dir: Path,
+) -> None:
+    """The retained (truncated) slice stays in the module's existing
+    canonical output order, never rank order, and two calls over the SAME
+    unchanged bundle truncate identically."""
+    first = find_candidates_report(high_only_over_cap_bundle_dir)
+    second = find_candidates_report(high_only_over_cap_bundle_dir)
+
+    assert first == second
+    member_ids = [group.member_ids for group in first.groups]
+    assert member_ids == sorted(member_ids)
+
+
+def test_acronym_low_dedup_holds_when_cap_engaged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pair matching BOTH the ACRONYM and near-match (LOW) rules appears
+    at most once, under `Tier.ACRONYM`, even once the cap is engaged --
+    ranking and truncation run strictly AFTER group construction, so the
+    once-under-the-stronger-tier rule is never reconsidered."""
+    bundle_dir = tmp_path / "bundle"
+    for index in range(49):
+        title = f"hpair{index:03d}"
+        _write_doc(bundle_dir / "concepts" / f"h{index:03d}a.md", title=title)
+        _write_doc(bundle_dir / "concepts" / f"h{index:03d}b.md", title=title)
+
+    _write_doc(bundle_dir / "concepts" / "adk.md", title="ADK (Agent Development Kit)")
+    _write_doc(bundle_dir / "concepts" / "google-adk.md", title="Google ADK")
+
+    scores: dict[frozenset[str], float] = {}
+    for index in range(5):
+        title_a = f"extraa{index:03d}"
+        title_b = f"extrab{index:03d}"
+        _write_doc(bundle_dir / "concepts" / f"e{index:03d}a.md", title=title_a)
+        _write_doc(bundle_dir / "concepts" / f"e{index:03d}b.md", title=title_b)
+        scores[frozenset((title_a, title_b))] = 0.8
+
+    def _fake_score(key_a: str, key_b: str) -> float | None:
+        return scores.get(frozenset((key_a, key_b)))
+
+    monkeypatch.setattr(candidates_mod, "near_match_score", _fake_score)
+
+    report = find_candidates_report(bundle_dir)
+
+    assert report.produced == 55
+    assert report.retained == 50
+    acronym_groups = [group for group in report.groups if group.tier is Tier.ACRONYM]
+    assert len(acronym_groups) == 1
+    assert acronym_groups[0].member_ids == ("concepts/adk", "concepts/google-adk")
+    assert not any(group.tier is Tier.LOW for group in report.groups)
+
+
+def test_high_slice_is_a_prefix_of_find_exact_title_groups(
+    high_only_over_cap_bundle_dir: Path,
+) -> None:
+    """`find_candidates`' (capped) HIGH slice is a PREFIX of
+    `find_exact_title_groups`'s (uncapped) output, in the same order -- the
+    design's amended equivalence contract (candidates.py's docstring)."""
+    capped_high = find_candidates(high_only_over_cap_bundle_dir)
+    uncapped_high = find_exact_title_groups(high_only_over_cap_bundle_dir)
+
+    assert len(capped_high) == 50
+    assert len(uncapped_high) == 60
+    assert capped_high == uncapped_high[:50]
+
+
+def test_candidate_group_truncation_notice_none_below_cap(tmp_path: Path) -> None:
+    """`candidate_group_truncation_notice` returns `None` when the cap did
+    not bind."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle_dir / "concepts" / "b.md", title="STOICISM")
+
+    report = find_candidates_report(bundle_dir)
+
+    assert report.produced == report.retained
+    assert candidate_group_truncation_notice(report) is None
+
+
+def test_candidate_group_truncation_notice_names_both_counts_above_cap(
+    high_only_over_cap_bundle_dir: Path,
+) -> None:
+    """`candidate_group_truncation_notice` names both counts, matching
+    `edge_typing.candidate_truncation_notice`'s "cap reached" shape."""
+    report = find_candidates_report(high_only_over_cap_bundle_dir)
+
+    notice = candidate_group_truncation_notice(report)
+
+    assert notice == "50 of 60 candidate group(s) shown (cap reached)"
