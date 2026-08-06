@@ -88,6 +88,27 @@ rescued by a longer wait, and raising this value further would only make the
 failure slower to observe. That failure mode belongs to the prompt's
 anti-enumeration instruction (#404), not here."""
 
+DEFAULT_MAX_GENERATION_TOKENS = 8192
+"""Packaged default for `max_generation_tokens`, in tokens, matching
+`openkos.yaml.template` and forwarded to Ollama as `options.num_predict`
+(issue #422).
+
+This is a SAFETY RAIL against a non-terminating generation, NOT a
+quality-tuning knob -- it is expected never to bind on legitimate work.
+Grounded in a real measurement (2026-08-06): five extraction calls through
+the project's own `_build_messages`/`_SYSTEM_PROMPT`, run against local
+`qwen3:8b` on 17 KB real prose sources, produced `eval_count` of 4154,
+1624, 962, 269, 107 -- all with `done_reason: "stop"` (a normal completion,
+never truncated). 8192 leaves roughly 2x headroom over the largest
+legitimate completed reply observed (4154).
+
+Before this change, nothing bounded how much a chat call could GENERATE:
+`chat_timeout` (above) only bounds how long the client WAITS, so a
+generation that never terminates burned the full deadline and returned
+nothing (issue #422). Reaching this ceiling raises `OllamaGenerationCapped`
+(`llm.ollama`) rather than returning a silently truncated reply -- a
+mis-set rail is loud, not silent."""
+
 DEFAULT_VOLATILITY_WINDOWS: dict[str, str] = {"slow": "90d", "volatile": "7d"}
 """Packaged per-tier default windows (freshness-lint-v1, design: "Per-tier
 windows (CONCRETE, FINAL)"): `slow` = 90d, `volatile` = 7d -- continuity
@@ -539,6 +560,15 @@ class Config:
     seams only -- embedding calls keep `OllamaClient`'s own default, and the
     liveness probes keep `_PREFLIGHT_TIMEOUT`, which answers a different
     question (is anything listening) and must stay short."""
+    max_generation_tokens: int
+    """Hard ceiling, in tokens, on how much a single `llm.chat` request may
+    GENERATE before Ollama cuts it off (issue #422), defaulting to
+    `DEFAULT_MAX_GENERATION_TOKENS` when the key is absent or explicitly
+    null. Validated as a positive integer and forwarded as
+    `options.num_predict` at the CHAT seams only, mirroring
+    `chat_timeout`'s scope exactly. A SAFETY RAIL, not a quality knob:
+    reaching it raises `OllamaGenerationCapped` rather than returning a
+    silently truncated reply."""
     confidential_local_exemption: bool
     """Whether a `confidential` concept may be included in an `llm.chat`
     payload when the backend host is verifiably this machine (issue #240),
@@ -596,6 +626,7 @@ def read_config(root: Path) -> Config:
     freshness_window = raw.get("freshness_window")
     embedding_model = raw.get("embedding_model")
     chat_timeout = raw.get("chat_timeout")
+    max_generation_tokens = raw.get("max_generation_tokens")
     confidential_local_exemption = raw.get("confidential_local_exemption")
     volatility_windows = raw.get("volatility_windows")
     type_tiers = raw.get("type_tiers")
@@ -627,6 +658,28 @@ def read_config(root: Path) -> Config:
         raise ValueError(
             f"{layout.config_path.name}: 'chat_timeout' must be a positive "
             f"number of seconds, got {chat_timeout!r}"
+        )
+    if max_generation_tokens is not None and (
+        isinstance(max_generation_tokens, bool)
+        or not isinstance(max_generation_tokens, int)
+        or max_generation_tokens <= 0
+    ):
+        # `bool` is excluded FIRST and explicitly, mirroring `chat_timeout`'s
+        # own int-as-bool guard above: without that term
+        # `max_generation_tokens: true` would resolve to a one-token
+        # ceiling and truncate every reply immediately.
+        #
+        # Ollama's `num_predict` sentinels are refused outright, not merely
+        # non-positive values: `-1` means "unlimited" to Ollama and would
+        # silently disable the very bound this change installs; `0` means
+        # "return no completion"; `-2` means "fill the context window".
+        # Accepting any of them would be a footgun disguised as a valid
+        # setting, so this rail requires a plain positive integer -- never
+        # a fraction (Ollama's `num_predict` is a token count) and never
+        # one of Ollama's own reserved meanings.
+        raise ValueError(
+            f"{layout.config_path.name}: 'max_generation_tokens' must be a "
+            f"positive integer number of tokens, got {max_generation_tokens!r}"
         )
     if confidential_local_exemption is not None and not isinstance(
         confidential_local_exemption, bool
@@ -665,6 +718,11 @@ def read_config(root: Path) -> Config:
         # once instead of leaving every consumer to handle both.
         chat_timeout=(
             float(chat_timeout) if chat_timeout is not None else DEFAULT_CHAT_TIMEOUT
+        ),
+        max_generation_tokens=(
+            max_generation_tokens
+            if max_generation_tokens is not None
+            else DEFAULT_MAX_GENERATION_TOKENS
         ),
         confidential_local_exemption=(
             confidential_local_exemption

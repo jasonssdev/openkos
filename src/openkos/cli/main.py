@@ -124,8 +124,16 @@ def _chat_client(cfg: config.Config) -> OllamaClient:
     this: `main.py` already imports `curate`, so the dependency cannot run
     the other way. `tests/unit/cli/test_chat_timeout_wiring.py` pins both
     sites so the pair cannot drift.
+
+    Also honors `cfg.max_generation_tokens` (issue #422): the safety rail
+    on how much a single chat call may GENERATE, distinct from
+    `chat_timeout`'s bound on how long the client WAITS.
     """
-    return OllamaClient(model=cfg.model, timeout=cfg.chat_timeout)
+    return OllamaClient(
+        model=cfg.model,
+        timeout=cfg.chat_timeout,
+        max_generation_tokens=cfg.max_generation_tokens,
+    )
 
 
 # Shared remediation clause appended to the OllamaUnavailable handlers of

@@ -100,3 +100,20 @@ def test_extract_json_items_non_string_input_returns_empty_list() -> None:
 
 def test_extract_json_items_unparseable_input_returns_empty_list() -> None:
     assert parsing.extract_json_items("not json at all") == []
+
+
+def test_extract_json_items_mid_object_truncation_returns_empty_list() -> None:
+    """A reply cut off mid-JSON-object degrades to `[]`, never a partial
+    parse (#422): a generation-ceiling truncation lands in exactly this
+    path, so this behavior -- true today -- is pinned explicitly rather
+    than left implicit.
+
+    All four candidates fail in sequence: raw `json.loads` raises on the
+    unterminated object; `_strip_code_fence` requires a closing fence,
+    absent here; `_first_bracket_block` requires a closing `]`, absent;
+    `_first_brace_block` requires a closing `}`, absent. Every candidate
+    is `None` or unparseable, so the loop falls through to `[]`.
+    """
+    truncated = '[{"type": "Person", "title": "Ada Lovelace", "summary": "Ma'
+
+    assert parsing.extract_json_items(truncated) == []

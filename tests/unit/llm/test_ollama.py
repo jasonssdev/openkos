@@ -27,6 +27,7 @@ from openkos.llm.ollama import (
     OllamaClient,
     OllamaEmbeddingDimensionMismatch,
     OllamaError,
+    OllamaGenerationCapped,
     OllamaModelNotFound,
     OllamaUnavailable,
     is_embedding_model,
@@ -214,6 +215,100 @@ def test_chat_request_targets_host_api_chat_with_model_and_messages() -> None:
     sent = _sent_body(captured[0])
     assert sent["model"] == "qwen3:8b"
     assert sent["messages"] == [{"role": "user", "content": "hi"}]
+
+
+# --- Generation ceiling: `num_predict` and `done_reason == "length"` (#422) --
+
+
+def test_chat_sends_num_predict_when_max_generation_tokens_configured() -> None:
+    """`chat()` emits `options.num_predict` when a ceiling is configured."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        urlopen=_fake_urlopen(_ok_body("hi"), captured),
+    )
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    sent = _sent_body(captured[0])
+    assert sent["options"] == {"num_predict": 8192}
+
+
+def test_chat_omits_options_entirely_when_max_generation_tokens_not_configured() -> (
+    None
+):
+    """`chat()` omits `options` entirely when no ceiling is configured, so an
+    opted-out workspace sends a byte-identical request to today's."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(_ok_body("hi"), captured))
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    sent = _sent_body(captured[0])
+    assert "options" not in sent
+
+
+def _ok_body_with_done_reason(content: str, done_reason: str) -> bytes:
+    """Build a well-formed `/api/chat` success body carrying `done_reason`."""
+    return json.dumps(
+        {
+            "message": {"role": "assistant", "content": content},
+            "done": True,
+            "done_reason": done_reason,
+        }
+    ).encode("utf-8")
+
+
+def test_chat_raises_generation_capped_when_done_reason_is_length() -> None:
+    """`done_reason == "length"` raises `OllamaGenerationCapped`: the model
+    hit the configured ceiling and the reply is truncated."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        urlopen=_fake_urlopen(
+            _ok_body_with_done_reason("truncated mid-", "length"), captured
+        ),
+    )
+
+    with pytest.raises(OllamaGenerationCapped):
+        client.chat([{"role": "user", "content": "hi"}])
+
+
+def test_chat_generation_capped_is_an_ollama_error() -> None:
+    """`OllamaGenerationCapped` is `OllamaError`-family, so it propagates
+    through every existing bare `except OllamaError` handler unmodified."""
+    assert issubclass(OllamaGenerationCapped, OllamaError)
+
+
+def test_chat_does_not_raise_when_done_reason_is_stop() -> None:
+    """`done_reason == "stop"` is a normal completion; no exception."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        urlopen=_fake_urlopen(
+            _ok_body_with_done_reason("a complete reply", "stop"), captured
+        ),
+    )
+
+    result = client.chat([{"role": "user", "content": "hi"}])
+
+    assert result == "a complete reply"
+
+
+def test_chat_does_not_raise_when_done_reason_is_absent() -> None:
+    """A response missing `done_reason` entirely must NOT raise -- absent is
+    treated as not-capped (fail-open on the signal; the bound itself is
+    what protects us)."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3", urlopen=_fake_urlopen(_ok_body("no signal"), captured)
+    )
+
+    result = client.chat([{"role": "user", "content": "hi"}])
+
+    assert result == "no signal"
 
 
 # --- Phase 4/5: error mapping -------------------------------------------------

@@ -1543,3 +1543,142 @@ def test_written_config_carries_chat_timeout(tmp_path: Path) -> None:
 
     assert "chat_timeout:" in text
     assert config.read_config(tmp_path).chat_timeout == config.DEFAULT_CHAT_TIMEOUT
+
+
+# --- max_generation_tokens: the configurable generation ceiling (#422) -------
+
+
+def test_default_max_generation_tokens_is_a_safety_rail() -> None:
+    """The packaged default is 8192, grounded in a real measurement (#422).
+
+    Five extraction calls through the project's own `_build_messages`/
+    `_SYSTEM_PROMPT` against local `qwen3:8b` on 17 KB real prose sources
+    produced `eval_count` of 4154, 1624, 962, 269, 107 -- all with
+    `done_reason: "stop"`. 8192 is roughly 2x headroom over the largest
+    legitimate completed reply.
+
+    This is a SAFETY RAIL against a non-terminating generation, not a
+    quality-tuning knob, and it is expected never to bind on legitimate
+    work.
+    """
+    assert config.DEFAULT_MAX_GENERATION_TOKENS == 8192
+
+
+def test_read_config_reads_present_max_generation_tokens(tmp_path: Path) -> None:
+    """A `max_generation_tokens` present in `openkos.yaml` passes through (#422)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "max_generation_tokens: 4096\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.max_generation_tokens == 4096
+    assert isinstance(result.max_generation_tokens, int)
+
+
+def test_read_config_falls_back_to_default_max_generation_tokens_when_absent(
+    tmp_path: Path,
+) -> None:
+    """An `openkos.yaml` omitting `max_generation_tokens` falls back to the
+    packaged default, like every other field (D3)."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.max_generation_tokens == config.DEFAULT_MAX_GENERATION_TOKENS
+
+
+def test_read_config_falls_back_to_default_max_generation_tokens_on_explicit_null(
+    tmp_path: Path,
+) -> None:
+    """An explicit `max_generation_tokens:` (YAML null) falls back too,
+    matching the `is not None` convention every other field follows."""
+    (tmp_path / "openkos.yaml").write_text("max_generation_tokens:\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.max_generation_tokens == config.DEFAULT_MAX_GENERATION_TOKENS
+
+
+def test_read_config_rejects_non_numeric_max_generation_tokens(
+    tmp_path: Path,
+) -> None:
+    """A non-numeric `max_generation_tokens` fails loudly rather than being
+    coerced."""
+    (tmp_path / "openkos.yaml").write_text(
+        "max_generation_tokens: soon\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match="'max_generation_tokens' must be a positive integer"
+    ):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_boolean_max_generation_tokens(tmp_path: Path) -> None:
+    """`max_generation_tokens: true` is rejected, not read as `1` token.
+
+    `bool` is a subclass of `int` in Python, so a bare numeric check would
+    silently accept `true`, mirroring the same hazard `chat_timeout`
+    guards against.
+    """
+    (tmp_path / "openkos.yaml").write_text(
+        "max_generation_tokens: true\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match="'max_generation_tokens' must be a positive integer"
+    ):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_non_integer_max_generation_tokens(
+    tmp_path: Path,
+) -> None:
+    """A fractional `max_generation_tokens` is refused: Ollama's
+    `num_predict` is a token count, not a fractional quantity."""
+    (tmp_path / "openkos.yaml").write_text(
+        "max_generation_tokens: 512.5\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match="'max_generation_tokens' must be a positive integer"
+    ):
+        config.read_config(tmp_path)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "-2"])
+def test_read_config_rejects_ollama_sentinel_max_generation_tokens(
+    tmp_path: Path, value: str
+) -> None:
+    """Ollama's sentinel values for `num_predict` are refused, not passed
+    through (#422 design decision, already made -- not re-opened here).
+
+    `-1` means "unlimited" to Ollama and would silently disable the very
+    bound this change installs; `0` means "return no completion"; `-2`
+    means "fill the context window". Accepting any of them would be a
+    footgun disguised as a valid setting.
+    """
+    (tmp_path / "openkos.yaml").write_text(
+        f"max_generation_tokens: {value}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match="'max_generation_tokens' must be a positive integer"
+    ):
+        config.read_config(tmp_path)
+
+
+def test_written_config_carries_max_generation_tokens(tmp_path: Path) -> None:
+    """`write_config` ships the key, and reading it back yields the packaged
+    default -- the template and `DEFAULT_MAX_GENERATION_TOKENS` must not
+    drift."""
+    config.write_config(tmp_path, model="qwen3:8b", embedding_model="bge-m3")
+
+    text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+
+    assert "max_generation_tokens:" in text
+    assert (
+        config.read_config(tmp_path).max_generation_tokens
+        == config.DEFAULT_MAX_GENERATION_TOKENS
+    )
