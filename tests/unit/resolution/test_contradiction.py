@@ -2351,3 +2351,160 @@ def test_load_ledger_bodies_degrades_when_gate_blocks(tmp_path: Path) -> None:
 
     assert before_doc == ("concepts/survivor", "")
     assert absorbed_doc == ("concepts/absorbed", "")
+
+
+# ---------------------------------------------------------------------------
+# `_MERGED_BODY_FLOOR` (issue #444): typed-edge candidates were unconditionally
+# first in the single `_MAX_PAIRS` budget, so a corpus whose live typed-edge
+# pairs alone reach the cap judged ZERO merged-body candidates -- #409's
+# detection went silent in exactly the busy, long-lived corpora it exists for.
+#
+# The cap stays single and shared (#409 Requirement 3). Only the ORDER changes:
+# merged-body candidates get a reserved floor of slots.
+# ---------------------------------------------------------------------------
+
+
+def _merged_bundle(bundle_dir: Path, count: int) -> None:
+    """`count` survivors, one merge-ledger entry each -- `count` merged-body
+    candidates."""
+    (bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    for i in range(count):
+        _write_survivor_with_merges(
+            bundle_dir / "concepts" / f"survivor{i:04d}.md",
+            entries=[_ledger_entry(absorbed_id=f"concepts/absorbed{i:04d}")],
+        )
+
+
+def _plan_for(
+    bundle_dir: Path, *, edges: int, merges: int
+) -> contradiction_mod.CandidatePlan:
+    _merged_bundle(bundle_dir, merges)
+    store: GraphStore = _FakeGraphStore(_chain_edges(edges))
+    return contradiction_mod.plan_candidates(bundle_dir, store=store)
+
+
+def _kinds(plan: contradiction_mod.CandidatePlan) -> tuple[int, int]:
+    """`(typed_edge_judged, merged_body_judged)` in the planned list."""
+    merged = sum(1 for s in plan.specs if s.merge_entry is not None)
+    return len(plan.specs) - merged, merged
+
+
+def test_merged_body_candidates_survive_a_typed_edge_saturated_budget(
+    tmp_path: Path,
+) -> None:
+    """Typed-edge pairs alone overflow the cap. Every merged-body candidate is
+    still judged, because the floor reserves its slots before typed edges fill
+    the budget (issue #444)."""
+    plan = _plan_for(tmp_path / "bundle", edges=contradiction_mod._MAX_PAIRS, merges=5)
+
+    edge_judged, merged_judged = _kinds(plan)
+
+    assert merged_judged == 5, "the whole point: merged-body detection stays alive"
+    assert edge_judged == contradiction_mod._MAX_PAIRS - 5
+    assert plan.llm_calls == contradiction_mod._MAX_PAIRS
+
+
+def test_merged_body_floor_is_a_guarantee_not_a_ceiling(tmp_path: Path) -> None:
+    """When typed edges do not fill the budget, merged-body candidates take
+    every remaining slot -- far past the floor. The floor sets a minimum, never
+    a maximum (issue #444)."""
+    floor = contradiction_mod._MERGED_BODY_FLOOR
+    # More merged-body candidates than the whole budget, so the only limit on
+    # what they take is what typed edges leave behind.
+    plan = _plan_for(
+        tmp_path / "bundle", edges=10, merges=contradiction_mod._MAX_PAIRS + 50
+    )
+
+    edge_judged, merged_judged = _kinds(plan)
+
+    assert edge_judged == 10, "typed edges are never starved to honour the floor"
+    assert merged_judged == contradiction_mod._MAX_PAIRS - 10
+    assert merged_judged > floor
+
+
+def test_merged_body_floor_reserves_nothing_when_the_budget_is_not_reached(
+    tmp_path: Path,
+) -> None:
+    """Under the cap, the floor is inert: every candidate of both kinds is
+    judged and nothing is reserved or dropped (issue #444)."""
+    plan = _plan_for(tmp_path / "bundle", edges=3, merges=2)
+
+    assert _kinds(plan) == (3, 2)
+    assert plan.llm_calls == 5
+    assert plan.total_count == 5
+
+
+def test_typed_edges_keep_the_budget_they_do_not_owe_the_floor(
+    tmp_path: Path,
+) -> None:
+    """The floor only ever reserves as many slots as there are merged-body
+    candidates to fill it -- 2 merges reserve 2 slots, not
+    `_MERGED_BODY_FLOOR` (issue #444). A fixed reservation would silently cost
+    typed-edge coverage on every corpus with few merges."""
+    plan = _plan_for(tmp_path / "bundle", edges=contradiction_mod._MAX_PAIRS, merges=2)
+
+    edge_judged, merged_judged = _kinds(plan)
+
+    assert merged_judged == 2
+    assert edge_judged == contradiction_mod._MAX_PAIRS - 2
+
+
+def _plan(
+    *, edge_total: int, merged_total: int, judged_edges: int, judged_merged: int
+) -> contradiction_mod.CandidatePlan:
+    specs = [
+        contradiction_mod._CandidateSpec(
+            pair_ids=(f"c{i:04d}", f"c{i + 1:04d}"), relation_type="references"
+        )
+        for i in range(judged_edges)
+    ] + [
+        contradiction_mod._CandidateSpec(
+            pair_ids=(f"s{i:04d}", f"s{i:04d}"),
+            relation_type=None,
+            merge_entry=_ledger_entry(absorbed_id=f"concepts/absorbed{i:04d}"),
+        )
+        for i in range(judged_merged)
+    ]
+    return contradiction_mod.CandidatePlan(
+        specs=tuple(specs), edge_total=edge_total, merged_total=merged_total
+    )
+
+
+def test_truncation_notice_is_none_when_nothing_was_dropped() -> None:
+    plan = _plan(edge_total=3, merged_total=2, judged_edges=3, judged_merged=2)
+
+    assert contradiction_mod.contradiction_truncation_notice(plan) is None
+
+
+def test_truncation_notice_names_only_the_kind_that_was_dropped() -> None:
+    """The whole point of #444's reporting half: an operator over the cap can
+    tell WHICH kind went unjudged. A notice that named both unconditionally,
+    or neither, would not answer that."""
+    edges_only = _plan(
+        edge_total=210, merged_total=4, judged_edges=196, judged_merged=4
+    )
+    merged_only = _plan(
+        edge_total=150, merged_total=90, judged_edges=150, judged_merged=50
+    )
+
+    edges_notice = contradiction_mod.contradiction_truncation_notice(edges_only)
+    merged_notice = contradiction_mod.contradiction_truncation_notice(merged_only)
+
+    assert edges_notice is not None
+    assert "14 typed-edge" in edges_notice
+    assert "merged-body" not in edges_notice
+
+    assert merged_notice is not None
+    assert "40 merged-body" in merged_notice
+    assert "typed-edge" not in merged_notice
+
+
+def test_truncation_notice_reports_both_kinds_and_the_shared_total() -> None:
+    plan = _plan(edge_total=180, merged_total=60, judged_edges=150, judged_merged=50)
+
+    notice = contradiction_mod.contradiction_truncation_notice(plan)
+
+    assert notice == (
+        "200 of 240 candidate(s) shown (cap reached); "
+        "dropped: 30 typed-edge, 10 merged-body"
+    )

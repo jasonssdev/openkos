@@ -26,7 +26,12 @@ from openkos.cli import main as contradiction_main
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
-from openkos.resolution.contradiction import ContradictionVerdict, Verdict
+from openkos.resolution.contradiction import (
+    CandidatePlan,
+    ContradictionVerdict,
+    Verdict,
+    _CandidateSpec,
+)
 from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
@@ -127,6 +132,23 @@ class _FakeOllamaClient:
             '{"verdict": "contradicts", "confidence": 0.9, '
             '"rationale": "fake reply", "conflicting_claims": ["x"]}'
         )
+
+
+def _truncated_plan() -> CandidatePlan:
+    """A plan the shared `_MAX_PAIRS` budget truncated in BOTH kinds: 250
+    candidates produced (250 typed-edge + 50 merged-body), 1 judged.
+
+    Built from the real `CandidatePlan`/`_CandidateSpec` so it cannot drift
+    from what `contradiction_truncation_notice` reads."""
+    return CandidatePlan(
+        specs=(
+            _CandidateSpec(
+                pair_ids=("concepts/a", "concepts/b"), relation_type="related_to"
+            ),
+        ),
+        edge_total=201,
+        merged_total=50,
+    )
 
 
 def _verdict(
@@ -516,11 +538,15 @@ def test_contradictions_no_candidate_pairs_never_calls_llm(
 # ---------------------------------------------------------------------------
 
 
-def test_contradictions_cap_reached_line_present(
+def test_contradictions_cap_reached_line_names_which_kind_was_dropped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Cap-reached -> "N of M pairs shown (cap reached)" line present (spec:
-    Cap truncation is reported)."""
+    """Cap-reached -> a truncation line naming WHICH KIND went unjudged
+    (spec: Cap truncation is reported; issue #444).
+
+    The line is driven by the `CandidatePlan` the verb builds and hands to
+    `find_contradictions`, not by that function's return -- so it describes
+    the exact list that was judged, and can break the total down per kind."""
     _init_workspace(tmp_path, monkeypatch)
 
     def _fake_find(
@@ -529,11 +555,16 @@ def test_contradictions_cap_reached_line_present(
         return [_verdict(confidence=0.9)], 250
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+    monkeypatch.setattr(
+        "openkos.cli.main.plan_candidates",
+        lambda *a, **k: _truncated_plan(),
+    )
 
     result = runner.invoke(app, ["contradictions"])
 
     assert result.exit_code == 0
-    assert "1 of 250 pairs shown (cap reached)" in result.stdout
+    assert "1 of 251 candidate(s) shown (cap reached)" in result.stdout
+    assert "dropped: 200 typed-edge, 50 merged-body" in result.stdout
 
 
 def test_contradictions_no_cap_reached_line_when_under_cap(

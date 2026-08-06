@@ -77,6 +77,26 @@ caller receives the full deduped total alongside the (possibly capped)
 verdict list, and the CLI verb reports "N of M pairs shown (cap reached)"
 when the two differ (spec: Cap truncation is reported)."""
 
+_MERGED_BODY_FLOOR = 50
+"""Slots within `_MAX_PAIRS` that merged-body candidates cannot be crowded
+out of (issue #444).
+
+Typed-edge candidates used to fill the shared budget unconditionally first,
+so any corpus whose live typed-edge pairs alone reached `_MAX_PAIRS` judged
+ZERO merged-body candidates -- and the corpora that exhaust the typed-edge
+budget are the busiest, longest-lived ones, which are also the ones most
+likely to have accumulated merges. #409's detection went silent in exactly
+the situation it was built for.
+
+This is a MINIMUM, not a quota: merged-body candidates take every slot typed
+edges leave unused, and only `min(len(merged_specs), _MERGED_BODY_FLOOR)` is
+ever withheld from typed edges, so a corpus with two merges gives up two
+typed-edge slots rather than fifty. 50 is a quarter of the budget, chosen
+against measurement rather than taste: real end-to-end runs produced 8-16
+typed-edge pairs (see #379's cost measurement), so the remaining 150 slots
+stay far above anything a real corpus has reached, while the merged-body
+count is bounded by the bundle's total merge-ledger entries."""
+
 _CONFIDENCE_DISPLAY_THRESHOLD = 0.7
 """Precision-first display threshold: the default CLI report shows only
 `CONTRADICTS` verdicts with confidence at or above this value, matching the
@@ -719,6 +739,45 @@ class CandidatePlan:
         """Exactly how many `llm.chat` calls judging this plan costs."""
         return len(self.specs)
 
+    @property
+    def merged_judged(self) -> int:
+        """Merged-body candidates that survived the cap."""
+        return sum(1 for spec in self.specs if spec.merge_entry is not None)
+
+    @property
+    def edge_judged(self) -> int:
+        """Typed-edge candidates that survived the cap."""
+        return len(self.specs) - self.merged_judged
+
+
+def contradiction_truncation_notice(plan: CandidatePlan) -> str | None:
+    """The "N of M ... (cap reached)" line a caller renders when the shared
+    `_MAX_PAIRS` budget truncated this plan, naming WHICH KIND was dropped
+    and by how much -- `None` when nothing was truncated (issue #444).
+
+    Mirrors `candidate_group_truncation_notice`/`candidate_truncation_notice`:
+    the resolution layer owns the wording, the CLI only echoes it, so every
+    verb reporting this truncation says the same thing.
+
+    Naming the kind is the part of #444 that holds regardless of the ordering
+    policy. The old notice reported one combined number, so an operator whose
+    corpus was over the cap could not tell whether the candidates that went
+    unjudged were typed-edge pairs or the merged bodies -- the same
+    report-what-was-dropped gap #381, #404 and #409 were each filed about."""
+    dropped_edges = plan.edge_total - plan.edge_judged
+    dropped_merged = plan.merged_total - plan.merged_judged
+    if dropped_edges <= 0 and dropped_merged <= 0:
+        return None
+    dropped: list[str] = []
+    if dropped_edges > 0:
+        dropped.append(f"{dropped_edges} typed-edge")
+    if dropped_merged > 0:
+        dropped.append(f"{dropped_merged} merged-body")
+    return (
+        f"{plan.llm_calls} of {plan.total_count} candidate(s) shown "
+        f"(cap reached); dropped: {', '.join(dropped)}"
+    )
+
 
 def plan_candidates(
     bundle_dir: Path,
@@ -776,8 +835,16 @@ def plan_candidates(
     ]
     merged_specs = _merged_body_candidates(bundle_dir, deprecated)
 
+    # Issue #444: reserve the floor BEFORE typed edges take the budget, then
+    # let merged-body candidates spill into whatever typed edges left unused.
+    # `reserved` is `min(...)`, never the flat floor, so a corpus with two
+    # merges gives up two typed-edge slots rather than fifty.
+    reserved = min(len(merged_specs), _MERGED_BODY_FLOOR)
+    kept_edges = edge_specs[: _MAX_PAIRS - reserved]
+    kept_merged = merged_specs[: _MAX_PAIRS - len(kept_edges)]
+
     return CandidatePlan(
-        specs=tuple((edge_specs + merged_specs)[:_MAX_PAIRS]),
+        specs=tuple(kept_edges + kept_merged),
         edge_total=edge_total,
         merged_total=len(merged_specs),
     )
@@ -792,6 +859,7 @@ def find_contradictions(
     local_exemption: bool = False,
     candidates: CandidateSource | None = None,
     store: GraphStore | None = None,
+    plan: CandidatePlan | None = None,
     on_progress: Callable[[int, int, ContradictionVerdict], None] | None = None,
 ) -> tuple[list[ContradictionVerdict], int]:
     """Orchestrate the whole read-only contradiction-detection flow: open
@@ -884,15 +952,23 @@ def find_contradictions(
     The candidate list itself is built by `plan_candidates` (issue #446), not
     inline here: `curate`'s Contradictions cost gate has to state the number
     of calls this function will make BEFORE it runs, and the only way those
-    two numbers cannot drift is for both to come from the same code."""
-    plan = plan_candidates(
-        bundle_dir,
-        store=store,
-        candidates=candidates,
-        include_deprecated=include_deprecated,
-        include_confidential=include_confidential,
-        local_exemption=local_exemption,
-    )
+    two numbers cannot drift is for both to come from the same code.
+
+    `plan` (issue #444) lets a caller that ALREADY built one pass it in
+    rather than have it rebuilt. Both CLI verbs need the plan themselves, to
+    render `contradiction_truncation_notice`'s per-kind line -- passing it
+    here means the notice describes the very list that was judged, and saves
+    the second bundle walk that recomputing it would cost. Omitted, this
+    builds its own exactly as before."""
+    if plan is None:
+        plan = plan_candidates(
+            bundle_dir,
+            store=store,
+            candidates=candidates,
+            include_deprecated=include_deprecated,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
     total_count = plan.total_count
     specs = list(plan.specs)
 

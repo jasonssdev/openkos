@@ -75,6 +75,7 @@ from openkos.resolution.candidates import CandidateGroup
 from openkos.resolution.contradiction import (
     CandidatePlan,
     ContradictionVerdict,
+    contradiction_truncation_notice,
     find_contradictions,
     is_high_confidence_contradiction,
     plan_candidates,
@@ -174,7 +175,7 @@ class CurateContext:
 
     Resolved by the COMMAND rather than lazily alongside `ollama_client`
     because the stage PROBES need it: `_structure_probe`,
-    `_concept_type_names` and `_contradiction_pairs` all apply the
+    `_concept_type_names` and `_contradiction_plan` all apply the
     sensitivity filter to compute their cost-gate counts, and they run
     before any client is built. A probe that filtered on different terms
     than the run would preview a cost the run does not pay.
@@ -766,12 +767,19 @@ def _contradictions_probe(ctx: CurateContext) -> StageProbe:
 def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     """`find_contradictions` with `on_progress` (design D4): report-only
     and terminal -- never proposes or performs a write (spec: Contradictions
-    Stage Is Report-Only And Last)."""
+    Stage Is Report-Only And Last).
+
+    The plan is rebuilt here rather than carried from `probe` (design D4's
+    no-memoization rule) and handed to `find_contradictions`, so the
+    cap-reached line names WHICH KIND was truncated (#444) and describes the
+    exact list that was judged."""
     from openkos.cli import main as cli_main
 
     llm = ctx.ollama_client
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Contradictions stage requires an LLM client")
+
+    plan = _contradiction_plan(ctx)
 
     source = cli_main._open_proximity_or_degrade(ctx.layout.vectors_db_path)
     try:
@@ -781,21 +789,20 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             source.close()
 
     with graph as store:
-        verdicts, total_pairs = find_contradictions(
+        verdicts, _total_pairs = find_contradictions(
             ctx.layout.bundle_dir,
             llm=llm,
             include_deprecated=ctx.include_deprecated,
             include_confidential=ctx.include_confidential,
             local_exemption=ctx.local_exemption,
             store=store,
+            plan=plan,
             on_progress=observability.progress_callback("curate", "pair"),
         )
 
-    if total_pairs > len(verdicts):
-        typer.echo(
-            f"Contradictions: {len(verdicts)} of {total_pairs} pairs shown "
-            "(cap reached)"
-        )
+    truncation = contradiction_truncation_notice(plan)
+    if truncation is not None:
+        typer.echo(f"Contradictions: {truncation}")
 
     high_confidence: list[ContradictionVerdict] = [
         v for v in verdicts if is_high_confidence_contradiction(v)
