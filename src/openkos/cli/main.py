@@ -8904,32 +8904,6 @@ def _open_fts_or_degrade(
     return handle, False
 
 
-def _open_graph_or_degrade(
-    path: Path,
-) -> tuple[AbstractContextManager["GraphStore | None"], bool]:
-    """Existence-gated, read-only handle open for `query`'s persisted graph
-    seam (Slice 5, PR3).
-
-    Structurally IDENTICAL to `_open_fts_or_degrade` (same two deliberate
-    differences from `_open_vector_store_or_degrade` documented there: no
-    explicit `path.exists()` guard here either, since
-    `sqlite_graph.open_graph_store_readonly` is already existence-gated
-    internally; catches only `sqlite3.Error`, since the graph store has no
-    typed "unavailable" exception either). Returns a context manager
-    yielding either an open `SqliteGraphStore` (satisfying `GraphStore`
-    structurally) or `None`, plus whether the CLI itself detected the store
-    as unavailable this call (absent, or a raw `sqlite3.Error` from
-    `open_graph_store_readonly`'s open-time validating read against a
-    corrupt/invalid EXISTING `graph.db`)."""
-    try:
-        handle = sqlite_graph.open_graph_store_readonly(path)
-    except sqlite3.Error:
-        return nullcontext(None), True
-    if handle is None:
-        return nullcontext(None), True
-    return handle, False
-
-
 @dataclass(frozen=True)
 class _FiledAnswerPlan:
     """One validated `query --save` filing staged for Phase B write --
@@ -9102,33 +9076,37 @@ def query(
     confirmation prompt, no `--auto`. `--save` is the sole exception and
     brings all three with it (see below). Must be run inside an initialized
     workspace; outside one it refuses (exit 1) with a short reason on
-    stderr. Retrieval fuses THREE lists: lexical (FTS5) hits, dense
-    (`vectors.db`) hits, and a second-stage
-    seeded personalized-PageRank graph pool -- all three now read PERSISTED,
-    read-only on-disk indexes under `.openkos/` (`fts.db`, `vectors.db`,
-    `graph.db`) that `reindex` maintains, rather than rebuilding anything
-    in-process per call (Slice 5, PR3). `query` never WRITES to any of the
-    three derived stores -- an absent or unavailable/corrupt store degrades
-    cleanly (FTS/graph fall back to the remaining lists; dense falls back to
-    FTS-only), never creating or repairing one; only `reindex` writes.
+    stderr. Retrieval fuses TWO lists: lexical (FTS5) hits and dense
+    (`vectors.db`) hits -- both read PERSISTED, read-only on-disk indexes
+    under `.openkos/` (`fts.db`, `vectors.db`) that `reindex` maintains,
+    rather than rebuilding anything in-process per call (Slice 5, PR3).
+    `query` never WRITES to either derived store -- an absent or
+    unavailable/corrupt store degrades cleanly (FTS falls back to dense-only;
+    dense falls back to FTS-only), never creating or repairing one; only
+    `reindex` writes.
+
+    There was a THIRD list until issue #434: a second-stage seeded
+    personalized-PageRank pool read from `.openkos/graph.db`. It is gone
+    from retrieval because centrality is not relevance -- it repeatedly
+    seated the corpus's most central concept at the cost of a real hit, once
+    evicting the very document that answered the question. `graph.db` is
+    still built by `reindex` and still backs contradiction candidates;
+    `query` simply no longer opens it.
 
     Every completed run (successful answer or no-match) prints a one-line
     `retrieval:` summary to STDERR reporting the raw FTS hit count, the raw
-    dense hit count, the raw graph hit count, the fused count, whether the
-    LLM was invoked, and how many sources were cited -- so a silent
-    short-circuit (e.g. zero hits, so the LLM never ran) is always visible,
-    even though STDOUT stays pipe-clean. When any derived index is absent or
-    unavailable/corrupt (FTS, dense, or graph), an additional stderr line
-    hints at running `openkos reindex` to enable full retrieval -- `query`
-    itself never recomputes or compares the bundle's manifest hash to reach
-    this decision; staleness detection is `reindex`'s exclusive job (D2).
-    When graph retrieval degraded (absent/unopenable index, no seeds, or a
-    PageRank failure), a separate stderr note says so -- graph retrieval
-    never affects the FTS/dense outcome. When the FTS index build skipped
-    any unreadable/unparseable files (at the LAST `reindex` run), an
-    `index:` skip-notice block follows the summary on stderr, worded as a
-    whole-bundle build diagnostic -- it never implies the skipped files were
-    candidates for THIS query's match.
+    dense hit count, the fused count, whether the LLM was invoked, and how
+    many sources were cited -- so a silent short-circuit (e.g. zero hits, so
+    the LLM never ran) is always visible, even though STDOUT stays
+    pipe-clean. When either derived index is absent or unavailable/corrupt
+    (FTS or dense), an additional stderr line hints at running
+    `openkos reindex` to enable full retrieval -- `query` itself never
+    recomputes or compares the bundle's manifest hash to reach this
+    decision; staleness detection is `reindex`'s exclusive job (D2). When
+    the FTS index build skipped any unreadable/unparseable files (at the
+    LAST `reindex` run), an `index:` skip-notice block follows the summary
+    on stderr, worded as a whole-bundle build diagnostic -- it never implies
+    the skipped files were candidates for THIS query's match.
 
     On a successful answer, STDOUT carries exactly the answer text, then
     (only when at least one concept was cited) a blank line, `Citations:`,
@@ -9146,11 +9124,11 @@ def query(
     traceback and exits 1.
 
     Unless `--include-deprecated` is passed, deprecated/superseded concepts
-    (status-aware-retrieval) are excluded from every retrieval channel
-    (lexical, dense, graph) BEFORE fusion -- the `retrieval:` stderr summary
-    and every count in it (FTS/dense/graph/fused/cited) already report the
-    POST-filter values, since filtering happens inside `answer()` before
-    those counts are captured.
+    (status-aware-retrieval) are excluded from both retrieval channels
+    (lexical, dense) BEFORE fusion -- the `retrieval:` stderr summary and
+    every count in it (FTS/dense/fused/cited) already report the POST-filter
+    values, since filtering happens inside `answer()` before those counts
+    are captured.
 
     Unless `--include-confidential` is passed, confidential concepts
     (sensitivity-fail-closed-filter) are likewise excluded from every
@@ -9217,11 +9195,9 @@ def query(
         layout.vectors_db_path
     )
     fts_index_cm, fts_was_unavailable = _open_fts_or_degrade(layout.fts_db_path)
-    graph_index_cm, graph_was_unavailable = _open_graph_or_degrade(layout.graph_db_path)
     with (
         vector_store_cm as vector_store,
         fts_index_cm as fts_index,
-        graph_index_cm as graph_index,
     ):
         # #381: named BEFORE the LLM call, not after it -- the user is told
         # their answer is suspect while they are still waiting for it,
@@ -9249,7 +9225,6 @@ def query(
                 embedder=embedder,
                 vector_store=vector_store,
                 fts_index=fts_index,
-                graph_index=graph_index,
                 limit=limit,
                 include_deprecated=include_deprecated,
                 include_confidential=include_confidential,
@@ -9307,36 +9282,25 @@ def query(
 
     cited_count = len(result.citations)
     llm_status = "invoked" if result.llm_invoked else "skipped"
-    # The graph term reports `graph_contributed_count` -- the concepts the
-    # graph channel actually ADDED -- not `graph_hit_count`, its raw
-    # personalized-PageRank candidate pool (issue #402). The candidate count
-    # was misleading in both directions: a workspace with zero typed edges
-    # still reported `10 graph`, and even a well-connected one usually
-    # contributes nothing of its own, because the graph channel may only
-    # fill reserved slots with concepts FTS and dense never found. The
-    # `-added` suffix keeps the term from being read as a hit count like the
-    # two before it.
+    # Two retrieval terms, because there are two retrieval channels. The
+    # summary used to carry a third, `<n> graph-added` from
+    # `graph_contributed_count` -- how many reserved tail slots the seeded
+    # personalized-PageRank channel filled with concepts FTS and dense never
+    # found. Issue #434 removed the channel: measured over 10 questions the
+    # slot it claimed was 7 times harmful, 3 times neutral and never
+    # beneficial, because PageRank centrality is a property of the corpus,
+    # not of the question. There is no term to print because there is no
+    # third list, and no graph-degrade note below for the same reason.
     typer.echo(
         f"retrieval: {result.fts_hit_count} FTS + {result.dense_hit_count} "
-        f"dense + {result.graph_contributed_count} graph-added → "
+        f"dense → "
         f"{result.fused_count} fused → LLM {llm_status} → {cited_count} cited",
         err=True,
     )
-    if (
-        store_was_unavailable
-        or fts_was_unavailable
-        or graph_was_unavailable
-        or result.dense_degraded
-    ):
+    if store_was_unavailable or fts_was_unavailable or result.dense_degraded:
         typer.echo(
             "hint: one or more derived indexes are unavailable this run -- "
             "run `openkos reindex` to enable full retrieval.",
-            err=True,
-        )
-    if result.graph_degraded:
-        typer.echo(
-            "note: graph retrieval degraded for this run -- falling back to "
-            "FTS+dense fusion only.",
             err=True,
         )
     if result.skip_notices:

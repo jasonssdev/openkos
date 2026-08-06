@@ -142,11 +142,16 @@ def _write_query_doc(
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Initialize a workspace AND backfill an (empty) `vectors.db`, `fts.db`,
-    and `graph.db`, so `query`'s three derived-index seams are ALL healthy
-    by default -- most tests here exercise the answer-rendering/stderr-format
-    contract, not the absent/corrupt-index-degrade/hint behavior, which has
-    its own dedicated tests below using a workspace missing one or more of
-    the three stores (or one that fails to open)."""
+    and `graph.db`, so `query`'s two retrieval seams are healthy by default
+    -- most tests here exercise the answer-rendering/stderr-format contract,
+    not the absent/corrupt-index-degrade/hint behavior, which has its own
+    dedicated tests below using a workspace missing one of the stores (or
+    one that fails to open).
+
+    `graph.db` is still written even though `query` no longer reads it
+    (issue #434): `reindex` maintains it, `_stale_index_names` still names
+    it in the shared staleness advisory, and contradiction detection still
+    derives its candidate pairs from the typed edges it projects."""
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
@@ -215,7 +220,7 @@ def test_query_matching_answer_renders_citations_in_fused_rank_order(
         "  → concepts/epictetus (Epictetus)\n"
     )
     assert result.stderr == (
-        "retrieval: 3 FTS + 2 dense + 0 graph-added → 2 fused → LLM invoked → 2 cited\n"
+        "retrieval: 3 FTS + 2 dense → 2 fused → LLM invoked → 2 cited\n"
     )
 
 
@@ -246,7 +251,7 @@ def test_query_zero_hits_renders_zero_hits_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 0 FTS + 0 dense + 0 graph-added → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 0 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -277,7 +282,7 @@ def test_query_all_unreadable_renders_corruption_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 2 FTS + 0 dense + 0 graph-added → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 2 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -306,7 +311,7 @@ def test_query_empty_question_renders_prompt_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 0 FTS + 0 dense + 0 graph-added → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 0 FTS + 0 dense → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -341,7 +346,7 @@ def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
         "  → concepts/stoicism (Stoicism)\n"
     )
     assert result.stderr == (
-        "retrieval: 1 FTS + 0 dense + 0 graph-added → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense → 1 fused → LLM invoked → 1 cited\n"
         "index: 1 doc skipped while building the search index (whole-bundle, "
         "not this query's hits):\n"
         "  concepts/corrupt.md: skipped (unreadable)\n"
@@ -371,7 +376,7 @@ def test_query_no_skip_notices_omits_skip_block(
 
     assert result.exit_code == 0
     assert result.stderr == (
-        "retrieval: 1 FTS + 0 dense + 0 graph-added → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense → 1 fused → LLM invoked → 1 cited\n"
     )
 
 
@@ -472,12 +477,13 @@ def test_query_builds_and_injects_embedder_and_vector_store(
     assert kwargs["vector_store"] is not None
 
 
-def test_query_builds_and_injects_fts_index_and_graph_index(
+def test_query_injects_the_fts_index_and_no_graph_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`query` opens the persisted FTS and graph derived indexes read-only
-    and injects both into `answer()` alongside the embedder/vector store
-    (Slice 5, PR3; spec: Happy-Path Answer Rendering -- Matching answer with
+    """`query` opens the persisted FTS derived index read-only and injects it
+    into `answer()` alongside the embedder/vector store -- and passes NO
+    `graph_index`, because retrieval has no graph channel to feed (issue
+    #434; spec: Happy-Path Answer Rendering -- Matching answer with
     citations)."""
     _init_workspace(tmp_path, monkeypatch)
     bundle_dir = tmp_path / "bundle"
@@ -509,7 +515,7 @@ def test_query_builds_and_injects_fts_index_and_graph_index(
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["fts_index"] is not None
-    assert kwargs["graph_index"] is not None
+    assert "graph_index" not in kwargs
 
 
 def test_query_never_creates_vectors_db(
@@ -715,18 +721,16 @@ def test_query_corrupt_vectors_db_degrades_with_hint(
     assert "openkos reindex" in result.stderr
 
 
-def test_query_cold_fts_and_graph_stores_hint_at_reindex(
+def test_query_cold_fts_store_hints_at_reindex(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A workspace with no `fts.db`/`graph.db` (never reindexed) still
-    completes on whatever retrieval lists remain available, exits 0, and
-    prints the reindex hint -- mirroring the existing dense-cold-store
-    behavior (Slice 5, PR3; query-command: FTS/Graph-Unavailable Runs
-    Degrade And Hint At Reindex -- Never-reindexed workspace hints at
-    reindex for FTS/graph too)."""
+    """A workspace with no `fts.db` (never reindexed) still completes on
+    whatever retrieval lists remain available, exits 0, and prints the
+    reindex hint -- mirroring the existing dense-cold-store behavior (Slice
+    5, PR3; query-command: FTS-Unavailable Runs Degrade And Hint At Reindex
+    -- Never-reindexed workspace hints at reindex for FTS too)."""
     _init_workspace(tmp_path, monkeypatch)
     (tmp_path / ".openkos" / "fts.db").unlink()
-    (tmp_path / ".openkos" / "graph.db").unlink()
     fake_result = AnswerResult(
         answer="Stoicism teaches the dichotomy of control.",
         citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
@@ -752,7 +756,7 @@ def test_query_cold_fts_and_graph_stores_hint_at_reindex(
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["fts_index"] is None
-    assert kwargs["graph_index"] is None
+    assert "graph_index" not in kwargs
     assert "openkos reindex" in result.stderr
 
 
@@ -764,7 +768,7 @@ def test_query_corrupt_fts_db_degrades_with_hint(
     `query` must still degrade to dense-only fusion, printing the answer and
     citations to STDOUT and the reindex hint on stderr, rather than crashing
     with a raw traceback (Slice 5, PR3; query-command: Corrupt or unopenable
-    FTS/graph index degrades with the same hint)."""
+    FTS index degrades with the same hint)."""
     _init_workspace(tmp_path, monkeypatch)
     openkos_dir = tmp_path / ".openkos"
     (openkos_dir / "fts.db").write_bytes(b"not a database")
@@ -797,14 +801,23 @@ def test_query_corrupt_fts_db_degrades_with_hint(
     assert "openkos reindex" in result.stderr
 
 
-def test_query_corrupt_graph_db_degrades_with_hint(
+def test_query_ignores_a_corrupt_graph_db_entirely(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An EXISTING `graph.db` that is corrupt at the filesystem level raises
-    a raw `sqlite3.Error` from `open_graph_store_readonly`'s validating read
-    -- `query` must still degrade cleanly, rather than crashing with a raw
-    traceback (Slice 5, PR3; query-command: Corrupt or unopenable FTS/graph
-    index degrades with the same hint)."""
+    """A corrupt `graph.db` no longer degrades RETRIEVAL (issue #434): the
+    graph channel is gone, so `query` never opens the store as an index,
+    never passes a `graph_index`, and never prints the
+    derived-index-unavailable hint or the graph-degrade note on its account.
+
+    This is the load-bearing difference from the removed
+    `test_query_corrupt_graph_db_degrades_with_hint`, which treated a broken
+    graph store as a partial retrieval failure worth reporting.
+
+    What DOES survive is the shared `_stale_index_names` advisory, which
+    `query`, `status` and `next` all read and which still names `graph`
+    (`reindex` still maintains `graph.db`, and contradiction detection still
+    reads the projection). So the assertion here is scoped to the retrieval
+    seam, not to the whole of stderr."""
     _init_workspace(tmp_path, monkeypatch)
     openkos_dir = tmp_path / ".openkos"
     (openkos_dir / "graph.db").write_bytes(b"not a database")
@@ -833,8 +846,10 @@ def test_query_corrupt_graph_db_degrades_with_hint(
     assert "Traceback" not in result.stderr
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
-    assert kwargs["graph_index"] is None
-    assert "openkos reindex" in result.stderr
+    assert "graph_index" not in kwargs
+    assert "derived indexes are unavailable this run" not in result.stderr
+    assert "graph retrieval degraded" not in result.stderr
+    assert "graph-added" not in result.stderr
 
 
 def test_query_dense_degraded_hints_at_reindex_even_with_store_present(
@@ -888,13 +903,17 @@ def test_query_no_hint_when_dense_healthy_and_store_present(
     assert "reindex" not in result.stderr
 
 
-def test_query_retrieval_summary_reports_what_the_graph_contributed(
+def test_query_retrieval_summary_has_no_graph_term(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The `retrieval:` stderr summary reports `graph_contributed_count` --
-    the concepts the graph channel ADDED -- not the raw
-    `graph_hit_count` candidate pool (spec: Stderr Retrieval Summary On
-    Every Run)."""
+    """The `retrieval:` stderr summary is `FTS + dense -> fused -> LLM ->
+    cited` and nothing else (issue #434).
+
+    The graph term is gone because the channel is gone. It reported
+    `graph_contributed_count`, the number of reserved slots the graph filled
+    -- an honest number for a channel that should not have been filling
+    slots at all: seeded personalized PageRank ranks by global centrality,
+    and every slot it claimed cost a real FTS/dense hit."""
     _init_workspace(tmp_path, monkeypatch)
     fake_result = AnswerResult(
         answer="Stoicism teaches the dichotomy of control.",
@@ -906,9 +925,6 @@ def test_query_retrieval_summary_reports_what_the_graph_contributed(
         dense_hit_count=2,
         fused_count=2,
         dense_degraded=False,
-        graph_hit_count=4,
-        graph_degraded=False,
-        graph_contributed_count=1,
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -916,88 +932,19 @@ def test_query_retrieval_summary_reports_what_the_graph_contributed(
 
     assert result.exit_code == 0
     assert result.stderr == (
-        "retrieval: 3 FTS + 2 dense + 1 graph-added → 2 fused → LLM invoked → 1 cited\n"
+        "retrieval: 3 FTS + 2 dense \u2192 2 fused \u2192 LLM invoked \u2192 1 cited\n"
     )
-    assert result.stdout == (
-        "Stoicism teaches the dichotomy of control.\n"
-        "\n"
-        "Citations:\n"
-        "  → concepts/stoicism (Stoicism)\n"
-    )
+    assert "graph" not in result.stderr
 
 
-def test_query_retrieval_summary_reports_zero_for_a_graph_that_added_nothing(
+def test_query_never_prints_a_graph_degrade_note(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A workspace whose graph produced a full candidate pool but added no
-    concept of its own reports `0 graph-added` -- the old summary printed
-    the candidate count (`10 graph`), which read as a contribution the graph
-    never made (issue #402)."""
+    """No run prints a graph-degrade note any more (issue #434) -- there is
+    no graph stage left to degrade, so an absent or unopenable `graph.db`
+    changes nothing a reader of `query` would ever see."""
     _init_workspace(tmp_path, monkeypatch)
-    fake_result = AnswerResult(
-        answer="Stoicism teaches the dichotomy of control.",
-        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
-        fts_hit_count=3,
-        llm_invoked=True,
-        no_match_cause="none",
-        skip_notices=[],
-        dense_hit_count=2,
-        fused_count=2,
-        dense_degraded=False,
-        graph_hit_count=10,
-        graph_degraded=False,
-        graph_contributed_count=0,
-    )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
-
-    result = runner.invoke(app, ["query", "what is stoicism?"])
-
-    assert result.exit_code == 0
-    assert result.stderr == (
-        "retrieval: 3 FTS + 2 dense + 0 graph-added → 2 fused → LLM invoked → 1 cited\n"
-    )
-
-
-def test_query_graph_degraded_adds_a_stderr_note(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`graph_degraded=True` prints an additional stderr note, mirroring
-    the existing dense-degrade hint shape; stdout is unaffected (spec:
-    Graph degrade is noted alongside the summary)."""
-    _init_workspace(tmp_path, monkeypatch)
-    fake_result = AnswerResult(
-        answer="Stoicism teaches the dichotomy of control.",
-        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
-        fts_hit_count=1,
-        llm_invoked=True,
-        no_match_cause="none",
-        skip_notices=[],
-        dense_hit_count=0,
-        fused_count=1,
-        dense_degraded=False,
-        graph_hit_count=0,
-        graph_degraded=True,
-    )
-    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
-
-    result = runner.invoke(app, ["query", "what is stoicism?"])
-
-    assert result.exit_code == 0
-    assert "graph retrieval degraded" in result.stderr
-    assert result.stdout == (
-        "Stoicism teaches the dichotomy of control.\n"
-        "\n"
-        "Citations:\n"
-        "  → concepts/stoicism (Stoicism)\n"
-    )
-
-
-def test_query_no_graph_degrade_note_when_graph_healthy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A healthy graph run (`graph_degraded=False`) prints no graph-degrade
-    note at all."""
-    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / ".openkos" / "graph.db").unlink()
     fake_result = AnswerResult(
         answer="Stoicism teaches the dichotomy of control.",
         citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
@@ -1008,8 +955,6 @@ def test_query_no_graph_degrade_note_when_graph_healthy(
         dense_hit_count=1,
         fused_count=1,
         dense_degraded=False,
-        graph_hit_count=2,
-        graph_degraded=False,
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -1017,6 +962,7 @@ def test_query_no_graph_degrade_note_when_graph_healthy(
 
     assert result.exit_code == 0
     assert "graph retrieval degraded" not in result.stderr
+    assert "graph" not in result.stderr
 
 
 def test_query_builds_ollama_client_from_configured_model(
@@ -1206,7 +1152,7 @@ def test_query_dimension_mismatch_is_fatal_even_when_fts_already_had_hits(
 
     assert control.exit_code == 0
     assert control.stderr.startswith(
-        "retrieval: 1 FTS + 0 dense + 0 graph-added → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense → 1 fused → LLM invoked → 1 cited\n"
     )
     assert "a fake answer" in control.stdout
 
@@ -1429,7 +1375,7 @@ def test_query_retrieval_stderr_default_reports_post_filter_fts_count(
 
     assert result.exit_code == 0
     assert result.stderr.startswith(
-        "retrieval: 1 FTS + 0 dense + 0 graph-added → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense → 1 fused → LLM invoked → 1 cited\n"
     )
 
 
@@ -1455,7 +1401,7 @@ def test_query_retrieval_stderr_include_deprecated_reports_post_filter_fts_count
 
     assert result.exit_code == 0
     assert result.stderr.startswith(
-        "retrieval: 2 FTS + 0 dense + 0 graph-added → 2 fused → LLM invoked → 2 cited\n"
+        "retrieval: 2 FTS + 0 dense → 2 fused → LLM invoked → 2 cited\n"
     )
 
 
@@ -1628,10 +1574,11 @@ def test_query_local_exemption_keeps_the_general_advisory(
 
 
 def test_query_docstring_no_longer_claims_no_persisted_state() -> None:
-    """`query`'s docstring no longer states that graph/FTS retrieval carries
-    "no persisted state, no CLI-level graph command" -- it now describes
-    both as reading persisted, `reindex`-written on-disk indexes (Slice 5,
-    PR3; query-command: Docstring reflects persisted-index contract)."""
+    """`query`'s docstring no longer states that retrieval carries "no
+    persisted state, no CLI-level graph command" -- it now describes the FTS
+    and dense channels as reading persisted, `reindex`-written on-disk
+    indexes (Slice 5, PR3; query-command: Docstring reflects persisted-index
+    contract)."""
     cli_main = _REPO_ROOT / "src" / "openkos" / "cli" / "main.py"
     tree = ast.parse(cli_main.read_text(encoding="utf-8"))
     query_docstring = next(

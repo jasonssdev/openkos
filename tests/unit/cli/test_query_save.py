@@ -387,7 +387,7 @@ def test_query_purity_without_save_is_byte_identical(
         "  → concepts/stoicism (Stoicism)\n"
     )
     assert result.stderr == (
-        "retrieval: 1 FTS + 0 dense + 0 graph-added → 0 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense → 0 fused → LLM invoked → 1 cited\n"
     )
     assert (tmp_path / "bundle" / "index.md").read_text(
         encoding="utf-8"

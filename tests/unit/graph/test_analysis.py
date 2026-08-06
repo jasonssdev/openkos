@@ -167,9 +167,11 @@ def test_provenance_mirror_edge_present_in_digraph_with_derived_from_attribute(
     COUNT and node/edge SET are unaffected by the type-attribute flip; only
     the `relation_type` attribute value changes from `None` to
     `"derived_from"` (spec: graph-projection non-regression, task 7.2).
-    Undirected PPR (`graph_retrieve.py`/this module) reads the same edge
-    set regardless of `relation_type`, so this confirms the flip is benign
-    for retrieval."""
+    A `DiGraph` consumer reads the same edge set regardless of
+    `relation_type`, so this confirms the flip is benign. (Previously this
+    named `graph_retrieve.py`'s undirected PPR as that consumer; issue #434
+    removed it, and the projection's remaining consumer is contradiction
+    candidate derivation, which reads typed edges.)"""
     bundle_dir = tmp_path / "bundle"
     (bundle_dir / "concepts").mkdir(parents=True)
     (bundle_dir / "concepts" / "a.md").write_text(

@@ -1,32 +1,28 @@
-"""Cited answer library: retrieve -> fuse -> seed a graph stage -> fuse
-again -> assemble -> answer over a compiled bundle.
+"""Cited answer library: retrieve -> fuse -> assemble -> answer over a
+compiled bundle.
 
-`answer()` composes five seams end-to-end: an injected, read-only
+`answer()` composes four seams end-to-end: an injected, read-only
 `fts_index` handle (lexical retrieval), an injected `Embedder` + `VectorStore`
-(dense retrieval, optional), `retrieval.fusion` (rank-position fusion:
-`fuse` derives the graph seeds AND is the base of the final ranking, which
-`fuse_with_graph` then tops up), an
-injected, read-only `graph_index` handle + `retrieval.graph_retrieve.graph_rank`
-(a seeded personalized-PageRank second retrieval stage, optional/degrading),
-a per-hit guarded `okf.load_frontmatter` re-read (assemble), and an injected
-`llm.LLMBackend` (answer). Core is synchronous; `llm`, `embedder`,
-`vector_store`, `fts_index`, and `graph_index` are ALL caller-supplied, so
-this module never imports `openkos.config` (mirrors `llm/ollama.py`'s leaf
-discipline).
+(dense retrieval, optional), `retrieval.fusion.fuse` (rank-position fusion of
+exactly those two lists, and the whole of the ranking), a per-hit guarded
+`okf.load_frontmatter` re-read (assemble), and an injected `llm.LLMBackend`
+(answer). Core is synchronous; `llm`, `embedder`, `vector_store`, and
+`fts_index` are ALL caller-supplied, so this module never imports
+`openkos.config` (mirrors `llm/ollama.py`'s leaf discipline).
 
 Slice 5 (performance-caching, PR3, design D4): `answer()` no longer builds
-`fts_index`/`graph_index` itself -- it reads whatever ALREADY-OPEN,
-read-only handle the caller injects (mirroring `vector_store`'s existing
-contract exactly). The caller (`query`'s CLI wiring) opens the persisted
-`.openkos/fts.db`/`.openkos/graph.db` read-only and passes `None` when a
-store is absent or unopenable/corrupt -- that open-failure-to-`None`
-decision happens ENTIRELY at the caller's store-open call site, never here.
-`answer()` itself performs exactly ONE check per handle: `is None`. It NEVER
-computes or compares a bundle manifest hash (D2 binding contract) -- a
-properly-`reindex`ed handle is always treated as fresh; staleness detection
-is `reindex`'s exclusive job. Because there is no more per-query build, the
-empty-query short-circuit now touches ZERO injected handles at all (not even
-a call to open one) -- provable via spies on all four (follow-up #1).
+`fts_index` itself -- it reads whatever ALREADY-OPEN, read-only handle the
+caller injects (mirroring `vector_store`'s existing contract exactly). The
+caller (`query`'s CLI wiring) opens the persisted `.openkos/fts.db`
+read-only and passes `None` when the store is absent or unopenable/corrupt
+-- that open-failure-to-`None` decision happens ENTIRELY at the caller's
+store-open call site, never here. `answer()` itself performs exactly ONE
+check per handle: `is None`. It NEVER computes or compares a bundle manifest
+hash (D2 binding contract) -- a properly-`reindex`ed handle is always
+treated as fresh; staleness detection is `reindex`'s exclusive job. Because
+there is no more per-query build, the empty-query short-circuit now touches
+ZERO injected handles at all (not even a call to open one) -- provable via
+spies on all three (follow-up #1).
 
 Typed exceptions (the `OllamaError` family, or any exception a caller's
 `fts_index.search`/`vector_store.query` implementation might itself raise
@@ -34,40 +30,38 @@ OUTSIDE its own documented degrade cases) propagate unswallowed to the
 caller -- the exception-vs-degrade boundary lives ONLY at the handle's
 OWN documented failure modes (dense: `VecUnavailable`/read-path
 `sqlite3.Error`, plus the GENERIC transient `OllamaError` from the question
-embed; graph: any exception from `graph_rank`), never at a broader catch-all
-here. The three FATAL `OllamaError` subclasses -- `OllamaUnavailable`,
-`OllamaModelNotFound`, and `OllamaEmbeddingDimensionMismatch` (issue #209)
--- are on the propagating side of that split, never the degrading one: each
-names a permanent environment or configuration fault that no re-run can
-heal. `fts_index.search` itself is documented as never
-raising (mirrors `state.fts.FtsIndex.search`'s own contract), so FTS stays
-mandatory and un-degraded except via the `fts_index is None` branch.
+embed), never at a broader catch-all here. The three FATAL `OllamaError`
+subclasses -- `OllamaUnavailable`, `OllamaModelNotFound`, and
+`OllamaEmbeddingDimensionMismatch` (issue #209) -- are on the propagating
+side of that split, never the degrading one: each names a permanent
+environment or configuration fault that no re-run can heal.
+`fts_index.search` itself is documented as never raising (mirrors
+`state.fts.FtsIndex.search`'s own contract), so FTS stays mandatory and
+un-degraded except via the `fts_index is None` branch.
 
-Degrade matrix (graph column): healthy handle+PPR -> `graph_degraded=False`;
-no seeds (both initial retrievers empty) -> PPR skipped entirely,
-`graph_degraded=True`; absent `graph_index`, or `graph_rank` raising -> `[]`,
-`graph_degraded=True`; an edgeless graph (handle opened successfully, zero
-edges) -> `[]`, `graph_degraded=False` (the handle itself opened fine --
-query performs no freshness comparison of its own). Graph never affects
-FTS/dense outcomes, and FTS stays mandatory.
+Issue #434 removed a FIFTH seam: an injected, read-only `graph_index` handle
+feeding a seeded personalized-PageRank stage between the two fuses, whose
+bounded contribution then filled reserved tail slots of the final ranking.
+Two A/B measurements ended it. On a 21-node graph one concept,
+`concepts/document-skills`, was the contribution on 6 of 10 unrelated
+questions; on a 27-node graph the concentration spread out but per-question
+judgement was 7 harmful, 3 neutral, 0 beneficial -- including evicting
+`sources/mcp-origin` from "When did MCP originate?" and `sources/10-mcp`
+from a question about which protocol BigQuery belongs to.
 
-Issue #402: the graph channel is ADDITIVE, never a reordering. The final
-ranking is `fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)`,
-whose FTS+dense base ordering the graph list cannot permute -- it may only
-fill `fusion.GRAPH_RESERVED_SLOTS` reserved tail slots with concepts the two
-retrievers never saw. `AnswerResult.graph_contributed_count` reports how many
-of those slots it actually filled, which is what the graph is worth on this
-query; `graph_hit_count` remains the raw PPR candidate pool.
+That is a verdict on the RANKING FUNCTION, not on the typed graph. Seeded
+PPR ranks by global centrality, a property of the corpus rather than of the
+question, so a bigger graph only changes which central node wins the
+reserved slot -- the slot still costs a base hit. The typed graph itself is
+untouched and still earns its keep: `resolution/contradiction.py` derives
+candidate pairs from typed edges, and `reindex` still maintains
+`.openkos/graph.db`.
 
 status-aware-retrieval (MVP-3 gap #8 · S1, Phase 2): unless the caller
 passes `include_deprecated=True`, `answer()` computes the single shared
 `openkos.lifecycle.deprecated_concept_ids(bundle_dir)` predicate ONCE per
 call and filters `hits`/`vec_hits` via `lifecycle.filter_hits` BEFORE the
-initial fuse (so graph seeds are already live-only), and filters
-`graph_hits` again AFTER PPR (so a deprecated/superseded node PPR happens to
-surface is dropped too, while a live concept reachable only through it
-still surfaces on its own PPR-propagated merits). Every count on
-`AnswerResult` (`fts_hit_count`, `dense_hit_count`, `graph_hit_count`,
+fuse. Every count on `AnswerResult` (`fts_hit_count`, `dense_hit_count`,
 `fused_count`) is therefore a POST-filter count. `include_deprecated=True`
 skips the predicate walk entirely -- no `_iter_docs` pass, no filtering --
 restoring today's status-blind behavior byte-for-byte at zero added cost.
@@ -80,7 +74,6 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import lifecycle, sensitivity
-from openkos.graph.base import GraphStore
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import (
     OllamaEmbeddingDimensionMismatch,
@@ -89,7 +82,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.model import okf
-from openkos.retrieval import fusion, graph_retrieve, pool
+from openkos.retrieval import fusion, pool
 from openkos.state import fts
 from openkos.state.vectorstore import VecHit, VectorStore, VecUnavailable
 
@@ -240,8 +233,8 @@ class AnswerResult:
     status filter (additive; status-aware-retrieval, Phase 2)."""
     fused_count: int = 0
     """Number of distinct `concept_id`s in the fused, limit-truncated list
-    (additive). Already reflects the lifecycle status filter, since `hits`/
-    `vec_hits`/`graph_hits` are all filtered before this fuse."""
+    (additive). Already reflects the lifecycle status filter, since both
+    `hits` and `vec_hits` are filtered before this fuse."""
     dense_degraded: bool = False
     """`True` when dense retrieval could not proceed this call (absent
     `vector_store`, `VecUnavailable`, a read-path `sqlite3.Error`, or the
@@ -251,28 +244,6 @@ class AnswerResult:
     (`OllamaUnavailable`, `OllamaModelNotFound`,
     `OllamaEmbeddingDimensionMismatch`) -- those propagate instead, so no
     `AnswerResult` is produced at all (issue #209)."""
-    graph_hit_count: int = 0
-    """Personalized-PageRank pool size returned by `graph_rank` for this
-    call, BEFORE the final fusion's truncation to `limit` but AFTER the
-    lifecycle status filter (additive; status-aware-retrieval, Phase 2)."""
-    graph_degraded: bool = False
-    """`True` when graph retrieval could not proceed this call (absent
-    `graph_index`, no seeds from the initial fuse, or `graph_rank` raised)
-    and an empty graph list was used instead; `False` when graph retrieval
-    ran normally, including the edgeless-graph case where the handle itself
-    opened successfully (additive)."""
-    graph_contributed_count: int = 0
-    """How many concepts of the final fused list the graph channel actually
-    ADDED -- i.e. how many of `fusion.GRAPH_RESERVED_SLOTS` reserved slots it
-    filled with concepts absent from the FTS+dense pool (issue #402).
-
-    Distinct from `graph_hit_count`, which is the raw personalized-PageRank
-    CANDIDATE pool. The two diverge sharply and the difference is the point:
-    a workspace with zero typed edges, or one whose PPR candidates were all
-    already found lexically/semantically, reports a `graph_hit_count` of up
-    to `pool.pool_limit(limit)` while contributing exactly nothing. This
-    field is the honest number, so a reader can judge whether the graph
-    channel is earning its place."""
 
 
 def _assemble_context(
@@ -461,31 +432,6 @@ def _dense_search(
         return [], True
 
 
-def _graph_search(
-    graph_index: GraphStore | None, seeds: list[str], *, limit: int
-) -> tuple[list[fusion.GraphHit], bool]:
-    """Run the graph retrieval sub-phase over an ALREADY-OPEN, read-only
-    `graph_index` handle (opened by the caller against the persisted on-disk
-    graph store; no per-call build) and rank up to `limit` concepts related
-    to `seeds` via personalized PageRank.
-
-    Degrades to `([], True)` -- `graph_degraded=True`, an empty graph list
-    folded into the final fusion -- whenever `graph_index` is absent
-    (`None`, the caller has ALREADY resolved an unopenable/corrupt on-disk
-    store to `None`) or `graph_rank` raises ANY `Exception` (broad,
-    mirroring `sqlite_graph`'s own degrade-not-crash posture): graph
-    retrieval is purely additive and must never break FTS/dense answering.
-    Only ever called with a non-empty `seeds` list -- the caller skips this
-    entirely when the initial fuse produced no seeds.
-    """
-    if graph_index is None:
-        return [], True
-    try:
-        return graph_retrieve.graph_rank(graph_index, seeds, limit=limit), False
-    except Exception:  # broad: any PPR failure degrades, never crashes (D-graph)
-        return [], True
-
-
 def answer(
     question: str,
     *,
@@ -494,7 +440,6 @@ def answer(
     embedder: Embedder | None = None,
     vector_store: VectorStore | None = None,
     fts_index: fts.FtsSearchHandle | None = None,
-    graph_index: GraphStore | None = None,
     limit: int = 5,
     include_deprecated: bool = False,
     include_confidential: bool = False,
@@ -502,39 +447,21 @@ def answer(
 ) -> AnswerResult:
     """Answer `question` from `bundle_dir` using `llm`, citing the concepts used.
 
-    See module docstring for the retrieve/fuse/seed/graph/fuse/assemble/
-    answer flow.
+    See module docstring for the retrieve/fuse/assemble/answer flow.
 
     An empty/whitespace-only `question` short-circuits BEFORE any
-    retrieval -- `fts_index.search`, `embedder.embed`, `vector_store.query`,
-    and any query surface of `graph_index` are never called (follow-up #1:
-    provable via spies on all four). Otherwise, both retrievers are queried
-    with `pool_limit = pool.pool_limit(limit)`. Unless `include_deprecated`
+    retrieval -- `fts_index.search`, `embedder.embed`, and
+    `vector_store.query` are never called (follow-up #1: provable via spies
+    on all three). Otherwise, both retrievers are queried with
+    `pool_limit = pool.pool_limit(limit)`. Unless `include_deprecated`
     is `True`, the shared `lifecycle.deprecated_concept_ids(bundle_dir)`
     predicate is computed ONCE and both `hits` and `vec_hits` are filtered
-    against it via `lifecycle.filter_hits` BEFORE the initial fuse
-    (status-aware-retrieval, Phase 2) -- so graph seeds are already
-    live-only. `hits`/`vec_hits` are fused via `retrieval.fusion.fuse` into
-    an INITIAL fused list; the top `min(limit, 5)` `concept_id`s of that
-    initial list become the graph stage's `seeds`. WHEN seeds exist,
-    `_graph_search` reads the injected `graph_index` handle and runs
-    personalized PageRank for up to `pool.pool_limit(limit)` related
-    concepts, and `graph_hits` is likewise filtered against the SAME
-    `deprecated` set (unless `include_deprecated`) -- the graph structure
-    itself is never rebuilt, so a live concept reachable only through a
-    deprecated/superseded neighbor still surfaces via PPR, while the
-    neighbor itself is dropped from the output. WHEN no seeds exist (both
-    retrievers found nothing), the graph read is skipped entirely and
-    `graph_degraded=True`. A FINAL
-    `fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)` returns
-    the top-`limit` list from those ALREADY-FILTERED lists before context
-    assembly: the FTS+dense fusion is the base ranking and the graph list can
-    only ADD concepts absent from it, into bounded reserved tail slots
-    (issue #402) -- so every `AnswerResult` count is a POST-filter count, and
-    `graph_contributed_count` is the number of reserved slots actually
-    filled. `include_deprecated=True` skips the predicate walk entirely
-    (zero added cost) and restores today's status-blind behavior
-    byte-for-byte.
+    against it via `lifecycle.filter_hits` BEFORE the fuse
+    (status-aware-retrieval, Phase 2). `fusion.fuse(hits, vec_hits)`, sliced
+    to `limit`, is the FINAL ranking -- nothing is layered on top of it
+    (issue #434) -- so every `AnswerResult` count is a POST-filter count.
+    `include_deprecated=True` skips the predicate walk entirely (zero added
+    cost) and restores today's status-blind behavior byte-for-byte.
 
     `answer` NEVER computes or compares a bundle manifest hash (D2 binding
     contract) -- neither this module nor any of its imports references
@@ -544,8 +471,8 @@ def answer(
     sensitivity-fail-closed-filter (S3a): unless `include_confidential` is
     `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
     predicate is likewise computed ONCE and unioned with the `deprecated` set
-    before filtering `hits`/`vec_hits`/`graph_hits` -- a confidential concept
-    is excluded from every retrieval channel exactly like a deprecated one,
+    before filtering `hits`/`vec_hits` -- a confidential concept
+    is excluded from both retrieval channels exactly like a deprecated one,
     and `include_confidential=True` independently skips its own predicate
     walk at zero added cost. Correction batch (post-4R-review, FIX 2): that
     predicate is a SINGLE `okf._iter_docs` walk and can silently miss a doc
@@ -608,25 +535,11 @@ def answer(
     hits = lifecycle.filter_hits(hits, excluded)
     vec_hits = lifecycle.filter_hits(vec_hits, excluded)
 
-    initial_fused = fusion.fuse(hits, vec_hits)
-    seeds = initial_fused[: min(limit, 5)]
-    if seeds:
-        graph_hits, graph_degraded = _graph_search(
-            graph_index, seeds, limit=pool.pool_limit(limit)
-        )
-        graph_hits = lifecycle.filter_hits(graph_hits, excluded)
-    else:
-        graph_hits, graph_degraded = [], True
-
-    # The graph channel is ADDITIVE, never a reordering (issue #402): the
-    # `initial_fused` FTS+dense ranking above IS the base, and
-    # `fuse_with_graph` may only append graph-only concepts into its bounded
-    # reserved tail slots. `graph_contributed_count` is therefore exactly the
-    # number of fused ids that were never in the FTS+dense pool -- and
-    # `set(initial_fused)` IS that pool, already computed for the seeds.
-    fused_ids = fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)
-    pool_ids = set(initial_fused)
-    graph_contributed = sum(1 for cid in fused_ids if cid not in pool_ids)
+    # ONE fuse, of exactly the two retriever lists, sliced to `limit` (issue
+    # #434). There used to be a second fuse here that topped this ranking up
+    # with a seeded-PageRank concept in a reserved tail slot; measurement
+    # showed the slot cost a real hit and bought centrality, not relevance.
+    fused_ids = fusion.fuse(hits, vec_hits)[: max(limit, 0)]
     context_blocks, citations = _assemble_context(
         bundle_dir,
         fused_ids,
@@ -646,9 +559,6 @@ def answer(
             dense_hit_count=len(vec_hits),
             fused_count=len(fused_ids),
             dense_degraded=dense_degraded,
-            graph_hit_count=len(graph_hits),
-            graph_degraded=graph_degraded,
-            graph_contributed_count=graph_contributed,
         )
 
     reply = llm.chat(_build_messages(context_blocks, question))
@@ -666,7 +576,4 @@ def answer(
         dense_hit_count=len(vec_hits),
         fused_count=len(fused_ids),
         dense_degraded=dense_degraded,
-        graph_hit_count=len(graph_hits),
-        graph_degraded=graph_degraded,
-        graph_contributed_count=graph_contributed,
     )
