@@ -56,13 +56,17 @@ from openkos.model.relations import validate_relation_type
 from openkos.model.types import CLASSIFIABLE_TYPES as _CLASSIFIABLE_TYPES
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
-from openkos.resolution import find_candidates, find_exact_title_groups
+from openkos.resolution import find_candidates_report, find_exact_title_groups
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     Verdict,
     adjudicate_candidates,
 )
-from openkos.resolution.candidates import CandidateGroup, Tier
+from openkos.resolution.candidates import (
+    CandidateGroup,
+    Tier,
+    candidate_group_truncation_notice,
+)
 from openkos.resolution.contradiction import (
     find_contradictions,
     is_high_confidence_contradiction,
@@ -7300,8 +7304,8 @@ def status() -> None:
     # #216: hence `find_exact_title_groups`, not `find_candidates` -- it
     # returns the identical HIGH groups in the identical order, but skips the
     # O(n^2) pairwise `near_match_score` pass whose LOW groups this line
-    # discarded. `duplicates`/`adjudicate` still call `find_candidates`:
-    # they use both tiers.
+    # discarded. `duplicates`/`adjudicate` still call `find_candidates_report`
+    # (curate-call-budget): they use both tiers.
     exact_title_groups = len(find_exact_title_groups(layout.bundle_dir))
     if exact_title_groups:
         needs_attention.append(
@@ -7696,21 +7700,28 @@ def duplicates(
     initialized workspace -- the SAME check `status`/`lint` use -- printing
     the reason to stderr with no raw traceback.
 
-    On a workspace, `resolution.find_candidates` performs one read-only,
-    whole-bundle pass and returns candidate groups: same-type OKF objects
-    that MIGHT be the same real-world entity, tiered by HOW they matched --
-    HIGH (an exact normalized title) or LOW (a near-match). The tier records
-    the match METHOD, never a strength ranking, which is why a LOW group can carry
+    On a workspace, `resolution.find_candidates_report` performs one
+    read-only, whole-bundle pass and returns a `CandidateGroupReport` of
+    candidate groups: same-type OKF objects that MIGHT be the same
+    real-world entity, tiered by HOW they matched -- HIGH (an exact
+    normalized title) or LOW (a near-match). The tier records the match
+    METHOD, never a strength ranking, which is why a LOW group can carry
     a similarity score of 1.000 without contradiction (issue #192). This is
     a REPORT ONLY -- `duplicates` never merges, deletes, or otherwise
     adjudicates a candidate; it points at the SHIPPED `merge` verb
     (`cli/main.py:3957`) through its trailing hint instead (spec: Read-Only
     CLI Candidate Report Verb).
 
+    `find_candidates_report` bounds its returned groups to
+    `_MAX_CANDIDATE_GROUPS` (curate-call-budget); it does NOT return every
+    group a pathological corpus would otherwise produce. WHEN the cap
+    binds, `duplicates` echoes `candidate_group_truncation_notice` to
+    stderr before rendering the (bounded) report -- never silently.
+
     Output is grouped by OKF `type`, then by tier, mirroring
-    `find_candidates`'s own stable ordering: each group renders its type,
-    tier, member concept_ids, and the trigger (the shared normalized key
-    for HIGH, the similarity score for LOW). An empty result renders a
+    `find_candidates_report`'s own stable ordering: each group renders its
+    type, tier, member concept_ids, and the trigger (the shared normalized
+    key for HIGH, the similarity score for LOW). An empty result renders a
     clear "No candidates found." line instead of an empty section. Every
     successful read exits 0, whether or not any candidates are found (spec:
     No candidates still exits 0). No file under the workspace is ever
@@ -7719,9 +7730,9 @@ def duplicates(
 
     Unless `--include-deprecated` is passed, deprecated/superseded concepts
     (status-aware-retrieval) are excluded from every candidate group --
-    `duplicates` shares `adjudicate`'s `find_candidates` call and, per the
-    locked scope decision, gets the SAME `--include-deprecated` flag for
-    consistency.
+    `duplicates` shares `adjudicate`'s `find_candidates_report` call and,
+    per the locked scope decision, gets the SAME `--include-deprecated`
+    flag for consistency.
     """
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -7730,7 +7741,13 @@ def duplicates(
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
-    groups = find_candidates(layout.bundle_dir, include_deprecated=include_deprecated)
+    report = find_candidates_report(
+        layout.bundle_dir, include_deprecated=include_deprecated
+    )
+    groups = list(report.groups)
+    notice = candidate_group_truncation_notice(report)
+    if notice is not None:
+        typer.echo(notice, err=True)
 
     typer.echo(f"openkos duplicates: workspace at {root}")
     typer.echo()
@@ -7809,13 +7826,20 @@ def adjudicate(
     `config.require_workspace` gate (D1), then a Phase-A `read_config` guard
     (`except (OSError, ValueError)`, lint parity), then a real
     `OllamaClient(model=cfg.model)` is built and injected -- as the
-    `LLMBackend` -- into `resolution.find_candidates` followed by
+    `LLMBackend` -- into `resolution.find_candidates_report` followed by
     `resolution.adjudication.adjudicate_candidates`. Invoked WITHOUT
     `--apply`/`--apply-same` it never merges, writes, or decides -- it only
     prints a verdict for human review and points at the SHIPPED `merge` verb
     (`cli/main.py:3957`) through its own `Next:` hint, exactly as
     `duplicates` does. Those two flags are the only paths that write, and
     both are gated on an explicit confirmation; see their paragraphs below.
+
+    `find_candidates_report` bounds its returned groups to
+    `_MAX_CANDIDATE_GROUPS` (curate-call-budget); it does NOT hand
+    `adjudicate_candidates` every group a pathological corpus would
+    otherwise produce. WHEN the cap binds, `adjudicate` echoes
+    `candidate_group_truncation_notice` to stderr before the LLM pass
+    begins -- never silently.
 
     `--json` emits the adjudication results as a single pretty-printed JSON
     array on stdout and fully suppresses all human output (tally, legend,
@@ -7841,10 +7865,10 @@ def adjudicate(
     message, exit 1, and zero writes.
 
     Unless `--include-deprecated` is passed, deprecated/superseded concepts
-    (status-aware-retrieval) are excluded from the `find_candidates` call
-    that feeds `adjudicate_candidates` -- `adjudicate` uses candidates, so it
-    threads the flag into `find_candidates`, not into `adjudicate_candidates`
-    itself.
+    (status-aware-retrieval) are excluded from the `find_candidates_report`
+    call that feeds `adjudicate_candidates` -- `adjudicate` uses candidates,
+    so it threads the flag into `find_candidates_report`, not into
+    `adjudicate_candidates` itself.
 
     Unless `--include-confidential` is passed, confidential concepts
     (sensitivity-fail-closed-filter) are excluded at the MEMBER level, inside
@@ -7907,9 +7931,13 @@ def adjudicate(
         )
         raise typer.Exit(code=1) from exc
 
-    candidates = find_candidates(
+    report = find_candidates_report(
         layout.bundle_dir, include_deprecated=include_deprecated
     )
+    candidates = list(report.groups)
+    notice = candidate_group_truncation_notice(report)
+    if notice is not None:
+        typer.echo(notice, err=True)
     llm = _chat_client(cfg)
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(

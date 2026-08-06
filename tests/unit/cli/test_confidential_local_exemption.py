@@ -37,7 +37,7 @@ from openkos.cli.main import app
 from openkos.graph.base import Edge
 from openkos.llm.ollama import BackendHostLocality, OllamaClient
 from openkos.resolution.adjudication import AdjudicatedCandidate
-from openkos.resolution.candidates import CandidateGroup, Tier
+from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.resolution.contradiction import ContradictionVerdict
 from openkos.retrieval.answer import AnswerResult
 
@@ -227,7 +227,13 @@ def _spy_contradictions(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
 def _spy_adjudicate(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
     spy = _KwargSpy(list[AdjudicatedCandidate]())
     monkeypatch.setattr(main_mod, "adjudicate_candidates", spy)
-    monkeypatch.setattr(main_mod, "find_candidates", lambda *a, **k: [_candidate()])
+    monkeypatch.setattr(
+        main_mod,
+        "find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(
+            groups=(_candidate(),), produced=1, retained=1
+        ),
+    )
     return spy
 
 

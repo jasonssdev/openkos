@@ -137,45 +137,48 @@ own RED→GREEN→conversion sequence is sequential.
 
 ### `duplicates` (`src/openkos/cli/main.py:7733`)
 
-21. **RED: `test_duplicates.py` — over-cap bundle emits the truncation
+21. [x] **RED: `test_duplicates.py` — over-cap bundle emits the truncation
     notice.**
     Satisfies: entity-resolution spec, "Truncation Is Never Silent"
     (duplicates as a caller).
-22. **RED: `test_duplicates.py` — below-cap bundle emits nothing.**
-23. **GREEN: `duplicates` switches to `find_candidates_report`, echoes
+22. [x] **RED: `test_duplicates.py` — below-cap bundle emits nothing.**
+23. [x] **GREEN: `duplicates` switches to `find_candidates_report`, echoes
     the notice to stderr; docstring at `main.py:7699-7733` amended — no
     longer claims to return "every" group.** Makes tests 21-22 pass.
-24. **Convert the 5 monkeypatch sites in `test_duplicates.py`** (lines
+24. [x] **Convert the 5 monkeypatch sites in `test_duplicates.py`** (lines
     189, 223, 257, 346, 369): `openkos.cli.main.find_candidates` →
     `...find_candidates_report`.
 
 ### `adjudicate` (`src/openkos/cli/main.py:7910`)
 
-25. **RED: `test_adjudicate.py` — over-cap bundle emits the truncation
+25. [x] **RED: `test_adjudicate.py` — over-cap bundle emits the truncation
     notice.**
-26. **RED: `test_adjudicate.py` — below-cap bundle emits nothing.**
-27. **GREEN: `adjudicate` switches to `find_candidates_report`, echoes
+26. [x] **RED: `test_adjudicate.py` — below-cap bundle emits nothing.**
+27. [x] **GREEN: `adjudicate` switches to `find_candidates_report`, echoes
     the notice to stderr; docstring at `main.py:7835` amended.** Makes
     tests 25-26 pass.
-28. **Convert the 47 monkeypatch sites in `test_adjudicate.py`** (lines
+28. [x] **Convert the 47 monkeypatch sites in `test_adjudicate.py`** (lines
     292 through 2898): same rename as task 24. The shared
     `_fake_find_candidates` / `_recording_find_candidates` / local
     `fake_find` helpers wrap their list in a `CandidateGroupReport`, so
     most individual sites reduce to a one-line target-string edit once
     the shared helpers are updated.
 
-Note: `tests/unit/cli/test_confidential_local_exemption.py` needs no
-conversion (0 sites, unaffected).
+Note: `tests/unit/cli/test_confidential_local_exemption.py` needed one
+conversion, not zero — a single attribute-based `monkeypatch.setattr(main_mod,
+"find_candidates", ...)` site (line 230, parametrized across 4 test IDs) was
+not caught by a string-literal grep for `"openkos.cli.main.find_candidates"`.
+Converted to `find_candidates_report` returning a `CandidateGroupReport`.
 
 ### Slice B close-out
 
-29. **Slice B quality gates**: `uv run pytest` (full suite, both slices),
+29. [x] **Slice B quality gates**: `uv run pytest` (full suite, both slices),
     `uv run ruff check . && uv run ruff format --check .`, `uv run mypy .`
     (strict; coverage gate `fail_under = 90`, branch coverage). Confirm the
     spec's never-silent requirement is met end-to-end (`curate`,
-    `duplicates`, `adjudicate` all disclose truncation). Open/land PR #2
-    per `chained-pr` skill, targeting PR #1's branch per that skill's
-    stacked-PR convention.
+    `duplicates`, `adjudicate` all disclose truncation). Land: PR #2 targets
+    PR #1's branch (`curate-call-budget-slice-a`) per the stacked-PR
+    convention; not opened this run (orchestrator owns delivery).
 
 ---
 
