@@ -301,6 +301,67 @@ def test_candidate_pairs_excludes_derived_from_typed_edges() -> None:
     assert total == 1
 
 
+def test_candidate_pairs_excludes_typed_self_loop_edges() -> None:
+    """A typed edge whose target IS its source (`concepts/x -> concepts/x`)
+    is never a contradiction candidate (issue #411): asking the model whether
+    a document contradicts itself loads the same body twice and spends a call
+    on a question with no answer.
+
+    Self-loops are reachable -- the `Relation` codec accepts them, only the
+    interactive `relate` verb refuses to create one, and
+    `okf.merge_relations` deliberately preserves a pre-existing one. So this
+    is filtered here rather than assumed impossible upstream."""
+    self_loop = Edge(
+        source_id="concepts/stoicism",
+        target_id="concepts/stoicism",
+        relation_type="contradicts",
+    )
+    store: GraphStore = _FakeGraphStore([self_loop])
+
+    pairs, total = contradiction_mod._candidate_pairs(store)
+
+    assert pairs == []
+    assert total == 0
+
+
+def test_candidate_pairs_self_loop_never_consumes_the_pair_budget() -> None:
+    """The self-loop drop happens BEFORE `total_count` is taken, so a
+    self-pair neither occupies a `_MAX_PAIRS` slot nor inflates the
+    truncation signal (issue #411).
+
+    Counting it in `total_count` would make the "N of M pairs shown (cap
+    reached)" notice claim work was truncated that was never judgeable in the
+    first place."""
+    self_loop = Edge(
+        source_id="concepts/a", target_id="concepts/a", relation_type="contradicts"
+    )
+    genuine = Edge(
+        source_id="concepts/b", target_id="concepts/c", relation_type="related_to"
+    )
+    store: GraphStore = _FakeGraphStore([self_loop, genuine])
+
+    pairs, total = contradiction_mod._candidate_pairs(store, cap=1)
+
+    assert pairs == [("concepts/b", "concepts/c")]
+    assert total == 1
+
+
+def test_candidate_pairs_self_loop_drop_survives_the_uncapped_call() -> None:
+    """`find_contradictions` calls this with `cap=None` to merge typed-edge
+    candidates with merged-body ones before a single higher-level cap
+    (#409 Requirement 3). The self-loop drop must hold on that branch too,
+    which returns through a different `return` statement."""
+    self_loop = Edge(
+        source_id="concepts/a", target_id="concepts/a", relation_type="contradicts"
+    )
+    store: GraphStore = _FakeGraphStore([self_loop])
+
+    pairs, total = contradiction_mod._candidate_pairs(store, cap=None)
+
+    assert pairs == []
+    assert total == 0
+
+
 # ---------------------------------------------------------------------------
 # Phase 3: fail-closed parse table tests (Req: Verdict Shape, Citation Gate, Parse)
 #
@@ -1974,22 +2035,32 @@ def test_find_contradictions_judges_merged_body_candidate_end_to_end(
 
 
 # ---------------------------------------------------------------------------
-# `merged_absorbed_id` as the SOLE discriminator (Correction 2): a `(x, x)`
-# `pair_ids` is producible TODAY from an ordinary typed self-loop
-# (independent of this change, #411) -- so a self-loop-derived verdict and a
-# merged-content verdict for the SAME id must never be conflated, and every
-# renderer must branch on `merged_absorbed_id is not None`, never on
-# `pair_ids` shape.
+# A typed self-loop and a merged-body candidate on the SAME id (#411 + #409).
+#
+# Before #411 a typed self-loop reached candidate generation, so a `(x, x)`
+# `pair_ids` had two possible origins and `merged_absorbed_id` was the only
+# thing telling them apart. #411 removes the self-loop origin, which must NOT
+# collaterally suppress the merged-body candidate on the same id.
+#
+# The renderer-level invariant -- every renderer branches on
+# `merged_absorbed_id is not None`, never on `pair_ids` shape -- is guarded
+# independently, and without a generation path, by
+# `tests/unit/cli/test_contradictions.py::
+# test_contradictions_renders_merged_body_verdict_distinctly_from_pair_verdict`.
 # ---------------------------------------------------------------------------
 
 
-def test_self_loop_and_merged_content_verdicts_for_same_id_render_distinctly(
+def test_self_loop_is_dropped_without_suppressing_a_merged_candidate_on_that_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A hand-authored typed self-loop on `concepts/x` (reachable today, see
-    #411) and a merged-body candidate on the SAME `concepts/x` in the SAME
-    run produce two verdicts sharing the identical `pair_ids == ("concepts/x",
-    "concepts/x")` -- distinguishable ONLY via `merged_absorbed_id`."""
+    """A hand-authored typed self-loop on `concepts/x` and a merged-body
+    candidate on the SAME `concepts/x` in the same run yield exactly ONE
+    verdict: the merged-body one.
+
+    The self-loop contributes nothing (#411), and the drop is targeted --
+    filtering by `source_id == target_id` at the typed-edge step must not
+    reach the intra-document candidates, which legitimately carry
+    `pair_ids == (x, x)`."""
     bundle_dir = tmp_path / "bundle"
     entry = _ledger_entry(absorbed_id="concepts/absorbed")
     _write_survivor_with_merges(
@@ -2006,22 +2077,16 @@ def test_self_loop_and_merged_content_verdicts_for_same_id_render_distinctly(
         "build_graph",
         lambda _bundle_dir, **_kw: _store_context(fake_store),
     )
-    llm = _FakeLLM(
-        replies=[_valid_reply(verdict="consistent"), _valid_reply(verdict="consistent")]
-    )
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
 
-    assert len(verdicts) == 2
-    same_id_verdicts = [
-        v for v in verdicts if v.pair_ids == ("concepts/x", "concepts/x")
-    ]
-    assert len(same_id_verdicts) == 2
-    self_loop_verdicts = [v for v in verdicts if v.merged_absorbed_id is None]
-    merged_verdicts = [v for v in verdicts if v.merged_absorbed_id is not None]
-    assert len(self_loop_verdicts) == 1
-    assert len(merged_verdicts) == 1
-    assert merged_verdicts[0].merged_absorbed_id == "concepts/absorbed"
+    assert total == 1
+    (verdict,) = verdicts
+    assert verdict.pair_ids == ("concepts/x", "concepts/x")
+    assert verdict.merged_absorbed_id == "concepts/absorbed"
+    # One call, not two: the self-loop never reached the model.
+    assert len(llm.calls) == 1
 
 
 # ---------------------------------------------------------------------------
