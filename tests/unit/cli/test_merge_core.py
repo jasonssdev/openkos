@@ -840,11 +840,14 @@ def test_build_merged_document_body_layout_is_pinned() -> None:
     subject is that the `## Merged content (<absorbed-id>)` heading is where
     an unreconciled second body lands.
 
-    It was pinned by NOTHING before this test: mutating the heading text in
-    `okf.build_merged_document` left all 3732 tests green. Asserted against a
-    literal rather than against a recomputation, because a test that rebuilds
-    the expectation from the same function moves with it and can never catch
-    a change to the layout itself."""
+    Before this test, the existing coverage in `tests/unit/model/test_okf.py`
+    asserted the heading via an `in` substring check plus `body.index`
+    ordering (never a full literal) -- a measured mutation that APPENDED
+    text after the heading's closing paren left that substring intact and
+    survived undetected. This test closes that narrower gap by asserting
+    against a literal rather than a recomputation, because a test that
+    rebuilds the expectation from the same function moves with it and can
+    never catch a change to the layout itself."""
     metadata, body = okf.build_merged_document(
         {"type": "Concept", "title": "Survivor"},
         "Survivor body.",

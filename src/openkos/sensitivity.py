@@ -46,6 +46,28 @@ cross the invariant; `lifecycle.filter_hits` stays where it is and is reused
 here verbatim (its `deprecated` parameter is just a `frozenset[str]` of
 excluded ids, axis-agnostic).
 
+`merged_content_blocked` (surface-merged-body-contradictions, issue #409) is a
+THIRD, deliberate gate -- not an accidental duplicate of the two above. It
+closes a gap neither `should_block` nor `sensitive_concept_ids` can see: both
+read only the CURRENT on-disk `sensitivity` value, but a merge survivor's
+`MergeLedgerEntry.absorbed_snapshot` embeds a full historical document body
+that may have been written at a HIGHER sensitivity than the survivor's
+current value now reads. The induction "current sensitivity dominates every
+absorbed body, because `combine_sensitivity` only ever raises it" holds
+across merges but breaks across `set-sensitivity`, which can deliberately
+LOWER a concept's sensitivity (shipped ADR-0008 behavior, permitted on an
+interactive confirm or with `--allow-downgrade`). A survivor that absorbed a
+`confidential` document and was later downgraded to `public` still has that
+confidential body sitting in its ledger; gating on the current value alone
+would ship it to the LLM. `merged_content_blocked` closes this by ranking
+the max of the survivor's current sensitivity AND the entry's own frozen
+`sensitivity_before`/`sensitivity_after` -- per ledger entry, since a later
+downgrade can lower the current value below what one specific historical
+entry established. It composes with `include_confidential`/`local_exemption`
+identically to `should_block`/`sensitive_concept_ids`. This is a sibling
+gate, not a fourth accidental copy of the same authority: it exists because
+the OTHER two gates are structurally incapable of inspecting `merged_from`.
+
 `blocks_llm_send` is the ONE fail-closed authority both `sensitive_concept_ids`
 (per-bundle walk) and every single-value gate outside a walk (the `ingest`
 extract floor gate in `cli/main.py`, and `retrieval/answer.py`'s per-doc
@@ -139,6 +161,76 @@ def should_block(
     if include_confidential or local_exemption:
         return False
     return blocks_llm_send(metadata.get("sensitivity"))
+
+
+def _fail_closed_rank(value: object) -> int:
+    """Rank a raw sensitivity `value` fail-closed, treating a missing
+    (`None`) or blank/whitespace-only string as `"confidential"` rather than
+    `okf._rank`'s own absent-value default of `"private"` -- the SAME
+    fail-closed override `blocks_llm_send` already applies before ever
+    delegating to `okf._rank` (see that function's docstring for why a
+    security-relevant signal that is simply missing must fail toward the
+    MOST restrictive level, not the merge-combine default). A present,
+    non-blank value is delegated to `okf._rank` unchanged, which itself
+    already fails closed on an unrecognized string or non-string value."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return okf.SENSITIVITY_ORDER.index("confidential")
+    return okf._rank(value)
+
+
+def merged_content_blocked(
+    current_sensitivity: object,
+    entry: okf.MergeLedgerEntry,
+    *,
+    threshold: str = "confidential",
+    include_confidential: bool = False,
+    local_exemption: bool = False,
+) -> bool:
+    """Ledger-aware fail-closed gate for ONE intra-document (merged-body)
+    contradiction candidate (surface-merged-body-contradictions, Correction
+    1): `True` when `entry`'s absorbed body must NOT reach an `llm.chat`
+    payload.
+
+    Ranks (fail-closed, via `_fail_closed_rank`) the MAX of three values and
+    compares it against `threshold` (default `"confidential"`, `okf._rank`
+    semantics):
+
+    1. `current_sensitivity` -- the survivor's CURRENT on-disk sensitivity,
+       covering anything established by a merge or a raise that happened
+       AFTER this entry;
+    2. `entry.sensitivity_before` -- the survivor's own level immediately
+       before THIS specific merge, frozen in the ledger and never mutated by
+       a later `set-sensitivity` downgrade;
+    3. `entry.sensitivity_after` -- `plan_merge` sets this to
+       `combine_sensitivity(survivor, absorbed)` at merge time, so it
+       already dominates the absorbed document's own original sensitivity
+       by construction -- no need to reparse `entry.absorbed_snapshot`'s
+       frontmatter.
+
+    This MUST be called once PER LEDGER ENTRY, never once per survivor: a
+    later downgrade can have lowered `current_sensitivity` below what one
+    specific historical entry established, and that entry's own frozen
+    values are an independent floor a caller must not skip by checking only
+    the survivor's current value or only its most recent entry.
+
+    `entry.sensitivity_before` uses `""` as the sentinel for "survivor had
+    no `sensitivity` key at merge time" (`MergeLedgerEntry`'s docstring);
+    `_fail_closed_rank` treats it identically to a missing value -- the most
+    restrictive rank, never `okf._rank`'s absent-default of private.
+
+    `include_confidential`/`local_exemption` compose identically to
+    `should_block`/`sensitive_concept_ids`'s own contract: either hatch
+    short-circuits to `False` (never blocked) IMMEDIATELY, before any
+    ledger field is inspected. No new escape-hatch semantics."""
+    if include_confidential or local_exemption:
+        return False
+    threshold_rank = okf._rank(threshold)
+    combined_rank = max(
+        _fail_closed_rank(current_sensitivity),
+        _fail_closed_rank(entry.sensitivity_before),
+        _fail_closed_rank(entry.sensitivity_after),
+    )
+    return combined_rank >= threshold_rank
 
 
 def sensitive_concept_ids(

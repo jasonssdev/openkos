@@ -145,6 +145,23 @@ class ContradictionVerdict:
     """Claims cited from the pair's content supporting a `CONTRADICTS`
     verdict. Empty for `CONSISTENT`/`UNCERTAIN`; a `CONTRADICTS` reply with
     empty/missing claims is coerced to `UNCERTAIN` instead (citation gate)."""
+    merged_absorbed_id: str | None = None
+    """`None` for a typed-edge candidate. For an intra-document (merged-body)
+    candidate (surface-merged-body-contradictions, issue #409), the absorbed
+    concept id this verdict compares against `pair_ids`' survivor -- i.e.
+    the `MergeLedgerEntry.absorbed_id` this candidate was built from.
+
+    WARNING: this field is the SOLE discriminator between a typed-edge
+    candidate and a merged-body candidate. `pair_ids` may ALSO be
+    `(concept_id, concept_id)` for a typed-edge candidate today, independent
+    of this field and independent of this change: `_pair_key` has no
+    self-pair guard, a pre-existing survivor-side self-loop is left
+    untouched by `okf.merge_relations`, and a typed self-loop reaches
+    `store.edges()` and therefore `_candidate_pairs` unchanged (tracked
+    separately as #411). A consumer that branches on `pair_ids[0] ==
+    pair_ids[1]` instead of `merged_absorbed_id is not None` WILL conflate a
+    self-loop-derived verdict with a merged-content verdict for the same
+    concept id -- NEVER fall back to `pair_ids` equality."""
 
 
 def _pair_key(source_id: str, target_id: str) -> tuple[str, str]:
@@ -157,7 +174,10 @@ def _pair_key(source_id: str, target_id: str) -> tuple[str, str]:
 
 
 def _candidate_pairs(
-    store: GraphStore, deprecated: frozenset[str] = frozenset()
+    store: GraphStore,
+    deprecated: frozenset[str] = frozenset(),
+    *,
+    cap: int | None = _MAX_PAIRS,
 ) -> tuple[list[tuple[str, str]], int]:
     """Derive candidate pairs from `store`'s TYPED edges only
     (`relation_type is not None`), EXCLUDING any edge whose `relation_type
@@ -184,13 +204,21 @@ def _candidate_pairs(
     this a total no-op, preserving byte-identical behavior for callers that
     never pass a deprecated set.
 
+    `cap` (surface-merged-body-contradictions, Requirement 3) defaults to
+    `_MAX_PAIRS`, preserving this function's own historical truncation
+    contract for a direct caller. `find_contradictions` passes `cap=None` to
+    get the FULL live list uncapped, so it can merge typed-edge candidates
+    with intra-document (merged-body) candidates into ONE ordered list
+    before applying a SINGLE `_MAX_PAIRS` slice at that higher level --
+    never two independent caps that could drift apart.
+
     Returns `(pairs, total_count)`: `pairs` is the deduped, deprecation-
-    filtered set sorted by `tuple(sorted(pair))` and truncated to
-    `_MAX_PAIRS`; `total_count` is the FULL deduped, deprecation-filtered
-    count BEFORE truncation, so the caller can detect and report a
-    cap-reached truncation (spec: Cap truncation is reported) -- truncation
-    is never silent, and the cap-reached signal now only fires when LIVE
-    pairs genuinely exceed the cap."""
+    filtered set sorted by `tuple(sorted(pair))`, truncated to `cap` (or
+    returned in full when `cap is None`); `total_count` is the FULL deduped,
+    deprecation-filtered count BEFORE truncation, so the caller can detect
+    and report a cap-reached truncation (spec: Cap truncation is reported)
+    -- truncation is never silent, and the cap-reached signal now only
+    fires when LIVE pairs genuinely exceed the cap."""
     typed_edges = [
         edge
         for edge in store.edges()
@@ -203,7 +231,9 @@ def _candidate_pairs(
         for pair in ordered
         if pair[0] not in deprecated and pair[1] not in deprecated
     ]
-    return live[:_MAX_PAIRS], len(live)
+    if cap is None:
+        return live, len(live)
+    return live[:cap], len(live)
 
 
 def _pair_relation_types(store: GraphStore) -> dict[tuple[str, str], str]:
@@ -292,6 +322,220 @@ def _load_doc(
         return concept_id, ""
     title = str(metadata.get("title") or "") or concept_id
     return title, body
+
+
+@dataclass(frozen=True)
+class _CandidateSpec:
+    """One judgeable candidate BEFORE judgment, unifying a typed-edge
+    candidate and an intra-document (merged-body) candidate into the SAME
+    ordered list (surface-merged-body-contradictions, Requirement 3: one
+    cap, one list) -- so both kinds share the single `_MAX_PAIRS` slice in
+    `find_contradictions`, never two independently maintained caps.
+
+    `merge_entry is None` marks a typed-edge candidate (`pair_ids` are two
+    distinct, related concept ids; `relation_type` is the edge label shown
+    to the LLM). `merge_entry is not None` marks an intra-document
+    candidate: `pair_ids == (survivor_id, survivor_id)` (for readability
+    only -- see `ContradictionVerdict.merged_absorbed_id`'s warning),
+    `relation_type` is always `None`, and `merge_entry.absorbed_id` is the
+    concept this candidate's `merged_absorbed_id` will carry."""
+
+    pair_ids: tuple[str, str]
+    relation_type: str | None
+    merge_entry: okf.MergeLedgerEntry | None = None
+
+
+def _merged_body_candidates(
+    bundle_dir: Path, deprecated: frozenset[str]
+) -> list[_CandidateSpec]:
+    """Build one intra-document candidate per `MergeLedgerEntry` on every
+    survivor document under `bundle_dir` (surface-merged-body-contradictions
+    #409): each candidate pairs `entry.survivor_before`'s body against
+    `entry.absorbed_snapshot`'s body, both recovered deterministically from
+    the survivor's OWN ledger -- no second node, no LLM at merge time, no
+    re-ingest.
+
+    Linear, not quadratic: `merged_from` is a flat LIFO list -- `plan_merge`
+    always appends `[*existing_entries, entry]` -- so a survivor's current
+    ledger already lists every historical entry with no recursion. Exactly
+    `len(merged_from)` candidates per survivor: never the fully-stacked
+    current body against every fragment, and never all-pairs-of-fragments.
+
+    `deprecated` mirrors `_candidate_pairs`'s own treatment: a survivor id
+    in `deprecated` contributes zero merged-body candidates, exactly like it
+    never appears in a typed-edge candidate pair. `sensitivity` is
+    deliberately NOT filtered here (unlike `_candidate_pairs`'s `excluded`
+    set, which also folds in confidential ids): a survivor's CURRENT
+    on-disk sensitivity is only ONE of the three values the ledger-aware
+    gate (`sensitivity.merged_content_blocked`) ranks fail-closed per entry
+    at JUDGE time (`_load_ledger_bodies`) -- pre-filtering here on the
+    current value alone would be the exact insufficient check Correction 1
+    replaces.
+
+    A survivor whose `merged_from` frontmatter is corrupt (non-list, or an
+    entry that fails to decode) contributes zero candidates for THAT
+    survivor rather than raising -- this is a doc-level building step, not
+    a judged pair; a sibling survivor with a valid ledger is unaffected."""
+    candidates: list[_CandidateSpec] = []
+    for scan in okf._iter_docs(bundle_dir):
+        if scan.read_error is not None or scan.parse_error is not None:
+            continue
+        survivor_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        if survivor_id in deprecated:
+            continue
+        metadata = scan.metadata or {}
+        try:
+            entries = okf.decode_merged_from(metadata)
+        except Exception:  # noqa: S112 -- broad: a corrupt ledger degrades this doc only
+            continue
+        for entry in entries:
+            candidates.append(
+                _CandidateSpec(
+                    pair_ids=(survivor_id, survivor_id),
+                    relation_type=None,
+                    merge_entry=entry,
+                )
+            )
+    return candidates
+
+
+_MERGED_CONTENT_HEADING_PREFIX = "\n\n## Merged content ("
+"""The heading `okf.build_merged_document` writes above an absorbed body.
+
+DUPLICATED LITERAL, deliberately and narrowly. `okf.build_merged_document` is
+the ONE authority that writes this heading; this module only needs to find it
+in order to cut a ledger snapshot back down to the survivor's own content.
+Promoting it to a shared constant on `okf` is the right end state and is left
+as a follow-up rather than done here, because that module is outside this
+change's reviewed scope. `tests/unit/cli/test_merge_core.py::
+test_build_merged_document_body_layout_is_pinned` pins the layout against a
+literal, so a change to the heading fails there loudly rather than silently
+degrading this split."""
+
+
+def _own_body_before_merge(before_body: str) -> str:
+    """Cut `entry.survivor_before`'s body down to the survivor's OWN content
+    at that merge point, dropping every previously-absorbed section.
+
+    `build_merged_document` APPENDS rather than overwrites, so the ledger's
+    `survivor_before` for entry *k* already embeds the *k-1* bodies absorbed
+    before it. Sending that whole accumulated body would be wrong twice over:
+
+    - **Cost.** Candidate COUNT is linear (one per ledger entry), but the
+      bytes per candidate would grow with every prior merge, so one
+      survivor's candidates would together cost O(m^2) in the number of
+      merges -- the quadratic-cost shape `_MAX_PAIRS` and issues #382/#422
+      exist to prevent. Found by the 4R review of this change; the
+      exploration's own linearity analysis covered candidate count only.
+    - **Correctness.** Those earlier absorbed bodies are ALREADY judged as
+      their own candidates. Leaving them in invites a verdict about a
+      disagreement that belongs to a different candidate, reported against
+      this one.
+
+    Truncating at the FIRST heading is what makes this exact: entries are
+    appended LIFO, so everything from the first `## Merged content (` onward
+    belongs to strictly earlier entries. A body with no such heading (the
+    first merge on a survivor) is returned unchanged."""
+    cut = before_body.find(_MERGED_CONTENT_HEADING_PREFIX)
+    if cut == -1:
+        return before_body
+    return before_body[:cut]
+
+
+def _load_ledger_bodies(
+    bundle_dir: Path,
+    survivor_id: str,
+    entry: okf.MergeLedgerEntry,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
+) -> tuple[tuple[str, str], tuple[str, str]]:
+    """Ledger-body sibling of `_load_doc` (Requirement 4): returns
+    `((before_title, before_body), (absorbed_title, absorbed_body))` for one
+    intra-document candidate, pairing `entry.survivor_before`'s body against
+    `entry.absorbed_snapshot`'s body -- both IN-MEMORY ledger strings,
+    never a second path read.
+
+    Re-reads `survivor_id`'s CURRENT on-disk document -- the same
+    walk-independent re-read `_load_doc` performs for its own concept id --
+    ONLY to learn the survivor's current `sensitivity`, one of the three
+    values `sensitivity.merged_content_blocked` (Requirement 1) ranks
+    fail-closed alongside `entry.sensitivity_before`/`entry.sensitivity_after`.
+    An unreadable/unparseable current survivor document degrades BOTH bodies
+    to `(id, "")`, the same shape `_load_doc` uses for its own degrade path
+    -- fail-closed, since a survivor whose current sensitivity cannot be
+    read must never be assumed safe to send.
+
+    When `sensitivity.merged_content_blocked` blocks, both bodies degrade to
+    `(id, "")` identically. Only once the gate clears are
+    `entry.survivor_before`/`entry.absorbed_snapshot` parsed via
+    `okf.load_frontmatter`; a parse failure on either ledger string
+    independently degrades ONLY that side to `("", "")`, mirroring
+    `_load_doc`'s broad-except contract.
+
+    The parsed `survivor_before` body is then cut to the survivor's own
+    content by `_own_body_before_merge` -- see that function for why sending
+    the accumulated body would be both quadratic in cost and wrong about
+    which candidate a disagreement belongs to.
+
+    `include_confidential`/`local_exemption` are threaded straight through
+    to `sensitivity.merged_content_blocked`, identically to how `_load_doc`
+    threads them to `sensitivity.should_block`."""
+    try:
+        current_text = (bundle_dir / f"{survivor_id}.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return (survivor_id, ""), (entry.absorbed_id, "")
+    try:
+        current_metadata, _ = okf.load_frontmatter(current_text)
+    except Exception:  # broad: any parse failure degrades this candidate
+        return (survivor_id, ""), (entry.absorbed_id, "")
+
+    if sensitivity.merged_content_blocked(
+        current_metadata.get("sensitivity"),
+        entry,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    ):
+        return (survivor_id, ""), (entry.absorbed_id, "")
+
+    try:
+        before_metadata, before_body = okf.load_frontmatter(entry.survivor_before)
+    except Exception:  # broad: any parse failure degrades this side only
+        before_metadata, before_body = {}, ""
+    before_body = _own_body_before_merge(before_body)
+    before_title = str(before_metadata.get("title") or "") or survivor_id
+
+    try:
+        absorbed_metadata, absorbed_body = okf.load_frontmatter(entry.absorbed_snapshot)
+    except Exception:  # broad: any parse failure degrades this side only
+        absorbed_metadata, absorbed_body = {}, ""
+    absorbed_title = str(absorbed_metadata.get("title") or "") or entry.absorbed_id
+
+    return (before_title, before_body), (absorbed_title, absorbed_body)
+
+
+def _build_merge_messages(
+    survivor_id: str,
+    absorbed_id: str,
+    before_doc: tuple[str, str],
+    absorbed_doc: tuple[str, str],
+) -> list[Message]:
+    """Assemble the 2-message prompt for one intra-document (merged-body)
+    candidate: the survivor's body immediately BEFORE it absorbed
+    `absorbed_id` against the absorbed document's own snapshot body --
+    mirrors `_build_messages`'s shape, but frames both halves as the SAME
+    concept's own history rather than two distinct, related concepts."""
+    before_title, before_body = before_doc
+    absorbed_title, absorbed_body = absorbed_doc
+    user_content = (
+        f"MERGE: {survivor_id} absorbed {absorbed_id}\n\n"
+        f"[{survivor_id} before merge — {before_title}]\n{before_body}\n\n"
+        f"[{absorbed_id} — {absorbed_title}]\n{absorbed_body}"
+    )
+    return [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
 
 
 def _build_messages(
@@ -401,15 +645,19 @@ def is_high_confidence_contradiction(verdict: ContradictionVerdict) -> bool:
 
 
 def _pairs_and_types(
-    store: GraphStore, excluded: frozenset[str]
+    store: GraphStore, excluded: frozenset[str], *, cap: int | None = _MAX_PAIRS
 ) -> tuple[list[tuple[str, str]], int, dict[tuple[str, str], str]]:
     """Return `(pairs, total_count, relation_types)` over an already-open
     `store` (`find_contradictions`'s two-branch shape, graph-projection-
     reuse design §3): a one-line extraction holding today's
     `_candidate_pairs`/`_pair_relation_types` pair, so both the
     caller-supplied and self-built branches compute candidates
-    identically."""
-    pairs, total_count = _candidate_pairs(store, excluded)
+    identically. `cap` is threaded straight to `_candidate_pairs`
+    (surface-merged-body-contradictions, Requirement 3): `find_contradictions`
+    passes `cap=None` to get the full live list uncapped, so it can be
+    merged with intra-document candidates before a single, higher-level
+    `_MAX_PAIRS` slice."""
+    pairs, total_count = _candidate_pairs(store, excluded, cap=cap)
     relation_types = _pair_relation_types(store)
     return pairs, total_count, relation_types
 
@@ -497,7 +745,20 @@ def find_contradictions(
     `include_confidential` lives ONLY in `sensitivity.py` (see its module
     docstring). Defaults to `False`: a caller that cannot prove locality
     gets today's blanket blocking, so forgetting the parameter can only ever
-    be MORE restrictive."""
+    be MORE restrictive.
+
+    surface-merged-body-contradictions (issue #409, detection half):
+    intra-document (merged-body) candidates -- one per `MergeLedgerEntry` on
+    every survivor in `bundle_dir` (`_merged_body_candidates`) -- are merged
+    into the SAME ordered candidate list as the typed-edge pairs above,
+    BEFORE the single `_MAX_PAIRS` slice (Requirement 3: one cap, one list;
+    `total_pair_count` reflects the combined pre-cap total). Each such
+    candidate's `ContradictionVerdict.merged_absorbed_id` is set to its
+    `MergeLedgerEntry.absorbed_id` -- the SOLE discriminator from a
+    typed-edge candidate (see that field's docstring warning). Its two
+    bodies are gated per entry by the ledger-aware
+    `sensitivity.merged_content_blocked` (Requirement 1), never by the
+    survivor's current on-disk sensitivity alone -- see `_load_ledger_bodies`."""
     deprecated: frozenset[str] = frozenset()
     if not include_deprecated:
         deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
@@ -509,37 +770,67 @@ def find_contradictions(
     excluded = deprecated | confidential
 
     if store is not None:
-        pairs, total_count, relation_types = _pairs_and_types(store, excluded)
+        edge_pairs, edge_total, relation_types = _pairs_and_types(
+            store, excluded, cap=None
+        )
     else:
         with build_graph(bundle_dir, candidates=candidates) as owned:
-            pairs, total_count, relation_types = _pairs_and_types(owned, excluded)
+            edge_pairs, edge_total, relation_types = _pairs_and_types(
+                owned, excluded, cap=None
+            )
+
+    edge_specs = [
+        _CandidateSpec(pair_ids=pair, relation_type=relation_types.get(pair))
+        for pair in edge_pairs
+    ]
+    merged_specs = _merged_body_candidates(bundle_dir, deprecated)
+    all_specs = edge_specs + merged_specs
+    total_count = edge_total + len(merged_specs)
+    specs = all_specs[:_MAX_PAIRS]
 
     verdicts: list[ContradictionVerdict] = []
-    judged_total = len(pairs)
-    for index, pair in enumerate(pairs, start=1):
-        source_id, target_id = pair
-        src_doc = _load_doc(
-            bundle_dir,
-            source_id,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        tgt_doc = _load_doc(
-            bundle_dir,
-            target_id,
-            include_confidential=include_confidential,
-            local_exemption=local_exemption,
-        )
-        relation_type = relation_types.get(pair)
-        messages = _build_messages(pair, src_doc, tgt_doc, relation_type)
+    judged_total = len(specs)
+    for index, spec in enumerate(specs, start=1):
+        if spec.merge_entry is not None:
+            survivor_id, _ = spec.pair_ids
+            src_doc, tgt_doc = _load_ledger_bodies(
+                bundle_dir,
+                survivor_id,
+                spec.merge_entry,
+                include_confidential=include_confidential,
+                local_exemption=local_exemption,
+            )
+            messages = _build_merge_messages(
+                survivor_id, spec.merge_entry.absorbed_id, src_doc, tgt_doc
+            )
+            merged_absorbed_id = spec.merge_entry.absorbed_id
+        else:
+            source_id, target_id = spec.pair_ids
+            src_doc = _load_doc(
+                bundle_dir,
+                source_id,
+                include_confidential=include_confidential,
+                local_exemption=local_exemption,
+            )
+            tgt_doc = _load_doc(
+                bundle_dir,
+                target_id,
+                include_confidential=include_confidential,
+                local_exemption=local_exemption,
+            )
+            messages = _build_messages(
+                spec.pair_ids, src_doc, tgt_doc, spec.relation_type
+            )
+            merged_absorbed_id = None
         reply = llm.chat(messages)
         verdict, confidence, rationale, conflicting_claims = _parse_reply(reply)
         pair_verdict = ContradictionVerdict(
-            pair_ids=pair,
+            pair_ids=spec.pair_ids,
             verdict=verdict,
             confidence=confidence,
             rationale=rationale,
             conflicting_claims=conflicting_claims,
+            merged_absorbed_id=merged_absorbed_id,
         )
         verdicts.append(pair_verdict)
         if on_progress is not None:
