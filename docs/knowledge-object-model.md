@@ -88,7 +88,7 @@ Additional fields may be introduced by specialized object types without breaking
 
 ## A worked example
 
-A complete Knowledge Object — OKF concept document plus the OpenKOS layer — looks like this. It is taken verbatim from [`examples/good-life-demo/`](../examples/good-life-demo/), where someone reading philosophy took notes on Epictetus, then had one of their readings corrected by a friend on a call:
+A complete Knowledge Object — OKF concept document plus the OpenKOS layer — looks like this. It is taken verbatim from [`examples/good-life-demo/`](../examples/good-life-demo/), where someone reading philosophy took notes on Epictetus, then had one of their readings corrected by a friend on a call. Its two-source `provenance` is not a single compile: each source first produced its own `Stoicism` concept, and entity resolution's exact-title match reached a `SAME` verdict that merged the two, unioning their provenance:
 
 ```markdown
 ---
@@ -308,7 +308,7 @@ To restore the old blanket behavior for a workspace, set `confidential_local_exe
 
 ## Living documents and versioning
 
-A Knowledge Object is a **living document**, not an immutable record. As new sources arrive, the engine rewrites existing objects — revising claims, reconciling contradictions, strengthening synthesis. This is the whole point of the compounding wiki pattern.
+A Knowledge Object is a **living document**, not an immutable record. Nothing rewrites an object merely because a new source arrives: the mechanism is a `SAME` verdict from entity resolution — reached through `curate`'s Identity stage or `adjudicate --apply` — which unions provenance and merges bodies for two documents judged to describe the same entity. This is the whole point of the compounding wiki pattern.
 
 History is not lost:
 
