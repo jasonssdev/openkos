@@ -237,6 +237,8 @@ Reconciliation is idempotent per pair: re-running the exact same request (same m
 
 **Read-only.** LLM-suggests a relation `type` for every untyped body-link edge in the bundle, printing a suggested type and rationale per edge (or `[?]` when the suggestion is invalid) for human review. It never writes — applying a suggestion is still a separate, explicit `openkos relate <source> <type> <target>` call. Degrades the same way `adjudicate`/`query` do.
 
+The model is offered the seeded vocabulary **minus `derived_from`**, and a reply naming it is refused outright rather than shown ([#380](https://github.com/jasonssdev/openkos/issues/380)). In OpenKOS that type means *provenance* — the guarantee behind citations and sensitivity propagation — and the engine already synthesizes it at graph projection from each document's `provenance:` field. A model offered it used it in its colloquial "builds upon" sense and proposed an edge to the wrong source; once accepted, an invented provenance edge is indistinguishable from a real one. `openkos relate` still accepts `derived_from` from a human, who is asserting the fact rather than inferring it.
+
 | Flag | Meaning |
 | --- | --- |
 | `--include-confidential` | Include confidential concepts. Excluded by default when the LLM backend is **not** verifiably on this machine — an untyped edge with a confidential endpoint is then dropped before `llm.chat` is ever called for it. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |

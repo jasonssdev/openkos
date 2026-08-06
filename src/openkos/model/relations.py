@@ -44,6 +44,49 @@ SEEDED_RELATION_TYPES: frozenset[str] = frozenset(rt.name for rt in REGISTRY)
 string is still a valid relation type -- membership here only controls
 whether `validate_relation_type` prints an advisory note."""
 
+ENGINE_OWNED_RELATION_TYPES: frozenset[str] = frozenset({"derived_from"})
+"""Seeded types the ENGINE derives, and an LLM must therefore never propose
+(issue #380).
+
+`derived_from` means PROVENANCE here -- "this object was compiled from that
+source" -- and it is the guarantee behind citations and behind sensitivity
+propagation under the high-water-mark rule. The graph projection SYNTHESIZES
+it from each document's `provenance:` frontmatter (`graph/sqlite_graph.py`,
+#135), so it is already the engine's output, computed from recorded fact.
+
+Measured failure: a suggester offered this type used it in its colloquial
+sense and proposed `events/mcp-launching -> sources/mcp-origin` because the
+event "builds upon the origin of MCP". The real provenance was
+`sources/mcp-launch`. Once accepted, that invented edge sits in the same
+graph, with the same type string, as the synthesized ones -- indistinguishable
+from real provenance, which is what makes it silent corruption rather than a
+visible mistake.
+
+This set is a NARROWING of what may be SUGGESTED, never of the vocabulary.
+`derived_from` stays in `REGISTRY` and in `SEEDED_RELATION_TYPES`: it is a KOM
+default, the engine writes it, and a human running `relate` must still be able
+to -- a person asserting provenance is stating a fact, not inferring one from
+prose. `validate_relation_type` is deliberately untouched, so the write path
+keeps accepting it silently.
+
+#380 asked whether any other seeded type is in the same position. Checked
+against the projection: it is not. `graph/sqlite_graph.py` synthesizes exactly
+one relation type, this one; every other typed edge comes from a human's
+`relations:` frontmatter, and the remaining passes write untyped rows. So this
+set has one member on purpose, and a second entry belongs here only if the
+engine starts deriving another type.
+"""
+
+SUGGESTABLE_RELATION_TYPES: frozenset[str] = (
+    SEEDED_RELATION_TYPES - ENGINE_OWNED_RELATION_TYPES
+)
+"""What an LLM suggester may propose: the seeded defaults minus the
+engine-owned ones.
+
+Derived rather than hand-listed on purpose -- a second literal tuple would
+drift from `REGISTRY` the first time a type is added to one and not the
+other, and the drift would be silent."""
+
 
 def validate_relation_type(rel_type: str, *, warn: bool = True) -> str:
     """Validate `rel_type` for the `relate` CLI verb's write path.

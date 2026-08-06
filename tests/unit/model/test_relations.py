@@ -35,6 +35,41 @@ def test_seeded_relation_types_has_eight_kom_defaults() -> None:
     )
 
 
+def test_derived_from_is_engine_owned() -> None:
+    """`derived_from` MEANS provenance in OpenKOS, and the engine synthesizes
+    it at graph projection from each doc's `provenance:` frontmatter
+    (`graph/sqlite_graph.py`, #135). It is therefore the engine's to write,
+    not a suggester's to propose (#380)."""
+    assert frozenset({"derived_from"}) == relations.ENGINE_OWNED_RELATION_TYPES
+
+
+def test_suggestable_is_the_seeded_vocabulary_minus_the_engine_owned_ones() -> None:
+    """The suggestable set is DERIVED, never hand-listed -- a second literal
+    list would drift from `REGISTRY` the first time a type is added."""
+    assert relations.SUGGESTABLE_RELATION_TYPES == (
+        relations.SEEDED_RELATION_TYPES - relations.ENGINE_OWNED_RELATION_TYPES
+    )
+    assert "derived_from" not in relations.SUGGESTABLE_RELATION_TYPES
+    assert relations.SUGGESTABLE_RELATION_TYPES
+
+
+def test_engine_owned_types_stay_in_the_seeded_kom_vocabulary() -> None:
+    """#380 removes `derived_from` from what a MODEL may propose, not from the
+    vocabulary itself. It is a KOM default, the engine writes it, and a human
+    running `relate` must still be able to -- so it stays seeded, and
+    `validate_relation_type` must not start calling it unknown."""
+    assert "derived_from" in relations.SEEDED_RELATION_TYPES
+
+
+def test_validate_does_not_treat_an_engine_owned_type_as_unknown(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The write path keeps accepting `derived_from` silently as a seeded
+    type; narrowing the SUGGESTION vocabulary must not leak into `relate`."""
+    assert relations.validate_relation_type("derived_from") == "derived_from"
+    assert "is not a seeded relation type" not in capsys.readouterr().err
+
+
 def test_module_has_zero_openkos_imports() -> None:
     """`model/relations.py` is a zero-dependency leaf, like `model/types.py`
     -- it must never import from another `openkos` module (design: "new leaf
