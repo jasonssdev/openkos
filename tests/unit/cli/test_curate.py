@@ -100,10 +100,12 @@ class _FakeConfig:
         model: str = "stub-model",
         review: bool = True,
         chat_timeout: float = config.DEFAULT_CHAT_TIMEOUT,
+        max_generation_tokens: int = config.DEFAULT_MAX_GENERATION_TOKENS,
     ) -> None:
         self.model = model
         self.review = review
         self.chat_timeout = chat_timeout
+        self.max_generation_tokens = max_generation_tokens
 
 
 class _FakeLayout:

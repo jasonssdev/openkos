@@ -55,6 +55,20 @@ class OllamaModelNotFound(OllamaError):
     """Raised on a 404 response whose body reports the model tag as not found (D4)."""
 
 
+class OllamaGenerationCapped(OllamaError):
+    """Raised when `chat()`'s response reports `done_reason == "length"`
+    (issue #422): the model hit the configured `max_generation_tokens`
+    ceiling before it finished, so the reply was cut off mid-generation and
+    is unusable.
+
+    A truncated reply is not a partial success -- `llm.parsing.
+    extract_json_items` returns `[]` on a mid-JSON truncation, so there is
+    nothing to salvage. Subclasses `OllamaError` so it propagates through
+    every existing `except OllamaError` handler unmodified (D4), landing in
+    exactly the same handling a hung call gets today: loud, per-source
+    failure, never a silent empty result."""
+
+
 class OllamaEmbeddingDimensionMismatch(OllamaError):
     """Raised when an `/api/embed` response row has a length other than
     `EMBED_DIM` (D7): a PERMANENT, non-healing misconfiguration -- the
@@ -336,12 +350,20 @@ class OllamaClient:
         *,
         host: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        max_generation_tokens: int | None = None,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
         embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         """Resolve `host` (arg > `OLLAMA_HOST` env > default) and store config (D2).
+
+        `max_generation_tokens` (issue #422) is the CHAT-only generation
+        ceiling: when given, `chat()` forwards it as `options.num_predict`
+        and raises `OllamaGenerationCapped` if the reply is cut off before
+        finishing. `None` (the default) omits `options` entirely, so an
+        opted-out caller sends a request byte-identical to before this
+        change -- never affects `embed()` or `list_models()`.
 
         `embed_retry_attempts`/`embed_retry_backoff_base`/`sleep` configure
         ONLY `embed()`'s retry-with-backoff loop (D1/D3) -- `chat()` and
@@ -350,6 +372,7 @@ class OllamaClient:
         occurs and to observe the backoff schedule."""
         self._model = model
         self._timeout = timeout
+        self._max_generation_tokens = max_generation_tokens
         self._urlopen = urlopen
         self._embed_retry_attempts = embed_retry_attempts
         self._embed_retry_backoff_base = embed_retry_backoff_base
@@ -394,16 +417,21 @@ class OllamaClient:
         return classify_backend_host(self._host)
 
     def chat(self, messages: Sequence[Message]) -> str:
-        """POST `messages` to `{host}/api/chat` and return `message.content` (D5, D6)."""
+        """POST `messages` to `{host}/api/chat` and return `message.content`
+        (D5, D6). Raises `OllamaGenerationCapped` if the response reports
+        `done_reason == "length"` (issue #422): the model hit the
+        configured `max_generation_tokens` ceiling and the reply is
+        truncated."""
         url = f"{self._host}/api/chat"
-        payload = json.dumps(
-            {
-                "model": self._model,
-                "messages": list(messages),
-                "stream": False,
-                "think": False,
-            }
-        ).encode("utf-8")
+        request_body: dict[str, Any] = {
+            "model": self._model,
+            "messages": list(messages),
+            "stream": False,
+            "think": False,
+        }
+        if self._max_generation_tokens is not None:
+            request_body["options"] = {"num_predict": self._max_generation_tokens}
+        payload = json.dumps(request_body).encode("utf-8")
         # The URL is always `{trusted host}/api/chat` (D2: host is user/env
         # config, normalized to a scheme, never derived from document content) --
         # not an arbitrary user-supplied URL, so the S310 scheme audit does not
@@ -446,6 +474,18 @@ class OllamaClient:
         if not isinstance(content, str):
             raise OllamaError(
                 f"Expected message.content to be a string, got {type(content)!r}"
+            )
+
+        # `done_reason` is read AFTER the malformed-response guard above, on
+        # the already-validated `data` dict, so a response missing it
+        # entirely never raises here -- `.get` returns `None`, which simply
+        # does not equal `"length"` (fail-open on the signal; the bound
+        # itself, not this check, is what protects the caller).
+        if isinstance(data, dict) and data.get("done_reason") == "length":
+            raise OllamaGenerationCapped(
+                "Ollama stopped generation at the configured "
+                f"max_generation_tokens ceiling ({self._max_generation_tokens}) "
+                "before the reply finished; the response is truncated and unusable."
             )
         return content
 

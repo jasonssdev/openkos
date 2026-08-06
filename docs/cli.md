@@ -523,6 +523,7 @@ default_sensitivity: private
 confidential_local_exemption: true  # send confidential concepts to a LOCAL LLM backend
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
 chat_timeout: 600         # seconds an LLM chat call may take before giving up
+max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
@@ -549,6 +550,20 @@ Raise it for large sources or a slow machine. It will **not** rescue a model tha
 A value that is absent or explicitly null falls back to the default. A non-numeric, boolean, zero, or negative value is refused when the config is read, rather than silently coerced: `chat_timeout: true` would otherwise resolve to a one-second deadline and make every call look like a dead backend, and `chat_timeout: 0` would disable the LLM entirely while reading like a deliberate setting.
 
 A source whose extraction times out is recorded on the Source document as `extraction_status: failed` and surfaced by `openkos lint` with a retry command — it is not confused with a source the model legitimately found nothing in.
+
+### `max_generation_tokens`
+
+A hard ceiling, in tokens, on how much a single `llm.chat` request may **generate**, forwarded to Ollama as `options.num_predict`. Default `8192`.
+
+It governs the same CHAT seams `chat_timeout` does, and nothing else: `ingest`'s extraction, `curate`, `query`, `adjudicate`, `suggest-relations`, and `contradictions`. Embedding calls and the startup liveness probes are unaffected.
+
+**This is a SAFETY RAIL against a non-terminating generation, not a quality-tuning knob**, and it is expected never to bind on legitimate work. `chat_timeout` bounds how long the client *waits*; before this setting existed, nothing bounded how much the model could *emit* — a generation that never stops burned the full `chat_timeout` deadline and returned nothing ([#422](https://github.com/jasonssdev/openkos/issues/422)).
+
+The default is grounded in a measurement (2026-08-06): five extraction calls through the project's own message-building and system prompt, run against local `qwen3:8b` on 17 KB real prose sources, produced `eval_count` of 4154, 1624, 962, 269, 107 — all with `done_reason: "stop"` (a normal completion). `8192` leaves roughly 2× headroom over the largest legitimate completed reply observed.
+
+A value that is absent or explicitly null falls back to the default. A non-positive value, a boolean, a fraction, or one of Ollama's own `num_predict` sentinels (`0` = return no completion, `-1` = unlimited, `-2` = fill the context window) is refused when the config is read, rather than silently accepted: `-1` would silently disable the very bound this setting installs.
+
+When the ceiling is reached before the model finishes, the client raises `OllamaGenerationCapped` rather than returning the truncated reply — a truncated JSON reply cannot be salvaged (`extract_json_items` returns `[]` on a mid-object truncation), so this lands in the same loud, per-source failure handling a hung call already gets, rather than a silent empty result. It does **not** protect against a slow-but-terminating generation (`chat_timeout` covers that), and it does not improve extraction quality — only `_MAX_OBJECTS_PER_SOURCE` and the prompt itself govern what gets kept.
 
 ### Sensitivity and the local backend
 

@@ -67,6 +67,7 @@ def test_chat_client_applies_configured_timeout() -> None:
         freshness_window="7d",
         embedding_model="bge-m3",
         chat_timeout=42.5,
+        max_generation_tokens=config.DEFAULT_MAX_GENERATION_TOKENS,
         confidential_local_exemption=True,
         volatility_windows={},
         type_tiers={},
@@ -88,6 +89,7 @@ def test_chat_client_uses_the_configured_model() -> None:
         freshness_window="7d",
         embedding_model="bge-m3",
         chat_timeout=config.DEFAULT_CHAT_TIMEOUT,
+        max_generation_tokens=config.DEFAULT_MAX_GENERATION_TOKENS,
         confidential_local_exemption=True,
         volatility_windows={},
         type_tiers={},
@@ -135,3 +137,53 @@ def test_chat_timeout_default_matches_the_transport_default() -> None:
     from openkos.llm import ollama
 
     assert config.DEFAULT_CHAT_TIMEOUT == ollama.DEFAULT_TIMEOUT
+
+
+# --- max_generation_tokens: the same wiring pinned for the generation
+# ceiling (#422), mirroring every guard above for `chat_timeout` -----------
+
+
+def test_chat_client_applies_configured_max_generation_tokens() -> None:
+    """`_chat_client` hands the workspace's `max_generation_tokens` to the client."""
+    cfg = config.Config(
+        model="qwen3:8b",
+        review=True,
+        default_sensitivity="private",
+        freshness_window="7d",
+        embedding_model="bge-m3",
+        chat_timeout=config.DEFAULT_CHAT_TIMEOUT,
+        max_generation_tokens=2048,
+        confidential_local_exemption=True,
+        volatility_windows={},
+        type_tiers={},
+    )
+
+    client = main_module._chat_client(cfg)
+
+    assert client._max_generation_tokens == 2048
+
+
+def test_every_chat_client_construction_passes_max_generation_tokens() -> None:
+    """No chat client is constructed without the configured generation ceiling.
+
+    Mirrors `test_every_chat_client_construction_passes_a_timeout`: a site
+    that omits `max_generation_tokens=` compiles, type-checks, and runs -- it
+    just silently ignores the workspace's ceiling, reintroducing the
+    unbounded-generation defect #422 exists to close.
+    """
+    offenders: list[str] = []
+    seen = 0
+    for path in sorted(_SRC.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for call in _chat_client_calls(tree):
+            seen += 1
+            if any(kw.arg == "max_generation_tokens" for kw in call.keywords):
+                continue
+            offenders.append(f"{path.name}:{call.lineno}")
+
+    assert seen > 0, "no chat client constructions found -- the guard is blind"
+    assert not offenders, (
+        "chat client(s) constructed without an explicit "
+        "max_generation_tokens, so the workspace's generation ceiling is "
+        "ignored there:\n  " + "\n  ".join(offenders)
+    )

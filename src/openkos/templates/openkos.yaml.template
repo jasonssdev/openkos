@@ -5,6 +5,7 @@ default_sensitivity: private
 confidential_local_exemption: true  # send confidential concepts to a LOCAL LLM backend
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
 chat_timeout: 600         # seconds an LLM chat call may take before giving up
+max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
