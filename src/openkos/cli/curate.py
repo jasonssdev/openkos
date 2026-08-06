@@ -52,7 +52,7 @@ from typing import Literal
 
 import typer
 
-from openkos import config, lifecycle, lint, sensitivity
+from openkos import config, lint, sensitivity
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
 from openkos.graph.base import Edge
@@ -73,10 +73,11 @@ from openkos.resolution.adjudication import (
 )
 from openkos.resolution.candidates import CandidateGroup
 from openkos.resolution.contradiction import (
+    CandidatePlan,
     ContradictionVerdict,
-    _pairs_and_types,
     find_contradictions,
     is_high_confidence_contradiction,
+    plan_candidates,
 )
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
@@ -712,27 +713,22 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     )
 
 
-def _contradiction_pairs(
-    ctx: CurateContext,
-) -> tuple[list[tuple[str, str]], int]:
-    """The cheap, LLM-free pre-flight pair count Contradictions' `cost_line`
-    needs (design D4): `build_graph` + `_pairs_and_types`'s deduped, typed-
-    edge candidate pairs, deprecation/sensitivity-excluded exactly as
-    `find_contradictions` itself would exclude them -- no `llm.chat` call.
-    Reused as-is by `_contradictions_run`'s own `find_contradictions` call,
-    which re-derives its own graph fresh (design D4's no-memoization rule
-    is about STATE CARRIED BETWEEN STAGES, not a ban on this stage reading
-    its own bundle twice in one pass)."""
-    from openkos.cli import main as cli_main
+def _contradiction_plan(ctx: CurateContext) -> CandidatePlan:
+    """The cheap, LLM-free pre-flight plan Contradictions' `cost_line` needs
+    (design D4): the EXACT candidate list `_contradictions_run`'s
+    `find_contradictions` will judge, built by the same `plan_candidates`
+    call it uses -- no `llm.chat` call.
 
-    excluded: set[str] = set()
-    if not ctx.include_deprecated:
-        excluded |= lifecycle.deprecated_concept_ids(ctx.layout.bundle_dir)
-    excluded |= sensitivity.sensitive_concept_ids(
-        ctx.layout.bundle_dir,
-        include_confidential=ctx.include_confidential,
-        local_exemption=ctx.local_exemption,
-    )
+    Issue #446: this used to count `_pairs_and_types` alone, i.e. typed-edge
+    pairs only, while the run judged typed-edge PLUS merged-body candidates.
+    The gate therefore understated the spend by the bundle's merge-ledger
+    count, and `--auto` consented to a number smaller than what was paid.
+    Sharing `plan_candidates` makes the two the same number by construction.
+
+    The graph is still built fresh here rather than carried over to `run`
+    (design D4's no-memoization rule is about STATE CARRIED BETWEEN STAGES,
+    not a ban on this stage reading its own bundle twice in one pass)."""
+    from openkos.cli import main as cli_main
 
     source = cli_main._open_proximity_or_degrade(ctx.layout.vectors_db_path)
     try:
@@ -742,22 +738,28 @@ def _contradiction_pairs(
             source.close()
 
     with graph as store:
-        pairs, total_count, _relation_types = _pairs_and_types(
-            store, frozenset(excluded)
+        return plan_candidates(
+            ctx.layout.bundle_dir,
+            store=store,
+            include_deprecated=ctx.include_deprecated,
+            include_confidential=ctx.include_confidential,
+            local_exemption=ctx.local_exemption,
         )
-    return pairs, total_count
 
 
 def _contradictions_probe(ctx: CurateContext) -> StageProbe:
-    """`build_graph` + `find_contradictions`'s own candidate-pair narrowing
-    (design D4), counted via `_contradiction_pairs` with no `llm.chat`
-    call -- Contradictions runs LAST, so this never affects an earlier
-    stage's queue."""
-    pairs, _total = _contradiction_pairs(ctx)
+    """`build_graph` + `find_contradictions`'s own candidate planning (design
+    D4), counted via `_contradiction_plan` with no `llm.chat` call --
+    Contradictions runs LAST, so this never affects an earlier stage's queue.
+
+    `llm_calls` is `plan.llm_calls`, the length of the SAME already-capped
+    spec list the run will judge, so the cost line cannot understate the
+    spend (issue #446)."""
+    plan = _contradiction_plan(ctx)
     return StageProbe(
-        items=tuple(pairs),
-        llm_calls=len(pairs),
-        empty_message="No candidate pairs found." if not pairs else None,
+        items=plan.specs,
+        llm_calls=plan.llm_calls,
+        empty_message="No candidate pairs found." if not plan.specs else None,
     )
 
 

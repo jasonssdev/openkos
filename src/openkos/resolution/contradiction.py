@@ -687,6 +687,102 @@ def _pairs_and_types(
     return pairs, total_count, relation_types
 
 
+@dataclass(frozen=True)
+class CandidatePlan:
+    """The full, already-capped candidate list one `find_contradictions` run
+    will judge, plus the pre-cap totals behind it (issue #446).
+
+    Exists so the number `curate`'s Contradictions cost gate STATES and the
+    number `find_contradictions` SPENDS come from one computation. They were
+    two: the gate counted typed-edge pairs while the run judged typed-edge
+    plus merged-body candidates, so the gate understated the spend by the
+    merge-ledger count and the operator consented to less than was paid."""
+
+    specs: tuple[_CandidateSpec, ...]
+    """The candidates to judge, in order, already sliced to `_MAX_PAIRS`.
+    Exactly one `llm.chat` call is made per element."""
+    edge_total: int
+    """Deduped, self-loop-free, deprecation/sensitivity-filtered typed-edge
+    pair count BEFORE the cap."""
+    merged_total: int
+    """Merged-body candidate count BEFORE the cap -- one per
+    `MergeLedgerEntry` on every non-deprecated survivor."""
+
+    @property
+    def total_count(self) -> int:
+        """Combined pre-cap total, the `total_pair_count` a caller compares
+        against `len(specs)` to detect truncation."""
+        return self.edge_total + self.merged_total
+
+    @property
+    def llm_calls(self) -> int:
+        """Exactly how many `llm.chat` calls judging this plan costs."""
+        return len(self.specs)
+
+
+def plan_candidates(
+    bundle_dir: Path,
+    *,
+    store: GraphStore | None = None,
+    candidates: CandidateSource | None = None,
+    include_deprecated: bool = False,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
+) -> CandidatePlan:
+    """Build the candidate list `find_contradictions` will judge, WITHOUT
+    judging it -- no `llm.chat` call, so a caller can price a run before
+    committing to it (issue #446).
+
+    This is the ONE place typed-edge and merged-body candidates are combined
+    and sliced to `_MAX_PAIRS` (#409 Requirement 3: one cap, one list, one
+    `total_count`). `find_contradictions` calls it rather than inlining the
+    combination, and `curate`'s `_contradictions_probe` calls it to state the
+    stage's cost -- so the stated and spent numbers are the same number by
+    construction rather than by two implementations agreeing.
+
+    `store`/`candidates` mirror `find_contradictions`' two-branch shape: when
+    `store` is supplied it is reused and never closed (ownership stays with
+    the caller, graph-projection-reuse #196); otherwise a graph is built and
+    closed here.
+
+    Deprecation is computed ONCE and used twice, exactly as before: unioned
+    with the sensitivity set for typed-edge exclusion, and passed alone to
+    `_merged_body_candidates`, whose per-entry sensitivity gate is the
+    ledger-aware `sensitivity.merged_content_blocked` applied at judge time
+    rather than the survivor's current on-disk value."""
+    deprecated: frozenset[str] = frozenset()
+    if not include_deprecated:
+        deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
+    confidential = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
+    excluded = deprecated | confidential
+
+    if store is not None:
+        edge_pairs, edge_total, relation_types = _pairs_and_types(
+            store, excluded, cap=None
+        )
+    else:
+        with build_graph(bundle_dir, candidates=candidates) as owned:
+            edge_pairs, edge_total, relation_types = _pairs_and_types(
+                owned, excluded, cap=None
+            )
+
+    edge_specs = [
+        _CandidateSpec(pair_ids=pair, relation_type=relation_types.get(pair))
+        for pair in edge_pairs
+    ]
+    merged_specs = _merged_body_candidates(bundle_dir, deprecated)
+
+    return CandidatePlan(
+        specs=tuple((edge_specs + merged_specs)[:_MAX_PAIRS]),
+        edge_total=edge_total,
+        merged_total=len(merged_specs),
+    )
+
+
 def find_contradictions(
     bundle_dir: Path,
     *,
@@ -783,35 +879,22 @@ def find_contradictions(
     typed-edge candidate (see that field's docstring warning). Its two
     bodies are gated per entry by the ledger-aware
     `sensitivity.merged_content_blocked` (Requirement 1), never by the
-    survivor's current on-disk sensitivity alone -- see `_load_ledger_bodies`."""
-    deprecated: frozenset[str] = frozenset()
-    if not include_deprecated:
-        deprecated = lifecycle.deprecated_concept_ids(bundle_dir)
-    confidential = sensitivity.sensitive_concept_ids(
+    survivor's current on-disk sensitivity alone -- see `_load_ledger_bodies`.
+
+    The candidate list itself is built by `plan_candidates` (issue #446), not
+    inline here: `curate`'s Contradictions cost gate has to state the number
+    of calls this function will make BEFORE it runs, and the only way those
+    two numbers cannot drift is for both to come from the same code."""
+    plan = plan_candidates(
         bundle_dir,
+        store=store,
+        candidates=candidates,
+        include_deprecated=include_deprecated,
         include_confidential=include_confidential,
         local_exemption=local_exemption,
     )
-    excluded = deprecated | confidential
-
-    if store is not None:
-        edge_pairs, edge_total, relation_types = _pairs_and_types(
-            store, excluded, cap=None
-        )
-    else:
-        with build_graph(bundle_dir, candidates=candidates) as owned:
-            edge_pairs, edge_total, relation_types = _pairs_and_types(
-                owned, excluded, cap=None
-            )
-
-    edge_specs = [
-        _CandidateSpec(pair_ids=pair, relation_type=relation_types.get(pair))
-        for pair in edge_pairs
-    ]
-    merged_specs = _merged_body_candidates(bundle_dir, deprecated)
-    all_specs = edge_specs + merged_specs
-    total_count = edge_total + len(merged_specs)
-    specs = all_specs[:_MAX_PAIRS]
+    total_count = plan.total_count
+    specs = list(plan.specs)
 
     verdicts: list[ContradictionVerdict] = []
     judged_total = len(specs)
