@@ -91,10 +91,10 @@ indistinguishably.)
 - THEN stdout prompts the user to provide a question, and the process
   exits `0`
 
-### Requirement: FTS/Graph-Unavailable Runs Degrade And Hint At Reindex
+### Requirement: FTS-Unavailable Runs Degrade And Hint At Reindex
 
-WHEN the persisted FTS or graph derived index is absent or its on-disk store
-is unopenable/corrupt (the same condition `answer()` degrades on), `query`
+WHEN the persisted FTS derived index is absent or its on-disk store is
+unopenable/corrupt (the same condition `answer()` degrades on), `query`
 MUST still complete using whichever retrieval lists remain available, exit
 `0`, and print an additional stderr hint telling the user to run
 `openkos reindex`. STDOUT MUST remain unaffected — answer text and citations
@@ -104,35 +104,57 @@ design D2, staleness detection is reindex's exclusive job; a properly-
 reindexed handle is always treated as fresh at query time. This mirrors the
 existing dense-unavailable hint.
 
-#### Scenario: Never-reindexed workspace hints at reindex for FTS/graph too
+An absent or corrupt `graph.db` MUST NOT trigger this hint, and MUST NOT
+change the answer, the citations, or any count in the retrieval summary.
 
-- GIVEN a workspace that has never run `reindex` (no persisted FTS or graph
-  index exists)
+(Previously: the graph derived index was covered by this requirement too —
+`query` opened `.openkos/graph.db` read-only, degraded to `graph_index=None`
+when it was absent or corrupt, and printed the same reindex hint. Issue #434
+removed the retrieval consumer, so `query` no longer opens the store at all.
+`reindex` still writes `graph.db` and the shared stale-index advisory still
+names it, because contradiction-candidate derivation still reads the typed
+projection.)
+
+#### Scenario: Never-reindexed workspace hints at reindex for FTS too
+
+- GIVEN a workspace that has never run `reindex` (no persisted FTS index
+  exists)
 - WHEN `openkos query "<question>"` is run
 - THEN the process exits 0, stdout renders whatever answer the remaining
   retrieval lists support, and stderr includes a hint to run
   `openkos reindex`
 
-#### Scenario: Corrupt or unopenable FTS/graph index degrades with the same hint
+#### Scenario: Corrupt or unopenable FTS index degrades with the same hint
 
-- GIVEN a persisted FTS or graph index whose on-disk store cannot be opened
+- GIVEN a persisted FTS index whose on-disk store cannot be opened
   (e.g. a corrupt file), and no query-time manifest comparison is performed
 - WHEN `openkos query "<question>"` is run
 - THEN the process exits 0 on the remaining available lists, and stderr
   includes the reindex hint
 
+#### Scenario: A corrupt graph store is not a retrieval degrade
+
+- GIVEN `.openkos/graph.db` is absent, or present but corrupt
+- WHEN `openkos query "<question>"` is run
+- THEN no `graph_index` is passed to `answer()`, stderr carries neither the
+  derived-index-unavailable hint nor a graph-degrade note on its account,
+  and the answer is unchanged
+
 ### Requirement: Docstring No Longer Claims No Persisted State
 
-The `query` command's docstring (`cli/main.py:2226`) MUST no longer state
-that graph/FTS retrieval carries "no persisted state, no CLI-level graph
-command"; it MUST describe graph and FTS retrieval as reading persisted,
-`reindex`-written on-disk indexes.
+The `query` command's docstring MUST no longer state that retrieval carries
+"no persisted state, no CLI-level graph command"; it MUST describe the FTS
+and dense channels as reading persisted, `reindex`-written on-disk indexes.
+
+(Previously: this named graph retrieval alongside FTS as a persisted-index
+reader. Issue #434 removed the graph channel from retrieval; the docstring
+now explains that removal instead.)
 
 #### Scenario: Docstring reflects the persisted-index contract
 
 - GIVEN `cli/main.py`'s `query` command docstring
 - WHEN a reader reviews it after this change
-- THEN it states that graph and FTS retrieval read persisted on-disk indexes
+- THEN it states that FTS and dense retrieval read persisted on-disk indexes
   maintained by `reindex`, and no longer claims no persisted state exists
 
 ### Requirement: `--limit` Option
@@ -281,18 +303,22 @@ members, same order (hit-rank) — with each line showing that citation's
 
 `query` MUST print a one-line retrieval summary to stderr on every
 completed run (successful answer or no-match), stating `fts_hit_count`,
-`dense_hit_count`, `fused_count`, `graph_contributed_count`, whether the LLM
-was invoked, and the count of rendered citations. The graph term MUST report
-what the graph channel ADDED (`graph_contributed_count`), labelled to say so,
-NOT its raw candidate pool (`graph_hit_count`). WHEN `graph_degraded` is
-`True`, the summary MUST additionally note that graph retrieval degraded
-for this run. STDOUT MUST carry only the answer text and (when present) the
-`Citations:` block — unchanged in shape from current behavior.
-(Previously: the stderr line reported `fts_hit_count`, `dense_hit_count`,
-and `fused_count` only, with no graph count or graph-degrade note.
-Previously: the graph term reported `graph_hit_count`, so a workspace with
-zero typed edges still printed `10 graph` — a candidate count read by every
-reader as a contribution the graph had not made, issue #402.)
+`dense_hit_count`, `fused_count`, whether the LLM was invoked, and the count
+of rendered citations. The summary MUST carry NO graph term, and `query`
+MUST NOT print a graph-degrade note on any run. STDOUT MUST carry only the
+answer text and (when present) the `Citations:` block — unchanged in shape
+from current behavior.
+
+(Previously: the line carried a third retrieval term, `<n> graph-added` from
+`AnswerResult.graph_contributed_count` — how many reserved slots the seeded
+personalized-PageRank channel filled with concepts FTS and dense never found
+— plus a separate note whenever `graph_degraded` was `True`. That term was
+itself a correction of an earlier one reporting `graph_hit_count`, the raw
+candidate pool, which printed `10 graph` on a workspace with zero typed
+edges. Issue #434 removed the channel the term described: measured over 10
+questions the slot it claimed was 7 times harmful, 3 times neutral and never
+beneficial, because seeded PageRank ranks by global centrality — a property
+of the corpus, not of the question — and the slot always cost a real hit.)
 
 #### Scenario: Successful answer keeps stdout pipe-clean
 
@@ -301,30 +327,22 @@ reader as a contribution the graph had not made, issue #402.)
 - THEN stdout (captured via `capsys`/`capfd`) contains exactly the answer
   text plus the `Citations:` block, with no summary text mixed in
 - AND stderr (captured separately) contains one line reporting
-  `fts_hit_count`, `dense_hit_count`, `fused_count`,
-  `graph_contributed_count`, LLM-invoked status, and the citation count
+  `fts_hit_count`, `dense_hit_count`, `fused_count`, LLM-invoked status,
+  and the citation count
 
 #### Scenario: No-match run still emits an extended stderr summary
 
 - GIVEN `answer()` returns a no-match `AnswerResult`
 - WHEN `openkos query "<question>"` is run
-- THEN stderr reports the extended retrieval summary (including
-  `graph_contributed_count`, zero where applicable) for that run and the
-  process exits `0`
+- THEN stderr reports the extended retrieval summary (zero where applicable)
+  for that run and the process exits `0`
 
-#### Scenario: A graph that added nothing reports zero, not its pool size
+#### Scenario: The summary names no graph term
 
-- GIVEN `answer()` returns an `AnswerResult` with a non-zero
-  `graph_hit_count` and `graph_contributed_count=0`
-- WHEN `openkos query "<question>"` is run
-- THEN the stderr retrieval summary's graph term is `0`
-
-#### Scenario: Graph degrade is noted alongside the summary
-
-- GIVEN `answer()` returns an `AnswerResult` with `graph_degraded=True`
-- WHEN `openkos query "<question>"` is run
-- THEN the stderr retrieval summary includes a note that graph retrieval
-  degraded for this run, and stdout is unaffected
+- GIVEN any completed `query` run, healthy or degraded
+- WHEN its stderr is read
+- THEN the retrieval line contains no `graph-added` term and no
+  graph-degrade note
 
 ### Requirement: Build-Time Skip Notices Surfaced As A Whole-Bundle Signal
 

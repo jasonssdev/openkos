@@ -26,8 +26,10 @@ consumer is the `query` command.
 
 CLI command; reading/constructing `openkos.config`; context truncation or
 token budget beyond `limit`; weighted/normalized score fusion; distance-to-similarity
-conversion; graph/link ranking as a third input; filing the answer back as a
-concept; citation metadata beyond `concept_id` and `title`.
+conversion; graph/link ranking in any position — as a third RRF input or as
+an additive reserved-slot channel (see "Answering Reads No Graph"); filing
+the answer back as a concept; citation metadata beyond `concept_id` and
+`title`.
 
 ## Requirements
 
@@ -45,7 +47,7 @@ bundle's manifest hash; that comparison is reindex's exclusive job.
 
 - GIVEN `fts_index` is `None` (workspace never ran `reindex`)
 - WHEN `answer(...)` is called
-- THEN retrieval proceeds using dense (and graph) hits alone, `fts_hit_count`
+- THEN retrieval proceeds using dense hits alone, `fts_hit_count`
   is `0`, and no exception propagates
 
 #### Scenario: Corrupt or unopenable FTS handle degrades to empty
@@ -68,7 +70,7 @@ bundle's manifest hash; that comparison is reindex's exclusive job.
 ### Requirement: Lexical Retrieval Drives Answer Assembly
 
 `answer(question, *, bundle_dir, llm, embedder, vector_store, fts_index,
-graph_index, limit)` MUST retrieve FTS hits via the injected, read-only
+limit)` MUST retrieve FTS hits via the injected, read-only
 `fts_index.search(question, limit=pool_limit)` handle AND dense hits via
 `vector_store.query(embedder.embed([question])[0], k=pool_limit)`
 (`pool_limit = max(limit, 10)`), fuse both lists via
@@ -78,7 +80,9 @@ LLM context, call `llm.chat(...)` exactly once, and return an `AnswerResult`
 whose `answer` is the LLM's returned text.
 (Previously: FTS retrieval built its own `:memory:` index internally via
 `fts.build_index(bundle_dir)` on every call; there was no injected FTS
-handle.)
+handle. Previously: the signature also took a `graph_index` handle, and the
+fused list was topped up by a graph channel before truncation — issue #434
+removed both.)
 
 #### Scenario: Matching concepts produce a cited answer
 
@@ -212,20 +216,21 @@ swallowed by the generic transient `OllamaError` degrade instead.)
 ### Requirement: Module Is Config-Free And Backend-Injected
 
 `retrieval/answer.py` MUST NOT import `openkos.config`. `LLMBackend`,
-`Embedder`, `VectorStore`, `fts_index`, and `graph_index` instances MUST all
-be supplied by the caller; the module MUST NOT construct, open, or select
-any of them itself.
+`Embedder`, `VectorStore`, and `fts_index` instances MUST all be supplied
+by the caller; the module MUST NOT construct, open, or select any of them
+itself.
 (Previously: `LLMBackend`, `Embedder`, and `VectorStore` were caller-injected;
 `fts_index` and `graph_index` did not exist as parameters — the module built
-its own FTS index and graph internally.)
+its own FTS index and graph internally. Previously: `graph_index` was a
+fourth injected handle; issue #434 removed the stage that read it.)
 
 #### Scenario: Module has no config dependency
 
 - GIVEN a static import check of `retrieval/answer.py`
 - WHEN its imports are inspected
 - THEN `openkos.config` is absent, and the only sources of `LLMBackend`,
-  `Embedder`, `VectorStore`, `fts_index`, and `graph_index` are the
-  parameters passed by the caller
+  `Embedder`, `VectorStore`, and `fts_index` are the parameters passed by
+  the caller
 
 ### Requirement: Citations Reflect Only Context-Included Concepts
 
@@ -251,19 +256,17 @@ tripped), and `skip_notices` (`list[str]`, copied from `FtsIndex.skipped` for
 that build) — UNCHANGED from the existing contract. `AnswerResult` MUST
 additionally, and PURELY ADDITIVELY, carry: `dense_hit_count` (int, raw
 `vector_store.query` hit count), `fused_count` (int, number of distinct
-`concept_id`s in the FINAL fused, limit-truncated list), `dense_degraded`
-(bool), `graph_hit_count` (int, raw personalized-PageRank pool size before
-final fusion, default `0`), `graph_degraded` (bool, `True` when graph
-retrieval could not proceed this call, default `False`), and
-`graph_contributed_count` (int, how many of the final fused list's
-`concept_id`s the graph channel ADDED — i.e. how many reserved slots it
-filled with concepts absent from the FTS+dense pool — default `0`). No
-existing field is removed or retyped. The module MUST remain config-free.
-(Previously: no `graph_hit_count`/`graph_degraded` fields; `fused_count`
-reflected only a two-list fusion. Previously: no `graph_contributed_count` —
-`graph_hit_count`, the raw candidate pool, was the only graph number
-available to a caller, and it overstates the graph's contribution to the
-point of being unrelated to it.)
+`concept_id`s in the FINAL fused, limit-truncated list), and
+`dense_degraded` (bool). `AnswerResult` MUST NOT carry any graph metadata:
+`graph_hit_count`, `graph_degraded`, and `graph_contributed_count` MUST all
+be absent. The module MUST remain config-free.
+(Previously: those three fields existed — `graph_hit_count` the raw
+personalized-PageRank candidate pool, `graph_degraded` whether the graph
+stage could run, and `graph_contributed_count` how many reserved slots the
+graph filled with concepts absent from the FTS+dense pool. All three
+described a channel issue #434 removed; a field that could only ever report
+zero would read as a channel that contributed nothing, rather than one that
+is not there.)
 
 #### Scenario: Successful answer sets success metadata
 
@@ -271,146 +274,90 @@ point of being unrelated to it.)
 - WHEN `answer(...)` returns a non-`NO_MATCH` answer
 - THEN `llm_invoked` is `True` and `no_match_cause` is `"none"`
 
-#### Scenario: Graph counts reflect retrieval
+#### Scenario: AnswerResult reports no graph metadata
 
-- GIVEN a graph pool of 6 `concept_id`s contributed to the final fusion
-- WHEN `answer(...)` is called
-- THEN `graph_hit_count` equals `6`
-
-#### Scenario: graph_contributed_count counts what the graph added, not its pool
-
-- GIVEN a graph candidate pool whose entries are all already in the FTS+dense
-  pool
-- WHEN `answer(...)` is called
-- THEN `graph_hit_count` is the raw pool size while
-  `graph_contributed_count` is `0`
-
-#### Scenario: graph_degraded reflects whether graph retrieval ran
-
-- GIVEN graph retrieval completed normally for this call
-- WHEN `answer(...)` is called
-- THEN `graph_degraded` is `False`
-- GIVEN graph retrieval instead fell back to an empty list for this call
-- WHEN `answer(...)` is called
-- THEN `graph_degraded` is `True`
+- GIVEN the `AnswerResult` dataclass
+- WHEN its fields are inspected
+- THEN `graph_hit_count`, `graph_degraded`, and `graph_contributed_count`
+  are all absent
 
 ### Requirement: Empty Query Sets A Distinct No-Match Cause
 
 WHEN `question.strip()` is empty, `answer` MUST short-circuit BEFORE any
-retrieval — it MUST NOT call `fts_index.search`, `embedder.embed`,
-`vector_store.query`, or any query surface of `graph_index` — and MUST NOT
-invoke the LLM, returning a no-match `AnswerResult` with `no_match_cause`
-equal to `"empty_query"`, distinguishable from `"zero_hits"`. This MUST be
-provable via test doubles (spies) on `fts_index`, `embedder`, `vector_store`,
-and `graph_index`, each recording zero calls for this path.
+retrieval — it MUST NOT call `fts_index.search`, `embedder.embed`, or
+`vector_store.query` — and MUST NOT invoke the LLM, returning a no-match
+`AnswerResult` with `no_match_cause` equal to `"empty_query"`,
+distinguishable from `"zero_hits"`. This MUST be provable via test doubles
+(spies) on `fts_index`, `embedder`, and `vector_store`, each recording zero
+calls for this path.
 (Previously: short-circuited before internally-built FTS/dense/graph steps;
 there were no injected handles for a test spy to observe, so the strongest
-available assertion was that the LLM was never called.)
+available assertion was that the LLM was never called. Previously: a fourth
+spy covered `graph_index`.)
 
 #### Scenario: Whitespace-only question touches no injected handle
 
 - GIVEN `question` is empty or contains only whitespace, and `fts_index`,
-  `embedder`, `vector_store`, and `graph_index` are all spies
+  `embedder`, and `vector_store` are all spies
 - WHEN `answer(...)` is called
-- THEN none of the four spies record any call, `llm.chat` is never invoked,
+- THEN none of the three spies record any call, `llm.chat` is never invoked,
   and `no_match_cause` is `"empty_query"`
 
-### Requirement: Graph Retrieval Runs As A Second-Stage, Seeded PPR List
+### Requirement: Answering Reads No Graph
 
-`answer` MUST, after the initial `fuse(hits, vec_hits)`, derive SEEDS as the
-top `min(limit, 5)` `concept_id`s of that initial fused list, read the
-injected, read-only, persisted `graph_index` handle (opened by the caller
-against the on-disk graph store; no per-call build), and run personalized
-PageRank (`nx.pagerank(to_digraph(store), personalization=seeds,
-alpha=0.85)` over an undirected view) to produce a `graph_hits` pool of size
-`max(limit, 10)`. The system MUST then compute the FINAL ranking as
-`fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)` and feed
-that list, unchanged, into `_assemble_context` — so the FTS+dense fusion is
-the base ranking the graph cannot permute, and the graph may only ADD
-concepts absent from the FTS+dense pool into its bounded reserved slots
-(retrieval-fusion: The Graph Channel Is Additive, Never A Reordering). Seeds
-MUST come from the initial fused ranking, never from a raw union of FTS and
-dense hits.
-(Previously: `answer` built an in-process graph via `build_graph(bundle_dir)`
-internally on every call; there was no injected, persisted graph handle.
-Previously: the final ranking was `fusion.fuse(hits, vec_hits,
-graph_hits)[:limit]`, a three-list RRF in which the graph reordered concepts
-FTS and dense had already found — issue #402.)
+`answer` MUST compute its final ranking as `fusion.fuse(hits, vec_hits)`
+sliced to `limit`, and feed that list unchanged into `_assemble_context`.
+It MUST NOT accept a `graph_index` parameter, MUST NOT import
+`openkos.graph` or `retrieval.graph_retrieve`, MUST NOT derive graph seeds
+from the fused list, and MUST NOT run any second retrieval stage.
 
-#### Scenario: Graph contributes a concept absent from FTS and dense hits
+(Previously: `answer` derived SEEDS as the top `min(limit, 5)`
+`concept_id`s of an INITIAL `fuse(hits, vec_hits)`, read an injected,
+read-only, persisted `graph_index` handle, and ran personalized PageRank
+(`nx.pagerank`, `alpha=0.85`, over an undirected view) for a `graph_hits`
+pool of size `max(limit, 10)`. A FINAL
+`fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)` then let
+that pool fill bounded reserved tail slots with concepts absent from the
+FTS+dense pool. The stage degraded rather than raised — an absent handle,
+absent seeds, or a PageRank exception yielded `graph_hits = []` and
+`graph_degraded=True`, while an edgeless-but-openable projection yielded
+`[]` and `graph_degraded=False` — and its ranking was deterministic across
+repeated calls.
 
-- GIVEN a concept is reachable via graph proximity to the top fused hits but
+None of that was wrong as implemented; the stage was correct, bounded and
+measurable, which is precisely what allowed it to be judged. Two A/B runs of
+10 questions found 7 harmful, 3 neutral and 0 beneficial contributions,
+including evicting `sources/mcp-origin` from "When did MCP originate?" and
+`sources/10-mcp` from a question about which protocol BigQuery belongs to.
+Seeded PPR ranks by GLOBAL CENTRALITY, not by relevance to the question, and
+the reserved slot always costs a base hit. Growing the corpus changes which
+central node wins the slot and nothing else. The typed graph is retained for
+contradiction-candidate derivation, which reads typed edges rather than
+centrality; a future graph channel would need a different ranking function —
+traversal from the question's own matched concepts — proposed and measured
+on its own terms.)
+
+#### Scenario: The graph plays no part in the answer
+
+- GIVEN a bundle whose typed graph strongly connects some concept that
   matches the question neither lexically nor semantically
 - WHEN `answer(...)` is called
-- THEN that concept can appear in the final list, in a reserved tail slot
+- THEN that concept is absent from the citations, and the citations are
+  exactly the first `limit` entries of `fuse(hits, vec_hits)`
 
-#### Scenario: The graph never evicts a concept FTS and dense already found
+#### Scenario: answer() has no graph seam to inject
 
-- GIVEN a concept inside the FTS+dense candidate pool but outside the
-  top-`limit`, which personalized PageRank returns at graph rank 1
+- GIVEN the signature of `answer`
+- WHEN its parameters are inspected
+- THEN there is no `graph_index` parameter, and `retrieval/answer.py`
+  imports nothing from `openkos.graph`
+
+#### Scenario: A corrupt or absent graph store cannot affect answering
+
+- GIVEN `.openkos/graph.db` is absent, or present but corrupt
 - WHEN `answer(...)` is called
-- THEN it is not promoted into the citations, and the FTS+dense citation
-  order is unchanged by its presence in `graph_hits`
-
-#### Scenario: Seeds come from the initial fuse, not a raw union
-
-- GIVEN an initial `fuse(hits, vec_hits)` whose top-ranked `concept_id`s
-  differ from the raw union of FTS-only and dense-only top hits
-- WHEN `answer(...)` runs personalized PageRank
-- THEN the seed set passed as `personalization` equals the top
-  `min(limit, 5)` `concept_id`s of the INITIAL fused list, not the raw union
-
-### Requirement: Graph Retrieval Degrades To An Empty List On Failure
-
-WHEN the injected `graph_index` handle is absent, its backing on-disk store
-is unopenable/corrupt, or PageRank computation raises any exception,
-`answer` MUST catch/handle it, proceed with `graph_hits = []` for the final
-fusion (equivalent to two-list fusion), set `graph_degraded=True` on the
-returned `AnswerResult`, and MUST NOT raise. `answer` MUST NOT recompute or
-compare the current bundle's manifest hash to decide this — that comparison
-is reindex's exclusive job (D2); a properly-reindexed handle is always
-treated as fresh at query time. FTS and dense retrieval MUST remain
-unaffected — this mirrors the existing dense-degrade contract. Graph
-retrieval has no cold-start precondition distinct from FTS/dense now that
-all three share the same persisted-index degrade contract: an absent or
-unopenable index degrades gracefully rather than raising.
-(Previously: only an exception raised by `build_graph`/PageRank at call time
-triggered the degrade path; there was no absent/unopenable-handle case
-because the graph was always rebuilt in-process per call.)
-
-#### Scenario: Graph build failure degrades cleanly
-
-- GIVEN PageRank computation raises an exception
-- WHEN `answer(...)` is called
-- THEN `graph_degraded` is `True`, `graph_hit_count` is `0`, no exception
-  propagates, and the answer is produced from FTS + dense fusion alone
-
-#### Scenario: Absent graph handle degrades cleanly
-
-- GIVEN `graph_index` is `None` (workspace never ran `reindex`)
-- WHEN `answer(...)` is called
-- THEN `graph_degraded` is `True`, `graph_hit_count` is `0`, and FTS/dense
-  retrieval still produce a final answer
-
-#### Scenario: Edgeless bundle yields an empty graph list, not a failure
-
-- GIVEN the bundle's graph projection has nodes but zero edges
-- WHEN `answer(...)` is called
-- THEN `graph_hits` is empty, `graph_degraded` is `False` (the index itself
-  was opened successfully — query performed no freshness comparison), and
-  FTS/dense retrieval still produce a final answer
-
-### Requirement: Personalized PageRank Is Deterministic
-
-WHEN given a fixed bundle, a fixed question, and fixed seeds, personalized
-PageRank MUST produce the same ranking across repeated calls.
-
-#### Scenario: Same bundle and question produce the same graph ranking
-
-- GIVEN a fixed compiled bundle and a fixed question
-- WHEN `answer(...)` is called twice
-- THEN both calls produce identical `graph_hits` ordering and an identical
-  final fused, limit-truncated `concept_id` list
+- THEN the answer, its citations, and every `AnswerResult` count are
+  byte-identical to the same call against a healthy graph store
 
 ### Requirement: Dense Retrieval Degrades To FTS-Only
 

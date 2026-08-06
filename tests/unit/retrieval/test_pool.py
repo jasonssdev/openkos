@@ -1,8 +1,11 @@
 """Unit tests for `retrieval/pool.py`: the shared pool-floor helper.
 
-DRYs the `max(limit, 10)` "pool floor" duplicated across `answer.py`/
-`graph_retrieve.py` (follow-up #2) into one named constant + function, so a
-future change to the floor value has exactly one place to edit.
+Names the `max(limit, 10)` "pool floor" once (follow-up #2) so a future
+change to the floor value has exactly one place to edit. It was extracted
+because `answer.py` and the since-removed `graph_retrieve.py` both needed it
+(issue #434 left `answer.py` as the only caller); the constant stays named
+rather than being inlined back, because the floor is a retrieval contract --
+FTS and dense are both widened to it before either is queried.
 """
 
 from openkos.retrieval import pool

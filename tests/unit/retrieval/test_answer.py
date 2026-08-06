@@ -1,20 +1,24 @@
 """Unit tests for `retrieval/answer.py`: the cited answer library.
 
-`answer()` composes four INJECTED seams end-to-end (Slice 5, PR3, design D4):
-a read-only `fts_index` handle (lexical), an injected `Embedder` +
-`VectorStore` (dense, optional), a read-only `graph_index` handle +
-`retrieval.graph_retrieve.graph_rank` (seeded PPR, optional/degrading), and
-an injected `llm.LLMBackend` (answer). `answer()` no longer builds
-`fts_index`/`graph_index` itself -- tests inject either a real
-`fts.build_index(bundle_dir)`/`sqlite_graph.build_graph(bundle_dir)` handle
-(via a `with` block) for genuine end-to-end coverage, or a lightweight
-structural fake for isolated/degrade-path coverage. All tests use a
-`tmp_path` bundle and a structural fake `LLMBackend` -- zero network, zero
-real Ollama process.
+`answer()` composes three INJECTED seams end-to-end (Slice 5, PR3, design
+D4): a read-only `fts_index` handle (lexical), an injected `Embedder` +
+`VectorStore` (dense, optional), and an injected `llm.LLMBackend` (answer).
+`answer()` no longer builds `fts_index` itself -- tests inject either a real
+`fts.build_index(bundle_dir)` handle (via a `with` block) for genuine
+end-to-end coverage, or a lightweight structural fake for isolated/degrade-
+path coverage. All tests use a `tmp_path` bundle and a structural fake
+`LLMBackend` -- zero network, zero real Ollama process.
+
+Issue #434 removed the fourth seam, the seeded personalized-PageRank graph
+stage, so every fixture, spy, and degrade-matrix row it owned is gone from
+this module. The removal is about the RANKING FUNCTION, not the typed graph:
+PPR ranks by global centrality, which is not relevance to a question. The
+typed graph itself still backs contradiction candidates and is untouched.
 """
 
 import ast
 import dataclasses
+import importlib
 import inspect
 import sqlite3
 from collections.abc import Sequence
@@ -25,8 +29,6 @@ from typer.testing import CliRunner
 
 from openkos import lifecycle, sensitivity
 from openkos.cli.main import app
-from openkos.graph import sqlite_graph
-from openkos.graph.base import Edge, GraphStore
 from openkos.llm.base import EMBED_DIM, Message
 from openkos.llm.ollama import (
     OllamaEmbeddingDimensionMismatch,
@@ -35,8 +37,6 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.retrieval import answer as answer_mod
-from openkos.retrieval import fusion, graph_retrieve
-from openkos.retrieval.fusion import GraphHit
 from openkos.state import fts
 from openkos.state.vectorstore import VecHit, VecUnavailable
 
@@ -204,39 +204,6 @@ class _FakeVectorStore:
 
     def close(self) -> None:
         pass
-
-
-class _FakeGraphStore:
-    """A minimal `GraphStore` fixture over an explicit node/edge list --
-    injected directly as `graph_index=...`, no build/context-manager step."""
-
-    def __init__(self, nodes: list[str], edges: list[Edge]) -> None:
-        self._nodes = nodes
-        self._edges = edges
-
-    def nodes(self) -> list[str]:
-        return self._nodes
-
-    def edges(self) -> list[Edge]:
-        return self._edges
-
-    def neighbors(self, concept_id: str) -> list[str]:
-        return [edge.target_id for edge in self._edges if edge.source_id == concept_id]
-
-
-class _SpyGraphStore:
-    """A `GraphStore` fixture that raises if any query method is ever
-    called -- proves `answer()` never reads an injected `graph_index` it
-    has no seeds for, or on the empty-question short-circuit."""
-
-    def nodes(self) -> list[str]:
-        raise AssertionError("graph_index.nodes() should never be called here")
-
-    def edges(self) -> list[Edge]:
-        raise AssertionError("graph_index.edges() should never be called here")
-
-    def neighbors(self, concept_id: str) -> list[str]:
-        raise AssertionError("graph_index.neighbors() should never be called here")
 
 
 # --- Phase 1: scaffold -------------------------------------------------
@@ -823,17 +790,15 @@ def test_dense_only_hit_avoids_the_zero_hit_path(tmp_path: Path) -> None:
 
 def test_empty_question_touches_no_injected_handle(tmp_path: Path) -> None:
     """A whitespace-only question short-circuits BEFORE any retrieval --
-    `fts_index.search`, `embedder.embed`, `vector_store.query`, and any
-    query surface of `graph_index` are ALL untouched, `llm.chat` is never
-    invoked, and `no_match_cause` is `"empty_query"` (follow-up #1,
-    strengthened: spies on all four injected handles, not just two;
-    query-answer: Whitespace-only question touches no injected handle)."""
+    `fts_index.search`, `embedder.embed`, and `vector_store.query` are ALL
+    untouched, `llm.chat` is never invoked, and `no_match_cause` is
+    `"empty_query"` (follow-up #1; query-answer: Whitespace-only question
+    touches no injected handle)."""
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     fts_index = _SpyFtsIndex()
     embedder = _FakeEmbedder()
     vector_store = _FakeVectorStore(hits=[])
-    graph_index = _SpyGraphStore()
     llm = _FakeLLM()
 
     result = answer_mod.answer(
@@ -843,7 +808,6 @@ def test_empty_question_touches_no_injected_handle(tmp_path: Path) -> None:
         embedder=embedder,
         vector_store=vector_store,
         fts_index=fts_index,
-        graph_index=graph_index,
     )
 
     assert fts_index.calls == 0
@@ -854,8 +818,6 @@ def test_empty_question_touches_no_injected_handle(tmp_path: Path) -> None:
     assert result.answer == answer_mod.NO_MATCH
     assert result.fts_hit_count == 0
     assert result.llm_invoked is False
-    assert result.graph_degraded is False
-    assert result.graph_hit_count == 0
 
 
 # --- Phase 3: dense degrade to FTS-only ------------------------------------
@@ -1157,472 +1119,6 @@ def test_typed_exception_from_fts_search_propagates_even_with_no_dense(
         )
 
 
-# --- Phase 3 (graph slice): two-stage seeded graph retrieval --------------
-
-
-def test_graph_reachable_concept_absent_from_fts_and_dense_appears_via_graph(
-    tmp_path: Path,
-) -> None:
-    """A concept reachable via graph proximity to the seeds -- absent from
-    both FTS and dense hits -- appears in the final answer's citations via
-    its `graph_hits` rank (spec: Graph contributes a concept absent from
-    FTS and dense hits)."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "stoicism.md",
-        title="Stoicism",
-        body="dichotomyzz of control",
-    )
-    _write_doc(
-        bundle_dir / "concepts" / "graph-neighbor.md",
-        title="Graph Neighbor",
-        body="reachable only via the graph, not lexically or semantically",
-    )
-    recording_index = _RecordingIndex(
-        hits=[fts.FtsHit(concept_id="concepts/stoicism", score=0.0)]
-    )
-    fake_store = _FakeGraphStore(
-        nodes=["concepts/stoicism", "concepts/graph-neighbor"],
-        edges=[
-            Edge(source_id="concepts/stoicism", target_id="concepts/graph-neighbor")
-        ],
-    )
-    llm = _FakeLLM(reply="cites the graph neighbor too")
-
-    result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=llm,
-        fts_index=recording_index,
-        graph_index=fake_store,
-    )
-
-    cited_ids = {citation.concept_id for citation in result.citations}
-    assert "concepts/graph-neighbor" in cited_ids
-
-
-def test_seeds_come_from_the_initial_fuse_not_a_raw_union(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The seed set passed as `graph_rank`'s `seeds` equals the top
-    `min(limit, 5)` `concept_id`s of the INITIAL `fuse(hits, vec_hits)`, not
-    a raw union of FTS-only and dense-only top hits (spec: Seeds come from
-    the initial fuse, not a raw union)."""
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    fts_hits = [fts.FtsHit(concept_id=f"concepts/f{i}", score=0.0) for i in range(1, 7)]
-    recording_index = _RecordingIndex(hits=fts_hits)
-    vector_store = _FakeVectorStore(
-        hits=[VecHit(concept_id="concepts/d1", distance=0.0)]
-    )
-    embedder = _FakeEmbedder()
-    expected_seeds = fusion.fuse(
-        fts_hits, [VecHit(concept_id="concepts/d1", distance=0.0)]
-    )[:5]
-    recorded_seeds: list[list[str]] = []
-    original_rank = graph_retrieve.graph_rank
-
-    def _spy_graph_rank(
-        store: GraphStore, seeds: list[str], *, limit: int
-    ) -> list[GraphHit]:
-        recorded_seeds.append(list(seeds))
-        return original_rank(store, seeds, limit=limit)
-
-    monkeypatch.setattr(graph_retrieve, "graph_rank", _spy_graph_rank)
-
-    answer_mod.answer(
-        "q",
-        bundle_dir=bundle_dir,
-        llm=_FakeLLM(),
-        embedder=embedder,
-        vector_store=vector_store,
-        fts_index=recording_index,
-        graph_index=_FakeGraphStore(nodes=[], edges=[]),
-    )
-
-    assert recorded_seeds == [expected_seeds]
-    assert expected_seeds != [hit.concept_id for hit in fts_hits[:5]]
-
-
-def test_graph_hit_count_equals_raw_pool_size_before_truncation(
-    tmp_path: Path,
-) -> None:
-    """`graph_hit_count` equals the raw pool size returned by `graph_rank`
-    before final-fusion truncation (spec: Graph counts reflect retrieval)."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "seed.md", title="Seed", body="dichotomyzz seed"
-    )
-    for i in range(6):
-        _write_doc(
-            bundle_dir / "concepts" / f"n{i}.md", title=f"N{i}", body=f"neighbor {i}"
-        )
-    recording_index = _RecordingIndex(
-        hits=[fts.FtsHit(concept_id="concepts/seed", score=0.0)]
-    )
-    fake_store = _FakeGraphStore(
-        nodes=["concepts/seed"] + [f"concepts/n{i}" for i in range(6)],
-        edges=[
-            Edge(source_id="concepts/seed", target_id=f"concepts/n{i}")
-            for i in range(6)
-        ],
-    )
-    llm = _FakeLLM(reply="counts reflect the pool")
-
-    result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=llm,
-        fts_index=recording_index,
-        graph_index=fake_store,
-        limit=3,
-    )
-
-    assert result.graph_hit_count == 6
-
-
-# --- #402: the graph channel is additive, never a reordering --------------
-
-
-def _pooled_bundle(bundle_dir: Path, size: int) -> list[fts.FtsHit]:
-    """Write `size` `concepts/p{i}` docs and return the matching FTS hit
-    list, ordered `p0` best -- so the FTS+dense base ranking is exactly
-    `["concepts/p0", ..., f"concepts/p{size-1}"]`."""
-    for i in range(size):
-        _write_doc(
-            bundle_dir / "concepts" / f"p{i}.md", title=f"P{i}", body=f"body {i}"
-        )
-    return [
-        fts.FtsHit(concept_id=f"concepts/p{i}", score=float(i)) for i in range(size)
-    ]
-
-
-def test_graph_never_evicts_a_pooled_concept_it_ranks_highly(tmp_path: Path) -> None:
-    """Issue #402: `concepts/p5` sits at FTS rank 6 -- inside the candidate
-    pool but outside the top-`limit` -- and is the ONLY non-seed the graph
-    can reach, so it comes back at graph rank 1. It MUST NOT be promoted
-    into the answer context, and MUST NOT displace `concepts/p4`."""
-    bundle_dir = tmp_path / "bundle"
-    fts_hits = _pooled_bundle(bundle_dir, 6)
-    fake_store = _FakeGraphStore(
-        nodes=[f"concepts/p{i}" for i in range(6)],
-        edges=[Edge(source_id="concepts/p0", target_id="concepts/p5")],
-    )
-
-    result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=_FakeLLM(reply="the base ranking survives"),
-        fts_index=_RecordingIndex(hits=fts_hits),
-        graph_index=fake_store,
-        limit=5,
-    )
-
-    assert [citation.concept_id for citation in result.citations] == [
-        f"concepts/p{i}" for i in range(5)
-    ]
-    assert result.graph_contributed_count == 0
-
-
-def test_a_graph_only_concept_claims_a_reserved_tail_slot(tmp_path: Path) -> None:
-    """A concept only the graph can see joins the answer context in a
-    reserved TAIL slot, displacing the weakest base concept but permuting
-    none of the survivors."""
-    bundle_dir = tmp_path / "bundle"
-    fts_hits = _pooled_bundle(bundle_dir, 6)
-    _write_doc(
-        bundle_dir / "concepts" / "graph-only.md",
-        title="Graph Only",
-        body="reachable only via the graph",
-    )
-    fake_store = _FakeGraphStore(
-        nodes=[f"concepts/p{i}" for i in range(6)] + ["concepts/graph-only"],
-        edges=[Edge(source_id="concepts/p0", target_id="concepts/graph-only")],
-    )
-
-    result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=_FakeLLM(reply="the graph added one"),
-        fts_index=_RecordingIndex(hits=fts_hits),
-        graph_index=fake_store,
-        limit=5,
-    )
-
-    assert [citation.concept_id for citation in result.citations] == [
-        "concepts/p0",
-        "concepts/p1",
-        "concepts/p2",
-        "concepts/p3",
-        "concepts/graph-only",
-    ]
-    assert result.graph_contributed_count == 1
-
-
-def test_graph_contributed_count_is_capped_at_the_reserved_slots(
-    tmp_path: Path,
-) -> None:
-    """Four graph-only neighbors still contribute only
-    `fusion.GRAPH_RESERVED_SLOTS` concepts."""
-    bundle_dir = tmp_path / "bundle"
-    fts_hits = _pooled_bundle(bundle_dir, 6)
-    for i in range(4):
-        _write_doc(
-            bundle_dir / "concepts" / f"g{i}.md", title=f"G{i}", body=f"graph only {i}"
-        )
-    fake_store = _FakeGraphStore(
-        nodes=[f"concepts/p{i}" for i in range(6)]
-        + [f"concepts/g{i}" for i in range(4)],
-        edges=[
-            Edge(source_id="concepts/p0", target_id=f"concepts/g{i}") for i in range(4)
-        ],
-    )
-
-    result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=_FakeLLM(reply="bounded contribution"),
-        fts_index=_RecordingIndex(hits=fts_hits),
-        graph_index=fake_store,
-        limit=5,
-    )
-
-    assert result.graph_contributed_count == fusion.GRAPH_RESERVED_SLOTS
-    cited = [citation.concept_id for citation in result.citations]
-    assert cited[:3] == ["concepts/p0", "concepts/p1", "concepts/p2"]
-
-
-def test_an_edgeless_graph_contributes_nothing_and_reports_zero(
-    tmp_path: Path,
-) -> None:
-    """A workspace whose graph has nodes but no edges leaves the FTS+dense
-    citation list byte-identical and reports `graph_contributed_count == 0`
-    -- never the raw candidate-pool size."""
-    bundle_dir = tmp_path / "bundle"
-    fts_hits = _pooled_bundle(bundle_dir, 6)
-    recording_index = _RecordingIndex(hits=fts_hits)
-
-    without_graph = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=_FakeLLM(reply="identical"),
-        fts_index=recording_index,
-        limit=5,
-    )
-    with_edgeless_graph = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=_FakeLLM(reply="identical"),
-        fts_index=recording_index,
-        graph_index=_FakeGraphStore(
-            nodes=[f"concepts/p{i}" for i in range(6)], edges=[]
-        ),
-        limit=5,
-    )
-
-    assert [c.concept_id for c in with_edgeless_graph.citations] == [
-        c.concept_id for c in without_graph.citations
-    ]
-    assert with_edgeless_graph.graph_contributed_count == 0
-
-
-def test_graph_rank_raising_degrades_gracefully(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """`graph_rank` raising any `Exception` sets `graph_degraded=True`,
-    `graph_hit_count=0`, propagates no exception, and the FTS+dense answer
-    is still produced (spec: Graph build failure degrades cleanly).
-    `graph_rank` is the ACTUAL call site `_graph_search` wraps in a
-    try/except now that there is no per-call `build_graph` step."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "stoicism.md",
-        title="Stoicism",
-        body="dichotomyzz of control",
-    )
-    llm = _FakeLLM(reply="answered despite the graph failure")
-
-    def _raise_graph_rank(
-        store: GraphStore, seeds: list[str], *, limit: int
-    ) -> list[GraphHit]:
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(graph_retrieve, "graph_rank", _raise_graph_rank)
-
-    result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=llm,
-        fts_index=_RecordingIndex(
-            hits=[fts.FtsHit(concept_id="concepts/stoicism", score=0.0)]
-        ),
-        graph_index=_FakeGraphStore(nodes=["concepts/stoicism"], edges=[]),
-    )
-
-    assert result.graph_degraded is True
-    assert result.graph_hit_count == 0
-    assert result.llm_invoked is True
-    assert result.answer == "answered despite the graph failure"
-
-
-def test_edgeless_graph_is_not_a_degrade(tmp_path: Path) -> None:
-    """A graph projection that opened successfully but has zero edges
-    yields `graph_hits=[]` and `graph_degraded=False` -- the handle itself
-    opened fine (spec: Edgeless bundle yields an empty graph list, not a
-    failure)."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "stoicism.md",
-        title="Stoicism",
-        body="dichotomyzz of control",
-    )
-    fake_store = _FakeGraphStore(
-        nodes=["concepts/stoicism", "concepts/other"], edges=[]
-    )
-    llm = _FakeLLM(reply="fine without graph edges")
-
-    with fts.build_index(bundle_dir) as idx:
-        result = answer_mod.answer(
-            "dichotomyzz",
-            bundle_dir=bundle_dir,
-            llm=llm,
-            fts_index=idx,
-            graph_index=fake_store,
-        )
-
-    assert result.graph_hit_count == 0
-    assert result.graph_degraded is False
-    assert result.llm_invoked is True
-
-
-def test_no_seeds_skips_graph_read_entirely(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An empty initial fuse (zero hits from both retrievers) means no
-    seeds exist -- `graph_rank` is never called and the injected
-    `graph_index` is never read -- `graph_degraded=True`,
-    `graph_hit_count=0` (spec: no seeds skips the build)."""
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    recording_index = _RecordingIndex(hits=[])
-    rank_calls: list[tuple[object, ...]] = []
-
-    def _recording_graph_rank(
-        store: GraphStore, seeds: list[str], *, limit: int
-    ) -> list[GraphHit]:
-        rank_calls.append((store, seeds, limit))
-        return []
-
-    monkeypatch.setattr(graph_retrieve, "graph_rank", _recording_graph_rank)
-    llm = _FakeLLM()
-
-    result = answer_mod.answer(
-        "q",
-        bundle_dir=bundle_dir,
-        llm=llm,
-        fts_index=recording_index,
-        graph_index=_SpyGraphStore(),
-    )
-
-    assert rank_calls == []
-    assert result.graph_degraded is True
-    assert result.graph_hit_count == 0
-
-
-def test_absent_graph_index_degrades_cleanly(tmp_path: Path) -> None:
-    """`graph_index=None` (the default -- workspace never ran `reindex`, or
-    the CLI resolved an unopenable/corrupt store to `None`) sets
-    `graph_degraded=True`, `graph_hit_count=0`, and FTS/dense retrieval
-    still produce a final answer (query-answer: Absent graph handle
-    degrades cleanly)."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "stoicism.md",
-        title="Stoicism",
-        body="dichotomyzz of control",
-    )
-    llm = _FakeLLM(reply="answered without any graph index")
-
-    with fts.build_index(bundle_dir) as idx:
-        result = answer_mod.answer(
-            "dichotomyzz",
-            bundle_dir=bundle_dir,
-            llm=llm,
-            fts_index=idx,
-            graph_index=None,
-        )
-
-    assert result.graph_degraded is True
-    assert result.graph_hit_count == 0
-    assert result.llm_invoked is True
-    assert result.answer == "answered without any graph index"
-
-
-def test_graph_retrieval_is_deterministic_across_repeated_calls(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Same bundle and question, `answer()` called twice, produces
-    identical `graph_hits` ordering (spied via `graph_retrieve.graph_rank`,
-    asserting the RAW pre-truncation output is byte-for-byte identical
-    across both calls -- score-level determinism, not just the final
-    low-limit citation ordering, which could otherwise mask a
-    nondeterministic tie-break the truncation happens to hide) AND an
-    identical final fused, limit-truncated `concept_id` list (spec:
-    Personalized PageRank Is Deterministic; review finding R3: restores the
-    stronger raw-output spy assertion the DI migration had dropped)."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "stoicism.md",
-        title="Stoicism",
-        body="dichotomyzz of control [Related](/concepts/related.md)",
-    )
-    _write_doc(
-        bundle_dir / "concepts" / "related.md",
-        title="Related",
-        body="a related concept reachable via the graph",
-    )
-    recorded_ranks: list[list[GraphHit]] = []
-    original_rank = graph_retrieve.graph_rank
-
-    def _recording_rank(
-        store: GraphStore, seeds: list[str], *, limit: int
-    ) -> list[GraphHit]:
-        result = original_rank(store, seeds, limit=limit)
-        recorded_ranks.append(result)
-        return result
-
-    monkeypatch.setattr(graph_retrieve, "graph_rank", _recording_rank)
-
-    with (
-        fts.build_index(bundle_dir) as idx_one,
-        sqlite_graph.build_graph(bundle_dir) as store_one,
-    ):
-        first = answer_mod.answer(
-            "dichotomyzz",
-            bundle_dir=bundle_dir,
-            llm=_FakeLLM(),
-            fts_index=idx_one,
-            graph_index=store_one,
-        )
-    with (
-        fts.build_index(bundle_dir) as idx_two,
-        sqlite_graph.build_graph(bundle_dir) as store_two,
-    ):
-        second = answer_mod.answer(
-            "dichotomyzz",
-            bundle_dir=bundle_dir,
-            llm=_FakeLLM(),
-            fts_index=idx_two,
-            graph_index=store_two,
-        )
-
-    assert len(recorded_ranks) == 2
-    assert recorded_ranks[0] == recorded_ranks[1]
-    assert [c.concept_id for c in first.citations] == [
-        c.concept_id for c in second.citations
-    ]
-
-
 # --- Phase 6/7: title fallback -------------------------------------------
 
 
@@ -1753,6 +1249,88 @@ def test_answer_module_never_computes_or_imports_bundle_manifest_hash() -> None:
     assert "bundle_manifest_hash" not in source
 
 
+def test_answer_module_no_longer_reads_the_graph_at_all() -> None:
+    """`retrieval/answer.py` imports nothing from `openkos.graph` and names
+    no graph-stage IDENTIFIER (issue #434).
+
+    The flow is retrieve -> fuse -> assemble -> answer; the seed/graph/fuse
+    stages are gone. This is a STATIC guard because the failure mode it
+    protects against is silent: a re-added graph stage would still answer
+    every question, just worse -- the measured harm was 7 harmful, 3
+    neutral, 0 beneficial over 10 questions, including evicting
+    `sources/mcp-origin` from "When did MCP originate?" to seat the corpus's
+    most central node. Centrality is not relevance.
+
+    Prose is checked separately from identifiers on purpose: the module
+    docstring MAY (and does) explain why the channel was removed, so this
+    asserts on names a re-added stage would have to use, not on the word
+    "graph" appearing anywhere."""
+    module_path = _REPO_ROOT / "src" / "openkos" / "retrieval" / "answer.py"
+    source = module_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+
+    assert not any(
+        name.startswith("openkos.graph") or "graph_retrieve" in name
+        for name in imported
+    ), f"{module_path} still imports the graph layer: {imported}"
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+    banned = {
+        "graph_index",
+        "graph_rank",
+        "graph_hits",
+        "graph_degraded",
+        "graph_hit_count",
+        "graph_contributed_count",
+        "fuse_with_graph",
+        "GraphHit",
+        "GraphStore",
+    }
+    assert not (names & banned), f"{module_path} still names: {names & banned}"
+
+
+def test_answer_takes_no_graph_index_parameter() -> None:
+    """`answer()`'s signature has no `graph_index` seam left to inject
+    (issue #434) -- passing one is a `TypeError`, not a silently ignored
+    keyword."""
+    parameters = inspect.signature(answer_mod.answer).parameters
+
+    assert "graph_index" not in parameters
+
+
+def test_answer_result_carries_no_graph_metadata() -> None:
+    """`AnswerResult` reports nothing about a graph channel that no longer
+    runs: `graph_hit_count`, `graph_contributed_count`, and `graph_degraded`
+    are all gone (issue #434). A field that always reported zero would be
+    worse than absent -- it would read as a channel that contributed
+    nothing, rather than one that is not there."""
+    field_names = {field.name for field in dataclasses.fields(answer_mod.AnswerResult)}
+
+    assert "graph_hit_count" not in field_names
+    assert "graph_contributed_count" not in field_names
+    assert "graph_degraded" not in field_names
+
+
+def test_graph_retrieve_module_is_gone() -> None:
+    """`retrieval/graph_retrieve.py` had exactly one importer, `answer.py`,
+    so removing the stage removed the module's only consumer (issue #434).
+    `openkos.graph` -- the typed projection that backs contradiction
+    candidates -- is deliberately untouched and still imports cleanly."""
+    module_path = _REPO_ROOT / "src" / "openkos" / "retrieval" / "graph_retrieve.py"
+
+    assert not module_path.exists()
+    with pytest.raises(ImportError):
+        importlib.import_module("openkos.retrieval.graph_retrieve")
+    assert importlib.import_module("openkos.graph.sqlite_graph") is not None
+
+
 # --- status-aware-retrieval, Phase 2/PR2: query-path lifecycle filtering --
 
 
@@ -1826,40 +1404,6 @@ def test_deprecated_concept_excluded_from_vector_hits_by_default(
     assert result.dense_hit_count == 1
 
 
-def test_deprecated_concept_excluded_from_graph_hits_by_default(
-    tmp_path: Path,
-) -> None:
-    """A deprecated concept directly graph-adjacent to a live seed never
-    appears as a graph hit; `graph_hit_count` reports the POST-filter count
-    (0), not the raw pool size returned by `graph_rank` (spec: No leak via
-    any single input)."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "seed.md", title="Seed", body="dichotomyzz seed"
-    )
-    _write_doc(bundle_dir / "concepts" / "old.md", title="Old", status="deprecated")
-    recording_index = _RecordingIndex(
-        hits=[fts.FtsHit(concept_id="concepts/seed", score=0.0)]
-    )
-    fake_store = _FakeGraphStore(
-        nodes=["concepts/seed", "concepts/old"],
-        edges=[Edge(source_id="concepts/seed", target_id="concepts/old")],
-    )
-    llm = _FakeLLM(reply="seed only")
-
-    result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=llm,
-        fts_index=recording_index,
-        graph_index=fake_store,
-    )
-
-    cited_ids = {citation.concept_id for citation in result.citations}
-    assert "concepts/old" not in cited_ids
-    assert result.graph_hit_count == 0
-
-
 def test_superseded_concept_excluded_end_to_end(tmp_path: Path) -> None:
     """A concept that is the TARGET of another concept's `supersedes` edge is
     excluded through `answer()`, even though its own `status` frontmatter is
@@ -1888,48 +1432,6 @@ def test_superseded_concept_excluded_end_to_end(tmp_path: Path) -> None:
     cited_ids = {citation.concept_id for citation in result.citations}
     assert "concepts/old" not in cited_ids
     assert "concepts/live" in cited_ids
-
-
-def test_live_concept_surfaces_through_a_superseded_neighbor(tmp_path: Path) -> None:
-    """A live concept reachable ONLY via a superseded graph neighbor still
-    surfaces on its own merits (PPR mass propagates through the neighbor's
-    still-intact graph edge), while the superseded neighbor itself never
-    appears as a hit (spec: Live concept reachable only through a deprecated
-    neighbor)."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "seed.md", title="Seed", body="dichotomyzz seed"
-    )
-    _write_doc(
-        bundle_dir / "concepts" / "superseder.md",
-        title="Superseder",
-        relations=[("concepts/old-neighbor", "supersedes")],
-    )
-    _write_doc(bundle_dir / "concepts" / "old-neighbor.md", title="Old Neighbor")
-    _write_doc(bundle_dir / "concepts" / "live-child.md", title="Live Child")
-    recording_index = _RecordingIndex(
-        hits=[fts.FtsHit(concept_id="concepts/seed", score=0.0)]
-    )
-    fake_store = _FakeGraphStore(
-        nodes=["concepts/seed", "concepts/old-neighbor", "concepts/live-child"],
-        edges=[
-            Edge(source_id="concepts/seed", target_id="concepts/old-neighbor"),
-            Edge(source_id="concepts/old-neighbor", target_id="concepts/live-child"),
-        ],
-    )
-    llm = _FakeLLM(reply="reaches live-child through the superseded neighbor")
-
-    result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=llm,
-        fts_index=recording_index,
-        graph_index=fake_store,
-    )
-
-    cited_ids = {citation.concept_id for citation in result.citations}
-    assert "concepts/old-neighbor" not in cited_ids
-    assert "concepts/live-child" in cited_ids
 
 
 def test_only_deprecated_match_yields_zero_hits_no_match_by_default(
@@ -2066,11 +1568,11 @@ def test_all_live_bundle_is_identical_with_and_without_include_deprecated(
 
 
 def test_r3_counts_and_fused_count_report_post_filter_values(tmp_path: Path) -> None:
-    """`fts_hit_count`, `dense_hit_count`, `graph_hit_count`, and
-    `fused_count` all report POST-filter values -- filtering happens BEFORE
-    these counts are captured, not after (design R3, pinned). Every input
-    channel (fts, dense, graph) contributes one deprecated concept that must
-    not leak into the count or the citations."""
+    """`fts_hit_count`, `dense_hit_count`, and `fused_count` all report
+    POST-filter values -- filtering happens BEFORE these counts are captured,
+    not after (design R3, pinned). Both input channels (fts, dense)
+    contribute one deprecated concept that must not leak into the count or
+    the citations."""
     bundle_dir = tmp_path / "bundle"
     _write_doc(
         bundle_dir / "concepts" / "fts-old.md", title="FTS Old", status="deprecated"
@@ -2084,11 +1586,6 @@ def test_r3_counts_and_fused_count_report_post_filter_values(tmp_path: Path) -> 
         bundle_dir / "concepts" / "vec-old.md", title="Vec Old", status="deprecated"
     )
     _write_doc(bundle_dir / "concepts" / "vec-live.md", title="Vec Live")
-    _write_doc(
-        bundle_dir / "concepts" / "graph-old.md",
-        title="Graph Old",
-        status="deprecated",
-    )
     recording_index = _RecordingIndex(
         hits=[
             fts.FtsHit(concept_id="concepts/fts-old", score=1.0),
@@ -2102,10 +1599,6 @@ def test_r3_counts_and_fused_count_report_post_filter_values(tmp_path: Path) -> 
             VecHit(concept_id="concepts/vec-live", distance=0.1),
         ]
     )
-    fake_store = _FakeGraphStore(
-        nodes=["concepts/fts-live", "concepts/graph-old"],
-        edges=[Edge(source_id="concepts/fts-live", target_id="concepts/graph-old")],
-    )
     llm = _FakeLLM(reply="post-filter counts")
 
     result = answer_mod.answer(
@@ -2115,70 +1608,14 @@ def test_r3_counts_and_fused_count_report_post_filter_values(tmp_path: Path) -> 
         embedder=embedder,
         vector_store=vector_store,
         fts_index=recording_index,
-        graph_index=fake_store,
     )
 
     assert result.fts_hit_count == 1  # 2 raw FTS hits, 1 deprecated filtered out
     assert result.dense_hit_count == 1  # 2 raw dense hits, 1 deprecated filtered out
-    assert result.graph_hit_count == 0  # sole raw graph hit is deprecated
     assert result.fused_count == 2  # fts-live + vec-live only
     cited_ids = {citation.concept_id for citation in result.citations}
     assert "concepts/fts-old" not in cited_ids
     assert "concepts/vec-old" not in cited_ids
-    assert "concepts/graph-old" not in cited_ids
-
-
-def test_deprecated_concept_never_becomes_a_graph_seed(tmp_path: Path) -> None:
-    """A deprecated concept `D` that is the sole FTS hit -- and would
-    otherwise be the graph stage's seed -- is stripped from `hits` BEFORE
-    `seeds = initial_fused[...]` is computed, so it never becomes a seed and
-    PPR never runs to expand it. A live concept `N` that is a graph neighbor
-    of `D`, reachable ONLY through `D` (no independent FTS/vector hit of its
-    own), therefore never surfaces by default. The contrast assertion with
-    `include_deprecated=True` proves the fixture genuinely wires `N` as
-    reachable-only-through-`D`: there, `D` restores to the initial fuse,
-    becomes the seed, and PPR expansion surfaces `N` on its own graph merits
-    -- so the default-case absence is not vacuous (design R1/R3: filtering
-    happens BEFORE seed derivation, not merely on the final graph_hits)."""
-    bundle_dir = tmp_path / "bundle"
-    _write_doc(
-        bundle_dir / "concepts" / "d.md",
-        title="D",
-        body="dichotomyzz deprecated seed",
-        status="deprecated",
-    )
-    _write_doc(bundle_dir / "concepts" / "n.md", title="N")
-    recording_index = _RecordingIndex(
-        hits=[fts.FtsHit(concept_id="concepts/d", score=1.0)]
-    )
-    fake_store = _FakeGraphStore(
-        nodes=["concepts/d", "concepts/n"],
-        edges=[Edge(source_id="concepts/d", target_id="concepts/n")],
-    )
-    llm = _FakeLLM(reply="reached only via the deprecated seed's graph edge")
-
-    default_result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=llm,
-        fts_index=recording_index,
-        graph_index=fake_store,
-    )
-    include_result = answer_mod.answer(
-        "dichotomyzz",
-        bundle_dir=bundle_dir,
-        llm=llm,
-        fts_index=recording_index,
-        graph_index=fake_store,
-        include_deprecated=True,
-    )
-
-    default_cited_ids = {citation.concept_id for citation in default_result.citations}
-    assert "concepts/n" not in default_cited_ids
-    assert "concepts/d" not in default_cited_ids
-
-    include_cited_ids = {citation.concept_id for citation in include_result.citations}
-    assert "concepts/n" in include_cited_ids
 
 
 # --- sensitivity-fail-closed-filter, S3a/PR1: query-path sensitivity filtering --
