@@ -24,6 +24,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos import fsio
 from openkos.cli import main
 from openkos.cli.main import app
+from openkos.extraction import concept as concept_mod
 from openkos.llm.base import EMBED_DIM, Message
 from openkos.llm.ollama import (
     OllamaError,
@@ -3181,11 +3182,16 @@ def test_build_concept_failure_skips_only_that_candidate(
 def test_batch_of_five_all_staged_no_second_cap_in_main(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A batch of exactly 5 valid, non-colliding, non-existing candidates
-    are ALL staged and written -- `main.py` never re-caps; `concept.py`'s
-    `_MAX_OBJECTS_PER_SOURCE = 5` is the only ceiling (Phase 11; spec:
-    "LLM proposes more than CAP objects" / "Multiple distinct objects
-    extracted, under cap")."""
+    """A batch of 5 valid, non-colliding, non-existing candidates are ALL
+    staged and written -- `main.py` never re-caps; `concept.py`'s
+    `_MAX_OBJECTS_PER_SOURCE` is the only ceiling (Phase 11; spec: "LLM
+    proposes more than CAP objects" / "Multiple distinct objects extracted,
+    under cap").
+
+    5 is now UNDER the cap rather than exactly at it (#404 raised it to 6),
+    which leaves this test checking what it was named for: that no second
+    ceiling hides in `main.py`. The at-the-cap case is covered by
+    `tests/unit/extraction/test_concept.py`."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(
         monkeypatch,
@@ -5218,12 +5224,23 @@ def _many_concepts_reply(n: int) -> str:
     return f"[{items}]"
 
 
+_CAP = concept_mod._MAX_OBJECTS_PER_SOURCE
+"""Read symbolically so these tests describe the NOTICE, not the cap value.
+
+They were written against a hardcoded 5 and all three broke when #404's
+measurement moved it to 6 -- while the notice itself was behaving correctly.
+A test that fails on a deliberate, separately-pinned change it does not
+govern costs a debugging trip and teaches nothing. The value has its own
+literal assertion in `tests/unit/extraction/test_concept.py`.
+"""
+
+
 def test_ingest_reports_when_the_object_cap_discarded_candidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#404: a source proposing 20 objects and one proposing 5 were
-    indistinguishable in the output -- both simply wrote 5 documents. The
-    loss is now named, so a reader can tell the difference."""
+    """#404: a source proposing 20 objects and one proposing exactly the cap
+    were indistinguishable in the output -- both simply wrote `cap` documents.
+    The loss is now named, so a reader can tell the difference."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _many_concepts_reply(20))
     source = tmp_path / "notes.txt"
@@ -5232,7 +5249,7 @@ def test_ingest_reports_when_the_object_cap_discarded_candidates(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert "5 of 20 extracted object(s) kept (cap reached)" in result.stderr
+    assert f"{_CAP} of 20 extracted object(s) kept (cap reached)" in result.stderr
 
 
 def test_ingest_cap_notice_names_the_discarded_titles(
@@ -5242,22 +5259,24 @@ def test_ingest_cap_notice_names_the_discarded_titles(
     behind #404 showed the discarded tail is exactly what a reader needs to
     judge whether the cap cost them anything real."""
     _init_workspace(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch, _many_concepts_reply(8))
+    # Exactly `_CAP_NOTICE_TITLE_LIMIT` over the cap, so every discarded title
+    # is named and none is folded into the "+N more" remainder.
+    proposed = _CAP + main._CAP_NOTICE_TITLE_LIMIT
+    _patch_llm(monkeypatch, _many_concepts_reply(proposed))
     source = tmp_path / "notes.txt"
     source.write_text("A long document about many topics.", encoding="utf-8")
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert "Topic 5" in result.stderr
-    assert "Topic 6" in result.stderr
-    assert "Topic 7" in result.stderr
+    for index in range(_CAP, proposed):
+        assert f"Topic {index}" in result.stderr
 
 
 def test_ingest_cap_notice_bounds_how_many_titles_it_echoes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A source proposing 61 objects would otherwise dump 56 titles into the
+    """A source proposing 61 objects would otherwise dump 55 titles into the
     terminal. Name enough to judge, then count the rest."""
     _init_workspace(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, _many_concepts_reply(20))
@@ -5266,7 +5285,8 @@ def test_ingest_cap_notice_bounds_how_many_titles_it_echoes(
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
-    assert "(+12 more)" in result.stderr
+    unnamed = (20 - _CAP) - main._CAP_NOTICE_TITLE_LIMIT
+    assert f"(+{unnamed} more)" in result.stderr
     assert "Topic 19" not in result.stderr
 
 
