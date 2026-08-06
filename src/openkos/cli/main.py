@@ -1146,12 +1146,21 @@ def _prepare_one_merge(
 def _format_merge_preview_line(prepared: "PreparedMerge") -> str:
     """The "merge X into Y (...)" preview line for one prepared merge,
     extracted verbatim from the former inline body (issue #137 closing
-    slice, Phase 1 refactor)."""
+    slice, Phase 1 refactor). Gains an optional stacked-body clause (issue
+    #409, report half) only when `prepared.stacked_body` is non-`None` --
+    a merge that stacks nothing says nothing extra here either."""
+    stacked_note = ""
+    if prepared.stacked_body is not None:
+        stacked_note = (
+            f", stacks {prepared.stacked_body.absorbed_chars} unreconciled "
+            f"body char(s) ({prepared.stacked_body.share:.0%} of merged body)"
+        )
     return (
         f"  merge {prepared.absorbed_canonical} into {prepared.survivor_canonical} "
         f"(sensitivity {prepared.sensitivity_before}->"
         f"{prepared.sensitivity_after}, {len(prepared.touched_files)} "
-        f"rewrite(s), removes bundle/{prepared.absorbed_canonical}.md)"
+        f"rewrite(s), removes bundle/{prepared.absorbed_canonical}.md"
+        f"{stacked_note})"
     )
 
 
@@ -5585,6 +5594,43 @@ def _expected_post_merge_index_and_log(
 
 
 @dataclass(frozen=True)
+class StackedBodyReport:
+    """Body-stacking signal for one merge (issue #409, report half):
+    `okf.build_merged_document` unconditionally appends the absorbed body
+    under a `## Merged content (<absorbed-id>)` heading without comparing
+    it against the survivor's body -- this report says the merge DID that,
+    since nothing else does.
+
+    A bare "bodies were stacked" boolean would fire on essentially every
+    merge (an absorbed body is normally non-empty) and add pure noise, so
+    the signal instead carries magnitude: `absorbed_chars` is how much
+    unreconciled content the absorbed side contributed, and `share` is
+    what fraction of the resulting merged body that now is -- a stacked
+    sentence and a stacked essay are materially different things to flag
+    for a human. `PreparedMerge.stacked_body` is `None`, printed as
+    nothing, when the absorbed body carries no reconcilable content
+    (empty or whitespace-only) -- matching the same "print nothing on the
+    empty case" discipline `dropped_self_loops` / `deduped_collisions`
+    already follow, rather than reporting a report about nothing.
+
+    This does NOT detect disagreement between the two bodies -- that is
+    the intra-document contradiction-detection half of #409, a separate,
+    larger change. This is purely "the merge stacked N chars of
+    unreconciled content"."""
+
+    absorbed_chars: int
+    merged_chars: int
+
+    @property
+    def share(self) -> float:
+        """Fraction of the merged body's chars contributed by the absorbed
+        side, unreconciled. `merged_chars` is never zero when this report
+        exists (a non-empty absorbed body was appended to the merged
+        body), so this never divides by zero."""
+        return self.absorbed_chars / self.merged_chars
+
+
+@dataclass(frozen=True)
 class PreparedMerge:
     """Pure Phase-A result of `prepare_merge`: everything `merge`'s preview,
     confirm gate, and `merge_core` need, built in memory without writing
@@ -5616,6 +5662,7 @@ class PreparedMerge:
     removed: int
     dropped_self_loops: list[okf.Relation]
     deduped_collisions: list[okf.Relation]
+    stacked_body: StackedBodyReport | None
     sensitivity_before: str
     sensitivity_after: str
     review: bool
@@ -5737,13 +5784,32 @@ def prepare_merge(
     # Pure and deterministic -- calling it a second time is cheap and
     # never diverges from what `plan.merged_survivor` actually carries.
     survivor_metadata, _ = okf.load_frontmatter(survivor_text)
-    absorbed_metadata, _ = okf.load_frontmatter(absorbed_text)
+    absorbed_metadata, absorbed_body = okf.load_frontmatter(absorbed_text)
     _, dropped_self_loops, deduped_collisions = okf.merge_relations(
         okf.decode_relations(survivor_metadata),
         okf.decode_relations(absorbed_metadata),
         survivor_id=survivor_canonical,
         absorbed_id=absorbed_canonical,
     )
+
+    # Body-stacking report (issue #409, report half): `build_merged_document`
+    # stays pure and returns bytes only (design decision -- see
+    # `StackedBodyReport`'s docstring), so this recomputes the signal from
+    # `plan.merged_survivor` -- the SAME bytes `merge_core` will write --
+    # the same way the outbound relations report above is recomputed rather
+    # than threaded through `MergePlan`. `None` when there is nothing to
+    # report: an empty/whitespace-only absorbed body contributes no
+    # unreconciled content, so the "print nothing on empty" discipline
+    # applies here exactly as it does to `dropped_self_loops` /
+    # `deduped_collisions`.
+    stripped_absorbed_body = absorbed_body.strip()
+    stacked_body: StackedBodyReport | None = None
+    if stripped_absorbed_body:
+        _, merged_body = okf.load_frontmatter(plan.merged_survivor)
+        stacked_body = StackedBodyReport(
+            absorbed_chars=len(stripped_absorbed_body),
+            merged_chars=len(merged_body),
+        )
 
     new_index_text, removed = bundle_index.remove_index_entry(
         index_text, absorbed_canonical
@@ -5786,6 +5852,7 @@ def prepare_merge(
         removed=removed,
         dropped_self_loops=dropped_self_loops,
         deduped_collisions=deduped_collisions,
+        stacked_body=stacked_body,
         sensitivity_before=sensitivity_before,
         sensitivity_after=sensitivity_after,
         review=cfg.review,
@@ -6237,6 +6304,12 @@ def merge(
         typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
     for relation in prepared.deduped_collisions:
         typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
+    if prepared.stacked_body is not None:
+        typer.echo(
+            f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
+            f"unreconciled char(s) ({prepared.stacked_body.share:.0%} of "
+            "merged body -- bodies were appended, not reconciled)"
+        )
     for rel in prepared.rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
     for rel in prepared.relation_rewritten_files:

@@ -18,6 +18,8 @@ from openkos.bundle import relations as bundle_relations
 from openkos.cli.main import (
     MergeResult,
     PreparedMerge,
+    StackedBodyReport,
+    _format_merge_preview_line,
     _resolve_concept_path,
     app,
     merge_core,
@@ -585,3 +587,274 @@ def test_merge_core_provenance_and_relation_snapshots_byte_identical_to_pre_merg
     assert entry.relation_rewrites[0].file == "concepts/all_three.md"
     assert entry.provenance_rewrites[0].snapshot == entry.relation_rewrites[0].snapshot
     assert entry.provenance_rewrites[0].snapshot == pre_merge_text
+
+
+def test_prepare_merge_reports_stacked_body_when_absorbed_body_is_non_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`prepare_merge` recomputes a body-stacking report (issue #409, report
+    half): when the absorbed body carries reconcilable content, the report
+    is non-`None` and carries both the absorbed body's char count and its
+    share of the resulting merged body -- grounded in the `apatheia` /
+    `apatheia-2` collision the issue names, where the absorbed half is the
+    precise misreading the survivor's body already corrects."""
+    _init_workspace(tmp_path, monkeypatch)
+    survivor_body = (
+        "A Stoic concept referring to freedom from destructive passions, "
+        "not the absence of feeling.\n\n"
+        "Apatheia is freedom from the pathe, the destructive passions."
+    )
+    absorbed_body = (
+        "The Stoic goal of emotional indifference or freedom from passion.\n\n"
+        "Apatheia seems to be the Stoic goal -- indifference to emotion."
+    )
+    _write_concept(tmp_path, "concepts/apatheia", title="Apatheia", body=survivor_body)
+    _write_concept(
+        tmp_path, "concepts/apatheia-2", title="Apatheia", body=absorbed_body
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/apatheia", "concepts/apatheia-2"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    assert prepared.stacked_body is not None
+    _, actual_absorbed_body = okf.load_frontmatter(
+        absorbed_path.read_text(encoding="utf-8")
+    )
+    expected_absorbed_chars = len(actual_absorbed_body.strip())
+    assert prepared.stacked_body.absorbed_chars == expected_absorbed_chars
+    _, merged_body = okf.load_frontmatter(prepared.plan.merged_survivor)
+    assert prepared.stacked_body.merged_chars == len(merged_body)
+    expected_share = expected_absorbed_chars / len(merged_body)
+    assert prepared.stacked_body.share == pytest.approx(expected_share)
+
+
+def test_prepare_merge_stacked_body_is_none_when_absorbed_body_is_blank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absorbed body that is empty or whitespace-only carries no
+    reconcilable content, so the report stays `None` -- matching the
+    "prints nothing when empty" discipline `dropped_self_loops` /
+    `deduped_collisions` already follow. A bare "bodies were stacked" flag
+    would fire even here and add pure noise (design judgement, issue
+    #409). Written directly via `okf.dump_frontmatter` (not `_write_concept`,
+    which always prepends a `# {title}` heading -- itself reconcilable
+    content) to get a genuinely whitespace-only body."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="Real content."
+    )
+    absorbed_concept_path = tmp_path / "bundle" / "concepts" / "absorbed.md"
+    absorbed_concept_path.parent.mkdir(parents=True, exist_ok=True)
+    absorbed_concept_path.write_text(
+        okf.dump_frontmatter({"type": "Concept", "title": "Absorbed"}, "   \n  \n"),
+        encoding="utf-8",
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    assert prepared.stacked_body is None
+
+
+def test_format_merge_preview_line_includes_stacked_body_note_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_format_merge_preview_line` -- shared by `merge` and
+    `adjudicate --apply`/`--apply-same` -- appends the stacked-body note
+    when `prepared.stacked_body` is non-`None`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="Real content."
+    )
+    _write_concept(
+        tmp_path, "concepts/absorbed", title="Absorbed", body="Contradicting content."
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    line = _format_merge_preview_line(prepared)
+    assert prepared.stacked_body is not None
+    assert f"{prepared.stacked_body.absorbed_chars}" in line
+    assert "unreconciled" in line
+
+
+def test_format_merge_preview_line_omits_stacked_body_note_when_absorbed_body_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A merge that stacks nothing says nothing in the preview line either
+    -- no "unreconciled" note appears when the absorbed body is blank.
+    Written directly via `okf.dump_frontmatter` (not `_write_concept`,
+    which always prepends a `# {title}` heading) to get a genuinely empty
+    body."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="Real content."
+    )
+    absorbed_concept_path = tmp_path / "bundle" / "concepts" / "absorbed.md"
+    absorbed_concept_path.parent.mkdir(parents=True, exist_ok=True)
+    absorbed_concept_path.write_text(
+        okf.dump_frontmatter({"type": "Concept", "title": "Absorbed"}, ""),
+        encoding="utf-8",
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    assert prepared.stacked_body is None
+    line = _format_merge_preview_line(prepared)
+    assert "unreconciled" not in line
+
+
+def test_stacked_body_report_does_not_change_merged_document_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression pin (issue #409, report half): `prepare_merge`'s merged
+    bytes stay exactly what `build_merged_document` returns. The
+    body-stacking report is recomputed read-only, never fed back into the
+    merged bytes themselves.
+
+    This pins `prepare_merge` AGAINST `build_merged_document`, so it moves
+    with that function by construction and cannot detect a change to the
+    merged layout itself -- `test_build_merged_document_body_layout_is_pinned`
+    below carries that guard against a literal instead."""
+    _init_workspace(tmp_path, monkeypatch)
+    survivor_body = "Survivor body."
+    absorbed_body = "Absorbed body."
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body=survivor_body)
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body=absorbed_body)
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    survivor_metadata, survivor_text_body = okf.load_frontmatter(
+        survivor_path.read_text(encoding="utf-8")
+    )
+    absorbed_metadata, absorbed_text_body = okf.load_frontmatter(
+        absorbed_path.read_text(encoding="utf-8")
+    )
+    expected_metadata, expected_body = okf.build_merged_document(
+        survivor_metadata,
+        survivor_text_body,
+        absorbed_metadata,
+        absorbed_text_body,
+        absorbed_canonical,
+        survivor_canonical,
+    )
+    # `plan.merged_survivor` is `okf.dump_frontmatter(merged_metadata,
+    # merged_body)` (`bundle/merge.py::plan_merge`) -- round-trip the
+    # independently-recomputed expectation through the same
+    # dump/load cycle before comparing, so a normalizing trailing
+    # newline the emitter always adds isn't mistaken for drift.
+    _, expected_body_roundtripped = okf.load_frontmatter(
+        okf.dump_frontmatter(expected_metadata, expected_body)
+    )
+    _, actual_body = okf.load_frontmatter(prepared.plan.merged_survivor)
+    assert actual_body == expected_body_roundtripped
+    assert isinstance(prepared.stacked_body, StackedBodyReport)
+
+
+def test_build_merged_document_body_layout_is_pinned() -> None:
+    """The merged body's layout is user-visible content in the bundle -- the
+    artifact that is supposed to be the source of truth -- and #409's whole
+    subject is that the `## Merged content (<absorbed-id>)` heading is where
+    an unreconciled second body lands.
+
+    It was pinned by NOTHING before this test: mutating the heading text in
+    `okf.build_merged_document` left all 3732 tests green. Asserted against a
+    literal rather than against a recomputation, because a test that rebuilds
+    the expectation from the same function moves with it and can never catch
+    a change to the layout itself."""
+    metadata, body = okf.build_merged_document(
+        {"type": "Concept", "title": "Survivor"},
+        "Survivor body.",
+        {"type": "Concept", "title": "Absorbed"},
+        "Absorbed body.",
+        "concepts/absorbed",
+        "concepts/survivor",
+    )
+
+    assert body == (
+        "Survivor body.\n\n## Merged content (concepts/absorbed)\n\nAbsorbed body.\n"
+    )
+    assert metadata["title"] == "Survivor"

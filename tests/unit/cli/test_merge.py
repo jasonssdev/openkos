@@ -750,6 +750,33 @@ def test_preview_surfaces_relation_drop_dedupe_and_retarget_bullets(
     assert "bundle/concepts/linker.md (retarget relation to survivor)" in result.output
 
 
+def test_preview_surfaces_stacked_body_bullet_when_absorbed_body_non_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Phase A preview surfaces the body-stacking report (issue #409,
+    report half) as a non-silent bullet, mirroring the existing
+    drop-self-loop / dedupe-collision bullets: the merge stacks the
+    absorbed body under a `## Merged content` heading without comparing it
+    to the survivor's -- this bullet says so, with the unreconciled char
+    count so the operator knows how much content to actually go read."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body="Real body.")
+    _write_concept(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        body="Contradicting body content.",
+    )
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "stack absorbed body:" in result.output
+    assert "unreconciled" in result.output
+
+
 def test_preview_bullets_match_committed_survivor_content(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
