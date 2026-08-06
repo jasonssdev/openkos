@@ -580,3 +580,95 @@ def test_lint_never_writes_to_the_workspace(
 
     assert result.exit_code == 0
     assert _snapshot(tmp_path) == before
+
+
+# --- issue #421: unbacked provenance claims ---
+
+
+def test_lint_flags_an_unbacked_derived_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `relations:` entry typed `derived_from` whose target is absent from
+    that same document's `provenance:` is reported under its own section,
+    naming the citing concept, the relation type, the offending target, and
+    the provenance the document actually records; `lint` still exits 0
+    (issue #421)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "9-productionize-agent.md").write_text(
+        "---\ntype: Source\ntitle: Productionize\nresource: raw/9.txt\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "agent-development.md").write_text(
+        "---\ntype: Concept\ntitle: Agent Development\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "adk-agent-development-kit.md").write_text(
+        "---\ntype: Concept\ntitle: ADK\n"
+        "provenance:\n  - sources/9-productionize-agent\n"
+        "relations:\n  - type: derived_from\n"
+        "    target: concepts/agent-development.md\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Unbacked provenance:" in result.stdout
+    section = result.stdout.split("Unbacked provenance:", 1)[1]
+    assert "concepts/adk-agent-development-kit: " in section
+    assert "derived_from" in section
+    assert "concepts/agent-development" in section
+    assert "sources/9-productionize-agent" in section
+    # A backed claim is never a subject here.
+    assert "concepts/agent-development: " not in section
+
+
+def test_lint_does_not_flag_a_backed_derived_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `derived_from` whose target IS in the document's `provenance:`
+    states what the graph projection would synthesize anyway -- no finding
+    (issue #421)."""
+    _init_workspace(tmp_path, monkeypatch)
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir()
+    (sources_dir / "a.md").write_text(
+        "---\ntype: Source\ntitle: A\nresource: raw/a.txt\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "derived.md").write_text(
+        "---\ntype: Concept\ntitle: Derived\n"
+        "provenance:\n  - sources/a\n"
+        "relations:\n  - type: derived_from\n    target: sources/a.md\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Unbacked provenance:", 1)[1]
+    assert "  No unbacked provenance claims." in section
+
+
+def test_lint_clean_bundle_reports_zero_unbacked_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the unbacked-provenance empty state;
+    `lint` still exits 0 and creates no file (issue #421)."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Unbacked provenance:" in result.stdout
+    assert "  No unbacked provenance claims." in result.stdout
+    assert _snapshot(tmp_path) == before

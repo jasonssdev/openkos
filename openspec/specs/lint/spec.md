@@ -368,3 +368,65 @@ that all fall inside a single Source's closure MUST be reported as
 - WHEN `openkos lint` runs
 - THEN it reports a `below-source-sensitivity` finding for that descendant,
   and no `multi-source-uncovered` finding is reported for it
+
+### Requirement: Unbacked-Provenance-Claim Scan
+
+`openkos lint` MUST flag, as a distinct finding kind
+(`unbacked-provenance`), every `relations:` entry whose relation type is
+engine-owned and whose target is absent from the SAME document's
+`provenance:` list. The set of engine-owned types MUST be read from
+`model/relations.py::ENGINE_OWNED_RELATION_TYPES` (today exactly
+`derived_from`), never hard-coded in the check, so that a second
+engine-derived type is covered without rewriting the scan. An
+engine-owned entry whose target IS recorded in `provenance:` MUST NOT be
+flagged, and the existence of the target in the bundle MUST NOT be tested
+here — a target absent from the bundle is already reported as `dangling`,
+and a claim can be unbacked while naming a document that exists.
+
+The scan MUST be pure and deterministic: it MUST NOT call any model
+backend, read any clock, or perform a bundle walk of its own, reusing
+`LintDoc`'s existing single-pass `collect_docs` walk. The finding's detail
+MUST name the citing document, the offending relation type, the offending
+target, and the provenance the document actually records. `openkos lint`
+MUST NOT delete, rewrite, or otherwise repair the offending `relations:`
+entry, and the finding's detail MUST NOT name a command that would: a
+human-accepted relation is removed only by an explicit human edit. This
+scan MUST NOT change `lint`'s exit code: the Non-Gating Exit Contract
+already covers all existing kinds and MUST cover this one too.
+
+#### Scenario: A derived_from absent from the document's provenance is flagged
+
+- GIVEN a concept whose `relations:` contains an entry typed `derived_from`
+  targeting a concept that does not appear in that concept's `provenance:`
+- WHEN `openkos lint` runs
+- THEN it reports an `unbacked-provenance` finding naming the citing
+  concept, the relation type, the target, and the provenance the document
+  records
+
+#### Scenario: A derived_from backed by the document's provenance produces no finding
+
+- GIVEN a concept whose `relations:` contains an entry typed `derived_from`
+  targeting an id that IS listed in that concept's `provenance:`
+- WHEN `openkos lint` runs
+- THEN no `unbacked-provenance` finding is reported for that entry
+
+#### Scenario: A human-authored relation type is never a subject
+
+- GIVEN a concept whose `relations:` contains only non-engine-owned entries
+  (for example `related_to`) targeting ids absent from its `provenance:`
+- WHEN `openkos lint` runs
+- THEN no `unbacked-provenance` finding is reported for that concept
+
+#### Scenario: An engine-owned claim on a document with no provenance is flagged
+
+- GIVEN a concept with an engine-owned `relations:` entry and an absent or
+  empty `provenance:` list
+- WHEN `openkos lint` runs
+- THEN it reports an `unbacked-provenance` finding for that entry
+
+#### Scenario: The offending relation is reported, never repaired
+
+- GIVEN a bundle containing at least one `unbacked-provenance` finding
+- WHEN `openkos lint` runs
+- THEN it reports the finding, still exits 0, and no bundle file is
+  created, modified, or deleted

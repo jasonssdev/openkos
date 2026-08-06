@@ -335,3 +335,30 @@ presence MUST NOT cause a non-zero exit.
 - WHEN the below-Source and multi-source-uncovered checks also run
 - THEN they reuse that same in-memory `docs` list and `status` performs no
   more bundle walks than before this change
+
+### Requirement: Needs-Attention Surfaces Unbacked Provenance Claims
+
+`openkos status` MUST fold `lint`'s `unbacked-provenance` findings into its
+"needs attention" section, labeled distinctly by kind, reusing the same
+in-memory `docs` list from the `collect_docs()` call it already makes — it
+MUST NOT perform a second `collect_docs()` call or any new bundle walk.
+Each surfaced entry MUST name the citing document, the offending relation
+type, and the offending target. The check MUST NOT call any model backend.
+Findings MUST be informational: their presence MUST NOT cause a non-zero
+exit, and `status` MUST NOT repair the offending relation.
+
+#### Scenario: An unbacked derived_from is surfaced under needs attention
+
+- GIVEN a bundle containing a concept whose `relations:` asserts
+  `derived_from` against a target absent from that concept's `provenance:`
+- WHEN `openkos status` runs
+- THEN it lists that concept under "needs attention", labeled
+  `unbacked-provenance` and naming the relation type and target, and still
+  exits 0
+
+#### Scenario: No new bundle walk is introduced
+
+- GIVEN `status` already calls `lint_check.collect_docs()` once
+- WHEN the unbacked-provenance check also runs
+- THEN it reuses that same in-memory `docs` list and `status` performs no
+  more bundle walks than before this change

@@ -16,6 +16,25 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **`lint` and `status` now detect an unbacked provenance claim**: a
+  `relations:` entry typed `derived_from` whose target the same document's
+  `provenance:` never records asserts a compilation that never happened.
+  `derived_from` *means* provenance, and the graph projection synthesizes it
+  from `provenance:`, so once such an entry is written it lands in the same
+  graph, with the same type string, as the synthesized ones —
+  indistinguishable downstream, which is what made it silent corruption
+  rather than a visible mistake. The document is the last place the two are
+  still separable, which is why the new `unbacked-provenance` check reads
+  the frontmatter rather than the projection. #380 closed the ingress by
+  withholding the type from the suggester; this is the detection half, for
+  the claims already on disk. Pure and deterministic — no model call, no
+  clock, and no extra bundle walk — and report-only: the finding names the
+  citing concept, the relation type, the offending target, and the
+  provenance actually recorded, but names no command, because removing a
+  human-accepted relation is a destructive edit no read-only verb may make.
+  Its subject set is read from `ENGINE_OWNED_RELATION_TYPES`, so a second
+  engine-derived type would be followed rather than silently unchecked
+  (#421).
 - **Entity resolution now sees acronym-expansion duplicates**: a new
   `ACRONYM` candidate tier pairs two same-type titles when a token of one IS
   the initials of a contiguous word run in the other — `Google ADK` with
