@@ -755,12 +755,20 @@ def _contradictions_probe(ctx: CurateContext) -> StageProbe:
 
     `llm_calls` is `plan.llm_calls`, the length of the SAME already-capped
     spec list the run will judge, so the cost line cannot understate the
-    spend (issue #446)."""
+    spend (issue #446).
+
+    `notice` carries the per-kind cap-truncation line (issue #450), mirroring
+    what `_structure_probe` already does with `candidate_truncation_notice`.
+    `gate()` echoes it immediately before `cost_line`, so an operator learns
+    that candidates were dropped BEFORE consenting to the spend -- reporting
+    it only from `run` told them after the calls it describes had been paid
+    for."""
     plan = _contradiction_plan(ctx)
     return StageProbe(
         items=plan.specs,
         llm_calls=plan.llm_calls,
         empty_message="No candidate pairs found." if not plan.specs else None,
+        notice=contradiction_truncation_notice(plan),
     )
 
 
@@ -772,33 +780,28 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     The plan is rebuilt here rather than carried from `probe` (design D4's
     no-memoization rule) and handed to `find_contradictions`, so the
     cap-reached line names WHICH KIND was truncated (#444) and describes the
-    exact list that was judged."""
-    from openkos.cli import main as cli_main
+    exact list that was judged.
 
+    No `store` is passed alongside it, and no graph is built here beyond the
+    one `_contradiction_plan` builds internally (issue #450):
+    `find_contradictions` reads `store` ONLY inside its `if plan is None:`
+    branch, so a second `build_graph` purely to supply that argument would be
+    a full in-memory SQLite build over the bundle for no effect."""
     llm = ctx.ollama_client
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Contradictions stage requires an LLM client")
 
     plan = _contradiction_plan(ctx)
 
-    source = cli_main._open_proximity_or_degrade(ctx.layout.vectors_db_path)
-    try:
-        graph = build_graph(ctx.layout.bundle_dir, candidates=source)
-    finally:
-        if source is not None:
-            source.close()
-
-    with graph as store:
-        verdicts, _total_pairs = find_contradictions(
-            ctx.layout.bundle_dir,
-            llm=llm,
-            include_deprecated=ctx.include_deprecated,
-            include_confidential=ctx.include_confidential,
-            local_exemption=ctx.local_exemption,
-            store=store,
-            plan=plan,
-            on_progress=observability.progress_callback("curate", "pair"),
-        )
+    verdicts, _total_pairs = find_contradictions(
+        ctx.layout.bundle_dir,
+        llm=llm,
+        include_deprecated=ctx.include_deprecated,
+        include_confidential=ctx.include_confidential,
+        local_exemption=ctx.local_exemption,
+        plan=plan,
+        on_progress=observability.progress_callback("curate", "pair"),
+    )
 
     truncation = contradiction_truncation_notice(plan)
     if truncation is not None:

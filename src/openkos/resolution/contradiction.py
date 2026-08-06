@@ -799,6 +799,16 @@ def plan_candidates(
     stage's cost -- so the stated and spent numbers are the same number by
     construction rather than by two implementations agreeing.
 
+    THE SLICING ORDER IS LOAD-BEARING, not incidental (issue #444). Merged-body
+    candidates hold a reserved floor of `_MERGED_BODY_FLOOR` slots that typed
+    edges cannot crowd them out of, because typed edges filling the budget
+    first meant a busy corpus judged NONE of them. The floor is a minimum, not
+    a quota -- merged-body candidates take every slot typed edges leave unused,
+    and only `min(len(merged_specs), _MERGED_BODY_FLOOR)` is ever withheld. See
+    `_MERGED_BODY_FLOOR` for why 50, and do not reorder the slice below without
+    re-reading it: reverting to a plain `edge_specs + merged_specs` truncation
+    silently restores the bug.
+
     `store`/`candidates` mirror `find_contradictions`' two-branch shape: when
     `store` is supplied it is reused and never closed (ownership stays with
     the caller, graph-projection-reuse #196); otherwise a graph is built and
