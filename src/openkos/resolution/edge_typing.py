@@ -44,7 +44,11 @@ from openkos.graph.sqlite_graph import CandidateReport, CandidateSource, build_g
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model import okf
-from openkos.model.relations import SEEDED_RELATION_TYPES, validate_relation_type
+from openkos.model.relations import (
+    ENGINE_OWNED_RELATION_TYPES,
+    SUGGESTABLE_RELATION_TYPES,
+    validate_relation_type,
+)
 
 _MALFORMED_REPLY_RATIONALE = (
     "malformed reply: could not parse a valid suggestion JSON object"
@@ -62,11 +66,31 @@ as a JSON object at all -- this constant is used to uphold
 invariant when the model DID reply with parseable JSON but left `rationale`
 blank."""
 
-_SEEDED_VOCAB_LINE = ", ".join(sorted(SEEDED_RELATION_TYPES))
-"""The seeded relation vocabulary as a stable, sorted, comma-joined string,
-derived from `model.relations.SEEDED_RELATION_TYPES` (single source of
-truth) -- baked into `_SYSTEM_PROMPT` so the model is constrained to the
-closed set rather than inventing out-of-vocab verbs (issue #134)."""
+_ENGINE_OWNED_RATIONALE = (
+    "refused: this type records provenance, which the engine derives from the "
+    "document's own provenance field -- a suggested one cannot be told apart "
+    "from a real one"
+)
+"""Stable rationale for a suggestion refused because it named an engine-owned
+type (issue #380).
+
+Ours, not the model's. #380's evidence is a rationale that reads perfectly
+plausible and is factually wrong -- "derived from the MCP Origin Date as it
+builds upon the origin of MCP", for an event whose real provenance was a
+different source entirely. Echoing that sentence beside a refusal would hand
+the operator the exact argument that produced the corruption, so this
+constant replaces it rather than falling back to it."""
+
+_SEEDED_VOCAB_LINE = ", ".join(sorted(SUGGESTABLE_RELATION_TYPES))
+"""The SUGGESTABLE relation vocabulary as a stable, sorted, comma-joined
+string, derived from `model.relations.SUGGESTABLE_RELATION_TYPES` (single
+source of truth) -- baked into `_SYSTEM_PROMPT` so the model is constrained
+to the closed set rather than inventing out-of-vocab verbs (issue #134).
+
+Narrowed from `SEEDED_RELATION_TYPES` by #380: the engine-owned types are
+withheld from the prompt entirely. Offering `derived_from` is what invited a
+model to use it in its colloquial "builds upon" sense and write an edge
+indistinguishable from real provenance."""
 
 _SYSTEM_PROMPT = (
     "You are a relation-type suggester in a local-first knowledge engine. "
@@ -248,6 +272,17 @@ def _parse_reply(raw: object) -> tuple[str | None, str]:
         suggested_type = validate_relation_type(type_raw, warn=False)
     except ValueError:
         return None, rationale if rationale.strip() else _DEGRADED_RATIONALE_FALLBACK
+
+    # Engine-owned types are refused HERE, not merely withheld from the prompt
+    # (issue #380). `_SYSTEM_PROMPT` no longer offers `derived_from`, and that
+    # is not enforcement: prompt wording could not carry an anti-twin rule at
+    # this tier either, where a clause forbidding a shape made that shape more
+    # frequent through priming (`extraction/concept.py`'s
+    # `_drop_source_title_twins`, design D4/5b). A model that emits one anyway
+    # must be refused deterministically, or the corruption still reaches the
+    # operator's accept prompt with a plausible rationale attached.
+    if suggested_type in ENGINE_OWNED_RELATION_TYPES:
+        return None, _ENGINE_OWNED_RATIONALE
     return suggested_type, rationale
 
 

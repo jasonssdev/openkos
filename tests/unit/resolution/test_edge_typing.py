@@ -394,11 +394,19 @@ def test_suggest_edge_types_builds_a_two_message_json_only_prompt(
 def test_system_prompt_constrains_to_the_seeded_relation_vocabulary(
     tmp_path: Path,
 ) -> None:
-    """The rubric must name every seeded relation type so the model picks
+    """The rubric must name every SUGGESTABLE relation type so the model picks
     from the closed set instead of inventing out-of-vocab verbs (issue #134:
     the model overwhelmingly proposed `source_of`/`describes`/... none of
-    which are valid `relate` inputs)."""
-    from openkos.model.relations import SEEDED_RELATION_TYPES
+    which are valid `relate` inputs).
+
+    It must also NOT name the engine-owned ones (#380): offering
+    `derived_from` invites the model to use it colloquially ("builds upon"),
+    and the result is indistinguishable from the provenance edges the engine
+    synthesizes at projection."""
+    from openkos.model.relations import (
+        ENGINE_OWNED_RELATION_TYPES,
+        SUGGESTABLE_RELATION_TYPES,
+    )
 
     _write_doc(tmp_path / "a.md", title="Alpha", body="Alpha body.")
     _write_doc(tmp_path / "b.md", title="Beta", body="Beta body.")
@@ -408,8 +416,53 @@ def test_system_prompt_constrains_to_the_seeded_relation_vocabulary(
     edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
 
     system = llm.calls[0][0]["content"]
-    for seeded_type in SEEDED_RELATION_TYPES:
-        assert seeded_type in system
+    for suggestable in SUGGESTABLE_RELATION_TYPES:
+        assert suggestable in system
+    for engine_owned in ENGINE_OWNED_RELATION_TYPES:
+        assert engine_owned not in system
+
+
+def test_engine_owned_type_is_rejected_even_when_the_model_proposes_it(
+    tmp_path: Path,
+) -> None:
+    """#380: the prompt no longer offers `derived_from`, and that alone is not
+    the fix.
+
+    Prompt wording is not an enforcement mechanism at this tier -- the same
+    lesson `_drop_source_title_twins` was built on, where a clause forbidding
+    a shape made that shape MORE frequent via priming. A model that emits
+    `derived_from` anyway must be refused here, deterministically, or the
+    corruption #380 reports still reaches the operator's accept prompt."""
+    _write_doc(tmp_path / "a.md", title="A", body="x")
+    _write_doc(tmp_path / "b.md", title="B", body="y")
+    edges = [Edge(source_id="a", target_id="b")]
+    llm = _FakeLLM(
+        replies=[_valid_reply("derived_from", "It builds upon the origin of MCP.")]
+    )
+
+    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+
+    assert result[0].suggested_type is None
+    assert "provenance" in result[0].rationale
+
+
+def test_rejecting_an_engine_owned_type_does_not_echo_the_models_reasoning(
+    tmp_path: Path,
+) -> None:
+    """The rationale on this degrade is OURS, not the model's.
+
+    #380's evidence is a rationale that reads plausibly and is factually
+    wrong: "derived from the MCP Origin Date as it builds upon the origin of
+    MCP". Surfacing that sentence next to a refusal would hand the operator
+    the very argument that produced the corruption."""
+    _write_doc(tmp_path / "a.md", title="A", body="x")
+    _write_doc(tmp_path / "b.md", title="B", body="y")
+    edges = [Edge(source_id="a", target_id="b")]
+    llm = _FakeLLM(replies=[_valid_reply("derived_from", "it builds upon the origin")])
+
+    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+
+    assert "builds upon" not in result[0].rationale
 
 
 def test_out_of_vocab_suggestion_is_kept_but_prints_no_advisory_note(
