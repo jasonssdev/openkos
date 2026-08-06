@@ -91,12 +91,11 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
     supersedes: set[tuple[str, str]] = set()
 
     for scan in okf._iter_docs(bundle_dir):
-        # Concept-id/link_dir derivation is duplicated a third time here
-        # (also spelled at `lifecycle.py:70` and `sensitivity.py:116`) --
-        # deliberately deferred (design D2): extracting a shared
-        # `okf.concept_id_for` helper is a follow-up only at a fourth call
-        # site, or when the derivation itself changes -- not now.
-        concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        # This comment used to defer extracting a shared `okf.concept_id_for`
+        # helper until "a fourth call site, or when the derivation itself
+        # changes". Both conditions arrived at once (#430): there were eleven
+        # call sites, and the derivation has to change to normalize.
+        concept_id = okf.concept_id_for(scan.path, bundle_dir)
         link_dir = concept_id.split("/", 1)[0] if "/" in concept_id else ""
 
         if scan.read_error is not None or scan.parse_error is not None:

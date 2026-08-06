@@ -2299,3 +2299,66 @@ def test_type_alternative_keeps_the_bundle_conformant(tmp_path: Path) -> None:
     )
 
     assert okf.check_conformance(bundle) == []
+
+
+# --- concept_id_for: one derivation for every reader (#430, part 1) ----------
+#
+# Eleven readers each spelled this inline, and `graph/analysis.py` already
+# flagged the duplication and asked for a shared helper. This is that helper,
+# and nothing more: byte-identical output to every site it replaces.
+#
+# It exists to be the ONE place #430's NFC-normalization decision can later be
+# made. That decision is deliberately NOT taken here -- see the issue.
+
+
+def test_concept_id_for_derives_the_relative_posix_id(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / "stoicism.md"
+
+    assert okf.concept_id_for(path, bundle_dir) == "concepts/stoicism"
+
+
+def test_concept_id_for_spans_nested_directories(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "people" / "maria-salazar.md"
+
+    assert okf.concept_id_for(path, bundle_dir) == "people/maria-salazar"
+
+
+def test_concept_id_for_strips_only_the_final_suffix(tmp_path: Path) -> None:
+    """A stem containing a dot keeps it: `with_suffix("")` strips only the
+    final component's own suffix. Both pre-refactor spellings agree here."""
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / "v1.2-release.md"
+
+    assert okf.concept_id_for(path, bundle_dir) == "concepts/v1.2-release"
+
+
+def test_concept_id_for_leaves_a_bare_dot_md_name_unstripped(tmp_path: Path) -> None:
+    """The ONE input where the two pre-refactor spellings diverge, pinned so
+    the divergence is a recorded decision rather than an accident.
+
+    `pathlib` treats `.md` as a dotfile name with no suffix, so
+    `with_suffix("")` is a no-op here while `lint`'s old
+    `removesuffix(".md")` would yield `concepts/`. This adopts the ten-site
+    spelling, so `lint`'s id for such a file changes. Reachable -- `rglob`
+    returns it -- but not from openkos, whose `_slugify` never writes an empty
+    stem; and neither spelling yields a usable id for a document with no
+    name."""
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / ".md"
+
+    assert path.suffix == "", "the premise: pathlib sees no suffix to strip"
+    assert okf.concept_id_for(path, bundle_dir) == "concepts/.md"
+    assert okf.concept_id_for(path, bundle_dir) != "concepts/"
+
+
+def test_concept_id_for_is_pure_and_needs_no_file_on_disk(tmp_path: Path) -> None:
+    """No I/O: callers hand it a `DocScan.path` from a walk already done, and
+    a helper that stat-ed would add a filesystem round trip per document to
+    every bundle-walking verb."""
+    bundle_dir = tmp_path / "bundle"
+
+    assert okf.concept_id_for(bundle_dir / "concepts" / "absent.md", bundle_dir) == (
+        "concepts/absent"
+    )

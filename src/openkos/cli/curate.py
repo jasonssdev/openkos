@@ -585,7 +585,7 @@ def _sensitivity_gap_ids(bundle_dir: Path) -> frozenset[str]:
         if scan.read_error is not None or scan.parse_error is not None:
             continue
         if (scan.metadata or {}).get("sensitivity") is None:
-            cid = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+            cid = okf.concept_id_for(scan.path, bundle_dir)
             gaps.add(cid)
     return frozenset(gaps)
 

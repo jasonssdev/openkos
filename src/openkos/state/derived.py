@@ -119,7 +119,7 @@ def bundle_manifest_hash(bundle_dir: Path) -> str:
     """
     pairs: list[tuple[str, str]] = []
     for scan in okf._iter_docs(bundle_dir):
-        concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        concept_id = okf.concept_id_for(scan.path, bundle_dir)
         if scan.read_error is not None or scan.parse_error is not None:
             continue
         try:

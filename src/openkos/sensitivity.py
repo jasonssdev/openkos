@@ -267,7 +267,7 @@ def sensitive_concept_ids(
         return frozenset()
     blocked: set[str] = set()
     for scan in okf._iter_docs(bundle_dir):
-        cid = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        cid = okf.concept_id_for(scan.path, bundle_dir)
         if scan.read_error is not None or scan.parse_error is not None:
             blocked.add(cid)  # unreadable/unparseable -> fail closed
             continue

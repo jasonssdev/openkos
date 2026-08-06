@@ -245,7 +245,7 @@ def reindex(
     to_embed: list[tuple[str, str, str]] = []  # (concept_id, text, content_hash)
 
     for scan in okf._iter_docs(bundle_dir):
-        concept_id = scan.path.relative_to(bundle_dir).with_suffix("").as_posix()
+        concept_id = okf.concept_id_for(scan.path, bundle_dir)
         seen.add(concept_id)
 
         if scan.read_error is not None or scan.parse_error is not None:
