@@ -7,6 +7,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import unicodedata
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -1504,20 +1505,80 @@ def _run_adjudicate_apply_same(
     )
 
 
-_SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
+_SLUG_COLLAPSE_RE = re.compile(r"-+")
+
+
+def _is_slug_char(char: str) -> bool:
+    """Whether `_slugify` keeps `char` verbatim.
+
+    The whitelist is Unicode letters and digits (`str.isalnum()`, i.e.
+    categories `L*`/`N*`) plus combining marks (`M*`). Marks are included
+    because in Indic, Hebrew and Arabic scripts a vowel sign or virama is
+    part of its grapheme, not decoration: dropping `ि`/`्` from `हिन्दी`
+    would corrupt the word rather than merely spell it differently.
+    """
+    return char.isalnum() or unicodedata.category(char).startswith("M")
 
 
 def _slugify(stem: str) -> str:
-    """Sanitize a filename stem into a slug: lowercase, `[^a-z0-9]+` -> `-`, trimmed.
+    """Sanitize a filename stem OR a title into a slug: NFC, lowercase,
+    Unicode letters/digits/marks kept, every other run -> `-`, trimmed.
 
-    Callers always pass `Path(src).stem` -- the basename's stem, already
-    stripped of every directory component by `Path.name`/`Path.stem` -- so a
-    traversal segment in the original `<path>` argument can never leak into
-    the returned slug (path containment). When the stem is already safe
-    (only lowercase letters/digits/hyphens) it is returned unchanged, so
-    `raw/notes.md` and `bundle/sources/notes.md` line up.
+    THE SLUG IS THE IDENTITY, not a filename detail: an object's Concept ID
+    is its path within the bundle with `.md` removed (OKF §2,
+    `docs/knowledge-object-model.md`), and there is no separate `id` field.
+    So what this function throws away decides which objects exist at all.
+
+    **Unicode-safe (issue #414).** The original `[^a-z0-9]+` sanitiser
+    collapsed every non-ASCII character to a hyphen, which mangled accented
+    Latin (`Diseño de Módulos` -> `dise-o-de-m-dulos`) and slugified a title
+    in any non-Latin script (`知识图谱`, `Общая теория`, `こんにちは`) to the
+    EMPTY string -- and an empty slug makes `_stage_derived_objects` skip
+    the candidate, so every correctly extracted object from such a source
+    was silently discarded. The whitelist is now Unicode-aware
+    (`_is_slug_char`), so those titles keep their own script.
+
+    **Transliteration was considered and rejected.** Romanising `知识图谱`
+    to `zhi-shi-tu-pu` is a *choice* (which romanisation? whose tone
+    marks?), not a fact about the title, and it would need a dependency to
+    make that choice for the user. OpenKOS preserves representations rather
+    than deciding them, so the slug carries the author's script.
+
+    **NFC is normalised explicitly, in and out.** macOS filesystems
+    normalise to NFD; without `unicodedata.normalize("NFC", ...)` the same
+    title would produce different bytes -- and therefore a different Concept
+    ID -- on different platforms. Identity has to be stable across
+    filesystems, so both the input and the lowercased result are folded to
+    NFC (lowercasing can itself denormalise, e.g. `İ` -> `i` + U+0307).
+
+    **Path containment holds by construction**, which matters more now that
+    the docstring's old guarantee ("callers always pass `Path(src).stem`")
+    no longer holds -- `_stage_derived_objects` (LLM-extracted titles) and
+    `_stage_filed_answer` (`query --save` titles) both pass unconstrained
+    text. Nothing but a Unicode letter, digit, mark or `-` can reach the
+    output, and no Unicode alphanumeric is a path separator on any supported
+    platform, so `/`, `\\`, `.`, `..`, `:`, a null byte, a control character
+    and the Windows-reserved set are all unreachable: `../../etc/passwd`
+    slugifies to `etc-passwd`.
+
+    **Backward compatible for ASCII, exactly.** For any pure-ASCII input the
+    result is byte-for-byte what the old `[^a-z0-9]+` regex returned
+    (`notes` -> `notes`, `My Notes` -> `my-notes`), because ASCII
+    `str.isalnum()` is precisely `[a-zA-Z0-9]`. Existing bundles never
+    silently rename.
+
+    May still return `""` -- a title of only punctuation or emoji has no
+    letters or digits to keep. That is a supported outcome, not an error:
+    every caller (`ingest`, `_stage_derived_objects`, `_stage_filed_answer`)
+    has its own empty-slug branch.
     """
-    return _SLUG_SANITIZE_RE.sub("-", stem.lower()).strip("-")
+    normalized = unicodedata.normalize("NFC", stem)
+    sanitized = "".join(
+        char.lower() if _is_slug_char(char) else "-" for char in normalized
+    )
+    return unicodedata.normalize(
+        "NFC", _SLUG_COLLAPSE_RE.sub("-", sanitized).strip("-")
+    )
 
 
 def _titleize(stem: str) -> str:
@@ -1543,13 +1604,27 @@ def _collision_family(link_dir: Path, base_slug: str) -> list[Path]:
     first). Matched via a REGEX anchored on the full filename stem
     (`^{base}(-\\d+)?$`), NEVER a glob, so an unrelated sibling like
     `<base>-word.md` never joins the family (design: Collision loop
-    mechanics; #131)."""
+    mechanics; #131).
+
+    Both sides are NFC-normalized before matching (#414). `_slugify` emits
+    NFC, but HFS+ (and some SMB mounts) rewrite a filename to NFD on write
+    while APFS preserves whatever spelling it is handed, so `glob` can
+    legitimately return the NFD stem of a file created under the NFC slug.
+    Matching the raw stems would miss it -- while `derived_path.exists()`,
+    which is normalization-INSENSITIVE on macOS, still reports True. The
+    caller would then read an EMPTY family, misread the slug as belonging to
+    a foreign source, and disambiguate to `<slug>-2` on every re-ingest
+    until `write_exclusive` raised `FileExistsError`. Unreachable while
+    slugs were ASCII (ASCII has no NFD form); reachable now that they carry
+    accents.
+    """
     if not link_dir.is_dir():
         return []
-    pattern = re.compile(rf"^{re.escape(base_slug)}(?:-(\d+))?$")
+    base = unicodedata.normalize("NFC", base_slug)
+    pattern = re.compile(rf"^{re.escape(base)}(?:-(\d+))?$")
     members: list[tuple[int, Path]] = []
     for path in link_dir.glob("*.md"):
-        match = pattern.match(path.stem)
+        match = pattern.match(unicodedata.normalize("NFC", path.stem))
         if match is None:
             continue
         suffix_n = int(match.group(1)) if match.group(1) else 0
@@ -1649,8 +1724,13 @@ def _first_free_disambiguated_slug(
     on disk (a stem present in `family`) nor already claimed by an earlier
     candidate in THIS batch (`reserved`) -- deterministic, ascending scan
     (design: Collision loop mechanics -- batch-local `seen_slugs` guard;
-    #131)."""
-    taken = {path.stem for path in family} | reserved
+    #131).
+
+    On-disk stems are NFC-normalized before the comparison, for the same
+    reason `_collision_family` normalizes (#414): an NFD `<base>-2.md` must
+    still count as taken, or this would hand back a name that already
+    exists."""
+    taken = {unicodedata.normalize("NFC", path.stem) for path in family} | reserved
     n = 2
     while f"{base_slug}-{n}" in taken:
         n += 1

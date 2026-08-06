@@ -13,6 +13,7 @@ recovery from a partial write is via git, not an in-process undo.
 import json
 import os
 import stat
+import unicodedata
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -3494,6 +3495,52 @@ def test_family_regex_excludes_base_word_slug(tmp_path: Path) -> None:
 
     names = {path.name for path in family}
     assert names == {"note.md", "note-2.md"}
+
+
+def test_family_matches_an_nfd_spelled_filename(tmp_path: Path) -> None:
+    """The family scan compares NFC-normalized stems, so a member stored on
+    disk in NFD still joins the family of its NFC slug (#414).
+
+    `_slugify` emits NFC, but HFS+ (and some SMB mounts) rewrite a filename
+    to NFD on write, and APFS preserves whatever spelling it is handed -- so
+    `link_dir.glob` can legitimately return the NFD stem for a file created
+    under the NFC slug. Without normalization the anchored regex misses it
+    while `derived_path.exists()` (normalization-INSENSITIVE on macOS) still
+    reports True. The caller would then read an EMPTY family, conclude the
+    slug belongs to a foreign source, and disambiguate to `<slug>-2` on
+    every single re-ingest -- until `write_exclusive` finally raised
+    `FileExistsError`. Idempotent re-ingest depends on this match."""
+    link_dir = tmp_path / "concepts"
+    link_dir.mkdir()
+    nfc = unicodedata.normalize("NFC", "diseño")
+    nfd = unicodedata.normalize("NFD", "diseño")
+    assert nfc != nfd
+    (link_dir / f"{nfd}.md").write_text("body", encoding="utf-8")
+    (link_dir / f"{nfd}-2.md").write_text("body", encoding="utf-8")
+
+    family = main._collision_family(link_dir, nfc)
+
+    assert [unicodedata.normalize("NFC", path.stem) for path in family] == [
+        nfc,
+        f"{nfc}-2",
+    ]
+
+
+def test_first_free_disambiguated_slug_sees_an_nfd_family_member(
+    tmp_path: Path,
+) -> None:
+    """`_first_free_disambiguated_slug` compares family stems as strings, so
+    it too must normalize: an on-disk NFD `<slug>-2.md` has to count as taken
+    or the disambiguation loop would hand back a name that already exists
+    (#414)."""
+    link_dir = tmp_path / "concepts"
+    link_dir.mkdir()
+    nfc = unicodedata.normalize("NFC", "diseño")
+    nfd = unicodedata.normalize("NFD", "diseño")
+    (link_dir / f"{nfd}-2.md").write_text("body", encoding="utf-8")
+    family = [link_dir / f"{nfd}-2.md"]
+
+    assert main._first_free_disambiguated_slug(family, nfc, set()) == f"{nfc}-3"
 
 
 def test_family_scan_skips_malformed_frontmatter_member(tmp_path: Path) -> None:
