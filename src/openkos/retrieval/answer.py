@@ -3,8 +3,9 @@ again -> assemble -> answer over a compiled bundle.
 
 `answer()` composes five seams end-to-end: an injected, read-only
 `fts_index` handle (lexical retrieval), an injected `Embedder` + `VectorStore`
-(dense retrieval, optional), `retrieval.fusion.fuse` (rank-position fusion,
-called TWICE -- once to derive graph seeds, once as the final fusion), an
+(dense retrieval, optional), `retrieval.fusion` (rank-position fusion:
+`fuse` derives the graph seeds AND is the base of the final ranking, which
+`fuse_with_graph` then tops up), an
 injected, read-only `graph_index` handle + `retrieval.graph_retrieve.graph_rank`
 (a seeded personalized-PageRank second retrieval stage, optional/degrading),
 a per-hit guarded `okf.load_frontmatter` re-read (assemble), and an injected
@@ -49,6 +50,14 @@ no seeds (both initial retrievers empty) -> PPR skipped entirely,
 edges) -> `[]`, `graph_degraded=False` (the handle itself opened fine --
 query performs no freshness comparison of its own). Graph never affects
 FTS/dense outcomes, and FTS stays mandatory.
+
+Issue #402: the graph channel is ADDITIVE, never a reordering. The final
+ranking is `fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)`,
+whose FTS+dense base ordering the graph list cannot permute -- it may only
+fill `fusion.GRAPH_RESERVED_SLOTS` reserved tail slots with concepts the two
+retrievers never saw. `AnswerResult.graph_contributed_count` reports how many
+of those slots it actually filled, which is what the graph is worth on this
+query; `graph_hit_count` remains the raw PPR candidate pool.
 
 status-aware-retrieval (MVP-3 gap #8 · S1, Phase 2): unless the caller
 passes `include_deprecated=True`, `answer()` computes the single shared
@@ -252,6 +261,18 @@ class AnswerResult:
     and an empty graph list was used instead; `False` when graph retrieval
     ran normally, including the edgeless-graph case where the handle itself
     opened successfully (additive)."""
+    graph_contributed_count: int = 0
+    """How many concepts of the final fused list the graph channel actually
+    ADDED -- i.e. how many of `fusion.GRAPH_RESERVED_SLOTS` reserved slots it
+    filled with concepts absent from the FTS+dense pool (issue #402).
+
+    Distinct from `graph_hit_count`, which is the raw personalized-PageRank
+    CANDIDATE pool. The two diverge sharply and the difference is the point:
+    a workspace with zero typed edges, or one whose PPR candidates were all
+    already found lexically/semantically, reports a `graph_hit_count` of up
+    to `pool.pool_limit(limit)` while contributing exactly nothing. This
+    field is the honest number, so a reader can judge whether the graph
+    channel is earning its place."""
 
 
 def _assemble_context(
@@ -504,11 +525,15 @@ def answer(
     deprecated/superseded neighbor still surfaces via PPR, while the
     neighbor itself is dropped from the output. WHEN no seeds exist (both
     retrievers found nothing), the graph read is skipped entirely and
-    `graph_degraded=True`. A FINAL `fusion.fuse(hits, vec_hits, graph_hits)`
-    folds all three ALREADY-FILTERED lists, truncated to `limit`, before
-    context assembly -- every `AnswerResult` count is therefore a
-    POST-filter count. `include_deprecated=True` skips the predicate walk
-    entirely (zero added cost) and restores today's status-blind behavior
+    `graph_degraded=True`. A FINAL
+    `fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)` returns
+    the top-`limit` list from those ALREADY-FILTERED lists before context
+    assembly: the FTS+dense fusion is the base ranking and the graph list can
+    only ADD concepts absent from it, into bounded reserved tail slots
+    (issue #402) -- so every `AnswerResult` count is a POST-filter count, and
+    `graph_contributed_count` is the number of reserved slots actually
+    filled. `include_deprecated=True` skips the predicate walk entirely
+    (zero added cost) and restores today's status-blind behavior
     byte-for-byte.
 
     `answer` NEVER computes or compares a bundle manifest hash (D2 binding
@@ -593,7 +618,15 @@ def answer(
     else:
         graph_hits, graph_degraded = [], True
 
-    fused_ids = fusion.fuse(hits, vec_hits, graph_hits)[:limit]
+    # The graph channel is ADDITIVE, never a reordering (issue #402): the
+    # `initial_fused` FTS+dense ranking above IS the base, and
+    # `fuse_with_graph` may only append graph-only concepts into its bounded
+    # reserved tail slots. `graph_contributed_count` is therefore exactly the
+    # number of fused ids that were never in the FTS+dense pool -- and
+    # `set(initial_fused)` IS that pool, already computed for the seeds.
+    fused_ids = fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)
+    pool_ids = set(initial_fused)
+    graph_contributed = sum(1 for cid in fused_ids if cid not in pool_ids)
     context_blocks, citations = _assemble_context(
         bundle_dir,
         fused_ids,
@@ -615,6 +648,7 @@ def answer(
             dense_degraded=dense_degraded,
             graph_hit_count=len(graph_hits),
             graph_degraded=graph_degraded,
+            graph_contributed_count=graph_contributed,
         )
 
     reply = llm.chat(_build_messages(context_blocks, question))
@@ -634,4 +668,5 @@ def answer(
         dense_degraded=dense_degraded,
         graph_hit_count=len(graph_hits),
         graph_degraded=graph_degraded,
+        graph_contributed_count=graph_contributed,
     )

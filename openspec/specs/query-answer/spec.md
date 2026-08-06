@@ -253,11 +253,17 @@ additionally, and PURELY ADDITIVELY, carry: `dense_hit_count` (int, raw
 `vector_store.query` hit count), `fused_count` (int, number of distinct
 `concept_id`s in the FINAL fused, limit-truncated list), `dense_degraded`
 (bool), `graph_hit_count` (int, raw personalized-PageRank pool size before
-final fusion, default `0`), and `graph_degraded` (bool, `True` when graph
-retrieval could not proceed this call, default `False`). No existing field is
-removed or retyped. The module MUST remain config-free.
+final fusion, default `0`), `graph_degraded` (bool, `True` when graph
+retrieval could not proceed this call, default `False`), and
+`graph_contributed_count` (int, how many of the final fused list's
+`concept_id`s the graph channel ADDED — i.e. how many reserved slots it
+filled with concepts absent from the FTS+dense pool — default `0`). No
+existing field is removed or retyped. The module MUST remain config-free.
 (Previously: no `graph_hit_count`/`graph_degraded` fields; `fused_count`
-reflected only a two-list fusion.)
+reflected only a two-list fusion. Previously: no `graph_contributed_count` —
+`graph_hit_count`, the raw candidate pool, was the only graph number
+available to a caller, and it overstates the graph's contribution to the
+point of being unrelated to it.)
 
 #### Scenario: Successful answer sets success metadata
 
@@ -270,6 +276,14 @@ reflected only a two-list fusion.)
 - GIVEN a graph pool of 6 `concept_id`s contributed to the final fusion
 - WHEN `answer(...)` is called
 - THEN `graph_hit_count` equals `6`
+
+#### Scenario: graph_contributed_count counts what the graph added, not its pool
+
+- GIVEN a graph candidate pool whose entries are all already in the FTS+dense
+  pool
+- WHEN `answer(...)` is called
+- THEN `graph_hit_count` is the raw pool size while
+  `graph_contributed_count` is `0`
 
 #### Scenario: graph_degraded reflects whether graph retrieval ran
 
@@ -309,20 +323,34 @@ injected, read-only, persisted `graph_index` handle (opened by the caller
 against the on-disk graph store; no per-call build), and run personalized
 PageRank (`nx.pagerank(to_digraph(store), personalization=seeds,
 alpha=0.85)` over an undirected view) to produce a `graph_hits` pool of size
-`max(limit, 10)`. The system MUST then compute a FINAL fusion
-`fusion.fuse(hits, vec_hits, graph_hits)[:limit]` and feed that truncated
-list, unchanged, into `_assemble_context`. Seeds MUST come from the initial
-fused ranking, never from a raw union of FTS and dense hits.
+`max(limit, 10)`. The system MUST then compute the FINAL ranking as
+`fusion.fuse_with_graph(hits, vec_hits, graph_hits, limit=limit)` and feed
+that list, unchanged, into `_assemble_context` — so the FTS+dense fusion is
+the base ranking the graph cannot permute, and the graph may only ADD
+concepts absent from the FTS+dense pool into its bounded reserved slots
+(retrieval-fusion: The Graph Channel Is Additive, Never A Reordering). Seeds
+MUST come from the initial fused ranking, never from a raw union of FTS and
+dense hits.
 (Previously: `answer` built an in-process graph via `build_graph(bundle_dir)`
-internally on every call; there was no injected, persisted graph handle.)
+internally on every call; there was no injected, persisted graph handle.
+Previously: the final ranking was `fusion.fuse(hits, vec_hits,
+graph_hits)[:limit]`, a three-list RRF in which the graph reordered concepts
+FTS and dense had already found — issue #402.)
 
 #### Scenario: Graph contributes a concept absent from FTS and dense hits
 
 - GIVEN a concept is reachable via graph proximity to the top fused hits but
   matches the question neither lexically nor semantically
 - WHEN `answer(...)` is called
-- THEN that concept can appear in the final fused, limit-truncated list via
-  its `graph_hits` rank
+- THEN that concept can appear in the final list, in a reserved tail slot
+
+#### Scenario: The graph never evicts a concept FTS and dense already found
+
+- GIVEN a concept inside the FTS+dense candidate pool but outside the
+  top-`limit`, which personalized PageRank returns at graph rank 1
+- WHEN `answer(...)` is called
+- THEN it is not promoted into the citations, and the FTS+dense citation
+  order is unchanged by its presence in `graph_hits`
 
 #### Scenario: Seeds come from the initial fuse, not a raw union
 

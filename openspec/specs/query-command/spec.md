@@ -281,13 +281,18 @@ members, same order (hit-rank) — with each line showing that citation's
 
 `query` MUST print a one-line retrieval summary to stderr on every
 completed run (successful answer or no-match), stating `fts_hit_count`,
-`dense_hit_count`, `fused_count`, `graph_hit_count`, whether the LLM was
-invoked, and the count of rendered citations. WHEN `graph_degraded` is
+`dense_hit_count`, `fused_count`, `graph_contributed_count`, whether the LLM
+was invoked, and the count of rendered citations. The graph term MUST report
+what the graph channel ADDED (`graph_contributed_count`), labelled to say so,
+NOT its raw candidate pool (`graph_hit_count`). WHEN `graph_degraded` is
 `True`, the summary MUST additionally note that graph retrieval degraded
 for this run. STDOUT MUST carry only the answer text and (when present) the
 `Citations:` block — unchanged in shape from current behavior.
 (Previously: the stderr line reported `fts_hit_count`, `dense_hit_count`,
-and `fused_count` only, with no graph count or graph-degrade note.)
+and `fused_count` only, with no graph count or graph-degrade note.
+Previously: the graph term reported `graph_hit_count`, so a workspace with
+zero typed edges still printed `10 graph` — a candidate count read by every
+reader as a contribution the graph had not made, issue #402.)
 
 #### Scenario: Successful answer keeps stdout pipe-clean
 
@@ -296,16 +301,23 @@ and `fused_count` only, with no graph count or graph-degrade note.)
 - THEN stdout (captured via `capsys`/`capfd`) contains exactly the answer
   text plus the `Citations:` block, with no summary text mixed in
 - AND stderr (captured separately) contains one line reporting
-  `fts_hit_count`, `dense_hit_count`, `fused_count`, `graph_hit_count`,
-  LLM-invoked status, and the citation count
+  `fts_hit_count`, `dense_hit_count`, `fused_count`,
+  `graph_contributed_count`, LLM-invoked status, and the citation count
 
 #### Scenario: No-match run still emits an extended stderr summary
 
 - GIVEN `answer()` returns a no-match `AnswerResult`
 - WHEN `openkos query "<question>"` is run
 - THEN stderr reports the extended retrieval summary (including
-  `graph_hit_count`, zero where applicable) for that run and the process
-  exits `0`
+  `graph_contributed_count`, zero where applicable) for that run and the
+  process exits `0`
+
+#### Scenario: A graph that added nothing reports zero, not its pool size
+
+- GIVEN `answer()` returns an `AnswerResult` with a non-zero
+  `graph_hit_count` and `graph_contributed_count=0`
+- WHEN `openkos query "<question>"` is run
+- THEN the stderr retrieval summary's graph term is `0`
 
 #### Scenario: Graph degrade is noted alongside the summary
 

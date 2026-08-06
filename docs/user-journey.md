@@ -147,9 +147,9 @@ Citations:
   → sources/call-with-maria-2026-07-14 (call with maria 2026 07 14)
 ```
 
-On every run, a `retrieval: <n> FTS + <n> dense + <n> graph → <n> fused → LLM invoked|skipped → <n> cited` summary also prints to stderr — separate from the stdout answer above, so scripts piping stdout never see it.
+On every run, a `retrieval: <n> FTS + <n> dense + <n> graph-added → <n> fused → LLM invoked|skipped → <n> cited` summary also prints to stderr — separate from the stdout answer above, so scripts piping stdout never see it.
 
-`query` cites whichever documents its fused retrieval matched — the Source, a derived page, or both — rather than always preferring one over the other; a cited `Source` concept (`bundle/sources/<slug>.md`) itself embeds the raw text and points back to `raw/<name>`, so the citation chain lets the user ask *how do I know this?* and get a file path. **MVP 2** made retrieval graph-aware — lexical FTS, dense vectors, and a PageRank walk over the typed graph, fused by RRF — so related pages reachable through the graph can surface even when the words do not match. **Later MVPs** deepen the compile side: the answer above will reflect the *corrected* understanding the base learned from later sources, not just the first one it saw.
+`query` cites whichever documents its fused retrieval matched — the Source, a derived page, or both — rather than always preferring one over the other; a cited `Source` concept (`bundle/sources/<slug>.md`) itself embeds the raw text and points back to `raw/<name>`, so the citation chain lets the user ask *how do I know this?* and get a file path. **MVP 2** made retrieval graph-aware — lexical FTS and dense vectors fused by RRF, then a PageRank walk over the typed graph adding, into reserved slots, only what those two missed — so related pages reachable through the graph can surface even when the words do not match, without displacing the hits the words did match. **Later MVPs** deepen the compile side: the answer above will reflect the *corrected* understanding the base learned from later sources, not just the first one it saw.
 
 A good answer can be filed back as a new concept, so exploration compounds — feeding the loop again.
 

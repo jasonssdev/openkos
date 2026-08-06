@@ -215,7 +215,7 @@ def test_query_matching_answer_renders_citations_in_fused_rank_order(
         "  → concepts/epictetus (Epictetus)\n"
     )
     assert result.stderr == (
-        "retrieval: 3 FTS + 2 dense + 0 graph → 2 fused → LLM invoked → 2 cited\n"
+        "retrieval: 3 FTS + 2 dense + 0 graph-added → 2 fused → LLM invoked → 2 cited\n"
     )
 
 
@@ -246,7 +246,7 @@ def test_query_zero_hits_renders_zero_hits_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 0 FTS + 0 dense + 0 graph → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 0 FTS + 0 dense + 0 graph-added → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -277,7 +277,7 @@ def test_query_all_unreadable_renders_corruption_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 2 FTS + 0 dense + 0 graph → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 2 FTS + 0 dense + 0 graph-added → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -306,7 +306,7 @@ def test_query_empty_question_renders_prompt_message(
     )
     assert "Citations:" not in result.stdout
     assert result.stderr == (
-        "retrieval: 0 FTS + 0 dense + 0 graph → 0 fused → LLM skipped → 0 cited\n"
+        "retrieval: 0 FTS + 0 dense + 0 graph-added → 0 fused → LLM skipped → 0 cited\n"
     )
 
 
@@ -341,7 +341,7 @@ def test_query_skip_notices_surfaced_on_stderr_alongside_successful_answer(
         "  → concepts/stoicism (Stoicism)\n"
     )
     assert result.stderr == (
-        "retrieval: 1 FTS + 0 dense + 0 graph → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense + 0 graph-added → 1 fused → LLM invoked → 1 cited\n"
         "index: 1 doc skipped while building the search index (whole-bundle, "
         "not this query's hits):\n"
         "  concepts/corrupt.md: skipped (unreadable)\n"
@@ -371,7 +371,7 @@ def test_query_no_skip_notices_omits_skip_block(
 
     assert result.exit_code == 0
     assert result.stderr == (
-        "retrieval: 1 FTS + 0 dense + 0 graph → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense + 0 graph-added → 1 fused → LLM invoked → 1 cited\n"
     )
 
 
@@ -888,11 +888,12 @@ def test_query_no_hint_when_dense_healthy_and_store_present(
     assert "reindex" not in result.stderr
 
 
-def test_query_retrieval_summary_includes_graph_hit_count(
+def test_query_retrieval_summary_reports_what_the_graph_contributed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The `retrieval:` stderr summary reports `graph_hit_count` alongside
-    the existing FTS/dense/fused counts (spec: Stderr Retrieval Summary On
+    """The `retrieval:` stderr summary reports `graph_contributed_count` --
+    the concepts the graph channel ADDED -- not the raw
+    `graph_hit_count` candidate pool (spec: Stderr Retrieval Summary On
     Every Run)."""
     _init_workspace(tmp_path, monkeypatch)
     fake_result = AnswerResult(
@@ -907,6 +908,7 @@ def test_query_retrieval_summary_includes_graph_hit_count(
         dense_degraded=False,
         graph_hit_count=4,
         graph_degraded=False,
+        graph_contributed_count=1,
     )
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
 
@@ -914,13 +916,45 @@ def test_query_retrieval_summary_includes_graph_hit_count(
 
     assert result.exit_code == 0
     assert result.stderr == (
-        "retrieval: 3 FTS + 2 dense + 4 graph → 2 fused → LLM invoked → 1 cited\n"
+        "retrieval: 3 FTS + 2 dense + 1 graph-added → 2 fused → LLM invoked → 1 cited\n"
     )
     assert result.stdout == (
         "Stoicism teaches the dichotomy of control.\n"
         "\n"
         "Citations:\n"
         "  → concepts/stoicism (Stoicism)\n"
+    )
+
+
+def test_query_retrieval_summary_reports_zero_for_a_graph_that_added_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace whose graph produced a full candidate pool but added no
+    concept of its own reports `0 graph-added` -- the old summary printed
+    the candidate count (`10 graph`), which read as a contribution the graph
+    never made (issue #402)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Stoicism teaches the dichotomy of control.",
+        citations=[Citation(concept_id="concepts/stoicism", title="Stoicism")],
+        fts_hit_count=3,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=2,
+        fused_count=2,
+        dense_degraded=False,
+        graph_hit_count=10,
+        graph_degraded=False,
+        graph_contributed_count=0,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert result.stderr == (
+        "retrieval: 3 FTS + 2 dense + 0 graph-added → 2 fused → LLM invoked → 1 cited\n"
     )
 
 
@@ -1172,7 +1206,7 @@ def test_query_dimension_mismatch_is_fatal_even_when_fts_already_had_hits(
 
     assert control.exit_code == 0
     assert control.stderr.startswith(
-        "retrieval: 1 FTS + 0 dense + 0 graph → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense + 0 graph-added → 1 fused → LLM invoked → 1 cited\n"
     )
     assert "a fake answer" in control.stdout
 
@@ -1395,7 +1429,7 @@ def test_query_retrieval_stderr_default_reports_post_filter_fts_count(
 
     assert result.exit_code == 0
     assert result.stderr.startswith(
-        "retrieval: 1 FTS + 0 dense + 0 graph → 1 fused → LLM invoked → 1 cited\n"
+        "retrieval: 1 FTS + 0 dense + 0 graph-added → 1 fused → LLM invoked → 1 cited\n"
     )
 
 
@@ -1421,7 +1455,7 @@ def test_query_retrieval_stderr_include_deprecated_reports_post_filter_fts_count
 
     assert result.exit_code == 0
     assert result.stderr.startswith(
-        "retrieval: 2 FTS + 0 dense + 0 graph → 2 fused → LLM invoked → 2 cited\n"
+        "retrieval: 2 FTS + 0 dense + 0 graph-added → 2 fused → LLM invoked → 2 cited\n"
     )
 
 
