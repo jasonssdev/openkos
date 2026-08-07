@@ -77,6 +77,7 @@ import json
 import re
 import statistics
 import sys
+import tempfile
 import time
 import urllib.request
 from collections import Counter
@@ -99,6 +100,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CORPUS = _REPO_ROOT / "examples" / "extraction-corpus"
 _SOURCES = _CORPUS / "sources"
 _GROUND_TRUTH = _CORPUS / "ground-truth"
+_AMI_CORPUS = _REPO_ROOT / "evals" / "decision_extraction"
+_AMI_SOURCES = _AMI_CORPUS / "sources"
+_AMI_GROUND_TRUTH = _AMI_CORPUS / "ground_truth"
 
 DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_RUNS = 5
@@ -408,14 +412,26 @@ def parse_ground_truth(text: str, *, name: str = "<memory>") -> Parsed:
     )
 
 
-def load_ground_truth(gt_path: Path) -> GroundTruth:
+def _resolve_source(sources_dir: Path, name: str) -> Path:
+    """Pair a ground-truth stem with its source: `.md` (prose corpus) wins,
+    `.txt` (AMI transcripts, #457) is the fallback. When neither exists the
+    untried `.md` path is returned so `source_exists` stays the sweep's seam
+    for a missing source -- resolution itself never raises."""
+    for suffix in (".md", ".txt"):
+        candidate = sources_dir / f"{name}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return sources_dir / f"{name}.md"
+
+
+def load_ground_truth(gt_path: Path, *, sources_dir: Path = _SOURCES) -> GroundTruth:
     """Parse one `ground-truth/<name>.md` and pair it with its raw source."""
     name = gt_path.stem
     parsed = parse_ground_truth(gt_path.read_text(encoding="utf-8"), name=name)
     return GroundTruth(
         name=name,
         gt_path=gt_path,
-        source_path=_SOURCES / f"{name}.md",
+        source_path=_resolve_source(sources_dir, name),
         subjects=parsed.subjects,
         facets=parsed.facets,
         near_duplicates=parsed.near_duplicates,
@@ -423,9 +439,14 @@ def load_ground_truth(gt_path: Path) -> GroundTruth:
     )
 
 
-def discover_ground_truth(directory: Path = _GROUND_TRUTH) -> list[GroundTruth]:
+def discover_ground_truth(
+    directory: Path = _GROUND_TRUTH, *, sources_dir: Path = _SOURCES
+) -> list[GroundTruth]:
     """Load every ground-truth file, sorted by name."""
-    return [load_ground_truth(p) for p in sorted(directory.glob("*.md"))]
+    return [
+        load_ground_truth(p, sources_dir=sources_dir)
+        for p in sorted(directory.glob("*.md"))
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -1027,9 +1048,12 @@ def evaluate_cell(
     """Run one fixture `runs` times under one arm; skip a missing source."""
     cell = Cell(fixture=truth.name, arm=arm, truth=truth)
     if not truth.source_exists:
+        try:
+            shown = str(truth.source_path.relative_to(_REPO_ROOT))
+        except ValueError:
+            shown = str(truth.source_path)
         cell.skip_reason = (
-            f"source not present ({truth.source_path.relative_to(_REPO_ROOT)} is "
-            f"git-ignored; see the corpus .gitignore)"
+            f"source not present ({shown} is git-ignored; see the corpus .gitignore)"
         )
         return cell
     source_text = truth.read_source()
@@ -1716,15 +1740,63 @@ def self_test() -> int:
 
     # 13. The real corpus ground truth parses. This is a REGRESSION GUARD on the
     #     committed fixtures, not on this harness: the files are hand-edited, and
-    #     a broken one must fail here rather than skew a measurement later.
-    for path in sorted(_GROUND_TRUTH.glob("*.md")):
-        try:
-            loaded = load_ground_truth(path)
-        except GroundTruthError as exc:
-            failures.append(f"real ground truth {path.name} does not parse: {exc}")
-            continue
-        if loaded.subject_count == 0:
-            failures.append(f"real ground truth {path.name} lists no subject")
+    #     a broken one must fail here rather than skew a measurement later. The
+    #     AMI transcript ground truth (#457) is scored by this same harness, so
+    #     it sits under the same guard.
+    for gt_dir, src_dir in (
+        (_GROUND_TRUTH, _SOURCES),
+        (_AMI_GROUND_TRUTH, _AMI_SOURCES),
+    ):
+        for path in sorted(gt_dir.glob("*.md")):
+            try:
+                loaded = load_ground_truth(path, sources_dir=src_dir)
+            except GroundTruthError as exc:
+                failures.append(f"real ground truth {path.name} does not parse: {exc}")
+                continue
+            if loaded.subject_count == 0:
+                failures.append(f"real ground truth {path.name} lists no subject")
+
+    # 14. Source resolution (#457): a ground-truth stem may pair with a `.md`
+    #     source (the prose corpus) or a `.txt` source (the AMI transcripts).
+    #     Missing sources stay a load-time non-event -- `source_exists` is the
+    #     sweep's seam for that -- so resolution falls back to `.md` untried.
+    with tempfile.TemporaryDirectory() as tmp:
+        gt_dir = Path(tmp) / "ground_truth"
+        src_dir = Path(tmp) / "sources"
+        gt_dir.mkdir()
+        src_dir.mkdir()
+        (gt_dir / "m.md").write_text(_SAMPLE_GT, encoding="utf-8")
+        (src_dir / "m.txt").write_text("A: hello\n", encoding="utf-8")
+        check(
+            "txt source resolves",
+            load_ground_truth(gt_dir / "m.md", sources_dir=src_dir).source_path,
+            src_dir / "m.txt",
+        )
+        (src_dir / "m.md").write_text("prose\n", encoding="utf-8")
+        check(
+            "md source wins over txt",
+            load_ground_truth(gt_dir / "m.md", sources_dir=src_dir).source_path,
+            src_dir / "m.md",
+        )
+        (src_dir / "m.md").unlink()
+        (src_dir / "m.txt").unlink()
+        missing = load_ground_truth(gt_dir / "m.md", sources_dir=src_dir)
+        check("missing source falls back to md", missing.source_path, src_dir / "m.md")
+        check("missing source is a non-event", missing.source_exists, False)
+        check(
+            "discovery threads sources_dir",
+            [t.source_path for t in discover_ground_truth(gt_dir, sources_dir=src_dir)],
+            [src_dir / "m.md"],
+        )
+        # A dotted stem (`TS3005a.transcript.md` -> `TS3005a.transcript`) must
+        # pair with its dotted `.txt` source -- the shape the AMI fixtures use.
+        (gt_dir / "d.stem.md").write_text(_SAMPLE_GT, encoding="utf-8")
+        (src_dir / "d.stem.txt").write_text("A: hello\n", encoding="utf-8")
+        check(
+            "dotted stem resolves to txt",
+            load_ground_truth(gt_dir / "d.stem.md", sources_dir=src_dir).source_path,
+            src_dir / "d.stem.txt",
+        )
 
     if failures:
         print("SELF-TEST FAILED:")
@@ -1774,6 +1846,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Ground-truth stem to include; repeatable. Default: all.",
     )
+    parser.add_argument(
+        "--ground-truth-dir",
+        type=Path,
+        default=_GROUND_TRUTH,
+        help="Directory of ground-truth `.md` files. Default: the prose "
+        "corpus. Point at evals/decision_extraction/ground_truth for the "
+        "AMI transcripts (#457).",
+    )
+    parser.add_argument(
+        "--sources-dir",
+        type=Path,
+        default=_SOURCES,
+        help="Directory of raw sources paired by stem; `<name>.md` is "
+        "preferred, `<name>.txt` is the fallback. Default: the prose "
+        "corpus sources.",
+    )
     parser.add_argument("--host", default=None, help="Ollama host.")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument(
@@ -1820,7 +1908,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     try:
-        truths = discover_ground_truth()
+        truths = discover_ground_truth(
+            args.ground_truth_dir, sources_dir=args.sources_dir
+        )
     except GroundTruthError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
