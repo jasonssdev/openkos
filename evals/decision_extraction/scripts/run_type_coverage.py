@@ -446,9 +446,7 @@ def main(argv: list[str] | None = None) -> int:
     results: list[SourceResult] = []
     for path in sources:
         print(f"  {path.name}")
-        results.append(
-            run_source(path, llm, args.runs, union_judge=args.union_judge)
-        )
+        results.append(run_source(path, llm, args.runs, union_judge=args.union_judge))
 
     floors = {
         meeting: named_entity_floor(ami_root, meeting)

@@ -766,9 +766,7 @@ def read_config(root: Path) -> Config:
             volatility_windows if volatility_windows is not None else {}
         ),
         type_tiers=(type_tiers if type_tiers is not None else {}),
-        union_judge=(
-            union_judge if union_judge is not None else DEFAULT_UNION_JUDGE
-        ),
+        union_judge=(union_judge if union_judge is not None else DEFAULT_UNION_JUDGE),
     )
 
 

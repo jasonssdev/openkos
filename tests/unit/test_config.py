@@ -1721,9 +1721,7 @@ def test_read_config_preserves_explicit_union_judge_false(tmp_path: Path) -> Non
     assert result.union_judge is False
 
 
-@pytest.mark.parametrize(
-    "yaml_body", ["union_judge: null\n", "union_judge:\n"]
-)
+@pytest.mark.parametrize("yaml_body", ["union_judge: null\n", "union_judge:\n"])
 def test_read_config_explicit_null_union_judge_falls_back(
     tmp_path: Path, yaml_body: str
 ) -> None:

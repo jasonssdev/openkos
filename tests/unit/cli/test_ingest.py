@@ -1251,9 +1251,7 @@ def test_ingest_judge_empty_admission_keeps_the_merged_union_and_reports_distinc
     _init_workspace(tmp_path, monkeypatch)
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
     run2 = _concept_reply(title="Stoic Dichotomy Of Control")
-    _patch_sequenced_llm(
-        monkeypatch, [run1, run2, '{"keep": ["A Fabricated Title"]}']
-    )
+    _patch_sequenced_llm(monkeypatch, [run1, run2, '{"keep": ["A Fabricated Title"]}'])
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes about self-control.", encoding="utf-8")
 
@@ -1305,11 +1303,7 @@ def test_ingest_union_judge_backstop_writes_no_more_than_12_derived_objects(
         )
 
     run_reply = "[" + ", ".join(item(i) for i in range(1, 16)) + "]"  # 15 distinct
-    keep_reply = (
-        '{"keep": ['
-        + ", ".join(f'"Subject {i}"' for i in range(1, 16))
-        + "]}"
-    )
+    keep_reply = '{"keep": [' + ", ".join(f'"Subject {i}"' for i in range(1, 16)) + "]}"
     _patch_sequenced_llm(monkeypatch, [run_reply, run_reply, keep_reply])
     source = tmp_path / "notes.txt"
     source.write_text("A long document about many topics.", encoding="utf-8")
@@ -1340,9 +1334,7 @@ def test_ingest_pre_judge_ceiling_drop_is_reported_on_stderr(
         )
 
     run1 = "[" + ", ".join(item(i) for i in range(1, 26)) + "]"  # 25 distinct
-    keep_reply = (
-        '{"keep": [' + ", ".join(f'"Subject {i}"' for i in range(1, 25)) + "]}"
-    )
+    keep_reply = '{"keep": [' + ", ".join(f'"Subject {i}"' for i in range(1, 25)) + "]}"
     _patch_sequenced_llm(monkeypatch, [run1, "[]", keep_reply])
     source = tmp_path / "notes.txt"
     source.write_text("A long document about many topics.", encoding="utf-8")

@@ -1969,9 +1969,7 @@ def test_union_twin_drop_applies_per_run_before_merge() -> None:
     )
     run1 = _array(_DECISION_ITEM, twin)
     run2 = _array(_DECISION_ITEM)
-    llm = _SequencedLLM(
-        [run1, run2, _keep_reply("Frame the Essay Around Control")]
-    )
+    llm = _SequencedLLM([run1, run2, _keep_reply("Frame the Essay Around Control")])
 
     outcome = concept_mod.extract_concept_union(
         "Meeting notes.", source_title="Team Meeting", llm=llm
@@ -1994,9 +1992,7 @@ def test_union_merge_keeps_the_richer_body_on_collision() -> None:
     )
     llm = _SequencedLLM([_array(thin), _array(rich), _keep_reply("Stoicism")])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert len(outcome.objects) == 1
     assert outcome.objects[0].body.startswith("A much longer")
@@ -2017,9 +2013,7 @@ def test_union_merge_description_tie_break_on_equal_body_length() -> None:
         [_array(short_desc), _array(long_desc), _keep_reply("Stoicism")]
     )
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert outcome.objects[0].description == "A much longer description of Stoicism."
 
@@ -2031,9 +2025,7 @@ def test_union_merge_both_equal_keeps_first_occurrence_order() -> None:
         [_array(_CONCEPT_ITEM), _array(_CONCEPT_ITEM), _keep_reply("Stoicism")]
     )
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert len(outcome.objects) == 1
     assert outcome.objects[0].description == "A school of Hellenistic philosophy."
@@ -2050,9 +2042,7 @@ def test_union_chunked_source_makes_exactly_chunks_plus_one_calls() -> None:
     replies.append(_keep_reply("Frame the Essay Around Control"))
     llm = _SequencedLLM(replies)
 
-    outcome = concept_mod.extract_concept_union(
-        text, source_title="Meeting", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union(text, source_title="Meeting", llm=llm)
 
     assert len(llm.calls) == len(windows) + 1
     assert outcome.report.runs == 1
@@ -2075,9 +2065,7 @@ def test_union_ceiling_caps_judge_input_at_24_candidates() -> None:
     judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 25)))
     llm = _SequencedLLM([run1, run2, judge_reply])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     judge_call = llm.calls[2]
     judge_user_content = judge_call[1]["content"]
@@ -2092,9 +2080,7 @@ def test_union_judge_success_reports_judged_out_titles() -> None:
     run2 = _array(_CONCEPT_ITEM)
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert outcome.report.judge_status == "ok"
     assert outcome.report.judged_out_titles == ("Zettelkasten App",)
@@ -2112,9 +2098,7 @@ def test_union_judge_title_match_is_normalized_not_raw() -> None:
     run2 = _array(_CONCEPT_ITEM)
     llm = _SequencedLLM([run1, run2, _keep_reply("stoicism", "Epictetus")])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
     assert "Stoicism" not in outcome.report.judged_out_titles
@@ -2137,9 +2121,7 @@ def test_union_same_title_different_type_candidates_are_both_admitted() -> None:
     run2 = _array()
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert [(r.type, r.title) for r in outcome.objects] == [
         ("Concept", "Stoicism"),
@@ -2160,9 +2142,7 @@ def test_union_procedure_survives_judge_rejection_via_deterministic_readmission(
     # Judge rejects the Procedure -- only "Stoicism" is kept in its reply.
     llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     titles = {r.title for r in outcome.objects}
     assert "Morning Journaling Routine" in titles
@@ -2188,17 +2168,13 @@ def test_union_judge_failure_degrades_to_the_full_backstopped_union(
     run2 = _array(_PERSON_ITEM)
     llm = _SequencedLLM([run1, run2, judge_failure])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert outcome.report.judge_status == "failed"
     assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
 
 
-def test_union_valid_empty_selection_degrades_to_the_full_backstopped_union() -> (
-    None
-):
+def test_union_valid_empty_selection_degrades_to_the_full_backstopped_union() -> None:
     """A judge reply that is valid in shape but whose admitted set -- after
     closed-candidate-list matching and Procedure re-admission -- is empty
     MUST NOT return zero objects while the merged union is non-empty
@@ -2213,9 +2189,7 @@ def test_union_valid_empty_selection_degrades_to_the_full_backstopped_union() ->
     # nothing closed-set matches, and there is no Procedure to re-admit.
     llm = _SequencedLLM([run1, run2, _keep_reply("A Fabricated Title")])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
     assert outcome.report.judge_status not in ("ok", "failed")
@@ -2230,9 +2204,7 @@ def test_union_empty_merged_union_skips_the_judge_entirely() -> None:
     and used to land `judge_status == "ok"` despite admitting nothing."""
     llm = _SequencedLLM([_array(), _array(), _keep_reply("Unused")])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert len(llm.calls) == 2
     assert outcome.report.judge_status == "skipped"
@@ -2253,9 +2225,7 @@ def test_union_backstop_passes_through_a_set_of_7_unchanged() -> None:
     judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 8)))
     llm = _SequencedLLM([run1, run2, judge_reply])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert len(outcome.objects) == 7
     assert outcome.report.produced == 7
@@ -2277,9 +2247,7 @@ def test_union_backstop_truncates_a_judge_selected_set_above_12() -> None:
     judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 16)))
     llm = _SequencedLLM([run1, run2, judge_reply])
 
-    outcome = concept_mod.extract_concept_union(
-        "Notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
     assert len(outcome.objects) == 12
     assert outcome.report.produced == 15
@@ -2302,9 +2270,7 @@ def test_extract_concept_regression_suite_still_green_and_prompt_untouched() -> 
     `extract_concept`'s own `_SYSTEM_PROMPT` is untouched by this change."""
     llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
 
-    outcome = concept_mod.extract_concept(
-        "Some notes.", source_title="Notes", llm=llm
-    )
+    outcome = concept_mod.extract_concept("Some notes.", source_title="Notes", llm=llm)
 
     assert len(llm.calls) == 1
     assert [r.title for r in outcome.objects] == ["Stoicism"]

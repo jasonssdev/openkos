@@ -74,10 +74,7 @@ def _build_judge_messages(
         f"{i}. type={c.type!r} title={c.title!r} description={c.description!r}"
         for i, c in enumerate(candidates, start=1)
     )
-    user_content = (
-        f"SOURCE TEXT:\n{source_text}\n\n"
-        f"CANDIDATES:\n{candidate_lines}"
-    )
+    user_content = f"SOURCE TEXT:\n{source_text}\n\nCANDIDATES:\n{candidate_lines}"
     return [
         {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},

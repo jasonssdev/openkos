@@ -752,9 +752,9 @@ def _merge_union(results: list[ExtractionResult]) -> list[ExtractionResult]:
             best[key] = result
             continue
         richer_body = len(result.body) > len(current.body)
-        tied_body_richer_description = len(result.body) == len(
-            current.body
-        ) and len(result.description) > len(current.description)
+        tied_body_richer_description = len(result.body) == len(current.body) and len(
+            result.description
+        ) > len(current.description)
         if richer_body or tied_body_richer_description:
             best[key] = result
         # Otherwise the tie (or a strictly poorer challenger) leaves the
@@ -919,9 +919,7 @@ def extract_concept_union(
             judged_out_titles = ()
         else:
             kept = admitted
-            judged_out_titles = tuple(
-                c.title for c in judge_input if c not in kept
-            )
+            judged_out_titles = tuple(c.title for c in judge_input if c not in kept)
             judge_status = "ok"
 
     retained = kept[:_UNION_BACKSTOP]
@@ -930,9 +928,7 @@ def extract_concept_union(
         report=ExtractionReport(
             produced=len(kept),
             retained=len(retained),
-            discarded_titles=tuple(
-                result.title for result in kept[_UNION_BACKSTOP:]
-            ),
+            discarded_titles=tuple(result.title for result in kept[_UNION_BACKSTOP:]),
             chunks=chunk_count,
             runs=run_count,
             judge_status=judge_status,

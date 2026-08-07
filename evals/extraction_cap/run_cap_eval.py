@@ -1037,7 +1037,12 @@ def evaluate_cell(
     client = build_client(model, host, timeout, temperature)
     for run_index in range(1, runs + 1):
         outcome = run_one(
-            truth, source_text, client, arm, run_index, twin_risk,
+            truth,
+            source_text,
+            client,
+            arm,
+            run_index,
+            twin_risk,
             union_judge=union_judge,
         )
         cell.outcomes.append(outcome)
