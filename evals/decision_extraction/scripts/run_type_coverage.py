@@ -379,6 +379,18 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path.cwd() / "data" / "ami" / "raw" / "manual"),
         help="unpacked AMI manual annotations (for the namedEntities layer)",
     )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="pin options.temperature (default: the model's Modelfile value)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="pin options.seed (default: unpinned)",
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
@@ -396,8 +408,11 @@ def main(argv: list[str] | None = None) -> int:
     if not ami_root.is_dir():
         raise SystemExit(f"--ami-root is not a directory: {ami_root}")
 
-    llm = OllamaClient(model=args.model)
-    print(f"model {args.model}, {args.runs} run(s) per source\n")
+    llm = OllamaClient(model=args.model, temperature=args.temperature, seed=args.seed)
+    sampling = (
+        f", temperature {args.temperature}" if args.temperature is not None else ""
+    ) + (f", seed {args.seed}" if args.seed is not None else "")
+    print(f"model {args.model}, {args.runs} run(s) per source{sampling}\n")
 
     results: list[SourceResult] = []
     for path in sources:

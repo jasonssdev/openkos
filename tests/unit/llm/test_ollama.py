@@ -249,6 +249,54 @@ def test_chat_omits_options_entirely_when_max_generation_tokens_not_configured()
     assert "options" not in sent
 
 
+def test_chat_sends_temperature_zero_when_configured() -> None:
+    """`chat()` emits `options.temperature` even at 0.0 -- the deterministic
+    setting is the whole point, so a falsy-check bug would defeat it."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        temperature=0.0,
+        urlopen=_fake_urlopen(_ok_body("hi"), captured),
+    )
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    sent = _sent_body(captured[0])
+    assert sent["options"] == {"temperature": 0.0}
+
+
+def test_chat_sends_seed_when_configured() -> None:
+    """`chat()` emits `options.seed` when a sampling seed is configured."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        seed=7,
+        urlopen=_fake_urlopen(_ok_body("hi"), captured),
+    )
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    sent = _sent_body(captured[0])
+    assert sent["options"] == {"seed": 7}
+
+
+def test_chat_merges_all_configured_options() -> None:
+    """Ceiling, temperature and seed share one `options` object."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        temperature=0.0,
+        seed=7,
+        urlopen=_fake_urlopen(_ok_body("hi"), captured),
+    )
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    sent = _sent_body(captured[0])
+    assert sent["options"] == {"num_predict": 8192, "temperature": 0.0, "seed": 7}
+
+
 def _ok_body_with_done_reason(content: str, done_reason: str) -> bytes:
     """Build a well-formed `/api/chat` success body carrying `done_reason`."""
     return json.dumps(

@@ -1705,3 +1705,222 @@ def test_system_prompt_offers_the_optional_alternative_field() -> None:
     the validation above would be correct and permanently inert.
     """
     assert "type_alternative" in concept_mod._SYSTEM_PROMPT
+
+
+# --- Chunked extraction (#454) ----------------------------------------------
+#
+# Measured basis (2026-08-06 probes, recorded on #454): qwen3:8b under the
+# production prompt returns EXACTLY one object per chat call on transcript
+# material regardless of input size -- 16/16 chunk calls plus every whole-doc
+# cell. Multiplicity therefore has to come from call structure: a 40.8 KB
+# transcript that yields 1 Event whole yields 9 distinct objects (3 Decision,
+# 2 Concept, 2 Project, 2 Event) when split into ~4 KB chunks and merged.
+
+
+class _SequencedLLM:
+    """A structural `LLMBackend` whose replies differ per call.
+
+    `replies[i]` answers call `i`; an Exception instance raises instead.
+    Records every call like `_FakeLLM` so tests can assert the fan-out.
+    """
+
+    def __init__(self, replies: Sequence[str | Exception]) -> None:
+        self.replies = list(replies)
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        reply = self.replies[len(self.calls) - 1]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def _long_text(lines: int = 700, width: int = 30) -> str:
+    """Deterministic multi-line text comfortably above `_CHUNK_THRESHOLD`."""
+    return "\n".join(f"A: line {i:04d} " + "x" * width for i in range(lines))
+
+
+def test_chunk_lines_returns_whole_text_when_under_target() -> None:
+    """Text at or under the target packs into exactly one chunk."""
+    text = "alpha\nbeta\ngamma"
+
+    assert concept_mod._chunk_lines(text, target=100) == [text]
+
+
+def test_chunk_lines_reconstructs_the_text_exactly() -> None:
+    """Joining the chunks with newlines restores the input byte-for-byte --
+    chunking must never lose or duplicate source content."""
+    text = _long_text()
+
+    chunks = concept_mod._chunk_lines(text, target=1000)
+
+    assert len(chunks) > 1
+    assert "\n".join(chunks) == text
+
+
+def test_chunk_lines_never_splits_inside_a_line() -> None:
+    """A single line longer than the target becomes its own chunk, whole --
+    splitting mid-line would hand the model a truncated utterance."""
+    oversized = "B: " + "y" * 500
+    text = f"first\n{oversized}\nlast"
+
+    chunks = concept_mod._chunk_lines(text, target=100)
+
+    assert oversized in chunks
+
+
+def test_chunk_lines_packs_multiline_chunks_to_at_most_target() -> None:
+    """Every chunk holding more than one line stays within the target."""
+    text = _long_text()
+
+    chunks = concept_mod._chunk_lines(text, target=1000)
+
+    for chunk in chunks:
+        if "\n" in chunk:
+            assert len(chunk) <= 1000
+
+
+def test_small_source_makes_exactly_one_chat_call() -> None:
+    """At or under `_CHUNK_THRESHOLD` the single-call path is untouched --
+    the behavior every existing measurement was taken against."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+    text = "x" * concept_mod._CHUNK_THRESHOLD
+
+    outcome = concept_mod.extract_concept(text, source_title="Notes", llm=llm)
+
+    assert len(llm.calls) == 1
+    assert outcome.report.chunks == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+def test_large_source_makes_one_chat_call_per_chunk() -> None:
+    """Above the threshold, one chat call per `_chunk_lines` window, each
+    carrying its own window's text and the SAME source title."""
+    text = _long_text()
+    assert len(text) > concept_mod._CHUNK_THRESHOLD
+    expected = concept_mod._chunk_lines(text)
+    llm = _SequencedLLM(["[]"] * len(expected))
+
+    outcome = concept_mod.extract_concept(text, source_title="Meeting", llm=llm)
+
+    assert len(llm.calls) == len(expected)
+    assert outcome.report.chunks == len(expected)
+    for call, chunk in zip(llm.calls, expected, strict=True):
+        user = call[1]["content"]
+        assert chunk in user
+        assert "Meeting" in user
+
+
+def test_chunked_results_merge_in_chunk_order() -> None:
+    """Validated objects concatenate in chunk order, first chunk first."""
+    text = _long_text()
+    replies: list[str | Exception] = ["[]"] * len(concept_mod._chunk_lines(text))
+    replies[0] = _array(_DECISION_ITEM)
+    replies[1] = _array(_PERSON_ITEM, _PROJECT_ITEM)
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept(text, source_title="Meeting", llm=llm)
+
+    assert [r.title for r in outcome.objects] == [
+        "Frame the Essay Around Control",
+        "Epictetus",
+        "Stoicism Essay Series",
+    ]
+
+
+def test_chunked_merge_dedups_by_type_and_normalized_title() -> None:
+    """The same subject surfacing in two chunks lands once, keeping the
+    first occurrence -- title comparison is the twin rule's normalization
+    (strip + casefold + collapsed whitespace), never fuzzy."""
+    variant = (
+        '{"type": "Concept", "title": "  STOICISM ", '
+        '"description": "Same subject, later chunk.", "body": ""}'
+    )
+    text = _long_text()
+    replies: list[str | Exception] = ["[]"] * len(concept_mod._chunk_lines(text))
+    replies[0] = _array(_CONCEPT_ITEM)
+    replies[1] = _array(variant)
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept(text, source_title="Meeting", llm=llm)
+
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+    assert outcome.objects[0].description == "A school of Hellenistic philosophy."
+    assert outcome.report.produced == 1
+
+
+def test_chunked_merge_keeps_same_title_under_different_types() -> None:
+    """Dedup keys on (type, title): a Concept and an Event sharing a title
+    are different objects, and the downstream slug guard owns that collision."""
+    event_stoicism = (
+        '{"type": "Event", "title": "Stoicism", '
+        '"description": "A dated happening oddly named.", "body": ""}'
+    )
+    text = _long_text()
+    replies: list[str | Exception] = ["[]"] * len(concept_mod._chunk_lines(text))
+    replies[0] = _array(_CONCEPT_ITEM)
+    replies[1] = _array(event_stoicism)
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept(text, source_title="Meeting", llm=llm)
+
+    assert [(r.type, r.title) for r in outcome.objects] == [
+        ("Concept", "Stoicism"),
+        ("Event", "Stoicism"),
+    ]
+
+
+def test_chunked_twin_drop_applies_to_the_merged_list() -> None:
+    """A source-title twin from ANY chunk is dropped when a non-twin
+    exists across the whole merge -- the rule sees the merged list, not
+    each chunk's slice of it."""
+    twin = (
+        '{"type": "Event", "title": "Team Meeting", '
+        '"description": "The meeting itself.", "body": ""}'
+    )
+    text = _long_text()
+    replies: list[str | Exception] = ["[]"] * len(concept_mod._chunk_lines(text))
+    replies[0] = _array(_DECISION_ITEM)
+    replies[1] = _array(twin)
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept(text, source_title="Team Meeting", llm=llm)
+
+    assert [r.title for r in outcome.objects] == ["Frame the Essay Around Control"]
+
+
+def test_chunked_cap_applies_after_the_merge() -> None:
+    """The cap slices the MERGED list: seven distinct objects across chunks
+    keep the first six, and the report names the seventh as the casualty."""
+
+    def item(i: int) -> str:
+        return (
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "Distinct subject {i}.", "body": ""}}'
+        )
+
+    text = _long_text()
+    replies: list[str | Exception] = ["[]"] * len(concept_mod._chunk_lines(text))
+    replies[0] = _array(*(item(i) for i in range(1, 5)))
+    replies[1] = _array(*(item(i) for i in range(5, 8)))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept(text, source_title="Meeting", llm=llm)
+
+    assert outcome.report.produced == 7
+    assert outcome.report.retained == 6
+    assert outcome.report.discarded_titles == ("Subject 7",)
+    assert len(outcome.objects) == 6
+
+
+def test_ollama_error_from_a_later_chunk_propagates_unswallowed() -> None:
+    """The module's `OllamaError` contract is unchanged by chunking: a
+    backend failure on any chunk propagates to the caller's degrade seam."""
+    text = _long_text()
+    replies: list[str | Exception] = ["[]"] * len(concept_mod._chunk_lines(text))
+    replies[1] = OllamaUnavailable("Ollama not reachable")
+    llm = _SequencedLLM(replies)
+
+    with pytest.raises(OllamaUnavailable):
+        concept_mod.extract_concept(text, source_title="Meeting", llm=llm)

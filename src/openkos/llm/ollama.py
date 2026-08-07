@@ -351,6 +351,8 @@ class OllamaClient:
         host: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         max_generation_tokens: int | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
         embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
@@ -365,6 +367,15 @@ class OllamaClient:
         opted-out caller sends a request byte-identical to before this
         change -- never affects `embed()` or `list_models()`.
 
+        `temperature`/`seed` are CHAT-only sampling pins forwarded as
+        `options.temperature`/`options.seed` under the same contract:
+        `None` (both defaults) contributes nothing to `options`, and
+        `temperature=0.0` is a real value, not an omission -- greedy
+        decoding is precisely the deterministic setting a caller pins.
+        Without them the send inherits whatever the model's Modelfile
+        ships (qwen3:8b: temperature 0.6, top_p 0.95), which is measured
+        run-to-run variance on identical extraction input (#454).
+
         `embed_retry_attempts`/`embed_retry_backoff_base`/`sleep` configure
         ONLY `embed()`'s retry-with-backoff loop (D1/D3) -- `chat()` and
         `list_models()` are untouched, never retried. `sleep` defaults to
@@ -373,6 +384,8 @@ class OllamaClient:
         self._model = model
         self._timeout = timeout
         self._max_generation_tokens = max_generation_tokens
+        self._temperature = temperature
+        self._seed = seed
         self._urlopen = urlopen
         self._embed_retry_attempts = embed_retry_attempts
         self._embed_retry_backoff_base = embed_retry_backoff_base
@@ -429,8 +442,15 @@ class OllamaClient:
             "stream": False,
             "think": False,
         }
+        options: dict[str, Any] = {}
         if self._max_generation_tokens is not None:
-            request_body["options"] = {"num_predict": self._max_generation_tokens}
+            options["num_predict"] = self._max_generation_tokens
+        if self._temperature is not None:
+            options["temperature"] = self._temperature
+        if self._seed is not None:
+            options["seed"] = self._seed
+        if options:
+            request_body["options"] = options
         payload = json.dumps(request_body).encode("utf-8")
         # The URL is always `{trusted host}/api/chat` (D2: host is user/env
         # config, normalized to a scheme, never derived from document content) --

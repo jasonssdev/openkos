@@ -331,6 +331,16 @@ def _validate(data: dict[str, Any]) -> ExtractionResult | None:
     )
 
 
+def _normalize_title(value: str) -> str:
+    """The ONE title normalization (strip + casefold + collapsed internal
+    whitespace) shared by the twin rule and the chunk-merge dedup -- exact,
+    never fuzzy/semantic. Lifted out of `_drop_source_title_twins` when
+    chunked extraction (#454) needed the identical comparison: two rules
+    deciding "same title" differently would let an object dodge one by
+    matching the other."""
+    return " ".join(value.strip().casefold().split())
+
+
 _TWIN_EXEMPT_TYPE = "Procedure"
 """The one object type `_drop_source_title_twins` never treats as a twin
 (#413).
@@ -394,15 +404,12 @@ def _drop_source_title_twins(
     if len(results) <= 1:
         return results
 
-    def _normalize(value: str) -> str:
-        return " ".join(value.strip().casefold().split())
-
-    normalized_title = _normalize(source_title)
+    normalized_title = _normalize_title(source_title)
 
     def _is_twin(result: ExtractionResult) -> bool:
         return (
             result.type != _TWIN_EXEMPT_TYPE
-            and _normalize(result.title) == normalized_title
+            and _normalize_title(result.title) == normalized_title
         )
 
     non_twins = [r for r in results if not _is_twin(r)]
@@ -449,6 +456,99 @@ other models, and not in Spanish, where the third corpus fixture showed a
 markedly different profile."""
 
 
+_CHUNK_THRESHOLD = 18_000
+"""Source length (chars) above which extraction fans out to one chat call
+per `_chunk_lines` window instead of a single whole-document call (#454).
+
+Both sides of the boundary are measured, on `qwen3:8b`:
+
+- ABOVE it, the single call collapses: the 40.8 KB AMI transcript
+  `TS3005b` returned exactly one `Event` in every whole-document run --
+  temperature 0 and model-default sampling alike -- while the SAME text in
+  ~4 KB chunks yielded 9 distinct objects, including the 3 `Decision`s its
+  own annotation layer affords (2026-08-06 probes, #454). The mechanism is
+  the one-object-per-call attractor those probes isolated: 16 of 16 chunk
+  calls returned exactly one object, so multiplicity has to come from call
+  structure, not prompt wording (two reworded arms both failed to move it).
+- BELOW it, the whole-document call is the path every existing measurement
+  was taken against, and it WORKS on prose: the #379 gate's 13-17 KB
+  documents produced 5-10 objects each. Chunking that band would replace a
+  measured-working path with an unmeasured one, so the threshold sits just
+  above it.
+
+The known cost: a 16.4 KB meeting transcript (`TS3005a`) collapses too,
+and stays under this threshold. Size does not predict the collapse --
+corpus shape does (#454's own counter-evidence) -- and no cheap detector
+for "transcript-shaped" exists yet. Lowering the boundary is an eval run
+away (`evals/decision_extraction/`), not a code change."""
+
+_CHUNK_TARGET = 4_000
+"""Window size (chars) `_chunk_lines` packs toward. The 2026-08-06 probes
+measured recovery at this size: every ~4 KB chunk of `TS3005b` returned one
+usable object where the whole document returned one Event, and the two AMI
+summaries in the 1.1-2.5 KB band extract well. Deliberately NOT tuned finer
+than "the band where extraction demonstrably works"."""
+
+
+def _chunk_lines(text: str, target: int = _CHUNK_TARGET) -> list[str]:
+    """Pack LINES into windows of at most `target` chars, never splitting
+    inside a line (a truncated utterance is not extractable content).
+
+    Lines, not paragraphs: the material this exists for -- speaker-labelled
+    transcripts -- has no blank lines at all, which is exactly how the first
+    chunking probe silently failed to chunk (#454). A single line longer
+    than `target` becomes its own oversized window, whole.
+
+    Lossless by construction: `"\\n".join(_chunk_lines(text)) == text`."""
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in text.split("\n"):
+        if current and size + len(line) + 1 > target:
+            chunks.append("\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += len(line) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def _extract_once(
+    source_text: str, source_title: str, llm: LLMBackend
+) -> list[ExtractionResult]:
+    """One chat call's validated results, in reply order -- the pre-#454
+    whole-document pipeline up to (not including) twin-drop and the cap,
+    shared verbatim by the single-call and per-chunk paths."""
+    reply = llm.chat(_build_messages(source_text, source_title))
+    items = parsing.extract_json_items(reply)
+    results: list[ExtractionResult] = []
+    for item in items:
+        result = _validate(item)
+        if result is not None:
+            results.append(result)
+    return results
+
+
+def _dedup_merged(results: list[ExtractionResult]) -> list[ExtractionResult]:
+    """Drop chunk-merge duplicates by `(type, _normalize_title(title))`,
+    keeping the FIRST occurrence (chunk order -- earlier context named the
+    subject first). Keyed on type deliberately: a `Concept` and an `Event`
+    sharing a title are different objects, and the in-batch slug guard in
+    `ingest` already owns that collision. Exact-normalized only, never
+    fuzzy: a semantic near-duplicate is cosmetic and mergeable later; a
+    wrongly-merged pair is silent data loss."""
+    seen: set[tuple[str, str]] = set()
+    out: list[ExtractionResult] = []
+    for result in results:
+        key = (result.type, _normalize_title(result.title))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(result)
+    return out
+
+
 @dataclass(frozen=True)
 class ExtractionReport:
     """What the `_MAX_OBJECTS_PER_SOURCE` cap discarded on one call (#404).
@@ -470,6 +570,11 @@ class ExtractionReport:
     produced: int = 0
     retained: int = 0
     discarded_titles: tuple[str, ...] = ()
+    chunks: int = 1
+    """How many chat calls this extraction fanned out to (#454): `1` on the
+    single-call path every measurement before chunking was taken against;
+    the `_chunk_lines` window count above `_CHUNK_THRESHOLD`. Defaulted so
+    every pre-chunking construction site keeps working unchanged."""
 
 
 @dataclass(frozen=True)
@@ -539,17 +644,35 @@ def extract_concept(
     is no longer assumed correct. On at least one real source it provably
     keeps the wrong objects.
 
+    Sources longer than `_CHUNK_THRESHOLD` are extracted per `_chunk_lines`
+    window -- one chat call each, same source title -- then merged in chunk
+    order with `_dedup_merged` before the twin-drop and cap above (#454:
+    the one-object-per-call attractor makes call structure, not prompt
+    wording, the multiplicity lever on long material). `report.chunks`
+    carries the fan-out; `1` means the single-call path.
+
     Any `OllamaError`-family exception raised by `llm.chat` propagates
     unswallowed to the caller (see module docstring). The caller loops
     `openkos.model.okf.build_concept` once per returned object.
     """
-    reply = llm.chat(_build_messages(source_text, source_title))
-    items = parsing.extract_json_items(reply)
-    results: list[ExtractionResult] = []
-    for item in items:
-        result = _validate(item)
-        if result is not None:
-            results.append(result)
+    if len(source_text) <= _CHUNK_THRESHOLD:
+        results = _extract_once(source_text, source_title, llm)
+        chunk_count = 1
+    else:
+        # #454: above the threshold the single call collapses to one object
+        # (the one-object-per-call attractor), so fan out one call per
+        # window and merge. Every chunk is prompted with the SAME source
+        # title -- the probe's part-style labels were measured to change
+        # nothing (cell B), and one title keeps the twin rule's target
+        # stable. A backend failure on any chunk propagates unswallowed,
+        # per the module contract; partial fan-out results are discarded
+        # with it (the caller's degrade seam is all-or-nothing).
+        windows = _chunk_lines(source_text)
+        chunk_count = len(windows)
+        merged: list[ExtractionResult] = []
+        for window in windows:
+            merged.extend(_extract_once(window, source_title, llm))
+        results = _dedup_merged(merged)
     results = _drop_source_title_twins(results, source_title=source_title)
     retained = results[:_MAX_OBJECTS_PER_SOURCE]
     return ExtractionOutcome(
@@ -560,5 +683,6 @@ def extract_concept(
             discarded_titles=tuple(
                 result.title for result in results[_MAX_OBJECTS_PER_SOURCE:]
             ),
+            chunks=chunk_count,
         ),
     )
