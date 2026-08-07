@@ -137,6 +137,17 @@ mechanism of the sync section, not the protocol concept. **This is the most
 contestable call in this file** — if a later reader judges the two the same
 thing, move `Notion MCP Server` up here and rescore.
 
+- Building a Research Agent with the Claude Agent SDK | Research Agent Implementation
+- Human-in-the-Loop Guardrails | Security and Safety Measures
+
+Both from the 2026-08-07 prompt-A/B adjudication queue. `Research Agent
+Implementation` joins the `Research Agent Application` / `Research Agent`
+family — the artifact the whole document builds. `Security and Safety
+Measures` names exactly the topic of `## Production Security: Implementing
+Human-in-the-Loop Guardrails`, that subject's home section; the counter-reading
+(too generic to credit) was considered and rejected because nothing else in
+this document is a candidate for it.
+
 ## Facets, not subjects
 
 Steps and components of the procedure above, not knowledge objects. An
@@ -173,6 +184,27 @@ bolded sentence, no section of its own, rejected for promotion.
 `Learning-a-Tool Skill` is `The Orchestration Skill` under its filename — the
 heading is "### 3. The Orchestration Skill (`learning-a-tool.md`)", one thing
 with two names.
+
+Added in the second adjudication pass (2026-08-07 prompt-A/B sweep):
+
+- Research Agent Architecture
+- Progressive Leveling
+- Progressive Learning Milestones
+- Plan Verification (Plan Mode Activation)
+- File Creation and Synthesis
+- Parallel Investigation
+- Main Agent (Orchestrator)
+- Documentation Researcher (Sub-Agent)
+- Repository Analyzer (Sub-Agent)
+- Web Researcher (Sub-Agent)
+
+`Progressive Leveling` is one bolded phase bullet inside the Orchestration
+Skill's workflow (line 51) — the same shape as `Sub-Agent Toolkit
+Assignments`. The four agent-role titles name the components of the
+orchestrator-workers layout, which is itself a facet (judged in the subjects
+section above). `Research Agent Architecture` names the layout of the app the
+procedure builds; the SDK subject already owns `## Architecture Overview`'s
+knowledge about the SDK itself.
 
 ## Out of scope
 

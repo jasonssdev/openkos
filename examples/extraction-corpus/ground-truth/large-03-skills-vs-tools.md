@@ -69,6 +69,17 @@ That judgment is load-bearing for this fixture's headline number: with it, that
 run recovered all 7 subjects and the cap discarded TWO of them
 (`Brand Guidelines Skill` and this one) rather than one.
 
+- BigQuery Integration | BigQuery
+
+`BigQuery` bare came out of the 2026-08-07 prompt-A/B adjudication queue. When
+the model titles an object `BigQuery` on this source it is covering the
+integration arc, which owns whole sections (`# Connecting Claude Desktop to
+BigQuery with MCP`, `# Checking BigQuery Tables`, `# Updating the Skill to Use
+BigQuery`). The out-of-scope reading (the MinerU precedent from
+`medium-08-sdk-skills.md`) was considered and rejected: MinerU is an example
+the procedure researches, while BigQuery is the developed TARGET of the
+integration subject.
+
 ## Facets, not subjects
 
 Positions 8–20 of the measured run. The #404 verdict: *"facets of one subject,
@@ -118,6 +129,69 @@ Note the shape: every one of them leads with the word "Skill". That is the same
 signal `corpus.py survey` reports as `skillx4` for this file — the document's
 own headings cluster around one subject, and the model follows that cluster
 past the point where it still names distinct things.
+
+Added in the second adjudication pass (2026-08-07 prompt-A/B sweep, 10 runs per
+arm). Same two families as above under yet more spellings — the matcher is
+exact on purpose, so every observed phrasing needs its own line. The nine
+`Skill Creator Best Practice for X` lines all come from ONE runaway run that
+produced 25 objects; they are the decay tail made legible.
+
+- Skill Development Best Practices
+- Marketing Campaign Skill
+- Skill Initialization Script
+- Skill Packaging Script
+- Skill Validation Script
+- SKILL.md File
+- YAML Frontmatter
+- Skill Folder Structure
+- Skill Assets Folder
+- Skill Creator Scripts
+- Skill Creator Best Practices
+- Skill Creator Workflow
+- Skill Creator Python Scripts
+- Skill Creator Initialization Script
+- Skill Creator Packaging Script
+- Skill Creator Validation Script
+- Skill Creator Best Practice for Date Range
+- Skill Creator Best Practice for Prompting
+- Skill Creator Best Practice for Asset Management
+- Skill Creator Best Practice for Skill Integration
+- Skill Creator Best Practice for Skill Reusability
+- Skill Creator Best Practice for Skill Portability
+- Skill Creator Best Practice for Skill Documentation
+- Skill Creator Best Practice for Skill Testing
+- Skill Creator Best Practice for Skill Optimization
+- Presentation Creation Workflow
+- Presentation Generation
+- Presentation Workflow
+- Presentation Creation
+- Presentation Creation with Skills
+- Presentation Generation with Brand Guidelines
+- Skill Workflow Integration
+- Skill Workflow
+- Skill Packaging and Validation
+- Skill Development Process
+- Skill Development Workflow
+- Skill Structure and Best Practices
+- Skill Repository
+- Data Integration with External Sources
+- Brand Guidelines Integration
+
+`Skill Repository` names `## Where the Document Skills Live` (a component of
+the `Pre-built Skills` arc), `Data Integration with External Sources`
+generalizes the BigQuery arc, and `Brand Guidelines Integration` names the
+workflow step that USES the Brand Guidelines Skill, not the skill itself.
+
+## Out of scope
+
+Things this document MENTIONS but is not ABOUT — the MinerU rule from
+`medium-08-sdk-skills.md`, applied here.
+
+- GitHub Repository
+
+The repository hosting the skills gets passing mentions only ("These skills
+live inside the repository", "how GitHub is rendering this Markdown file") —
+never a section, never development.
 
 ## Near-duplicates
 

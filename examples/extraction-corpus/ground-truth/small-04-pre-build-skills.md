@@ -73,10 +73,32 @@ the judgment is about what names that subject, not about which document it was
 observed in. Withholding it here would manufacture a difference between the
 pair that is an artifact of which file happened to be measured first.
 
-Spanish rephrasings are NOT pre-listed. This is the corpus's only non-English
-source and how the extractor names these subjects in Spanish is unmeasured;
-guessing the aliases in advance would decide that question instead of
-observing it. They get adjudicated from a real run's queue, like this one was.
+Spanish rephrasings are NOT pre-listed in advance. This is the corpus's only
+non-English source and how the extractor names these subjects in Spanish is
+unmeasured; guessing the aliases in advance would decide that question instead
+of observing it. They get adjudicated from a real run's queue, like this one
+was. The lines below are that observation — every one came out of the
+2026-08-07 prompt-A/B sweep's adjudication queue (10 runs per arm), never
+guessed.
+
+- Pre-built Skills | Skills preconstruidas en Claude | Skills preconstruidas | Skills Preconstruidas de Anthropic | Pre-built Skills in Claude AI
+- MCP Workflows | Workflows con MCP | Workflows empresariales | Workflow Empresarial | Flujo de trabajo empresarial
+- BigQuery Integration | BigQuery | Integration with BigQuery | MCP Integration with BigQuery | BigQuery Integration with MCP
+- Model Context Protocol (MCP) | MCP (Machine Control Protocol) | MCP (Multi-Cloud Platform) | MCP (Multi-Component Processing) | MCP (Machine Context Protocol) | MCP (Machine Connection Protocol) | MCP (Model Communication Protocol)
+
+`Workflows empresariales` (and its casings) is the document's own frame for
+the combine-skills-and-MCP arc — judged the `MCP Workflows` subject, not a
+generic facet. `BigQuery` bare mirrors the same alias adjudicated in
+`large-03-skills-vs-tools.md`.
+
+**The `MCP (...)` block records a defect, deliberately.** On this Spanish
+source the model recovers the MCP subject but INVENTS the acronym's expansion
+— six distinct false expansions across 13 emissions, versus zero on the two
+English fixtures. They are aliased because recall measures subject COVERAGE
+and the subject WAS recovered; the hallucinated-title defect is real but is a
+different failure, tracked in its own issue, and leaving these unjudged would
+have misread it as "extraction misses MCP on Spanish sources". No metric in
+`evals/extraction_cap/` sees title fidelity today.
 
 ## Facets, not subjects
 
@@ -103,6 +125,44 @@ emitting these is decaying, not enumerating.
 - Flujo de ejecución (Paso 1–4)
 - Resultado
 
+Added in the second adjudication pass (2026-08-07 prompt-A/B sweep). The
+extractor answers this Spanish source mostly in ENGLISH — the whole facet
+family below mirrors `large-03-skills-vs-tools.md`'s English decay tail, plus
+the workflow-step spellings observed here:
+
+- Marketing Analysis Skill
+- Marketing Analysis Workflow
+- Skill Packaging
+- Skill Validation
+- Skill Initialization
+- Skill Integration
+- Skill Customization
+- Skill Development
+- Skill Development Workflow
+- Skill Deployment
+- Skill Configuration
+- Skill Execution
+- Skill Automation
+- Skill Reusability
+- SKILL.md
+- SKILL.md Structure
+- YAML Frontmatter
+- Presentation Generation
+- Automated Presentation Generation
+- Data Analysis Workflow
+- Workflow Execution Process
+- Workflow Automation
+- Workflow Integration
+- Workflow Integration with Skills and MCP
+- Workflow Integration with BigQuery
+- Example Skills
+
+`Example Skills` is the second of the document's `Dos categorías de skills` —
+a category inside the `Pre-built Skills` arc, same judgment as its Spanish
+heading. `Marketing Analysis Skill` mirrors large-03's
+`Marketing Campaign Analysis Skill` facet call: carried in from a previous
+lesson, modified in one step, held by the `BigQuery Integration` arc.
+
 This fixture is the density probe of the corpus: 44 headings in 7.7 KB, the
 highest ratio of the three. The English original spreads comparable material
 over more than twice the length, so this version hands the model many more
@@ -110,7 +170,16 @@ candidate headings per kilobyte — the shape most likely to trigger enumeration
 
 ## Near-duplicates
 
-None identified.
+Pairs are written `Canonical Subject | the duplicate phrasing`.
+
+- Pre-built Skills | Document Skills
+
+**This section read "None identified." until the second adjudication pass, and
+that was the same mistake `large-03-skills-vs-tools.md` already corrected.**
+`Document Skills` appeared in 1 run of the 2026-08-07 sweep here; the English
+pair had already adjudicated it a near-duplicate of `Pre-built Skills` (the
+document itself equates them), and the two ground truths of one paired lesson
+must not disagree about the same pair.
 
 `Model Context Protocol (MCP)` against `MCP Workflows` was examined and
 rejected for the same reason as in `large-03-skills-vs-tools.md`: the protocol
