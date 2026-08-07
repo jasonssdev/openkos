@@ -943,6 +943,39 @@ def expand_union_judge_arms(
     return [(label, temp, False) for label, temp in arms]
 
 
+_STEM_TITLE_SUFFIX = "+stem-title"
+"""Arm-label suffix (#459) distinguishing a stem-title row from the
+production-derived-title row it is compared against. Same design as
+`_UNION_JUDGE_SUFFIX`: a suffix on the opaque `arm` label, so every scoring
+and reporting path keeps working unchanged and the paired rows sort
+adjacent."""
+
+
+def expand_title_mode_arms(
+    arms: list[tuple[str, float | None, bool]], *, title_mode: str
+) -> list[tuple[str, float | None, bool, bool]]:
+    """Cross each `(label, temperature, union_judge)` arm with the source-title
+    dimension (#459), per `title_mode`:
+
+    - `"derived"` (default): every arm passes the production-derived title
+      (`derive_source_title` on the source text, `ingest`'s behavior) --
+      byte-identical to before this flag existed.
+    - `"stem"`: every arm passes the file stem instead, labels unchanged.
+    - `"both"`: every arm runs under BOTH titles, the stem row labeled with
+      `_STEM_TITLE_SUFFIX`, so one report/rescore carries the A/B that
+      isolates title priming from every other variable.
+    """
+    if title_mode == "stem":
+        return [(label, temp, uj, True) for label, temp, uj in arms]
+    if title_mode == "both":
+        expanded: list[tuple[str, float | None, bool, bool]] = []
+        for label, temp, uj in arms:
+            expanded.append((label, temp, uj, False))
+            expanded.append((f"{label}{_STEM_TITLE_SUFFIX}", temp, uj, True))
+        return expanded
+    return [(label, temp, uj, False) for label, temp, uj in arms]
+
+
 def build_client(
     model: str, host: str | None, timeout: float, temperature: float | None
 ) -> OllamaClient:
@@ -969,6 +1002,23 @@ def source_title_for(source_text: str, source_path: Path) -> str:
     return derived if derived is not None else source_path.stem.replace("-", " ")
 
 
+def resolve_title(
+    source_text: str, source_path: Path, *, stem_title: bool = False
+) -> str:
+    """The title an arm sends, per the #459 A/B dimension.
+
+    `stem_title=False` is production (`source_title_for`). `stem_title=True`
+    is the raw file stem -- the configuration `run_type_coverage.py` and the
+    #456 gate measured, under which TS3005b.transcript produced ~10 candidates
+    where the derived title produced 1. The stem is passed VERBATIM (no
+    hyphen-respelling): the A/B needs the exact string the gate sent, not a
+    third variant.
+    """
+    if stem_title:
+        return source_path.stem
+    return source_title_for(source_text, source_path)
+
+
 def run_one(
     truth: GroundTruth,
     source_text: str,
@@ -978,6 +1028,7 @@ def run_one(
     twin_risk: tuple[str, ...],
     *,
     union_judge: bool = False,
+    stem_title: bool = False,
 ) -> RunOutcome:
     """Drive the REAL pipeline once; never raise.
 
@@ -990,7 +1041,7 @@ def run_one(
     every downstream scoring/reporting path is unchanged; only the `arm`
     label (see `resolve_arms`) distinguishes which pipeline produced a row.
     """
-    title = source_title_for(source_text, truth.source_path)
+    title = resolve_title(source_text, truth.source_path, stem_title=stem_title)
     started = time.perf_counter()
     extractor = extract_concept_union if union_judge else extract_concept
     try:
@@ -1044,6 +1095,7 @@ def evaluate_cell(
     timeout: float,
     *,
     union_judge: bool = False,
+    stem_title: bool = False,
 ) -> Cell:
     """Run one fixture `runs` times under one arm; skip a missing source."""
     cell = Cell(fixture=truth.name, arm=arm, truth=truth)
@@ -1068,6 +1120,7 @@ def evaluate_cell(
             run_index,
             twin_risk,
             union_judge=union_judge,
+            stem_title=stem_title,
         )
         cell.outcomes.append(outcome)
         _print_run_line(outcome)
@@ -1798,6 +1851,77 @@ def self_test() -> int:
             src_dir / "d.stem.txt",
         )
 
+    # 15. Title dimension (#459): the A/B seam between the production-derived
+    #     source title and the file-stem title, and its arm expansion. The two
+    #     titles are the collapse variable isolated on TS3005b.transcript, so
+    #     the resolver must be provably mode-faithful.
+    check(
+        "derived title takes the H1",
+        resolve_title(
+            "# AMI meeting TS3005b\n\nA: hi\n", Path("/x/TS3005b.transcript.txt")
+        ),
+        "AMI meeting TS3005b",
+    )
+    check(
+        "stem title ignores the H1",
+        resolve_title(
+            "# AMI meeting TS3005b\n\nA: hi\n",
+            Path("/x/TS3005b.transcript.txt"),
+            stem_title=True,
+        ),
+        "TS3005b.transcript",
+    )
+    # A raw speaker-turn transcript (no heading) is exactly the input where
+    # production's derivation returns None -- the two modes then diverge in
+    # respelling: production respells the stem, the stem arm never does.
+    check(
+        "derived title falls back like production",
+        resolve_title("A: hello\nB: hi\n", Path("/x/some-doc.md")),
+        "some doc",
+    )
+    check(
+        "stem title never rewrites the stem",
+        resolve_title("A: hello\nB: hi\n", Path("/x/some-doc.md"), stem_title=True),
+        "some-doc",
+    )
+    three_arms: list[tuple[str, float | None, bool]] = [(BASELINE_ARM, None, False)]
+    check(
+        "title mode derived is a no-op",
+        expand_title_mode_arms(three_arms, title_mode="derived"),
+        [(BASELINE_ARM, None, False, False)],
+    )
+    check(
+        "title mode stem flips every arm unlabeled",
+        expand_title_mode_arms(three_arms, title_mode="stem"),
+        [(BASELINE_ARM, None, False, True)],
+    )
+    check(
+        "title mode both pairs each arm with a labeled stem row",
+        expand_title_mode_arms(three_arms, title_mode="both"),
+        [
+            (BASELINE_ARM, None, False, False),
+            (f"{BASELINE_ARM}{_STEM_TITLE_SUFFIX}", None, False, True),
+        ],
+    )
+    check(
+        "title and pipeline dimensions compose",
+        expand_title_mode_arms(
+            expand_union_judge_arms([(BASELINE_ARM, None)], union_judge_mode="both"),
+            title_mode="both",
+        ),
+        [
+            (BASELINE_ARM, None, False, False),
+            (f"{BASELINE_ARM}{_STEM_TITLE_SUFFIX}", None, False, True),
+            (f"{BASELINE_ARM}{_UNION_JUDGE_SUFFIX}", None, True, False),
+            (
+                f"{BASELINE_ARM}{_UNION_JUDGE_SUFFIX}{_STEM_TITLE_SUFFIX}",
+                None,
+                True,
+                True,
+            ),
+        ],
+    )
+
     if failures:
         print("SELF-TEST FAILED:")
         for failure in failures:
@@ -1845,6 +1969,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=None,
         help="Ground-truth stem to include; repeatable. Default: all.",
+    )
+    parser.add_argument(
+        "--title-mode",
+        choices=("derived", "stem", "both"),
+        default="derived",
+        help="Source-title dimension (#459): 'derived' (default) sends the "
+        "production-derived title (ingest's behavior, byte-identical to "
+        "before this flag); 'stem' sends the file stem (the configuration "
+        "the #456 gate measured); 'both' runs EACH arm under both titles "
+        "(stem row labeled '+stem-title') for the title-priming A/B.",
     )
     parser.add_argument(
         "--ground-truth-dir",
@@ -1942,11 +2076,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     base_arms = resolve_arms(baseline=args.baseline, temperatures=args.temperature)
-    arms = expand_union_judge_arms(base_arms, union_judge_mode=args.union_judge)
+    arms = expand_title_mode_arms(
+        expand_union_judge_arms(base_arms, union_judge_mode=args.union_judge),
+        title_mode=args.title_mode,
+    )
 
     cells: list[Cell] = []
     for truth in truths:
-        for arm, temperature, union_judge in arms:
+        for arm, temperature, union_judge, stem_title in arms:
             print(f"\n=== {truth.name} [{arm}] ===")
             cell = evaluate_cell(
                 truth,
@@ -1957,6 +2094,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.host,
                 args.timeout,
                 union_judge=union_judge,
+                stem_title=stem_title,
             )
             if cell.skip_reason:
                 print(f"  skipped: {cell.skip_reason}")
