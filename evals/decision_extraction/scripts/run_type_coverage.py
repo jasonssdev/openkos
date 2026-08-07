@@ -84,7 +84,12 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from openkos.extraction.concept import _MAX_OBJECTS_PER_SOURCE, extract_concept
+from openkos.extraction.concept import (
+    _MAX_OBJECTS_PER_SOURCE,
+    _UNION_BACKSTOP,
+    extract_concept,
+    extract_concept_union,
+)
 from openkos.llm.ollama import OllamaClient
 from openkos.model.types import CLASSIFIABLE_TYPES
 
@@ -199,13 +204,23 @@ def _split_name(path: Path) -> tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) >= 3 else (parts[0], "source")
 
 
-def run_source(path: Path, llm: object, runs: int) -> SourceResult:
+def run_source(
+    path: Path, llm: object, runs: int, *, union_judge: bool = False
+) -> SourceResult:
+    """`union_judge` (#456) toggles between the single-cap `extract_concept`
+    (default -- byte-identical to before this flag existed) and the
+    union-of-runs + selector-judge `extract_concept_union`, for the TS3005b
+    before/after type-coverage comparison the Pre-Archive Measurement Gate
+    requires. Both return the same `ExtractionOutcome` shape, so every
+    downstream field below (`report.produced`/`retained`/`discarded_titles`)
+    keeps meaning what it already means regardless of which pipeline ran."""
     meeting, variant = _split_name(path)
     result = SourceResult(name=path.name, meeting=meeting, variant=variant)
     text = path.read_text(encoding="utf-8")
+    extractor = extract_concept_union if union_judge else extract_concept
     for index in range(1, runs + 1):
         try:
-            outcome = extract_concept(text, source_title=path.stem, llm=llm)  # type: ignore[arg-type]
+            outcome = extractor(text, source_title=path.stem, llm=llm)  # type: ignore[arg-type]
         except Exception as exc:
             result.errors.append(f"run {index}: {type(exc).__name__}: {exc}")
             continue
@@ -223,8 +238,15 @@ def run_source(path: Path, llm: object, runs: int) -> SourceResult:
 
 
 def render(
-    results: list[SourceResult], floors: dict[str, collections.Counter[str]]
+    results: list[SourceResult],
+    floors: dict[str, collections.Counter[str]],
+    *,
+    cap: int = _MAX_OBJECTS_PER_SOURCE,
 ) -> str:
+    """`cap` (#456) names whichever backstop actually bounded this run --
+    `_MAX_OBJECTS_PER_SOURCE` (6) on the single-cap path, `_UNION_BACKSTOP`
+    (12) under `--union-judge` -- so the printed "(cap N)" line never
+    misreports which ceiling produced these counts."""
     lines: list[str] = ["", "=" * 72, "TYPE COVERAGE", "=" * 72, ""]
 
     for result in results:
@@ -242,7 +264,7 @@ def render(
         lines.append(
             f"  {n} run(s); mean {sum(result.retained) / n:.1f} kept "
             f"of {sum(result.produced) / n:.1f} proposed "
-            f"(cap {_MAX_OBJECTS_PER_SOURCE})"
+            f"(cap {cap})"
         )
         for okf_type in sorted(CLASSIFIABLE_TYPES):
             count = totals.get(okf_type, 0)
@@ -392,6 +414,13 @@ def main(argv: list[str] | None = None) -> int:
         help="pin options.seed (default: unpinned)",
     )
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--union-judge",
+        action="store_true",
+        help="Run extract_concept_union (#456: union-of-runs + selector-judge) "
+        "instead of the default single-cap extract_concept, for a TS3005b "
+        "before/after type-coverage comparison.",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -417,13 +446,14 @@ def main(argv: list[str] | None = None) -> int:
     results: list[SourceResult] = []
     for path in sources:
         print(f"  {path.name}")
-        results.append(run_source(path, llm, args.runs))
+        results.append(run_source(path, llm, args.runs, union_judge=args.union_judge))
 
     floors = {
         meeting: named_entity_floor(ami_root, meeting)
         for meeting in sorted({r.meeting for r in results})
     }
-    print(render(results, floors))
+    cap = _UNION_BACKSTOP if args.union_judge else _MAX_OBJECTS_PER_SOURCE
+    print(render(results, floors, cap=cap))
     return 0
 
 

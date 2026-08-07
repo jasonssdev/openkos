@@ -90,6 +90,7 @@ from openkos.extraction.concept import (
     _TWIN_EXEMPT_TYPE,
     ExtractionOutcome,
     extract_concept,
+    extract_concept_union,
 )
 from openkos.llm.ollama import OllamaClient, OllamaError
 from openkos.source_title import derive_source_title
@@ -886,6 +887,41 @@ def resolve_arms(
     return arms
 
 
+_UNION_JUDGE_SUFFIX = "+union-judge"
+"""Arm-label suffix (#456) distinguishing a union+judge row from the
+single-cap row it is compared against -- e.g. `baseline` vs.
+`baseline+union-judge`. A suffix on the existing label rather than a new
+report column: every scoring/reporting path keyed on `arm` as an opaque
+string keeps working unchanged, and the two rows sort adjacent."""
+
+
+def expand_union_judge_arms(
+    arms: list[tuple[str, float | None]], *, union_judge_mode: str
+) -> list[tuple[str, float | None, bool]]:
+    """Cross each `(label, temperature)` arm with the pipeline dimension
+    (#456), per `union_judge_mode`:
+
+    - `"off"` (default): every arm runs the single-cap `extract_concept`
+      pipeline only -- byte-identical to before this flag existed.
+    - `"on"`: every arm runs the union+judge `extract_concept_union`
+      pipeline only, labels unchanged (no suffix -- there is nothing to
+      disambiguate from in this mode).
+    - `"both"`: every arm runs BOTH pipelines, the union+judge row labeled
+      with `_UNION_JUDGE_SUFFIX`, so a single report/rescore shows the
+      before/after pair a reader can diff for the recall delta the
+      Pre-Archive Measurement Gate requires.
+    """
+    if union_judge_mode == "on":
+        return [(label, temp, True) for label, temp in arms]
+    if union_judge_mode == "both":
+        expanded: list[tuple[str, float | None, bool]] = []
+        for label, temp in arms:
+            expanded.append((label, temp, False))
+            expanded.append((f"{label}{_UNION_JUDGE_SUFFIX}", temp, True))
+        return expanded
+    return [(label, temp, False) for label, temp in arms]
+
+
 def build_client(
     model: str, host: str | None, timeout: float, temperature: float | None
 ) -> OllamaClient:
@@ -919,16 +955,25 @@ def run_one(
     arm: str,
     run_index: int,
     twin_risk: tuple[str, ...],
+    *,
+    union_judge: bool = False,
 ) -> RunOutcome:
     """Drive the REAL pipeline once; never raise.
 
     A backend failure is recorded as a failed run, exactly as `run_spike.py`
     does: a single bad call in a 30-call sweep must not discard the other 29.
+
+    `union_judge` (#456) selects `extract_concept_union` -- the union-of-runs
+    + selector-judge pipeline -- instead of the single-run, single-cap
+    `extract_concept`. Both return the same `ExtractionOutcome` shape, so
+    every downstream scoring/reporting path is unchanged; only the `arm`
+    label (see `resolve_arms`) distinguishes which pipeline produced a row.
     """
     title = source_title_for(source_text, truth.source_path)
     started = time.perf_counter()
+    extractor = extract_concept_union if union_judge else extract_concept
     try:
-        outcome = extract_concept(source_text, source_title=title, llm=client)
+        outcome = extractor(source_text, source_title=title, llm=client)
     except OllamaError as exc:
         return RunOutcome(
             fixture=truth.name,
@@ -976,6 +1021,8 @@ def evaluate_cell(
     model: str,
     host: str | None,
     timeout: float,
+    *,
+    union_judge: bool = False,
 ) -> Cell:
     """Run one fixture `runs` times under one arm; skip a missing source."""
     cell = Cell(fixture=truth.name, arm=arm, truth=truth)
@@ -989,7 +1036,15 @@ def evaluate_cell(
     twin_risk = twin_deleted_subjects(source_text, truth)
     client = build_client(model, host, timeout, temperature)
     for run_index in range(1, runs + 1):
-        outcome = run_one(truth, source_text, client, arm, run_index, twin_risk)
+        outcome = run_one(
+            truth,
+            source_text,
+            client,
+            arm,
+            run_index,
+            twin_risk,
+            union_judge=union_judge,
+        )
         cell.outcomes.append(outcome)
         _print_run_line(outcome)
     return cell
@@ -1740,6 +1795,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Run the synthetic self-test and exit (no Ollama needed).",
     )
+    parser.add_argument(
+        "--union-judge",
+        choices=("off", "on", "both"),
+        default="off",
+        help="Pipeline dimension (#456): 'off' (default) runs the single-cap "
+        "extract_concept path only, byte-identical to before this flag "
+        "existed; 'on' runs extract_concept_union only; 'both' runs EACH "
+        "arm under both pipelines (union+judge row labeled '+union-judge'), "
+        "for the before/after recall-delta comparison the Pre-Archive "
+        "Measurement Gate requires.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1785,14 +1851,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_queue_note(replayed)
         return 0
 
-    arms = resolve_arms(baseline=args.baseline, temperatures=args.temperature)
+    base_arms = resolve_arms(baseline=args.baseline, temperatures=args.temperature)
+    arms = expand_union_judge_arms(base_arms, union_judge_mode=args.union_judge)
 
     cells: list[Cell] = []
     for truth in truths:
-        for arm, temperature in arms:
+        for arm, temperature, union_judge in arms:
             print(f"\n=== {truth.name} [{arm}] ===")
             cell = evaluate_cell(
-                truth, arm, temperature, args.runs, args.model, args.host, args.timeout
+                truth,
+                arm,
+                temperature,
+                args.runs,
+                args.model,
+                args.host,
+                args.timeout,
+                union_judge=union_judge,
             )
             if cell.skip_reason:
                 print(f"  skipped: {cell.skip_reason}")

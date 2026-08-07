@@ -11,6 +11,9 @@ max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call m
 #   volatile: 7d
 # type_tiers:             # per-concept-type volatility tier overrides (overrides
 #   Person: volatile      # the built-in registry default; see docs/adr/0007)
+# union_judge: true       # union-of-runs + selector-judge extraction (default
+                          # on); set false to restore the single-run, single-cap
+                          # extraction path byte-for-byte
 
 # Layout is fixed: `raw/` (immutable sources) and `bundle/` (the OKF
 # bundle root) live next to this file. The engine does not read layout

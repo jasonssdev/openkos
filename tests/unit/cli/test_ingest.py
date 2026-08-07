@@ -988,8 +988,9 @@ def test_private_default_sensitivity_floor_calls_llm_chat_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`default_sensitivity: private` (the packaged default) proceeds to
-    call `extract_concept`/`llm.chat` exactly as before this change (spec:
-    Private floor proceeds unchanged)."""
+    call `llm.chat` (spec: Private floor proceeds unchanged) -- 3 calls
+    under the union+judge product default (#456: 2 extraction runs + 1
+    judge call), not blocked by the sensitivity gate."""
     _init_workspace(tmp_path, monkeypatch)
     fake = _patch_llm(monkeypatch, _concept_reply())
     source = tmp_path / "notes.txt"
@@ -998,7 +999,7 @@ def test_private_default_sensitivity_floor_calls_llm_chat_unchanged(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert len(fake.calls) == 1
+    assert len(fake.calls) == 3
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     assert concept_path.is_file()
 
@@ -1034,9 +1035,9 @@ def test_include_confidential_bypasses_the_confidential_floor_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`--include-confidential` bypasses the `default_sensitivity:
-    confidential` floor gate: `extract_concept`/`llm.chat` IS called, and the
-    derived object is written, even at a confidential floor (spec:
-    `--include-confidential` Escape Flag)."""
+    confidential` floor gate: `llm.chat` IS called, and the derived object
+    is written, even at a confidential floor (spec: `--include-confidential`
+    Escape Flag) -- 3 calls under the union+judge product default (#456)."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
@@ -1050,7 +1051,7 @@ def test_include_confidential_bypasses_the_confidential_floor_gate(
     )
 
     assert result.exit_code == 0
-    assert len(fake.calls) == 1
+    assert len(fake.calls) == 3
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     assert concept_path.is_file()
 
@@ -1142,6 +1143,213 @@ def test_stage_derived_objects_returns_none_reason_on_success(
 
     assert len(plans) == 1
     assert skip_reason is None
+
+
+# --- union_judge kwarg (#456, design D9) -------------------------------------
+
+
+class _SequencedLLM:
+    """A structural `LLMBackend` whose replies differ per call, mirroring
+    `test_concept.py::_SequencedLLM`. `replies[i]` answers call `i`; an
+    `Exception` instance raises instead of returning."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+    """See `_FakeLLM.locality` above -- required for `ingest`'s embedding-host
+    advisory and confidential local exemption checks."""
+
+    def __init__(self, replies: Sequence[str | Exception]) -> None:
+        self.replies = list(replies)
+        self.calls: list[list[Message]] = []
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        self.calls.append(list(messages))
+        reply = self.replies[len(self.calls) - 1]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def test_stage_derived_objects_union_judge_false_calls_extract_concept_once(
+    tmp_path: Path,
+) -> None:
+    """`union_judge=False` (the kwarg's own default) calls `extract_concept`
+    exactly once per source -- no judge call, the untouched single-run path
+    (design D9: 39 existing test call sites keep exercising this)."""
+    llm = _FakeLLM(_concept_reply())
+
+    plans, skip_reason = main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=llm, union_judge=False)  # type: ignore[arg-type]
+    )
+
+    assert len(llm.calls) == 1
+    assert len(plans) == 1
+    assert skip_reason is None
+
+
+def test_stage_derived_objects_union_judge_true_calls_extract_concept_union(
+    tmp_path: Path,
+) -> None:
+    """`union_judge=True` routes through `extract_concept_union`: 2
+    extraction calls + 1 judge call."""
+    llm = _SequencedLLM(
+        [_concept_reply(), _concept_reply(), '{"keep": ["Stoic Dichotomy Of Control"]}']
+    )
+
+    plans, skip_reason = main._stage_derived_objects(
+        **_stage_kwargs(tmp_path, llm=llm, union_judge=True)  # type: ignore[arg-type]
+    )
+
+    assert len(llm.calls) == 3
+    assert len(plans) == 1
+    assert skip_reason is None
+
+
+def _patch_sequenced_llm(
+    monkeypatch: pytest.MonkeyPatch, replies: Sequence[str | Exception]
+) -> _SequencedLLM:
+    """Replace `openkos.cli.main.OllamaClient` with a factory returning a
+    `_SequencedLLM`, mirroring `_patch_llm`'s pattern for a fixed-reply fake."""
+    fake = _SequencedLLM(replies)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", lambda *args, **kwargs: fake)
+    return fake
+
+
+def test_ingest_judge_failure_keeps_the_merged_union_and_reports_distinctly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 3.6: base extraction succeeds (2 runs, 2 distinct candidates),
+    the judge call raises `OllamaError` -- the merged-union candidates
+    (backstop-truncated) are staged/written, `_judge_failure_notice` fires
+    (distinct wording from `_judge_selection_notice`/`_extraction_cap_notice`
+    -- neither of which appears), and `ingest` exits 0."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Stoic Dichotomy Of Control")
+    _patch_sequenced_llm(monkeypatch, [run1, run2, OllamaUnavailable("boom")])
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "judge selection unavailable" in result.stderr
+    assert "cap reached" not in result.stderr
+    assert "judge dropped" not in result.stderr
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+
+
+def test_ingest_judge_empty_admission_keeps_the_merged_union_and_reports_distinctly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 2.24 (#456 gate finding): base extraction succeeds, the judge
+    reply is well-formed but names a title absent from every candidate --
+    the admitted set is empty with nothing to re-admit. The merged-union
+    candidates (backstop-truncated) are still staged/written,
+    `_judge_failure_notice` fires with wording distinct from BOTH the
+    `"failed"` degrade and a successful selection, and `ingest` exits 0."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Stoic Dichotomy Of Control")
+    _patch_sequenced_llm(monkeypatch, [run1, run2, '{"keep": ["A Fabricated Title"]}'])
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "judge selection admitted zero objects" in result.stderr
+    assert "judge selection unavailable" not in result.stderr
+    assert "cap reached" not in result.stderr
+    assert "judge dropped" not in result.stderr
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+
+
+def test_ingest_base_extraction_ollama_error_still_source_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 3.8: `llm.chat` raises during the BASE extraction call itself
+    (not the judge) -- behavior is unchanged from the existing Source-only
+    degrade, even under the union+judge product default."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_sequenced_llm(monkeypatch, [OllamaUnavailable("boom")])
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "concept extraction skipped" in result.stderr
+    assert "keeping the Source only" in result.stderr
+    concept_dir = tmp_path / "bundle" / "concepts"
+    assert not concept_dir.exists() or list(concept_dir.iterdir()) == []
+    source_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert source_path.is_file()
+
+
+def test_ingest_union_judge_backstop_writes_no_more_than_12_derived_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 3.10: a union+judge selection yielding more than 12 valid
+    objects writes no more than 12 derived files -- the `_UNION_BACKSTOP`
+    cap (12), replacing the old cap of 6."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def item(i: int) -> str:
+        return (
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "Distinct subject {i}.", "body": "Body {i}."}}'
+        )
+
+    run_reply = "[" + ", ".join(item(i) for i in range(1, 16)) + "]"  # 15 distinct
+    keep_reply = '{"keep": [' + ", ".join(f'"Subject {i}"' for i in range(1, 16)) + "]}"
+    _patch_sequenced_llm(monkeypatch, [run_reply, run_reply, keep_reply])
+    source = tmp_path / "notes.txt"
+    source.write_text("A long document about many topics.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_dir = tmp_path / "bundle" / "concepts"
+    written = list(concept_dir.glob("*.md")) if concept_dir.exists() else []
+    assert len(written) == 12
+
+
+def test_ingest_pre_judge_ceiling_drop_is_reported_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A union run whose merged candidates exceed the 24-candidate
+    pre-judge ceiling reports the drop on stderr
+    (`_pre_judge_ceiling_notice`), with wording distinct from the judge
+    notices and from the final `cap reached` backstop notice -- those
+    describe judged or cap-discarded titles, while these candidates never
+    reached the judge at all."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def item(i: int) -> str:
+        return (
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "Distinct subject {i}.", "body": "Body {i}."}}'
+        )
+
+    run1 = "[" + ", ".join(item(i) for i in range(1, 26)) + "]"  # 25 distinct
+    keep_reply = '{"keep": [' + ", ".join(f'"Subject {i}"' for i in range(1, 25)) + "]}"
+    _patch_sequenced_llm(monkeypatch, [run1, "[]", keep_reply])
+    source = tmp_path / "notes.txt"
+    source.write_text("A long document about many topics.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    ceiling_lines = [
+        line for line in result.stderr.splitlines() if "pre-judge ceiling" in line
+    ]
+    assert len(ceiling_lines) == 1
+    assert "24-candidate" in ceiling_lines[0]
+    assert "1 merged candidate(s) never reached the judge" in ceiling_lines[0]
+    for other_notice_marker in ("cap reached", "judge dropped", "judge selection"):
+        assert other_notice_marker not in ceiling_lines[0]
 
 
 def test_healthy_ingest_builds_the_source_document_exactly_once(
@@ -1914,7 +2122,7 @@ def test_reingest_with_nondeterministic_llm_title_inserts_a_new_distinct_object(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert len(fake.calls) == 1
+    assert len(fake.calls) == 3  # 2 extraction runs + 1 judge call (#456)
     assert first_concept_path.read_text(encoding="utf-8") == first_content
     second_concept_path = (
         tmp_path / "bundle" / "concepts" / "a-completely-different-title.md"
@@ -4985,8 +5193,10 @@ def test_batch_forwards_include_confidential_per_file(
 ) -> None:
     """`--include-confidential` is forwarded unchanged to every per-file
     ingest: under a `confidential` workspace floor the flag bypasses the
-    extraction gate for EACH file, so the LLM is called once per file
-    (issue #267)."""
+    extraction gate for EACH file, so the LLM is called for each file
+    (issue #267) -- 2 calls per file under the union+judge product default
+    (#456: 2 extraction runs; the declining reply leaves the merged union
+    empty, so no judge call is spent on it)."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
@@ -4997,7 +5207,7 @@ def test_batch_forwards_include_confidential_per_file(
     result = runner.invoke(app, ["ingest", "notes", "--auto", "--include-confidential"])
 
     assert result.exit_code == 0
-    assert len(fake.calls) == 2
+    assert len(fake.calls) == 4
 
 
 def test_batch_confidential_floor_degrades_every_file_without_flag(
@@ -5289,6 +5499,9 @@ def test_ingest_reports_when_the_object_cap_discarded_candidates(
     were indistinguishable in the output -- both simply wrote `cap` documents.
     The loss is now named, so a reader can tell the difference."""
     _init_workspace(tmp_path, monkeypatch)
+    # Pinned to the single-run path (#404's own cap, `_MAX_OBJECTS_PER_SOURCE`)
+    # -- distinct from the union+judge `_UNION_BACKSTOP` of 12 (#456).
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
     _patch_llm(monkeypatch, _many_concepts_reply(20))
     source = tmp_path / "notes.txt"
     source.write_text("A long document about many topics.", encoding="utf-8")
@@ -5306,6 +5519,7 @@ def test_ingest_cap_notice_names_the_discarded_titles(
     behind #404 showed the discarded tail is exactly what a reader needs to
     judge whether the cap cost them anything real."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
     # Exactly `_CAP_NOTICE_TITLE_LIMIT` over the cap, so every discarded title
     # is named and none is folded into the "+N more" remainder.
     proposed = _CAP + main._CAP_NOTICE_TITLE_LIMIT
@@ -5326,6 +5540,7 @@ def test_ingest_cap_notice_bounds_how_many_titles_it_echoes(
     """A source proposing 61 objects would otherwise dump 55 titles into the
     terminal. Name enough to judge, then count the rest."""
     _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
     _patch_llm(monkeypatch, _many_concepts_reply(20))
     source = tmp_path / "notes.txt"
     source.write_text("A long document about many topics.", encoding="utf-8")

@@ -299,3 +299,31 @@ Titles matching neither a ground-truth subject nor a named facet. This harness n
 - `Interactive Development Loop` — seen 1 time(s)
 - `Execution Safety and Validation` — seen 1 time(s)
 - `Agent Definition` — seen 1 time(s)
+
+---
+
+## 2026-08-07 — union+judge measurement gate (change `union-judge-extraction`, #456)
+
+10 runs/cell, `--union-judge on`, ground truth current as of the second
+adjudication pass. Baselines are the same day's single-run `current` arm,
+rescored against that ground truth. Full generated report:
+`results/union-judge-gate-2026-08-07.md`.
+
+| fixture | post-cap recall, single-run | union+judge | cap_cost, single-run | union+judge |
+| --- | --- | --- | --- | --- |
+| `large-03-skills-vs-tools` | 0.71 | **0.84** | 1.00 | **0.00** |
+| `medium-08-sdk-skills` | 0.88 | **0.97** | 0.00 | 0.00 |
+| `small-04-pre-build-skills` | 0.73 | **0.80** | 0.40 | **0.00** |
+
+Gate criterion (recall MUST NOT regress on any fixture): **passed on all
+three**, and the defect that motivated the change — genuine subjects lost to
+blind positional truncation — measured **zero everywhere**. `large-03` had 2
+backend errors (600 s timeouts) attributable to a long-serving Ollama process;
+the server was restarted for the subsequent AMI rerun, which had none.
+
+The gate also caught one real defect before delivery: a VALID judge selection
+admitting zero objects returned `[]` with `judge_status="ok"` (reproduced on
+`TS3005a.transcript`). Fixed in-change with a deterministic empty-admission
+floor (degrade to the backstop-truncated union, `judge_status="empty"`, its
+own stderr notice). Judge selectivity on meeting transcripts remains
+unmeasured for lack of AMI subject-level ground truth — #457.

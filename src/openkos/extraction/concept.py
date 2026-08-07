@@ -18,6 +18,7 @@ UX, looping `openkos.model.okf.build_concept` once per validated object.
 from dataclasses import dataclass
 from typing import Any
 
+from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
 from openkos.model.types import CLASSIFIABLE_TYPES as _VALID_TYPES
@@ -575,6 +576,39 @@ class ExtractionReport:
     single-call path every measurement before chunking was taken against;
     the `_chunk_lines` window count above `_CHUNK_THRESHOLD`. Defaulted so
     every pre-chunking construction site keeps working unchanged."""
+    runs: int = 1
+    """Full extraction passes over the source (union-judge, #456): `2` on
+    the unchunked `extract_concept_union` path (two `_extract_once` calls
+    merged into a union before judging), `1` everywhere else -- the
+    single-run `extract_concept` path AND the chunked union path, which is
+    judge-only with no second pass per chunk. Defaulted so every
+    pre-union construction site keeps working unchanged."""
+    judge_status: str = "skipped"
+    """`"skipped"` whenever the judge never ran: the single-run
+    `extract_concept` path, which never calls it, and
+    `extract_concept_union` on an EMPTY merged union (nothing to judge, so
+    no call is spent); `"ok"` when `extract_concept_union`'s judge call
+    returned a usable selection admitting at least one candidate; `"failed"`
+    when the judge call itself was unusable (`OllamaError`, empty reply, or
+    unparseable/wrong-shape reply -- design D7); `"empty"` when the reply was
+    valid in shape but its admitted set -- after closed-candidate-list
+    matching and `Procedure` re-admission -- was empty despite a non-empty
+    merged union (#456 gate finding, 2026-08-07: never surface zero objects
+    while the merged union is non-empty). Both `"failed"` and `"empty"` keep
+    the full backstopped union and are treated identically by
+    `_judge_failure_notice`. Defaulted so every pre-union construction site
+    keeps working unchanged."""
+    judged_out_titles: tuple[str, ...] = ()
+    """Titles the judge selected AGAINST, in merged-candidate order, on the
+    `judge_status == "ok"` path -- always `()` when the judge was skipped,
+    failed, or admitted nothing (each of those keeps everything, so nothing
+    was ultimately judged out). Never includes a `Procedure` re-admitted by
+    the deterministic post-filter (design D5), even when the judge itself
+    rejected it."""
+    pre_judge_dropped: int = 0
+    """Merged candidates cut by `_MAX_JUDGE_CANDIDATES` BEFORE the judge
+    ever saw them -- distinct from `discarded_titles`, which is the FINAL
+    backstop cap's casualty list. `0` on every non-union path."""
 
 
 @dataclass(frozen=True)
@@ -684,5 +718,221 @@ def extract_concept(
                 result.title for result in results[_MAX_OBJECTS_PER_SOURCE:]
             ),
             chunks=chunk_count,
+        ),
+    )
+
+
+def _merge_union(results: list[ExtractionResult]) -> list[ExtractionResult]:
+    """Merge candidates from multiple runs by `(type, _normalize_title(title))`
+    (design D6), keeping the RICHER object on collision rather than the
+    first one -- unlike `_dedup_merged`, which is a same-reply/chunk-merge
+    dedup that deliberately keeps first occurrence, since a later chunk
+    covering the same subject again is a repeat, not a second opinion.
+    Here the two candidates come from two INDEPENDENT extraction attempts,
+    so run 2 may genuinely describe the same subject more fully than run 1
+    did, and keep-first would silently throw that away.
+
+    On a collision: the candidate with the longer `body` wins; a tie falls
+    back to the longer `description`; if both tie, the FIRST occurrence
+    wins, keeping the merge output order deterministic. The whole
+    `ExtractionResult` is swapped, never field-mixed, so the winner is
+    always a real object one run actually produced.
+
+    Output position is the first occurrence of each key, across the whole
+    input in order -- so a run-2-only object still lands after every
+    run-1 object that came before it, and a collision does not move its
+    slot even when run 2 wins the content."""
+    order: list[tuple[str, str]] = []
+    best: dict[tuple[str, str], ExtractionResult] = {}
+    for result in results:
+        key = (result.type, _normalize_title(result.title))
+        current = best.get(key)
+        if current is None:
+            order.append(key)
+            best[key] = result
+            continue
+        richer_body = len(result.body) > len(current.body)
+        tied_body_richer_description = len(result.body) == len(current.body) and len(
+            result.description
+        ) > len(current.description)
+        if richer_body or tied_body_richer_description:
+            best[key] = result
+        # Otherwise the tie (or a strictly poorer challenger) leaves the
+        # first occurrence in place -- no swap.
+    return [best[key] for key in order]
+
+
+_MAX_JUDGE_CANDIDATES = 24
+"""Ceiling on merged candidates handed to `judge.select` (design D8),
+applied AFTER the union merge and BEFORE the judge call -- distinct from,
+and always at least as large as, `_UNION_BACKSTOP`. Reasoned rather than
+measured: 2x the backstop, bounding judge prompt growth on a many-chunk
+source without a corpus measurement showing it ever binds (open question,
+design). `report.pre_judge_dropped` names what this ceiling cut."""
+
+_UNION_BACKSTOP = 12
+"""Fixed cap applied EXACTLY ONCE, LAST -- after judge selection (or the
+failure degrade) and after `Procedure` re-admission (design D8). Never
+user-configurable, unlike the single-run `_MAX_OBJECTS_PER_SOURCE`: this is
+a pathological-output backstop, not the primary selection mechanism (the
+judge is), and measured evidence (design D8) says it does not bind on a
+genuine set -- 7 unchunked, 9 on the TS3005b chunked fixture."""
+
+
+def extract_concept_union(
+    source_text: str, *, source_title: str, llm: LLMBackend
+) -> ExtractionOutcome:
+    """Union-of-runs + selector-judge orchestrator (design D1, #456): a
+    SIBLING to `extract_concept` in this same module, replacing the blind
+    `_MAX_OBJECTS_PER_SOURCE` position-based truncation with a merge +
+    judge + backstop pipeline. `extract_concept` itself is UNCHANGED --
+    every existing caller (`run_spike.py`, both `evals/model_spike/`
+    harnesses) keeps calling it directly.
+
+    Below `_CHUNK_THRESHOLD`: runs `_extract_once` TWICE with the identical
+    prompt/messages, twin-drops EACH run's own output independently
+    (`_drop_source_title_twins`, before merge), then merges the two runs
+    with `_merge_union` (richer body/description wins a collision, design
+    D6). `report.runs == 2`.
+
+    Above `_CHUNK_THRESHOLD`: judge-only, no second pass per chunk -- the
+    existing `_chunk_lines`/`_dedup_merged`/twin-drop pipeline from
+    `extract_concept` runs unchanged, and the judge evaluates that single
+    merged set (spec: "Chunked Sources Are Judge-Only, No Second Pass" --
+    this is the PERMANENT shape for chunked sources). `report.runs == 1`.
+
+    The merged candidate list is then capped at `_MAX_JUDGE_CANDIDATES`
+    (design D8) -- candidates beyond the ceiling never reach the judge at
+    all, and `report.pre_judge_dropped` names how many. An EMPTY merged
+    list skips the judge entirely (`judge_status` stays `"skipped"` -- no
+    LLM call is spent deciding among zero candidates); otherwise
+    `judge.select` is called with the (possibly ceiling-truncated) merged
+    list and
+    `source_text`; a `None` result (any `llm.chat` exception, an empty
+    reply, or an unparseable/wrong-shape reply -- judge.py's own D7
+    contract) degrades to keeping the FULL ceiling-truncated set unfiltered,
+    `report.judge_status = "failed"`. A successful selection keeps only the
+    candidates whose title the judge echoed, PLUS a deterministic,
+    prompt-independent re-admission of any `Procedure`-typed candidate
+    (design D5) -- `report.judged_out_titles` never names a re-admitted
+    `Procedure`, and `report.judge_status = "ok"`. If that admitted set is
+    EMPTY despite a non-empty judge input (#456, 2026-08-07 gate finding),
+    the pipeline degrades the same way as a judge failure -- keeping the
+    FULL ceiling-truncated set unfiltered -- but records
+    `report.judge_status = "empty"`, distinct from both `"ok"` and
+    `"failed"`, so extraction never returns zero objects while the merged
+    union is non-empty.
+
+    `_UNION_BACKSTOP` (12) is applied exactly once, LAST -- after the
+    judge/failure-degrade AND after `Procedure` re-admission (design D8).
+    `report.produced`/`report.retained`/`report.discarded_titles` are tied
+    to this FINAL cap only, exactly like `extract_concept` -- never to the
+    pre-judge ceiling, so `_extraction_cap_notice` (CLI) keeps rendering
+    unchanged (it reads these three fields and nothing else).
+
+    Any `OllamaError`-family exception from an `_extract_once` call
+    (including run 2, unchunked path) propagates unswallowed to the caller,
+    exactly like `extract_concept` -- the judge's own fail-closed contract
+    is `judge.select`'s alone and is never extended to cover extraction
+    failures.
+    """
+    if len(source_text) <= _CHUNK_THRESHOLD:
+        run1 = _drop_source_title_twins(
+            _extract_once(source_text, source_title, llm), source_title=source_title
+        )
+        run2 = _drop_source_title_twins(
+            _extract_once(source_text, source_title, llm), source_title=source_title
+        )
+        merged = _merge_union(run1 + run2)
+        chunk_count = 1
+        run_count = 2
+    else:
+        windows = _chunk_lines(source_text)
+        chunk_count = len(windows)
+        chunked: list[ExtractionResult] = []
+        for window in windows:
+            chunked.extend(_extract_once(window, source_title, llm))
+        merged = _drop_source_title_twins(
+            _dedup_merged(chunked), source_title=source_title
+        )
+        run_count = 1
+
+    pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
+    judge_input = merged[:_MAX_JUDGE_CANDIDATES]
+
+    if not judge_input:
+        # Nothing to judge: an empty merged union used to spend a real
+        # judge call to select among zero candidates and land
+        # `judge_status = "ok"`, contradicting that status's "admitted at
+        # least one" meaning. Skip the call; the report defaults already
+        # say it all (`judge_status="skipped"` means "judge not run").
+        return ExtractionOutcome(
+            objects=[],
+            report=ExtractionReport(
+                produced=0,
+                retained=0,
+                chunks=chunk_count,
+                runs=run_count,
+            ),
+        )
+
+    selected = judge_mod.select(
+        source_text,
+        [
+            judge_mod.JudgeCandidate(
+                type=c.type, title=c.title, description=c.description
+            )
+            for c in judge_input
+        ],
+        llm,
+    )
+
+    if selected is None:
+        kept = judge_input
+        judge_status = "failed"
+        judged_out_titles: tuple[str, ...] = ()
+    else:
+        # Normalized on BOTH sides (design D4): the judge echoes titles as
+        # prose, and case/whitespace drift in that echo must not silently
+        # drop a genuine candidate. Deliberate bound (#457): the reply is
+        # title-only, so two different-typed candidates sharing one
+        # normalized title cannot be told apart -- a selected title admits
+        # ALL of them, damage bounded by `_UNION_BACKSTOP`; the reply-
+        # protocol change that could disambiguate is tracked in #457.
+        selected_titles = {_normalize_title(title) for title in selected}
+        admitted = [
+            c
+            for c in judge_input
+            if _normalize_title(c.title) in selected_titles
+            or c.type == _TWIN_EXEMPT_TYPE
+        ]
+        if not admitted and judge_input:
+            # Empty-admission floor (#456, 2026-08-07 gate finding): a
+            # valid-shaped judge reply whose admitted set -- after closed-set
+            # matching AND Procedure re-admission -- is empty must never
+            # surface as zero objects while the merged union is non-empty.
+            # Degrade exactly like a judge failure, but with a status
+            # distinct from BOTH "ok" and "failed" so callers can tell a
+            # rejected-everything selection apart from an unusable reply.
+            kept = judge_input
+            judge_status = "empty"
+            judged_out_titles = ()
+        else:
+            kept = admitted
+            judged_out_titles = tuple(c.title for c in judge_input if c not in kept)
+            judge_status = "ok"
+
+    retained = kept[:_UNION_BACKSTOP]
+    return ExtractionOutcome(
+        objects=retained,
+        report=ExtractionReport(
+            produced=len(kept),
+            retained=len(retained),
+            discarded_titles=tuple(result.title for result in kept[_UNION_BACKSTOP:]),
+            chunks=chunk_count,
+            runs=run_count,
+            judge_status=judge_status,
+            judged_out_titles=judged_out_titles,
+            pre_judge_dropped=pre_judge_dropped,
         ),
     )
