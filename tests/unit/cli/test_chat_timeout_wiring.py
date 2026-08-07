@@ -71,6 +71,7 @@ def test_chat_client_applies_configured_timeout() -> None:
         confidential_local_exemption=True,
         volatility_windows={},
         type_tiers={},
+        union_judge=config.DEFAULT_UNION_JUDGE,
     )
 
     client = main_module._chat_client(cfg)
@@ -93,6 +94,7 @@ def test_chat_client_uses_the_configured_model() -> None:
         confidential_local_exemption=True,
         volatility_windows={},
         type_tiers={},
+        union_judge=config.DEFAULT_UNION_JUDGE,
     )
 
     assert main_module._chat_client(cfg)._model == "some-model:latest"
@@ -156,6 +158,7 @@ def test_chat_client_applies_configured_max_generation_tokens() -> None:
         confidential_local_exemption=True,
         volatility_windows={},
         type_tiers={},
+        union_judge=config.DEFAULT_UNION_JUDGE,
     )
 
     client = main_module._chat_client(cfg)

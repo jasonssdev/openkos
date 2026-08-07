@@ -1682,3 +1682,75 @@ def test_written_config_carries_max_generation_tokens(tmp_path: Path) -> None:
         config.read_config(tmp_path).max_generation_tokens
         == config.DEFAULT_MAX_GENERATION_TOKENS
     )
+
+
+# --- union_judge: opt-out flag for the union+judge extraction pipeline (#456) --
+
+
+def test_default_union_judge_is_true() -> None:
+    """The packaged default enables union+judge extraction (design D9): a
+    one-line rollback exists (flip this constant), so the product default
+    can safely be the improved path."""
+    assert config.DEFAULT_UNION_JUDGE is True
+
+
+def test_read_config_falls_back_to_true_when_union_judge_absent(
+    tmp_path: Path,
+) -> None:
+    """An absent `union_judge` key falls back to `True` -- a workspace
+    created before #456 keeps working, opted into the new pipeline."""
+    (tmp_path / "openkos.yaml").write_text("model: gemma3\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.union_judge is True
+
+
+def test_read_config_preserves_explicit_union_judge_false(tmp_path: Path) -> None:
+    """`union_judge: false` is a real value, not an absence -- checked
+    `is not None`, never by truthiness, so it survives untouched (mutation
+    guard for task 3.1: a truthiness check would still coerce `False` since
+    `False` is falsy either way at the VALUE level, but a naive
+    `raw.get("union_judge", True)` swallows an explicit `False` written as
+    `union_judge: false` no differently here -- this test pins that the
+    explicit value reads back exactly as written)."""
+    (tmp_path / "openkos.yaml").write_text("union_judge: false\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.union_judge is False
+
+
+@pytest.mark.parametrize(
+    "yaml_body", ["union_judge: null\n", "union_judge:\n"]
+)
+def test_read_config_explicit_null_union_judge_falls_back(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """A present-but-null `union_judge` falls back to the packaged default,
+    matching every other field's `is not None` fallback."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.union_judge is config.DEFAULT_UNION_JUDGE
+
+
+@pytest.mark.parametrize(
+    "yaml_body",
+    [
+        "union_judge: maybe\n",
+        "union_judge: 1\n",
+        "union_judge:\n  nested: true\n",
+    ],
+)
+def test_read_config_rejects_a_non_bool_union_judge(
+    tmp_path: Path, yaml_body: str
+) -> None:
+    """A non-bool `union_judge` raises `ValueError`, validated rather than
+    coerced -- `1` is rejected too (int-as-bool hazard, mirroring
+    `confidential_local_exemption`'s own guard)."""
+    (tmp_path / "openkos.yaml").write_text(yaml_body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"union_judge"):
+        config.read_config(tmp_path)

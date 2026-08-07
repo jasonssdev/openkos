@@ -35,7 +35,11 @@ from openkos.bundle import relations as bundle_relations
 from openkos.cli import curate as curate_module
 from openkos.cli import next_action as next_action_module
 from openkos.cli import observability
-from openkos.extraction.concept import ExtractionReport, extract_concept
+from openkos.extraction.concept import (
+    ExtractionReport,
+    extract_concept,
+    extract_concept_union,
+)
 from openkos.graph import proximity, sqlite_graph
 from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import build_graph
@@ -1762,6 +1766,70 @@ A source that proposed 61 objects would otherwise dump 56 titles into the
 terminal -- name enough to judge whether the loss mattered, then count."""
 
 
+def _judge_failure_notice(report: ExtractionReport) -> str | None:
+    """Render the union+judge failure-degrade notice (#456/#456), or `None`
+    when the judge succeeded or was never invoked.
+
+    Distinct wording from `_extraction_cap_notice` (a numeric cap firing)
+    and from `_judge_selection_notice` (a successful judge selection) --
+    spec: "a `_judge_failure_notice` distinct from `_judge_selection_notice`/
+    `_extraction_cap_notice`". Fires on BOTH degrade statuses that keep the
+    full (backstop-capped) merged union instead of filtering it:
+    `"failed"` (the judge call raised, returned an empty reply, or an
+    unparseable/wrong-shape reply) and `"empty"` (#456 gate finding: a
+    valid-shaped reply whose admitted set was empty). Each status renders
+    distinct wording so the two degrade causes stay tellable apart in the
+    terminal."""
+    if report.judge_status == "failed":
+        reason = "judge selection unavailable"
+    elif report.judge_status == "empty":
+        reason = "judge selection admitted zero objects"
+    else:
+        return None
+    return (
+        f"{reason}; kept the full merged extraction "
+        f"union ({report.retained} object(s)) unfiltered"
+    )
+
+
+def _pre_judge_ceiling_notice(report: ExtractionReport) -> str | None:
+    """Render the pre-judge ceiling drop notice, or `None` when the
+    24-candidate ceiling (`concept._MAX_JUDGE_CANDIDATES`) cut nothing.
+
+    Distinct wording from `_extraction_cap_notice` (the FINAL backstop cap
+    firing on what survived selection) and from both judge notices (what the
+    judge did or failed to do): these candidates were cut BEFORE the judge
+    ever saw them, so they were never judged, dropped, or cap-discarded --
+    they simply never reached the judge."""
+    if report.pre_judge_dropped <= 0:
+        return None
+    return (
+        "merged extraction union exceeded the 24-candidate pre-judge "
+        f"ceiling; {report.pre_judge_dropped} merged candidate(s) never "
+        "reached the judge"
+    )
+
+
+def _judge_selection_notice(report: ExtractionReport) -> str | None:
+    """Render the union+judge SUCCESSFUL-selection notice (#456), naming
+    what the judge dropped, or `None` when the judge kept everything, was
+    never invoked, or failed (handled by `_judge_failure_notice` instead).
+
+    Mirrors `_extraction_cap_notice`'s shape (a count plus a bounded list of
+    named titles) for the judge's OWN drop, distinct from the FINAL numeric
+    cap: a judge-dropped title is never also a cap-discarded title, since
+    `report.discarded_titles` is built from what SURVIVED judge selection
+    (see `extract_concept_union`'s docstring)."""
+    if report.judge_status != "ok" or not report.judged_out_titles:
+        return None
+    shown = report.judged_out_titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(report.judged_out_titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return f"judge dropped {len(report.judged_out_titles)} candidate(s): {listed}"
+
+
 def _extraction_cap_notice(report: ExtractionReport) -> str | None:
     """Render the `_MAX_OBJECTS_PER_SOURCE` truncation notice, or `None` when
     the cap did not fire (#404).
@@ -1853,6 +1921,7 @@ def _stage_derived_objects(
     bundle_dir: Path,
     llm: LLMBackend,
     include_confidential: bool = False,
+    union_judge: bool = False,
 ) -> tuple[list[_DerivedPlan], okf.ExtractionStatus | None]:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
@@ -1941,6 +2010,16 @@ def _stage_derived_objects(
     `workspace_floor`: the extraction gate above MUST keep reading the
     workspace floor (`sensitivity-aware-llm` Requirement 4, unchanged by
     this change), never the Source's own value, even when the two differ.
+
+    `union_judge` (design D9, #456) selects which extraction orchestrator
+    runs: `False` (this kwarg's own default -- a REQUIRED keyword, not
+    defaulted from `config`, so every existing direct call site keeps
+    exercising the untouched single-run path as a regression guard) calls
+    `extraction.concept.extract_concept` exactly once; `True` calls
+    `extract_concept_union`, which runs extraction twice (or once per chunk)
+    and adds a selector-judge pass. The CLI's own `ingest` call site is the
+    ONE place that injects `cfg.union_judge` explicitly, so the product-ON
+    default lives in `config.DEFAULT_UNION_JUDGE` alone.
     """
     if raw_content is None or not raw_content.strip():
         typer.echo(
@@ -1960,9 +2039,10 @@ def _stage_derived_objects(
         )
         return [], "blocked-by-sensitivity"
 
+    extractor = extract_concept_union if union_judge else extract_concept
     try:
         with Console(stderr=True).status("openkos ingest: extracting concepts…"):
-            outcome = extract_concept(raw_content, source_title=source_title, llm=llm)
+            outcome = extractor(raw_content, source_title=source_title, llm=llm)
     except OllamaError as exc:
         typer.echo(
             f"openkos ingest: concept extraction skipped -- {exc}; "
@@ -1972,6 +2052,21 @@ def _stage_derived_objects(
         return [], "failed"
 
     extractions = outcome.objects
+    # The pre-judge ceiling fires FIRST of all: it cut candidates before
+    # the judge ever saw them, so it renders ahead of what the judge did.
+    ceiling_notice = _pre_judge_ceiling_notice(outcome.report)
+    if ceiling_notice is not None:
+        typer.echo(f"openkos ingest: {ceiling_notice}", err=True)
+
+    # #456: a judge notice fires next, distinct from the #404 cap notice --
+    # `judge_status` is "skipped" on the single-run path, so both helpers
+    # are no-ops there without needing an `if union_judge` guard here.
+    judge_notice = _judge_failure_notice(outcome.report) or _judge_selection_notice(
+        outcome.report
+    )
+    if judge_notice is not None:
+        typer.echo(f"openkos ingest: {judge_notice}", err=True)
+
     # #404: the cap was the ONE drop in this function that said nothing --
     # empty slug, in-batch collision, existing file and failed build all
     # report per candidate below. A source proposing 20 objects and one
@@ -2924,6 +3019,7 @@ def _ingest_single(
             bundle_dir=layout.bundle_dir,
             llm=_chat_client(cfg),
             include_confidential=include_confidential,
+            union_judge=cfg.union_judge,
         )
         if skip_reason is not None:
             # Re-render from scratch with the discovered reason stamped in

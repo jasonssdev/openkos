@@ -84,3 +84,36 @@ conclusion was then carried as if it were about extraction in general.
 On meeting material the same pipeline reaches 1:1 routinely and unpredictably.
 "Multiplicity holds" needed a second corpus shape before it was a claim about
 the extractor rather than about that corpus.
+
+## 2026-08-07 — union+judge gate rerun (change `union-judge-extraction`, #456)
+
+Post-#455 baseline vs the union+judge pipeline (`--union-judge`, 3 runs,
+fresh Ollama):
+
+| Source | baseline (blind cap) | union+judge | reading |
+|---|---|---|---|
+| `TS3005a.summary` | 4, 4, 1 | 4, 4, 6 | no regression |
+| `TS3005a.transcript` | 1, 1, 1 | **1, 1, 4** | first run set ever past 1 object; reached `Concept`, `Procedure`, `Project` beside `Event` |
+| `TS3005b.summary` | 1, 1, 1 | 1, 1, 2 | first `Decision` from this summary |
+| `TS3005b.transcript` | 6, 6, 6 of 10 | **5, 1, 7** | type coverage held (`Decision` 4, `Event` 6, `Project` 2, `Procedure` 1); see caveat |
+
+**Defect found and fixed by this gate.** The first union rerun returned
+`0 kept of 0 proposed` with `judge_status="ok"` on `TS3005a.transcript`: both
+runs collapsed to the umbrella Event `AMI meeting TS3005a`, the judge rejected
+it, and the pipeline had no floor. Fixed before delivery: an empty admitted
+set with a non-empty union now degrades to the backstop-truncated union
+(`judge_status="empty"`, distinct stderr notice) — extraction can no longer
+return zero objects from a substantive source by judge decision alone.
+
+**Caveat that is now #457.** The `5, 1, 7` spread on `TS3005b.transcript`
+includes a run where the judge kept 1 of ~10 merged candidates from 40.8 KB —
+the old collapse silhouette, produced by selection rather than generation.
+Whether those rejections were right (facets) or wrong (subjects) is
+UNDECIDABLE without AMI subject-level ground truth; the blind cap's `6, 6, 6`
+was never truth either (#454 showed it discarding genuine `Decision` titles).
+Adjudicate first, tune the judge after — never the reverse.
+
+The `Person`/`Organization`/`Place` absences persist unchanged under the
+union path (still zero against 17/4/3 annotated mentions) — the open
+participant-extraction question above stands, and #457's adjudication pass is
+positioned to settle it.

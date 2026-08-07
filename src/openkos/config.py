@@ -109,6 +109,19 @@ nothing (issue #422). Reaching this ceiling raises `OllamaGenerationCapped`
 (`llm.ollama`) rather than returning a silently truncated reply -- a
 mis-set rail is loud, not silent."""
 
+DEFAULT_UNION_JUDGE = True
+"""Packaged default for `union_judge` (design D9, #456): the union-of-runs +
+selector-judge extraction pipeline (`extraction.concept.extract_concept_union`)
+replaces the blind, position-based `_MAX_OBJECTS_PER_SOURCE` truncation.
+
+`True` because the union+judge path is the measured improvement: two runs
+merged and judge-selected recovers subjects a single run's cap silently
+discarded (design proposal). The rollback is one line -- flipping this
+constant to `False` restores the single-run, single-cap `extract_concept`
+path byte-for-byte -- so shipping the improved path as the default carries no
+un-recoverable risk, unlike `confidential_local_exemption` (a security
+posture) or `default_sensitivity` (data classification)."""
+
 DEFAULT_VOLATILITY_WINDOWS: dict[str, str] = {"slow": "90d", "volatile": "7d"}
 """Packaged per-tier default windows (freshness-lint-v1, design: "Per-tier
 windows (CONCRETE, FINAL)"): `slow` = 90d, `volatile` = 7d -- continuity
@@ -589,6 +602,14 @@ class Config:
     passes through verbatim -- unknown-type/invalid-tier validation and the
     override step in the `volatility`/`type_tiers`/registry-default/fallback
     precedence stay in `lint.window_for_doc`, not here."""
+    union_judge: bool
+    """Whether `ingest` uses the union-of-runs + selector-judge extraction
+    pipeline (design D9, #456), defaulting to `DEFAULT_UNION_JUDGE` when the
+    key is absent or explicitly null. `False` restores the single-run,
+    single-cap `extract_concept` path byte-for-byte -- the CLI passes this
+    value explicitly to `_stage_derived_objects`'s `union_judge` kwarg
+    rather than defaulting it there, so the product-ON default lives in
+    exactly ONE place."""
 
 
 def read_config(root: Path) -> Config:
@@ -630,6 +651,7 @@ def read_config(root: Path) -> Config:
     confidential_local_exemption = raw.get("confidential_local_exemption")
     volatility_windows = raw.get("volatility_windows")
     type_tiers = raw.get("type_tiers")
+    union_judge = raw.get("union_judge")
     if model is not None and not isinstance(model, str):
         raise ValueError(
             f"{layout.config_path.name}: 'model' must be a string, got "
@@ -697,6 +719,17 @@ def read_config(root: Path) -> Config:
             f"{layout.config_path.name}: 'confidential_local_exemption' must be "
             f"a boolean, got {type(confidential_local_exemption).__name__}"
         )
+    if union_judge is not None and not isinstance(union_judge, bool):
+        # Validated, never coerced (design D9), mirroring
+        # `confidential_local_exemption`'s own guard: `isinstance(x, bool)`
+        # is deliberately narrower than a truthiness test, since YAML
+        # resolves `1` to `int` and accepting int-as-bool would make
+        # `union_judge: 0` and `: false` agree only by coincidence of
+        # Python's numeric tower.
+        raise ValueError(
+            f"{layout.config_path.name}: 'union_judge' must be a boolean, got "
+            f"{type(union_judge).__name__}"
+        )
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,
@@ -733,6 +766,9 @@ def read_config(root: Path) -> Config:
             volatility_windows if volatility_windows is not None else {}
         ),
         type_tiers=(type_tiers if type_tiers is not None else {}),
+        union_judge=(
+            union_judge if union_judge is not None else DEFAULT_UNION_JUDGE
+        ),
     )
 
 

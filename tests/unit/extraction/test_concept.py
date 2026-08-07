@@ -1924,3 +1924,387 @@ def test_ollama_error_from_a_later_chunk_propagates_unswallowed() -> None:
 
     with pytest.raises(OllamaUnavailable):
         concept_mod.extract_concept(text, source_title="Meeting", llm=llm)
+
+
+# --- Union-of-runs + selector judge (#456) -----------------------------------
+#
+# `extract_concept_union` is a SIBLING orchestrator in this module (design
+# D1) -- `extract_concept` stays untouched (regression, task 2.22). Below
+# `_CHUNK_THRESHOLD` it runs `_extract_once` TWICE, twin-drops each run's own
+# output, merges by richer body, ceils at `_MAX_JUDGE_CANDIDATES`, asks
+# `judge.select`, deterministically re-admits `Procedure`, then applies the
+# `_UNION_BACKSTOP` cap exactly once, last.
+
+
+def _keep_reply(*titles: str) -> str:
+    """A well-formed judge reply keeping exactly `titles`."""
+    quoted = ", ".join(f'"{t}"' for t in titles)
+    return f'{{"keep": [{quoted}]}}'
+
+
+def test_union_runs_extraction_twice_below_the_chunk_threshold() -> None:
+    """Below `_CHUNK_THRESHOLD`, `extract_concept_union` issues 2 calls with
+    identical extraction messages, and a candidate unique to run 2 survives
+    in the merged union handed to the judge (recall claim)."""
+    run1 = _array(_CONCEPT_ITEM)
+    run2 = _array(_CONCEPT_ITEM, _PERSON_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism", "Epictetus")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Some notes.", source_title="Notes", llm=llm
+    )
+
+    # 2 extraction calls + 1 judge call.
+    assert len(llm.calls) == 3
+    assert llm.calls[0] == llm.calls[1]
+    assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
+
+
+def test_union_twin_drop_applies_per_run_before_merge() -> None:
+    """A source-title twin from ONE run is dropped from THAT run's
+    contribution before the union is built, independent of run order."""
+    twin = (
+        '{"type": "Event", "title": "Team Meeting", '
+        '"description": "The meeting itself.", "body": ""}'
+    )
+    run1 = _array(_DECISION_ITEM, twin)
+    run2 = _array(_DECISION_ITEM)
+    llm = _SequencedLLM(
+        [run1, run2, _keep_reply("Frame the Essay Around Control")]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    assert "Team Meeting" not in {r.title for r in outcome.objects}
+
+
+def test_union_merge_keeps_the_richer_body_on_collision() -> None:
+    """A `(type, normalized-title)` collision across runs keeps the
+    candidate with the longer `body`, not first-occurrence order."""
+    thin = (
+        '{"type": "Concept", "title": "Stoicism", '
+        '"description": "A school of philosophy.", "body": "short"}'
+    )
+    rich = (
+        '{"type": "Concept", "title": "Stoicism", '
+        '"description": "A school of philosophy.", '
+        '"body": "A much longer and richer body describing Stoicism in detail."}'
+    )
+    llm = _SequencedLLM([_array(thin), _array(rich), _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert len(outcome.objects) == 1
+    assert outcome.objects[0].body.startswith("A much longer")
+
+
+def test_union_merge_description_tie_break_on_equal_body_length() -> None:
+    """Equal `body` length falls back to the longer `description`."""
+    short_desc = (
+        '{"type": "Concept", "title": "Stoicism", '
+        '"description": "Short.", "body": "same length"}'
+    )
+    long_desc = (
+        '{"type": "Concept", "title": "Stoicism", '
+        '"description": "A much longer description of Stoicism.", '
+        '"body": "same length"}'
+    )
+    llm = _SequencedLLM(
+        [_array(short_desc), _array(long_desc), _keep_reply("Stoicism")]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert outcome.objects[0].description == "A much longer description of Stoicism."
+
+
+def test_union_merge_both_equal_keeps_first_occurrence_order() -> None:
+    """When body and description both tie, the FIRST occurrence (run 1)
+    wins, keeping merge order deterministic."""
+    llm = _SequencedLLM(
+        [_array(_CONCEPT_ITEM), _array(_CONCEPT_ITEM), _keep_reply("Stoicism")]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert len(outcome.objects) == 1
+    assert outcome.objects[0].description == "A school of Hellenistic philosophy."
+
+
+def test_union_chunked_source_makes_exactly_chunks_plus_one_calls() -> None:
+    """Above `_CHUNK_THRESHOLD`, no second extraction pass per chunk: exactly
+    `chunks + 1` total calls (one per chunk, plus one judge call), and
+    `report.runs == 1`."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = _array(_DECISION_ITEM)
+    replies.append(_keep_reply("Frame the Essay Around Control"))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Meeting", llm=llm
+    )
+
+    assert len(llm.calls) == len(windows) + 1
+    assert outcome.report.runs == 1
+    assert outcome.report.chunks == len(windows)
+
+
+def test_union_ceiling_caps_judge_input_at_24_candidates() -> None:
+    """More than `_MAX_JUDGE_CANDIDATES` (24) merged candidates: the judge
+    sees exactly 24, and `pre_judge_dropped` counts the remainder."""
+
+    def item(i: int) -> str:
+        return (
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "Distinct subject {i}.", "body": ""}}'
+        )
+
+    run1 = _array(*(item(i) for i in range(1, 22)))  # 21 distinct
+    run2 = _array(*(item(i) for i in range(15, 26)))  # 4 new (22-25)
+    # 25 total distinct subjects across both runs -> ceiling(24) drops 1.
+    judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 25)))
+    llm = _SequencedLLM([run1, run2, judge_reply])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    judge_call = llm.calls[2]
+    judge_user_content = judge_call[1]["content"]
+    assert judge_user_content.count("Subject ") == 24
+    assert outcome.report.pre_judge_dropped == 1
+
+
+def test_union_judge_success_reports_judged_out_titles() -> None:
+    """A successful judge selection names the dropped titles in
+    `judged_out_titles`, and `judge_status == "ok"`."""
+    run1 = _array(_CONCEPT_ITEM, _ENTITY_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert outcome.report.judge_status == "ok"
+    assert outcome.report.judged_out_titles == ("Zettelkasten App",)
+    assert {r.title for r in outcome.objects} == {"Stoicism"}
+
+
+def test_union_judge_title_match_is_normalized_not_raw() -> None:
+    """A judge reply echoing a kept title in different CASE ("stoicism" for
+    candidate "Stoicism") still admits that candidate, and never misreports
+    it in `judged_out_titles` -- admission matches via the module's shared
+    `_normalize_title` on BOTH sides (design D4). Mutation this catches:
+    reverting the admission filter to raw `c.title in selected` equality,
+    which silently drops the candidate and blames the judge for it."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("stoicism", "Epictetus")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
+    assert "Stoicism" not in outcome.report.judged_out_titles
+    assert outcome.report.judge_status == "ok"
+
+
+def test_union_same_title_different_type_candidates_are_both_admitted() -> None:
+    """Pin of a deliberate bound (#457): the judge reply is title-only, so
+    two different-typed candidates sharing one normalized title cannot be
+    disambiguated -- a selected title admits BOTH, and neither is reported
+    in `judged_out_titles`. Damage is bounded by `_UNION_BACKSTOP`; the
+    reply-protocol change that could tell them apart is tracked in #457,
+    and this test is the alarm if admission behavior drifts before it."""
+    entity_twin = (
+        '{"type": "Entity", "title": "Stoicism", '
+        '"description": "An organization named after the philosophy.", '
+        '"body": ""}'
+    )
+    run1 = _array(_CONCEPT_ITEM, entity_twin)
+    run2 = _array()
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert [(r.type, r.title) for r in outcome.objects] == [
+        ("Concept", "Stoicism"),
+        ("Entity", "Stoicism"),
+    ]
+    assert outcome.report.judged_out_titles == ()
+    assert outcome.report.judge_status == "ok"
+
+
+def test_union_procedure_survives_judge_rejection_via_deterministic_readmission() -> (
+    None
+):
+    """A judge-rejected `Procedure` candidate is retained AND absent from
+    `judged_out_titles` -- deterministic post-filter re-admission (D5), never
+    a judge prompt clause."""
+    run1 = _array(_CONCEPT_ITEM, _PROCEDURE_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    # Judge rejects the Procedure -- only "Stoicism" is kept in its reply.
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    titles = {r.title for r in outcome.objects}
+    assert "Morning Journaling Routine" in titles
+    assert "Morning Journaling Routine" not in outcome.report.judged_out_titles
+
+
+@pytest.mark.parametrize(
+    "judge_failure",
+    [
+        "not json",
+        "",
+        OllamaUnavailable("boom"),
+    ],
+)
+def test_union_judge_failure_degrades_to_the_full_backstopped_union(
+    judge_failure: str | Exception,
+) -> None:
+    """`llm.chat` raising `OllamaError`, an empty reply, or an unparseable
+    reply during the judge call -- all three: the full merged union is kept
+    (no candidate lost), `judge_status == "failed"`, and no exception
+    escapes `extract_concept_union` itself."""
+    run1 = _array(_CONCEPT_ITEM)
+    run2 = _array(_PERSON_ITEM)
+    llm = _SequencedLLM([run1, run2, judge_failure])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert outcome.report.judge_status == "failed"
+    assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
+
+
+def test_union_valid_empty_selection_degrades_to_the_full_backstopped_union() -> (
+    None
+):
+    """A judge reply that is valid in shape but whose admitted set -- after
+    closed-candidate-list matching and Procedure re-admission -- is empty
+    MUST NOT return zero objects while the merged union is non-empty
+    (spec: "Valid selection admitting zero objects degrades the same way",
+    2026-08-07 gate finding on `TS3005a.transcript`). The full merged union
+    (backstop-truncated) is kept, and `judge_status` is a distinct degrade
+    value, never `"ok"` and never `"failed"` (that value names the
+    unparseable/exception/empty-reply case, not a valid-but-empty one)."""
+    run1 = _array(_CONCEPT_ITEM)
+    run2 = _array(_PERSON_ITEM)
+    # Well-formed reply, but names a title absent from every candidate --
+    # nothing closed-set matches, and there is no Procedure to re-admit.
+    llm = _SequencedLLM([run1, run2, _keep_reply("A Fabricated Title")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
+    assert outcome.report.judge_status not in ("ok", "failed")
+    assert outcome.report.judged_out_titles == ()
+
+
+def test_union_empty_merged_union_skips_the_judge_entirely() -> None:
+    """Both runs returning empty arrays: NO judge call is made (exactly the
+    2 extraction calls), and `judge_status == "skipped"` -- the default
+    whose docstring already means "judge not run". A judge call selecting
+    among zero candidates spends a real LLM round trip to decide nothing,
+    and used to land `judge_status == "ok"` despite admitting nothing."""
+    llm = _SequencedLLM([_array(), _array(), _keep_reply("Unused")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 2
+    assert outcome.report.judge_status == "skipped"
+    assert outcome.objects == []
+
+
+def test_union_backstop_passes_through_a_set_of_7_unchanged() -> None:
+    """A judge-selected set of 7 passes through the backstop unchanged."""
+
+    def item(i: int) -> str:
+        return (
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "Distinct subject {i}.", "body": ""}}'
+        )
+
+    run1 = _array(*(item(i) for i in range(1, 8)))  # 7 distinct
+    run2 = _array()
+    judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 8)))
+    llm = _SequencedLLM([run1, run2, judge_reply])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert len(outcome.objects) == 7
+    assert outcome.report.produced == 7
+    assert outcome.report.retained == 7
+
+
+def test_union_backstop_truncates_a_judge_selected_set_above_12() -> None:
+    """A judge-selected set of more than 12 is truncated to exactly 12,
+    applied strictly AFTER re-admission -- not before the judge."""
+
+    def item(i: int) -> str:
+        return (
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "Distinct subject {i}.", "body": ""}}'
+        )
+
+    run1 = _array(*(item(i) for i in range(1, 16)))  # 15 distinct
+    run2 = _array()
+    judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 16)))
+    llm = _SequencedLLM([run1, run2, judge_reply])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes.", source_title="Notes", llm=llm
+    )
+
+    assert len(outcome.objects) == 12
+    assert outcome.report.produced == 15
+    assert outcome.report.retained == 12
+
+
+def test_union_extraction_run_2_error_propagates_unswallowed() -> None:
+    """An `OllamaError` from run 2's extraction call (not the judge)
+    propagates unswallowed -- the judge's fail-closed contract is its own,
+    never extended to cover extraction failures."""
+    run1 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, OllamaUnavailable("boom")])
+
+    with pytest.raises(OllamaUnavailable):
+        concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+
+def test_extract_concept_regression_suite_still_green_and_prompt_untouched() -> None:
+    """Regression guard (task 2.22): `extract_concept_union` is additive --
+    `extract_concept`'s own `_SYSTEM_PROMPT` is untouched by this change."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    outcome = concept_mod.extract_concept(
+        "Some notes.", source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
