@@ -1,5 +1,5 @@
 change: union-judge-extraction
-phase: verify
+phase: archived
 artifact_store: hybrid
 artifacts:
   exploration: true
@@ -62,4 +62,4 @@ tasks_progress:
     - "5.3"
   pending: []
 last_updated: 2026-08-07
-
+archived_date: 2026-08-07

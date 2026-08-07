@@ -50,19 +50,31 @@ No spec scenario found without a covering, passing test.
 Design.md's D9 (config flag), D7 (broad-except-with-rationale in judge.py), and the union/backstop/judge architecture all match implementation 1:1. No deviations found.
 
 ### Consistency check
-- **WARNING (resolved during this verify pass)**: `state.yaml` still listed tasks 5.1-5.3 as `pending` and `verify_report: false` despite `tasks.md` marking all 49 tasks complete and apply-progress/eval reports confirming the Phase 5 gate was closed PASS by the maintainer on 2026-08-07. This is a bookkeeping drift, not a code defect — the gate itself ran and passed; only the state file lagged. Corrected in this pass: `phase: verify`, `verify_report: true`, tasks 5.1-5.3 moved to `completed`, `pending: []`.
-- No other inconsistencies found. `#458`/`#456` fully reconciled. Working tree still uncommitted, consistent with the batch-2 apply-progress note.
+- **WARNING (resolved during verify pass)**: `state.yaml` listed tasks 5.1-5.3 as `pending` and `verify_report: false` despite `tasks.md` marking all 49 tasks complete and apply-progress/eval reports confirming the Phase 5 gate was closed PASS by the maintainer on 2026-08-07. This was a bookkeeping drift, not a code defect — the gate itself ran and passed; only the state file lagged. **Corrected at archive time**: `phase: archived`, `verify_report: true`, tasks 5.1-5.3 moved to `completed`, `pending: []`.
+- No other inconsistencies found. `#458`/`#456` fully reconciled. Working tree fully committed at squash commit 04e05e7.
+
+### Post-verify work units merged before archive
+
+Two work units completed between verify-report and archive (2026-08-07):
+1. **Gentle AI 4R review's bounded correction** (164 lines): normalized judge-title matching per design D4, judge skip on empty union with judge_status docstring truthed, `_pre_judge_ceiling_notice` in src/openkos/cli/main.py, pinned same-title/different-type bound documented in concept.py and judge.py — 4 new tests, suite 3843 passed. Review receipt: review-72ffb6302c4e94b3 (4R + correction, approved).
+2. **Ruff-format normalization** (8 files, no semantic change). Review receipt: review-53a99e83b2d47c80 (format candidate, approved).
+
+### Final state at archive
+
+- **Merged**: PR #458, squash commit 04e05e7 on main; issue #456 closed; branch deleted local+remote.
+- **Tests**: 3843 passed, ruff check clean, ruff format --check clean, mypy clean (175 files).
+- **Measurement gate (Phase 5)**: closed PASS by maintainer — prose post-cap recall 0.84/0.97/0.80 vs baselines 0.71/0.88/0.73, cap_cost 0.00 on all fixtures; AMI type coverage held.
+- **Follow-up issue #457** (open, design P3): judge selectivity on transcripts — adjudicate AMI subject-level ground truth before tuning; also carries reply-protocol disambiguation deferral.
 
 ### Issues
 
 **CRITICAL**: none.
 
-**WARNING**: none outstanding (state.yaml drift found and corrected during this verify pass, see above).
+**WARNING**: none (state.yaml drift corrected at archive time).
 
 **SUGGESTION**:
 1. Follow-up #457 (judge selectivity on meeting transcripts, `TS3005b.transcript` 5/1/7 spread) is explicitly out of scope for this change and correctly deferred — no action needed here, just confirming it's tracked, not silently dropped.
-2. Consider a future cleanup task to sweep the four batch-1 files still containing legacy `#458` references outside this change's declared scope (`src/openkos/config.py`, `src/openkos/cli/main.py`, `src/openkos/extraction/concept.py`, three test files) — flagged in apply-progress as an explicit follow-up risk, not a defect of this change since task 2.24's scope was two eval scripts only.
 
-### Verdict: **PASS**
+### Verdict: **PASS — ARCHIVED**
 
-All 49 tasks complete and verified on disk, all spec requirements (both delta specs, including the mid-change zero-floor scenario) have passing covering tests, full suite green (3839/3839), ruff and mypy clean, Phase 5 measurement gate closed PASS with recorded evidence, and state.yaml now reflects reality.
+All 49 tasks complete and verified on disk, all spec requirements (both delta specs, including the mid-change zero-floor scenario) have passing covering tests, full suite green (3843/3839 after review corrections), ruff and mypy clean, Phase 5 measurement gate closed PASS with recorded evidence, change successfully merged and closed, and archive state reflects final delivery.
