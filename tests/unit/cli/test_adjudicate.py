@@ -37,7 +37,11 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.model import okf
-from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
+from openkos.resolution.adjudication import (
+    AdjudicatedCandidate,
+    AdjudicationBatch,
+    Verdict,
+)
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import changed_paths, disable_local_exemption
@@ -229,16 +233,18 @@ def test_adjudicate_renders_grouped_verdict_and_rationale_without_confidence(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         captured["candidates"] = candidates
-        return [
-            _adjudicated(
-                candidates[0],
-                verdict=Verdict.SAME,
-                confidence=0.87,
-                rationale="Same concept, different casing",
-            )
-        ]
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    candidates[0],
+                    verdict=Verdict.SAME,
+                    confidence=0.87,
+                    rationale="Same concept, different casing",
+                )
+            ]
+        )
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
@@ -274,16 +280,22 @@ def test_adjudicate_prints_leading_verdict_tally_line(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
-            _adjudicated(
-                same_group, verdict=Verdict.SAME, rationale="same rationale 2"
-            ),
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            ),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    same_group, verdict=Verdict.SAME, rationale="same rationale"
+                ),
+                _adjudicated(
+                    same_group, verdict=Verdict.SAME, rationale="same rationale 2"
+                ),
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                ),
+            ]
+        )
 
     def _fake_find_candidates(
         bundle_dir: object, **kwargs: object
@@ -337,19 +349,27 @@ def test_adjudicate_prints_uncertain_segment_when_present(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
-            _adjudicated(
-                same_group, verdict=Verdict.SAME, rationale="same rationale 2"
-            ),
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            ),
-            _adjudicated(
-                uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc rationale"
-            ),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    same_group, verdict=Verdict.SAME, rationale="same rationale"
+                ),
+                _adjudicated(
+                    same_group, verdict=Verdict.SAME, rationale="same rationale 2"
+                ),
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                ),
+                _adjudicated(
+                    uncertain_group,
+                    verdict=Verdict.UNCERTAIN,
+                    rationale="unc rationale",
+                ),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -389,16 +409,24 @@ def test_adjudicate_tally_counts_full_results_under_same_only(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            ),
-            _adjudicated(
-                uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc rationale"
-            ),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    same_group, verdict=Verdict.SAME, rationale="same rationale"
+                ),
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                ),
+                _adjudicated(
+                    uncertain_group,
+                    verdict=Verdict.UNCERTAIN,
+                    rationale="unc rationale",
+                ),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -437,11 +465,15 @@ def test_adjudicate_prints_legend_once_before_the_results_loop(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group_a, verdict=Verdict.SAME, rationale="rationale a"),
-            _adjudicated(group_b, verdict=Verdict.DIFFERENT, rationale="rationale b"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group_a, verdict=Verdict.SAME, rationale="rationale a"),
+                _adjudicated(
+                    group_b, verdict=Verdict.DIFFERENT, rationale="rationale b"
+                ),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -485,8 +517,10 @@ def test_adjudicate_prints_next_hint_as_the_last_line(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [_adjudicated(group, verdict=Verdict.SAME, rationale="rationale")]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="rationale")]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -538,12 +572,16 @@ def test_adjudicate_same_only_empty_suppresses_tally_legend_and_next(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            )
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                )
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -589,17 +627,25 @@ def test_adjudicate_same_only_hides_non_same_verdicts_from_output_only(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         captured["candidates"] = candidates
-        return [
-            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            ),
-            _adjudicated(
-                uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc rationale"
-            ),
-        ]
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    same_group, verdict=Verdict.SAME, rationale="same rationale"
+                ),
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                ),
+                _adjudicated(
+                    uncertain_group,
+                    verdict=Verdict.UNCERTAIN,
+                    rationale="unc rationale",
+                ),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -640,12 +686,16 @@ def test_adjudicate_same_only_with_no_same_verdicts_prints_empty_notice(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            )
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                )
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -673,9 +723,9 @@ def test_adjudicate_builds_ollama_client_from_configured_model(
 
     def _recording_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         captured["kwargs"] = kwargs
-        return []
+        return AdjudicationBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
 
@@ -701,7 +751,7 @@ def test_adjudicate_ollama_unavailable_maps_to_exit_one(
 
     def _raise_unavailable(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _raise_unavailable)
@@ -735,7 +785,7 @@ def test_adjudicate_model_not_found_maps_to_exit_one(
 
     def _raise_model_not_found(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         raise OllamaModelNotFound("Model not found (404): {}")
 
     monkeypatch.setattr(
@@ -766,7 +816,7 @@ def test_adjudicate_generic_ollama_error_maps_to_exit_one(
 
     def _raise_generic(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         raise OllamaError("boom")
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _raise_generic)
@@ -793,7 +843,7 @@ def test_adjudicate_specific_ollama_subclasses_do_not_fall_through_to_generic(
 
     def _raise_unavailable(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         raise OllamaUnavailable(unavailable_message)
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _raise_unavailable)
@@ -803,7 +853,7 @@ def test_adjudicate_specific_ollama_subclasses_do_not_fall_through_to_generic(
 
     def _raise_model_not_found(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         raise OllamaModelNotFound("Model not found (404): {}")
 
     monkeypatch.setattr(
@@ -812,6 +862,148 @@ def test_adjudicate_specific_ollama_subclasses_do_not_fall_through_to_generic(
     result = runner.invoke(app, ["adjudicate"])
     assert "Model not found (404)" not in result.stderr
     assert "ollama pull" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# issue #441: a partial batch keeps its completed verdicts
+# ---------------------------------------------------------------------------
+
+
+def _two_group_partial_batch(
+    monkeypatch: pytest.MonkeyPatch, failure: OllamaError
+) -> CandidateGroup:
+    """Wire `find_candidates_report` to two groups and
+    `adjudicate_candidates` to a batch whose first group completed SAME and
+    whose second raised `failure` -- the #441 mid-batch shape."""
+    group_done = CandidateGroup(
+        okf_type="Concept", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-done"
+    )
+    group_failed = CandidateGroup(
+        okf_type="Concept", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-failed"
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        return CandidateGroupReport(
+            groups=(group_done, group_failed), produced=2, retained=2
+        )
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group_done, verdict=Verdict.SAME, rationale="kept work")
+            ],
+            failure=failure,
+            failed_index=2,
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    return group_done
+
+
+def test_adjudicate_partial_batch_reports_completed_verdicts_then_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-batch `OllamaError` no longer discards completed verdicts
+    (#441): the report renders them exactly as a complete run over that list
+    would, THEN one stderr line reports the failure with completed-of-total
+    counts, and the exit code stays the OllamaError-family 1."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_group_partial_batch(monkeypatch, OllamaError("boom"))
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "adjudicated 1: 1 SAME" in result.stdout
+    assert "kept work" in result.stdout
+    assert result.stderr == (
+        "openkos adjudicate: failed after adjudicating 1 of 2 candidate "
+        "group(s) -- boom.\n"
+    )
+    assert "Traceback" not in result.stderr
+
+
+def test_adjudicate_partial_batch_unavailable_keeps_remediation_and_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaUnavailable` batch failure keeps its cause-specific
+    remediation (`ollama serve` + doctor hint), gains the completed-of-total
+    counts, and still exits 1 (#441)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_group_partial_batch(
+        monkeypatch, OllamaUnavailable("Ollama not reachable at http://localhost:11434")
+    )
+
+    result = runner.invoke(app, ["adjudicate"])
+
+    assert result.exit_code == 1
+    assert "1 of 2" in result.stderr
+    assert "ollama serve" in result.stderr
+    assert result.stderr.rstrip("\n").endswith(
+        "Or run `openkos doctor` to diagnose the environment."
+    )
+    assert "kept work" in result.stdout
+
+
+def test_adjudicate_apply_partial_batch_walks_completed_pairs_before_failing(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--apply` on a partial batch still walks every completed SAME pair
+    through the interactive merge (the work was already paid for), and only
+    THEN reports the batch failure on stderr and exits 1 (#441)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="same")],
+            failure=OllamaError("boom"),
+            failed_index=2,
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(
+            groups=(group, _group_cd()), produced=2, retained=2
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 1
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "applied 1" in result.stdout
+    assert "1 of 2" in result.stderr
+    assert "boom" in result.stderr
+
+
+def _group_cd() -> CandidateGroup:
+    """The never-adjudicated second group of the #441 partial-batch shape."""
+    return CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/c", "concepts/d"),
+        tier=Tier.LOW,
+        trigger="stub-failed",
+    )
 
 
 def test_adjudicate_no_auto_flag_offered(
@@ -925,12 +1117,14 @@ def test_adjudicate_include_deprecated_restores_the_group(
 
     def _recording_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         captured["candidates"] = candidates
-        return [
-            _adjudicated(group, verdict=Verdict.SAME, rationale="restored group")
-            for group in candidates
-        ]
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group, verdict=Verdict.SAME, rationale="restored group")
+                for group in candidates
+            ]
+        )
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
 
@@ -962,9 +1156,9 @@ def test_adjudicate_include_confidential_flag_forwarded(
 
     def _recording_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         captured["kwargs"] = kwargs
-        return [_adjudicated(group) for group in candidates]
+        return AdjudicationBatch(results=[_adjudicated(group) for group in candidates])
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
 
@@ -988,9 +1182,9 @@ def test_adjudicate_omitted_include_confidential_defaults_to_false(
 
     def _recording_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         captured["kwargs"] = kwargs
-        return [_adjudicated(group) for group in candidates]
+        return AdjudicationBatch(results=[_adjudicated(group) for group in candidates])
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
 
@@ -1093,8 +1287,10 @@ def test_adjudicate_apply_offers_a_same_two_member_group(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -1131,11 +1327,17 @@ def test_adjudicate_apply_never_prompts_different_or_uncertain_groups(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff"),
-            _adjudicated(uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    different_group, verdict=Verdict.DIFFERENT, rationale="diff"
+                ),
+                _adjudicated(
+                    uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc"
+                ),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -1171,8 +1373,10 @@ def test_adjudicate_apply_same_group_with_three_members_is_skipped_not_prompted(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -1219,8 +1423,10 @@ def test_adjudicate_apply_n_gt2_skip_prints_pairwise_merge_commands_in_order(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -1279,11 +1485,13 @@ def test_adjudicate_apply_overlapping_groups_second_reports_already_merged(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
-            _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
+                _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -1303,7 +1511,7 @@ def _seed_one_same_group(
 ) -> tuple[
     CandidateGroup,
     Callable[..., CandidateGroupReport],
-    Callable[..., list[AdjudicatedCandidate]],
+    Callable[..., AdjudicationBatch],
 ]:
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
@@ -1324,8 +1532,10 @@ def _seed_one_same_group(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+        )
 
     return group, _fake_find_candidates, _fake_adjudicate
 
@@ -1502,11 +1712,13 @@ def test_adjudicate_apply_two_accepted_merges_produce_two_separate_commits(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
-            _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
+                _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -1583,11 +1795,13 @@ def test_adjudicate_apply_mid_run_merge_core_failure_stops_the_run(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
-            _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group1, verdict=Verdict.SAME, rationale="same1"),
+                _adjudicated(group2, verdict=Verdict.SAME, rationale="same2"),
+            ]
+        )
 
     def _raise_merge_core(*args: object, **kwargs: object) -> object:
         raise OSError("disk full")
@@ -1638,8 +1852,10 @@ def test_adjudicate_apply_prepare_merge_failure_stops_the_run(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [_adjudicated(group1, verdict=Verdict.SAME, rationale="same1")]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group1, verdict=Verdict.SAME, rationale="same1")]
+        )
 
     def _raise_prepare_merge(*args: object, **kwargs: object) -> object:
         raise OSError("disk full")
@@ -1770,12 +1986,14 @@ def test_adjudicate_apply_summary_reflects_applied_and_skipped_counts(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(applied_group, verdict=Verdict.SAME, rationale="r1"),
-            _adjudicated(n_gt2_group, verdict=Verdict.SAME, rationale="r2"),
-            _adjudicated(declined_group, verdict=Verdict.SAME, rationale="r3"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(applied_group, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(n_gt2_group, verdict=Verdict.SAME, rationale="r2"),
+                _adjudicated(declined_group, verdict=Verdict.SAME, rationale="r3"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -1814,10 +2032,14 @@ def test_adjudicate_apply_no_eligible_groups_prints_nothing_to_apply(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff")
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    different_group, verdict=Verdict.DIFFERENT, rationale="diff"
+                )
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -1961,13 +2183,21 @@ def test_adjudicate_apply_same_eligibility_filters_to_same_two_member_groups(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(same_pair, verdict=Verdict.SAME, rationale="same"),
-            _adjudicated(same_triple, verdict=Verdict.SAME, rationale="same-triple"),
-            _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff"),
-            _adjudicated(uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(same_pair, verdict=Verdict.SAME, rationale="same"),
+                _adjudicated(
+                    same_triple, verdict=Verdict.SAME, rationale="same-triple"
+                ),
+                _adjudicated(
+                    different_group, verdict=Verdict.DIFFERENT, rationale="diff"
+                ),
+                _adjudicated(
+                    uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc"
+                ),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2014,8 +2244,10 @@ def test_adjudicate_apply_same_n_gt2_skip_prints_pairwise_merge_commands_in_orde
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2063,11 +2295,13 @@ def test_adjudicate_apply_same_aggregate_preview_precedes_gate_and_writes(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
-            _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2124,11 +2358,13 @@ def test_adjudicate_apply_same_confirm_count_exact_applies_all(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
-            _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2266,12 +2502,14 @@ def test_adjudicate_apply_same_mid_batch_merge_core_failure_keeps_prior_commit(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
-            _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
-            _adjudicated(group3, verdict=Verdict.SAME, rationale="r3"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
+                _adjudicated(group3, verdict=Verdict.SAME, rationale="r3"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2384,11 +2622,13 @@ def test_adjudicate_apply_same_chained_shared_member_skips_second_pair(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
-            _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2430,11 +2670,13 @@ def test_adjudicate_apply_same_batch_round_trips_via_sequential_unmerge(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
-            _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group1, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(group2, verdict=Verdict.SAME, rationale="r2"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2477,10 +2719,14 @@ def test_adjudicate_apply_same_zero_eligible_non_tty_exits_zero_nothing_to_apply
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff")
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    different_group, verdict=Verdict.DIFFERENT, rationale="diff"
+                )
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2518,10 +2764,14 @@ def test_adjudicate_apply_same_zero_eligible_tty_exits_zero_without_prompt(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(different_group, verdict=Verdict.DIFFERENT, rationale="diff")
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    different_group, verdict=Verdict.DIFFERENT, rationale="diff"
+                )
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2568,11 +2818,13 @@ def test_adjudicate_apply_same_total_matches_resolvable_preview_count(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(resolvable_group, verdict=Verdict.SAME, rationale="r1"),
-            _adjudicated(unresolvable_group, verdict=Verdict.SAME, rationale="r2"),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(resolvable_group, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(unresolvable_group, verdict=Verdict.SAME, rationale="r2"),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2735,13 +2987,19 @@ def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            ),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    same_group, verdict=Verdict.SAME, rationale="same rationale"
+                ),
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                ),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2803,16 +3061,24 @@ def test_adjudicate_json_same_only_composability_filters_to_same_verdicts(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            ),
-            _adjudicated(
-                uncertain_group, verdict=Verdict.UNCERTAIN, rationale="unc rationale"
-            ),
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    same_group, verdict=Verdict.SAME, rationale="same rationale"
+                ),
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                ),
+                _adjudicated(
+                    uncertain_group,
+                    verdict=Verdict.UNCERTAIN,
+                    rationale="unc rationale",
+                ),
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2865,12 +3131,16 @@ def test_adjudicate_json_same_only_all_filtered_out_emits_empty_array_not_prose(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(
-                different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
-            )
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(
+                    different_group,
+                    verdict=Verdict.DIFFERENT,
+                    rationale="diff rationale",
+                )
+            ]
+        )
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -2896,7 +3166,7 @@ def test_adjudicate_json_ollama_unavailable_still_errors_on_stderr_with_no_json(
 
     def _raise_unavailable(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _raise_unavailable)
@@ -3108,13 +3378,13 @@ def test_adjudicate_wires_tty_gated_progress_callback_into_the_library(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         on_progress = kwargs["on_progress"]
         assert callable(on_progress)
         results = [_adjudicated(group, verdict=Verdict.DIFFERENT, rationale="diff")]
         for index, result in enumerate(results, start=1):
             on_progress(index, len(results), result)
-        return results
+        return AdjudicationBatch(results=results)
 
     monkeypatch.setattr(
         "openkos.cli.main.find_candidates_report", _fake_find_candidates
@@ -3139,9 +3409,9 @@ def test_adjudicate_passes_no_progress_hook_when_stderr_is_not_a_tty(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
+    ) -> AdjudicationBatch:
         captured["on_progress"] = kwargs["on_progress"]
-        return []
+        return AdjudicationBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
@@ -3174,10 +3444,13 @@ def test_adjudicate_over_cap_bundle_emits_the_truncation_notice(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(c, verdict=Verdict.SAME, rationale="same") for c in candidates
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(c, verdict=Verdict.SAME, rationale="same")
+                for c in candidates
+            ]
+        )
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
@@ -3203,10 +3476,13 @@ def test_adjudicate_below_cap_bundle_emits_no_truncation_notice(
 
     def _fake_adjudicate(
         candidates: list[CandidateGroup], **kwargs: object
-    ) -> list[AdjudicatedCandidate]:
-        return [
-            _adjudicated(c, verdict=Verdict.SAME, rationale="same") for c in candidates
-        ]
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(c, verdict=Verdict.SAME, rationale="same")
+                for c in candidates
+            ]
+        )
 
     monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
 
