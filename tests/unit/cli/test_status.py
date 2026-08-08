@@ -107,12 +107,11 @@ def test_status_fresh_bundle_empty_state(
 ) -> None:
     """A freshly initialized, empty bundle reports `Sources: 0`,
     `Concepts: 0`, the recent-activity empty-state text, and exits 0 (spec:
-    Freshly initialized empty bundle). `log.md`'s `Initialization` bullet
-    means "no activity recorded yet" is the true empty-log-body case, so
-    this asserts the actual init entry appears instead. A fresh `init`
-    never creates `.openkos/vectors.db`, so "needs attention" is NOT empty
-    -- it always surfaces the #142 missing-vector-index line until the
-    first `openkos reindex`."""
+    Freshly initialized empty bundle). Since #386, a bundle with ZERO
+    eligible documents no longer flags the missing vector index under
+    "Needs attention": reindexing an empty bundle is meaningless, and the
+    real next step (ingesting a first source) is `next`'s to name. With
+    nothing else pending, "Nothing needs attention." is the honest line."""
     _init_workspace(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["status"])
@@ -120,6 +119,27 @@ def test_status_fresh_bundle_empty_state(
     assert result.exit_code == 0
     assert "Sources:  0" in result.stdout
     assert "Concepts: 0" in result.stdout
+    assert "vectors.db" not in result.stdout
+    assert "openkos reindex" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
+
+
+def test_status_flags_missing_vectors_once_a_document_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The #386 empty-bundle gate is exactly one document wide: as soon as
+    one eligible document exists, a missing `vectors.db` is a real,
+    actionable absence again and the #142 line returns."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    (concepts_dir / "alpha.md").write_text(
+        "---\ntype: Concept\ntitle: Alpha\n---\nBody.\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
     assert "vectors.db" in result.stdout
     assert "openkos reindex" in result.stdout
 
@@ -240,8 +260,9 @@ def test_status_malformed_log_degrades_and_still_exits_zero(
 ) -> None:
     """A malformed `log.md` degrades to a notice under "Recent activity" and
     the command still exits 0 -- counts and findings are unaffected (spec:
-    Q2/D5, lenient degrade). No `.openkos/vectors.db` exists yet, so "needs
-    attention" surfaces the #142 missing-vector-index line."""
+    Q2/D5, lenient degrade). The missing-vector-index line no longer
+    appears here: the bundle is empty, and #386 gates that line on at
+    least one eligible document (pinned by its own tests)."""
     _init_workspace(tmp_path, monkeypatch)
     log_path = tmp_path / "bundle" / "log.md"
     log_path.write_text(
@@ -254,7 +275,6 @@ def test_status_malformed_log_degrades_and_still_exits_zero(
     assert result.exit_code == 0
     assert "Recent activity unavailable" in result.stdout
     assert "Sources:  0" in result.stdout
-    assert "vectors.db" in result.stdout
 
 
 def test_status_conformance_violation_is_surfaced_but_non_fatal(
@@ -594,8 +614,14 @@ def test_status_surfaces_missing_vectors_db(
     with an `openkos reindex` instruction, and `status` still exits 0
     (status spec: "Missing vectors.db is surfaced"). It must NOT also
     print "Nothing needs attention." -- the two lines are contradictory
-    (issue #183 Fix 2 follow-up)."""
+    (issue #183 Fix 2 follow-up). One eligible document keeps the #386
+    empty-bundle gate out of the way."""
     _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "alpha.md").write_text(
+        "---\ntype: Concept\ntitle: Alpha\n---\nBody.\n", encoding="utf-8"
+    )
 
     result = runner.invoke(app, ["status"])
 
@@ -655,7 +681,9 @@ def test_status_state2_edges_present_reports_counts(
 ) -> None:
     """State 2 (concept-to-concept edges exist, some typed) reports the
     total edge count and the typed subset (specs/status: "Edges present
-    reports counts")."""
+    reports counts"). Updated by #387: an untyped edge is ACTIONABLE, so
+    the line names the untyped count and the verb that types them
+    (`openkos curate`) instead of a bare density metric."""
     _init_workspace(tmp_path, monkeypatch)
     seed_vectors_db(tmp_path)
     concepts_dir = tmp_path / "bundle" / "concepts"
@@ -671,7 +699,53 @@ def test_status_state2_edges_present_reports_counts(
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0
-    assert "1 concept-to-concept edge(s) (0 typed)." in result.stdout
+    assert (
+        "1 of 1 concept-to-concept edge(s) untyped — run `openkos curate` "
+        "to type them." in result.stdout
+    )
+    assert "Nothing needs attention." not in result.stdout
+    assert "(0 typed)" not in result.stdout
+
+
+def test_status_fully_typed_edges_report_no_needs_attention_metric(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """When every concept-to-concept edge is typed there is nothing left to
+    act on, so the edge-count metric does NOT appear under "Needs
+    attention" -- or anywhere else: `status` has no informational section
+    for derived-graph metrics ("Bundle contents" is pinned to the disk
+    scan), so the fully-typed count is simply dropped (issue #387)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "stoicism.md").write_text(
+        "---\ntype: Concept\ntitle: Stoicism\n"
+        "relations:\n"
+        "  - target: concepts/epicureanism\n"
+        "    type: relates-to\n"
+        "---\nBody.\n",
+        encoding="utf-8",
+    )
+    (concepts_dir / "epicureanism.md").write_text(
+        "---\ntype: Concept\ntitle: Epicureanism\n---\nBody.\n", encoding="utf-8"
+    )
+    index_path = tmp_path / "bundle" / "index.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8") + "\n# Concepts\n\n"
+        "* [Stoicism](/concepts/stoicism.md) - test fixture.\n"
+        "* [Epicureanism](/concepts/epicureanism.md) - test fixture.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "concept-to-concept edge(s)" not in result.stdout
+    assert "openkos curate" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
 
 
 def test_status_builds_the_graph_once(
@@ -710,7 +784,7 @@ def test_status_builds_the_graph_once(
 
     assert result.exit_code == 0
     assert len(calls) == 1
-    assert "1 concept-to-concept edge(s) (0 typed)." in result.stdout
+    assert "1 of 1 concept-to-concept edge(s) untyped" in result.stdout
 
 
 def test_status_state3_missing_vectors_db_names_candidates(
@@ -719,8 +793,14 @@ def test_status_state3_missing_vectors_db_names_candidates(
     """State 3 (`vectors.db` absent) reports that candidate edges are not
     computable yet, using a message distinct from the state-1 "no concept
     relationships yet" line (specs/status: "Missing embeddings reports a
-    distinct not-computable state")."""
+    distinct not-computable state"). One eligible document keeps the #386
+    empty-bundle gate out of the way."""
     _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "alpha.md").write_text(
+        "---\ntype: Concept\ntitle: Alpha\n---\nBody.\n", encoding="utf-8"
+    )
 
     result = runner.invoke(app, ["status"])
 
@@ -734,8 +814,14 @@ def test_status_state3_empty_vectors_db_names_candidates(
 ) -> None:
     """State 3 also fires for an existing but EMPTY `vectors.db` (zero
     `vector_meta` rows), not merely an absent one -- `vector_store_is_empty`
-    keys on "absent OR empty" (issue #183)."""
+    keys on "absent OR empty" (issue #183). One eligible document keeps the
+    #386 empty-bundle gate out of the way."""
     _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+    (concepts_dir / "alpha.md").write_text(
+        "---\ntype: Concept\ntitle: Alpha\n---\nBody.\n", encoding="utf-8"
+    )
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(openkos_dir / "vectors.db"))
@@ -1049,6 +1135,26 @@ def test_status_flags_stale_derived_indexes_as_needing_attention(
     assert result.exit_code == 0
     assert (
         "Derived indexes are stale (fts, graph) — run `openkos reindex` to "
+        "refresh retrieval." in result.stdout
+    )
+
+
+def test_status_still_names_graph_only_staleness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#436 scopes the shared staleness advisory to the stores each verb
+    actually reads. `status` reports on BOTH manifest-gated stores, so a
+    stale `graph.db` behind a fresh `fts.db` is still named here even
+    though `query` (which never reads the graph) stays silent about it."""
+    _stale_workspace(tmp_path, monkeypatch)
+    # Refresh only the FTS store over the edited bundle: graph stays stale.
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", tmp_path / "bundle")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert (
+        "Derived indexes are stale (graph) — run `openkos reindex` to "
         "refresh retrieval." in result.stdout
     )
 

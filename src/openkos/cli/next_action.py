@@ -11,6 +11,9 @@ WHY THE TIERS ARE IN THIS ORDER (issue #277) -- read before reordering
 `_TIERS`. The order is *what blocks other work, then what is missing, then
 what is unsafe, then what is merely ambiguous*:
 
+0. a bundle with zero eligible documents has nothing to index, judge, or
+   label at all (#386) -- every other recommendation presupposes content,
+   so the first ingest outranks them all;
 1. a missing vector index blocks dense retrieval and candidate edges, so
    every later judgment is made over a starved corpus;
 2. an unextracted source is knowledge absent from the bundle entirely;
@@ -255,11 +258,46 @@ def _command_from_detail(detail: str, verb: str, *, takes_argument: bool) -> str
     return None
 
 
+def _tier_bootstrap_empty_bundle(signals: _BundleSignals) -> NextAction | None:
+    """Rank 0 (#386): a bundle with zero eligible documents needs its FIRST
+    ingest, not a reindex -- there is nothing to index, so recommending
+    `openkos reindex` over an empty bundle is a runnable command that does
+    nothing. This rung gates `_tier_missing_vector_index`: it checks the
+    same zero-walk `vector_store_empty` signal first and declines outright
+    when the index is populated, so the docs walk it needs (the SAME
+    memoized `signals.docs` walk tiers 2/3 share -- never a new one) is
+    paid only on runs that would otherwise recommend the meaningless
+    reindex. That walk's skip notices then surface through the ordinary
+    #275 path: a bundle whose only documents are unreadable is empty of
+    ELIGIBLE documents, and the recommendation names the damage beside
+    itself.
+
+    The command carries a `<path>` placeholder rather than declining the
+    way tier 2 does for a bare `openkos ingest`: tier 2's finding names a
+    document whose own `resource` should have supplied the argument, while
+    here no document exists anywhere -- only the user knows what to ingest
+    first, and the placeholder says exactly where their answer goes."""
+    if not signals.vector_store_empty:
+        return None
+    if signals.docs:
+        return None
+    return NextAction(
+        command="openkos ingest <path>",
+        reason=(
+            "This bundle has no documents yet -- ingest your first source "
+            "to give it something to index."
+        ),
+    )
+
+
 def _tier_missing_vector_index(signals: _BundleSignals) -> NextAction | None:
-    """Rank 1: missing or empty vector index. Ranked first because it BLOCKS
-    every later judgment, not because it is cheap; that it is also the
-    cheapest check -- zero bundle walks -- is corroboration (see the module
-    docstring's ordering principle before reordering `_TIERS`)."""
+    """Rank 1: missing or empty vector index. Ranked first among the
+    content-presupposing tiers because it BLOCKS every later judgment, not
+    because it is cheap; that it is also the cheapest check -- no walk of
+    its own, though the rank-0 bootstrap gate has already paid the shared
+    docs walk on every path that reaches this recommendation (#386) -- is
+    corroboration (see the module docstring's ordering principle before
+    reordering `_TIERS`)."""
     if not signals.vector_store_empty:
         return None
     return NextAction(
@@ -402,6 +440,12 @@ def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
     expensive check (two further walks), and the only tier requiring human
     judgment before any write, corroborates the position without setting it.
 
+    The command is `openkos curate` -- the consolidated loop (#266) that
+    RESOLVES pending groups, with `merge` as the manual path -- not the
+    read-only `openkos duplicates` display, which a recommendation must not
+    present as the action itself (#386). The reason still points at
+    `duplicates` as the way to review the groups before curating.
+
     Reports only the count of the finding that fired, never a count of
     findings `next` never walked far enough to see (D5)."""
     groups = signals.exact_title_groups
@@ -409,10 +453,11 @@ def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
         return None
     count = len(groups)
     return NextAction(
-        command="openkos duplicates",
+        command="openkos curate",
         reason=(
             f"{count} candidate group{_plural(count)} with identical "
-            f"titles {_agree(count, 'is', 'are')} pending review."
+            f"titles {_agree(count, 'is', 'are')} pending review. "
+            "Review them first with `openkos duplicates`."
         ),
     )
 
@@ -420,18 +465,19 @@ def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
 Tier = Callable[[_BundleSignals], NextAction | None]
 
 _TIERS: tuple[Tier, ...] = (
+    _tier_bootstrap_empty_bundle,
     _tier_missing_vector_index,
     _tier_stale_derived_indexes,
     _tier_unextracted_source,
     _tier_below_source_sensitivity,
     _tier_duplicate_groups,
 )
-"""D1 order: reindex (missing), reindex (stale, #381), ingest,
-backfill-sensitivity, duplicates. A higher-ranked tier's finding always
-wins; a lower-ranked tier is never even evaluated once a higher one fires
-(first-hit short-circuit) -- which is also what keeps the two reindex tiers
-from ever both firing: a missing index short-circuits before the stale
-check's bundle walk is ever paid."""
+"""D1 order: ingest-first (empty bundle, #386), reindex (missing), reindex
+(stale, #381), ingest, backfill-sensitivity, curate. A higher-ranked tier's
+finding always wins; a lower-ranked tier is never even evaluated once a
+higher one fires (first-hit short-circuit) -- which is also what keeps the
+two reindex tiers from ever both firing: a missing index short-circuits
+before the stale check's bundle walk is ever paid."""
 
 
 def next_action(layout: config.WorkspaceLayout) -> NextResult:
