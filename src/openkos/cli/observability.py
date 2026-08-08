@@ -72,6 +72,7 @@ color is ever emitted.
 """
 
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -208,22 +209,61 @@ def progress_callback(
     verb: str, noun: str
 ) -> Callable[[int, int, object], None] | None:
     """Build the TTY-gated per-item progress hook a CLI verb passes into a
-    library `on_progress` seam (issue #190).
+    library `on_progress` seam (issue #190; in-place + elapsed since
+    #383/#384).
 
     Returns `None` when stderr is NOT a TTY -- the verb then passes no hook
     at all, so a piped or redirected run stays byte-clean with zero
     per-item overhead. On a TTY, returns a callback matching every library
     `on_progress` contract (`(index, total, result)`, index 1-based) that
-    prints `openkos <verb>: <noun> <index>/<total>...` to STDERR per item;
-    the just-built result object is accepted but never rendered, so ONE
+    REWRITES one stderr line in place per item (#384: the old
+    line-per-item form buried a 74-item stage's results in 74 scrollback
+    lines): each invocation writes `\\r` +
+    `openkos <verb>: <noun> <index>/<total> - <elapsed>...`, space-padded
+    to at least the previous line's length so a shorter line fully
+    overwrites a longer one, with NO trailing newline -- except on the
+    FINAL item (`index == total`), which ends with `\\n` so subsequent
+    output starts clean below the finished counter. Stderr is flushed
+    EXPLICITLY on every write: with `\\r` and no newline, line buffering
+    never triggers, so an unflushed write would sit invisible in the
+    buffer -- hiding exactly the liveness signal the elapsed display
+    exists to give (#383). No ANSI escapes are ever emitted (padding, not
+    erase sequences), so NO_COLOR needs no special-casing -- there is
+    nothing to disable.
+
+    `<elapsed>` is measured from THIS factory call (stage start), not per
+    item -- `{s}s` under 60 seconds, `{m}m {s:02d}s` from 60 up (`12s`,
+    `17m 19s`) -- deliberately: it gives the operator a wall-clock anchor,
+    so a display stuck at `12s` twenty minutes into a run is visibly
+    stale, where a per-item clock would reset and hide the hang (#383).
+    One honest limitation: the display only updates when an item
+    COMPLETES, so a single long LLM call still shows the previous line --
+    a background ticker was deliberately not built for this slice.
+
+    The just-built result object is accepted but never rendered, so ONE
     generic factory serves every seam regardless of its result type.
     STDOUT is never touched -- it belongs to the verb's report.
     """
     if not sys.stderr.isatty():
         return None
 
+    start = time.monotonic()
+    previous_length = 0
+
     def _callback(index: int, total: int, _result: object) -> None:
-        typer.echo(f"openkos {verb}: {noun} {index}/{total}...", err=True)
+        nonlocal previous_length
+        elapsed = int(time.monotonic() - start)
+        if elapsed < 60:
+            elapsed_text = f"{elapsed}s"
+        else:
+            minutes, seconds = divmod(elapsed, 60)
+            elapsed_text = f"{minutes}m {seconds:02d}s"
+        line = f"openkos {verb}: {noun} {index}/{total} - {elapsed_text}..."
+        padded = line.ljust(previous_length)
+        previous_length = len(line)
+        terminator = "\n" if index == total else ""
+        sys.stderr.write(f"\r{padded}{terminator}")
+        sys.stderr.flush()
 
     return _callback
 

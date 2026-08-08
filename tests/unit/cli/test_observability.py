@@ -18,12 +18,55 @@ distinction these tests exist to hold.
 """
 
 import os
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
 from openkos.cli import observability
+
+
+class _FakeTtyStderr:
+    """Minimal TTY-claiming stream that records every `write` and counts
+    `flush` calls -- substituted for `sys.stderr` so tests can assert on
+    INDIVIDUAL writes (the `\\r`-led in-place rewrites of #384) and on the
+    per-invocation flush (#383), which `capsys`'s joined capture cannot
+    distinguish."""
+
+    def __init__(self) -> None:
+        self.writes: list[str] = []
+        self.flushes = 0
+
+    def isatty(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        self.writes.append(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self.flushes += 1
+
+
+def _fake_tty_stderr(monkeypatch: pytest.MonkeyPatch) -> _FakeTtyStderr:
+    stream = _FakeTtyStderr()
+    monkeypatch.setattr(sys, "stderr", stream)
+    return stream
+
+
+def _fake_monotonic(monkeypatch: pytest.MonkeyPatch, values: list[float]) -> None:
+    """Replace `time.monotonic` AS OBSERVABILITY SEES IT with a controlled
+    sequence (first value is consumed by the factory itself -- elapsed is
+    measured from stage start, not per item). The target is resolved
+    through `openkos.cli.observability.time`, so a renamed or restructured
+    import in the module under test (e.g. `from time import monotonic`)
+    fails this setup loudly instead of silently patching nothing (project
+    convention)."""
+    sequence = list(values)
+    monkeypatch.setattr(
+        "openkos.cli.observability.time.monotonic", lambda: sequence.pop(0)
+    )
 
 
 def _make_locked_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -297,46 +340,155 @@ def test_progress_callback_returns_none_when_stderr_is_not_a_tty(
     assert observability.progress_callback("adjudicate", "adjudicating group") is None
 
 
-def test_progress_callback_emits_verb_noun_counter_line_to_stderr_on_a_tty(
+def test_progress_callback_rewrites_one_line_in_place_on_a_tty(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """On a TTY, the returned callback prints exactly
-    `openkos <verb>: <noun> <index>/<total>...` to STDERR per invocation --
-    STDOUT stays untouched (it belongs to the verb's report)."""
-    import sys
-
-    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    """On a TTY, consecutive invocations REWRITE one stderr line in place
+    (#384): each write leads with `\\r`, renders
+    `openkos <verb>: <noun> <index>/<total> - <elapsed>...`, and a
+    non-final write carries NO newline anywhere -- so a 74-item stage
+    occupies one terminal line instead of 74 scrollback lines. STDOUT
+    stays untouched (it belongs to the verb's report)."""
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 100.0, 100.0])
 
     callback = observability.progress_callback("adjudicate", "adjudicating group")
 
     assert callback is not None
+    callback(1, 5, object())
     callback(2, 5, object())
 
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "openkos adjudicate: adjudicating group 2/5...\n"
+    assert stream.writes == [
+        "\ropenkos adjudicate: adjudicating group 1/5 - 0s...",
+        "\ropenkos adjudicate: adjudicating group 2/5 - 0s...",
+    ]
+    assert capsys.readouterr().out == ""
+
+
+def test_progress_callback_pads_a_shorter_line_to_cover_the_previous_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write whose visible text is SHORTER than the previous one is
+    space-padded to at least the previous line's length, so the leftover
+    tail of the longer line never lingers on screen (#384). The clock
+    sequence is deliberately non-monotonic -- real elapsed only grows, but
+    the padding contract is about lengths, and a shrinking elapsed is the
+    one deterministic way to force a shorter successor line under a fixed
+    verb/noun."""
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 1139.0, 105.0])
+
+    callback = observability.progress_callback("curate", "pair")
+
+    assert callback is not None
+    callback(1, 74, object())
+    callback(2, 74, object())
+
+    long_line = "openkos curate: pair 1/74 - 17m 19s..."
+    short_line = "openkos curate: pair 2/74 - 5s..."
+    assert stream.writes[0] == "\r" + long_line
+    assert stream.writes[1] == "\r" + short_line + " " * (
+        len(long_line) - len(short_line)
+    )
+
+
+def test_progress_callback_renders_elapsed_since_stage_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Elapsed is measured from the FACTORY's creation (stage start) and
+    rendered `{s}s` under 60 seconds, `{m}m {s:02d}s` from 60 up (#383):
+    the wall-clock anchor is what makes staleness visible -- a display
+    stuck at `12s` twenty minutes into a run is obviously dead, where a
+    bare counter looks the same alive or hung."""
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 112.0, 1139.0])
+
+    callback = observability.progress_callback("curate", "pair")
+
+    assert callback is not None
+    callback(41, 73, object())
+    callback(42, 73, object())
+
+    assert "openkos curate: pair 41/73 - 12s..." in stream.writes[0]
+    assert "openkos curate: pair 42/73 - 17m 19s..." in stream.writes[1]
+
+
+def test_progress_callback_terminates_the_final_item_with_a_newline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When `index == total` (the final item) the line ends with `\\n` so
+    subsequent output starts clean below it; every earlier write ends
+    without one (#384)."""
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 100.0, 100.0, 100.0])
+
+    callback = observability.progress_callback("reindex", "embedding doc")
+
+    assert callback is not None
+    callback(1, 3, object())
+    callback(2, 3, object())
+    callback(3, 3, object())
+
+    assert not stream.writes[0].endswith("\n")
+    assert not stream.writes[1].endswith("\n")
+    assert stream.writes[2].endswith("\n")
+
+
+def test_progress_callback_flushes_stderr_on_every_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`flush` is called on EVERY invocation (#383): with `\\r` and no
+    newline, line buffering never triggers, so an unflushed write would sit
+    invisible in the buffer -- hiding exactly the liveness signal the
+    elapsed display exists to give."""
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 100.0, 100.0])
+
+    callback = observability.progress_callback("curate", "untyped edge")
+
+    assert callback is not None
+    callback(1, 74, object())
+    assert stream.flushes == 1
+    callback(2, 74, object())
+    assert stream.flushes == 2
+
+
+def test_progress_callback_emits_no_ansi_escapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No write contains an ANSI escape byte: the in-place rewrite is pure
+    `\\r` + space-padding, never an erase sequence, so NO_COLOR needs no
+    special-casing -- there is no color or control styling to disable
+    (#384)."""
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 100.0, 1139.0, 1200.0])
+
+    callback = observability.progress_callback("curate", "concept type")
+
+    assert callback is not None
+    callback(1, 3, object())
+    callback(2, 3, object())
+    callback(3, 3, object())
+
+    assert all("\x1b" not in write for write in stream.writes)
 
 
 def test_progress_callback_ignores_the_result_object(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The third callback argument (the just-built result object) is
     accepted but never rendered -- one generic factory serves every
     library `on_progress` contract regardless of result type (#190)."""
-    import sys
-
-    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    stream = _fake_tty_stderr(monkeypatch)
+    _fake_monotonic(monkeypatch, [100.0, 100.0])
 
     callback = observability.progress_callback("reindex", "embedding doc")
 
     assert callback is not None
     callback(1, 3, "concepts/alpha")
 
-    captured = capsys.readouterr()
-    assert captured.err == "openkos reindex: embedding doc 1/3...\n"
-    assert "concepts/alpha" not in captured.err
+    assert "concepts/alpha" not in "".join(stream.writes)
 
 
 def test_stage_notice_emits_to_stderr_only_on_a_tty(

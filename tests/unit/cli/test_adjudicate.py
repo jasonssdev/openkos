@@ -3396,9 +3396,10 @@ def test_adjudicate_wires_tty_gated_progress_callback_into_the_library(
 ) -> None:
     """On a TTY, `adjudicate` passes `observability.progress_callback`'s
     hook into `adjudicate_candidates` as `on_progress`; each invocation
-    renders `openkos adjudicate: adjudicating group <i>/<n>...` on STDERR
-    while STDOUT keeps the clean report (issue #190, mirroring
-    `suggest-relations`' #134 wiring)."""
+    renders `openkos adjudicate: adjudicating group <i>/<n> - <elapsed>...`
+    on STDERR while STDOUT keeps the clean report (issue #190, in-place +
+    elapsed since #383/#384, mirroring `suggest-relations`' #134
+    wiring)."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
     group = CandidateGroup(
@@ -3431,7 +3432,7 @@ def test_adjudicate_wires_tty_gated_progress_callback_into_the_library(
     result = runner.invoke(app, ["adjudicate"])
 
     assert result.exit_code == 0
-    assert "openkos adjudicate: adjudicating group 1/1..." in result.stderr
+    assert "openkos adjudicate: adjudicating group 1/1 - " in result.stderr
     assert "adjudicating group" not in result.stdout
 
 
