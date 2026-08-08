@@ -28,8 +28,13 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.graph.base import Edge
 from openkos.graph.proximity import ProximityPair
-from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
-from openkos.resolution.edge_typing import EdgeSuggestion
+from openkos.llm.ollama import (
+    OllamaClient,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
+from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
 from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
@@ -308,16 +313,18 @@ def test_suggest_relations_provenance_mirror_edge_excluded_genuine_edge_surfaced
     )
     captured: dict[str, object] = {}
 
-    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         captured["edges"] = edges
-        return [
-            _suggestion(
-                source="concepts/a",
-                target="concepts/b",
-                suggested_type="related_to",
-                rationale="mentions B",
-            )
-        ]
+        return EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source="concepts/a",
+                    target="concepts/b",
+                    suggested_type="related_to",
+                    rationale="mentions B",
+                )
+            ]
+        )
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
 
@@ -367,16 +374,18 @@ def test_suggest_relations_renders_type_source_target_and_rationale(
         monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
     )
 
-    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         captured["kwargs"] = kwargs
-        return [
-            _suggestion(
-                source="concepts/a",
-                target="concepts/b",
-                suggested_type="references",
-                rationale="mentions concept b",
-            )
-        ]
+        return EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source="concepts/a",
+                    target="concepts/b",
+                    suggested_type="references",
+                    rationale="mentions concept b",
+                )
+            ]
+        )
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
 
@@ -404,8 +413,10 @@ def test_suggest_relations_degraded_item_renders_as_no_valid_type(
         monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
     )
 
-    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
-        return [_suggestion(suggested_type=None, rationale="malformed reply")]
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        return EdgeSuggestionBatch(
+            results=[_suggestion(suggested_type=None, rationale="malformed reply")]
+        )
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
 
@@ -432,9 +443,9 @@ def test_suggest_relations_builds_ollama_client_from_configured_model(
     )
     captured: dict[str, object] = {}
 
-    def _recording_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _recording_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         captured["kwargs"] = kwargs
-        return []
+        return EdgeSuggestionBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _recording_suggest)
 
@@ -460,7 +471,7 @@ def test_suggest_relations_ollama_unavailable_maps_to_exit_one(
     )
     before = _snapshot(tmp_path)
 
-    def _raise_unavailable(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _raise_unavailable(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_unavailable)
@@ -495,7 +506,7 @@ def test_suggest_relations_model_not_found_maps_to_exit_one(
     )
     before = _snapshot(tmp_path)
 
-    def _raise_model_not_found(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _raise_model_not_found(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         raise OllamaModelNotFound("Model not found (404): {}")
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_model_not_found)
@@ -517,15 +528,13 @@ def test_suggest_relations_generic_ollama_error_maps_to_exit_one(
 ) -> None:
     """A generic `OllamaError` (neither `OllamaUnavailable` nor
     `OllamaModelNotFound`) is caught by the 3rd-tier fallback handler."""
-    from openkos.llm.ollama import OllamaError
-
     _init_workspace(tmp_path, monkeypatch)
     _patch_candidate_edges(
         monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
     )
     before = _snapshot(tmp_path)
 
-    def _raise_generic(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _raise_generic(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         raise OllamaError("something else went wrong")
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _raise_generic)
@@ -539,6 +548,108 @@ def test_suggest_relations_generic_ollama_error_maps_to_exit_one(
     )
     assert "Traceback" not in result.stderr
     assert _snapshot(tmp_path) == before
+
+
+# ---------------------------------------------------------------------------
+# issue #441: a partial batch keeps its completed suggestions
+# ---------------------------------------------------------------------------
+
+
+def _two_edge_partial_batch(
+    monkeypatch: pytest.MonkeyPatch, failure: OllamaError
+) -> None:
+    """Wire `candidate_edges` to two edges and `suggest_edge_types` to a
+    batch whose first edge completed and whose second raised `failure` --
+    the #441 mid-batch shape."""
+    _patch_candidate_edges(
+        monkeypatch,
+        [
+            Edge(source_id="concepts/a", target_id="concepts/b"),
+            Edge(source_id="concepts/c", target_id="concepts/d"),
+        ],
+    )
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        return EdgeSuggestionBatch(
+            results=[
+                _suggestion(
+                    source="concepts/a",
+                    target="concepts/b",
+                    suggested_type="references",
+                    rationale="kept work",
+                )
+            ],
+            failure=failure,
+            failed_index=2,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+
+def test_suggest_relations_partial_batch_reports_completed_then_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-batch `OllamaError` no longer discards completed suggestions
+    (#441): the report renders them exactly as a complete run over that list
+    would, THEN one stderr line reports the failure with completed-of-total
+    counts, and the exit code stays the OllamaError-family 1."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_edge_partial_batch(monkeypatch, OllamaError("boom"))
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "[references] concepts/a -> concepts/b" in result.stdout
+    assert "kept work" in result.stdout
+    assert "openkos relate" in result.stdout
+    assert result.stderr == (
+        "openkos suggest-relations: failed after suggesting 1 of 2 untyped "
+        "edge(s) -- boom.\n"
+    )
+    assert "Traceback" not in result.stderr
+
+
+def test_suggest_relations_partial_batch_unavailable_keeps_remediation_and_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaUnavailable` batch failure keeps its cause-specific
+    remediation (`ollama serve` + doctor hint), gains the completed-of-total
+    counts, and still exits 1 (#441)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_edge_partial_batch(
+        monkeypatch, OllamaUnavailable("Ollama not reachable at http://localhost:11434")
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 1
+    assert "1 of 2" in result.stderr
+    assert "ollama serve" in result.stderr
+    assert result.stderr.rstrip("\n").endswith(
+        "Or run `openkos doctor` to diagnose the environment."
+    )
+    assert "kept work" in result.stdout
+
+
+def test_suggest_relations_partial_batch_model_not_found_keeps_pull_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaModelNotFound` batch failure keeps the configured model's
+    `ollama pull` remediation alongside the completed-of-total counts (#441)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "llama3.2:1b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {configured_model}\n", encoding="utf-8"
+    )
+    _two_edge_partial_batch(monkeypatch, OllamaModelNotFound("Model not found (404)"))
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 1
+    assert "1 of 2" in result.stderr
+    assert f"ollama pull {configured_model}" in result.stderr
+    assert "kept work" in result.stdout
 
 
 def test_suggest_relations_auto_flag_skips_the_confirmation_gate(
@@ -581,10 +692,10 @@ def test_suggest_relations_gate_previews_cost_and_declining_generates_nothing(
     )
     called = False
 
-    def _must_not_run(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _must_not_run(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         nonlocal called
         called = True
-        return []
+        return EdgeSuggestionBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _must_not_run)
 
@@ -609,7 +720,7 @@ def test_suggest_relations_gate_confirmed_runs_and_prints_per_edge_progress(
     ]
     _patch_candidate_edges(monkeypatch, edges)
 
-    def _fake_suggest(edges_arg: list[Edge], **kwargs: object) -> list[EdgeSuggestion]:
+    def _fake_suggest(edges_arg: list[Edge], **kwargs: object) -> EdgeSuggestionBatch:
         on_progress = kwargs["on_progress"]
         assert callable(on_progress)
         results = [
@@ -622,7 +733,7 @@ def test_suggest_relations_gate_confirmed_runs_and_prints_per_edge_progress(
         ]
         for index, suggestion in enumerate(results, start=1):
             on_progress(index, len(results), suggestion)
-        return results
+        return EdgeSuggestionBatch(results=results)
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
 
@@ -986,12 +1097,12 @@ def test_suggest_relations_builds_the_graph_once_on_the_non_zero_path(
         "openkos.resolution.edge_typing.build_graph", _counting_build_graph
     )
 
-    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         assert len(stores) == 1
         store = stores[0]
         with pytest.raises(sqlite3.ProgrammingError):
             store.edges()
-        return []
+        return EdgeSuggestionBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
 
@@ -1083,7 +1194,8 @@ def test_suggest_relations_reports_candidate_truncation_when_the_cap_is_reached(
 
     monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
     monkeypatch.setattr(
-        "openkos.cli.main.suggest_edge_types", lambda edges, **kwargs: []
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(results=[]),
     )
 
     result = runner.invoke(app, ["suggest-relations", "--auto"])
@@ -1119,7 +1231,8 @@ def test_suggest_relations_no_truncation_notice_under_the_cap(
 
     monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
     monkeypatch.setattr(
-        "openkos.cli.main.suggest_edge_types", lambda edges, **kwargs: []
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(results=[]),
     )
 
     result = runner.invoke(app, ["suggest-relations", "--auto"])
@@ -1178,7 +1291,8 @@ def test_suggest_relations_suppresses_notice_when_every_dropped_pair_is_confiden
 
     monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
     monkeypatch.setattr(
-        "openkos.cli.main.suggest_edge_types", lambda edges, **kwargs: []
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(results=[]),
     )
 
     default_run = runner.invoke(app, ["suggest-relations", "--auto"])
@@ -1239,7 +1353,8 @@ def test_suggest_relations_reports_only_visible_counts_for_a_mixed_drop(
 
     monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
     monkeypatch.setattr(
-        "openkos.cli.main.suggest_edge_types", lambda edges, **kwargs: []
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(results=[]),
     )
 
     result = runner.invoke(app, ["suggest-relations", "--auto"])

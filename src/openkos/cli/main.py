@@ -81,6 +81,7 @@ from openkos.resolution.contradiction import (
 )
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
+    EdgeSuggestionBatch,
     candidate_edges,
     candidate_truncation_notice,
     suggest_edge_types,
@@ -1168,6 +1169,37 @@ def _echo_adjudicate_batch_failure(
     context = (
         f"openkos adjudicate: failed after adjudicating {len(batch.results)} "
         f"of {total} candidate group(s)"
+    )
+    if isinstance(failure, OllamaUnavailable):
+        typer.echo(
+            f"{context} -- {failure}. Start it with `ollama serve`, then try "
+            f"again.{_DOCTOR_HINT}",
+            err=True,
+        )
+    elif isinstance(failure, OllamaModelNotFound):
+        typer.echo(
+            f"{context} -- model '{model}' is not installed. Pull it with "
+            f"`ollama pull {model}`, then try again.",
+            err=True,
+        )
+    else:
+        typer.echo(f"{context} -- {failure}.", err=True)
+
+
+def _echo_suggest_relations_batch_failure(
+    batch: EdgeSuggestionBatch, *, total: int, model: str
+) -> None:
+    """One stderr line for a partial `EdgeSuggestionBatch` (#441): the same
+    3-tier cause-specific wording the raise-path handlers use, prefixed with
+    how much paid-for work survived (mirrors
+    `_echo_adjudicate_batch_failure`). The `isinstance` dispatch mirrors the
+    handlers' ORDER for the same reason they are ordered: both specific
+    classes subclass `OllamaError`, so the generic branch must come last or
+    their actionable remediation is lost."""
+    failure = batch.failure
+    context = (
+        f"openkos suggest-relations: failed after suggesting "
+        f"{len(batch.results)} of {total} untyped edge(s)"
     )
     if isinstance(failure, OllamaUnavailable):
         typer.echo(
@@ -8530,10 +8562,17 @@ def suggest_relations_cmd(
     filters them out before this command ever sees them (spec: Already-typed
     edges are excluded from suggestions).
 
-    A no-model/no-Ollama run degrades via the SAME 3-tier ORDERED handler
-    `adjudicate`/`query` use -- `OllamaUnavailable`, then
+    A no-model/no-Ollama failure comes back INSIDE the returned
+    `EdgeSuggestionBatch` (#441) and maps onto the SAME 3-tier ORDERED
+    wording `adjudicate`/`query` use -- `OllamaUnavailable`, then
     `OllamaModelNotFound`, then the generic `OllamaError` fallback -- each
-    with its own actionable stderr message, exit 1, and zero writes.
+    with its own actionable stderr message and exit 1. The completed
+    suggestions are NEVER discarded: the report first renders
+    `batch.results` exactly as a complete run over that list, THEN one
+    stderr line reports the failure with completed-of-total counts and the
+    run exits 1. The raise-path handler ladder is retained around the call
+    itself for an injected backend that raises outside `llm.chat`'s guarded
+    seam -- same wording, no counts, zero writes either way.
 
     Unless `--include-confidential` is passed, an untyped edge with a
     confidential endpoint (sensitivity-fail-closed-filter) is excluded from
@@ -8666,7 +8705,7 @@ def suggest_relations_cmd(
         )
 
     try:
-        results = suggest_edge_types(
+        batch = suggest_edge_types(
             edges,
             bundle_dir=layout.bundle_dir,
             llm=llm,
@@ -8698,7 +8737,7 @@ def suggest_relations_cmd(
         typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
-    for result in results:
+    for result in batch.results:
         edge = result.edge
         if result.suggested_type is None:
             typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
@@ -8711,6 +8750,14 @@ def suggest_relations_cmd(
         typer.echo()
 
     typer.echo("Next: openkos relate <source> <type> <target>")
+
+    if batch.failure is not None:
+        # Partial batch (#441): the report above already rendered the
+        # completed suggestions exactly as a complete run over that list --
+        # the paid-for work is never discarded -- so all that remains is the
+        # one stderr failure line and the OllamaError-family exit code.
+        _echo_suggest_relations_batch_failure(batch, total=total, model=cfg.model)
+        raise typer.Exit(code=1) from batch.failure
 
 
 @app.command("suggest-volatility")
