@@ -9,6 +9,7 @@ every successful read; the ONLY non-zero exit path is an absent/unreadable
 workspace.
 """
 
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -671,4 +672,49 @@ def test_lint_clean_bundle_reports_zero_unbacked_provenance(
     assert result.exit_code == 0
     assert "Unbacked provenance:" in result.stdout
     assert "  No unbacked provenance claims." in result.stdout
+    assert _snapshot(tmp_path) == before
+
+
+def test_lint_flags_non_nfc_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An NFD-named doc under `bundle/` is reported under `Non-NFC names:`
+    with the escaped raw spelling and the NFC rename target, rendered via
+    `finding.path` (an on-disk entry, not a concept object), and `lint`
+    still exits 0 -- detection only, never a rename (issue #474)."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts_dir = tmp_path / "bundle" / "concepts"
+    concepts_dir.mkdir()
+    nfd_name = unicodedata.normalize("NFD", "café.md")
+    (concepts_dir / nfd_name).write_text(
+        "---\ntype: Concept\ntitle: Cafe\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Non-NFC names:" in result.stdout
+    section = result.stdout.split("Non-NFC names:", 1)[1]
+    nfc_rel = unicodedata.normalize("NFC", "concepts/café.md")
+    assert f"  {nfc_rel}: " in section
+    assert "\\u0301" in section
+    assert "is not NFC" in section
+    assert _snapshot(tmp_path) == before
+
+
+def test_lint_clean_bundle_reports_zero_non_nfc_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the non-NFC-names empty state; `lint`
+    still exits 0 and creates no file (issue #474)."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "Non-NFC names:" in result.stdout
+    assert "  No non-NFC on-disk names." in result.stdout
     assert _snapshot(tmp_path) == before
