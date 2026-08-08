@@ -12,8 +12,10 @@ Deliberately a NAMES-ONLY walk, not the `collect_docs` walk: design D3's
 no-fifth-walk guard protects the read+parse walk, and this walk opens no
 file -- also `collect_docs` only sees readable `.md` docs, while a
 decomposed name on a directory, a non-`.md` file, or an unreadable doc is
-exactly what this check must still see. Detection ONLY: openkos never
-renames (human curates, engine maintains).
+exactly what this check must still see. `lint` stays read-only and never
+renames; the finding's remediation names `openkos normalize-names`
+(#474 part 2), the dedicated verb that performs the rename this check
+only detects.
 
 Every non-ASCII test name is built with `unicodedata.normalize("NFD",
 ...)` -- never a pasted raw decomposed string, which an editor or VCS
@@ -173,3 +175,19 @@ def test_broken_walk_degrades_to_findings_collected_so_far(
     findings = lint.check_non_nfc_names(bundle_dir)
 
     assert [finding.path for finding in findings] == [f"{NFC_CAFE}.md"]
+
+
+def test_detail_names_normalize_names_as_remediation(tmp_path: Path) -> None:
+    """The finding's remediation names `openkos normalize-names` (issue
+    #474 part 2, design D8) -- it no longer asserts that openkos never
+    renames. Every other assertion elsewhere in this file is unchanged;
+    this is the ONE new assertion pinning the verb name, per design D8's
+    wording correction."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / f"{NFD_CAFE}.md").write_text("body\n", encoding="utf-8")
+
+    findings = lint.check_non_nfc_names(bundle_dir)
+
+    assert len(findings) == 1
+    assert "openkos normalize-names" in findings[0].detail

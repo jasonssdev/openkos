@@ -5,9 +5,16 @@ this never imports from either, avoiding a `bundle` -> `config` (or reverse)
 layering dependency.
 """
 
+import contextlib
 import os
 import uuid
 from pathlib import Path
+
+RENAME_TEMP_PREFIX = "okos-nfc-tmp-"
+"""Namespace for `rename_two_step`'s intermediate sibling name (issue #474
+part 2, design D3). ASCII -- trivially NFC, so a stranded temp is never
+self-flagged by `lint.scan_non_nfc_entries` -- and unique per call
+(`uuid4().hex` suffix), so concurrent runs never collide."""
 
 
 def write_exclusive(path: Path, content: str) -> None:
@@ -95,3 +102,63 @@ def copy_exclusive(src: Path, dst: Path) -> None:
         except BaseException:
             dst.unlink(missing_ok=True)
             raise
+
+
+def rename_two_step(src: Path, nfc_name: str) -> Path:
+    """Rename `src` to `nfc_name` (its own NFC-normalized name) through a
+    unique ASCII temporary sibling, verifying the result by byte-exact
+    directory listing (issue #474 part 2, `normalize-names`, design D2).
+
+    `src -> src.parent/f"{RENAME_TEMP_PREFIX}{uuid4().hex}" -> src.parent
+    /nfc_name`. A single DIRECT `os.rename(src, nfc_target)` is never
+    used: APFS/HFS+ and SMB shares are normalization-*insensitive*, so a
+    rename between two canonically equivalent names (the raw NFD spelling
+    and its NFC form) can be silently treated as a same-file no-op that
+    leaves the on-disk spelling untouched -- a failure mode that reports
+    success while `lint` still flags the entry. Neither hop of the
+    two-step scheme crosses a canonically equivalent pair -- the ASCII
+    temp name shares no characters with either spelling -- so both
+    `os.rename` calls are real renames even under a hostile,
+    normalization-insensitive primitive.
+
+    Verification is `nfc_name in os.listdir(src.parent)`, a byte-exact
+    listing comparison, never `Path.exists()`: the macOS spike (design.md
+    S1, Q4) observed `Path(nfc_target).exists()` returning `True` with
+    ONLY the NFD name on disk, which is exactly the silent-success result
+    this primitive exists to rule out.
+
+    On either the second rename failing or the post-rename verification
+    failing, the entry is restored to `src.name` (the original on-disk
+    spelling) and `OSError` is raised -- loudly, per design D2 -- leaving
+    no `RENAME_TEMP_PREFIX`-named entry stranded on disk. A stranded temp
+    can only result from a hard kill strictly between the two `os.rename`
+    calls below, which no exception handler here can observe; that case
+    is covered by `lint.scan_stranded_rename_temps` at the next run
+    (design D3), never by this primitive.
+    """
+    parent = src.parent
+    original_name = src.name
+    temp_path = parent / f"{RENAME_TEMP_PREFIX}{uuid.uuid4().hex}"
+    dst = parent / nfc_name
+    # `os.rename` (not `Path.rename`), deliberately: this primitive's own
+    # tests monkeypatch `os.rename` IN THIS MODULE'S NAMESPACE to inject a
+    # normalization-insensitive rename and prove the two-step scheme
+    # survives it (design D2/D3) -- `Path.rename` would not be patchable
+    # the same way.
+    os.rename(src, temp_path)  # noqa: PTH104
+    try:
+        os.rename(temp_path, dst)  # noqa: PTH104
+    except OSError:
+        os.rename(temp_path, parent / original_name)  # noqa: PTH104
+        raise
+    # Byte-exact directory-listing verification, never `Path.exists()`
+    # (design D2): the macOS spike observed `exists()` return `True` with
+    # only the NFD name on disk (design.md S1, Q4).
+    if nfc_name not in os.listdir(parent):  # noqa: PTH208
+        with contextlib.suppress(OSError):
+            os.rename(dst, parent / original_name)  # noqa: PTH104
+        raise OSError(
+            f"rename_two_step: verification failed -- {nfc_name!r} not "
+            f"found byte-exactly in {parent} after renaming {original_name!r}"
+        )
+    return dst
