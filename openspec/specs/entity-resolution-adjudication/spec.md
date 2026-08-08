@@ -558,21 +558,26 @@ For each eligible group, survivor MUST be `member_ids[0]` (alphabetical-first)
 and absorbed MUST be `member_ids[1]`. Before prompting, a preview of what
 `prepare_merge` would fuse (survivor, absorbed, rewrites, removed) MUST be
 printed. The prompt text MUST be exactly
-`Merge <absorbed> into <survivor>? [y/N/skip]`.
+`Merge <absorbed> into <survivor>? [y/N]` (issue #483: the same #398
+contract `curate`'s per-item walks advertise -- the formerly advertised
+`skip` token never had behavior distinct from a decline).
 
 #### Scenario: Preview precedes the exact prompt text
 
 - GIVEN an eligible SAME 2-member group
 - WHEN `adjudicate --apply` runs
 - THEN a `prepare_merge` preview is printed before the prompt
-- AND the prompt line is exactly `Merge <absorbed> into <survivor>? [y/N/skip]`
+- AND the prompt line is exactly `Merge <absorbed> into <survivor>? [y/N]`
   with `<survivor>` = `member_ids[0]` and `<absorbed>` = `member_ids[1]`
 
 ### Requirement: Prompt Response Semantics
 
-Only an input of `y` or `Y` MUST result in the merge being applied. Empty
-input, `skip`, and `N`/`n` MUST NOT apply the merge and MUST continue to the
-next group.
+The prompt MUST be validated by the same helper `curate`'s per-item walks
+use (`curate._confirm`, issue #483): `y`/`yes` (case/whitespace-insensitive)
+MUST apply the merge; `n`/`no` and empty input (the documented `N` default)
+MUST decline it and continue to the next group; any OTHER answer MUST be
+re-asked with a one-line notice naming the accepted tokens, never silently
+counted as a decline.
 
 #### Scenario: `y` applies the merge
 
@@ -586,11 +591,12 @@ next group.
 - WHEN `adjudicate --apply` runs
 - THEN the merge is NOT applied and the run continues
 
-#### Scenario: `skip` does not merge
+#### Scenario: an unrecognized answer is re-asked, not counted as a decline
 
-- GIVEN an eligible group and CliRunner `input="skip\n"`
+- GIVEN an eligible group and CliRunner `input="skip\ny\n"`
 - WHEN `adjudicate --apply` runs
-- THEN the merge is NOT applied and the run continues
+- THEN a notice naming the accepted tokens is printed
+- AND the merge is applied by the subsequent `y`
 
 #### Scenario: `N`/`n` does not merge
 
@@ -685,13 +691,24 @@ run MUST remain intact and reversible.
 
 At the end of the run, `adjudicate --apply` MUST print a summary line
 `applied X, skipped Y` where `Y` breaks down into N>2 skips, already-merged
-skips, and declined (N/skip/empty) prompts.
+skips, and declined (N/empty) prompts. After the summary line, each
+operator-declined merge MUST be named on its own
+`declined: <absorbed> -> <survivor>` line (issue #483, mirroring #398's
+decline listing), and no such line may appear for a merge that was applied.
 
 #### Scenario: Summary reflects applied and skipped counts
 
 - GIVEN a run with one applied merge, one N>2 skip, and one declined prompt
 - WHEN `adjudicate --apply` completes
 - THEN stdout shows `applied 1, skipped 2` with the breakdown of skip reasons
+
+#### Scenario: Declined merges are named after the summary
+
+- GIVEN a run with one applied merge and one operator-declined merge
+- WHEN `adjudicate --apply` completes
+- THEN the declined pair is named `declined: <absorbed> -> <survivor>` after
+  the summary line
+- AND the applied pair is not listed as declined
 
 ### Requirement: Empty / No-Eligible State
 
