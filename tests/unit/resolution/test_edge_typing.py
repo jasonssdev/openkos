@@ -18,25 +18,34 @@ from openkos.graph.base import Edge, GraphStore
 from openkos.graph.proximity import ProximityPair
 from openkos.graph.sqlite_graph import CandidateReport, build_graph
 from openkos.llm.base import Message
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.ollama import OllamaGenerationCapped, OllamaUnavailable
 from openkos.resolution import edge_typing as edge_typing_mod
 
 
 class _FakeLLM:
     """A structural `LLMBackend`: records every `chat` call, returns queued
     replies in call order. If `error` is set, `chat` raises it instead of
-    returning (and does not consume a queued reply)."""
+    returning (and does not consume a queued reply); `error_at` narrows the
+    raise to the k-th (1-based) call so mid-loop failure can be staged after
+    some edges already succeeded (#441)."""
 
     def __init__(
-        self, replies: Sequence[str] = (), *, error: BaseException | None = None
+        self,
+        replies: Sequence[str] = (),
+        *,
+        error: BaseException | None = None,
+        error_at: int | None = None,
     ) -> None:
         self._replies = list(replies)
         self.error = error
+        self.error_at = error_at
         self.calls: list[list[Message]] = []
 
     def chat(self, messages: Sequence[Message]) -> str:
         self.calls.append(list(messages))
-        if self.error is not None:
+        if self.error is not None and (
+            self.error_at is None or len(self.calls) == self.error_at
+        ):
             raise self.error
         return self._replies.pop(0)
 
@@ -173,7 +182,9 @@ def test_suggest_edge_types_returns_one_suggestion_per_input_edge_same_order(
         ]
     )
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 2
     assert [s.edge for s in result] == edges
@@ -209,7 +220,9 @@ def test_suggest_edge_types_malformed_reply_degrades_only_that_edge(
         ]
     )
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 5
     assert result[0].suggested_type == "references"
@@ -230,22 +243,12 @@ def test_suggest_edge_types_invalid_type_degrades_to_none_never_valid(
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=[_valid_reply("   ", "blank type")])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 1
     assert result[0].suggested_type is None
-
-
-def test_suggest_edge_types_propagates_ollama_error_unswallowed(
-    tmp_path: Path,
-) -> None:
-    _write_doc(tmp_path / "a.md", title="A")
-    _write_doc(tmp_path / "b.md", title="B")
-    edges = [Edge(source_id="a", target_id="b")]
-    llm = _FakeLLM(error=OllamaUnavailable("not reachable"))
-
-    with pytest.raises(OllamaUnavailable):
-        edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
 
 
 def test_suggest_edge_types_handles_unreadable_source_or_target_doc(
@@ -257,7 +260,9 @@ def test_suggest_edge_types_handles_unreadable_source_or_target_doc(
     edges = [Edge(source_id="missing-a", target_id="missing-b")]
     llm = _FakeLLM(replies=[_valid_reply("references", "best guess")])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 1
     assert result[0].suggested_type == "references"
@@ -278,7 +283,9 @@ def test_suggest_edge_types_handles_unparseable_frontmatter_doc(
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=[_valid_reply("references", "still tries")])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 1
     assert result[0].suggested_type == "references"
@@ -294,7 +301,9 @@ def test_suggest_edge_types_non_string_type_field_degrades_to_none(
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=['{"type": 42, "rationale": "numeric type"}'])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 1
     assert result[0].suggested_type is None
@@ -310,7 +319,9 @@ def test_suggest_edge_types_non_string_reply_degrades_to_none(tmp_path: Path) ->
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=[None])  # type: ignore[list-item]
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 1
     assert result[0].suggested_type is None
@@ -328,7 +339,9 @@ def test_suggest_edge_types_reply_that_is_valid_json_but_not_an_object_degrades(
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=["[1, 2, 3]"])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 1
     assert result[0].suggested_type is None
@@ -347,7 +360,9 @@ def test_suggest_edge_types_degrade_with_blank_rationale_falls_back_to_stable_te
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=['{"type": "   "}'])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 1
     assert result[0].suggested_type is None
@@ -364,7 +379,9 @@ def test_suggest_edge_types_non_string_type_with_blank_rationale_falls_back(
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=['{"type": 42, "rationale": "   "}'])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert len(result) == 1
     assert result[0].suggested_type is None
@@ -505,7 +522,9 @@ def test_engine_owned_type_is_rejected_even_when_the_model_proposes_it(
         replies=[_valid_reply("derived_from", "It builds upon the origin of MCP.")]
     )
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert result[0].suggested_type is None
     assert "provenance" in result[0].rationale
@@ -525,7 +544,9 @@ def test_rejecting_an_engine_owned_type_does_not_echo_the_models_reasoning(
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=[_valid_reply("derived_from", "it builds upon the origin")])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert "builds upon" not in result[0].rationale
 
@@ -542,7 +563,9 @@ def test_out_of_vocab_suggestion_is_kept_but_prints_no_advisory_note(
     edges = [Edge(source_id="a", target_id="b")]
     llm = _FakeLLM(replies=[_valid_reply("source_of", "provenance edge")])
 
-    result = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+    result = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm
+    ).results
 
     assert result[0].suggested_type == "source_of"
     assert "is not a seeded relation type" not in capsys.readouterr().err
@@ -729,7 +752,7 @@ def test_provenance_only_bundle_yields_zero_candidates_and_zero_llm_calls(
     llm = _FakeLLM()
 
     edges = edge_typing_mod.candidate_edges(bundle_dir)
-    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm).results
 
     assert edges == []
     assert result == []
@@ -771,6 +794,79 @@ def test_suggest_edge_types_invokes_on_progress_once_per_edge_in_order(
 
 
 # ---------------------------------------------------------------------------
+# Requirement: Partial Batch Preserved On Mid-Loop `OllamaError` (#441)
+# ---------------------------------------------------------------------------
+
+
+def test_mid_loop_ollama_error_returns_completed_results_and_failure(
+    tmp_path: Path,
+) -> None:
+    """An `OllamaError`-family raise on the k-th edge's `llm.chat` stops the
+    loop and returns every already-completed suggestion in input order, the
+    exception instance itself, and the 1-based failed index -- the caller
+    paid for k-1 completed calls and keeps all of them (#441). No edge
+    after the failed one is ever prompted; the failed edge produces no
+    suggestion and no `on_progress` call."""
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    _write_doc(tmp_path / "c.md", title="C")
+    edges = [
+        Edge(source_id="a", target_id="b"),
+        Edge(source_id="b", target_id="c"),
+        Edge(source_id="c", target_id="a"),
+    ]
+    capped = OllamaGenerationCapped("generation hit the token ceiling")
+    llm = _FakeLLM(replies=[_valid_reply("references")], error=capped, error_at=2)
+    seen: list[tuple[int, int, edge_typing_mod.EdgeSuggestion]] = []
+
+    def _cb(index: int, total: int, suggestion: edge_typing_mod.EdgeSuggestion) -> None:
+        seen.append((index, total, suggestion))
+
+    batch = edge_typing_mod.suggest_edge_types(
+        edges, bundle_dir=tmp_path, llm=llm, on_progress=_cb
+    )
+
+    assert isinstance(batch, edge_typing_mod.EdgeSuggestionBatch)
+    assert [s.edge for s in batch.results] == edges[:1]
+    assert batch.results[0].suggested_type == "references"
+    assert batch.failure is capped
+    assert batch.failed_index == 2
+    # The failed call itself happened; the edge AFTER it was never prompted.
+    assert len(llm.calls) == 2
+    # `on_progress` fired only for completed suggestions -- never for the
+    # failure.
+    assert [(index, total) for index, total, _ in seen] == [(1, 3)]
+
+
+def test_ollama_error_on_first_edge_returns_empty_results(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    edges = [Edge(source_id="a", target_id="b")]
+    failure = OllamaUnavailable("no local Ollama server reachable")
+    llm = _FakeLLM(error=failure, error_at=1)
+
+    batch = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+
+    assert batch.results == []
+    assert batch.failure is failure
+    assert batch.failed_index == 1
+
+
+def test_complete_run_reports_no_failure(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    _write_doc(tmp_path / "c.md", title="C")
+    edges = [Edge(source_id="a", target_id="b"), Edge(source_id="b", target_id="c")]
+    llm = _FakeLLM(replies=[_valid_reply("references"), _valid_reply("depends_on")])
+
+    batch = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
+
+    assert batch.failure is None
+    assert batch.failed_index is None
+    assert len(batch.results) == len(edges)
+
+
+# ---------------------------------------------------------------------------
 # Phase 3: `suggest_relations` orchestrator (owns `build_graph`)
 # ---------------------------------------------------------------------------
 
@@ -800,7 +896,7 @@ def test_suggest_relations_reads_graph_filters_untyped_and_delegates(
     )
     llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions C")])
 
-    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm).results
 
     assert len(result) == 1
     assert result[0].edge.source_id == "concepts/a"
@@ -837,7 +933,7 @@ def test_suggest_relations_excludes_untyped_edge_when_pair_already_typed(
     )
     llm = _FakeLLM(replies=[_valid_reply("related_to", "mentions C")])
 
-    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm).results
 
     assert len(result) == 1
     assert result[0].edge.source_id == "concepts/a"
@@ -858,7 +954,7 @@ def test_suggest_relations_on_bundle_with_no_untyped_edges_returns_empty(
     )
     llm = _FakeLLM()
 
-    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm).results
 
     assert result == []
     assert llm.calls == []
@@ -888,7 +984,7 @@ def test_edge_with_confidential_endpoint_excluded_by_default(tmp_path: Path) -> 
     )
     llm = _FakeLLM()
 
-    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm)
+    result = edge_typing_mod.suggest_relations(bundle_dir, llm=llm).results
 
     assert result == []
     assert llm.calls == []
@@ -916,7 +1012,7 @@ def test_include_confidential_true_restores_the_confidential_edge(
 
     result = edge_typing_mod.suggest_relations(
         bundle_dir, llm=llm, include_confidential=True
-    )
+    ).results
 
     assert len(result) == 1
     assert result[0].edge.source_id == "concepts/a"

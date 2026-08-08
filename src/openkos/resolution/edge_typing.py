@@ -6,7 +6,8 @@ OWNS the `openkos.graph` read internally -- opens `sqlite_graph.build_graph`,
 narrows `edges()` to the candidate set (`_candidate_edges`: untyped rows
 whose `(source_id, target_id)` pair does NOT already carry a typed edge
 elsewhere in the graph), and delegates to `suggest_edge_types`, the
-config-free LLM leaf, for one `EdgeSuggestion` per candidate edge, in order.
+config-free LLM leaf, for an `EdgeSuggestionBatch` holding one
+`EdgeSuggestion` per completed candidate edge, in order.
 The pair-level exclusion matters because an untyped body-link edge and a
 `relations:`-typed edge for the SAME pair can coexist as two distinct graph
 rows (`graph.base.Edge.relation_type`'s docstring); filtering on
@@ -16,11 +17,20 @@ accepted pair forever.
 Config-free leaf (mirrors `adjudication.py`, `extraction/concept.py`, and
 `retrieval/answer.py`): this module never imports `openkos.config`; the
 caller supplies an `LLMBackend`, never an `OllamaClient` constructed here.
-Any `OllamaError`-family exception raised by `llm.chat` propagates
-unswallowed to the caller -- only PARSING and VALIDATION failures degrade a
-single edge's suggestion, never the whole call, and no edge is ever skipped
-or dropped: `suggest_edge_types` returns exactly one `EdgeSuggestion` per
-input `Edge`, in the same order.
+Importing the `OllamaError` TYPE from `openkos.llm.ollama` keeps that
+discipline intact: `ollama.py` is itself a config-free stdlib leaf, and the
+error family is the failure contract every `LLMBackend` caller already
+speaks.
+
+An `OllamaError`-family exception raised by `llm.chat` mid-loop STOPS the
+loop but never discards paid-for work (issue #441): each completed edge
+cost one real LLM call, so `suggest_edge_types` returns an
+`EdgeSuggestionBatch` carrying every completed `EdgeSuggestion` (input
+order, one per completed edge) plus the failure that stopped the loop and
+the 1-based index of the edge whose chat raised. A complete run returns
+`failure=None`. Only PARSING and VALIDATION failures degrade a single
+edge's suggestion -- those never stop the loop, and no completed edge's
+suggestion is ever skipped or dropped.
 
 Layering: this module is DERIVED, not canonical -- it MAY import
 `openkos.graph` (derived -> derived, allowed). The live, tested constraint is
@@ -43,6 +53,7 @@ from openkos.graph.base import Edge, GraphStore
 from openkos.graph.sqlite_graph import CandidateReport, CandidateSource, build_graph
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
+from openkos.llm.ollama import OllamaError
 from openkos.model import okf
 from openkos.model.relations import (
     ENGINE_OWNED_RELATION_TYPES,
@@ -230,6 +241,32 @@ class EdgeSuggestion:
     omitted one, but is never blank on the fail-closed degrade paths."""
 
 
+@dataclass(frozen=True)
+class EdgeSuggestionBatch:
+    """Outcome of one `suggest_edge_types` run: every completed suggestion
+    plus, when the loop was cut short, the failure that stopped it (issue
+    #441). Ephemeral, like `EdgeSuggestion` -- never a persisted OKF type
+    or `bundle`/`state` file.
+
+    Partials ride the RETURN, not an exception payload, on purpose (mirrors
+    `adjudication.AdjudicationBatch`): an exception-carried partial forces
+    every caller into a try/except that must remember to salvage the
+    results off the exception, and the one caller that forgets reintroduces
+    exactly the work-discarding bug this type exists to fix. A return value
+    cannot be silently dropped by an unhandled raise."""
+
+    results: list[EdgeSuggestion]
+    """Every completed suggestion, in input order -- each one was fully
+    paid for (its `llm.chat` call succeeded) before the loop stopped."""
+    failure: OllamaError | None = None
+    """The `OllamaError`-family exception that stopped the loop, or `None`
+    for a complete run."""
+    failed_index: int | None = None
+    """1-based index of the edge whose `llm.chat` raised `failure`; `None`
+    when the run completed. The failed edge produced no suggestion and no
+    `on_progress` call, and no later edge was ever prompted."""
+
+
 def untyped_edges(store: GraphStore) -> list[Edge]:
     """Return every edge in `store` whose `relation_type is None`, in
     `store.edges()`'s own (sorted, deterministic) order.
@@ -395,15 +432,25 @@ def suggest_edge_types(
     include_confidential: bool = False,
     local_exemption: bool = False,
     on_progress: Callable[[int, int, EdgeSuggestion], None] | None = None,
-) -> list[EdgeSuggestion]:
+) -> EdgeSuggestionBatch:
     """Suggest a relation type + rationale for every edge in `edges`
     against `bundle_dir` using `llm`, read-only.
 
-    Returns exactly one `EdgeSuggestion` per input edge, in the same order
-    -- one `llm.chat` call per edge (module docstring). Any `OllamaError`-
-    family exception raised by `llm.chat` propagates unswallowed (module
-    docstring) -- this function catches only reply-parsing/validation
-    failures, never transport or model-availability errors.
+    Returns an `EdgeSuggestionBatch` whose `results` hold exactly one
+    `EdgeSuggestion` per COMPLETED edge, in input order -- one `llm.chat`
+    call per edge (module docstring); this function never filters EDGES.
+
+    An `OllamaError`-family exception raised by `llm.chat` stops the loop
+    and comes back IN the batch (`failure` set, `failed_index` naming the
+    1-based edge whose chat raised) rather than propagating (issue #441):
+    propagation made the caller pay for every completed call and then
+    discard all of the completed suggestions with the raise -- #422's
+    `OllamaGenerationCapped` made that edge fast and frequent. Only the
+    `llm.chat` call sits inside the guard; reply-parsing/validation
+    failures still degrade that one edge's suggestion, an unreadable
+    endpoint doc still degrades to `(concept_id, "")` for that one edge,
+    and a raise from the caller's own `on_progress` still propagates
+    untouched. A complete run returns `failure=None, failed_index=None`.
 
     `include_confidential` is threaded into `_load_doc`'s independent
     per-doc re-check (directory-walk-observability follow-up); it defaults
@@ -420,12 +467,14 @@ def suggest_edge_types(
     gets today's blanket blocking, so forgetting the parameter can only ever
     be MORE restrictive.
 
-    `on_progress`, if given, is called once per edge in input order, AFTER
-    that edge's `EdgeSuggestion` is built, with `(index, total, suggestion)`
-    where `index` is 1-based and `total == len(edges)` -- a hook for a CLI to
-    render a per-edge progress line during an otherwise opaque, minutes-long
-    run (issue #134). It never affects the returned list; an exception it
-    raises propagates to the caller (it is the caller's own callback)."""
+    `on_progress`, if given, is called once per COMPLETED edge in input
+    order, AFTER that edge's `EdgeSuggestion` is built, with `(index, total,
+    suggestion)` where `index` is 1-based and `total == len(edges)` -- a
+    hook for a CLI to render a per-edge progress line during an otherwise
+    opaque, minutes-long run (issue #134). The edge whose chat RAISED does
+    not count -- it produced no suggestion, so there is nothing to report
+    progress on (#441). It never affects the returned batch; an exception
+    it raises propagates to the caller (it is the caller's own callback)."""
     results: list[EdgeSuggestion] = []
     total = len(edges)
     for index, edge in enumerate(edges, start=1):
@@ -442,7 +491,13 @@ def suggest_edge_types(
             local_exemption=local_exemption,
         )
         messages = _build_messages(edge, src_doc, tgt_doc)
-        reply = llm.chat(messages)
+        # Guard ONLY the chat call (#441): a transport/model failure must
+        # not discard the completed suggestions, while parse/validate/
+        # progress failures keep their own existing contracts untouched.
+        try:
+            reply = llm.chat(messages)
+        except OllamaError as exc:
+            return EdgeSuggestionBatch(results=results, failure=exc, failed_index=index)
         suggested_type, rationale = _parse_reply(reply)
         suggestion = EdgeSuggestion(
             edge=edge, suggested_type=suggested_type, rationale=rationale
@@ -450,7 +505,7 @@ def suggest_edge_types(
         results.append(suggestion)
         if on_progress is not None:
             on_progress(index, total, suggestion)
-    return results
+    return EdgeSuggestionBatch(results=results)
 
 
 def _edges_from(store: GraphStore) -> list[Edge]:
@@ -477,9 +532,9 @@ def candidate_edges(
 
     This is the pre-flight surface a caller counts to bound cost before
     committing to `suggest_edge_types`'s one-`llm.chat`-per-edge run (issue
-    #134): `len(candidate_edges(...)) == len(suggest_relations(...))`, and
-    passing the returned list straight to `suggest_edge_types` reproduces
-    `suggest_relations` exactly. Owns the `openkos.graph` read logic (the
+    #134): on a complete run, `len(candidate_edges(...)) ==
+    len(suggest_relations(...).results)`, and passing the returned list
+    straight to `suggest_edge_types` reproduces `suggest_relations` exactly. Owns the `openkos.graph` read logic (the
     `_candidate_edges` narrowing and the confidentiality filter live here,
     not in any caller). Lifecycle ownership is optional: pass an
     already-open `store` and this function reuses it without closing it,
@@ -595,13 +650,15 @@ def suggest_relations(
     llm: LLMBackend,
     include_confidential: bool = False,
     local_exemption: bool = False,
-) -> list[EdgeSuggestion]:
+) -> EdgeSuggestionBatch:
     """Orchestrate the whole read-only suggestion flow: compute the
     `candidate_edges` set (which owns the internal `build_graph` read and the
-    confidential-endpoint filter) and delegate to `suggest_edge_types`. A
-    library-level convenience that couples counting and typing in one call;
-    the CLI verb instead calls `candidate_edges` and `suggest_edge_types`
-    separately so it can preview the count and gate on it (issue #134).
+    confidential-endpoint filter) and delegate to `suggest_edge_types`,
+    returning its `EdgeSuggestionBatch` unchanged (partial-batch contract
+    included, issue #441 -- see the module docstring). A library-level
+    convenience that couples counting and typing in one call; the CLI verb
+    instead calls `candidate_edges` and `suggest_edge_types` separately so
+    it can preview the count and gate on it (issue #134).
 
     `local_exemption` (issue #240) is the second escape hatch defined by
     `sensitivity.should_block`: the caller asserting that the `llm.chat`

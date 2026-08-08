@@ -1715,7 +1715,7 @@ def test_structure_accepted_suggestion_writes_via_extracted_relate_core(
     _reindexed_workspace(tmp_path, monkeypatch)
 
     from openkos.graph.base import Edge
-    from openkos.resolution.edge_typing import EdgeSuggestion
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
 
     edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
     monkeypatch.setattr(
@@ -1728,14 +1728,14 @@ def test_structure_accepted_suggestion_writes_via_extracted_relate_core(
         "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
 
-    def _fake_suggest(edges: object, **kwargs: object) -> list[EdgeSuggestion]:
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
         on_progress = kwargs.get("on_progress")
         suggestion = EdgeSuggestion(
             edge=edge, suggested_type="references", rationale="stub rationale"
         )
         if on_progress is not None:
             on_progress(1, 1, suggestion)  # type: ignore[operator]
-        return [suggestion]
+        return EdgeSuggestionBatch(results=[suggestion])
 
     monkeypatch.setattr("openkos.cli.curate.suggest_edge_types", _fake_suggest)
     _simulate_tty(monkeypatch)
@@ -1764,7 +1764,7 @@ def test_structure_declined_suggestion_writes_nothing(
     _reindexed_workspace(tmp_path, monkeypatch)
 
     from openkos.graph.base import Edge
-    from openkos.resolution.edge_typing import EdgeSuggestion
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
 
     edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
     monkeypatch.setattr(
@@ -1774,9 +1774,11 @@ def test_structure_declined_suggestion_writes_nothing(
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
     monkeypatch.setattr(
         "openkos.cli.curate.suggest_edge_types",
-        lambda edges, **k: [
-            EdgeSuggestion(edge=edge, suggested_type="references", rationale="stub")
-        ],
+        lambda edges, **k: EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(edge=edge, suggested_type="references", rationale="stub")
+            ]
+        ),
     )
     monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
     monkeypatch.setattr(
@@ -1855,6 +1857,116 @@ def test_structure_sees_post_merge_identity_state(
 
     assert result.exit_code == 0
     assert seen_survivors == [True, False]
+
+
+# ---------------------------------------------------------------------------
+# issue #441 -- a partial edge-suggestion batch keeps its completed items
+# ---------------------------------------------------------------------------
+
+
+def _partial_structure_batch(
+    monkeypatch: pytest.MonkeyPatch, failure: OllamaError
+) -> None:
+    """Seed a 2-edge Structure queue whose first edge completed with a valid
+    suggestion and whose second edge's chat raised `failure` -- the #441
+    mid-batch shape. Identity/Metadata/Contradictions probe empty so only
+    Structure prompts."""
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    edge_done = Edge(source_id="concepts/a", target_id="concepts/b")
+    edge_failed = Edge(source_id="concepts/c", target_id="concepts/d")
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.candidate_edges", lambda *a, **k: [edge_done, edge_failed]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_edge_types",
+        lambda *a, **k: EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(
+                    edge=edge_done, suggested_type="references", rationale="kept work"
+                )
+            ],
+            failure=failure,
+            failed_index=2,
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+
+def test_structure_partial_batch_applies_completed_then_reports_failed_with_counts(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generic mid-batch `OllamaError` no longer discards Structure's
+    completed suggestions (#441): the completed suggestion still goes through
+    the existing relate walk (and its accepted WRITE lands, issue #468), the
+    stage reports failed with completed-of-total AND applied/skipped counts,
+    later stages still run, and the exit code stays 0 (curate is not a CI
+    gate)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _partial_structure_batch(monkeypatch, OllamaError("boom"))
+    _simulate_tty(monkeypatch)
+
+    # Two stdin answers: Structure's cost gate `typer.confirm` consumes the
+    # first "y", the per-suggestion `[y/N/skip]` prompt the second.
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    # The accepted relation was WRITTEN before the failure surfaced (#468):
+    # the failure notice below must therefore disclose the write counts.
+    assert "references" in source_text
+    assert "concepts/b" in source_text
+    assert (
+        "Structure: failed -- boom (suggested 1 of 2 untyped edge(s); "
+        "applied 1, skipped 0)." in result.stdout
+    )
+    # Later stages still ran: their summary lines are present (pinned
+    # invariant -- a generic OllamaError fails only its own stage).
+    assert "Metadata:" in result.stdout
+    assert "Contradictions:" in result.stdout
+
+
+def test_structure_partial_batch_unavailable_still_walks_then_skips_later_stages(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An `OllamaUnavailable` mid-batch keeps the completed suggestions too
+    -- the relate walk needs no model -- but still surfaces through the
+    sequencer's run-scoped unavailable handling (`ollama serve` notice), so
+    later `needs_llm` stages are not asked to spend against a dead server
+    (#441)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _partial_structure_batch(monkeypatch, OllamaUnavailable("connection refused"))
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "references" in source_text
+    assert "Structure: unavailable -- connection refused" in result.stdout
+    assert "ollama serve" in result.stdout
 
 
 # ---------------------------------------------------------------------------

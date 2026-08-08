@@ -39,6 +39,7 @@ from openkos.llm.ollama import BackendHostLocality, OllamaClient
 from openkos.resolution.adjudication import AdjudicationBatch
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.resolution.contradiction import ContradictionVerdict
+from openkos.resolution.edge_typing import EdgeSuggestionBatch
 from openkos.retrieval.answer import AnswerResult
 
 runner = CliRunner()
@@ -297,7 +298,7 @@ def _spy_suggest_edge_types_direct(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy
         "candidate_edges",
         lambda *a, **k: [Edge(source_id="concepts/a", target_id="concepts/b")],
     )
-    spy = _KwargSpy(list[object]())
+    spy = _KwargSpy(EdgeSuggestionBatch(results=[]))
     monkeypatch.setattr(main_mod, "suggest_edge_types", spy)
     return spy
 

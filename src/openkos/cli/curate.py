@@ -484,7 +484,23 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     the exact same write path standalone `relate` uses, so the two can
     never drift apart. A degraded suggestion (`suggested_type=None`) is
     reported and skipped without a prompt (spec: Structure Stage Writes
-    Through The Relate Core)."""
+    Through The Relate Core).
+
+    A PARTIAL `EdgeSuggestionBatch` (#441) keeps its completed suggestions:
+    the walk below runs over `batch.results` exactly as over a complete run
+    -- the relate core needs no model, so a dead server cannot invalidate
+    suggestions already paid for. Only then is the failure surfaced, split
+    by class: `OllamaUnavailable`/`OllamaModelNotFound` are RE-RAISED so
+    the sequencer's existing handlers keep their run-scoped skip (later
+    `needs_llm` stages must not ask the operator to spend against a server
+    this stage just proved dead/misconfigured), while the rest of the
+    `OllamaError` family returns a `failed` outcome, leaving later stages
+    to run -- the same fails-only-this-stage scope the sequencer's generic
+    handler already pins. Unlike Identity's failed notice, this one also
+    carries the walk's applied/skipped counts (issue #468 follow-up 4): the
+    walk WRITES accepted relations through `relate_core` before the failure
+    surfaces, so a notice reporting only how much was suggested would hide
+    how much was written."""
     from openkos.cli import main as cli_main
 
     edges = [item for item in probe.items if isinstance(item, Edge)]
@@ -492,7 +508,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Structure stage requires an LLM client")
 
-    suggestions: Sequence[EdgeSuggestion] = suggest_edge_types(
+    batch = suggest_edge_types(
         edges,
         bundle_dir=ctx.layout.bundle_dir,
         llm=llm,
@@ -500,6 +516,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         local_exemption=ctx.local_exemption,
         on_progress=observability.progress_callback("curate", "untyped edge"),
     )
+    suggestions: Sequence[EdgeSuggestion] = batch.results
 
     layout = ctx.layout
     log_path = layout.bundle_dir / "log.md"
@@ -571,6 +588,23 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             f"({suggestion.suggested_type})",
         )
         applied += 1
+
+    if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
+        # Availability failures stay raise-shaped so the sequencer's handler
+        # keeps its run-scoped skip of later `needs_llm` stages; the walk
+        # above already ran, so the accepted writes survive (#441).
+        raise batch.failure
+    if batch.failure is not None:
+        return StageOutcome(
+            status="failed",
+            applied=applied,
+            skipped=skipped,
+            notice=(
+                f"Structure: failed -- {batch.failure} (suggested "
+                f"{len(batch.results)} of {len(edges)} untyped edge(s); "
+                f"applied {applied}, skipped {skipped})."
+            ),
+        )
 
     status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
     return StageOutcome(
