@@ -95,6 +95,20 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Fixed
 
+- **`adjudicate --apply`'s per-merge prompt now validates its answer**: the
+  walk advertised `[y/N/skip]` while implementing only two outcomes, and any
+  unrecognized input (`t`, `a`, `si`, `1` — #398's typo evidence) was
+  silently counted as a decline. It now routes the decision through the same
+  validating `_confirm` helper `curate`'s Identity stage uses for the SAME
+  merge decision (one prompt contract, one source of truth): the prompt is
+  `[y/N]`, an unrecognized answer is re-asked with a notice naming the
+  accepted tokens, and Enter keeps the documented `N` default. The
+  end-of-walk summary now also names each operator-declined merge on its own
+  `declined: <absorbed> -> <survivor>` line, mirroring #398's decline
+  listing, so a typo-free decline set is revisitable. `--apply-same` was
+  never affected — its typed-count gate is a separate code path with no
+  per-merge prompt (#483).
+
 - **The graph retrieval channel is now additive instead of a reordering**:
   it used to be folded into the same reciprocal-rank-fusion sum as FTS and
   dense, which made it structurally incapable of the one thing a typed graph

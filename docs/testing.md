@@ -536,7 +536,7 @@ and its unmerge during this test.
 SAME pairs, test both modes:
 
 ```bash
-openkos adjudicate --apply                            # interactive [y/N/skip] walk per SAME pair
+openkos adjudicate --apply                            # interactive [y/N] walk per SAME pair
 openkos adjudicate --apply-same --confirm-count <N>   # batch — <N> must equal the printed Total exactly
 ```
 

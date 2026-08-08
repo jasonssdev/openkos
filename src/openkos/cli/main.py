@@ -1413,16 +1413,30 @@ def _run_adjudicate_apply(
     2b-ii, design D2-D9): per SAME 2-member group (D3), re-verify both
     member ids still exist (D4, since an earlier merge this same run may
     have absorbed a later group's member), preview what `prepare_merge`
-    would fuse (D5), prompt `[y/N/skip]` (D6), and on `y` execute
-    `merge_core` + `_autocommit` (D7) -- reusing every 2b-i building block
-    verbatim. A mid-run write failure (D8) stops the loop immediately;
-    prior per-merge commits remain intact and reversible via `unmerge`. A
-    final summary line (D9) always prints, even when nothing is eligible.
+    would fuse (D5), prompt `[y/N]` (D6, reshaped by issue #483), and on
+    `y` execute `merge_core` + `_autocommit` (D7) -- reusing every 2b-i
+    building block verbatim. A mid-run write failure (D8) stops the loop
+    immediately; prior per-merge commits remain intact and reversible via
+    `unmerge`. A final summary line (D9) always prints, even when nothing
+    is eligible, followed by one `  declined: absorbed -> survivor` line
+    per operator-declined merge (issue #483, mirroring #398's decline
+    listing) so a typo-free decline set is revisitable.
+
+    The prompt itself is `curate._confirm` -- the SAME validating helper
+    curate's Identity stage routes this same merge decision through since
+    PR #482 (issue #483, closing the #398 gap here): `y`/`yes` accepts,
+    `n`/`no`/Enter declines, and any other answer re-prompts with a notice
+    naming the accepted tokens instead of being silently counted as a
+    decline. Reusing the private helper across the module boundary is
+    deliberate, like `_type_label` in #479 -- one prompt contract, one
+    source of truth (`main` already imports `curate_module` at module
+    scope; the docstring warning in curate.py is about the OPPOSITE
+    direction).
 
     Between the accepted `y` and the write sits the same TOCTOU window
     every drift-guarded verb closes (the #306/#313/#319 arc): every byte
     `_commit_one_merge` writes was computed by `_prepare_one_merge` BEFORE
-    the `[y/N/skip]` prompt, so an edit landing on any target while the
+    the `[y/N]` prompt, so an edit landing on any target while the
     prompt waited -- likeliest on the survivor, worst on the absorbed
     file, which is UNLINKED rather than overwritten -- would be silently
     destroyed. Each accepted pair therefore hands `_merge_drift_targets`'
@@ -1435,7 +1449,7 @@ def _run_adjudicate_apply(
     applied = 0
     skipped_n_gt2 = 0
     skipped_already_merged = 0
-    skipped_declined = 0
+    declined: list[str] = []
 
     for result in results:
         group = result.candidate
@@ -1467,14 +1481,16 @@ def _run_adjudicate_apply(
             continue
 
         typer.echo(_format_merge_preview_line(prepared))
-        answer = typer.prompt(
+        # Issue #483: `curate._confirm` is the one validating per-item
+        # write-consent prompt (#398 contract) -- private-helper reuse
+        # across the boundary is deliberate, as with `_type_label` (#479).
+        if not curate_module._confirm(
             f"Merge {prepared.absorbed_canonical} into "
-            f"{prepared.survivor_canonical}? [y/N/skip]",
-            default="N",
-            show_default=False,
-        )
-        if answer.strip().lower() not in {"y", "yes"}:
-            skipped_declined += 1
+            f"{prepared.survivor_canonical}? [y/N]"
+        ):
+            declined.append(
+                f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
+            )
             continue
 
         # Issue #346: every byte `_commit_one_merge` writes below was
@@ -1502,13 +1518,15 @@ def _run_adjudicate_apply(
             raise typer.Exit(code=1) from exc
         applied += 1
 
-    skipped_total = skipped_n_gt2 + skipped_already_merged + skipped_declined
+    skipped_total = skipped_n_gt2 + skipped_already_merged + len(declined)
     prefix = "nothing to apply -- " if applied == 0 and skipped_total == 0 else ""
     typer.echo(
         f"openkos adjudicate --apply: {prefix}applied {applied}, skipped "
         f"{skipped_total} (N>2: {skipped_n_gt2}, "
-        f"already-merged: {skipped_already_merged}, declined: {skipped_declined})"
+        f"already-merged: {skipped_already_merged}, declined: {len(declined)})"
     )
+    for item in declined:
+        typer.echo(f"  declined: {item}")
 
 
 def _run_adjudicate_apply_same(

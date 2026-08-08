@@ -1299,7 +1299,7 @@ def test_adjudicate_apply_offers_a_same_two_member_group(
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
 
-    assert "Merge concepts/b into concepts/a? [y/N/skip]" in result.stdout
+    assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
 
 
 def test_adjudicate_apply_never_prompts_different_or_uncertain_groups(
@@ -1554,7 +1554,7 @@ def test_adjudicate_apply_preview_precedes_the_exact_prompt_text(
 
     result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
 
-    prompt_line = "Merge concepts/b into concepts/a? [y/N/skip]"
+    prompt_line = "Merge concepts/b into concepts/a? [y/N]"
     assert prompt_line in result.stdout
     lines = result.stdout.splitlines()
     prompt_idx = next(i for i, line in enumerate(lines) if prompt_line in line)
@@ -1644,16 +1644,16 @@ def test_adjudicate_apply_merge_unions_provenance_from_both_sources(
     ]
 
 
-@pytest.mark.parametrize("declining_input", ["\n", "n\n", "skip\n"])
+@pytest.mark.parametrize("declining_input", ["\n", "n\n"])
 def test_adjudicate_apply_declining_inputs_do_not_merge_and_continue(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
     declining_input: str,
 ) -> None:
-    """Empty input, `n`, and `skip` all decline the merge, write nothing,
-    and the run continues (spec: empty input / `skip` / `N`/`n` does not
-    merge)."""
+    """Empty input (the documented `N` default) and `n` decline the merge,
+    write nothing, and the run continues (issue #483, the #398 contract:
+    only `n`/`no`/Enter decline -- `skip` is no longer a token)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
     monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
@@ -1665,6 +1665,135 @@ def test_adjudicate_apply_declining_inputs_do_not_merge_and_continue(
     assert (tmp_path / "bundle" / "concepts" / "a.md").exists()
     assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
     assert "declined" in result.stdout
+
+
+@pytest.mark.parametrize("unrecognized", ["t", "skip"])
+def test_adjudicate_apply_unrecognized_answer_reprompts_then_applies(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    unrecognized: str,
+) -> None:
+    """An unrecognized answer (`t` -- #398's typo evidence -- or the
+    formerly advertised `skip`) is re-asked with a notice naming the
+    accepted tokens, never silently counted as a decline; the subsequent
+    `y` applies the merge (issue #483, the #398 contract)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input=f"{unrecognized}\ny\n")
+
+    assert result.exit_code == 0
+    assert (
+        f"Unrecognized answer '{unrecognized}' -- expected y or n "
+        "(Enter = N). Asking again." in result.stdout
+    )
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "applied 1" in result.stdout
+
+
+def test_adjudicate_apply_prompt_advertises_y_n_without_skip(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The prompt advertises exactly the two implemented outcomes -- `[y/N]`
+    -- and the walk's output never advertises a `skip` token anywhere
+    (issue #483: the prompt shape #398 removed from curate)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
+    assert "[y/N/skip]" not in result.stdout
+    assert "/skip" not in result.stdout
+
+
+def test_adjudicate_apply_names_declined_merges_in_the_summary(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each operator-declined merge is named `absorbed -> survivor` after
+    the summary line (issue #483, mirroring #398's decline listing), so a
+    typo-free decline set is revisitable without re-running the walk."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    applied_group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub1",
+    )
+    declined_group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/c", "concepts/d"),
+        tier=Tier.HIGH,
+        trigger="stub2",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        groups = [applied_group, declined_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(applied_group, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(declined_group, verdict=Verdict.SAME, rationale="r2"),
+            ]
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    summary_idx = next(
+        i for i, line in enumerate(lines) if "openkos adjudicate --apply:" in line
+    )
+    assert "  declined: concepts/d -> concepts/c" in lines[summary_idx + 1 :]
+    # The applied pair is never listed as declined.
+    assert "  declined: concepts/b -> concepts/a" not in result.stdout
+
+
+def test_adjudicate_apply_all_applied_names_no_declined_merges(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run where every offered merge was accepted prints no per-item
+    `declined:` naming line -- the listing appears only when the operator
+    actually declined something (issue #483)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
+    monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "applied 1" in result.stdout
+    assert "  declined:" not in result.stdout
 
 
 def test_adjudicate_apply_two_accepted_merges_produce_two_separate_commits(
@@ -1887,7 +2016,7 @@ def test_adjudicate_apply_toctou_drift_exits_three_nothing_written(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An edit landing on the survivor file INSIDE the post-confirm window
-    -- after `_prepare_one_merge`'s snapshot, while the `[y/N/skip]` prompt
+    -- after `_prepare_one_merge`'s snapshot, while the `[y/N]` prompt
     waited -- is refused, not clobbered (issue #346, the #306/#313/#319
     drift-guard contract): exit 3, `refusing to write --` on stderr naming
     the actual command, the hand-edit intact, and nothing else on disk
@@ -1895,10 +2024,11 @@ def test_adjudicate_apply_toctou_drift_exits_three_nothing_written(
 
     The TOCTOU window under test opens AFTER `_prepare_one_merge`'s
     snapshot and closes at `_merge_drift_targets` -- in the `--apply` walk
-    that window is exactly the per-pair `[y/N/skip]` `typer.prompt`, so the
-    concurrent edit is injected from a `typer.prompt` stub that edits the
-    survivor and then accepts (mirrors `test_curate.py`'s Identity TOCTOU
-    test, the established pattern for this window)."""
+    that window is exactly the per-pair `[y/N]` prompt (`curate._confirm`
+    since #483, still built on `typer.prompt`), so the concurrent edit is
+    injected from a `typer.prompt` stub that edits the survivor and then
+    accepts (mirrors `test_curate.py`'s Identity TOCTOU test, the
+    established pattern for this window)."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _, fake_find, fake_adjudicate = _seed_one_same_group(tmp_path)
     monkeypatch.setattr("openkos.cli.main.find_candidates_report", fake_find)
