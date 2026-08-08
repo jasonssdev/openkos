@@ -24,7 +24,7 @@ from openkos.graph.proximity import ProximityPair
 from openkos.graph.sqlite_graph import build_graph
 from openkos.llm import parsing
 from openkos.llm.base import Message
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.ollama import OllamaGenerationCapped, OllamaUnavailable
 from openkos.model import okf
 from openkos.resolution import contradiction as contradiction_mod
 
@@ -32,18 +32,27 @@ from openkos.resolution import contradiction as contradiction_mod
 class _FakeLLM:
     """A structural `LLMBackend`: records every `chat` call, returns queued
     replies in call order. If `error` is set, `chat` raises it instead of
-    returning (and does not consume a queued reply)."""
+    returning (and does not consume a queued reply); `error_at` narrows the
+    raise to the k-th (1-based) call so mid-loop failure can be staged after
+    some pairs already succeeded (#441)."""
 
     def __init__(
-        self, replies: Sequence[object] = (), *, error: BaseException | None = None
+        self,
+        replies: Sequence[object] = (),
+        *,
+        error: BaseException | None = None,
+        error_at: int | None = None,
     ) -> None:
         self._replies = list(replies)
         self.error = error
+        self.error_at = error_at
         self.calls: list[list[Message]] = []
 
     def chat(self, messages: Sequence[Message]) -> str:
         self.calls.append(list(messages))
-        if self.error is not None:
+        if self.error is not None and (
+            self.error_at is None or len(self.calls) == self.error_at
+        ):
             raise self.error
         return self._replies.pop(0)  # type: ignore[return-value]
 
@@ -621,7 +630,8 @@ def test_find_contradictions_no_typed_edges_returns_empty_zero_llm_calls(
     )
     llm = _FakeLLM()
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert verdicts == []
     assert total == 0
@@ -652,7 +662,8 @@ def test_find_contradictions_provenance_only_bundle_yields_zero_candidates(
     )
     llm = _FakeLLM()
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert verdicts == []
     assert total == 0
@@ -681,7 +692,8 @@ def test_find_contradictions_excludes_hand_authored_derived_from_relation(
     )
     llm = _FakeLLM()
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert verdicts == []
     assert total == 0
@@ -801,7 +813,8 @@ def test_find_contradictions_genuine_typed_edge_still_surfaced(
     )
     llm = _FakeLLM(replies=[_valid_reply()])
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert total == 1
     assert len(verdicts) == 1
@@ -828,7 +841,8 @@ def test_find_contradictions_reads_graph_and_judges_one_typed_pair(
     )
     llm = _FakeLLM(replies=[_valid_reply()])
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert total == 1
     assert len(verdicts) == 1
@@ -860,7 +874,8 @@ def test_find_contradictions_symmetric_edges_judged_exactly_once(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert total == 1
     assert len(verdicts) == 1
@@ -896,7 +911,8 @@ def test_find_contradictions_malformed_reply_degrades_only_that_pair(
         ]
     )
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert total == 2
     assert len(verdicts) == 2
@@ -908,9 +924,76 @@ def test_find_contradictions_malformed_reply_degrades_only_that_pair(
     assert healthy.verdict is contradiction_mod.Verdict.CONSISTENT
 
 
-def test_find_contradictions_ollama_error_propagates_unswallowed(
+# ---------------------------------------------------------------------------
+# Requirement: Partial Batch Preserved On Mid-Loop `OllamaError` (#441)
+# ---------------------------------------------------------------------------
+
+
+def _three_pair_bundle(tmp_path: Path) -> Path:
+    """Four concepts chained by three typed `references` relations, yielding
+    the deterministic candidate order `(a,b) < (b,c) < (c,d)`."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "concepts").mkdir()
+    for name, target in (("a", "b"), ("b", "c"), ("c", "d"), ("d", None)):
+        lines = [
+            "---",
+            "type: Concept",
+            f"title: {name.upper()}",
+            "sensitivity: private",
+        ]
+        if target is not None:
+            lines += [
+                "relations:",
+                f"  - target: concepts/{target}",
+                "    type: references",
+            ]
+        lines += ["---", f"Body {name.upper()}."]
+        (bundle_dir / "concepts" / f"{name}.md").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+    return bundle_dir
+
+
+def test_mid_loop_ollama_error_returns_completed_results_and_failure(
     tmp_path: Path,
 ) -> None:
+    """An `OllamaError`-family raise on the k-th candidate's `llm.chat` stops
+    the loop and returns every already-completed verdict in input order, the
+    exception instance itself, and the 1-based failed index -- the caller
+    paid for k-1 completed calls and keeps all of them (#441). No candidate
+    after the failed one is ever prompted; the failed candidate produces no
+    verdict and no `on_progress` call."""
+    bundle_dir = _three_pair_bundle(tmp_path)
+    capped = OllamaGenerationCapped("generation hit the token ceiling")
+    llm = _FakeLLM(replies=[_valid_reply()], error=capped, error_at=2)
+    seen: list[tuple[int, int, contradiction_mod.ContradictionVerdict]] = []
+
+    def _cb(
+        index: int, total: int, verdict: contradiction_mod.ContradictionVerdict
+    ) -> None:
+        seen.append((index, total, verdict))
+
+    batch, total = contradiction_mod.find_contradictions(
+        bundle_dir, llm=llm, on_progress=_cb
+    )
+
+    assert isinstance(batch, contradiction_mod.ContradictionBatch)
+    assert [v.pair_ids for v in batch.results] == [("concepts/a", "concepts/b")]
+    assert batch.results[0].verdict is contradiction_mod.Verdict.CONTRADICTS
+    assert batch.failure is capped
+    assert batch.failed_index == 2
+    # `total_pair_count` keeps its own pre-cap contract on a partial run.
+    assert total == 3
+    # The failed call itself happened; the candidate AFTER it was never
+    # prompted.
+    assert len(llm.calls) == 2
+    # `on_progress` fired only for completed verdicts -- never for the
+    # failure.
+    assert [(index, judged) for index, judged, _ in seen] == [(1, 3)]
+
+
+def test_ollama_error_on_first_pair_returns_empty_results(tmp_path: Path) -> None:
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
     (bundle_dir / "concepts").mkdir()
@@ -924,10 +1007,26 @@ def test_find_contradictions_ollama_error_propagates_unswallowed(
         "---\ntype: Concept\ntitle: B\nsensitivity: private\n---\nBody B.\n",
         encoding="utf-8",
     )
-    llm = _FakeLLM(error=OllamaUnavailable("not reachable"))
+    failure = OllamaUnavailable("no local Ollama server reachable")
+    llm = _FakeLLM(error=failure, error_at=1)
 
-    with pytest.raises(OllamaUnavailable):
-        contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert batch.results == []
+    assert batch.failure is failure
+    assert batch.failed_index == 1
+    assert total == 1
+
+
+def test_complete_run_reports_no_failure(tmp_path: Path) -> None:
+    bundle_dir = _three_pair_bundle(tmp_path)
+    llm = _FakeLLM(replies=[_valid_reply(), _valid_reply(), _valid_reply()])
+
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert batch.failure is None
+    assert batch.failed_index is None
+    assert len(batch.results) == 3
 
 
 def test_load_doc_handles_unreadable_or_missing_document(tmp_path: Path) -> None:
@@ -978,7 +1077,8 @@ def test_find_contradictions_calls_llm_once_per_capped_candidate_pair(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="uncertain")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert len(verdicts) == 1
     assert len(llm.calls) == 1
@@ -1063,7 +1163,8 @@ def test_find_contradictions_at_exact_cap_boundary_all_pairs_judged(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * max_pairs)
 
-    verdicts, total = contradiction_mod.find_contradictions(tmp_path, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(tmp_path, llm=llm)
+    verdicts = batch.results
 
     assert total == max_pairs
     assert len(verdicts) == max_pairs
@@ -1087,7 +1188,8 @@ def test_find_contradictions_one_over_cap_boundary_truncates_and_signals(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * max_pairs)
 
-    verdicts, total = contradiction_mod.find_contradictions(tmp_path, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(tmp_path, llm=llm)
+    verdicts = batch.results
 
     assert total == max_pairs + 1
     assert len(verdicts) == max_pairs
@@ -1122,7 +1224,8 @@ def test_pair_touching_a_concept_superseded_by_another_is_excluded_by_default(
     _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
     llm = _FakeLLM()
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert verdicts == []
     assert llm.calls == []
@@ -1146,7 +1249,8 @@ def test_pair_touching_a_concept_with_its_own_deprecated_status_is_excluded(
     )
     llm = _FakeLLM()
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert verdicts == []
     assert llm.calls == []
@@ -1173,7 +1277,8 @@ def test_pair_with_deprecated_concept_as_the_alphabetically_first_element_is_exc
     _write_lifecycle_doc(bundle_dir / "concepts" / "z.md", title="Z")
     llm = _FakeLLM()
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert verdicts == []
     assert llm.calls == []
@@ -1224,7 +1329,8 @@ def test_live_pair_beyond_cap_index_is_not_starved_by_deprecated_pairs_in_cap(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert len(verdicts) == 1
     assert verdicts[0].pair_ids == ("zzz_live", "zzz_live-tgt")
@@ -1253,7 +1359,8 @@ def test_pair_with_both_sides_live_is_still_judged_alongside_a_dropped_pair(
     _write_lifecycle_doc(bundle_dir / "concepts" / "c.md", title="C")
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert len(verdicts) == 1
     assert verdicts[0].pair_ids == ("concepts/a", "concepts/c")
@@ -1277,9 +1384,10 @@ def test_include_deprecated_true_restores_a_pair_touching_a_superseded_concept(
     _write_lifecycle_doc(bundle_dir / "concepts" / "b.md", title="B")
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(
+    batch, _total = contradiction_mod.find_contradictions(
         bundle_dir, llm=llm, include_deprecated=True
     )
+    verdicts = batch.results
 
     assert len(verdicts) == 1
     assert verdicts[0].pair_ids == ("concepts/a", "concepts/b")
@@ -1408,7 +1516,8 @@ def test_pair_touching_a_confidential_concept_is_excluded_by_default(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert len(verdicts) == 1
     assert verdicts[0].pair_ids == ("concepts/b", "concepts/c")
@@ -1440,9 +1549,10 @@ def test_include_confidential_true_restores_the_confidential_pair(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(
+    batch, _total = contradiction_mod.find_contradictions(
         bundle_dir, llm=llm, include_confidential=True
     )
+    verdicts = batch.results
 
     assert len(verdicts) == 1
     assert verdicts[0].pair_ids == ("concepts/a", "concepts/b")
@@ -1645,9 +1755,10 @@ def test_proximity_candidate_rows_are_not_contradiction_candidates(
             calls.append(messages)
             raise AssertionError("no pair should have been judged")
 
-    verdicts, total = contradiction_mod.find_contradictions(
+    batch, total = contradiction_mod.find_contradictions(
         bundle, llm=_RecordingLLM(), candidates=source
     )
+    verdicts = batch.results
 
     assert verdicts == []
     assert total == 0
@@ -1672,9 +1783,10 @@ def test_typed_edges_still_judged_when_a_candidate_source_is_present(
         def chat(self, messages: Sequence[Message]) -> str:
             return '{"verdict": "no_contradiction", "rationale": "fine"}'
 
-    verdicts, total = contradiction_mod.find_contradictions(
+    batch, total = contradiction_mod.find_contradictions(
         bundle, llm=_AgreeLLM(), candidates=source
     )
+    verdicts = batch.results
 
     assert total == 1
     assert len(verdicts) == 1
@@ -1725,9 +1837,10 @@ def test_find_contradictions_invokes_on_progress_once_per_pair_in_order(
     ) -> None:
         seen.append((index, total, verdict))
 
-    verdicts, _total_pairs = contradiction_mod.find_contradictions(
+    batch, _total_pairs = contradiction_mod.find_contradictions(
         bundle_dir, llm=llm, on_progress=_cb
     )
+    verdicts = batch.results
 
     assert [(index, total) for index, total, _ in seen] == [(1, 2), (2, 2)]
     # Identity, not equality: the callback receives the SAME objects the
@@ -1803,9 +1916,10 @@ def test_local_exemption_restores_the_confidential_pair_and_its_body(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(
+    batch, _total = contradiction_mod.find_contradictions(
         bundle_dir, llm=llm, local_exemption=True
     )
+    verdicts = batch.results
 
     assert [v.pair_ids for v in verdicts] == [("concepts/a", "concepts/b")]
     (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
@@ -1840,7 +1954,8 @@ def test_local_exemption_defaults_to_false_on_find_contradictions(
     )
     llm = _FakeLLM()
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert verdicts == []
     assert llm.calls == []
@@ -2021,7 +2136,8 @@ def test_find_contradictions_judges_merged_body_candidate_end_to_end(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="contradicts")])
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert total == 1
     assert len(verdicts) == 1
@@ -2079,7 +2195,8 @@ def test_self_loop_is_dropped_without_suppressing_a_merged_candidate_on_that_id(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")])
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert total == 1
     (verdict,) = verdicts
@@ -2118,7 +2235,8 @@ def test_mixed_candidate_list_shares_a_single_cap_and_truncation_signal(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * max_pairs)
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert total == edge_count + merged_count
     assert len(verdicts) == max_pairs
@@ -2142,7 +2260,8 @@ def test_mixed_candidate_list_under_cap_judges_every_candidate(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * 4)
 
-    verdicts, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert total == 4
     assert len(verdicts) == 4
@@ -2180,7 +2299,8 @@ def test_merged_candidate_stays_blocked_after_survivor_downgraded(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="uncertain")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    batch, _total = contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+    verdicts = batch.results
 
     assert len(verdicts) == 1
     (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
@@ -2207,9 +2327,10 @@ def test_merged_candidate_include_confidential_restores_the_blocked_body(
     )
     llm = _FakeLLM(replies=[_valid_reply(verdict="uncertain")])
 
-    verdicts, _total = contradiction_mod.find_contradictions(
+    batch, _total = contradiction_mod.find_contradictions(
         bundle_dir, llm=llm, include_confidential=True
     )
+    verdicts = batch.results
 
     assert len(verdicts) == 1
     (message,) = [m for m in llm.calls[0] if m["role"] == "user"]

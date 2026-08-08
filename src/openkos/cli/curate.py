@@ -694,20 +694,42 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     design D5). Sensitivity gaps surfaced in the SAME pass (`
     _sensitivity_gap_ids`) are reported only, naming `openkos
     set-sensitivity`, and never written here (spec: Metadata Stage Writes
-    Tiers, Reports Sensitivity)."""
+    Tiers, Reports Sensitivity).
+
+    A PARTIAL `TierSuggestionBatch` (#441) keeps its completed suggestions:
+    the walk below runs over `batch.results` exactly as over a complete run
+    -- the set-volatility core needs no model, so a dead server cannot
+    invalidate suggestions already paid for -- and the sensitivity-gap
+    report still prints, since it reads the bundle, never the model. Only
+    then is the failure surfaced, split by class:
+    `OllamaUnavailable`/`OllamaModelNotFound` are RE-RAISED so the
+    sequencer's existing handlers keep their run-scoped skip (later
+    `needs_llm` stages must not ask the operator to spend against a server
+    this stage just proved dead/misconfigured), while the rest of the
+    `OllamaError` family returns a `failed` outcome, leaving later stages
+    to run -- the same fails-only-this-stage scope the sequencer's generic
+    handler already pins. Like Structure's failed notice (issue #468
+    follow-up 4), this one carries the walk's applied/skipped counts
+    alongside completed-of-total: the walk WRITES accepted tiers through
+    `set_volatility_core` before the failure surfaces, so a notice
+    reporting only how much was suggested would hide how much was written.
+    The of-total names the probe's type queue -- the count the operator's
+    cost gate consented to."""
     from openkos.cli import main as cli_main
 
+    type_names = [item for item in probe.items if isinstance(item, str)]
     llm = ctx.ollama_client
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Metadata stage requires an LLM client")
 
-    results: Sequence[TierSuggestion] = suggest_volatility(
+    batch = suggest_volatility(
         ctx.layout.bundle_dir,
         llm=llm,
         include_confidential=ctx.include_confidential,
         local_exemption=ctx.local_exemption,
         on_progress=observability.progress_callback("curate", "concept type"),
     )
+    results: Sequence[TierSuggestion] = batch.results
 
     applied = 0
     skipped = 0
@@ -766,6 +788,23 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         typer.echo(
             f"Metadata: sensitivity gap -- {concept_id} has no sensitivity "
             f"set. Run `openkos set-sensitivity {concept_id} <level>`."
+        )
+
+    if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
+        # Availability failures stay raise-shaped so the sequencer's handler
+        # keeps its run-scoped skip of later `needs_llm` stages; the walk
+        # above already ran, so the accepted writes survive (#441).
+        raise batch.failure
+    if batch.failure is not None:
+        return StageOutcome(
+            status="failed",
+            applied=applied,
+            skipped=skipped,
+            notice=(
+                f"Metadata: failed -- {batch.failure} (suggested "
+                f"{len(batch.results)} of {len(type_names)} concept type(s); "
+                f"applied {applied}, skipped {skipped})."
+            ),
         )
 
     status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
@@ -849,14 +888,29 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     one `_contradiction_plan` builds internally (issue #450):
     `find_contradictions` reads `store` ONLY inside its `if plan is None:`
     branch, so a second `build_graph` purely to supply that argument would be
-    a full in-memory SQLite build over the bundle for no effect."""
+    a full in-memory SQLite build over the bundle for no effect.
+
+    A PARTIAL `ContradictionBatch` (#441) keeps its completed verdicts: the
+    report below runs over `batch.results` exactly as over a complete run
+    -- they are already-paid-for reports, and this stage never writes. Only
+    then is the failure surfaced, split by class:
+    `OllamaUnavailable`/`OllamaModelNotFound` are RE-RAISED so the
+    sequencer's existing handlers keep their run-scoped skip wording
+    uniform (this stage is last, so there is no later stage to protect --
+    the split exists so all four batch stages fail in the same shapes),
+    while the rest of the `OllamaError` family returns a `failed` outcome.
+    The stage is READ-ONLY, so unlike Structure/Metadata the failed notice
+    carries completed-of-total counts only, never applied/skipped write
+    counts (issue #468 follow-up 4: write counts belong only where the walk
+    writes). The of-total is `plan.llm_calls` -- the same number the cost
+    gate stated and the truncation notice describes."""
     llm = ctx.ollama_client
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Contradictions stage requires an LLM client")
 
     plan = _contradiction_plan(ctx)
 
-    verdicts, _total_pairs = find_contradictions(
+    batch, _total_pairs = find_contradictions(
         ctx.layout.bundle_dir,
         llm=llm,
         include_deprecated=ctx.include_deprecated,
@@ -865,6 +919,7 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         plan=plan,
         on_progress=observability.progress_callback("curate", "pair"),
     )
+    verdicts: Sequence[ContradictionVerdict] = batch.results
 
     truncation = contradiction_truncation_notice(plan)
     if truncation is not None:
@@ -882,6 +937,21 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         for claim in verdict.conflicting_claims:
             typer.echo(f"  - {claim}")
         typer.echo(f"  rationale: {verdict.rationale}")
+
+    if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
+        # Availability failures stay raise-shaped so the sequencer's handler
+        # keeps its run-scoped skip of later `needs_llm` stages; the report
+        # above already ran, so the completed verdicts survive (#441).
+        raise batch.failure
+    if batch.failure is not None:
+        return StageOutcome(
+            status="failed",
+            applied=len(high_confidence),
+            notice=(
+                f"Contradictions: failed -- {batch.failure} (judged "
+                f"{len(batch.results)} of {plan.llm_calls} candidate(s))."
+            ),
+        )
 
     status: Literal["applied", "empty"] = "applied" if high_confidence else "empty"
     notice = (

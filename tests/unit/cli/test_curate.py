@@ -1983,7 +1983,10 @@ def test_metadata_accepted_tier_writes_via_extracted_set_volatility_core(
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _reindexed_workspace(tmp_path, monkeypatch)
 
-    from openkos.resolution.volatility_typing import TierSuggestion
+    from openkos.resolution.volatility_typing import (
+        TierSuggestion,
+        TierSuggestionBatch,
+    )
 
     monkeypatch.setattr(
         "openkos.cli.curate.find_candidates_report",
@@ -1999,7 +2002,7 @@ def test_metadata_accepted_tier_writes_via_extracted_set_volatility_core(
 
     def _fake_suggest_volatility(
         bundle_dir: Path, **kwargs: object
-    ) -> list[TierSuggestion]:
+    ) -> TierSuggestionBatch:
         on_progress = kwargs.get("on_progress")
         suggestion = TierSuggestion(
             type_name="Concept",
@@ -2009,7 +2012,7 @@ def test_metadata_accepted_tier_writes_via_extracted_set_volatility_core(
         )
         if on_progress is not None:
             on_progress(1, 1, suggestion)  # type: ignore[operator]
-        return [suggestion]
+        return TierSuggestionBatch(results=[suggestion])
 
     monkeypatch.setattr(
         "openkos.cli.curate.suggest_volatility", _fake_suggest_volatility
@@ -2045,7 +2048,12 @@ def test_metadata_sensitivity_gap_reported_never_written(
     monkeypatch.setattr(
         "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
     )
-    monkeypatch.setattr("openkos.cli.curate.suggest_volatility", lambda *a, **k: [])
+    from openkos.resolution.volatility_typing import TierSuggestionBatch
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility",
+        lambda *a, **k: TierSuggestionBatch(results=[]),
+    )
     monkeypatch.setattr(
         "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
     )
@@ -2107,6 +2115,112 @@ def test_metadata_gap_notice_survives_an_empty_type_list(
 
 
 # ---------------------------------------------------------------------------
+# issue #441 -- a partial tier-suggestion batch keeps its completed items
+# ---------------------------------------------------------------------------
+
+
+def _partial_metadata_batch(
+    monkeypatch: pytest.MonkeyPatch, failure: OllamaError
+) -> None:
+    """Seed a 2-type Metadata queue whose first type completed with a valid
+    suggestion and whose second type's chat raised `failure` -- the #441
+    mid-batch shape. Identity/Structure/Contradictions probe empty so only
+    Metadata prompts."""
+    from openkos.resolution.volatility_typing import (
+        TierSuggestion,
+        TierSuggestionBatch,
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names",
+        lambda *a, **k: ["Concept", "Person"],
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility",
+        lambda *a, **k: TierSuggestionBatch(
+            results=[
+                TierSuggestion(
+                    type_name="Concept",
+                    current_default="static",
+                    suggested_tier="volatile",
+                    rationale="kept work",
+                )
+            ],
+            failure=failure,
+            failed_index=2,
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+
+def test_metadata_partial_batch_applies_completed_then_reports_failed_with_counts(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generic mid-batch `OllamaError` no longer discards Metadata's
+    completed suggestions (#441): the completed suggestion still goes
+    through the existing set-volatility walk (and its accepted WRITE lands,
+    issue #468), the stage reports failed with completed-of-total AND
+    applied/skipped counts, later stages still run, and the exit code stays
+    0 (curate is not a CI gate)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _partial_metadata_batch(monkeypatch, OllamaError("boom"))
+    _simulate_tty(monkeypatch)
+
+    # Two stdin answers: Metadata's cost gate `typer.confirm` consumes the
+    # first "y", the per-type [y/N/skip] prompt the second.
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    config_text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    # The accepted tier was WRITTEN before the failure surfaced (#468): the
+    # failure notice below must therefore disclose the write counts.
+    assert "volatile" in config_text
+    assert (
+        "Metadata: failed -- boom (suggested 1 of 2 concept type(s); "
+        "applied 1, skipped 0)." in result.stdout
+    )
+    # The later stage still ran: its summary line is present (pinned
+    # invariant -- a generic OllamaError fails only its own stage).
+    assert "Contradictions:" in result.stdout
+
+
+def test_metadata_partial_batch_unavailable_still_walks_then_skips_later_stages(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An `OllamaUnavailable` mid-batch keeps the completed suggestions too
+    -- the set-volatility core needs no model -- but still surfaces through
+    the sequencer's run-scoped unavailable handling (`ollama serve`
+    notice), so later `needs_llm` stages are not asked to spend against a
+    dead server (#441)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _partial_metadata_batch(monkeypatch, OllamaUnavailable("connection refused"))
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    config_text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+    assert "volatile" in config_text
+    assert "Metadata: unavailable -- connection refused" in result.stdout
+    assert "ollama serve" in result.stdout
+
+
+# ---------------------------------------------------------------------------
 # 2.18-2.19 -- Contradictions stage (report-only, terminal)
 # ---------------------------------------------------------------------------
 
@@ -2122,6 +2236,7 @@ def test_contradictions_runs_last_and_never_writes(
     _reindexed_workspace(tmp_path, monkeypatch)
 
     from openkos.resolution.contradiction import (
+        ContradictionBatch,
         ContradictionVerdict,
     )
     from openkos.resolution.contradiction import (
@@ -2143,7 +2258,7 @@ def test_contradictions_runs_last_and_never_writes(
 
     def _fake_find_contradictions(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[object], int]:
+    ) -> tuple[ContradictionBatch, int]:
         order.append("Contradictions")
         on_progress = kwargs.get("on_progress")
         verdict = ContradictionVerdict(
@@ -2155,7 +2270,7 @@ def test_contradictions_runs_last_and_never_writes(
         )
         if on_progress is not None:
             on_progress(1, 1, verdict)  # type: ignore[operator]
-        return [verdict], 1
+        return ContradictionBatch(results=[verdict]), 1
 
     monkeypatch.setattr(
         "openkos.cli.curate.find_contradictions", _fake_find_contradictions
@@ -2168,6 +2283,107 @@ def test_contradictions_runs_last_and_never_writes(
     assert result.exit_code == 0
     assert order == ["Contradictions"]
     assert "CONTRADICTS" in result.stdout
+    assert changed_paths(before, _snapshot(tmp_path)) == set()
+
+
+# ---------------------------------------------------------------------------
+# issue #441 -- a partial contradiction batch keeps its completed verdicts
+# ---------------------------------------------------------------------------
+
+
+def _partial_contradictions_batch(
+    monkeypatch: pytest.MonkeyPatch, failure: OllamaError
+) -> None:
+    """Seed a 2-candidate Contradictions queue whose first candidate
+    completed with a high-confidence verdict and whose second candidate's
+    chat raised `failure` -- the #441 mid-batch shape. Earlier stages probe
+    empty so only Contradictions runs."""
+    from openkos.resolution.contradiction import (
+        ContradictionBatch,
+        ContradictionVerdict,
+    )
+    from openkos.resolution.contradiction import Verdict as CVerdict
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan",
+        lambda *a, **k: _edge_plan(
+            ("concepts/a", "concepts/b"), ("concepts/c", "concepts/d")
+        ),
+    )
+    verdict = ContradictionVerdict(
+        pair_ids=("concepts/a", "concepts/b"),
+        verdict=CVerdict.CONTRADICTS,
+        confidence=0.9,
+        rationale="kept work",
+        conflicting_claims=("claim one",),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions",
+        lambda *a, **k: (
+            ContradictionBatch(results=[verdict], failure=failure, failed_index=2),
+            2,
+        ),
+    )
+
+
+def test_contradictions_partial_batch_reports_completed_then_fails_with_counts(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generic mid-batch `OllamaError` no longer discards Contradictions'
+    completed verdicts (#441): the completed high-confidence verdict is
+    still reported, the stage reports failed with completed-of-total counts
+    ONLY (the stage is read-only, so there are no write counts to
+    disclose), and the exit code stays 0 (curate is not a CI gate)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _partial_contradictions_batch(monkeypatch, OllamaError("boom"))
+
+    before = _snapshot(tmp_path)
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0
+    assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
+    assert "kept work" in result.stdout
+    assert (
+        "Contradictions: failed -- boom (judged 1 of 2 candidate(s))." in result.stdout
+    )
+    assert changed_paths(before, _snapshot(tmp_path)) == set()
+
+
+def test_contradictions_partial_batch_unavailable_still_reports_completed(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An `OllamaUnavailable` mid-batch keeps the completed verdicts too --
+    they are already-paid-for reports -- but still surfaces through the
+    sequencer's run-scoped unavailable handling (`ollama serve` notice)
+    (#441). Contradictions is the last stage, so the run-scoped skip has no
+    later stage to protect; the class split is kept anyway so the summary
+    wording stays uniform across all four batch stages."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _partial_contradictions_batch(monkeypatch, OllamaUnavailable("connection refused"))
+
+    before = _snapshot(tmp_path)
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0
+    assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
+    assert "Contradictions: unavailable -- connection refused" in result.stdout
+    assert "ollama serve" in result.stdout
     assert changed_paths(before, _snapshot(tmp_path)) == set()
 
 
@@ -2454,8 +2670,11 @@ def test_contradictions_run_builds_no_graph_it_does_not_use(
         return real_build_graph(bundle_dir, **kwargs)
 
     monkeypatch.setattr(curate, "build_graph", _counting_build_graph)
+    from openkos.resolution.contradiction import ContradictionBatch as _CBatch
+
     monkeypatch.setattr(
-        "openkos.cli.curate.find_contradictions", lambda *a, **k: ([], 0)
+        "openkos.cli.curate.find_contradictions",
+        lambda *a, **k: (_CBatch(results=[]), 0),
     )
 
     ctx = curate.CurateContext(
