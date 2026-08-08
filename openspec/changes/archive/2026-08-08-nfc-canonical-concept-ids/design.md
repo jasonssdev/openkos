@@ -16,7 +16,7 @@ revert of the inverse helper. Both ADR conditions are not met; no ADR.
 ## D2 — The tolerant inverse (`okf.concept_path_for`)
 
 Normalizing ids alone converts a comparison bug into a silent-content bug:
-nine sites rebuild `bundle_dir / f"{id}.md"`, and on a byte-exact filesystem
+seven sites rebuild `bundle_dir / f"{id}.md"`, and on a byte-exact filesystem
 an NFC id cannot open an NFD file. Each of those sites was infallible before
 normalization (the id came straight from the walked path), and most of them
 swallow a read miss as an empty body handed to an LLM prompt.

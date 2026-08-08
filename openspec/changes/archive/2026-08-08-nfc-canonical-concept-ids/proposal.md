@@ -33,7 +33,7 @@ Two obligations follow, and both are in scope:
 1. **Id derivation normalizes.** `okf.concept_id_for` NFC-normalizes the
    bundle-relative path it derives, so an id derived from an NFD filename
    compares equal to the same id spelled NFC anywhere else.
-2. **Path reconstruction tolerates the old spelling.** Nine sites rebuild
+2. **Path reconstruction tolerates the old spelling.** Seven sites rebuild
    `bundle_dir / f"{id}.md"` from an id that is now canonically NFC, and the
    name on disk may still be decomposed on a byte-exact filesystem (a bundle
    authored on HFS+, committed, and cloned onto ext4 carries NFD filenames
@@ -51,7 +51,7 @@ Two obligations follow, and both are in scope:
 1. `okf.concept_id_for` NFC-normalizes its result (canonical layer).
 2. `okf.concept_path_for` — the tolerant inverse, with its two guards
    (symlink fail-closed, ASCII scan skip).
-3. The nine reconstruction sites route through it:
+3. The seven reconstruction sites route through it:
    `cli/main.py:_resolve_concept_path` (the path-safety gate `merge`/`forget`
    resolve through), `cli/curate.py` Structure stage,
    `resolution/contradiction.py` (`_load_doc`, `_load_ledger_bodies`),

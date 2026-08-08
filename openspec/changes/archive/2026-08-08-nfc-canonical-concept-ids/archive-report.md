@@ -37,5 +37,5 @@ follow-ups above.
 - No ADR: the decision is one-line reversible at a single derivation site and
   rewrites no bundle bytes (design D1).
 - Known doc nit shipped deliberately (frozen candidate): proposal/design/tasks
-  say "nine" reconstruction sites where the candidate routes seven — tracked
-  in #473.
+  said "nine" reconstruction sites where the candidate routes seven — tracked
+  in #473 and corrected in these archived copies by that fix.

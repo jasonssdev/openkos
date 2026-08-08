@@ -286,6 +286,63 @@ def test_stage_filed_answer_missing_citation_folds_confidential(
     assert "sensitivity: confidential" in plan.content
 
 
+def test_stage_filed_answer_sensitivity_survives_a_decomposed_citation_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#473: a citation id is NFC (`okf.concept_id_for` normalizes every id
+    derived from a walked path) while the on-disk filename can still be NFD
+    on a byte-exact filesystem (a bundle authored on HFS+, committed, and
+    cloned onto ext4). The sensitivity re-read must resolve the document
+    through `okf.concept_path_for` like every other reconstruction site --
+    reading the NFC spelling directly misses, falls into the broad
+    fail-closed `except`, and silently folds a READABLE citation's `private`
+    to `confidential`.
+
+    Byte-exact lookups are simulated (a name must appear verbatim in its
+    parent's real directory listing) so the miss also reproduces on macOS,
+    whose filesystems resolve either spelling insensitively."""
+    nfc_stem = "café"  # precomposed e-acute, one code point
+    nfd_stem = "café"  # e + combining acute, two code points
+    assert nfc_stem != nfd_stem, "fixture must use two distinct spellings"
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", nfd_stem, title="Cafe")
+
+    real_exists = Path.exists
+    real_read_text = Path.read_text
+    real_iterdir = Path.iterdir
+
+    def _byte_exact(self: Path) -> bool:
+        try:
+            return self.name in {p.name for p in real_iterdir(self.parent)}
+        except OSError:
+            return False
+
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda self: _byte_exact(self) if self.suffix == ".md" else real_exists(self),
+    )
+
+    def _byte_exact_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self.suffix == ".md" and not _byte_exact(self):
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", _byte_exact_read_text)
+
+    plan = _stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="answer text",
+        citations=[Citation(concept_id=f"concepts/{nfc_stem}", title="Cafe")],
+        bundle_dir=bundle_dir,
+        default_sensitivity="public",
+        timestamp="2026-07-23T00:00:00Z",
+    )
+
+    assert plan.sensitivity == "private"
+    assert "sensitivity: private" in plan.content
+
+
 def test_stage_filed_answer_malformed_frontmatter_folds_confidential(
     tmp_path: Path,
 ) -> None:

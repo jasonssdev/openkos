@@ -9421,7 +9421,15 @@ def _stage_filed_answer(
     sensitivity = default_sensitivity
     for citation in citations:
         try:
-            text = (bundle_dir / f"{citation.concept_id}.md").read_text(
+            # `okf.concept_path_for`, not `bundle_dir / f"{id}.md"` (#473):
+            # citation ids come out of `okf.concept_id_for` and are NFC, while
+            # the name on disk may be decomposed on a byte-exact filesystem.
+            # A direct read of the NFC spelling misses a file that exists,
+            # falls into the fail-closed `except` below, and folds a READABLE
+            # citation's sensitivity to `confidential` -- fail-closed is for
+            # documents that cannot be verified, not for a spelling mismatch
+            # the rest of the pipeline already tolerates.
+            text = okf.concept_path_for(citation.concept_id, bundle_dir).read_text(
                 encoding="utf-8"
             )
             metadata, _ = okf.load_frontmatter(text)
