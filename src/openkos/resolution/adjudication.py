@@ -39,7 +39,7 @@ from openkos.llm.base import LLMBackend, Message
 from openkos.llm.ollama import OllamaError
 from openkos.model import okf
 
-from .candidates import CandidateGroup
+from .candidates import CandidateGroup, _type_label
 
 _NO_READABLE_MEMBER_CONTENT = "no readable member content"
 """Stable rationale for the all-members-unreadable short-circuit (module
@@ -230,6 +230,19 @@ def _build_messages(
     the `"OKF TYPE: ..."` line as the joined display label (e.g.
     `"Concept+Entity"`) -- `member_types_by_id` only affects per-member
     tagging, never that line.
+
+    Surviving-members derivation (#479): whether this function is called on
+    the cross-type path at all -- and what `okf_type` names -- derives from
+    the distinct types among the SURVIVING `members` actually rendered
+    below, never from the candidate's pre-filter `member_types`. The caller
+    (`adjudicate_candidates`) passes `member_types_by_id` only when the
+    survivors span more than one type, and `okf_type` as the label of the
+    surviving types alone: a cross-type group reduced by filtering to one
+    type takes the single-type path, byte-identical to a genuinely
+    single-type group, so the model is never asked to judge cross-type-ness
+    it cannot see. (That the filtered members are dropped SILENTLY is the
+    pre-existing single-type contract, unchanged here -- no "members
+    withheld" disclosure is added.)
     """
     if member_types_by_id is None:
         member_blocks = "\n\n".join(
@@ -401,17 +414,22 @@ def adjudicate_candidates(
                 rationale=_NO_READABLE_MEMBER_CONTENT,
             )
         else:
-            distinct_types = set(candidate.member_types)
-            member_types_by_id = (
-                dict(zip(candidate.member_ids, candidate.member_types, strict=True))
-                if len(distinct_types) > 1
-                else None
+            # Cross-type framing derives from the members that SURVIVED
+            # filtering (#479), looked up by concept_id -- never positionally
+            # (see `_build_messages`) and never from the pre-filter
+            # `candidate.member_types`: when a cross-type group's only
+            # other-type member was dropped above, the survivors share one
+            # type and the model must not be told the group it SEES spans
+            # more than one.
+            types_by_id = dict(
+                zip(candidate.member_ids, candidate.member_types, strict=True)
             )
+            surviving_types = {types_by_id[concept_id] for concept_id, _, _ in members}
             messages = _build_messages(
-                candidate.okf_type,
+                _type_label(tuple(surviving_types)),
                 candidate.tier.value,
                 members,
-                member_types_by_id=member_types_by_id,
+                member_types_by_id=(types_by_id if len(surviving_types) > 1 else None),
             )
             # Guard ONLY the chat call (#441): a transport/model failure must
             # not discard the completed results, while parse/validate/progress
