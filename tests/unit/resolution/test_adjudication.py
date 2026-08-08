@@ -8,6 +8,7 @@ zero real Ollama process. Mirrors `_FakeLLM` in
 extended to a queue since each group needs its own reply.
 """
 
+import dataclasses
 import inspect
 from collections.abc import Sequence
 from pathlib import Path
@@ -452,6 +453,129 @@ def test_system_prompt_distinguishes_part_whole_from_identity(tmp_path: Path) ->
     # Bias toward not-SAME for part-whole must be stated, not merely implied.
     assert "different" in system_message
     assert "merge" in system_message
+
+
+# ---------------------------------------------------------------------------
+# Requirement: Cross-Type Prompt Honesty (#437)
+# ---------------------------------------------------------------------------
+
+
+def test_single_type_group_prompt_bytes_unchanged(tmp_path: Path) -> None:
+    """Regression pin: a same-type group's rendered prompt keeps today's
+    exact bytes -- `"OKF TYPE: {okf_type}"` plus each member's untagged
+    `[concept_id — title]` header, no per-member type suffix, no NOTE turn."""
+    _write_doc(tmp_path / "a.md", title="Ada Lovelace", body="Body A.")
+    _write_doc(tmp_path / "b.md", title="Ada L.", body="Body B.")
+    group = _group("a", "b", okf_type="Person", tier=Tier.HIGH)
+    llm = _FakeLLM(replies=[_valid_reply("same")])
+
+    adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
+
+    user_message = llm.calls[0][-1]["content"]
+    assert user_message == (
+        "OKF TYPE: Person\nTIER: high\n\nMEMBERS:\n\n"
+        "[a — Ada Lovelace]\nBody A.\n\n"
+        "[b — Ada L.]\nBody B."
+    )
+    assert "(OKF type:" not in user_message
+    assert "NOTE" not in user_message
+
+
+def test_cross_type_group_prompt_names_both_types_and_tags_each_member(
+    tmp_path: Path,
+) -> None:
+    """A cross-type group's prompt names every distinct type present and
+    tags each member's own header with that member's own type -- sourced
+    from `member_types` (via a concept_id-keyed mapping the caller builds),
+    NEVER from `candidate.okf_type`, which is only the joined display
+    label."""
+    _write_doc(tmp_path / "concepts" / "a.md", title="Stoicism", body="Body A.")
+    _write_doc(tmp_path / "entities" / "b.md", title="Stoic School", body="Body B.")
+    group = CandidateGroup(
+        okf_type="Concept+Entity",
+        member_ids=("concepts/a", "entities/b"),
+        tier=Tier.HIGH,
+        trigger="stoicism",
+        member_types=("Concept", "Entity"),
+    )
+    llm = _FakeLLM(replies=[_valid_reply("different")])
+
+    adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
+
+    user_message = llm.calls[0][-1]["content"]
+    assert "Concept" in user_message
+    assert "Entity" in user_message
+    assert "[concepts/a — Stoicism] (OKF type: Concept)" in user_message
+    assert "[entities/b — Stoic School] (OKF type: Entity)" in user_message
+    assert "NOTE" in user_message.upper()
+
+
+def test_blocked_member_cross_type_prompt_still_tags_correctly(
+    tmp_path: Path,
+) -> None:
+    """When a candidate's `member_ids` is a FILTERED subset (a blocked
+    member was dropped before `_build_messages` runs -- adjudication.py's
+    sensitivity-fail-closed-filter), the surviving members are still tagged
+    with their OWN type via the concept_id-keyed lookup, never by position."""
+    _write_doc(tmp_path / "concepts" / "a.md", title="Stoicism", body="Body A.")
+    _write_doc(
+        tmp_path / "entities" / "b.md",
+        title="Stoic School",
+        body="Body B.",
+        sensitivity_value="confidential",
+    )
+    _write_doc(tmp_path / "people" / "c.md", title="Zeno", body="Body C.")
+    # The full 3-member cross-type group -- member "b" is confidential and
+    # will be dropped BEFORE `_load_members` ever reads it.
+    group = CandidateGroup(
+        okf_type="Concept+Entity+Person",
+        member_ids=("concepts/a", "entities/b", "people/c"),
+        tier=Tier.HIGH,
+        trigger="stub",
+        member_types=("Concept", "Entity", "Person"),
+    )
+    llm = _FakeLLM(replies=[_valid_reply("different")])
+
+    adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
+
+    user_message = llm.calls[0][-1]["content"]
+    # "entities/b" was blocked -- never reaches the prompt at all.
+    assert "entities/b" not in user_message
+    assert "Stoic School" not in user_message
+    # The surviving members keep their OWN correct type, not shifted by
+    # the missing middle member's absence (positional alignment would
+    # mislabel "people/c" as "Entity" here).
+    assert "[concepts/a — Stoicism] (OKF type: Concept)" in user_message
+    assert "[people/c — Zeno] (OKF type: Person)" in user_message
+
+
+def test_verdict_schema_unchanged_for_a_cross_type_group(tmp_path: Path) -> None:
+    """A cross-type group's `AdjudicatedCandidate` exposes only
+    `candidate`/`verdict`/`confidence`/`rationale` -- no new field, even
+    though the group carries `member_types`."""
+    _write_doc(tmp_path / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "entities" / "b.md", title="Stoic School")
+    group = CandidateGroup(
+        okf_type="Concept+Entity",
+        member_ids=("concepts/a", "entities/b"),
+        tier=Tier.HIGH,
+        trigger="stoicism",
+        member_types=("Concept", "Entity"),
+    )
+    llm = _FakeLLM(replies=[_valid_reply("different", 0.8, "different entities")])
+
+    result = adjudication_mod.adjudicate_candidates(
+        [group], bundle_dir=tmp_path, llm=llm
+    ).results[0]
+
+    assert {f.name for f in dataclasses.fields(result)} == {
+        "candidate",
+        "verdict",
+        "confidence",
+        "rationale",
+    }
+    assert result.verdict == adjudication_mod.Verdict.DIFFERENT
+    assert result.confidence == 0.8
 
 
 # ---------------------------------------------------------------------------

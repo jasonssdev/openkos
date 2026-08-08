@@ -1131,6 +1131,27 @@ def test_build_merged_document_scalar_fields_survivor_wins() -> None:
     assert merged["version"] == 1
 
 
+def test_build_merged_document_survivor_type_wins_on_a_cross_type_merge() -> None:
+    """Frontmatter-Conflict Resolution delta scenario "Survivor's type wins
+    on a cross-type merge": `type` follows the same survivor-wins scalar
+    rule as any other scalar, even when survivor and absorbed declare
+    DIFFERENT OKF types -- the absorbed `Entity` type is discarded, never
+    surfaced as a conflict."""
+    survivor = _survivor_metadata(type="Concept")
+    absorbed = _absorbed_metadata(type="Entity")
+
+    merged, _ = okf.build_merged_document(
+        survivor,
+        "Survivor body.",
+        absorbed,
+        "Absorbed body.",
+        "absorbed-id",
+        "survivor-id",
+    )
+
+    assert merged["type"] == "Concept"
+
+
 def test_build_merged_document_scalar_only_on_absorbed_fills_the_gap() -> None:
     """A scalar present ONLY on the absorbed side (missing from the
     survivor) fills the gap rather than being dropped."""

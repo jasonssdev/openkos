@@ -995,8 +995,15 @@ def build_merged_document(
     Field-kind rules: a scalar present on both sides keeps the SURVIVOR's
     value; a scalar present on only one side fills the gap; a list-valued
     field (`tags`, `provenance`, or any other list) is unioned, deduped,
-    order-preserving (survivor's items first); `sensitivity` is RECOMPUTED
-    via `combine_sensitivity`, never copied; `freshness`+`timestamp` are
+    order-preserving (survivor's items first). `type` is a SCALAR and
+    follows this same survivor-wins rule EXPLICITLY, including when
+    survivor and absorbed declare DIFFERENT OKF types (a cross-type merge,
+    #437): the merged document's `type` is always the survivor's declared
+    type, and the absorbed side's `type` is discarded via the generic
+    `elif key not in merged` branch below -- it is never surfaced as a
+    "conflict" requiring resolution, the same as any other scalar already
+    present on the survivor. `sensitivity` is RECOMPUTED via
+    `combine_sensitivity`, never copied; `freshness`+`timestamp` are
     taken TOGETHER from whichever side has the strictly more recent
     `timestamp` (`_absorbed_is_more_recent`), falling back to the
     survivor's own value when either timestamp is missing/unparseable.

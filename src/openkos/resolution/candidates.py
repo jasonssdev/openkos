@@ -2,28 +2,42 @@
 
 `find_candidates` walks a bundle via `okf._iter_docs` (D2, the SAME
 enumerate/skip pattern as `state/fts.py`/`graph/sqlite_graph.py`),
-partitions non-Source concept documents by their EXACT declared OKF
-`type`, and proposes candidate GROUPS within each partition via two
-deterministic, stdlib-only tiers: HIGH (an exact shared
-`normalize.normalize_key`) and LOW (a `similarity.is_near_match`,
-excluding any pair already HIGH). Output is ephemeral -- frozen
-dataclasses only, never a persisted OKF type or `bundle`/`state` file --
-and this module never writes a byte of the bundle.
+collects non-Source concept documents (`_eligible_keyed_docs`), and
+proposes candidate GROUPS via three deterministic, stdlib-only tiers:
+HIGH (an exact shared `normalize.normalize_key`, bucketed ACROSS all
+declared OKF types -- issue #437), ACRONYM (`similarity.
+acronym_expansion_match`), and LOW (a `similarity.is_near_match`,
+excluding any pair already HIGH or ACRONYM). ACRONYM and LOW remain
+STRICTLY per-type -- only HIGH is exempt from type partitioning. Output is
+ephemeral -- frozen dataclasses only, never a persisted OKF type or
+`bundle`/`state` file -- and this module never writes a byte of the
+bundle.
 
-`find_exact_title_groups` (issue #216) is the same pass with the LOW tier
-left out: it returns exactly the `Tier.HIGH` groups `find_candidates` would
-return, in the same order, without ever running the O(n^2) pairwise
-`near_match_score` pass. It exists for `status`, which counted HIGH groups
-and threw every LOW group away. Both entry points share
-`_keyed_docs_by_type` and `_high_candidate_groups`, so they cannot drift.
+Cross-type exact-title bucketing (#437): two documents of DIFFERENT
+declared OKF types whose titles normalize identically now form ONE HIGH
+candidate group, carrying both types via `CandidateGroup.member_types`
+(index-aligned with `member_ids`) and a joined display label on
+`okf_type` (e.g. `"Concept+Entity"`, sorted and `+`-joined -- see
+`_type_label`). This is a deliberate, narrow exemption to the ACRONYM/LOW
+per-type rule: HIGH's zero-cost bucket-by-key shape extends naturally
+across types with no pairwise cost, while ACRONYM/LOW's pairwise passes
+stay scoped per type for cost-profile reasons.
+
+`find_exact_title_groups` (issue #216) is the same pass with the
+ACRONYM/LOW tiers left out: it returns exactly the `Tier.HIGH` groups
+`find_candidates` would return, in the same order, without ever running
+the O(n^2) pairwise `near_match_score` pass. It exists for `status`, which
+counted HIGH groups and threw every LOW group away. Both entry points
+share `_eligible_keyed_docs` and `_high_candidate_groups`, so they cannot
+drift.
 
 status-aware-retrieval (MVP-3 gap #8 · S1, Phase 3): unless the caller
 passes `include_deprecated=True`, `find_candidates` computes the shared
 `openkos.lifecycle.deprecated_concept_ids(bundle_dir)` predicate ONCE per
 call and excludes any deprecated/superseded concept id from
-`_iter_eligible`'s output BEFORE HIGH/LOW pairing, so no candidate group
-ever contains a deprecated concept. `include_deprecated=True` skips the
-predicate walk entirely (no `_iter_docs` pass), restoring today's
+`_iter_eligible`'s output BEFORE HIGH/ACRONYM/LOW pairing, so no candidate
+group ever contains a deprecated concept. `include_deprecated=True` skips
+the predicate walk entirely (no `_iter_docs` pass), restoring today's
 status-blind behavior byte-for-byte (design R1's zero-cost escape path).
 """
 
@@ -65,14 +79,32 @@ _TIER_ORDER[Tier.ACRONYM] = 1
 _TIER_ORDER[Tier.LOW] = 2
 
 
+def _type_label(member_types: tuple[str, ...]) -> str:
+    """The `okf_type` display label for a set of member types (design D2):
+    the DISTINCT types in `member_types`, sorted ascending and joined with
+    `+`. A same-type group's `member_types` holds exactly one distinct
+    value, so this returns that bare type unchanged (e.g. `"Concept"`); a
+    cross-type group's distinct values join deterministically regardless of
+    which member's type appears first (e.g. `("Entity", "Concept")` and
+    `("Concept", "Entity")` both produce `"Concept+Entity"`). This label is
+    EPHEMERAL and DISPLAY-ONLY -- it is never a persisted OKF `type` and
+    never parsed back into individual types by any consumer."""
+    return "+".join(sorted(set(member_types)))
+
+
 @dataclass(frozen=True)
 class CandidateGroup:
-    """One candidate group: same-type OKF objects that MIGHT be the same
-    real-world entity. Ephemeral -- never a persisted OKF type or
-    `bundle`/`state` file."""
+    """One candidate group: OKF objects that MIGHT be the same real-world
+    entity. Ephemeral -- never a persisted OKF type or `bundle`/`state`
+    file. For the ACRONYM and LOW tiers every member shares one OKF type
+    (strict per-type blocking); a HIGH group MAY span more than one
+    declared OKF type (#437's cross-type exact-title bucketing)."""
 
     okf_type: str
-    """The exact OKF `type` shared by every member."""
+    """The display type: the shared OKF `type` for a same-type group, or
+    the sorted, `+`-joined distinct types for a cross-type HIGH group (see
+    `_type_label`) -- an ephemeral display label only, never a persisted
+    OKF type."""
     member_ids: tuple[str, ...]
     """The involved concept_ids -- sorted ascending, at least 2, unique.
     A HIGH group may have more than 2 members (all sharing one exact
@@ -83,6 +115,26 @@ class CandidateGroup:
     """HIGH: the shared normalized key. ACRONYM: the matched acronym itself.
     LOW: the near-match score (`near_match_score`) formatted to 3 decimal
     places."""
+    member_types: tuple[str, ...] = ()
+    """The declared OKF type of each member, index-aligned with
+    `member_ids` (`member_types[i]` is `member_ids[i]`'s type). Defaults,
+    via `__post_init__`, to `(okf_type,) * len(member_ids)` when omitted --
+    every existing same-type construction site remains valid unchanged, and
+    the field is never empty. Explicitly passed only for a cross-type HIGH
+    group, where it MUST be index-aligned with `member_ids` (`ValueError` on
+    a length mismatch)."""
+
+    def __post_init__(self) -> None:
+        if not self.member_types:
+            object.__setattr__(
+                self, "member_types", (self.okf_type,) * len(self.member_ids)
+            )
+        elif len(self.member_types) != len(self.member_ids):
+            raise ValueError(
+                "member_types must be index-aligned with member_ids: got "
+                f"{len(self.member_types)} member_types for "
+                f"{len(self.member_ids)} member_ids"
+            )
 
 
 _MAX_CANDIDATE_GROUPS: Final[int] = 50
@@ -181,45 +233,23 @@ def _iter_eligible(bundle_dir: Path) -> list[tuple[str, str, str]]:
     return eligible
 
 
-def _high_groups_for_type(
-    keyed: list[tuple[str, str]],
-) -> list[tuple[str, ...]]:
-    """Group `(concept_id, normalized_key)` pairs by exact key.
-
-    Returns the HIGH member-id tuples (each with >= 2 members, sorted), in
-    ascending normalized-key order. Bucketing plus one sort of the keys --
-    no pairwise work here, so the HIGH-only entry point never pays for any
-    (see `_pairs_covered_by_high_groups`, which only `find_candidates`
-    calls).
-    """
-    by_key: dict[str, list[str]] = defaultdict(list)
-    for concept_id, key in keyed:
-        by_key[key].append(concept_id)
-
-    high_groups: list[tuple[str, ...]] = []
-    for key in sorted(by_key):
-        members = sorted(by_key[key])
-        if len(members) < 2:
-            continue
-        high_groups.append(tuple(members))
-    return high_groups
-
-
-def _keyed_docs_by_type(
+def _eligible_keyed_docs(
     bundle_dir: Path, *, include_deprecated: bool
-) -> list[tuple[str, list[tuple[str, str]]]]:
-    """The shared prelude of BOTH public entry points, in one place.
+) -> list[tuple[str, str, str]]:
+    """The shared, FLAT I/O prelude of BOTH public entry points (design D1).
 
     Walks the bundle via `_iter_eligible`, applies the
     `lifecycle.deprecated_concept_ids` exclusion unless
     `include_deprecated=True` (in which case that predicate walk is skipped
-    entirely), partitions what survives by exact `okf_type`, and returns
-    `(okf_type, keyed)` pairs in ASCENDING `okf_type` order, where `keyed`
-    is `(concept_id, normalize_key(title))` sorted by ascending
-    `concept_id`. Callers pick up exactly where `_high_groups_for_type`
-    takes over, so `find_candidates` and `find_exact_title_groups` cannot
-    drift on eligibility, deprecation, partitioning, or normalization
-    (#216).
+    entirely), and returns `(concept_id, okf_type, normalized_key)` triples
+    for every survivor, in NO particular order -- `_keyed_docs_by_type` and
+    `_high_candidate_groups` each impose their own ordering downstream. This
+    is the ONLY function in the module that touches the filesystem for
+    candidate generation; `_keyed_docs_by_type` (the per-type partition) and
+    `_high_candidate_groups` (the cross-type HIGH bucketing) are both pure
+    functions over this flat list, so `find_candidates` and
+    `find_exact_title_groups` cannot drift on eligibility, deprecation, or
+    normalization (#216, #437).
     """
     eligible = _iter_eligible(bundle_dir)
     if not include_deprecated:
@@ -229,43 +259,73 @@ def _keyed_docs_by_type(
             for concept_id, okf_type, title in eligible
             if concept_id not in deprecated
         ]
+    return [
+        (concept_id, okf_type, normalize_key(title))
+        for concept_id, okf_type, title in eligible
+    ]
 
+
+def _keyed_docs_by_type(
+    keyed: list[tuple[str, str, str]],
+) -> list[tuple[str, list[tuple[str, str]]]]:
+    """PURE partition of the flat `_eligible_keyed_docs` output by exact
+    `okf_type` (design D1) -- the SAME output shape the pre-#437 shared
+    prelude produced, now split out as its own pure step. Returns
+    `(okf_type, keyed)` pairs in ASCENDING `okf_type` order, where `keyed`
+    is `(concept_id, normalized_key)` sorted by ascending `concept_id`. Feeds
+    the ACRONYM/LOW passes in `find_candidates_report`, which stay strictly
+    per-type; the HIGH tier no longer goes through this partition at all
+    (see `_high_candidate_groups`, which buckets the FLAT list instead).
+    """
     by_type: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for concept_id, okf_type, title in eligible:
-        by_type[okf_type].append((concept_id, title))
+    for concept_id, okf_type, key in keyed:
+        by_type[okf_type].append((concept_id, key))
 
     keyed_by_type: list[tuple[str, list[tuple[str, str]]]] = []
     for okf_type in sorted(by_type):
         docs = sorted(by_type[okf_type], key=lambda doc: doc[0])
-        keyed_by_type.append(
-            (
-                okf_type,
-                [(concept_id, normalize_key(title)) for concept_id, title in docs],
-            )
-        )
+        keyed_by_type.append((okf_type, docs))
     return keyed_by_type
 
 
-def _high_candidate_groups(
-    okf_type: str, keyed: list[tuple[str, str]]
-) -> list[CandidateGroup]:
-    """Build one type partition's HIGH `CandidateGroup`s from `keyed`.
+def _high_candidate_groups(keyed: list[tuple[str, str, str]]) -> list[CandidateGroup]:
+    """Build HIGH `CandidateGroup`s from the FLAT `(concept_id, okf_type,
+    normalized_key)` list, bucketed by exact key ACROSS ALL declared OKF
+    types (#437, design D1) -- one bucket-then-sort pass, no pairwise work
+    of any kind, so this stays free for the HIGH-only entry point exactly
+    as before the cross-type change.
 
-    Returns them in `_high_groups_for_type`'s key-sorted order -- callers own
-    the final ordering. Shared by both public entry points so a HIGH group's
-    `okf_type`/`member_ids`/`trigger` are constructed in exactly ONE place
-    (#216).
+    Two or more documents sharing one normalized key form a single group
+    regardless of type: a same-type cluster gets `okf_type` equal to that
+    shared type (`_type_label` on one distinct value is a no-op); a
+    cross-type cluster gets the sorted, `+`-joined display label (e.g.
+    `"Concept+Entity"`) and `member_types` index-aligned with `member_ids`.
+    Returned in ascending normalized-key order -- callers (`find_candidates_
+    report`/`find_exact_title_groups`) own the final `(okf_type,
+    member_ids)` output ordering; this function's own order is an
+    implementation detail, not part of either entry point's contract.
     """
-    key_by_id = dict(keyed)
-    return [
-        CandidateGroup(
-            okf_type=okf_type,
-            member_ids=member_ids,
-            tier=Tier.HIGH,
-            trigger=key_by_id[member_ids[0]],
+    by_key: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for concept_id, okf_type, key in keyed:
+        by_key[key].append((concept_id, okf_type))
+
+    groups: list[CandidateGroup] = []
+    for key in sorted(by_key):
+        members = sorted(by_key[key], key=lambda member: member[0])
+        if len(members) < 2:
+            continue
+        member_ids = tuple(member[0] for member in members)
+        member_types = tuple(member[1] for member in members)
+        groups.append(
+            CandidateGroup(
+                okf_type=_type_label(member_types),
+                member_ids=member_ids,
+                tier=Tier.HIGH,
+                trigger=key,
+                member_types=member_types,
+            )
         )
-        for member_ids in _high_groups_for_type(keyed)
-    ]
+    return groups
 
 
 def _pairs_covered_by_high_groups(
@@ -273,12 +333,18 @@ def _pairs_covered_by_high_groups(
 ) -> set[frozenset[str]]:
     """Every unordered concept-id pair already covered by a HIGH group.
 
-    This is exactly what excludes a pair from the LOW pass (HIGH/LOW
-    disjoint, per pair), and it is fully derivable from the HIGH groups, so
-    ONLY `find_candidates` calls it. Keeping it out of
-    `_high_groups_for_type` keeps the O(m^2)-in-cluster-size pair build off
-    `find_exact_title_groups`'s path, which never runs a LOW pass and so has
-    nothing to exclude.
+    This is exactly what excludes a pair from the ACRONYM/LOW passes
+    (HIGH/ACRONYM/LOW disjoint, per pair), and it is fully derivable from the
+    HIGH groups, so ONLY `find_candidates_report` calls it, ONCE, over the
+    GLOBAL cross-type HIGH set (design D1) -- every per-type ACRONYM/LOW loop
+    reuses that single result. A cross-type HIGH pair never appears in a
+    same-type ACRONYM/LOW loop's `combinations(keyed, 2)` anyway (each such
+    loop is already scoped to one `okf_type`), so this global set is a
+    superset for any one type and the same-type exclusion it existed for
+    stays byte-for-byte unchanged. Keeping this build out of
+    `_high_candidate_groups` keeps the O(m^2)-in-cluster-size pair build off
+    `find_exact_title_groups`'s path, which never runs an ACRONYM/LOW pass
+    and so has nothing to exclude.
     """
     return {
         frozenset(pair)
@@ -321,14 +387,12 @@ def find_candidates_report(
     capped (see its own docstring) and never pays for the O(n^2)
     `near_match_score` pass below.
     """
-    groups: list[CandidateGroup] = []
-    for okf_type, keyed in _keyed_docs_by_type(
-        bundle_dir, include_deprecated=include_deprecated
-    ):
-        high_groups = _high_candidate_groups(okf_type, keyed)
-        groups.extend(high_groups)
-        high_pairs = _pairs_covered_by_high_groups(high_groups)
+    eligible = _eligible_keyed_docs(bundle_dir, include_deprecated=include_deprecated)
+    high_groups = _high_candidate_groups(eligible)
+    high_pairs = _pairs_covered_by_high_groups(high_groups)
 
+    groups: list[CandidateGroup] = list(high_groups)
+    for okf_type, keyed in _keyed_docs_by_type(eligible):
         for (id_a, key_a), (id_b, key_b) in combinations(keyed, 2):
             pair = frozenset((id_a, id_b))
             if pair in high_pairs:
@@ -418,10 +482,11 @@ def find_exact_title_groups(
     evicted in favour of an ACRONYM or LOW group competing for the same cap
     slots, and both functions apply the SAME `(okf_type, member_ids)`
     tie-break to the surviving HIGH groups. Both functions share
-    `_keyed_docs_by_type` and `_high_candidate_groups`, then apply the SAME
-    final sort key, and within one type HIGH groups have disjoint member
-    sets -- so `(okf_type, member_ids)` is a strict total order over them
-    and no tie is left for the sort to break arbitrarily. The verbatim
+    `_eligible_keyed_docs` and `_high_candidate_groups`, then apply the SAME
+    final sort key, and HIGH groups have disjoint member sets (a member
+    joins at most one exact-key bucket) -- so `(okf_type, member_ids)` is a
+    strict total order over them and no tie is left for the sort to break
+    arbitrarily. The verbatim
     (below-cap) equivalence is pinned by
     `tests/unit/resolution/test_candidates.py::
     test_find_exact_title_groups_equals_the_high_slice_in_order`; the
@@ -442,11 +507,12 @@ def find_exact_title_groups(
     read this function as a walk-count win.
 
     WHAT THIS COSTS, precisely: after the shared walks, one pass bucketing
-    the type partition's documents by their normalized key, plus one sort of
-    those keys. No pairwise work of any kind -- not `near_match_score`, and
-    not the already-HIGH pair set either, which is quadratic in the size of a
-    single exact-title cluster and which only the LOW pass needs (see
-    `_pairs_covered_by_high_groups`, called by `find_candidates` alone).
+    the FLAT eligible-document list by normalized key ACROSS all types
+    (#437), plus one sort of those keys. No pairwise work of any kind -- not
+    `near_match_score`, and not the already-HIGH pair set either, which is
+    quadratic in the size of a single exact-title cluster and which only the
+    ACRONYM/LOW passes need (see `_pairs_covered_by_high_groups`, called by
+    `find_candidates_report` alone).
 
     WHY A SEPARATE FUNCTION rather than a `tier=` filter on
     `find_candidates`:
@@ -463,11 +529,8 @@ def find_exact_title_groups(
     `find_candidates`: they render and adjudicate both tiers, so the
     pairwise pass is work they actually use.
     """
-    groups: list[CandidateGroup] = []
-    for okf_type, keyed in _keyed_docs_by_type(
-        bundle_dir, include_deprecated=include_deprecated
-    ):
-        groups.extend(_high_candidate_groups(okf_type, keyed))
+    eligible = _eligible_keyed_docs(bundle_dir, include_deprecated=include_deprecated)
+    groups = _high_candidate_groups(eligible)
 
     groups.sort(key=lambda g: (g.okf_type, _TIER_ORDER[g.tier], g.member_ids))
     return groups
