@@ -137,14 +137,16 @@ def _write_unextracted_source(
 # --- Phase 1: cost-contract foundation (`_BundleSignals`) -----------------
 
 
-def test_tier1_only_path_triggers_zero_bundle_walks(
+def test_tier1_only_path_pays_only_the_bootstrap_gates_single_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stopping at tier 1 (missing vector index) performs zero bundle
-    walks: neither `collect_docs` nor `find_exact_title_groups` is ever
-    called (spec: First-Hit Short-Circuit Cost Contract, "Stopping at tier
-    1 performs zero bundle walks")."""
+    """Stopping at tier 1 (missing vector index) pays exactly one bundle
+    walk -- the #386 bootstrap gate's `collect_docs`, which must prove the
+    bundle is non-empty before `reindex` may be recommended -- and never
+    `find_exact_title_groups` (spec: First-Hit Short-Circuit Cost
+    Contract, updated by #386)."""
     _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
     docs_calls = {"n": 0}
     groups_calls = {"n": 0}
     real_collect_docs = lint_check.collect_docs
@@ -171,7 +173,7 @@ def test_tier1_only_path_triggers_zero_bundle_walks(
 
     assert result.exit_code == 0
     assert "openkos reindex" in result.stdout
-    assert docs_calls["n"] == 0
+    assert docs_calls["n"] == 1
     assert groups_calls["n"] == 0
 
 
@@ -299,6 +301,95 @@ def test_tier4_path_performs_at_most_three_bundle_walks(
     assert docs_calls["n"] + (2 * groups_calls["n"]) <= 3
 
 
+# --- #386: bootstrap rung -- an empty bundle outranks the reindex tier ----
+
+
+def test_bootstrap_empty_bundle_recommends_ingest_not_reindex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshly created workspace (zero eligible documents) is told to
+    ingest its first source, never to `reindex` an empty bundle -- there is
+    nothing to index yet, so the missing-index recommendation would be
+    meaningless (issue #386)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" in result.stdout
+    assert "first source" in result.stdout
+    assert "openkos reindex" not in result.stdout
+
+
+def test_bootstrap_declines_when_any_eligible_document_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One eligible document is enough to make the missing vector index a
+    real, actionable absence again: the bootstrap rung declines and tier 1
+    recommends `reindex` (issue #386)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos reindex" in result.stdout
+    assert "openkos ingest" not in result.stdout
+
+
+def test_bootstrap_declines_when_the_vector_store_is_populated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The bootstrap rung gates the missing-vector-index tier only: with a
+    populated vector store it declines without a recommendation, so an
+    empty-but-indexed bundle falls through to the no-action pointer rather
+    than nagging about a first ingest (issue #386)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" not in result.stdout
+    assert "No ranked action found" in result.stdout
+
+
+def test_bootstrap_pays_one_docs_walk_and_no_group_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bootstrap rung reuses `_BundleSignals.docs` -- one memoized
+    `collect_docs` call, never a redundant walk, and never the exact-title
+    group walk (module cost contract, #386)."""
+    _init_workspace(tmp_path, monkeypatch)
+    docs_calls, groups_calls = _spy_walks(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" in result.stdout
+    assert docs_calls["n"] == 1
+    assert groups_calls["n"] == 0
+
+
+def test_bootstrap_over_an_unreadable_only_bundle_still_names_the_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle whose only documents could not be parsed has zero ELIGIBLE
+    documents, so the bootstrap rung fires -- and the walk it paid observed
+    the skipped files, so they are named alongside the recommendation (D4
+    honesty guard, #275/#386)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_unparseable_doc(tmp_path)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" in result.stdout
+    assert "concepts/broken.md: skipped (unparseable frontmatter)" in result.stdout
+
+
 # --- Phase 2: tier engine and order ----------------------------------------
 
 
@@ -405,8 +496,10 @@ def test_tier_1_command_is_fixed_reindex(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Tier 1's printed command is exactly `openkos reindex` regardless of
-    finding detail (spec: Per-Tier Command, scenario 3)."""
+    finding detail (spec: Per-Tier Command, scenario 3). The bundle carries
+    one eligible document so the #386 bootstrap rung declines."""
     _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
 
     result = runner.invoke(app, ["next"])
 
@@ -414,13 +507,15 @@ def test_tier_1_command_is_fixed_reindex(
     assert "Run: openkos reindex" in result.stdout
 
 
-def test_tier_4_command_is_fixed_duplicates(
+def test_tier_4_command_is_fixed_curate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     seed_vectors_db: Callable[[Path], None],
 ) -> None:
-    """Tier 4's printed command is exactly `openkos duplicates` regardless
-    of finding detail (spec: Per-Tier Command, scenario 4)."""
+    """Tier 4's printed command is exactly `openkos curate` -- the verb that
+    RESOLVES a pending duplicate group, not the read-only `duplicates`
+    display (issue #386). The reason still names `openkos duplicates` as
+    the way to review the groups first."""
     _init_workspace(tmp_path, monkeypatch)
     seed_vectors_db(tmp_path)
     _write_doc(tmp_path / "bundle" / "concepts" / "dup-a.md", title="Stoicism")
@@ -429,7 +524,9 @@ def test_tier_4_command_is_fixed_duplicates(
     result = runner.invoke(app, ["next"])
 
     assert result.exit_code == 0
-    assert "Run: openkos duplicates" in result.stdout
+    assert "Run: openkos curate" in result.stdout
+    assert "`openkos duplicates`" in result.stdout
+    assert "Run: openkos duplicates" not in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -468,7 +565,7 @@ def test_tier_4_reason_agrees_with_its_own_count(
     result = runner.invoke(app, ["next"])
 
     assert result.exit_code == 0
-    assert "Run: openkos duplicates" in result.stdout
+    assert "Run: openkos curate" in result.stdout
     assert expected in result.stdout
 
 
@@ -552,7 +649,7 @@ def test_trap2_bare_ingest_fallback_never_fires_tier_2(
 
     assert result.exit_code == 0
     assert "Run: openkos ingest" not in result.stdout
-    assert "Run: openkos duplicates" in result.stdout
+    assert "Run: openkos curate" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -620,7 +717,7 @@ def test_option_shaped_resource_never_becomes_a_printed_argument(
 
     assert result.exit_code == 0
     assert "Run: openkos ingest" not in result.stdout
-    assert "Run: openkos duplicates" in result.stdout
+    assert "Run: openkos curate" in result.stdout
 
 
 def test_shell_metacharacter_resource_never_becomes_the_printed_command(
@@ -644,7 +741,7 @@ def test_shell_metacharacter_resource_never_becomes_the_printed_command(
     assert result.exit_code == 0
     assert "curl" not in result.stdout
     assert "Run: openkos ingest" not in result.stdout
-    assert "Run: openkos duplicates" in result.stdout
+    assert "Run: openkos curate" in result.stdout
 
 
 # --- Duplicate-group check gated on higher tiers ---------------------------
@@ -882,8 +979,10 @@ def test_no_count_of_unseen_findings_when_a_tier_fires(
 ) -> None:
     """When a ranked tier fires, no numeral describes how many other
     findings exist or remain unseen (spec: No Count of Unseen Findings,
-    "No count appears when a tier fires")."""
+    "No count appears when a tier fires"). One eligible document keeps the
+    #386 bootstrap rung out of the way so tier 1 is the one that fires."""
     _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
 
     result = runner.invoke(app, ["next"])
 
@@ -950,7 +1049,7 @@ def test_backtick_in_resource_never_becomes_a_truncated_printed_path(
     assert result.exit_code == 0
     assert "Run: openkos ingest" not in result.stdout
     assert "rm -rf" not in result.stdout
-    assert "Run: openkos duplicates" in result.stdout
+    assert "Run: openkos curate" in result.stdout
 
 
 def test_balanced_backticks_in_resource_are_declined_too(
@@ -973,7 +1072,7 @@ def test_balanced_backticks_in_resource_are_declined_too(
 
     assert result.exit_code == 0
     assert "Run: openkos ingest" not in result.stdout
-    assert "Run: openkos duplicates" in result.stdout
+    assert "Run: openkos curate" in result.stdout
 
 
 def test_an_intact_resource_still_fires_tier_2_verbatim(
@@ -1069,15 +1168,16 @@ def test_every_skipped_document_is_named_not_just_the_first(
     assert "concepts/broken-b.md: skipped (unparseable frontmatter)" in result.stdout
 
 
-def test_tier_1_reports_no_skip_notices_and_still_pays_no_walk(
+def test_tier_1_names_skip_notices_its_bootstrap_gate_walk_observed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`next` reports only what it actually observed. Tier 1 fires on a
-    zero-walk check, so it never collected a notice and must not claim
-    otherwise -- surfacing notices MUST NOT buy them with the bundle walk
-    tier 1's cost contract forbids (spec: First-Hit Short-Circuit Cost
-    Contract, tier-1 = 0 walks)."""
+    """`next` reports only what it actually observed -- and since #386 the
+    bootstrap gate pays the docs walk before tier 1 may fire, so the skip
+    notices that walk observed ARE reported alongside the `reindex`
+    recommendation (D4: the honesty guard holds on every path). Exactly one
+    walk, never a second."""
     _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
     _write_unparseable_doc(tmp_path)
     calls = 0
     real_collect_docs = lint_check.collect_docs
@@ -1093,8 +1193,8 @@ def test_tier_1_reports_no_skip_notices_and_still_pays_no_walk(
 
     assert result.exit_code == 0
     assert "Run: openkos reindex" in result.stdout
-    assert calls == 0
-    assert "skipped" not in result.stdout
+    assert calls == 1
+    assert "concepts/broken.md: skipped (unparseable frontmatter)" in result.stdout
 
 
 # --- #276: a declined tier-2 finding is named, never silently dropped -----
@@ -1161,7 +1261,7 @@ def test_declination_is_named_even_when_a_lower_tier_fires(
     result = runner.invoke(app, ["next"])
 
     assert result.exit_code == 0
-    assert "Run: openkos duplicates" in result.stdout
+    assert "Run: openkos curate" in result.stdout
     assert "sources/notes" in result.stdout
 
 
@@ -1203,11 +1303,13 @@ def test_a_runnable_finding_produces_no_declination(
     assert "could not be turned into" not in result.stdout
 
 
-def test_tier_1_reports_no_declination_and_still_pays_no_walk(
+def test_tier_1_reports_no_declination_even_though_the_gate_walk_was_paid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Same structural rule the skip notices follow: reporting a
-    declination must never buy the walk tier 1's cost contract forbids."""
+    """A declination is a TIER-2 observation, and tier 1 firing means tier 2
+    never evaluated its findings -- so no declination appears even though
+    the #386 bootstrap gate already paid the docs walk. Reporting one would
+    claim an evaluation that never happened."""
     _init_workspace(tmp_path, monkeypatch)
     _write_unextracted_source(tmp_path, resource="")
     calls = 0
@@ -1224,7 +1326,7 @@ def test_tier_1_reports_no_declination_and_still_pays_no_walk(
 
     assert result.exit_code == 0
     assert "Run: openkos reindex" in result.stdout
-    assert calls == 0
+    assert calls == 1
     assert "sources/notes" not in result.stdout
 
 

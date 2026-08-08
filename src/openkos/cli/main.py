@@ -2041,13 +2041,27 @@ def _extraction_cap_notice(report: ExtractionReport) -> str | None:
     )
 
 
-def _stale_index_names(layout: config.WorkspaceLayout) -> tuple[str, ...]:
+def _stale_index_names(
+    layout: config.WorkspaceLayout, *, reads: tuple[str, ...]
+) -> tuple[str, ...]:
     """The manifest-gated derived stores whose contents predate the bundle,
-    named for a user-facing advisory (#381) -- shared by `query`, `status`
-    and `next` so all three agree on what "stale" means and on the wording
-    of the names they print.
+    named for a user-facing advisory (#381) -- shared by `query` and
+    `status` (and mirrored by `next`'s `_BundleSignals.stale_indexes`) so
+    all three agree on what "stale" means and on the wording of the names
+    they print.
 
-    Only `fts.db` and `graph.db` are checked, because only those two are
+    `reads` (#436) declares which of the checked stores THIS caller's
+    answer actually depends on, and the advisory names only that
+    intersection. `query` stopped reading `graph.db` in #434, so graph
+    staleness cannot degrade its answer and warning about it there was a
+    true statement about the workspace attached to the wrong claim
+    ("this answer may be degraded"). `status` and `next` describe the
+    workspace itself, so they keep declaring both stores. Keeping the one
+    shared helper -- with the caller's declaration as a parameter rather
+    than a fork -- is the point: what "stale" means still lives in exactly
+    one place. A name in `reads` outside the checked set is ignored.
+
+    Only `fts.db` and `graph.db` are checkable, because only those two are
     gated by a whole-bundle `manifest_hash`. `vectors.db` is maintained
     per-document (`reindex` compares each doc's own `content_hash`), so an
     edited bundle leaves it PARTIALLY current rather than wholesale stale --
@@ -2057,13 +2071,15 @@ def _stale_index_names(layout: config.WorkspaceLayout) -> tuple[str, ...]:
     Never raises: a failing advisory must not be what breaks the command it
     advises, so any error degrades to "nothing to report" rather than
     propagating. The cost is one bundle walk (~4ms over 29 docs), and
-    `stale_derived_stores` skips even that when neither store is on disk.
+    `stale_derived_stores` skips even that when no declared store is on
+    disk.
     """
+    known = (("fts", layout.fts_db_path), ("graph", layout.graph_db_path))
+    stores = tuple((name, path) for name, path in known if name in reads)
+    if not stores:
+        return ()
     try:
-        return stale_derived_stores(
-            layout.bundle_dir,
-            (("fts", layout.fts_db_path), ("graph", layout.graph_db_path)),
-        )
+        return stale_derived_stores(layout.bundle_dir, stores)
     except Exception:  # broad: an advisory never breaks its own command
         return ()
 
@@ -7661,7 +7677,8 @@ def status() -> None:
     which is TWO walks by itself, not one: `_iter_eligible`, plus
     `lifecycle.deprecated_concept_ids` under the default
     `include_deprecated=False`; and -- only when `vectors.db` is non-empty --
-    `build_graph`'s walk behind the informational edge-count line.
+    `build_graph`'s walk behind the untyped-edge needs-attention line and
+    the empty-graph notice (#387).
     Consolidating the remaining walks has no open owner: #195 already
     landed, and what it guaranteed is that `status` calls `build_graph`
     exactly once; #216 landed too, and what it removed was the O(n^2)
@@ -7771,10 +7788,14 @@ def status() -> None:
         )
     # issue #183 (Slice 0): a missing/empty `vectors.db` is genuinely
     # ACTIONABLE (spec: "Needs-Attention Surfaces Missing Vector Index"), so
-    # it belongs in `needs_attention` itself -- unlike the edge-count line
-    # below, which stays purely INFORMATIONAL.
+    # it belongs in `needs_attention` itself -- unlike the empty-graph line
+    # below, which stays purely INFORMATIONAL. #386: gated on the bundle
+    # holding at least one eligible document (the SAME `docs` list every
+    # check above reuses -- no new walk): reindexing a bundle with nothing
+    # to index is meaningless, and `next` owns naming the real first step
+    # (`openkos ingest`) in that state.
     vectors_missing = vector_store_is_empty(layout.vectors_db_path)
-    if vectors_missing:
+    if vectors_missing and docs:
         needs_attention.append(
             "Dense retrieval and candidate edges unavailable — run "
             "`openkos reindex` (vectors.db missing)."
@@ -7785,32 +7806,46 @@ def status() -> None:
     # lines. Absence is deliberately NOT reported as staleness (see
     # `_stale_index_names`): a freshly `init`ed workspace has no derived
     # store at all, and recommending a refresh of indexes that were never
-    # built is the same defect #386 reports against `next`.
-    stale_indexes = _stale_index_names(layout)
+    # built is the same defect #386 reports against `next`. `status`
+    # describes the workspace, not one answer, so it declares BOTH
+    # manifest-gated stores (#436) -- unlike `query`, which reads only fts.
+    stale_indexes = _stale_index_names(layout, reads=("fts", "graph"))
     if stale_indexes:
         needs_attention.append(
             f"Derived indexes are stale ({', '.join(stale_indexes)}) — run "
             "`openkos reindex` to refresh retrieval."
         )
+    # #387: an UNTYPED concept-to-concept edge is pending curation work, so
+    # it earns a needs-attention line that says how many and names the verb
+    # that types them (`openkos curate`). A fully-typed edge count is a
+    # graph-density metric with no action, which is exactly what this
+    # section must not carry -- and `status` has no informational section
+    # for derived-graph metrics ("Bundle contents" is pinned to the disk
+    # scan), so the fully-typed count is dropped rather than moved.
+    # `graph_edge_summary` is read-only over the graph projection, built
+    # once (#195) and skipped when `vectors_missing`, exactly as before.
+    edge_summary: tuple[int, int] | None = None
+    if not vectors_missing:
+        with build_graph(layout.bundle_dir) as store:
+            edge_summary = graph_edge_summary(layout.bundle_dir, store=store)
+        total, typed = edge_summary
+        untyped = total - typed
+        if untyped:
+            needs_attention.append(
+                f"{untyped} of {total} concept-to-concept edge(s) untyped — "
+                "run `openkos curate` to type them."
+            )
     if not needs_attention:
         typer.echo("  Nothing needs attention.")
     else:
         for line in needs_attention:
             typer.echo(f"  {line}")
-    # The edge-count summary stays a separate, purely INFORMATIONAL line
+    # The empty-graph notice stays a separate, purely INFORMATIONAL line
     # (spec: "or an adjacent informational line") -- never appended to
     # `needs_attention`, so a healthy workspace still prints "Nothing needs
-    # attention." above; `graph_edge_summary` is read-only over the graph
-    # projection, so this never changes the exit code either. Skipped when
-    # `vectors_missing`, since it already starves any embedding-sourced
-    # candidate edge and is covered by the line above.
-    if not vectors_missing:
-        with build_graph(layout.bundle_dir) as store:
-            total, typed = graph_edge_summary(layout.bundle_dir, store=store)
-        if total == 0:
-            typer.echo("  No concept relationships yet.")
-        else:
-            typer.echo(f"  {total} concept-to-concept edge(s) ({typed} typed).")
+    # attention." above.
+    if edge_summary is not None and edge_summary[0] == 0:
+        typer.echo("  No concept relationships yet.")
 
 
 @app.command("next")
@@ -9641,8 +9676,11 @@ def query(
         # rather than after having read it and trusted it. This is the CLI
         # seam that already owns the open-failure-to-`None` decision, so the
         # D2 binding contract holds: `answer()` below still never computes
-        # or compares a manifest hash of its own.
-        stale_stores = _stale_index_names(layout)
+        # or compares a manifest hash of its own. #436: `query` declares
+        # only `fts` -- it stopped reading `graph.db` in #434, so graph
+        # staleness cannot degrade THIS answer and must not be blamed here
+        # (`status`/`next` still report it as workspace state).
+        stale_stores = _stale_index_names(layout, reads=("fts",))
         if stale_stores:
             typer.echo(
                 f"warning: derived indexes are stale ({', '.join(stale_stores)}) "

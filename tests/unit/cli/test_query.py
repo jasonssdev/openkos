@@ -149,9 +149,10 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     one that fails to open).
 
     `graph.db` is still written even though `query` no longer reads it
-    (issue #434): `reindex` maintains it, `_stale_index_names` still names
-    it in the shared staleness advisory, and contradiction detection still
-    derives its candidate pairs from the typed edges it projects."""
+    (issue #434): `reindex` maintains it, `status`/`next` still name it in
+    the shared staleness advisory (`query` itself declares only `fts`
+    since #436), and contradiction detection still derives its candidate
+    pairs from the typed edges it projects."""
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
@@ -813,11 +814,13 @@ def test_query_ignores_a_corrupt_graph_db_entirely(
     `test_query_corrupt_graph_db_degrades_with_hint`, which treated a broken
     graph store as a partial retrieval failure worth reporting.
 
-    What DOES survive is the shared `_stale_index_names` advisory, which
-    `query`, `status` and `next` all read and which still names `graph`
-    (`reindex` still maintains `graph.db`, and contradiction detection still
-    reads the projection). So the assertion here is scoped to the retrieval
-    seam, not to the whole of stderr."""
+    Since #436 the shared `_stale_index_names` advisory is scoped to the
+    stores each verb declares it reads -- `query` declares only `fts` -- so
+    a corrupt (hence unreadable, hence "stale") `graph.db` no longer
+    produces even the staleness warning here; `status` and `next` still
+    name `graph` (`reindex` still maintains `graph.db`, and contradiction
+    detection still reads the projection). The assertion here stays scoped
+    to the retrieval seam, not to the whole of stderr."""
     _init_workspace(tmp_path, monkeypatch)
     openkos_dir = tmp_path / ".openkos"
     (openkos_dir / "graph.db").write_bytes(b"not a database")
@@ -1693,7 +1696,13 @@ def test_query_warns_when_the_derived_indexes_are_stale(
     """#381: a bundle edited since the last reindex leaves `fts.db`/`graph.db`
     describing an older document set, and until now the ONLY symptom was a
     quietly worse answer. `query` names the stale stores before answering, so
-    the degradation is attributable rather than invisible."""
+    the degradation is attributable rather than invisible.
+
+    Updated by #436: `query` never reads `graph.db` (#434), so graph
+    staleness cannot degrade its answer -- the advisory names only the
+    stores this verb actually reads, which is `fts` alone. Naming `graph`
+    here was a true statement about the workspace but a false statement
+    about this answer."""
     _init_workspace(tmp_path, monkeypatch)
     # Edit the bundle AFTER the indexes were written -- exactly what `relate`,
     # `reconcile`, `merge` and `curate` do, none of which reindex.
@@ -1711,9 +1720,36 @@ def test_query_warns_when_the_derived_indexes_are_stale(
 
     assert result.exit_code == 0
     assert (
-        "warning: derived indexes are stale (fts, graph) -- this answer may "
+        "warning: derived indexes are stale (fts) -- this answer may "
         "be degraded; run `openkos reindex`.\n"
     ) in result.stderr
+    assert "graph" not in result.stderr
+
+
+def test_query_says_nothing_when_only_the_graph_index_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#436: a stale `graph.db` behind a fresh `fts.db` cannot degrade this
+    answer -- `query` reads no graph store -- so warning about it here would
+    be a false hint. `status` and `next` still report it (they describe the
+    workspace, not one answer)."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts = tmp_path / "bundle" / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / "new.md").write_text(
+        "---\ntype: Concept\ntitle: New\ndescription: ''\n---\nbody\n",
+        encoding="utf-8",
+    )
+    # Refresh only the FTS store over the edited bundle: graph stays stale.
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", tmp_path / "bundle")
+    monkeypatch.setattr(
+        "openkos.cli.main.answer", lambda *args, **kwargs: _stale_answer_result()
+    )
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "stale" not in result.stderr
 
 
 def test_query_stale_warning_precedes_the_retrieval_line(
