@@ -2727,3 +2727,315 @@ def test_contradictions_probe_carries_the_truncation_notice_to_the_cost_gate(
     assert "cap reached" in probe.notice
     assert "typed-edge" in probe.notice
     assert "merged-body" in probe.notice
+
+
+# ---------------------------------------------------------------------------
+# issue #398 -- the shared per-item confirm: [y/N] contract, re-prompt on
+# unrecognized input, declined-item identities in the summary
+# ---------------------------------------------------------------------------
+
+
+def _script_prompts(monkeypatch: pytest.MonkeyPatch, answers: list[str]) -> list[str]:
+    """Route `typer.prompt` through a scripted answer list and record every
+    prompt text. Mimics the real widget's default handling -- empty scripted
+    input returns `default`, exactly as pressing Enter would -- so the
+    "empty keeps N" behavior under test is the one a user actually gets."""
+    prompts: list[str] = []
+    remaining = list(answers)
+
+    def _prompt(text: str, default: str = "N", show_default: bool = False) -> str:
+        prompts.append(text)
+        raw = remaining.pop(0)
+        return default if raw == "" else raw
+
+    monkeypatch.setattr("typer.prompt", _prompt)
+    return prompts
+
+
+def test_confirm_reprompts_on_unrecognized_input_then_accepts(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The issue's typo evidence: `t` meant as `y` must re-prompt, never be
+    silently treated as a decline -- and the notice names the accepted
+    tokens."""
+    prompts = _script_prompts(monkeypatch, ["t", "y"])
+
+    assert curate._confirm("Apply? [y/N]") is True
+
+    assert prompts == ["Apply? [y/N]", "Apply? [y/N]"]
+    out = capsys.readouterr().out
+    assert "Unrecognized answer 't'" in out
+    assert "y or n" in out
+
+
+def test_confirm_reprompts_on_unrecognized_input_then_declines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompts = _script_prompts(monkeypatch, ["a", "n"])
+
+    assert curate._confirm("Apply? [y/N]") is False
+    assert len(prompts) == 2
+
+
+def test_confirm_empty_input_keeps_the_documented_default_decline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompts = _script_prompts(monkeypatch, [""])
+
+    assert curate._confirm("Apply? [y/N]") is False
+    assert len(prompts) == 1
+
+
+@pytest.mark.parametrize("answer", ["y", "yes", "Y", " y "])
+def test_confirm_accepts_without_reprompt(
+    answer: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts = _script_prompts(monkeypatch, [answer])
+
+    assert curate._confirm("Apply? [y/N]") is True
+    assert len(prompts) == 1
+
+
+@pytest.mark.parametrize("answer", ["n", "no", "N", "  "])
+def test_confirm_declines_without_reprompt(
+    answer: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts = _script_prompts(monkeypatch, [answer])
+
+    assert curate._confirm("Apply? [y/N]") is False
+    assert len(prompts) == 1
+
+
+def test_stage_outcome_skipped_items_defaults_to_empty() -> None:
+    """Every existing construction site omits the field, so it must
+    default -- and stay a tuple, matching the frozen dataclass idiom."""
+    outcome = curate.StageOutcome(status="applied", applied=1, skipped=0)
+    assert outcome.skipped_items == ()
+
+
+def test_render_summary_lists_declined_item_identities_indented() -> None:
+    outcomes = [curate.StageOutcome(status="empty") for _ in curate._STAGES]
+    outcomes[2] = curate.StageOutcome(
+        status="applied",
+        applied=1,
+        skipped=2,
+        notice="Structure: applied 1, skipped 2.",
+        skipped_items=(
+            "concepts/a -> concepts/b [references]",
+            "concepts/c -> concepts/d [part_of]",
+        ),
+    )
+
+    lines = curate.render_summary(outcomes)
+
+    assert len(lines) == 7  # 5 stage lines + 2 declined-item lines
+    idx = lines.index("Structure: Structure: applied 1, skipped 2.")
+    assert lines[idx + 1] == "  declined: concepts/a -> concepts/b [references]"
+    assert lines[idx + 2] == "  declined: concepts/c -> concepts/d [part_of]"
+
+
+def test_render_summary_prints_no_declined_lines_without_declined_items() -> None:
+    outcomes = [
+        curate.StageOutcome(status="applied", applied=1, skipped=1)
+        for _ in curate._STAGES
+    ]
+
+    lines = curate.render_summary(outcomes)
+
+    assert len(lines) == 5
+    assert all("declined:" not in line for line in lines)
+
+
+def _seed_identity_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One SAME-adjudicated 2-member candidate group over a real workspace,
+    with the later stages stubbed empty -- the exact fixture shape of
+    `test_accepted_identity_pair_commits_via_shared_merge_cores`, extracted
+    for the #398 prompt-contract tests."""
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+
+
+def test_identity_unrecognized_answer_reprompts_then_applies(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#398's regression evidence end-to-end: an operator typo (`t` for `y`)
+    at the per-pair prompt is re-asked, not silently counted as a decline --
+    the corrected `y` still lands the merge."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _seed_identity_pair(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    # Three stdin answers: the cost gate's `typer.confirm` consumes the
+    # first "y"; the per-pair prompt reads "t" (unrecognized -> re-ask),
+    # then the corrective "y".
+    result = runner.invoke(app, ["curate"], input="y\nt\ny\n")
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "Unrecognized answer 't'" in result.stdout
+    assert "y or n" in result.stdout
+    assert "Identity: applied 1, skipped 0." in result.stdout
+
+
+def test_identity_declined_pair_identity_listed_in_summary(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _seed_identity_pair(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    # The advertised contract is [y/N] -- `skip` is gone from the prompt.
+    assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
+    assert "[y/N/skip]" not in result.stdout
+    assert "Identity: applied 0, skipped 1." in result.stdout
+    assert "  declined: concepts/b -> concepts/a" in result.stdout
+
+
+def test_identity_applied_only_run_prints_no_declined_lines(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _seed_identity_pair(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert "Identity: applied 1, skipped 0." in result.stdout
+    assert "  declined:" not in result.stdout
+
+
+def test_structure_declined_edge_identity_listed_in_summary(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_edge_types",
+        lambda edges, **k: EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(edge=edge, suggested_type="references", rationale="stub")
+            ]
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+    _simulate_tty(monkeypatch)
+
+    # Structure's cost gate consumes "y"; the per-suggestion prompt "n".
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert "Relate concepts/a -> concepts/b [references]? [y/N]" in result.stdout
+    assert "[y/N/skip]" not in result.stdout
+    assert "Structure: applied 0, skipped 1." in result.stdout
+    assert "  declined: concepts/a -> concepts/b [references]" in result.stdout
+
+
+def test_metadata_declined_tier_identity_listed_in_summary(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.resolution.volatility_typing import (
+        TierSuggestion,
+        TierSuggestionBatch,
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility",
+        lambda *a, **k: TierSuggestionBatch(
+            results=[
+                TierSuggestion(
+                    type_name="Concept",
+                    current_default="static",
+                    suggested_tier="volatile",
+                    rationale="stub",
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+    _simulate_tty(monkeypatch)
+
+    # Metadata's cost gate consumes "y"; the per-type prompt "n".
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert "Set Concept -> volatile? [y/N]" in result.stdout
+    assert "[y/N/skip]" not in result.stdout
+    assert "Metadata: applied 0, skipped 1." in result.stdout
+    assert "  declined: Concept -> volatile" in result.stdout

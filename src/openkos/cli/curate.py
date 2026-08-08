@@ -128,6 +128,15 @@ class StageOutcome:
     applied: int = 0
     skipped: int = 0
     notice: str | None = None
+    skipped_items: tuple[str, ...] = ()
+    """Identities of the items the OPERATOR declined at this stage's
+    per-item `[y/N]` prompt (issue #398) -- a strict subset of what
+    `skipped` counts, which keeps its pre-#398 meaning and still counts
+    every skip branch (no-valid-suggestion, N>2 groups, prepared-None)
+    exactly as before. `render_summary` prints one indented line per entry,
+    so the operator knows exactly which items to revisit rather than only
+    how many there were. Defaults empty so every pre-existing construction
+    site stays valid."""
 
 
 @dataclass(frozen=True)
@@ -234,6 +243,32 @@ def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
     return False
 
 
+def _confirm(prompt_text: str) -> bool:
+    """The one per-item write-consent prompt all three interactive walks --
+    Identity, Structure, Metadata -- share (issue #398): loops on
+    `typer.prompt(prompt_text, default="N", show_default=False)` until the
+    answer is recognized. `y`/`yes` (case/whitespace-insensitive) accepts;
+    `n`/`no` or empty input declines -- pressing Enter reaches this loop as
+    the prompt's own `"N"` default, so the documented decline default is
+    preserved. Any OTHER answer (`t`, `a`, `si`, `1` -- #398's typo
+    evidence) echoes a one-line notice naming the accepted tokens and asks
+    again, instead of being silently counted as a decline. The advertised
+    contract is `[y/N]`: the formerly advertised `skip` token never had
+    behavior distinct from a decline, so it is gone from all three call
+    sites' prompt strings rather than given one here."""
+    while True:
+        answer = typer.prompt(prompt_text, default="N", show_default=False)
+        token = answer.strip().lower()
+        if token in {"y", "yes"}:
+            return True
+        if token in {"", "n", "no"}:
+            return False
+        typer.echo(
+            f"Unrecognized answer '{answer.strip()}' -- expected y or n "
+            "(Enter = N). Asking again."
+        )
+
+
 def _preconditions_probe(ctx: CurateContext) -> StageProbe:
     """Reuses `_open_proximity_or_degrade` (main.py) for the SAME
     missing-or-empty `vectors.db` check `suggest-relations`/`contradictions`
@@ -294,7 +329,7 @@ def _identity_probe(ctx: CurateContext) -> StageProbe:
 
 def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     """`adjudicate_candidates` then, per SAME 2-member group, the exact
-    `_prepare_one_merge` / preview / `[y/N/skip]` / `_reject_drifted_targets`
+    `_prepare_one_merge` / preview / `[y/N]` / `_reject_drifted_targets`
     / `_commit_one_merge` walk `adjudicate --apply` already performs (design
     D4/D6) -- reused verbatim rather than re-implemented, so the two write
     paths can never drift apart. N>2 groups are never auto-merged
@@ -349,6 +384,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
     applied = 0
     skipped = 0
+    declined: list[str] = []
     for result in results:
         group = result.candidate
         if result.verdict is not Verdict.SAME:
@@ -376,14 +412,14 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             continue
 
         typer.echo(cli_main._format_merge_preview_line(prepared))
-        answer = typer.prompt(
+        if not _confirm(
             f"Merge {prepared.absorbed_canonical} into "
-            f"{prepared.survivor_canonical}? [y/N/skip]",
-            default="N",
-            show_default=False,
-        )
-        if answer.strip().lower() not in {"y", "yes"}:
+            f"{prepared.survivor_canonical}? [y/N]"
+        ):
             skipped += 1
+            declined.append(
+                f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
+            )
             continue
 
         absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
@@ -420,6 +456,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 f"Identity: failed -- {batch.failure} (adjudicated "
                 f"{len(batch.results)} of {len(groups)} candidate group(s))."
             ),
+            skipped_items=tuple(declined),
         )
 
     status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
@@ -428,6 +465,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         applied=applied,
         skipped=skipped,
         notice=f"Identity: applied {applied}, skipped {skipped}.",
+        skipped_items=tuple(declined),
     )
 
 
@@ -479,7 +517,7 @@ def _structure_probe(ctx: CurateContext) -> StageProbe:
 
 def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     """`suggest_edge_types` with `on_progress` (design D4), then a per-item
-    `[y/N/skip]` walk writing every accepted suggestion through the
+    `[y/N]` walk writing every accepted suggestion through the
     extracted `relate` core (`prepare_relate`/`relate_core`, design D5) --
     the exact same write path standalone `relate` uses, so the two can
     never drift apart. A degraded suggestion (`suggested_type=None`) is
@@ -523,6 +561,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     now = datetime.now(UTC)
     applied = 0
     skipped = 0
+    declined: list[str] = []
 
     for suggestion in suggestions:
         edge = suggestion.edge
@@ -536,14 +575,14 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             f"[{suggestion.suggested_type}] {edge.source_id} -> {edge.target_id}"
         )
         typer.echo(f"  rationale: {suggestion.rationale}")
-        answer = typer.prompt(
+        if not _confirm(
             f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{suggestion.suggested_type}]? [y/N/skip]",
-            default="N",
-            show_default=False,
-        )
-        if answer.strip().lower() not in {"y", "yes"}:
+            f"[{suggestion.suggested_type}]? [y/N]"
+        ):
             skipped += 1
+            declined.append(
+                f"{edge.source_id} -> {edge.target_id} [{suggestion.suggested_type}]"
+            )
             continue
 
         source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
@@ -604,6 +643,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 f"{len(batch.results)} of {len(edges)} untyped edge(s); "
                 f"applied {applied}, skipped {skipped})."
             ),
+            skipped_items=tuple(declined),
         )
 
     status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
@@ -612,6 +652,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         applied=applied,
         skipped=skipped,
         notice=f"Structure: applied {applied}, skipped {skipped}.",
+        skipped_items=tuple(declined),
     )
 
 
@@ -689,7 +730,7 @@ def _metadata_probe(ctx: CurateContext) -> StageProbe:
 
 def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     """`suggest_volatility` with `on_progress` (design D4), then a per-type
-    `[y/N/skip]` walk writing every accepted tier through the extracted
+    `[y/N]` walk writing every accepted tier through the extracted
     `set-volatility` core (`prepare_set_volatility`/`set_volatility_core`,
     design D5). Sensitivity gaps surfaced in the SAME pass (`
     _sensitivity_gap_ids`) are reported only, naming `openkos
@@ -733,6 +774,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
     applied = 0
     skipped = 0
+    declined: list[str] = []
     for result in results:
         if result.suggested_tier is None:
             typer.echo(f"[?] {result.type_name}")
@@ -742,13 +784,9 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
         typer.echo(f"[{result.suggested_tier}] {result.type_name}")
         typer.echo(f"  rationale: {result.rationale}")
-        answer = typer.prompt(
-            f"Set {result.type_name} -> {result.suggested_tier}? [y/N/skip]",
-            default="N",
-            show_default=False,
-        )
-        if answer.strip().lower() not in {"y", "yes"}:
+        if not _confirm(f"Set {result.type_name} -> {result.suggested_tier}? [y/N]"):
             skipped += 1
+            declined.append(f"{result.type_name} -> {result.suggested_tier}")
             continue
 
         try:
@@ -805,6 +843,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 f"{len(batch.results)} of {len(type_names)} concept type(s); "
                 f"applied {applied}, skipped {skipped})."
             ),
+            skipped_items=tuple(declined),
         )
 
     status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
@@ -813,6 +852,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         applied=applied,
         skipped=skipped,
         notice=f"Metadata: applied {applied}, skipped {skipped}.",
+        skipped_items=tuple(declined),
     )
 
 
@@ -1167,9 +1207,13 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
 
 def render_summary(outcomes: Sequence[StageOutcome]) -> list[str]:
     """One line per `_STAGES` entry, in order -- ALWAYS exactly `len(_STAGES)`
-    lines, even when nothing was eligible in any stage (spec: Summary line
-    names every stage outcome)."""
-    return [
-        f"{stage.name}: {outcome.notice or outcome.status}"
-        for stage, outcome in zip(_STAGES, outcomes, strict=True)
-    ]
+    stage lines, even when nothing was eligible in any stage (spec: Summary
+    line names every stage outcome) -- plus, directly under a stage whose
+    outcome carries `skipped_items`, one indented `  declined: {item}` line
+    per operator-declined identity (issue #398), so the count-only stage
+    line is never the only record of what was passed over."""
+    lines: list[str] = []
+    for stage, outcome in zip(_STAGES, outcomes, strict=True):
+        lines.append(f"{stage.name}: {outcome.notice or outcome.status}")
+        lines.extend(f"  declined: {item}" for item in outcome.skipped_items)
+    return lines
