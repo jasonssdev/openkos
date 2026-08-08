@@ -1008,9 +1008,9 @@ def test_reindex_wires_tty_gated_progress_callback_into_the_orchestrator(
 ) -> None:
     """On a TTY, `reindex` passes `observability.progress_callback`'s hook
     into `state.reindex.reindex` as `on_progress`; each invocation renders
-    `openkos reindex: embedding doc <i>/<n>...` on STDERR while STDOUT
-    keeps the clean summary (issue #190, mirroring `suggest-relations`'
-    #134 wiring)."""
+    `openkos reindex: embedding doc <i>/<n> - <elapsed>...` on STDERR
+    while STDOUT keeps the clean summary (issue #190, in-place + elapsed
+    since #383/#384, mirroring `suggest-relations`' #134 wiring)."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
 
@@ -1026,8 +1026,8 @@ def test_reindex_wires_tty_gated_progress_callback_into_the_orchestrator(
     result = runner.invoke(app, ["reindex"])
 
     assert result.exit_code == 0
-    assert "openkos reindex: embedding doc 1/2..." in result.stderr
-    assert "openkos reindex: embedding doc 2/2..." in result.stderr
+    assert "openkos reindex: embedding doc 1/2 - " in result.stderr
+    assert "openkos reindex: embedding doc 2/2 - " in result.stderr
     assert "embedding doc" not in result.stdout
 
 

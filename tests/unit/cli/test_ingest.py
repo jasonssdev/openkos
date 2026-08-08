@@ -5130,8 +5130,8 @@ def test_batch_progress_lines_on_tty_stderr(
     result = runner.invoke(app, ["ingest", "notes"], input="y\n")
 
     assert result.exit_code == 0
-    assert "openkos ingest: ingesting file 1/2..." in result.stderr
-    assert "openkos ingest: ingesting file 2/2..." in result.stderr
+    assert "openkos ingest: ingesting file 1/2 - " in result.stderr
+    assert "openkos ingest: ingesting file 2/2 - " in result.stderr
     assert "ingesting file" not in result.stdout
 
 

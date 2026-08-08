@@ -1356,8 +1356,9 @@ def test_contradictions_wires_tty_gated_progress_callback_into_the_library(
     """On a TTY, `contradictions` passes
     `observability.progress_callback`'s hook into `find_contradictions` as
     `on_progress`; each invocation renders `openkos contradictions:
-    checking pair <i>/<n>...` on STDERR while STDOUT keeps the clean
-    report (issue #190, mirroring `suggest-relations`' #134 wiring)."""
+    checking pair <i>/<n> - <elapsed>...` on STDERR while STDOUT keeps
+    the clean report (issue #190, in-place + elapsed since #383/#384,
+    mirroring `suggest-relations`' #134 wiring)."""
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
 
@@ -1385,7 +1386,7 @@ def test_contradictions_wires_tty_gated_progress_callback_into_the_library(
     result = runner.invoke(app, ["contradictions"])
 
     assert result.exit_code == 0
-    assert "openkos contradictions: checking pair 1/1..." in result.stderr
+    assert "openkos contradictions: checking pair 1/1 - " in result.stderr
     assert "checking pair" not in result.stdout
 
 
