@@ -508,6 +508,15 @@ def test_cross_type_group_prompt_names_both_types_and_tags_each_member(
     assert "[concepts/a — Stoicism] (OKF type: Concept)" in user_message
     assert "[entities/b — Stoic School] (OKF type: Entity)" in user_message
     assert "NOTE" in user_message.upper()
+    # Exact-bytes regression pin (#479): an UNFILTERED cross-type group --
+    # every member survives -- keeps today's exact rendering.
+    assert user_message == (
+        "OKF TYPE: Concept+Entity\nTIER: high\n\n"
+        f"{adjudication_mod._CROSS_TYPE_NOTE}\n\n"
+        "MEMBERS:\n\n"
+        "[concepts/a — Stoicism] (OKF type: Concept)\nBody A.\n\n"
+        "[entities/b — Stoic School] (OKF type: Entity)\nBody B."
+    )
 
 
 def test_blocked_member_cross_type_prompt_still_tags_correctly(
@@ -547,6 +556,87 @@ def test_blocked_member_cross_type_prompt_still_tags_correctly(
     # mislabel "people/c" as "Entity" here).
     assert "[concepts/a — Stoicism] (OKF type: Concept)" in user_message
     assert "[people/c — Zeno] (OKF type: Person)" in user_message
+
+
+def test_cross_type_group_whose_other_type_member_is_filtered_renders_single_type_prompt(
+    tmp_path: Path,
+) -> None:
+    """#479: the cross-type framing derives from the members ACTUALLY
+    RENDERED in the prompt, never the original pre-filter `member_types`.
+    When a Concept+Entity group's only Entity member is blocked, the
+    survivors all share one type -- the prompt takes the plain single-type
+    path (no per-member tags, no NOTE), byte-identical to an equivalent
+    genuinely-single-type group's prompt."""
+    _write_doc(tmp_path / "concepts" / "a.md", title="Stoicism", body="Body A.")
+    _write_doc(tmp_path / "concepts" / "b.md", title="Stoic Philosophy", body="Body B.")
+    _write_doc(
+        tmp_path / "entities" / "c.md",
+        title="Stoic School",
+        body="Body C.",
+        sensitivity_value="confidential",
+    )
+    cross_group = CandidateGroup(
+        okf_type="Concept+Entity",
+        member_ids=("concepts/a", "concepts/b", "entities/c"),
+        tier=Tier.HIGH,
+        trigger="stoicism",
+        member_types=("Concept", "Concept", "Entity"),
+    )
+    cross_llm = _FakeLLM(replies=[_valid_reply("same")])
+    adjudication_mod.adjudicate_candidates(
+        [cross_group], bundle_dir=tmp_path, llm=cross_llm
+    )
+    cross_message = cross_llm.calls[0][-1]["content"]
+
+    single_group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stoicism",
+    )
+    single_llm = _FakeLLM(replies=[_valid_reply("same")])
+    adjudication_mod.adjudicate_candidates(
+        [single_group], bundle_dir=tmp_path, llm=single_llm
+    )
+    single_message = single_llm.calls[0][-1]["content"]
+
+    assert "(OKF type:" not in cross_message
+    assert "NOTE" not in cross_message
+    assert cross_message == single_message
+
+
+def test_three_type_group_with_one_member_filtered_names_only_surviving_types(
+    tmp_path: Path,
+) -> None:
+    """#479: a 3-type group whose Person member is blocked still renders
+    cross-type framing -- the survivors span two types -- but names exactly
+    the two SURVIVING types, on the `OKF TYPE:` line and in the per-member
+    tags, never the filtered-out one."""
+    _write_doc(tmp_path / "concepts" / "a.md", title="Stoicism", body="Body A.")
+    _write_doc(tmp_path / "entities" / "b.md", title="Stoic School", body="Body B.")
+    _write_doc(
+        tmp_path / "people" / "c.md",
+        title="Zeno",
+        body="Body C.",
+        sensitivity_value="confidential",
+    )
+    group = CandidateGroup(
+        okf_type="Concept+Entity+Person",
+        member_ids=("concepts/a", "entities/b", "people/c"),
+        tier=Tier.HIGH,
+        trigger="stub",
+        member_types=("Concept", "Entity", "Person"),
+    )
+    llm = _FakeLLM(replies=[_valid_reply("different")])
+
+    adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
+
+    user_message = llm.calls[0][-1]["content"]
+    assert user_message.startswith("OKF TYPE: Concept+Entity\nTIER: high")
+    assert "Person" not in user_message
+    assert "[concepts/a — Stoicism] (OKF type: Concept)" in user_message
+    assert "[entities/b — Stoic School] (OKF type: Entity)" in user_message
+    assert adjudication_mod._CROSS_TYPE_NOTE in user_message
 
 
 def test_verdict_schema_unchanged_for_a_cross_type_group(tmp_path: Path) -> None:
