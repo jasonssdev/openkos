@@ -38,8 +38,9 @@ from openkos.graph.base import Edge
 from openkos.llm.ollama import BackendHostLocality, OllamaClient
 from openkos.resolution.adjudication import AdjudicationBatch
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
-from openkos.resolution.contradiction import ContradictionVerdict
+from openkos.resolution.contradiction import ContradictionBatch
 from openkos.resolution.edge_typing import EdgeSuggestionBatch
+from openkos.resolution.volatility_typing import TierSuggestionBatch
 from openkos.retrieval.answer import AnswerResult
 
 runner = CliRunner()
@@ -222,7 +223,7 @@ def _spy_query(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
 
 
 def _spy_contradictions(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
-    spy = _KwargSpy((list[ContradictionVerdict](), 0))
+    spy = _KwargSpy((ContradictionBatch(results=[]), 0))
     monkeypatch.setattr(main_mod, "find_contradictions", spy)
     return spy
 
@@ -253,7 +254,7 @@ def _spy_suggest_relations(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
 
 
 def _spy_suggest_volatility(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
-    spy = _KwargSpy(list[object]())
+    spy = _KwargSpy(TierSuggestionBatch(results=[]))
     monkeypatch.setattr(main_mod, "suggest_volatility", spy)
     return spy
 

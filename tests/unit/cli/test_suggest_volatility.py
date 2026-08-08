@@ -24,8 +24,13 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.cli.main import app
-from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
-from openkos.resolution.volatility_typing import TierSuggestion
+from openkos.llm.ollama import (
+    OllamaClient,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
+from openkos.resolution.volatility_typing import TierSuggestion, TierSuggestionBatch
 from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
@@ -168,16 +173,18 @@ def test_suggest_volatility_renders_tier_type_and_rationale(
     _init_workspace(tmp_path, monkeypatch)
     captured: dict[str, object] = {}
 
-    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
         captured["bundle_dir"] = bundle_dir
         captured["kwargs"] = kwargs
-        return [
-            _suggestion(
-                type_name="Person",
-                suggested_tier="slow",
-                rationale="people change slowly",
-            )
-        ]
+        return TierSuggestionBatch(
+            results=[
+                _suggestion(
+                    type_name="Person",
+                    suggested_tier="slow",
+                    rationale="people change slowly",
+                )
+            ]
+        )
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _fake_suggest)
 
@@ -198,12 +205,16 @@ def test_suggest_volatility_degraded_item_renders_as_no_valid_tier(
     (spec: Invalid/missing suggested tier is never surfaced as valid)."""
     _init_workspace(tmp_path, monkeypatch)
 
-    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
-        return [
-            _suggestion(
-                type_name="Project", suggested_tier=None, rationale="malformed reply"
-            )
-        ]
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
+        return TierSuggestionBatch(
+            results=[
+                _suggestion(
+                    type_name="Project",
+                    suggested_tier=None,
+                    rationale="malformed reply",
+                )
+            ]
+        )
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _fake_suggest)
 
@@ -227,9 +238,9 @@ def test_suggest_volatility_builds_ollama_client_from_configured_model(
     )
     captured: dict[str, object] = {}
 
-    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
         captured["kwargs"] = kwargs
-        return []
+        return TierSuggestionBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _recording_suggest)
 
@@ -252,7 +263,7 @@ def test_suggest_volatility_ollama_unavailable_maps_to_exit_one(
     _init_workspace(tmp_path, monkeypatch)
     before = _snapshot(tmp_path)
 
-    def _raise_unavailable(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+    def _raise_unavailable(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
         raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _raise_unavailable)
@@ -286,7 +297,7 @@ def test_suggest_volatility_model_not_found_maps_to_exit_one(
 
     def _raise_model_not_found(
         bundle_dir: Path, **kwargs: object
-    ) -> list[TierSuggestion]:
+    ) -> TierSuggestionBatch:
         raise OllamaModelNotFound("Model not found (404): {}")
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _raise_model_not_found)
@@ -313,7 +324,7 @@ def test_suggest_volatility_generic_ollama_error_maps_to_exit_one(
     _init_workspace(tmp_path, monkeypatch)
     before = _snapshot(tmp_path)
 
-    def _raise_generic(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+    def _raise_generic(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
         raise OllamaError("something else went wrong")
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _raise_generic)
@@ -356,9 +367,9 @@ def test_suggest_volatility_include_confidential_flag_forwarded(
     _init_workspace(tmp_path, monkeypatch)
     captured: dict[str, object] = {}
 
-    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
         captured["kwargs"] = kwargs
-        return []
+        return TierSuggestionBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _recording_suggest)
 
@@ -378,9 +389,9 @@ def test_suggest_volatility_omitted_include_confidential_defaults_to_false(
     _init_workspace(tmp_path, monkeypatch)
     captured: dict[str, object] = {}
 
-    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+    def _recording_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
         captured["kwargs"] = kwargs
-        return []
+        return TierSuggestionBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _recording_suggest)
 
@@ -533,7 +544,7 @@ def test_suggest_volatility_wires_tty_gated_progress_callback_into_the_library(
     _init_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
 
-    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
         on_progress = kwargs["on_progress"]
         assert callable(on_progress)
         results = [
@@ -541,7 +552,7 @@ def test_suggest_volatility_wires_tty_gated_progress_callback_into_the_library(
         ]
         for index, suggestion in enumerate(results, start=1):
             on_progress(index, len(results), suggestion)
-        return results
+        return TierSuggestionBatch(results=results)
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _fake_suggest)
 
@@ -561,9 +572,9 @@ def test_suggest_volatility_passes_no_progress_hook_when_stderr_is_not_a_tty(
     _init_workspace(tmp_path, monkeypatch)
     captured: dict[str, object] = {}
 
-    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> list[TierSuggestion]:
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
         captured["on_progress"] = kwargs["on_progress"]
-        return []
+        return TierSuggestionBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.suggest_volatility", _fake_suggest)
 
@@ -571,3 +582,97 @@ def test_suggest_volatility_passes_no_progress_hook_when_stderr_is_not_a_tty(
 
     assert result.exit_code == 0
     assert captured["on_progress"] is None
+
+
+# ---------------------------------------------------------------------------
+# issue #441: a partial batch keeps its completed suggestions
+# ---------------------------------------------------------------------------
+
+
+def _partial_volatility_batch(
+    monkeypatch: pytest.MonkeyPatch, failure: OllamaError
+) -> None:
+    """Wire `suggest_volatility` to a batch whose first type completed and
+    whose second type's chat raised `failure` -- the #441 mid-batch shape."""
+
+    def _fake_suggest(bundle_dir: Path, **kwargs: object) -> TierSuggestionBatch:
+        return TierSuggestionBatch(
+            results=[
+                _suggestion(
+                    type_name="Person", suggested_tier="slow", rationale="kept work"
+                )
+            ],
+            failure=failure,
+            failed_index=2,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.suggest_volatility", _fake_suggest)
+
+
+def test_suggest_volatility_partial_batch_reports_completed_then_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-batch `OllamaError` no longer discards completed suggestions
+    (#441): the report renders them exactly as a complete run over that list
+    would, THEN one stderr line reports the failure with the completed
+    count, and the exit code stays the OllamaError-family 1. Unlike
+    `adjudicate`/`suggest-relations`, this verb derives its type queue
+    INSIDE the library leaf, so the failure line carries the completed
+    count without an of-total it would need a second bundle walk to state."""
+    _init_workspace(tmp_path, monkeypatch)
+    _partial_volatility_batch(monkeypatch, OllamaError("boom"))
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "[slow] Person" in result.stdout
+    assert "kept work" in result.stdout
+    assert "Next: openkos set-volatility <ConceptType> <tier>" in result.stdout
+    assert result.stderr == (
+        "openkos suggest-volatility: failed after suggesting 1 concept "
+        "type(s) -- boom.\n"
+    )
+    assert "Traceback" not in result.stderr
+
+
+def test_suggest_volatility_partial_batch_unavailable_keeps_remediation_and_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaUnavailable` batch failure keeps its cause-specific
+    remediation (`ollama serve` + doctor hint), gains the completed count,
+    and still exits 1 (#441)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _partial_volatility_batch(
+        monkeypatch, OllamaUnavailable("Ollama not reachable at http://localhost:11434")
+    )
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 1
+    assert "failed after suggesting 1 concept type(s)" in result.stderr
+    assert "ollama serve" in result.stderr
+    assert result.stderr.rstrip("\n").endswith(
+        "Or run `openkos doctor` to diagnose the environment."
+    )
+    assert "kept work" in result.stdout
+
+
+def test_suggest_volatility_partial_batch_model_not_found_keeps_pull_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaModelNotFound` batch failure keeps the configured model's
+    `ollama pull` remediation alongside the completed count (#441)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "llama3.2:1b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {configured_model}\n", encoding="utf-8"
+    )
+    _partial_volatility_batch(monkeypatch, OllamaModelNotFound("Model not found (404)"))
+
+    result = runner.invoke(app, ["suggest-volatility"])
+
+    assert result.exit_code == 1
+    assert "failed after suggesting 1 concept type(s)" in result.stderr
+    assert f"ollama pull {configured_model}" in result.stderr
+    assert "kept work" in result.stdout

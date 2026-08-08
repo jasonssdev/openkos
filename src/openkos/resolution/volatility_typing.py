@@ -3,12 +3,22 @@ bundle (freshness-suggest-windows, S2 -- `suggest-volatility`).
 
 Mirrors `resolution/edge_typing.py`'s leaf structure one layer over: this
 module never imports `openkos.config`; the caller supplies an `LLMBackend`,
-never an `OllamaClient` constructed here. Any `OllamaError`-family exception
-raised by `llm.chat` propagates unswallowed -- only PARSING and VALIDATION
-failures degrade a single type's suggestion, never the whole call, and no
-type is ever skipped or dropped: `suggest_volatility` returns exactly one
-`TierSuggestion` per distinct concept TYPE found in the bundle, in
-sorted-name order.
+never an `OllamaClient` constructed here. Importing the `OllamaError` TYPE
+from `openkos.llm.ollama` keeps that discipline intact: `ollama.py` is
+itself a config-free stdlib leaf, and the error family is the failure
+contract every `LLMBackend` caller already speaks.
+
+An `OllamaError`-family exception raised by `llm.chat` mid-loop STOPS the
+loop but never discards paid-for work (issue #441): each completed type
+cost one real LLM call, so `suggest_volatility` returns a
+`TierSuggestionBatch` carrying every completed `TierSuggestion`
+(sorted-name order, one per suggested type) plus the failure that stopped
+the loop and the 1-based index of the type whose chat raised. A complete
+run returns `failure=None`. Only PARSING and VALIDATION failures degrade a
+single type's suggestion -- those never stop the loop, and no suggested
+type is ever skipped or dropped; the one type-level skip is the documented
+sampled-docs-all-excluded filter, which never calls `llm.chat` for that
+type at all.
 
 Unlike `edge_typing` (per-EDGE suggestion), this module operates per concept
 TYPE: it reuses `lint.collect_docs` to group every readable, parseable doc
@@ -24,6 +34,7 @@ from pathlib import Path
 from openkos import lint, sensitivity
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
+from openkos.llm.ollama import OllamaError
 from openkos.model import okf, types
 
 N_SAMPLE_CONCEPTS = 5
@@ -85,6 +96,39 @@ class TierSuggestion:
     rationale: str
     """Free-text explanation; may be blank on a well-formed reply that
     omitted one, but is never blank on the fail-closed degrade paths."""
+
+
+@dataclass(frozen=True)
+class TierSuggestionBatch:
+    """Outcome of one `suggest_volatility` run: every completed suggestion
+    plus, when the loop was cut short, the failure that stopped it (issue
+    #441). Ephemeral, like `TierSuggestion` -- never a persisted OKF type
+    or `bundle`/`state` file.
+
+    Partials ride the RETURN, not an exception payload, on purpose (mirrors
+    `adjudication.AdjudicationBatch`/`edge_typing.EdgeSuggestionBatch`): an
+    exception-carried partial forces every caller into a try/except that
+    must remember to salvage the results off the exception, and the one
+    caller that forgets reintroduces exactly the work-discarding bug this
+    type exists to fix. A return value cannot be silently dropped by an
+    unhandled raise."""
+
+    results: list[TierSuggestion]
+    """Every completed suggestion, in sorted-type order -- each one was
+    fully paid for (its `llm.chat` call succeeded) before the loop
+    stopped."""
+    failure: OllamaError | None = None
+    """The `OllamaError`-family exception that stopped the loop, or `None`
+    for a complete run."""
+    failed_index: int | None = None
+    """1-based index of the TYPE whose `llm.chat` raised `failure`, counted
+    over the sorted types ENTERING the loop -- a type the post-sampling
+    re-check filtered out (no chat call, no suggestion) still consumes a
+    position, exactly as `adjudicate_candidates`'s no-readable-members
+    short-circuit consumes an index (#441) -- so this is NOT a count of
+    chat calls attempted. `None` when the run completed. The failed type
+    produced no suggestion and no `on_progress` call, and no later type
+    was ever prompted."""
 
 
 def _reread_sensitivity_blocked(
@@ -237,17 +281,27 @@ def suggest_volatility(
     include_confidential: bool = False,
     local_exemption: bool = False,
     on_progress: Callable[[int, int, TierSuggestion], None] | None = None,
-) -> list[TierSuggestion]:
+) -> TierSuggestionBatch:
     """Suggest a volatility tier + rationale for every distinct concept TYPE
     present under `bundle_dir`, read-only.
 
-    Reuses `lint.collect_docs` to walk and group the bundle. Returns exactly
-    one `TierSuggestion` per distinct type, in sorted-name order -- one
-    `llm.chat` call per type, never per concept (module docstring). Any
-    `OllamaError`-family exception raised by `llm.chat` propagates
-    unswallowed (module docstring) -- this function catches only
-    reply-parsing/validation failures, never transport or
-    model-availability errors.
+    Reuses `lint.collect_docs` to walk and group the bundle. Returns a
+    `TierSuggestionBatch` whose `results` hold exactly one `TierSuggestion`
+    per SUGGESTED type, in sorted-name order -- one `llm.chat` call per
+    type, never per concept (module docstring).
+
+    An `OllamaError`-family exception raised by `llm.chat` stops the loop
+    and comes back IN the batch (`failure` set, `failed_index` naming the
+    1-based type entering the loop whose chat raised -- see that field's
+    docstring for why a filtered-out type still counts) rather than
+    propagating (issue #441): propagation made the caller pay for every
+    completed call and then discard all of the completed suggestions with
+    the raise -- #422's `OllamaGenerationCapped` made that edge fast and
+    frequent. Only the `llm.chat` call sits inside the guard;
+    reply-parsing/validation failures still degrade that one type's
+    suggestion, and a raise from the caller's own `on_progress` still
+    propagates untouched. A complete run returns `failure=None,
+    failed_index=None`.
 
     sensitivity-fail-closed-filter (S3b): unless `include_confidential` is
     `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
@@ -275,9 +329,11 @@ def suggest_volatility(
     entering the loop. A type whose sampled docs are ALL excluded by the
     post-sampling re-check emits no suggestion and fires NO callback, so
     `total` is an UPPER BOUND: the final `index` ends below `total`
-    whenever a type was filtered out. It never affects the returned list;
-    an exception it raises propagates to the caller (it is the caller's
-    own callback).
+    whenever a type was filtered out. The type whose chat RAISED does not
+    count either -- it produced no suggestion, so there is nothing to
+    report progress on (#441). It never affects the returned batch; an
+    exception it raises propagates to the caller (it is the caller's own
+    callback).
 
     `local_exemption` (issue #240) is the second escape hatch defined by
     `sensitivity.should_block`: the caller asserting that the `llm.chat`
@@ -299,7 +355,7 @@ def suggest_volatility(
     sampled_docs = _sample_docs_by_type(docs)
     results: list[TierSuggestion] = []
     total = len(sampled_docs)
-    for type_name in sorted(sampled_docs):
+    for type_index, type_name in enumerate(sorted(sampled_docs), start=1):
         type_docs = [
             doc
             for doc in sampled_docs[type_name]
@@ -314,7 +370,15 @@ def suggest_volatility(
         bodies = [doc.body[:M_TRUNCATE_CHARS] for doc in type_docs]
         current_default = types.TYPE_TO_DEFAULT_VOLATILITY.get(type_name, "")
         messages = _build_messages(type_name, current_default, bodies)
-        reply = llm.chat(messages)
+        # Guard ONLY the chat call (#441): a transport/model failure must
+        # not discard the completed suggestions, while parse/validate/
+        # progress failures keep their own existing contracts untouched.
+        try:
+            reply = llm.chat(messages)
+        except OllamaError as exc:
+            return TierSuggestionBatch(
+                results=results, failure=exc, failed_index=type_index
+            )
         suggested_tier, rationale = _parse_reply(reply)
         suggestion = TierSuggestion(
             type_name=type_name,
@@ -325,4 +389,4 @@ def suggest_volatility(
         results.append(suggestion)
         if on_progress is not None:
             on_progress(len(results), total, suggestion)
-    return results
+    return TierSuggestionBatch(results=results)

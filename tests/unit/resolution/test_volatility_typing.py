@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from openkos.llm.base import Message
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.ollama import OllamaGenerationCapped, OllamaUnavailable
 from openkos.model import types
 from openkos.resolution import volatility_typing as volatility_typing_mod
 
@@ -23,18 +23,27 @@ from openkos.resolution import volatility_typing as volatility_typing_mod
 class _FakeLLM:
     """A structural `LLMBackend`: records every `chat` call, returns queued
     replies in call order. If `error` is set, `chat` raises it instead of
-    returning (and does not consume a queued reply)."""
+    returning (and does not consume a queued reply); `error_at` narrows the
+    raise to the k-th (1-based) call so mid-loop failure can be staged after
+    some types already succeeded (#441)."""
 
     def __init__(
-        self, replies: Sequence[str] = (), *, error: BaseException | None = None
+        self,
+        replies: Sequence[str] = (),
+        *,
+        error: BaseException | None = None,
+        error_at: int | None = None,
     ) -> None:
         self._replies = list(replies)
         self.error = error
+        self.error_at = error_at
         self.calls: list[list[Message]] = []
 
     def chat(self, messages: Sequence[Message]) -> str:
         self.calls.append(list(messages))
-        if self.error is not None:
+        if self.error is not None and (
+            self.error_at is None or len(self.calls) == self.error_at
+        ):
             raise self.error
         return self._replies.pop(0)
 
@@ -113,7 +122,7 @@ def test_suggest_volatility_returns_one_suggestion_per_distinct_type_sorted(
         ]
     )
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert [s.type_name for s in result] == ["Person", "Project"]
     assert result[0].suggested_tier == "slow"
@@ -132,7 +141,7 @@ def test_suggest_volatility_one_llm_call_per_type_not_per_concept(
     _write_doc(tmp_path / "c.md", doc_type="Person", title="C")
     llm = _FakeLLM(replies=[_valid_reply()])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert len(llm.calls) == 1
@@ -143,7 +152,7 @@ def test_suggest_volatility_on_empty_bundle_returns_empty_list_no_llm_calls(
 ) -> None:
     llm = _FakeLLM()
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert result == []
     assert llm.calls == []
@@ -156,7 +165,7 @@ def test_suggest_volatility_skips_docs_with_blank_type(tmp_path: Path) -> None:
     _write_doc(tmp_path / "b.md", doc_type="Person", title="B")
     llm = _FakeLLM(replies=[_valid_reply()])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert [s.type_name for s in result] == ["Person"]
     assert len(llm.calls) == 1
@@ -179,7 +188,7 @@ def test_suggest_volatility_malformed_reply_degrades_only_that_type(
         ]
     )
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 2
     assert result[0].type_name == "Person"
@@ -195,7 +204,7 @@ def test_suggest_volatility_invalid_tier_value_degrades_to_none(tmp_path: Path) 
     _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
     llm = _FakeLLM(replies=['{"tier": "eventually", "rationale": "bogus tier"}'])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert result[0].suggested_tier is None
@@ -205,7 +214,7 @@ def test_suggest_volatility_missing_tier_key_degrades_to_none(tmp_path: Path) ->
     _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
     llm = _FakeLLM(replies=['{"rationale": "no tier field at all"}'])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert result[0].suggested_tier is None
@@ -218,7 +227,7 @@ def test_suggest_volatility_non_string_tier_field_degrades_to_none(
     _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
     llm = _FakeLLM(replies=['{"tier": 42, "rationale": "numeric tier"}'])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert result[0].suggested_tier is None
@@ -232,7 +241,7 @@ def test_suggest_volatility_non_string_reply_degrades_to_none(tmp_path: Path) ->
     _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
     llm = _FakeLLM(replies=[None])  # type: ignore[list-item]
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert result[0].suggested_tier is None
@@ -245,7 +254,7 @@ def test_suggest_volatility_reply_that_is_valid_json_but_not_an_object_degrades(
     _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
     llm = _FakeLLM(replies=["[1, 2, 3]"])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert result[0].suggested_tier is None
@@ -261,7 +270,7 @@ def test_suggest_volatility_degrade_with_blank_rationale_falls_back_to_stable_te
     _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
     llm = _FakeLLM(replies=['{"tier": "eventually"}'])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert result[0].suggested_tier is None
@@ -274,7 +283,7 @@ def test_suggest_volatility_non_string_tier_with_blank_rationale_falls_back(
     _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
     llm = _FakeLLM(replies=['{"tier": 42, "rationale": "   "}'])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert result[0].suggested_tier is None
@@ -285,23 +294,107 @@ def test_suggest_volatility_valid_static_tier_is_accepted(tmp_path: Path) -> Non
     _write_doc(tmp_path / "a.md", doc_type="Place", title="A")
     llm = _FakeLLM(replies=[_valid_reply("static", "places rarely change")])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert len(result) == 1
     assert result[0].suggested_tier == "static"
 
 
 # ---------------------------------------------------------------------------
-# OllamaError propagation (unswallowed)
+# Requirement: Partial Batch Preserved On Mid-Loop `OllamaError` (#441)
 # ---------------------------------------------------------------------------
 
 
-def test_suggest_volatility_propagates_ollama_error_unswallowed(tmp_path: Path) -> None:
-    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
-    llm = _FakeLLM(error=OllamaUnavailable("not reachable"))
+def test_mid_loop_ollama_error_returns_completed_results_and_failure(
+    tmp_path: Path,
+) -> None:
+    """An `OllamaError`-family raise on the k-th type's `llm.chat` stops the
+    loop and returns every already-completed suggestion in sorted-type
+    order, the exception instance itself, and the 1-based failed index --
+    the caller paid for k-1 completed calls and keeps all of them (#441).
+    No type after the failed one is ever prompted; the failed type produces
+    no suggestion and no `on_progress` call."""
+    _write_doc(tmp_path / "a.md", doc_type="Concept", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Person", title="B")
+    _write_doc(tmp_path / "c.md", doc_type="Project", title="C")
+    capped = OllamaGenerationCapped("generation hit the token ceiling")
+    llm = _FakeLLM(replies=[_valid_reply()], error=capped, error_at=2)
+    seen: list[tuple[int, int, volatility_typing_mod.TierSuggestion]] = []
 
-    with pytest.raises(OllamaUnavailable):
-        volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    def _cb(
+        index: int, total: int, suggestion: volatility_typing_mod.TierSuggestion
+    ) -> None:
+        seen.append((index, total, suggestion))
+
+    batch = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm, on_progress=_cb)
+
+    assert isinstance(batch, volatility_typing_mod.TierSuggestionBatch)
+    assert [s.type_name for s in batch.results] == ["Concept"]
+    assert batch.failure is capped
+    assert batch.failed_index == 2
+    # The failed call itself happened; the type AFTER it was never prompted.
+    assert len(llm.calls) == 2
+    # `on_progress` fired only for completed suggestions -- never for the
+    # failure.
+    assert [(index, total) for index, total, _ in seen] == [(1, 3)]
+
+
+def test_ollama_error_on_first_type_returns_empty_results(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    failure = OllamaUnavailable("no local Ollama server reachable")
+    llm = _FakeLLM(error=failure, error_at=1)
+
+    batch = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert batch.results == []
+    assert batch.failure is failure
+    assert batch.failed_index == 1
+
+
+def test_complete_run_reports_no_failure(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", doc_type="Person", title="A")
+    _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
+    llm = _FakeLLM(replies=[_valid_reply(), _valid_reply()])
+
+    batch = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert batch.failure is None
+    assert batch.failed_index is None
+    assert len(batch.results) == 2
+
+
+def test_failed_index_counts_types_entering_the_loop_not_chat_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`failed_index` is the 1-based position of the failed type among the
+    types ENTERING the loop (sorted order) -- a type filtered out by the
+    post-sampling re-check still consumes a position, exactly as the
+    all-unreadable short-circuit consumes an index in
+    `adjudicate_candidates` (#441). Staged like the FIX-3 fail-closed test:
+    the precomputed confidential-id set is emptied so the confidential
+    `Concept` type enters the loop and is dropped by the re-check alone."""
+    from openkos import sensitivity
+
+    _write_doc(
+        tmp_path / "a.md",
+        doc_type="Concept",
+        title="A",
+        sensitivity_value="confidential",
+    )
+    _write_doc(tmp_path / "b.md", doc_type="Person", title="B")
+    monkeypatch.setattr(
+        sensitivity, "sensitive_concept_ids", lambda *a, **k: frozenset()
+    )
+    failure = OllamaUnavailable("no local Ollama server reachable")
+    llm = _FakeLLM(error=failure, error_at=1)
+
+    batch = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+
+    assert batch.results == []
+    assert batch.failure is failure
+    # `Concept` (filtered, no chat) held position 1; `Person`'s chat raised
+    # on the FIRST call but is the SECOND type entering the loop.
+    assert batch.failed_index == 2
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +460,7 @@ def test_suggest_volatility_types_iterated_in_sorted_name_order(tmp_path: Path) 
     _write_doc(tmp_path / "c.md", doc_type="Concept", title="C")
     llm = _FakeLLM(replies=[_valid_reply(), _valid_reply(), _valid_reply()])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert [s.type_name for s in result] == ["Concept", "Decision", "Project"]
 
@@ -444,7 +537,7 @@ def test_all_docs_of_a_type_confidential_yields_no_suggestion_for_that_type(
     _write_doc(tmp_path / "b.md", doc_type="Project", title="B")
     llm = _FakeLLM(replies=[_valid_reply()])
 
-    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm)
+    result = volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results
 
     assert [s.type_name for s in result] == ["Project"]
     assert len(llm.calls) == 1
@@ -738,7 +831,7 @@ def test_suggest_volatility_invokes_on_progress_once_per_emitted_suggestion(
 
     results = volatility_typing_mod.suggest_volatility(
         tmp_path, llm=llm, on_progress=_cb
-    )
+    ).results
 
     assert [(index, total) for index, total, _ in seen] == [(1, 2), (2, 2)]
     assert all(
@@ -780,7 +873,7 @@ def test_suggest_volatility_on_progress_total_is_upper_bound_when_type_filtered(
 
     results = volatility_typing_mod.suggest_volatility(
         tmp_path, llm=llm, on_progress=_cb
-    )
+    ).results
 
     # Two types entered the loop (`total == 2`), but the all-confidential
     # `Person` type emitted nothing: exactly one callback, ending at 1/2.
@@ -826,7 +919,7 @@ def test_local_exemption_restores_the_confidential_doc_to_sampling(
 
     result = volatility_typing_mod.suggest_volatility(
         tmp_path, llm=llm, local_exemption=True
-    )
+    ).results
 
     assert [s.type_name for s in result] == ["Person"]
     (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
@@ -852,5 +945,5 @@ def test_local_exemption_defaults_to_false_on_suggest_volatility(
     )
     llm = _FakeLLM()
 
-    assert volatility_typing_mod.suggest_volatility(tmp_path, llm=llm) == []
+    assert volatility_typing_mod.suggest_volatility(tmp_path, llm=llm).results == []
     assert llm.calls == []

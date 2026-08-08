@@ -74,6 +74,7 @@ from openkos.resolution.candidates import (
     candidate_group_truncation_notice,
 )
 from openkos.resolution.contradiction import (
+    ContradictionBatch,
     contradiction_truncation_notice,
     find_contradictions,
     is_high_confidence_contradiction,
@@ -86,7 +87,10 @@ from openkos.resolution.edge_typing import (
     candidate_truncation_notice,
     suggest_edge_types,
 )
-from openkos.resolution.volatility_typing import suggest_volatility
+from openkos.resolution.volatility_typing import (
+    TierSuggestionBatch,
+    suggest_volatility,
+)
 from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
 from openkos.sensitivity import blocks_llm_send
 from openkos.state import derived, fts
@@ -1200,6 +1204,73 @@ def _echo_suggest_relations_batch_failure(
     context = (
         f"openkos suggest-relations: failed after suggesting "
         f"{len(batch.results)} of {total} untyped edge(s)"
+    )
+    if isinstance(failure, OllamaUnavailable):
+        typer.echo(
+            f"{context} -- {failure}. Start it with `ollama serve`, then try "
+            f"again.{_DOCTOR_HINT}",
+            err=True,
+        )
+    elif isinstance(failure, OllamaModelNotFound):
+        typer.echo(
+            f"{context} -- model '{model}' is not installed. Pull it with "
+            f"`ollama pull {model}`, then try again.",
+            err=True,
+        )
+    else:
+        typer.echo(f"{context} -- {failure}.", err=True)
+
+
+def _echo_contradictions_batch_failure(
+    batch: ContradictionBatch, *, total: int, model: str
+) -> None:
+    """One stderr line for a partial `ContradictionBatch` (#441): the same
+    3-tier cause-specific wording the raise-path handlers use, prefixed with
+    how much paid-for work survived (mirrors
+    `_echo_adjudicate_batch_failure`). `total` is `plan.llm_calls` -- the
+    judged-candidate budget the verb already holds, so the count needs no
+    second planning pass. The `isinstance` dispatch mirrors the handlers'
+    ORDER for the same reason they are ordered: both specific classes
+    subclass `OllamaError`, so the generic branch must come last or their
+    actionable remediation is lost."""
+    failure = batch.failure
+    context = (
+        f"openkos contradictions: failed after judging {len(batch.results)} "
+        f"of {total} candidate(s)"
+    )
+    if isinstance(failure, OllamaUnavailable):
+        typer.echo(
+            f"{context} -- {failure}. Start it with `ollama serve`, then try "
+            f"again.{_DOCTOR_HINT}",
+            err=True,
+        )
+    elif isinstance(failure, OllamaModelNotFound):
+        typer.echo(
+            f"{context} -- model '{model}' is not installed. Pull it with "
+            f"`ollama pull {model}`, then try again.",
+            err=True,
+        )
+    else:
+        typer.echo(f"{context} -- {failure}.", err=True)
+
+
+def _echo_suggest_volatility_batch_failure(
+    batch: TierSuggestionBatch, *, model: str
+) -> None:
+    """One stderr line for a partial `TierSuggestionBatch` (#441): the same
+    3-tier cause-specific wording the raise-path handlers use, prefixed with
+    how much paid-for work survived (mirrors
+    `_echo_adjudicate_batch_failure`). Unlike its three siblings, the count
+    has no of-total: `suggest_volatility` derives its type queue INSIDE the
+    leaf, so the verb holds no pre-flight total and fabricating one would
+    cost a second full bundle walk for an error line. The `isinstance`
+    dispatch mirrors the handlers' ORDER for the same reason they are
+    ordered: both specific classes subclass `OllamaError`, so the generic
+    branch must come last or their actionable remediation is lost."""
+    failure = batch.failure
+    context = (
+        f"openkos suggest-volatility: failed after suggesting "
+        f"{len(batch.results)} concept type(s)"
     )
     if isinstance(failure, OllamaUnavailable):
         typer.echo(
@@ -8792,10 +8863,19 @@ def suggest_volatility_cmd(
     Parsing). One other type's degraded reply never stops the run -- every
     other type present is still reported.
 
-    A no-model/no-Ollama run degrades via the SAME 3-tier ORDERED handler
-    `suggest-relations`/`adjudicate`/`query` use -- `OllamaUnavailable`,
-    then `OllamaModelNotFound`, then the generic `OllamaError` fallback --
-    each with its own actionable stderr message, exit 1, and zero writes.
+    A no-model/no-Ollama failure comes back INSIDE the returned
+    `TierSuggestionBatch` (#441) and maps onto the SAME 3-tier ORDERED
+    wording `suggest-relations`/`adjudicate`/`query` use --
+    `OllamaUnavailable`, then `OllamaModelNotFound`, then the generic
+    `OllamaError` fallback -- each with its own actionable stderr message
+    and exit 1. The completed suggestions are NEVER discarded: the report
+    first renders `batch.results` exactly as a complete run over that list,
+    THEN one stderr line reports the failure with the completed count (no
+    of-total -- see `_echo_suggest_volatility_batch_failure` for why this
+    verb cannot state one) and the run exits 1. The raise-path handler
+    ladder is retained around the call itself for an injected backend that
+    raises outside `llm.chat`'s guarded seam -- same wording, no counts,
+    zero writes either way.
 
     Unless `--include-confidential` is passed, a confidential concept
     (sensitivity-fail-closed-filter) is excluded from sampling for its type
@@ -8832,7 +8912,7 @@ def suggest_volatility_cmd(
         local_exemption=local_exemption,
     )
     try:
-        results = suggest_volatility(
+        batch = suggest_volatility(
             layout.bundle_dir,
             llm=llm,
             include_confidential=include_confidential,
@@ -8868,9 +8948,13 @@ def suggest_volatility_cmd(
         typer.echo(f"openkos suggest-volatility: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    results = batch.results
     typer.echo(f"openkos suggest-volatility: workspace at {root}")
     typer.echo()
-    if not results:
+    if not results and batch.failure is None:
+        # Guarded on a clean run only (#441): a first-type failure also
+        # carries zero results, and "No concept types found." would then
+        # claim an empty bundle the failure, not the walk, produced.
         typer.echo("No concept types found.")
         return
 
@@ -8884,6 +8968,14 @@ def suggest_volatility_cmd(
         typer.echo()
 
     typer.echo("Next: openkos set-volatility <ConceptType> <tier>")
+
+    if batch.failure is not None:
+        # Partial batch (#441): the report above already rendered the
+        # completed suggestions exactly as a complete run over that list --
+        # the paid-for work is never discarded -- so all that remains is the
+        # one stderr failure line and the OllamaError-family exit code.
+        _echo_suggest_volatility_batch_failure(batch, model=cfg.model)
+        raise typer.Exit(code=1) from batch.failure
 
 
 @app.command()
@@ -8942,10 +9034,19 @@ def contradictions(
     exits 0 without ever calling `llm.chat` (spec: Empty Graph Yields Clear
     Message, No Crash).
 
-    A no-model/no-Ollama run degrades via the SAME 3-tier ORDERED handler
-    `suggest-relations`/`adjudicate`/`query` use -- `OllamaUnavailable`,
-    then `OllamaModelNotFound`, then the generic `OllamaError` fallback --
-    each with its own actionable stderr message, exit 1, and zero writes.
+    A no-model/no-Ollama failure comes back INSIDE the returned
+    `ContradictionBatch` (#441) and maps onto the SAME 3-tier ORDERED
+    wording `suggest-relations`/`adjudicate`/`query` use --
+    `OllamaUnavailable`, then `OllamaModelNotFound`, then the generic
+    `OllamaError` fallback -- each with its own actionable stderr message
+    and exit 1. The completed verdicts are NEVER discarded: the report
+    first renders `batch.results` exactly as a complete run over that list
+    (the `--all`/high-confidence display filter included), THEN one stderr
+    line reports the failure with completed-of-total counts -- the total is
+    `plan.llm_calls`, the same number the truncation notice describes --
+    and the run exits 1. The raise-path handler ladder is retained around
+    the call itself for an injected backend that raises outside `llm.chat`'s
+    guarded seam -- same wording, no counts, zero writes either way.
 
     Unless `--include-deprecated` is passed, deprecated/superseded concepts
     (status-aware-retrieval) never appear in a candidate pair -- dropped by
@@ -9008,7 +9109,7 @@ def contradictions(
             local_exemption=local_exemption,
         )
         try:
-            verdicts, _total_pairs = find_contradictions(
+            batch, _total_pairs = find_contradictions(
                 layout.bundle_dir,
                 llm=llm,
                 include_deprecated=include_deprecated,
@@ -9047,6 +9148,7 @@ def contradictions(
             typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
             raise typer.Exit(code=1) from exc
 
+        verdicts = batch.results
         typer.echo(f"openkos contradictions: workspace at {root}")
         typer.echo()
         # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
@@ -9073,7 +9175,11 @@ def contradictions(
         if notice is not None:
             typer.echo(notice)
             typer.echo()
-        if not verdicts:
+        if not verdicts and batch.failure is None:
+            # Guarded on a clean run only (#441): a first-candidate failure
+            # also carries zero verdicts, and the zero-candidates state
+            # message would then claim an empty graph the failure, not the
+            # projection, produced.
             typer.echo(
                 _zero_edge_state_message(
                     layout,
@@ -9098,8 +9204,9 @@ def contradictions(
         else [v for v in verdicts if is_high_confidence_contradiction(v)]
     )
     if not displayed:
+        # No early return (#441): the partial-batch failure epilogue below
+        # must run after every display path, exactly as in `adjudicate`.
         typer.echo("No high-confidence contradictions found.")
-        return
 
     for result in displayed:
         # surface-merged-body-contradictions (#409): `merged_absorbed_id` is
@@ -9126,6 +9233,14 @@ def contradictions(
             typer.echo(f"  - {claim}")
         typer.echo(f"  rationale: {result.rationale}")
         typer.echo()
+
+    if batch.failure is not None:
+        # Partial batch (#441): the report above already rendered the
+        # completed verdicts exactly as a complete run over that list -- the
+        # paid-for work is never discarded -- so all that remains is the one
+        # stderr failure line and the OllamaError-family exit code.
+        _echo_contradictions_batch_failure(batch, total=plan.llm_calls, model=cfg.model)
+        raise typer.Exit(code=1) from batch.failure
 
 
 def _no_match_message(cause: NoMatchCause, fts_hit_count: int) -> str:

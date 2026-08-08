@@ -15,12 +15,22 @@ review only -- this module never writes, merges, or reconciles.
 Config-free leaf (mirrors `adjudication.py`, `edge_typing.py`,
 `extraction/concept.py`, and `retrieval/answer.py`): this module never
 imports `openkos.config`; the caller supplies an `LLMBackend`, never an
-`OllamaClient` constructed here. Any `OllamaError`-family exception raised
-by `llm.chat` propagates unswallowed to the caller -- only PARSING and
-VALIDATION failures degrade a single pair's verdict, never the whole call,
-and no pair is ever skipped or dropped: `find_contradictions` returns
-exactly one `ContradictionVerdict` per candidate pair (after the
-`_MAX_PAIRS` cap), in the same deterministic order.
+`OllamaClient` constructed here. Importing the `OllamaError` TYPE from
+`openkos.llm.ollama` keeps that discipline intact: `ollama.py` is itself a
+config-free stdlib leaf, and the error family is the failure contract every
+`LLMBackend` caller already speaks.
+
+An `OllamaError`-family exception raised by `llm.chat` mid-loop STOPS the
+loop but never discards paid-for work (issue #441): each judged candidate
+cost one real LLM call, so `find_contradictions` returns a
+`ContradictionBatch` carrying every completed `ContradictionVerdict` (input
+order, one per judged candidate) plus the failure that stopped the loop and
+the 1-based index of the candidate whose chat raised. A complete run
+returns `failure=None`. Only PARSING and VALIDATION failures degrade a
+single pair's verdict -- those never stop the loop, and no judged pair is
+ever skipped or dropped: the batch holds exactly one `ContradictionVerdict`
+per JUDGED candidate (after the `_MAX_PAIRS` cap), in the same
+deterministic order.
 
 Layering: this module is DERIVED, not canonical -- it MAY import
 `openkos.graph` (derived -> derived, allowed). The live, tested constraint is
@@ -66,6 +76,7 @@ from openkos.graph.base import GraphStore
 from openkos.graph.sqlite_graph import CandidateSource, build_graph
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
+from openkos.llm.ollama import OllamaError
 from openkos.model import okf
 
 _MAX_PAIRS = 200
@@ -185,6 +196,33 @@ class ContradictionVerdict:
     consumer keyed on pair shape would silently start conflating
     self-loop-derived and merged-content verdicts on the day that happens;
     a consumer keyed on this field never can."""
+
+
+@dataclass(frozen=True)
+class ContradictionBatch:
+    """Outcome of one `find_contradictions` run: every completed verdict
+    plus, when the loop was cut short, the failure that stopped it (issue
+    #441). Ephemeral, like `ContradictionVerdict` -- never a persisted OKF
+    type or `bundle`/`state` file.
+
+    Partials ride the RETURN, not an exception payload, on purpose (mirrors
+    `adjudication.AdjudicationBatch`/`edge_typing.EdgeSuggestionBatch`): an
+    exception-carried partial forces every caller into a try/except that
+    must remember to salvage the results off the exception, and the one
+    caller that forgets reintroduces exactly the work-discarding bug this
+    type exists to fix. A return value cannot be silently dropped by an
+    unhandled raise."""
+
+    results: list[ContradictionVerdict]
+    """Every completed verdict, in input order -- each one was fully paid
+    for (its `llm.chat` call succeeded) before the loop stopped."""
+    failure: OllamaError | None = None
+    """The `OllamaError`-family exception that stopped the loop, or `None`
+    for a complete run."""
+    failed_index: int | None = None
+    """1-based index of the candidate whose `llm.chat` raised `failure`;
+    `None` when the run completed. The failed candidate produced no verdict
+    and no `on_progress` call, and no later candidate was ever prompted."""
 
 
 def _pair_key(source_id: str, target_id: str) -> tuple[str, str]:
@@ -871,7 +909,7 @@ def find_contradictions(
     store: GraphStore | None = None,
     plan: CandidatePlan | None = None,
     on_progress: Callable[[int, int, ContradictionVerdict], None] | None = None,
-) -> tuple[list[ContradictionVerdict], int]:
+) -> tuple[ContradictionBatch, int]:
     """Orchestrate the whole read-only contradiction-detection flow: open
     `build_graph` over `bundle_dir` internally, derive candidate pairs
     (`_candidate_pairs`: typed edges only, deduped, sorted, capped at
@@ -883,18 +921,20 @@ def find_contradictions(
     supplied, `candidates` is silently unused (the caller already consumed
     it building that store).
 
-    Returns `(verdicts, total_pair_count)`: `verdicts` has exactly one
-    `ContradictionVerdict` per candidate pair (after dropping, unless
+    Returns `(batch, total_pair_count)`: `batch.results` has exactly one
+    `ContradictionVerdict` per JUDGED candidate pair (after dropping, unless
     `include_deprecated`, any pair touching a deprecated concept -- BEFORE
     the `_MAX_PAIRS` cap, status-aware-retrieval Phase 3 -- and after the
-    cap itself), in the same deterministic order; `total_pair_count` is
-    `_candidate_pairs`'s deduped, deprecation-filtered pair count BEFORE the
-    cap (post-review correction: filtering now happens upstream of the cap
+    cap itself), in the same deterministic order; `total_pair_count` is the
+    combined deduped, deprecation-filtered candidate count BEFORE the cap
+    (post-review correction: filtering now happens upstream of the cap
     inside `_candidate_pairs`, so this count reflects LIVE pairs only), so
     the caller can detect a cap-reached truncation via `total_pair_count >
-    len(verdicts)` (spec: Cap truncation is reported) -- and that signal now
-    only fires when live pairs genuinely exceed the cap, never as a side
-    effect of deprecation filtering alone.
+    len(batch.results)` on a COMPLETE run (spec: Cap truncation is
+    reported) -- that signal now only fires when live pairs genuinely
+    exceed the cap, never as a side effect of deprecation filtering alone,
+    and `total_pair_count` keeps this pre-cap meaning on a partial run too,
+    where the shortfall is the failure's, not the cap's.
 
     Unless `include_deprecated=True`, the shared
     `lifecycle.deprecated_concept_ids(bundle_dir)` predicate is computed
@@ -916,25 +956,34 @@ def find_contradictions(
     `include_confidential=True` independently skips its own predicate walk at
     zero added cost.
 
-    A pair with zero candidate pairs (e.g. no typed edges at all, or every
+    A run with zero candidate pairs (e.g. no typed edges at all, or every
     typed-edge pair touches a deprecated/confidential concept) returns
-    `([], total)` WITHOUT calling `llm.chat` -- there is nothing to judge.
-    Any `OllamaError`-family exception raised by `llm.chat` propagates
-    unswallowed (module docstring) -- this function catches only
-    reply-parsing/validation failures for a single pair, never transport or
-    model-availability errors, and a malformed reply for one pair never
-    affects any other pair's result.
+    `(ContradictionBatch(results=[]), total)` WITHOUT calling `llm.chat` --
+    there is nothing to judge.
+
+    An `OllamaError`-family exception raised by `llm.chat` stops the loop
+    and comes back IN the batch (`failure` set, `failed_index` naming the
+    1-based candidate whose chat raised) rather than propagating (issue
+    #441): propagation made the caller pay for every judged call and then
+    discard all of the completed verdicts with the raise -- #422's
+    `OllamaGenerationCapped` made that edge fast and frequent. Only the
+    `llm.chat` call sits inside the guard; reply-parsing/validation
+    failures still degrade that one pair's verdict, an unreadable endpoint
+    doc still degrades to `(concept_id, "")` for that one candidate, and a
+    raise from the caller's own `on_progress` still propagates untouched.
+    A complete run returns `failure=None, failed_index=None`.
 
     `on_progress` (issue #190, mirroring `suggest_edge_types`'s #134
     contract), if given, is called once per judged pair in the
     deterministic pair order, AFTER that pair's `ContradictionVerdict` is
     built, with `(index, total, verdict)` where `index` is 1-based and
-    `total` is the number of pairs actually judged (post-cap, i.e.
-    `len(pairs)` -- NOT the pre-cap `total_pair_count` this function
+    `total` is the number of pairs planned for judgment (post-cap, i.e.
+    `len(plan.specs)` -- NOT the pre-cap `total_pair_count` this function
     returns) -- a hook for a CLI to render a per-pair progress line during
-    an otherwise opaque, minutes-long run. It never affects the returned
-    verdicts; an exception it raises propagates to the caller (it is the
-    caller's own callback).
+    an otherwise opaque, minutes-long run. The candidate whose chat RAISED
+    does not count -- it produced no verdict, so there is nothing to report
+    progress on (#441). It never affects the returned batch; an exception
+    it raises propagates to the caller (it is the caller's own callback).
 
     `local_exemption` (issue #240) is the second escape hatch defined by
     `sensitivity.should_block`: the caller asserting that the `llm.chat`
@@ -1016,7 +1065,16 @@ def find_contradictions(
                 spec.pair_ids, src_doc, tgt_doc, spec.relation_type
             )
             merged_absorbed_id = None
-        reply = llm.chat(messages)
+        # Guard ONLY the chat call (#441): a transport/model failure must
+        # not discard the completed verdicts, while parse/validate/progress
+        # failures keep their own existing contracts untouched.
+        try:
+            reply = llm.chat(messages)
+        except OllamaError as exc:
+            return (
+                ContradictionBatch(results=verdicts, failure=exc, failed_index=index),
+                total_count,
+            )
         verdict, confidence, rationale, conflicting_claims = _parse_reply(reply)
         pair_verdict = ContradictionVerdict(
             pair_ids=spec.pair_ids,
@@ -1029,4 +1087,4 @@ def find_contradictions(
         verdicts.append(pair_verdict)
         if on_progress is not None:
             on_progress(index, judged_total, pair_verdict)
-    return verdicts, total_count
+    return ContradictionBatch(results=verdicts), total_count

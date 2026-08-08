@@ -25,9 +25,15 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 from openkos.cli import main as contradiction_main
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
-from openkos.llm.ollama import OllamaClient, OllamaModelNotFound, OllamaUnavailable
+from openkos.llm.ollama import (
+    OllamaClient,
+    OllamaError,
+    OllamaModelNotFound,
+    OllamaUnavailable,
+)
 from openkos.resolution.contradiction import (
     CandidatePlan,
+    ContradictionBatch,
     ContradictionVerdict,
     Verdict,
     _CandidateSpec,
@@ -171,6 +177,14 @@ def _verdict(
     )
 
 
+def _found(
+    verdicts: list[ContradictionVerdict], total: int
+) -> tuple[ContradictionBatch, int]:
+    """Wrap a complete-run fake's verdict list in the `(batch, total)` shape
+    `find_contradictions` returns since #441 (`failure=None`)."""
+    return ContradictionBatch(results=verdicts), total
+
+
 def test_contradictions_refuses_when_not_a_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -235,7 +249,7 @@ def test_contradictions_ollama_unavailable_maps_to_exit_one(
 
     def _raise_unavailable(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         raise OllamaUnavailable("Ollama not reachable at http://localhost:11434")
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _raise_unavailable)
@@ -266,7 +280,7 @@ def test_contradictions_model_not_found_maps_to_exit_one(
 
     def _raise_model_not_found(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         raise OllamaModelNotFound("Model not found (404): {}")
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _raise_model_not_found)
@@ -295,7 +309,7 @@ def test_contradictions_generic_ollama_error_maps_to_exit_one(
 
     def _raise_generic(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         raise OllamaError("something else went wrong")
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _raise_generic)
@@ -321,7 +335,7 @@ def test_contradictions_handler_order_specific_before_generic(
 
     def _raise_unavailable(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         raise OllamaUnavailable("not reachable")
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _raise_unavailable)
@@ -347,8 +361,8 @@ def test_contradictions_default_view_shows_only_high_confidence_contradicts(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
-        return (
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
             [
                 _verdict(
                     source="concepts/a",
@@ -404,8 +418,8 @@ def test_contradictions_all_flag_shows_every_verdict(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
-        return (
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
             [
                 _verdict(
                     source="concepts/a",
@@ -455,9 +469,9 @@ def test_contradictions_all_flag_does_not_affect_find_contradictions_call(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         captured.append(bundle_dir)
-        return [_verdict(confidence=0.9)], 1
+        return _found([_verdict(confidence=0.9)], 1)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
 
@@ -520,9 +534,9 @@ def test_contradictions_no_candidate_pairs_never_calls_llm(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         calls.append((bundle_dir, kwargs))
-        return [], 0
+        return _found([], 0)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
 
@@ -551,8 +565,8 @@ def test_contradictions_cap_reached_line_names_which_kind_was_dropped(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
-        return [_verdict(confidence=0.9)], 250
+    ) -> tuple[ContradictionBatch, int]:
+        return _found([_verdict(confidence=0.9)], 250)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
     monkeypatch.setattr(
@@ -574,8 +588,8 @@ def test_contradictions_no_cap_reached_line_when_under_cap(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
-        return [_verdict(confidence=0.9)], 1
+    ) -> tuple[ContradictionBatch, int]:
+        return _found([_verdict(confidence=0.9)], 1)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
 
@@ -629,7 +643,7 @@ def test_contradictions_reports_candidate_truncation_when_the_cap_is_reached(
         contradiction_main, "_open_proximity_or_degrade", lambda p: _StubSource()
     )
     monkeypatch.setattr(
-        contradiction_main, "find_contradictions", lambda *a, **k: ([], 0)
+        contradiction_main, "find_contradictions", lambda *a, **k: _found([], 0)
     )
 
     result = runner.invoke(app, ["contradictions"])
@@ -669,7 +683,7 @@ def test_contradictions_no_candidate_truncation_notice_under_the_cap(
         contradiction_main, "_open_proximity_or_degrade", lambda p: _StubSource()
     )
     monkeypatch.setattr(
-        contradiction_main, "find_contradictions", lambda *a, **k: ([], 0)
+        contradiction_main, "find_contradictions", lambda *a, **k: _found([], 0)
     )
 
     result = runner.invoke(app, ["contradictions"])
@@ -727,7 +741,7 @@ def test_contradictions_suppresses_candidate_notice_when_every_dropped_pair_is_c
         contradiction_main, "_open_proximity_or_degrade", lambda p: _StubSource()
     )
     monkeypatch.setattr(
-        contradiction_main, "find_contradictions", lambda *a, **k: ([], 0)
+        contradiction_main, "find_contradictions", lambda *a, **k: _found([], 0)
     )
 
     default_run = runner.invoke(app, ["contradictions"])
@@ -775,8 +789,8 @@ def test_contradictions_never_writes_across_all_verdict_mix_scenarios(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
-        return (
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
             [
                 _verdict(verdict=Verdict.CONTRADICTS, confidence=0.9),
                 _verdict(verdict=Verdict.CONSISTENT, confidence=0.5),
@@ -804,8 +818,8 @@ def test_contradictions_renders_pair_verdict_confidence_and_cited_claims(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
-        return (
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
             [
                 _verdict(
                     source="concepts/a",
@@ -842,8 +856,8 @@ def test_contradictions_renders_merged_body_verdict_distinctly_from_pair_verdict
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
-        return (
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
             [
                 _verdict(
                     source="concepts/apatheia",
@@ -882,9 +896,9 @@ def test_contradictions_builds_ollama_client_from_configured_model(
 
     def _recording_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         captured["kwargs"] = kwargs
-        return [], 0
+        return _found([], 0)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
 
@@ -927,9 +941,9 @@ def test_contradictions_include_deprecated_flag_forwarded(
 
     def _recording_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         captured["kwargs"] = kwargs
-        return [], 0
+        return _found([], 0)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
 
@@ -952,9 +966,9 @@ def test_contradictions_omitted_include_deprecated_defaults_to_false(
 
     def _recording_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         captured["kwargs"] = kwargs
-        return [], 0
+        return _found([], 0)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
 
@@ -1035,9 +1049,9 @@ def test_contradictions_include_confidential_flag_forwarded(
 
     def _recording_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         captured["kwargs"] = kwargs
-        return [], 0
+        return _found([], 0)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
 
@@ -1059,9 +1073,9 @@ def test_contradictions_omitted_include_confidential_defaults_to_false(
 
     def _recording_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         captured["kwargs"] = kwargs
-        return [], 0
+        return _found([], 0)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _recording_find)
 
@@ -1264,7 +1278,7 @@ def test_contradictions_closes_the_proximity_source_on_success(
         contradiction_main, "_open_proximity_or_degrade", lambda p: source
     )
     monkeypatch.setattr(
-        contradiction_main, "find_contradictions", lambda *a, **k: ([], 0)
+        contradiction_main, "find_contradictions", lambda *a, **k: _found([], 0)
     )
 
     result = runner.invoke(app, ["contradictions"])
@@ -1349,7 +1363,7 @@ def test_contradictions_wires_tty_gated_progress_callback_into_the_library(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         on_progress = kwargs["on_progress"]
         assert callable(on_progress)
         verdicts = [
@@ -1364,7 +1378,7 @@ def test_contradictions_wires_tty_gated_progress_callback_into_the_library(
         ]
         for index, verdict in enumerate(verdicts, start=1):
             on_progress(index, len(verdicts), verdict)
-        return verdicts, 1
+        return _found(verdicts, 1)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
 
@@ -1386,9 +1400,9 @@ def test_contradictions_passes_no_progress_hook_when_stderr_is_not_a_tty(
 
     def _fake_find(
         bundle_dir: Path, **kwargs: object
-    ) -> tuple[list[ContradictionVerdict], int]:
+    ) -> tuple[ContradictionBatch, int]:
         captured["on_progress"] = kwargs["on_progress"]
-        return [], 0
+        return _found([], 0)
 
     monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
 
@@ -1396,3 +1410,157 @@ def test_contradictions_passes_no_progress_hook_when_stderr_is_not_a_tty(
 
     assert result.exit_code == 0
     assert captured["on_progress"] is None
+
+
+# ---------------------------------------------------------------------------
+# issue #441: a partial batch keeps its completed verdicts
+# ---------------------------------------------------------------------------
+
+
+def _two_candidate_partial_batch(
+    monkeypatch: pytest.MonkeyPatch, failure: OllamaError
+) -> None:
+    """Wire `plan_candidates` to two typed-edge candidates and
+    `find_contradictions` to a batch whose first candidate completed and
+    whose second candidate's chat raised `failure` -- the #441 mid-batch
+    shape."""
+    plan = CandidatePlan(
+        specs=(
+            _CandidateSpec(
+                pair_ids=("concepts/a", "concepts/b"), relation_type="related_to"
+            ),
+            _CandidateSpec(
+                pair_ids=("concepts/c", "concepts/d"), relation_type="related_to"
+            ),
+        ),
+        edge_total=2,
+        merged_total=0,
+    )
+    monkeypatch.setattr("openkos.cli.main.plan_candidates", lambda *a, **k: plan)
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return (
+            ContradictionBatch(
+                results=[
+                    _verdict(
+                        source="concepts/a",
+                        target="concepts/b",
+                        confidence=0.9,
+                        rationale="kept work",
+                    )
+                ],
+                failure=failure,
+                failed_index=2,
+            ),
+            2,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+
+
+def test_contradictions_partial_batch_reports_completed_then_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-batch `OllamaError` no longer discards completed verdicts
+    (#441): the report renders them exactly as a complete run over that list
+    would, THEN one stderr line reports the failure with completed-of-total
+    counts, and the exit code stays the OllamaError-family 1."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_candidate_partial_batch(monkeypatch, OllamaError("boom"))
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
+    assert "kept work" in result.stdout
+    assert result.stderr == (
+        "openkos contradictions: failed after judging 1 of 2 candidate(s) -- boom.\n"
+    )
+    assert "Traceback" not in result.stderr
+
+
+def test_contradictions_partial_batch_unavailable_keeps_remediation_and_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaUnavailable` batch failure keeps its cause-specific
+    remediation (`ollama serve` + doctor hint), gains the completed-of-total
+    counts, and still exits 1 (#441)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_candidate_partial_batch(
+        monkeypatch, OllamaUnavailable("Ollama not reachable at http://localhost:11434")
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 1
+    assert "1 of 2" in result.stderr
+    assert "ollama serve" in result.stderr
+    assert result.stderr.rstrip("\n").endswith(
+        "Or run `openkos doctor` to diagnose the environment."
+    )
+    assert "kept work" in result.stdout
+
+
+def test_contradictions_partial_batch_model_not_found_keeps_pull_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `OllamaModelNotFound` batch failure keeps the configured model's
+    `ollama pull` remediation alongside the completed-of-total counts
+    (#441)."""
+    _init_workspace(tmp_path, monkeypatch)
+    configured_model = "llama3.2:1b-openkos-test"
+    (tmp_path / "openkos.yaml").write_text(
+        f"model: {configured_model}\n", encoding="utf-8"
+    )
+    _two_candidate_partial_batch(
+        monkeypatch, OllamaModelNotFound("Model not found (404)")
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 1
+    assert "1 of 2" in result.stderr
+    assert f"ollama pull {configured_model}" in result.stderr
+    assert "kept work" in result.stdout
+
+
+def test_contradictions_first_candidate_failure_keeps_failure_over_zero_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch whose FIRST candidate failed carries zero completed verdicts
+    -- the verb must NOT print the zero-candidates state message (there WERE
+    candidates; the failure, not the graph, emptied the results) and must
+    still exit 1 with the counted failure line (#441)."""
+    plan = CandidatePlan(
+        specs=(
+            _CandidateSpec(
+                pair_ids=("concepts/a", "concepts/b"), relation_type="related_to"
+            ),
+        ),
+        edge_total=1,
+        merged_total=0,
+    )
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return (
+            ContradictionBatch(results=[], failure=OllamaError("boom"), failed_index=1),
+            1,
+        )
+
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.cli.main.plan_candidates", lambda *a, **k: plan)
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 1
+    assert "The graph has no typed edges yet." not in result.stdout
+    assert "Candidate relations unavailable" not in result.stdout
+    assert result.stderr == (
+        "openkos contradictions: failed after judging 0 of 1 candidate(s) -- boom.\n"
+    )
