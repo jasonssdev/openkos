@@ -12,6 +12,7 @@ All three §9 rules are implemented here: rules 1-2 walk every non-reserved
 
 import os
 import re
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -1088,13 +1089,15 @@ class DocScan:
 
 def concept_id_for(path: Path, bundle_dir: Path) -> str:
     """The concept id for `path` within `bundle_dir`: its bundle-relative
-    POSIX path without the `.md` suffix.
+    POSIX path without the `.md` suffix, NFC-normalized (issue #430).
 
     THE ONE derivation. Eleven readers -- `lint`, `lifecycle`, `sensitivity`,
     `state/derived`, `state/fts`, `state/reindex`, `graph/sqlite_graph`,
     `bundle/listing`, `resolution/candidates`, `resolution/contradiction`,
     `cli/curate` -- each spelled it inline, and `graph/analysis.py` already
-    flagged the duplication and asked for exactly this helper.
+    flagged the duplication and asked for exactly this helper. One copy means
+    the normalization decision below is made once rather than in eleven
+    places that can drift.
 
     Ten sites spelled it `.relative_to(bundle_dir).with_suffix("").as_posix()`
     and `lint` spelled it `.as_posix().removesuffix(".md")`. This adopts the
@@ -1124,22 +1127,125 @@ def concept_id_for(path: Path, bundle_dir: Path) -> str:
     for the display consequence, by
     `test_lint_identity_for_a_bare_dot_md_name_doubles_the_suffix`.
 
-    WHY IT EXISTS BEYOND TIDINESS (issue #430). These ids are compared against
-    ids spelled elsewhere -- a `relations:` target, a `provenance:` entry --
-    and on a filesystem that normalizes filenames (HFS+ writes NFD, SMB
-    varies) the two spellings of the same logical id do not compare equal.
-    Graph edges are dropped, `lint` invents orphans, and entity-resolution
-    candidates are missed, all silently.
+    WHY NORMALIZE. APFS preserves whatever normalization it is handed; HFS+
+    normalizes to NFD on write; SMB varies. So the same logical id can be
+    spelled NFC in one document's `relations:` frontmatter and NFD when
+    derived from a filename on the same machine, and a plain string comparison
+    between the two fails. Every consequence is silent: graph edges are
+    dropped because an edge target does not match any node id, `lint` reports
+    orphans and dangling links that do not exist, and entity-resolution
+    candidates are never nominated. This was unreachable while slugs were
+    ASCII (which has no distinct NFD form) and #429 made it reachable.
 
-    This helper deliberately does NOT normalize. It makes the decision
-    POSSIBLE in one place instead of eleven, which is the whole of its job
-    here. Normalizing turned out to need a matching inverse for the ~9 sites
-    that rebuild a path from an id, plus a symlink guard and a cost guard on
-    that inverse -- a change with its own design surface, tracked separately
-    on #430.
+    WHY NFC SPECIFICALLY, AND WHY THIS IS SAFE FOR THE ID-TO-PATH DIRECTION.
+    `_slugify` normalizes its output to NFC, so openkos never WRITES a
+    decomposed filename -- NFC is the canonical spelling by construction, not
+    by preference. The volumes that nonetheless store NFD (HFS+, SMB) resolve
+    lookups insensitively, so the ~7 sites that rebuild a path as
+    `bundle_dir / f"{concept_id}.md"` still open the file there. And on a
+    byte-exact volume the name is already NFC, where normalizing is a total
+    no-op. The remaining case -- a decomposed name sitting on a byte-exact
+    filesystem, e.g. a bundle authored on HFS+, committed, and cloned onto
+    ext4 -- is what `concept_path_for` below exists for; making the BUNDLE
+    consistent again (a rename migration) is deliberately left to the human,
+    tracked as a follow-up.
 
     Pure: no I/O, and `path` need not exist."""
-    return path.relative_to(bundle_dir).with_suffix("").as_posix()
+    relative = path.relative_to(bundle_dir).with_suffix("").as_posix()
+    return unicodedata.normalize("NFC", relative)
+
+
+def concept_path_for(concept_id: str, bundle_dir: Path) -> Path:
+    """The `.md` path `concept_id` names within `bundle_dir` -- the inverse of
+    `concept_id_for`, and the reason that one is safe (issue #430).
+
+    Making ids canonically NFC obliges this direction to accept that the NAME
+    ON DISK may still be decomposed. `concept_id_for`'s own reasoning covers
+    the volumes that normalize (HFS+, SMB resolve lookups insensitively, so the
+    direct probe succeeds there) -- but not a decomposed name sitting on a
+    BYTE-EXACT filesystem, which is reachable without anyone hand-authoring
+    anything: a bundle written on HFS+ and committed carries decomposed
+    filenames into git, and cloning it on ext4 reproduces them byte for byte.
+    There `bundle_dir / f"{nfc_id}.md"` simply does not exist, and the callers
+    that reconstruct a path this way degrade silently to an empty body -- they
+    would ask the model to judge nothing at all, and report a verdict on it.
+
+    So: probe the direct path first (the only branch that runs in the
+    overwhelmingly common case, and the one that keeps this free), and only if
+    that misses, resolve the id SEGMENT BY SEGMENT against the real directory
+    entries, matching each non-ASCII segment by NFC-normalized name. Directory
+    segments need this exactly as leaf names do: `concept_id_for` normalizes
+    every segment of the id, so a document under an NFD-named directory gets
+    an NFC id whose direct parent does not even exist on a byte-exact volume
+    -- a leaf-only scan would raise on the missing parent and silently miss a
+    file that is right there (found in review, R3-001). A miss at any segment
+    returns the direct path unchanged rather than raising: this helper
+    resolves a SPELLING, it does not assert existence, and every caller
+    already owns its own absence handling.
+
+    An unreadable parent directory degrades the same way. A scan is an
+    optimization over a failed lookup, and it must never be what turns a
+    silently-empty body into a crash.
+
+    TWO GUARDS, both load-bearing:
+
+    An ASCII id SKIPS the fallback entirely, and inside the fallback an ASCII
+    segment is joined directly rather than scanned. ASCII has no distinct
+    decomposed form, so a miss on one can never be a normalization mismatch
+    and a scan could only ever confirm the miss. This is what keeps the cost
+    honest: a dangling id is a documented, ordinary case -- `edge_typing.
+    _load_doc` and `contradiction._load_doc` both reach here for an endpoint
+    with no document at all -- and it is reached per candidate inside loops
+    that drive `llm.chat`. Without this, every such miss would pay unbounded
+    directory listings to learn nothing, and almost every real id is ASCII.
+
+    The fallback admits ONLY a regular non-symlink file at the leaf and a
+    non-symlink directory at every inner segment -- strictly LESS than the
+    direct probe, which resolves an exactly-named symlink as it always has.
+    The fallback is a GUESS keyed on normalization rather than an exact name
+    the caller asked for, so it fails closed: `_resolve_concept_path` is a
+    documented path-safety gate (`forget` deletes what it resolves) and every
+    LLM verb reads the result into a prompt, so admitting any entry by
+    normalized name would let a symlink planted under a decomposed spelling
+    stand in for an absent concept and be read through to a file outside the
+    bundle. The ASCII leaf of an id whose DIRECTORY was resolved by scan gets
+    the same strict admission: once any segment is a guess, the whole path is.
+
+    The fallback is deliberately silent -- no counter, no log line. It reports
+    a SPELLING, and a caller that wants to know a bundle carries decomposed
+    names should ask `lint`, which walks it anyway."""
+    direct = bundle_dir / f"{concept_id}.md"
+    if direct.exists() or concept_id.isascii():
+        return direct
+    current = bundle_dir
+    segments = concept_id.split("/")
+    for index, segment in enumerate(segments):
+        leaf = index == len(segments) - 1
+        name = f"{segment}.md" if leaf else segment
+        if segment.isascii():
+            exact = current / name
+            if leaf and (exact.is_symlink() or not exact.is_file()):
+                return direct
+            current = exact
+            continue
+        wanted = unicodedata.normalize("NFC", name)
+        found: Path | None = None
+        try:
+            for candidate in current.iterdir():
+                if unicodedata.normalize("NFC", candidate.name) != wanted:
+                    continue
+                if candidate.is_symlink():
+                    continue
+                if not (candidate.is_file() if leaf else candidate.is_dir()):
+                    continue
+                found = candidate
+                break
+        except OSError:
+            return direct
+        if found is None:
+            return direct
+        current = found
+    return current
 
 
 def _iter_docs(bundle_dir: Path) -> Iterator[DocScan]:

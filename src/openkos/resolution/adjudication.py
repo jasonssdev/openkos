@@ -141,7 +141,7 @@ def _load_members(
     `retrieval/answer.py:_assemble_context`): returns `(concept_id, title,
     body)` for every member whose document is readable and parseable,
     skipping the rest without raising. A member's document is looked up at
-    `bundle_dir / f"{concept_id}.md"`.
+    `okf.concept_path_for(concept_id, bundle_dir)` (#430).
 
     sensitivity-fail-closed-filter (directory-walk-observability follow-up,
     defense-in-depth): after re-reading each member's OWN frontmatter, also
@@ -170,7 +170,9 @@ def _load_members(
     members: list[tuple[str, str, str]] = []
     for concept_id in member_ids:
         try:
-            text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
+            text = okf.concept_path_for(concept_id, bundle_dir).read_text(
+                encoding="utf-8"
+            )
         except (OSError, UnicodeDecodeError):
             continue
         try:

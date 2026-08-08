@@ -7,6 +7,7 @@ else in the engine parses or emits frontmatter.
 
 import os
 import stat
+import unicodedata
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -2301,14 +2302,25 @@ def test_type_alternative_keeps_the_bundle_conformant(tmp_path: Path) -> None:
     assert okf.check_conformance(bundle) == []
 
 
-# --- concept_id_for: one derivation for every reader (#430, part 1) ----------
+# --- concept_id_for: one NFC-normalized derivation for every reader (#430) ---
 #
-# Eleven readers each spelled this inline, and `graph/analysis.py` already
-# flagged the duplication and asked for a shared helper. This is that helper,
-# and nothing more: byte-identical output to every site it replaces.
+# APFS preserves the normalization it is given; HFS+ normalizes to NFD on write
+# and SMB varies. So the same logical id can be spelled NFC in a document's
+# `relations:` frontmatter and NFD when derived from the filename, and a plain
+# string comparison between them fails -- silently dropping graph edges,
+# inventing `lint` orphans, and missing entity-resolution candidates.
 #
-# It exists to be the ONE place #430's NFC-normalization decision can later be
-# made. That decision is deliberately NOT taken here -- see the issue.
+# `_slugify` emits NFC, so openkos never WRITES an NFD filename: NFC is the
+# canonical spelling by construction, and the volumes that store NFD (HFS+,
+# SMB) resolve lookups insensitively, so reconstructing a path from an NFC id
+# still opens the NFD file there.
+
+
+_NFC_STEM = "café"
+"""`café` with a precomposed e-acute -- one code point."""
+
+_NFD_STEM = "café"
+"""The same `café` decomposed -- `e` plus a combining acute."""
 
 
 def test_concept_id_for_derives_the_relative_posix_id(tmp_path: Path) -> None:
@@ -2362,3 +2374,219 @@ def test_concept_id_for_is_pure_and_needs_no_file_on_disk(tmp_path: Path) -> Non
     assert okf.concept_id_for(bundle_dir / "concepts" / "absent.md", bundle_dir) == (
         "concepts/absent"
     )
+
+
+def test_concept_id_for_nfc_normalizes_a_decomposed_filename(
+    tmp_path: Path,
+) -> None:
+    """A filename stored NFD yields an NFC id, so it compares equal to the same
+    id spelled NFC in another document's frontmatter (#430)."""
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / f"{_NFD_STEM}.md"
+
+    concept_id = okf.concept_id_for(path, bundle_dir)
+
+    assert concept_id == f"concepts/{_NFC_STEM}"
+    assert unicodedata.is_normalized("NFC", concept_id)
+
+
+def test_concept_id_for_collapses_both_spellings_to_one_id(tmp_path: Path) -> None:
+    """The defect this closes is a comparison failure, so the property that
+    matters is that the two spellings become the SAME string -- not merely that
+    each is normalized in isolation."""
+    bundle_dir = tmp_path / "bundle"
+    nfc_path = bundle_dir / "concepts" / f"{_NFC_STEM}.md"
+    nfd_path = bundle_dir / "concepts" / f"{_NFD_STEM}.md"
+
+    assert okf.concept_id_for(nfc_path, bundle_dir) == okf.concept_id_for(
+        nfd_path, bundle_dir
+    )
+
+
+def test_concept_id_for_normalizes_a_decomposed_directory_too(
+    tmp_path: Path,
+) -> None:
+    """The id spans directory segments, and a subdirectory name can be stored
+    NFD exactly as a filename can -- normalizing only the stem would leave the
+    same mismatch one path segment up."""
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / _NFD_STEM / "stoicism.md"
+
+    assert okf.concept_id_for(path, bundle_dir) == f"{_NFC_STEM}/stoicism"
+
+
+def test_concept_id_for_leaves_an_already_nfc_id_byte_identical(
+    tmp_path: Path,
+) -> None:
+    """On a byte-exact filesystem the file is already NFC (`_slugify` emits
+    it), so normalization must be a total no-op there -- this is what makes the
+    change safe for the id-to-path reconstruction sites."""
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / f"{_NFC_STEM}.md"
+
+    assert okf.concept_id_for(path, bundle_dir) == f"concepts/{_NFC_STEM}"
+
+
+# --- concept_path_for: the inverse of concept_id_for (#430) ------------------
+#
+# `concept_id_for` makes ids canonically NFC. That obliges the reverse
+# direction to accept that the NAME ON DISK may still be NFD: a bundle authored
+# on HFS+ and committed to git carries decomposed filenames, and cloning it on
+# a byte-exact filesystem reproduces them exactly. There, `bundle_dir /
+# f"{nfc_id}.md"` does not exist, and the callers that reconstruct a path this
+# way degrade silently to an empty body.
+
+
+def test_concept_path_for_returns_the_direct_path_when_it_exists(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    expected = bundle_dir / "concepts" / "stoicism.md"
+    expected.write_text("body", encoding="utf-8")
+
+    assert okf.concept_path_for("concepts/stoicism", bundle_dir) == expected
+
+
+def test_concept_path_for_finds_a_decomposed_name_from_an_nfc_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression this closes: an NFC id must still resolve a file whose
+    on-disk name is NFD.
+
+    `Path.exists()` is forced False so the fallback scan is what answers --
+    otherwise macOS's normalization-insensitive lookup would satisfy the direct
+    probe and this test would pass without ever exercising the branch that
+    matters on ext4."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    on_disk = bundle_dir / "concepts" / f"{_NFD_STEM}.md"
+    on_disk.write_text("body", encoding="utf-8")
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+
+    resolved = okf.concept_path_for(f"concepts/{_NFC_STEM}", bundle_dir)
+
+    assert resolved.name == f"{_NFD_STEM}.md"
+    assert unicodedata.normalize("NFC", resolved.name) == f"{_NFC_STEM}.md"
+
+
+def test_concept_path_for_resolves_a_decomposed_ancestor_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DIRECTORY segment can be stored NFD exactly as a leaf filename can,
+    and `concept_id_for` normalizes every segment of the id -- so the NFC id's
+    direct parent does not even exist on a byte-exact filesystem. A leaf-only
+    scan raised on the missing parent and silently missed a file that is
+    right there (review finding R3-001); the segment-wise fallback must
+    resolve the decomposed directory and then the leaf beneath it.
+
+    `Path.exists()` is forced False so the fallback is what answers, exactly
+    as in the leaf-name test above."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / _NFD_STEM).mkdir(parents=True)
+    on_disk = bundle_dir / _NFD_STEM / "stoicism.md"
+    on_disk.write_text("body", encoding="utf-8")
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+
+    resolved = okf.concept_path_for(f"{_NFC_STEM}/stoicism", bundle_dir)
+
+    assert resolved.parent.name == _NFD_STEM
+    assert resolved.name == "stoicism.md"
+    assert resolved.read_text(encoding="utf-8") == "body"
+
+
+def test_concept_path_for_falls_back_to_the_direct_path_when_nothing_matches(
+    tmp_path: Path,
+) -> None:
+    """A missing concept returns the direct path rather than raising, so the
+    caller's own `OSError` handling stays the single place absence is
+    decided -- this helper resolves a spelling, it does not assert existence."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+
+    assert (
+        okf.concept_path_for("concepts/absent", bundle_dir)
+        == bundle_dir / "concepts" / "absent.md"
+    )
+
+
+def test_concept_path_for_tolerates_an_unreadable_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback scan lists a directory, which can raise. It must degrade to
+    the direct path rather than propagate -- every caller treats a miss as an
+    empty body, never as a crash."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+
+    def _boom(self: Path) -> Iterator[Path]:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "iterdir", _boom)
+
+    assert (
+        okf.concept_path_for("concepts/x", bundle_dir)
+        == bundle_dir / "concepts" / "x.md"
+    )
+
+
+def test_concept_path_for_never_resolves_a_symlink_through_the_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fallback is a GUESS keyed on normalization, so it must admit less
+    than the direct probe, never more.
+
+    `_resolve_concept_path` is a documented path-safety gate -- `forget`
+    deletes what it resolves, and every LLM verb reads it into a prompt. A
+    scan that matched any directory entry by normalized name would let a
+    symlink planted under a decomposed spelling stand in for an absent
+    concept and be read through to a file outside the bundle."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    outside = tmp_path / "outside.md"
+    outside.write_text("secret", encoding="utf-8")
+    (bundle_dir / "concepts" / f"{_NFD_STEM}.md").symlink_to(outside)
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+
+    resolved = okf.concept_path_for(f"concepts/{_NFC_STEM}", bundle_dir)
+
+    # The helper handed back the direct path, NOT the scanned symlink entry.
+    # Asserting on `resolved.is_symlink()` would test the filesystem instead:
+    # macOS resolves the NFC spelling to the NFD entry insensitively, so it
+    # reports True there and False on ext4 -- where the attack actually lands
+    # and where this path simply does not exist, so the read fails closed.
+    assert resolved == bundle_dir / "concepts" / f"{_NFC_STEM}.md"
+    assert resolved.name != f"{_NFD_STEM}.md"
+
+
+def test_concept_path_for_skips_the_scan_for_an_ascii_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ASCII has no distinct decomposed form, so a miss on an ASCII id can
+    never be a normalization mismatch and the scan cannot help.
+
+    This is what keeps the cost honest: a dangling id is a documented, normal
+    case reached inside per-candidate LLM loops, and almost every real id is
+    ASCII. Without this guard every such miss would pay an unbounded directory
+    listing to learn nothing."""
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    scanned: list[Path] = []
+
+    real_iterdir = Path.iterdir
+
+    def _recording_iterdir(self: Path) -> Iterator[Path]:
+        scanned.append(self)
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    monkeypatch.setattr(Path, "iterdir", _recording_iterdir)
+
+    okf.concept_path_for("concepts/dangling-ascii-id", bundle_dir)
+
+    assert scanned == [], "an ASCII id must not pay a directory scan"

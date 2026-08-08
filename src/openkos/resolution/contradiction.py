@@ -390,7 +390,7 @@ def _load_doc(
     `(concept_id, "")`, the exemption would be cosmetic. Defaults to
     `False`, fail-closed."""
     try:
-        text = (bundle_dir / f"{concept_id}.md").read_text(encoding="utf-8")
+        text = okf.concept_path_for(concept_id, bundle_dir).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return concept_id, ""
     try:
@@ -565,7 +565,9 @@ def _load_ledger_bodies(
     to `sensitivity.merged_content_blocked`, identically to how `_load_doc`
     threads them to `sensitivity.should_block`."""
     try:
-        current_text = (bundle_dir / f"{survivor_id}.md").read_text(encoding="utf-8")
+        current_text = okf.concept_path_for(survivor_id, bundle_dir).read_text(
+            encoding="utf-8"
+        )
     except (OSError, UnicodeDecodeError):
         return (survivor_id, ""), (entry.absorbed_id, "")
     try:

@@ -861,3 +861,49 @@ def test_build_merged_document_body_layout_is_pinned() -> None:
         "Survivor body.\n\n## Merged content (concepts/absorbed)\n\nAbsorbed body.\n"
     )
     assert metadata["title"] == "Survivor"
+
+
+# --- the shared resolver tolerates a decomposed on-disk name (#430) ----------
+
+
+def test_resolve_concept_path_finds_a_decomposed_filename_from_an_nfc_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_resolve_concept_path` is the shared id-to-path resolver every write
+    verb goes through, and #430 made every id derived from a walked path NFC.
+
+    A bundle authored on HFS+ and cloned onto a byte-exact filesystem carries
+    decomposed filenames openkos never wrote, so the NFC id must still resolve
+    them -- otherwise `merge` reports "concept does not exist" for a file that
+    is right there, and `curate`'s Identity stage counts it as an ordinary
+    skip with no diagnostic.
+
+    `Path.exists` is forced False so the fallback scan is what answers;
+    macOS resolves both spellings insensitively and would otherwise satisfy
+    the direct probe without exercising the branch ext4 depends on."""
+    from openkos.cli.main import _resolve_concept_path
+
+    nfc_stem = "café"
+    nfd_stem = "café"
+    assert nfc_stem != nfd_stem, "fixture must use two distinct spellings"
+
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True)
+    on_disk = bundle_dir / "concepts" / f"{nfd_stem}.md"
+    on_disk.write_text(
+        okf.dump_frontmatter({"type": "Concept", "title": "Cafe"}, "Body."),
+        encoding="utf-8",
+    )
+
+    real_exists = Path.exists
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda self: False if self.suffix == ".md" else real_exists(self),
+    )
+
+    resolved, canonical = _resolve_concept_path(bundle_dir, f"concepts/{nfc_stem}")
+
+    assert resolved.name == f"{nfd_stem}.md"
+    assert canonical == f"concepts/{nfc_stem}"
+    assert resolved.read_text(encoding="utf-8").endswith("Body.\n")
