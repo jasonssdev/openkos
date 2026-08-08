@@ -1455,6 +1455,68 @@ def test_prompt_frames_source_title_as_non_authoritative_metadata() -> None:
     assert "not authoritative" in user_content
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        "AMI meeting TS3005b",
+        "Weekly team MEETING",
+        "Sprint retrospective notes",
+        "Standup 2026-08-07",
+        "Project kickoff with the design team",
+        "Engineering huddle",
+    ],
+)
+def test_prompt_omits_meeting_shaped_source_title(title: str) -> None:
+    """#459: a title naming the document as a meeting -- an
+    extractable-Event-shaped container -- is omitted from the user message
+    entirely. Measured on `TS3005b.transcript` (blind chunked path,
+    qwen3:8b): under `AMI meeting TS3005b` extraction collapsed to 1 object
+    in 20/20 runs; with the title line omitted it produced 8 in 5/5 runs
+    (post-cap subject recall 0.51 vs ~0.0). The metadata-only label does
+    not hold against this title shape, so the guard removes the priming
+    channel instead of relabeling it. Display titles are untouched -- this
+    filters the PROMPT only."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept(
+        "a distinctive phrase zzqq", source_title=title, llm=llm
+    )
+
+    user_content = llm.calls[0][1]["content"]
+    assert title not in user_content
+    assert "SOURCE TITLE" not in user_content
+    assert "a distinctive phrase zzqq" in user_content
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Skills vs Tools in the Claude Agent SDK",
+        "Remote control functional design",
+        "Understanding session cookies",
+        "Designing the sync engine",
+        "Sales call transcript review",
+    ],
+)
+def test_prompt_keeps_non_meeting_source_title(title: str) -> None:
+    """The meeting guard is NARROW by measurement: `large-03` scores BEST
+    under its own derived title (0.75 post-cap recall vs 0.57 with the line
+    omitted), so the title must survive for descriptive titles -- including
+    ones containing polysemous words the lexicon deliberately excludes
+    (`session`, `sync`, `call`), which name technical topics far more often
+    than gatherings."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept(
+        "a distinctive phrase zzqq", source_title=title, llm=llm
+    )
+
+    user_content = llm.calls[0][1]["content"]
+    assert title in user_content
+    assert "SOURCE TITLE" in user_content
+    assert "not authoritative" in user_content
+
+
 # --- Layering guard ------------------------------------------------------------
 
 
@@ -1796,20 +1858,24 @@ def test_small_source_makes_exactly_one_chat_call() -> None:
 
 def test_large_source_makes_one_chat_call_per_chunk() -> None:
     """Above the threshold, one chat call per `_chunk_lines` window, each
-    carrying its own window's text and the SAME source title."""
+    carrying its own window's text and the SAME source title. The title must
+    not be meeting-shaped: the #459 guard omits such a title from EVERY
+    chunk's message (which is the point of the guard -- the collapse it
+    breaks acted per chunk), and this test pins per-chunk propagation of a
+    title that survives the guard."""
     text = _long_text()
     assert len(text) > concept_mod._CHUNK_THRESHOLD
     expected = concept_mod._chunk_lines(text)
     llm = _SequencedLLM(["[]"] * len(expected))
 
-    outcome = concept_mod.extract_concept(text, source_title="Meeting", llm=llm)
+    outcome = concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
 
     assert len(llm.calls) == len(expected)
     assert outcome.report.chunks == len(expected)
     for call, chunk in zip(llm.calls, expected, strict=True):
         user = call[1]["content"]
         assert chunk in user
-        assert "Meeting" in user
+        assert "Field Notes" in user
 
 
 def test_chunked_results_merge_in_chunk_order() -> None:

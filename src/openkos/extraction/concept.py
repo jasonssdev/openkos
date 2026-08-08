@@ -15,8 +15,9 @@ wording, and catching `OllamaError` to keep the CLI's Source-only fallback
 UX, looping `openkos.model.okf.build_concept` once per validated object.
 """
 
+import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from openkos.extraction import judge as judge_mod
 from openkos.llm import parsing
@@ -255,6 +256,26 @@ class ExtractionResult:
     forward."""
 
 
+_MEETING_SHAPED_TITLE_RE: Final = re.compile(
+    r"\b(meeting|standup|retrospective|kickoff|huddle)\b", re.IGNORECASE
+)
+"""A source title that names the document AS A GATHERING -- an
+extractable-Event-shaped container title (issue #459).
+
+Membership is deliberately TIGHT, and the admission test is asymmetric by
+measurement: a false NEGATIVE keeps the known collapse for that one
+document (bad, but the status quo, and extendable); a false POSITIVE
+silently switches that document to the no-title prompt, which regressed
+`large-03-skills-vs-tools` from 0.75 to 0.57 post-cap recall when applied
+broadly -- so polysemous words stay OUT even though they sometimes name
+gatherings. Excluded on those grounds: `session` (auth/web sessions),
+`sync` (data/file sync), `call` (API/function/system calls), `minutes`
+(durations), `retro` (retro design/gaming). Extend only with a word whose
+gathering reading dominates technical corpora, and re-measure through
+`evals/extraction_cap/run_cap_eval.py` before adopting (#459's
+measure-first rule)."""
+
+
 def _build_messages(source_text: str, source_title: str) -> list[Message]:
     """Assemble the 2-message prompt: system classification rules + the raw
     source text as the user turn, prefixed with its title labeled as
@@ -263,12 +284,26 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
     reads as the pre-computed answer to "what is this source about", since
     an H1-derived title anchoring that hard produced twin objects (D1
     verdict, `twin_rate` 0.34 under the H1 title vs 0.13 under the
-    filename-stem title)."""
-    user_content = (
-        f"SOURCE TITLE (metadata only, not authoritative -- treat as "
-        f"context, not the pre-computed topic): {source_title}\n\n"
-        f"SOURCE TEXT:\n{source_text}"
-    )
+    filename-stem title).
+
+    A meeting-shaped title (issue #459) is omitted from the user message
+    ENTIRELY rather than relabeled: on `TS3005b.transcript` the
+    metadata-only label did not hold -- extraction collapsed to 1 object in
+    20/20 chunked runs under `AMI meeting TS3005b`, and produced 8 in 5/5
+    runs with the line omitted (post-cap subject recall 0.51 vs ~0.0). The
+    guard filters the PROMPT channel only; the Source's display title is
+    derived upstream (`derive_source_title`) and is not affected. It lives
+    here and not in `derive_source_title` for exactly that reason: the
+    title is genuinely descriptive FOR HUMANS, it is only the model's
+    generation that it primes into a single-Event summary."""
+    if _MEETING_SHAPED_TITLE_RE.search(source_title):
+        user_content = f"SOURCE TEXT:\n{source_text}"
+    else:
+        user_content = (
+            f"SOURCE TITLE (metadata only, not authoritative -- treat as "
+            f"context, not the pre-computed topic): {source_title}\n\n"
+            f"SOURCE TEXT:\n{source_text}"
+        )
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
