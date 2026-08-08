@@ -39,7 +39,7 @@ requirement "Node Identity Is The OKF Concept ID".
   docstring records the decision and its safety argument.
 - [x] 2.2 `src/openkos/model/okf.py` — add `concept_path_for` with the two
   guards (D2).
-- [x] 2.3 Route the nine reconstruction sites: `cli/main.py`
+- [x] 2.3 Route the seven reconstruction sites: `cli/main.py`
   `_resolve_concept_path`, `cli/curate.py` Structure stage,
   `resolution/contradiction.py` ×2, `resolution/adjudication.py`,
   `resolution/edge_typing.py`, `retrieval/answer.py`.
