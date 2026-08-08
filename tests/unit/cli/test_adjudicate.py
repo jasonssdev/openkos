@@ -3276,6 +3276,43 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
     ]
 
 
+def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None:
+    """entity-resolution-adjudication delta scenario "`--json` payload keys
+    are unchanged for a cross-type group": a cross-type group's parsed
+    object has EXACTLY the existing keys (`member_ids`, `okf_type`, `tier`,
+    `verdict`, `rationale`) -- no `member_types` key is ever added, even
+    though the underlying `CandidateGroup` carries one."""
+    group = CandidateGroup(
+        okf_type="Concept+Entity",
+        member_ids=("concepts/a", "entities/b"),
+        tier=Tier.HIGH,
+        trigger="stoicism",
+        member_types=("Concept", "Entity"),
+    )
+    result = _adjudicated(
+        group, verdict=Verdict.DIFFERENT, rationale="different entities"
+    )
+
+    payload = main._adjudication_payload([result], same_only=False)
+
+    assert payload == [
+        {
+            "member_ids": ["concepts/a", "entities/b"],
+            "okf_type": "Concept+Entity",
+            "tier": "HIGH",
+            "verdict": "DIFFERENT",
+            "rationale": "different entities",
+        }
+    ]
+    assert set(payload[0].keys()) == {
+        "member_ids",
+        "okf_type",
+        "tier",
+        "verdict",
+        "rationale",
+    }
+
+
 def test_adjudication_payload_same_only_filters_to_same_verdicts() -> None:
     """`same_only=True` keeps only `Verdict.SAME` entries, dropping
     DIFFERENT/UNCERTAIN from the returned list (spec: `--same-only` Composes

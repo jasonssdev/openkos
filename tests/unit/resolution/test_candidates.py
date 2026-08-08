@@ -83,6 +83,62 @@ def test_tier_has_high_and_low_values() -> None:
     assert Tier.LOW.value == "low"
 
 
+def test_member_types_defaults_from_okf_type_for_a_same_type_group() -> None:
+    """`CandidateGroup.member_types` Field: when only `okf_type` is given,
+    `member_types` defaults, via `__post_init__`, to that type repeated once
+    per member."""
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b", "concepts/c"),
+        tier=Tier.HIGH,
+        trigger="stoicism",
+    )
+
+    assert group.member_types == ("Concept", "Concept", "Concept")
+
+
+def test_member_types_index_aligned_for_a_cross_type_group() -> None:
+    """A cross-type group carries each member's own type, index-aligned with
+    `member_ids`."""
+    group = CandidateGroup(
+        okf_type="Concept+Entity",
+        member_ids=("concepts/a", "entities/b"),
+        tier=Tier.HIGH,
+        trigger="justice",
+        member_types=("Concept", "Entity"),
+    )
+
+    assert group.member_types == ("Concept", "Entity")
+    assert group.member_types[0] == "Concept"
+    assert group.member_types[1] == "Entity"
+
+
+def test_member_types_length_mismatch_raises_value_error() -> None:
+    """`member_types` MUST be index-aligned with `member_ids`; a length
+    mismatch raises `ValueError`."""
+    with pytest.raises(ValueError, match="member_types"):
+        CandidateGroup(
+            okf_type="Concept",
+            member_ids=("concepts/a", "concepts/b"),
+            tier=Tier.HIGH,
+            trigger="stoicism",
+            member_types=("Concept",),
+        )
+
+
+def test_type_label_is_deterministic_regardless_of_input_order() -> None:
+    """`_type_label` sorts and joins distinct types with `+` deterministically
+    -- `("Entity", "Concept")` and `("Concept", "Entity")` both produce
+    `"Concept+Entity"`."""
+    assert candidates_mod._type_label(("Entity", "Concept")) == "Concept+Entity"
+    assert candidates_mod._type_label(("Concept", "Entity")) == "Concept+Entity"
+
+
+def test_type_label_is_the_bare_type_for_a_same_type_group() -> None:
+    """A single distinct type produces itself, not a joined label."""
+    assert candidates_mod._type_label(("Concept", "Concept", "Concept")) == "Concept"
+
+
 # --- whole-bundle scan + concept_id/type/trigger reporting -----------------
 
 
@@ -164,16 +220,29 @@ def test_partitions_by_exact_type_concept_vs_concept(tmp_path: Path) -> None:
     assert groups[0].okf_type == "Concept"
 
 
-def test_cross_type_identical_normalized_title_produces_no_candidate(
+def test_cross_type_identical_normalized_title_forms_one_high_group(
     tmp_path: Path,
 ) -> None:
-    """A Concept and an Entity with IDENTICAL normalized titles never form a
-    candidate -- type partitioning is strict regardless of similarity."""
+    """A Concept and an Entity with IDENTICAL normalized titles form ONE
+    cross-type HIGH group -- the HIGH tier is exempt from strict per-type
+    blocking (entity-resolution delta: Cross-Type Exact-Title Bucketing).
+    Both `find_candidates` and `find_exact_title_groups` must agree (#216's
+    equivalence contract), so this single test pins both entry points at
+    once (task 1.2's paired assertion)."""
     bundle_dir = tmp_path / "bundle"
     _write_doc(bundle_dir / "concepts" / "a.md", doc_type="Concept", title="Stoicism")
     _write_doc(bundle_dir / "entities" / "b.md", doc_type="Entity", title="Stoicism")
 
-    assert find_candidates(bundle_dir) == []
+    groups = find_candidates(bundle_dir)
+    exact = find_exact_title_groups(bundle_dir)
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.tier is Tier.HIGH
+    assert group.member_ids == ("concepts/a", "entities/b")
+    assert group.member_types == ("Concept", "Entity")
+    assert group.okf_type == "Concept+Entity"
+    assert exact == groups
 
 
 def test_two_different_types_each_with_their_own_matching_pair(
@@ -598,6 +667,14 @@ def _write_everything_bundle(bundle_dir: Path) -> None:
     by (`concepts/aaa...` before `concepts/zzy...`) -- so a missing final
     sort in `find_exact_title_groups` shows up here as an order divergence
     rather than passing by luck.
+
+    Also includes one cross-type exact-title pair (`concepts/xco` /
+    `entities/xen`, both titled "Justice") -- its joined `okf_type`
+    (`"Concept+Entity"`) sorts strictly between the single-type `"Concept"`
+    groups and the single-type `"Entity"` group in the module's canonical
+    `(okf_type, member_ids)` order, so the equivalence tests below cover a
+    cross-type group without disturbing the existing same-type ordering
+    assertions (task 1.3).
     """
     # Concept, HIGH key "zeno": `concepts/aaa` also supersedes
     # `concepts/old-zeno`, which deprecates that target by relation.
@@ -620,6 +697,10 @@ def _write_everything_bundle(bundle_dir: Path) -> None:
     # A second type with its own HIGH group.
     _write_doc(bundle_dir / "entities" / "e1.md", doc_type="Entity", title="Epictetus")
     _write_doc(bundle_dir / "entities" / "e2.md", doc_type="Entity", title="EPICTETUS")
+    # A cross-type exact-title pair -- HIGH is exempt from strict per-type
+    # blocking (Cross-Type Exact-Title Bucketing).
+    _write_doc(bundle_dir / "concepts" / "xco.md", doc_type="Concept", title="Justice")
+    _write_doc(bundle_dir / "entities" / "xen.md", doc_type="Entity", title="Justice")
     # A single-doc type yields nothing for that type.
     _write_doc(
         bundle_dir / "decisions" / "d1.md", doc_type="Decision", title="Adopt Stoicism"
@@ -648,13 +729,20 @@ def test_find_exact_title_groups_equals_the_high_slice_in_order(
 
     assert exact == high_slice
     # Pinned literally too: list equality alone would also hold if BOTH
-    # sides were mis-ordered the same way.
+    # sides were mis-ordered the same way. The cross-type group
+    # (`"Concept+Entity"`) sorts between the two single-type groups.
     assert [g.member_ids for g in exact] == [
         ("concepts/aaa", "concepts/aab"),
         ("concepts/zzy", "concepts/zzz"),
+        ("concepts/xco", "entities/xen"),
         ("entities/e1", "entities/e2"),
     ]
     assert all(g.tier is Tier.HIGH for g in exact)
+    cross_type_group = next(
+        g for g in exact if g.member_ids == ("concepts/xco", "entities/xen")
+    )
+    assert cross_type_group.okf_type == "Concept+Entity"
+    assert cross_type_group.member_types == ("Concept", "Entity")
 
 
 def test_find_exact_title_groups_equals_the_high_slice_with_include_deprecated(
@@ -681,6 +769,7 @@ def test_find_exact_title_groups_equals_the_high_slice_with_include_deprecated(
             "concepts/old-zeno",
         ),
         ("concepts/zzy", "concepts/zzz"),
+        ("concepts/xco", "entities/xen"),
         ("entities/e1", "entities/e2"),
     ]
 
@@ -850,6 +939,25 @@ def test_acronym_pairs_must_share_a_type(tmp_path: Path) -> None:
     assert candidates_mod.find_candidates(bundle) == []
 
 
+def test_cross_type_acronym_match_produces_no_candidate(tmp_path: Path) -> None:
+    """Entity-resolution delta scenario "Cross-type acronym match produces
+    no candidate": a Concept and an Entity that would match under the
+    ACRONYM rule still produce nothing -- unlike HIGH, ACRONYM stays
+    strictly per-type (distinct from `test_acronym_pairs_must_share_a_type`
+    above, which uses a Person/Concept pair)."""
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "concepts" / "adk.md",
+        doc_type="Concept",
+        title="ADK (Agent Development Kit)",
+    )
+    _write_doc(
+        bundle / "entities" / "google-adk.md", doc_type="Entity", title="Google ADK"
+    )
+
+    assert candidates_mod.find_candidates(bundle) == []
+
+
 def test_exact_title_groups_entry_point_ignores_acronym_pairs(tmp_path: Path) -> None:
     """`find_exact_title_groups` backs `status`' "identical titles" line and
     `next`'s duplicate tier (#216). An acronym pair does NOT have an
@@ -859,6 +967,30 @@ def test_exact_title_groups_entry_point_ignores_acronym_pairs(tmp_path: Path) ->
     _write_doc(bundle / "concepts" / "google-adk.md", title="Google ADK")
 
     assert candidates_mod.find_exact_title_groups(bundle) == []
+
+
+def test_acronym_and_low_groups_unaffected_absent_cross_type_overlap(
+    tmp_path: Path,
+) -> None:
+    """Entity-resolution delta scenario "ACRONYM/LOW results are unaffected
+    absent cross-type overlap": a bundle with an ACRONYM group and a LOW
+    group but NO cross-type exact-title overlap returns the identical
+    ACRONYM/LOW groups the pre-change per-type-only implementation always
+    returned -- cross-type HIGH bucketing changes nothing here."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "adk.md", title="ADK (Agent Development Kit)")
+    _write_doc(bundle / "concepts" / "google-adk.md", title="Google ADK")
+    _write_doc(bundle / "concepts" / "a.md", title="Stoicism")
+    _write_doc(bundle / "concepts" / "b.md", title="Stoic Philosophy")
+
+    groups = candidates_mod.find_candidates(bundle)
+
+    assert [(g.tier, g.member_ids) for g in groups] == [
+        (Tier.ACRONYM, ("concepts/adk", "concepts/google-adk")),
+        (Tier.LOW, ("concepts/a", "concepts/b")),
+    ]
+    for group in groups:
+        assert group.member_types == (group.okf_type,) * len(group.member_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -1109,3 +1241,54 @@ def test_candidate_group_truncation_notice_names_both_counts_above_cap(
     notice = candidate_group_truncation_notice(report)
 
     assert notice == "50 of 60 candidate group(s) shown (cap reached)"
+
+
+def test_cap_rank_tie_break_stays_stable_with_a_joined_okf_type_label(
+    tmp_path: Path,
+) -> None:
+    """`CandidateGroup.member_types` Field scenario "Cap-rank tie-break stays
+    stable with a joined label": a bundle over `_MAX_CANDIDATE_GROUPS`
+    including cross-type HIGH groups (joined `okf_type` labels) ranks and
+    truncates deterministically -- the joined label sorts as an opaque
+    string in the `(okf_type, member_ids)` tie-break, and two calls over the
+    unchanged bundle produce the identical retained set and order."""
+    bundle_dir = tmp_path / "bundle"
+    # 2-letter codes (below `similarity.MIN_TOKEN_LENGTH`) so `tokenize`
+    # drops them and `near_match_score` returns `None` for every
+    # cross-group combination -- pure HIGH tier, no incidental LOW noise
+    # (mirrors `high_only_over_cap_bundle_dir`'s fixture design).
+    for index in range(49):
+        key = f"{chr(97 + index // 26)}{chr(97 + index % 26)}"
+        _write_doc(bundle_dir / "concepts" / f"h{index:03d}a.md", title=key)
+        _write_doc(bundle_dir / "concepts" / f"h{index:03d}b.md", title=key)
+    # Two cross-type HIGH groups -- 51 total HIGH groups, one over the cap.
+    _write_doc(bundle_dir / "concepts" / "xa-concept.md", title="Justice")
+    _write_doc(
+        bundle_dir / "entities" / "xa-entity.md", doc_type="Entity", title="Justice"
+    )
+    _write_doc(bundle_dir / "concepts" / "xb-concept.md", title="Liberty")
+    _write_doc(
+        bundle_dir / "entities" / "xb-entity.md", doc_type="Entity", title="Liberty"
+    )
+
+    first = find_candidates_report(bundle_dir)
+    second = find_candidates_report(bundle_dir)
+
+    assert first == second
+    assert first.produced == 51
+    assert first.retained == 50
+    cross_type_groups = [g for g in first.groups if g.okf_type == "Concept+Entity"]
+    # Ties broken by ascending member_ids: "concepts/xa-concept" sorts before
+    # "concepts/xb-concept", so the "Justice" pair is retained, "Liberty" is
+    # cut.
+    assert len(cross_type_groups) == 1
+    assert cross_type_groups[0].member_ids == (
+        "concepts/xa-concept",
+        "entities/xa-entity",
+    )
+    # Canonical output order: `(okf_type, member_ids)` ascending -- the
+    # joined "Concept+Entity" label sorts strictly after every bare
+    # "Concept" group.
+    sort_keys = [(g.okf_type, g.member_ids) for g in first.groups]
+    assert sort_keys == sorted(sort_keys)
+    assert first.groups[-1].okf_type == "Concept+Entity"

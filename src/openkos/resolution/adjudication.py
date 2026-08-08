@@ -28,7 +28,7 @@ group whose members are ALL unreadable short-circuits to `Verdict.UNCERTAIN`
 """
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -190,16 +190,67 @@ def _load_members(
     return members
 
 
+_CROSS_TYPE_NOTE = (
+    "NOTE: this group spans more than one declared OKF type (tagged above per "
+    "member). A type disagreement alone does NOT make members different "
+    "entities -- judge identity from the content, exactly as for a "
+    "single-type group."
+)
+"""The one extra user-turn sentence a cross-type prompt adds (design D4,
+entity-resolution-adjudication delta: Cross-Type Prompt Honesty) -- warns
+the model not to infer DIFFERENT from the type tags alone."""
+
+
 def _build_messages(
-    okf_type: str, tier: str, members: list[tuple[str, str, str]]
+    okf_type: str,
+    tier: str,
+    members: list[tuple[str, str, str]],
+    *,
+    member_types_by_id: Mapping[str, str] | None = None,
 ) -> list[Message]:
     """Assemble the 2-message prompt (mirrors `concept._build_messages`):
     system rubric + a user turn listing the OKF type, tier, and each
-    readable member's `[concept_id — title]` header plus full body."""
+    readable member's header plus full body.
+
+    `member_types_by_id` is `None` for a single-type group (the default) --
+    the user turn's bytes stay EXACTLY what they always were: `"OKF TYPE:
+    {okf_type}"` plus each member's untagged `[concept_id — title]` header
+    (entity-resolution-adjudication delta: Cross-Type Prompt Honesty,
+    "Single-type group keeps today's exact prompt bytes"). When given (a
+    cross-type group), it MUST be keyed by concept_id, NOT indexed
+    positionally by `members`' order: `adjudicate_candidates` filters
+    blocked ids (S3a) and `_load_members` drops unreadable ones BEFORE this
+    function ever runs, so `members` is a filtered SUBSET of the candidate's
+    original `member_ids` -- positional alignment against `member_types`
+    would silently mislabel a surviving member once an earlier one was
+    dropped. In that case each member's header gains a `(OKF type: {t})`
+    suffix sourced from this mapping, and one extra user-turn sentence
+    (`_CROSS_TYPE_NOTE`) tells the model a type disagreement alone is not
+    evidence of a DIFFERENT verdict. `okf_type` itself is still rendered on
+    the `"OKF TYPE: ..."` line as the joined display label (e.g.
+    `"Concept+Entity"`) -- `member_types_by_id` only affects per-member
+    tagging, never that line.
+    """
+    if member_types_by_id is None:
+        member_blocks = "\n\n".join(
+            f"[{concept_id} — {title}]\n{body}" for concept_id, title, body in members
+        )
+        user_content = (
+            f"OKF TYPE: {okf_type}\nTIER: {tier}\n\nMEMBERS:\n\n{member_blocks}"
+        )
+        return [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+
     member_blocks = "\n\n".join(
-        f"[{concept_id} — {title}]\n{body}" for concept_id, title, body in members
+        f"[{concept_id} — {title}] (OKF type: {member_types_by_id[concept_id]})\n{body}"
+        for concept_id, title, body in members
     )
-    user_content = f"OKF TYPE: {okf_type}\nTIER: {tier}\n\nMEMBERS:\n\n{member_blocks}"
+    user_content = (
+        f"OKF TYPE: {okf_type}\nTIER: {tier}\n\n{_CROSS_TYPE_NOTE}\n\n"
+        f"MEMBERS:\n\n{member_blocks}"
+    )
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
@@ -350,8 +401,17 @@ def adjudicate_candidates(
                 rationale=_NO_READABLE_MEMBER_CONTENT,
             )
         else:
+            distinct_types = set(candidate.member_types)
+            member_types_by_id = (
+                dict(zip(candidate.member_ids, candidate.member_types, strict=True))
+                if len(distinct_types) > 1
+                else None
+            )
             messages = _build_messages(
-                candidate.okf_type, candidate.tier.value, members
+                candidate.okf_type,
+                candidate.tier.value,
+                members,
+                member_types_by_id=member_types_by_id,
             )
             # Guard ONLY the chat call (#441): a transport/model failure must
             # not discard the completed results, while parse/validate/progress
