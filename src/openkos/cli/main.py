@@ -8085,7 +8085,16 @@ def lint() -> None:
     `Unbacked provenance:` (issue #421:
     `lint_check.check_unbacked_provenance`, this SAME `docs` list again --
     an engine-owned `relations:` type, `derived_from`, naming a target the
-    document's own `provenance:` never records), each
+    document's own `provenance:` never records), and `Non-NFC names:`
+    (issue #474: `lint_check.check_non_nfc_names` -- a NAMES-ONLY
+    incremental `rglob` walk over `layout.bundle_dir` that never opens a
+    file, which is why it is NOT a violation of design D3's no-fifth-walk
+    guard: that guard protects the read+parse walk, and this one must see
+    what `collect_docs` cannot -- a decomposed name on a directory, a
+    non-`.md` file, or an unreadable doc. Rendered via `finding.path`,
+    never `.concept_id`, because the finding names an on-disk entry, not
+    a concept object. DETECTION ONLY: openkos never renames -- the detail
+    names the NFC target, but the migration is the human's call), each
     with its own empty-state line when there is nothing to report. Every
     successful read exits 0, whether the bundle is clean or
     has findings (spec: Non-Gating Exit Contract) -- `lint` is NOT a CI
@@ -8134,6 +8143,9 @@ def lint() -> None:
     dangling_provenance = lint_check.check_dangling_provenance(docs)
     # issue #421: and again -- pure, deterministic, no LLM, no clock.
     unbacked_provenance = lint_check.check_unbacked_provenance(docs)
+    # issue #474: a names-only walk, never the docs list -- collect_docs
+    # cannot see a decomposed directory, non-`.md` file, or unreadable doc.
+    non_nfc = lint_check.check_non_nfc_names(layout.bundle_dir)
     notices = window_notices + skip_notices
     report = lint_check.LintReport(
         stale=stale,
@@ -8144,6 +8156,7 @@ def lint() -> None:
         multi_source_uncovered=multi_source_uncovered,
         dangling_provenance=dangling_provenance,
         unbacked_provenance=unbacked_provenance,
+        non_nfc=non_nfc,
         notices=notices,
     )
 
@@ -8206,6 +8219,16 @@ def lint() -> None:
     else:
         for finding in report.unbacked_provenance:
             typer.echo(f"  {finding.concept_id}: {finding.detail}")
+    typer.echo()
+    typer.echo("Non-NFC names:")
+    if not report.non_nfc:
+        typer.echo("  No non-NFC on-disk names.")
+    else:
+        # #474: `finding.path`, never `.concept_id` -- this kind names an
+        # on-disk entry (possibly a directory or non-`.md` file), not a
+        # concept object, so the path is the honest spelling.
+        for finding in report.non_nfc:
+            typer.echo(f"  {finding.path}: {finding.detail}")
 
 
 @app.command()

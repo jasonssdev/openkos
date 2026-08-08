@@ -14,6 +14,7 @@ function here is deterministic and testable with fixed inputs.
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
@@ -124,9 +125,14 @@ class LintFinding:
     kind: str
     """`"stale"`, `"orphan"`, `"dangling"`, `"unextracted"`,
     `"below-source-sensitivity"`, `"multi-source-uncovered"`,
-    `"dangling-provenance"`, or `"unbacked-provenance"`."""
+    `"dangling-provenance"`, `"unbacked-provenance"`, or
+    `"non-nfc-name"`."""
     path: str
-    """The finding's bundle-relative `.md` path."""
+    """The finding's bundle-relative `.md` path -- except for
+    `"non-nfc-name"` (#474), where it may name a directory or a non-`.md`
+    file: that kind reports an on-disk ENTRY, not a concept object, so
+    `path`, not `concept_id`, is the honest spelling there (the same
+    reasoning the `concept_id` docstring gives for skip notices)."""
     detail: str
     """Human-readable detail text, rendered verbatim after the subject."""
 
@@ -141,7 +147,10 @@ class LintFinding:
         `path` as `f"{doc.identity}.md"`, and `doc.identity` IS the concept
         id. Skip notices are deliberately NOT covered -- they name a file
         that failed to become an object, so a path is the honest spelling
-        there."""
+        there. `"non-nfc-name"` findings (#474) are not covered either, for
+        the same reason: their `path` names an on-disk entry -- possibly a
+        directory or a non-`.md` file -- not a concept object, so
+        displaying them goes through `path`, never this property."""
         return self.path.removesuffix(".md")
 
 
@@ -179,6 +188,15 @@ class LintReport:
     is indistinguishable downstream from a synthesized one; this finding is
     the only surface that still tells them apart (see
     `check_unbacked_provenance`)."""
+    non_nfc: list[LintFinding] = field(default_factory=list)
+    """`"non-nfc-name"` findings (#474): an on-disk name (file OR
+    directory) under the bundle that is not NFC, with the NFC rename as
+    remediation. Concept ids are canonically NFC (`okf.concept_id_for`,
+    #430) and `okf.concept_path_for` resolves an NFC id against a
+    decomposed on-disk spelling TOLERANTLY -- its docstring promises that
+    a caller who wants to know a bundle carries decomposed names should
+    ask `lint`; this field is where that answer lands (see
+    `check_non_nfc_names`)."""
     notices: list[str] = field(default_factory=list)
 
 
@@ -1074,4 +1092,84 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
             )
         )
 
+    return findings
+
+
+def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:
+    """Flag every on-disk name (file OR directory) under `bundle_dir` that
+    is not NFC, with the NFC rename as remediation (issue #474).
+
+    Concept ids are canonically NFC: `okf.concept_id_for` normalizes on
+    the way in (#430), so a decomposed on-disk spelling and its NFC id can
+    never be byte-equal -- the drift a macOS-created bundle (HFS+ forced
+    NFD; APFS preserves whatever it is given) syncs onto every other
+    platform. `okf.concept_path_for` absorbs that drift TOLERANTLY,
+    resolving the NFC id against the decomposed file, and its docstring
+    ends by promising that a caller who wants to KNOW should ask `lint`.
+    This check is that answer. DETECTION ONLY: openkos never renames --
+    that migration decision is deliberately out of scope (human curates,
+    engine maintains), so the detail names the rename target but no verb
+    performs it.
+
+    This walk takes `bundle_dir` and pulls `bundle_dir.rglob("*")` one
+    entry at a time -- deliberately NOT the `collect_docs` walk, and
+    deliberately NOT a violation of design D3's no-fifth-walk guard: that
+    guard protects the read+parse walk (every `docs`-consuming check is
+    structurally incapable of opening one), while this walk reads NAMES
+    ONLY and never opens a single file. It also CANNOT ride on
+    `collect_docs`: that walk only surfaces readable, parseable `.md`
+    docs, and a decomposed name on a directory, a non-`.md` file, or an
+    unreadable doc is exactly what this check must still see.
+
+    The test is each entry's OWN name -- `path.name !=
+    unicodedata.normalize("NFC", path.name)` -- never the full path, so a
+    decomposed DIRECTORY produces exactly ONE finding, not one per
+    descendant: one rename fixes the whole subtree, and the report says
+    so once.
+
+    `path` is the NFC-normalized bundle-relative POSIX path -- the
+    canonical spelling, matching how every other verb spells the object
+    (#247) -- and it may name a directory or a non-`.md` file, which is
+    why the CLI renders this kind via `finding.path`, never
+    `finding.concept_id`. The detail carries BOTH spellings: the raw
+    on-disk name through `ascii(...)`, because the NFD/NFC difference is
+    invisible in rendered text and the escaped combining mark is the only
+    way a human can SEE it, and the NFC rename target as remediation.
+
+    Each `next()` on the walk is guarded INDIVIDUALLY, so a broken walk
+    (a directory deleted mid-scan, a permission wall) degrades to the
+    findings collected so far -- read-only-never-fail, matching every
+    other guard in this module. The generator is deliberately never fed
+    through `sorted(...)`: that would consume the WHOLE walk before the
+    first finding exists, so a mid-walk OSError would discard everything
+    already seen and render a silently empty, false-clean report (review
+    R4-001). Determinism comes from sorting the FINDINGS by `path` after
+    the walk instead. This scan is READ-ONLY and NON-GATING: it never
+    writes and its findings never affect any caller's exit code."""
+    findings: list[LintFinding] = []
+    entries = bundle_dir.rglob("*")
+    while True:
+        try:
+            entry = next(entries)
+        except StopIteration:
+            break
+        except OSError:
+            break  # a broken walk degrades to the findings collected so far
+        nfc_name = unicodedata.normalize("NFC", entry.name)
+        if entry.name == nfc_name:
+            continue
+        findings.append(
+            LintFinding(
+                kind="non-nfc-name",
+                path=unicodedata.normalize(
+                    "NFC", entry.relative_to(bundle_dir).as_posix()
+                ),
+                detail=(
+                    f"on-disk name {entry.name!a} is not NFC -- "
+                    f"rename it to {nfc_name!r} so the spelling on disk "
+                    f"matches the canonical id (#430)"
+                ),
+            )
+        )
+    findings.sort(key=lambda finding: finding.path)
     return findings
