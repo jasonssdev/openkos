@@ -546,7 +546,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             skipped += 1
             continue
 
-        source_path = layout.bundle_dir / f"{edge.source_id}.md"
+        source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
         try:
             prepared = cli_main.prepare_relate(
                 source_path,

@@ -3469,7 +3469,14 @@ def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]
     no-op (spec: Nonexistent Concept Refusal).
     """
     canonical_id = _canonicalize_concept_id(concept_id)
-    concept_path = bundle_dir / f"{canonical_id}.md"
+    # `okf.concept_path_for`, not `bundle_dir / f"{canonical_id}.md"` (#430):
+    # ids derived from a walked path are NFC-normalized, while the name on disk
+    # may be decomposed -- a bundle authored on HFS+ and cloned onto a
+    # byte-exact filesystem carries NFD filenames openkos never wrote. The
+    # path-safety canonicalization above still runs FIRST and is untouched;
+    # this only decides which SPELLING of an already-safe id is on disk, and
+    # the `is_file` refusal below is still the one place absence is decided.
+    concept_path = okf.concept_path_for(canonical_id, bundle_dir)
     if not concept_path.is_file():
         raise ValueError(f"concept '{concept_id}' does not exist")
     return concept_path, canonical_id

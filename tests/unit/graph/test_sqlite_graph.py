@@ -2082,3 +2082,40 @@ def test_build_graph_succeeds_with_no_usable_vectors_db(
     with sqlite_graph.build_graph(bundle, candidates=source) as store:
         assert _edge_rows(store) == []
         assert len(_node_ids(store)) == 2
+
+
+# --- NFC-normalized node ids (#430) ------------------------------------------
+#
+# HFS+ normalizes filenames to NFD on write and SMB varies, so a node id
+# derived from a filename could be spelled NFD while the `relations:` target
+# naming it is NFC. The typed-edge pass admits an edge only when its target is
+# in `node_ids`, so the mismatch dropped the edge silently.
+
+
+def test_typed_edge_survives_a_decomposed_filename_spelled_nfc_in_relations(
+    tmp_path: Path,
+) -> None:
+    """The target document's filename is stored NFD; the `relations:` entry
+    naming it is NFC. The edge must still be projected (#430).
+
+    Before `okf.concept_id_for` normalized the derivation, the node id came out
+    NFD, `relation.target in node_ids` was False, and the edge vanished with no
+    diagnostic anywhere."""
+    nfc_stem = "caf\u00e9"  # precomposed e-acute, one code point
+    nfd_stem = "cafe\u0301"  # e + combining acute, two code points
+    assert nfc_stem != nfd_stem, "fixture must use two distinct spellings"
+
+    bundle_dir = tmp_path / "bundle"
+    _write_doc_with_relations(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        relations=f"  - target: concepts/{nfc_stem}\n    type: depends_on\n",
+    )
+    _write_doc(bundle_dir / "concepts" / f"{nfd_stem}.md", title="Cafe")
+
+    with sqlite_graph.build_graph(bundle_dir) as store:
+        edges = _edge_rows(store)
+        nodes = store.nodes()
+
+    assert edges == [("concepts/stoicism", f"concepts/{nfc_stem}", "depends_on")]
+    assert f"concepts/{nfc_stem}" in nodes
