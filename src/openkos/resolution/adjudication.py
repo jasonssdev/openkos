@@ -5,12 +5,20 @@ entities, or the answer is UNCERTAIN.
 
 Config-free leaf (mirrors `extraction/concept.py` and `retrieval/answer.py`):
 this module never imports `openkos.config`; the caller supplies an
-`LLMBackend`, never an `OllamaClient` constructed here. Any `OllamaError`-
-family exception raised by `llm.chat` propagates unswallowed to the caller --
-only PARSING and VALIDATION failures degrade a group's result, never the
-whole call, and no group is ever skipped or dropped:
-`adjudicate_candidates` returns exactly one `AdjudicatedCandidate` per input
-`CandidateGroup`, in the same order.
+`LLMBackend`, never an `OllamaClient` constructed here. Importing the
+`OllamaError` TYPE from `openkos.llm.ollama` keeps that discipline intact:
+`ollama.py` is itself a config-free stdlib leaf, and the error family is
+the failure contract every `LLMBackend` caller already speaks.
+
+An `OllamaError`-family exception raised by `llm.chat` mid-loop STOPS the
+loop but never discards paid-for work (issue #441): each completed group
+cost one real LLM call, so `adjudicate_candidates` returns an
+`AdjudicationBatch` carrying every completed `AdjudicatedCandidate` (input
+order, one per adjudicated group) plus the failure that stopped the loop
+and the 1-based index of the group whose chat raised. A complete run
+returns `failure=None`. Only PARSING and VALIDATION failures degrade a
+single group's result -- those never stop the loop, and no adjudicated
+group is ever skipped or dropped.
 
 Normally this is one `llm.chat` call per group with readable content
 (mirrors `extract_concept`'s one-call-per-unit). A documented exception: a
@@ -28,6 +36,7 @@ from pathlib import Path
 from openkos import sensitivity
 from openkos.llm import parsing
 from openkos.llm.base import LLMBackend, Message
+from openkos.llm.ollama import OllamaError
 from openkos.model import okf
 
 from .candidates import CandidateGroup
@@ -93,6 +102,32 @@ class AdjudicatedCandidate:
     rationale: str
     """Free-text explanation; may be blank for a well-formed reply that
     omitted one, but is never blank on the fail-closed degrade paths."""
+
+
+@dataclass(frozen=True)
+class AdjudicationBatch:
+    """Outcome of one `adjudicate_candidates` run: every completed result
+    plus, when the loop was cut short, the failure that stopped it (issue
+    #441). Ephemeral, like `AdjudicatedCandidate` -- never a persisted OKF
+    type or `bundle`/`state` file.
+
+    Partials ride the RETURN, not an exception payload, on purpose: an
+    exception-carried partial forces every caller into a try/except that
+    must remember to salvage the results off the exception, and the one
+    caller that forgets reintroduces exactly the work-discarding bug this
+    type exists to fix. A return value cannot be silently dropped by an
+    unhandled raise."""
+
+    results: list[AdjudicatedCandidate]
+    """Every completed result, in input order -- each one was fully paid
+    for (its `llm.chat` call, if any, succeeded) before the loop stopped."""
+    failure: OllamaError | None = None
+    """The `OllamaError`-family exception that stopped the loop, or `None`
+    for a complete run."""
+    failed_index: int | None = None
+    """1-based index of the group whose `llm.chat` raised `failure`; `None`
+    when the run completed. The failed group produced no result and no
+    `on_progress` call, and no later group was ever prompted."""
 
 
 def _load_members(
@@ -231,20 +266,30 @@ def adjudicate_candidates(
     include_confidential: bool = False,
     local_exemption: bool = False,
     on_progress: Callable[[int, int, AdjudicatedCandidate], None] | None = None,
-) -> list[AdjudicatedCandidate]:
+) -> AdjudicationBatch:
     """Adjudicate every `CandidateGroup` in `candidates` against `bundle_dir`
     using `llm`, read-only.
 
-    Returns exactly one `AdjudicatedCandidate` per input group, in the same
-    order -- every verdict (`SAME`, `DIFFERENT`, `UNCERTAIN`) is kept; this
-    function never filters GROUPS. Normally one `llm.chat` call is issued per
-    group (module docstring); a group whose members are ALL unreadable (or,
-    per `sensitivity-fail-closed-filter` S3a below, all confidential)
+    Returns an `AdjudicationBatch` whose `results` hold exactly one
+    `AdjudicatedCandidate` per ADJUDICATED group, in input order -- every
+    verdict (`SAME`, `DIFFERENT`, `UNCERTAIN`) is kept; this function never
+    filters GROUPS. Normally one `llm.chat` call is issued per group (module
+    docstring); a group whose members are ALL unreadable (or, per
+    `sensitivity-fail-closed-filter` S3a below, all confidential)
     short-circuits to `UNCERTAIN`/`0.0`/`"no readable member content"`
-    without calling `llm.chat`. Any `OllamaError`-family exception raised by
-    `llm.chat` propagates unswallowed (module docstring) -- this function
-    catches only reply-parsing/validation failures, never transport or
-    model-availability errors.
+    without calling `llm.chat`.
+
+    An `OllamaError`-family exception raised by `llm.chat` stops the loop
+    and comes back IN the batch (`failure` set, `failed_index` naming the
+    1-based group whose chat raised) rather than propagating (issue #441):
+    propagation made the caller pay for every completed call and then
+    discard all of the completed results with the raise -- #422's
+    `OllamaGenerationCapped` made that edge fast and frequent. Only the
+    `llm.chat` call sits inside the guard; reply-parsing/validation failures
+    still degrade that one group's result, member-read failures still skip
+    that one member, and a raise from the caller's own `on_progress` still
+    propagates untouched. A complete run returns `failure=None,
+    failed_index=None`.
 
     sensitivity-fail-closed-filter (S3a): unless `include_confidential` is
     `True`, the shared `sensitivity.sensitive_concept_ids(bundle_dir)`
@@ -255,16 +300,17 @@ def adjudicate_candidates(
     `include_confidential=True` skips the predicate walk entirely, at zero
     added cost.
 
-    `on_progress`, if given, is called once per candidate group in input
-    order, AFTER that group's `AdjudicatedCandidate` is built, with
+    `on_progress`, if given, is called once per COMPLETED candidate group in
+    input order, AFTER that group's `AdjudicatedCandidate` is built, with
     `(index, total, result)` where `index` is 1-based and `total ==
     len(candidates)` -- a hook for a CLI to render a per-group progress line
     during an otherwise opaque, minutes-long run (issue #190, mirroring
     `suggest_edge_types`'s #134 contract). The no-readable-members
     short-circuit result COUNTS -- a result is a result, whether or not
-    `llm.chat` was ever called for it. It never affects the returned list;
-    an exception it raises propagates to the caller (it is the caller's own
-    callback).
+    `llm.chat` was ever called for it; the group whose chat RAISED does not
+    -- it produced no result, so there is nothing to report progress on
+    (#441). It never affects the returned batch; an exception it raises
+    propagates to the caller (it is the caller's own callback).
 
     `local_exemption` (issue #240) is the second escape hatch defined by
     `sensitivity.should_block`: the caller asserting that the `llm.chat`
@@ -305,7 +351,15 @@ def adjudicate_candidates(
             messages = _build_messages(
                 candidate.okf_type, candidate.tier.value, members
             )
-            reply = llm.chat(messages)
+            # Guard ONLY the chat call (#441): a transport/model failure must
+            # not discard the completed results, while parse/validate/progress
+            # failures keep their own existing contracts untouched.
+            try:
+                reply = llm.chat(messages)
+            except OllamaError as exc:
+                return AdjudicationBatch(
+                    results=results, failure=exc, failed_index=index
+                )
             verdict, confidence, rationale = _parse_reply(reply)
             result = AdjudicatedCandidate(
                 candidate=candidate,
@@ -316,4 +370,4 @@ def adjudicate_candidates(
         results.append(result)
         if on_progress is not None:
             on_progress(index, total, result)
-    return results
+    return AdjudicationBatch(results=results)

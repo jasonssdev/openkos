@@ -36,7 +36,7 @@ from openkos.cli import main as main_mod
 from openkos.cli.main import app
 from openkos.graph.base import Edge
 from openkos.llm.ollama import BackendHostLocality, OllamaClient
-from openkos.resolution.adjudication import AdjudicatedCandidate
+from openkos.resolution.adjudication import AdjudicationBatch
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.resolution.contradiction import ContradictionVerdict
 from openkos.retrieval.answer import AnswerResult
@@ -227,7 +227,7 @@ def _spy_contradictions(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
 
 
 def _spy_adjudicate(monkeypatch: pytest.MonkeyPatch) -> _KwargSpy:
-    spy = _KwargSpy(list[AdjudicatedCandidate]())
+    spy = _KwargSpy(AdjudicationBatch(results=[]))
     monkeypatch.setattr(main_mod, "adjudicate_candidates", spy)
     monkeypatch.setattr(
         main_mod,

@@ -64,6 +64,7 @@ from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates_report, find_exact_title_groups
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
+    AdjudicationBatch,
     Verdict,
     adjudicate_candidates,
 )
@@ -1103,6 +1104,85 @@ def _adjudication_payload(
         for result in results
         if not same_only or result.verdict is Verdict.SAME
     ]
+
+
+def _render_adjudicate_report(
+    root: Path, results: Sequence[AdjudicatedCandidate], *, same_only: bool
+) -> None:
+    """The human `adjudicate` report over `results`, byte-identical to the
+    pre-#441 inline body -- extracted so the partial-batch failure epilogue
+    can run AFTER every output mode instead of fighting this path's early
+    returns."""
+    typer.echo(f"openkos adjudicate: workspace at {root}")
+    typer.echo()
+    if not results:
+        typer.echo("No candidates found.")
+        return
+
+    displayed = [
+        result for result in results if not same_only or result.verdict is Verdict.SAME
+    ]
+    if not displayed:
+        typer.echo("No SAME-verdict candidates to display (--same-only).")
+        return
+
+    verdict_counts = Counter(result.verdict for result in results)
+    typer.echo(
+        _format_verdict_tally(
+            verdict_counts[Verdict.SAME],
+            verdict_counts[Verdict.DIFFERENT],
+            verdict_counts[Verdict.UNCERTAIN],
+        )
+    )
+    typer.echo(
+        "Legend: [tier] type -- trigger, then verdict and rationale. "
+        "The tier is the MATCH METHOD, not a strength ranking: "
+        "HIGH = exact normalized key, LOW = near-match similarity score."
+    )
+    for result in displayed:
+        group = result.candidate
+        tier_label = group.tier.name
+        typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
+        for member_id in group.member_ids:
+            typer.echo(f"  - {member_id}")
+        # Confidence is intentionally NOT shown: a local model returns a
+        # flat, uncalibrated value (issue #138), so a fake-precise two-decimal
+        # number would invite trust it has not earned. The value is still
+        # parsed and kept on `AdjudicatedCandidate` for future thresholding.
+        typer.echo(f"  verdict: {result.verdict.value.upper()}")
+        typer.echo(f"  rationale: {result.rationale}")
+        typer.echo()
+    typer.echo("Next: openkos merge <survivor> <absorbed>")
+
+
+def _echo_adjudicate_batch_failure(
+    batch: AdjudicationBatch, *, total: int, model: str
+) -> None:
+    """One stderr line for a partial `AdjudicationBatch` (#441): the same
+    3-tier cause-specific wording the raise-path handlers use, prefixed with
+    how much paid-for work survived. The `isinstance` dispatch mirrors the
+    handlers' ORDER for the same reason they are ordered: both specific
+    classes subclass `OllamaError`, so the generic branch must come last or
+    their actionable remediation is lost."""
+    failure = batch.failure
+    context = (
+        f"openkos adjudicate: failed after adjudicating {len(batch.results)} "
+        f"of {total} candidate group(s)"
+    )
+    if isinstance(failure, OllamaUnavailable):
+        typer.echo(
+            f"{context} -- {failure}. Start it with `ollama serve`, then try "
+            f"again.{_DOCTOR_HINT}",
+            err=True,
+        )
+    elif isinstance(failure, OllamaModelNotFound):
+        typer.echo(
+            f"{context} -- model '{model}' is not installed. Pull it with "
+            f"`ollama pull {model}`, then try again.",
+            err=True,
+        )
+    else:
+        typer.echo(f"{context} -- {failure}.", err=True)
 
 
 def _prepare_one_merge(
@@ -8126,9 +8206,11 @@ def adjudicate(
     array on stdout and fully suppresses all human output (tally, legend,
     per-group detail, `Next:` hint, and both empty-state messages). It emits
     every verdict by default; passing `--same-only` filters the array to
-    `SAME` entries, mirroring the human display filter. It short-circuits
-    AFTER the Ollama error handlers below, so a degraded run still exits 1 on
-    stderr with no JSON.
+    `SAME` entries, mirroring the human display filter. On a partial batch
+    (#441) the array holds the completed verdicts and the run still exits 1
+    after the stderr failure line below -- a machine consumer that ignores
+    the exit code reads valid, paid-for verdicts, never a fabricated
+    complete run.
 
     Output mirrors `duplicates`'s grouped render (type, tier, trigger,
     members) with each group's verdict and rationale appended. The parsed
@@ -8140,10 +8222,17 @@ def adjudicate(
     returns -- every candidate group regardless of the flag; the library
     itself never filters.
 
-    A no-model/no-Ollama run degrades via the SAME 3-tier ORDERED handler
-    `query` uses -- `OllamaUnavailable`, then `OllamaModelNotFound`, then the
-    generic `OllamaError` fallback -- each with its own actionable stderr
-    message, exit 1, and zero writes.
+    A no-model/no-Ollama failure comes back INSIDE the returned
+    `AdjudicationBatch` (#441) and maps onto the SAME 3-tier ORDERED wording
+    `query` uses -- `OllamaUnavailable`, then `OllamaModelNotFound`, then
+    the generic `OllamaError` fallback -- each with its own actionable
+    stderr message and exit 1. The completed verdicts are NEVER discarded:
+    every output mode (report, `--json`, `--apply`, `--apply-same`) first
+    processes `batch.results` exactly as a complete run over that list,
+    THEN one stderr line reports the failure with completed-of-total counts
+    and the run exits 1. The raise-path handler ladder is retained around
+    the call itself for an injected backend that raises outside `llm.chat`'s
+    guarded seam -- same wording, no counts, zero writes.
 
     Unless `--include-deprecated` is passed, deprecated/superseded concepts
     (status-aware-retrieval) are excluded from the `find_candidates_report`
@@ -8227,7 +8316,7 @@ def adjudicate(
         local_exemption=local_exemption,
     )
     try:
-        results = adjudicate_candidates(
+        batch = adjudicate_candidates(
             candidates,
             bundle_dir=layout.bundle_dir,
             llm=llm,
@@ -8264,62 +8353,27 @@ def adjudicate(
         typer.echo(f"openkos adjudicate: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    results = batch.results
     if json_output:
         typer.echo(
             json.dumps(_adjudication_payload(results, same_only=same_only), indent=2)
         )
-        return
-
-    if apply:
+    elif apply:
         _run_adjudicate_apply(root, layout, index_path, log_path, results)
-        return
-
-    if apply_same:
+    elif apply_same:
         _run_adjudicate_apply_same(
             root, layout, index_path, log_path, results, confirm_count=confirm_count
         )
-        return
+    else:
+        _render_adjudicate_report(root, results, same_only=same_only)
 
-    typer.echo(f"openkos adjudicate: workspace at {root}")
-    typer.echo()
-    if not results:
-        typer.echo("No candidates found.")
-        return
-
-    displayed = [
-        result for result in results if not same_only or result.verdict is Verdict.SAME
-    ]
-    if not displayed:
-        typer.echo("No SAME-verdict candidates to display (--same-only).")
-        return
-
-    verdict_counts = Counter(result.verdict for result in results)
-    typer.echo(
-        _format_verdict_tally(
-            verdict_counts[Verdict.SAME],
-            verdict_counts[Verdict.DIFFERENT],
-            verdict_counts[Verdict.UNCERTAIN],
-        )
-    )
-    typer.echo(
-        "Legend: [tier] type -- trigger, then verdict and rationale. "
-        "The tier is the MATCH METHOD, not a strength ranking: "
-        "HIGH = exact normalized key, LOW = near-match similarity score."
-    )
-    for result in displayed:
-        group = result.candidate
-        tier_label = group.tier.name
-        typer.echo(f"[{tier_label}] {group.okf_type} -- {group.trigger}")
-        for member_id in group.member_ids:
-            typer.echo(f"  - {member_id}")
-        # Confidence is intentionally NOT shown: a local model returns a
-        # flat, uncalibrated value (issue #138), so a fake-precise two-decimal
-        # number would invite trust it has not earned. The value is still
-        # parsed and kept on `AdjudicatedCandidate` for future thresholding.
-        typer.echo(f"  verdict: {result.verdict.value.upper()}")
-        typer.echo(f"  rationale: {result.rationale}")
-        typer.echo()
-    typer.echo("Next: openkos merge <survivor> <absorbed>")
+    if batch.failure is not None:
+        # Partial batch (#441): every output mode above already processed the
+        # completed verdicts exactly as a complete run over that list -- the
+        # paid-for work is never discarded -- so all that remains is the one
+        # stderr failure line and the OllamaError-family exit code.
+        _echo_adjudicate_batch_failure(batch, total=len(candidates), model=cfg.model)
+        raise typer.Exit(code=1) from batch.failure
 
 
 _CANDIDATES_UNAVAILABLE_MESSAGE = (

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from openkos.llm.base import Message
-from openkos.llm.ollama import OllamaUnavailable
+from openkos.llm.ollama import OllamaGenerationCapped, OllamaUnavailable
 from openkos.resolution import adjudication as adjudication_mod
 from openkos.resolution.candidates import CandidateGroup, Tier
 
@@ -23,18 +23,27 @@ from openkos.resolution.candidates import CandidateGroup, Tier
 class _FakeLLM:
     """A structural `LLMBackend`: records every `chat` call, returns queued
     replies in call order. If `error` is set, `chat` raises it instead of
-    returning (and does not consume a queued reply)."""
+    returning (and does not consume a queued reply); `error_at` narrows the
+    raise to the k-th (1-based) call so mid-loop failure can be staged after
+    some groups already succeeded (#441)."""
 
     def __init__(
-        self, replies: Sequence[str] = (), *, error: BaseException | None = None
+        self,
+        replies: Sequence[str] = (),
+        *,
+        error: BaseException | None = None,
+        error_at: int | None = None,
     ) -> None:
         self._replies = list(replies)
         self.error = error
+        self.error_at = error_at
         self.calls: list[list[Message]] = []
 
     def chat(self, messages: Sequence[Message]) -> str:
         self.calls.append(list(messages))
-        if self.error is not None:
+        if self.error is not None and (
+            self.error_at is None or len(self.calls) == self.error_at
+        ):
             raise self.error
         return self._replies.pop(0)
 
@@ -100,7 +109,7 @@ def test_adjudicated_candidate_exposes_candidate_verdict_confidence_rationale(
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert len(result) == 1
     adjudicated = result[0]
@@ -133,7 +142,7 @@ def test_one_result_per_input_group_same_order(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         groups, bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert len(result) == 3
     assert [r.candidate for r in result] == groups
@@ -172,7 +181,7 @@ def test_verdict_mapping_case_insensitive(
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == expected
 
@@ -187,7 +196,7 @@ def test_unknown_verdict_maps_to_uncertain_keeping_confidence(tmp_path: Path) ->
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.UNCERTAIN
     assert result[0].confidence == 0.4
@@ -202,7 +211,7 @@ def test_out_of_range_confidence_is_clamped_high(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].confidence == 1.0
 
@@ -215,7 +224,7 @@ def test_out_of_range_confidence_is_clamped_low(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].confidence == 0.0
 
@@ -233,7 +242,7 @@ def test_malformed_reply_degrades_to_uncertain_run_continues(tmp_path: Path) -> 
 
     result = adjudication_mod.adjudicate_candidates(
         [malformed_group, valid_group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert len(result) == 2
     assert result[0].verdict == adjudication_mod.Verdict.UNCERTAIN
@@ -251,7 +260,7 @@ def test_malformed_reply_rationale_notes_parse_failure(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert (
         "malformed" in result[0].rationale.lower()
@@ -270,7 +279,7 @@ def test_non_string_reply_degrades_to_uncertain(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.UNCERTAIN
     assert result[0].confidence == 0.0
@@ -288,7 +297,7 @@ def test_json_array_reply_is_not_an_object_degrades_to_uncertain(
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.UNCERTAIN
     assert result[0].confidence == 0.0
@@ -304,7 +313,7 @@ def test_non_string_verdict_field_maps_to_uncertain(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.UNCERTAIN
     assert result[0].confidence == 0.6
@@ -320,7 +329,7 @@ def test_non_numeric_confidence_field_defaults_to_zero(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.SAME
     assert result[0].confidence == 0.0
@@ -338,7 +347,7 @@ def test_nan_confidence_fails_closed_to_zero(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.SAME
     assert result[0].confidence == 0.0
@@ -356,7 +365,7 @@ def test_infinity_confidence_fails_closed_to_zero(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.SAME
     assert result[0].confidence == 0.0
@@ -374,7 +383,7 @@ def test_valid_reply_wrapped_in_json_code_fence_is_parsed(tmp_path: Path) -> Non
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.SAME
     assert result[0].confidence == 0.85
@@ -396,7 +405,7 @@ def test_valid_reply_embedded_in_prose_is_recovered(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.DIFFERENT
     assert result[0].confidence == 0.6
@@ -415,7 +424,7 @@ def test_member_with_unparseable_frontmatter_is_skipped(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert len(result) == 1
     assert len(llm.calls) == 1
@@ -458,7 +467,7 @@ def test_different_verdict_is_present_in_returned_list(tmp_path: Path) -> None:
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict == adjudication_mod.Verdict.DIFFERENT
 
@@ -476,7 +485,7 @@ def test_unreadable_member_is_skipped_group_still_adjudicated(tmp_path: Path) ->
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert len(result) == 1
     assert result[0].verdict == adjudication_mod.Verdict.UNCERTAIN
@@ -493,7 +502,7 @@ def test_all_members_unreadable_short_circuits_without_llm_call(tmp_path: Path) 
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert len(result) == 1
     assert result[0].candidate == group
@@ -504,18 +513,79 @@ def test_all_members_unreadable_short_circuits_without_llm_call(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
-# Requirement: `OllamaError`-Family Propagates Unswallowed From The Leaf
+# Requirement: Partial Batch Preserved On Mid-Loop `OllamaError` (#441)
 # ---------------------------------------------------------------------------
 
 
-def test_ollama_error_propagates_unswallowed(tmp_path: Path) -> None:
+def test_mid_loop_ollama_error_returns_completed_results_and_failure(
+    tmp_path: Path,
+) -> None:
+    """An `OllamaError`-family raise on the k-th group's `llm.chat` stops the
+    loop and returns every already-completed result in input order, the
+    exception instance itself, and the 1-based failed index -- the caller
+    paid for k-1 completed calls and keeps all of them (#441). No group
+    after the failed one is ever prompted; the failed group produces no
+    result and no `on_progress` call."""
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    _write_doc(tmp_path / "c.md", title="C")
+    _write_doc(tmp_path / "d.md", title="D")
+    _write_doc(tmp_path / "e.md", title="E")
+    _write_doc(tmp_path / "f.md", title="F")
+    groups = [_group("a", "b"), _group("c", "d"), _group("e", "f")]
+    capped = OllamaGenerationCapped("generation hit the token ceiling")
+    llm = _FakeLLM(replies=[_valid_reply("same")], error=capped, error_at=2)
+    seen: list[tuple[int, int, adjudication_mod.AdjudicatedCandidate]] = []
+
+    def _cb(
+        index: int, total: int, result: adjudication_mod.AdjudicatedCandidate
+    ) -> None:
+        seen.append((index, total, result))
+
+    batch = adjudication_mod.adjudicate_candidates(
+        groups, bundle_dir=tmp_path, llm=llm, on_progress=_cb
+    )
+
+    assert isinstance(batch, adjudication_mod.AdjudicationBatch)
+    assert [r.candidate for r in batch.results] == groups[:1]
+    assert batch.results[0].verdict is adjudication_mod.Verdict.SAME
+    assert batch.failure is capped
+    assert batch.failed_index == 2
+    # The failed call itself happened; the group AFTER it was never prompted.
+    assert len(llm.calls) == 2
+    # `on_progress` fired only for completed results -- never for the failure.
+    assert [(index, total) for index, total, _ in seen] == [(1, 3)]
+
+
+def test_ollama_error_on_first_group_returns_empty_results(tmp_path: Path) -> None:
     _write_doc(tmp_path / "a.md", title="A")
     _write_doc(tmp_path / "b.md", title="B")
     group = _group("a", "b")
-    llm = _FakeLLM(error=OllamaUnavailable("no local Ollama server reachable"))
+    failure = OllamaUnavailable("no local Ollama server reachable")
+    llm = _FakeLLM(error=failure, error_at=1)
 
-    with pytest.raises(OllamaUnavailable):
-        adjudication_mod.adjudicate_candidates([group], bundle_dir=tmp_path, llm=llm)
+    batch = adjudication_mod.adjudicate_candidates(
+        [group], bundle_dir=tmp_path, llm=llm
+    )
+
+    assert batch.results == []
+    assert batch.failure is failure
+    assert batch.failed_index == 1
+
+
+def test_complete_run_reports_no_failure(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "a.md", title="A")
+    _write_doc(tmp_path / "b.md", title="B")
+    _write_doc(tmp_path / "c.md", title="C")
+    _write_doc(tmp_path / "d.md", title="D")
+    groups = [_group("a", "b"), _group("c", "d")]
+    llm = _FakeLLM(replies=[_valid_reply("same"), _valid_reply("different")])
+
+    batch = adjudication_mod.adjudicate_candidates(groups, bundle_dir=tmp_path, llm=llm)
+
+    assert batch.failure is None
+    assert batch.failed_index is None
+    assert len(batch.results) == len(groups)
 
 
 # ---------------------------------------------------------------------------
@@ -531,12 +601,12 @@ def test_repeated_runs_with_fake_backend_are_deterministic(tmp_path: Path) -> No
     llm_one = _FakeLLM(replies=[_valid_reply("same", 0.77, "match")])
     result_one = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm_one
-    )
+    ).results
 
     llm_two = _FakeLLM(replies=[_valid_reply("same", 0.77, "match")])
     result_two = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm_two
-    )
+    ).results
 
     assert result_one == result_two
 
@@ -561,7 +631,7 @@ def test_confidential_member_excluded_before_load_members_by_default(
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert len(llm.calls) == 1
     (message,) = [m for m in llm.calls[0] if m["role"] == "user"]
@@ -581,7 +651,7 @@ def test_all_members_confidential_short_circuits_to_uncertain(tmp_path: Path) ->
 
     result = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict is adjudication_mod.Verdict.UNCERTAIN
     assert result[0].confidence == 0.0
@@ -763,7 +833,7 @@ def test_adjudicate_candidates_invokes_on_progress_once_per_group_in_order(
         bundle_dir=tmp_path,
         llm=llm,
         on_progress=_cb,
-    )
+    ).results
 
     assert [(index, total) for index, total, _ in seen] == [(1, 3), (2, 3), (3, 3)]
     # Identity, not equality: the callback receives the SAME objects the
@@ -789,7 +859,7 @@ def test_adjudicate_candidates_on_progress_omitted_changes_nothing(
 
     results = adjudication_mod.adjudicate_candidates(
         [group], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert len(results) == 1
     assert len(llm.calls) == 1
@@ -860,7 +930,7 @@ def test_local_exemption_defaults_to_false_on_adjudicate_candidates(
 
     result = adjudication_mod.adjudicate_candidates(
         [_group("a", "b")], bundle_dir=tmp_path, llm=llm
-    )
+    ).results
 
     assert result[0].verdict is adjudication_mod.Verdict.UNCERTAIN
     assert llm.calls == []

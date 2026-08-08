@@ -308,7 +308,19 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     computed from a state already disproved. A mid-run `(OSError, ValueError)`
     write failure stops the loop immediately too, mirroring
     `_run_adjudicate_apply`'s own documented behavior -- prior commits stay
-    intact and reversible via `unmerge`."""
+    intact and reversible via `unmerge`.
+
+    A PARTIAL `AdjudicationBatch` (#441) keeps its completed verdicts: the
+    walk below runs over `batch.results` exactly as over a complete run --
+    the merge cores need no model, so a dead server cannot invalidate
+    verdicts already paid for. Only then is the failure surfaced, split by
+    class: `OllamaUnavailable`/`OllamaModelNotFound` are RE-RAISED so the
+    sequencer's existing handlers keep their run-scoped skip (later
+    `needs_llm` stages must not ask the operator to spend against a server
+    this stage just proved dead/misconfigured), while the rest of the
+    `OllamaError` family returns a `failed` outcome with completed-of-total
+    counts, leaving later stages to run -- the same fails-only-this-stage
+    scope the sequencer's generic handler already pins."""
     from openkos.cli import main as cli_main
 
     layout = ctx.layout
@@ -325,7 +337,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     llm = ctx.ollama_client
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Identity stage requires an LLM client")
-    results: Sequence[AdjudicatedCandidate] = adjudicate_candidates(
+    batch = adjudicate_candidates(
         groups,
         bundle_dir=layout.bundle_dir,
         llm=llm,
@@ -333,6 +345,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         local_exemption=ctx.local_exemption,
         on_progress=observability.progress_callback("curate", "adjudicating group"),
     )
+    results: Sequence[AdjudicatedCandidate] = batch.results
 
     applied = 0
     skipped = 0
@@ -392,6 +405,22 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             )
             raise typer.Exit(code=1) from exc
         applied += 1
+
+    if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
+        # Availability failures stay raise-shaped so the sequencer's handler
+        # keeps its run-scoped skip of later `needs_llm` stages; the walk
+        # above already ran, so the completed verdicts survive (#441).
+        raise batch.failure
+    if batch.failure is not None:
+        return StageOutcome(
+            status="failed",
+            applied=applied,
+            skipped=skipped,
+            notice=(
+                f"Identity: failed -- {batch.failure} (adjudicated "
+                f"{len(batch.results)} of {len(groups)} candidate group(s))."
+            ),
+        )
 
     status: Literal["applied", "empty"] = "applied" if applied or skipped else "empty"
     return StageOutcome(

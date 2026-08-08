@@ -24,7 +24,11 @@ from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
-from openkos.resolution.adjudication import AdjudicatedCandidate, Verdict
+from openkos.resolution.adjudication import (
+    AdjudicatedCandidate,
+    AdjudicationBatch,
+    Verdict,
+)
 from openkos.resolution.candidates import CandidateGroup, CandidateGroupReport, Tier
 from openkos.resolution.contradiction import CandidatePlan, _CandidateSpec
 from tests.unit.cli.conftest import changed_paths, disable_local_exemption
@@ -856,11 +860,16 @@ def test_accepted_identity_pair_commits_via_shared_merge_cores(
     )
     monkeypatch.setattr(
         "openkos.cli.curate.adjudicate_candidates",
-        lambda *a, **k: [
-            AdjudicatedCandidate(
-                candidate=group, verdict=Verdict.SAME, confidence=0.9, rationale="same"
-            )
-        ],
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
     )
     _simulate_tty(monkeypatch)
 
@@ -871,6 +880,113 @@ def test_accepted_identity_pair_commits_via_shared_merge_cores(
     assert result.exit_code == 0
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
     assert "Identity: applied 1, skipped 0." in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# issue #441 -- a partial adjudication batch keeps its completed verdicts
+# ---------------------------------------------------------------------------
+
+
+def _partial_identity_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: OllamaError
+) -> None:
+    """Seed a 2-group Identity queue whose first group adjudicated SAME and
+    whose second group's chat raised `failure` -- the #441 mid-batch shape."""
+    group_done = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub-done",
+    )
+    group_failed = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/c", "concepts/d"),
+        tier=Tier.LOW,
+        trigger="stub-failed",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(
+            groups=(group_done, group_failed), produced=2, retained=2
+        ),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group_done,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ],
+            failure=failure,
+            failed_index=2,
+        ),
+    )
+
+
+def test_identity_partial_batch_applies_completed_then_reports_failed_with_counts(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generic mid-batch `OllamaError` no longer discards Identity's
+    completed verdicts (#441): the completed SAME pair still goes through
+    the existing merge walk, the stage reports failed with
+    completed-of-total counts, later stages still run, and the exit code
+    stays 0 (curate is not a CI gate)."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _partial_identity_batch(tmp_path, monkeypatch, OllamaError("boom"))
+    _simulate_tty(monkeypatch)
+
+    # Two stdin answers: the Identity cost gate's `typer.confirm` consumes
+    # the first "y", the per-pair `[y/N/skip]` `typer.prompt` the second.
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert (
+        "Identity: failed -- boom (adjudicated 1 of 2 candidate group(s))."
+        in result.stdout
+    )
+    # Later stages still ran: their summary lines are present (pinned
+    # invariant -- a generic OllamaError fails only its own stage).
+    assert "Structure:" in result.stdout
+    assert "Contradictions:" in result.stdout
+
+
+def test_identity_partial_batch_unavailable_still_walks_then_skips_later_stages(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An `OllamaUnavailable` mid-batch keeps the completed verdicts too --
+    the merge walk needs no model -- but still surfaces through the
+    sequencer's run-scoped unavailable handling (`ollama serve` notice), so
+    later `needs_llm` stages are not asked to spend against a dead server
+    (#441)."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _partial_identity_batch(
+        tmp_path, monkeypatch, OllamaUnavailable("connection refused")
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "Identity: unavailable -- connection refused" in result.stdout
+    assert "ollama serve" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -901,11 +1017,16 @@ def test_identity_n_gt2_group_prints_pairwise_commands_no_merge(
     )
     monkeypatch.setattr(
         "openkos.cli.curate.adjudicate_candidates",
-        lambda *a, **k: [
-            AdjudicatedCandidate(
-                candidate=group, verdict=Verdict.SAME, confidence=0.9, rationale="same"
-            )
-        ],
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
     )
     _simulate_tty(monkeypatch)
 
@@ -948,11 +1069,16 @@ def test_identity_toctou_drift_exits_three_nothing_written(
     )
     monkeypatch.setattr(
         "openkos.cli.curate.adjudicate_candidates",
-        lambda *a, **k: [
-            AdjudicatedCandidate(
-                candidate=group, verdict=Verdict.SAME, confidence=0.9, rationale="same"
-            )
-        ],
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
     )
     _simulate_tty(monkeypatch)
 
@@ -1695,11 +1821,16 @@ def test_structure_sees_post_merge_identity_state(
     )
     monkeypatch.setattr(
         "openkos.cli.curate.adjudicate_candidates",
-        lambda *a, **k: [
-            AdjudicatedCandidate(
-                candidate=group, verdict=Verdict.SAME, confidence=0.9, rationale="same"
-            )
-        ],
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
     )
 
     seen_survivors: list[bool] = []
