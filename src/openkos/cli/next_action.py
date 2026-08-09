@@ -36,7 +36,12 @@ control flow, or refactored (design D2): every signal this module reads
 comes from a function `status`/`lint` already ship
 (`vector_store_is_empty`, `lint_check.collect_docs` + its checks,
 `find_exact_title_groups`), so no walk logic is duplicated and the two
-verbs can drift in framing without drifting in truth.
+verbs can drift in framing without drifting in truth. ONE signal is sourced
+outside that set: `walk_incomplete` reads `okf._walk_errors` directly (#486),
+because neither `status` nor `lint` exposes the unlistable-directory signal
+as a function this module could call -- `status` folds it into its own
+rendered section. The principle it serves is the same one, though: the walk
+logic still lives in `okf`, and this module only reads its result.
 
 Cost contract, enforced STRUCTURALLY, not by discipline: `_BundleSignals` is
 the only object holding a `Path`. A tier callable receives only a
@@ -103,13 +108,12 @@ class NextAction:
     """The exact, runnable command string -- verbatim, never re-derived.
 
     ONE tier is exempt, and only one (#486): the rank-0 bootstrap rung
-    returns `openkos ingest <path>` with a literal placeholder, because no
-    document exists anywhere to supply the argument and only the user knows
-    what to ingest first (see `_tier_bootstrap_empty_bundle`). Every other
-    tier's command is runnable as printed. If a SECOND templated tier ever
-    appears, replace this exception with a structured `placeholder: bool`
-    rather than growing the list -- one exception is worth a sentence, two
-    are worth a field."""
+    returns `openkos ingest <path>` with a literal placeholder. Its own
+    docstring holds the reasoning; this sentence exists so the exception is
+    discoverable from the contract it bends. Every other tier's command is
+    runnable as printed. If a SECOND templated tier ever appears, replace
+    this exception with a structured `placeholder: bool` rather than growing
+    the list -- one exception is worth a sentence, two are worth a field."""
     reason: str
     """A single line explaining why this command was recommended."""
 
@@ -220,24 +224,22 @@ class _BundleSignals:
         skip notice at all. That is the exact gap that let a populated
         bundle read as a fresh one.
 
-        The placement is what preserves the cost contract. Every other
-        tier's walk budget is untouched because no other tier reads this,
-        and the one tier that does reaches it only when `vector_store_empty`
-        and an empty `docs` both already hold -- a bundle whose walk is by
-        then trivially cheap. Never raises: an advisory that breaks `next`
-        would be worse than the ambiguity it resolves."""
+        This is a SECOND full traversal, not a free one, and the honest
+        bound is where it is paid rather than how big it is: an empty `docs`
+        means zero ELIGIBLE documents, never a small tree -- reserved files,
+        non-document assets and deep nesting are all still walked. What the
+        cost contract preserves is that no other tier's budget moves, and
+        that this one is reached only on a run already headed for the
+        bootstrap recommendation.
+
+        Unwrapped, like the helper's two other callers: `okf._walk_errors`
+        hands `os.walk` an `onerror` collector, so a directory-scan failure
+        becomes an entry in its result rather than an exception. There is no
+        `OSError` here left to catch, and swallowing anything else would
+        report "the walk was complete" -- the precise claim this property
+        exists to stop the bootstrap tier from making."""
         if self._walk_incomplete is None:
-            # `OSError` only, NOT the broad `except Exception` its sibling
-            # signals use. This one fails OPEN into a claim -- a swallowed
-            # exception here reports "the walk was complete" and restores the
-            # very bug this property exists to prevent, so only the failure
-            # mode a directory scan genuinely has is absorbed. A bare
-            # `Exception` here hid a missing import during development and
-            # silently produced the wrong recommendation.
-            try:
-                self._walk_incomplete = bool(okf._walk_errors(self._layout.bundle_dir))
-            except OSError:
-                self._walk_incomplete = False
+            self._walk_incomplete = bool(okf._walk_errors(self._layout.bundle_dir))
         return self._walk_incomplete
 
     @property

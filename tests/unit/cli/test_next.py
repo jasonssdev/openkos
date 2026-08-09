@@ -1486,3 +1486,37 @@ def test_bootstrap_still_recommends_ingest_on_a_genuinely_empty_bundle(
     assert "Run: openkos ingest" in result.stdout
     assert "first source" in result.stdout
     assert "could not be read" not in result.stdout
+
+
+def test_incomplete_walk_redirect_still_names_the_file_level_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both kinds of damage in one run: unparseable FILES and an unlistable
+    DIRECTORY (#486).
+
+    The two travel different paths -- skip notices come from
+    `collect_docs`'s per-file errors, the redirect comes from
+    `okf._walk_errors`'s directory-scan errors -- and the redirect must not
+    swallow the notices on its way past.
+
+    `render_lines` appends the notices after BOTH branches, so today they
+    survive by construction rather than by this test's vigilance. That is
+    the point: this pins the D4 honesty guard against the ONE new way it
+    could be lost -- a future redirect that returns early or renders itself
+    -- and it is the only test where a file-level skip and a
+    directory-level failure occur in the same run."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_unparseable_doc(tmp_path)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    # The redirect fires: an unlistable directory means "empty" is not a
+    # claim this run can make, even though a file-level skip explains part
+    # of the emptiness.
+    assert "Run: openkos status" in result.stdout
+    assert "could not be read" in result.stdout
+    assert "Run: openkos ingest" not in result.stdout
+    # ...and the file-level damage is still named, not shadowed by it.
+    assert "concepts/broken.md: skipped (unparseable frontmatter)" in result.stdout
