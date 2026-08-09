@@ -911,7 +911,8 @@ def init(
     # after the choice AND below the call to action, which is after both
     # moments it exists to inform. The concrete note naming the resolved tag
     # still prints later; this one reaches the reader while they are deciding.
-    if sys.stdin.isatty() and embedding_model is None:
+    stickiness_stated_at_the_picker = sys.stdin.isatty() and embedding_model is None
+    if stickiness_stated_at_the_picker:
         typer.echo(
             "openkos init: note -- the embedding model you pick here is "
             "sticky: changing it in this workspace later forces a full "
@@ -958,12 +959,24 @@ def init(
         f"{layout.bundle_dir.name}/log.md, {layout.agents_path.name}, "
         f"{layout.config_path.name})."
     )
-    typer.echo(
-        f"openkos init: note -- the embedding model ('{resolved_embedding_model}') "
-        "is sticky: editing it in this workspace's openkos.yaml later forces "
-        "a full corpus re-embed the next time `openkos reindex` runs.",
-        err=True,
-    )
+    # ONE stickiness message per run (review finding on this change). Moving
+    # the warning earlier is worthless if the reader then meets the same
+    # sentence again a few lines down: when the picker already carried the
+    # explanation, this line only confirms which tag it applies to.
+    if stickiness_stated_at_the_picker:
+        typer.echo(
+            f"openkos init: the sticky embedding model is "
+            f"'{resolved_embedding_model}'.",
+            err=True,
+        )
+    else:
+        typer.echo(
+            f"openkos init: note -- the embedding model "
+            f"('{resolved_embedding_model}') is sticky: editing it in this "
+            "workspace's openkos.yaml later forces a full corpus re-embed the "
+            "next time `openkos reindex` runs.",
+            err=True,
+        )
     typer.echo("Next: run `openkos ingest <path>` to import your first source.")
 
     # Best-effort git setup (Slice 1, git-lifecycle): runs strictly AFTER
@@ -11123,16 +11136,21 @@ def doctor() -> None:
             )
         )
 
-    # 11. backend-host-locality (informational, always; NO SKIP branch --
-    # like checks 8/9/10 it depends on neither workspace state nor Ollama
-    # REACHABILITY: locality is a literal-form check over the host the chat
-    # client already resolved, so it answers even when the server is down.
+    # 11. backend-host-locality (informational, always; ALWAYS EMITTED).
+    # Unlike checks 8/9/10 this one now has a SKIP branch (#389), though not
+    # because it cannot answer: locality is a literal-form check over the
+    # host the chat client already resolved, so it still answers when the
+    # server is down. It skips because a green line beneath a red one reads
+    # as a contradiction to someone scanning the column, and the reader has
+    # no way to know the two answer different questions. The configured host
+    # stays in the detail either way, so nothing is lost by the downgrade.
     # Reuses the SAME `client` check 3 built, so what is reported is the
     # host `doctor` itself would have sent to, never a re-derivation.
     #
-    # ALWAYS `pass` (issue #240). The two other shapes were considered and
-    # are both wrong: `[FAIL]` on a non-local backend would call a
-    # legitimate configuration broken, and any non-`pass` status invites a
+    # `pass` while Ollama is reachable, `skip` when it is not; NEVER
+    # `fail` (issue #240). That third shape was considered and
+    # is wrong: `[FAIL]` on a non-local backend would call a
+    # legitimate configuration broken, and a failing status invites a
     # future reader to make this check critical, which would let an
     # informational report flip an exit code that scripts gate on. The
     # DETAIL carries the finding; the status only says the check ran.
