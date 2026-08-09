@@ -188,3 +188,32 @@ project cannot relicense), so a fresh clone parses the ground truth but skips
 every fixture with a "source not present" note instead of crashing. Others
 reproduce the METHOD, not the exact numbers. Same trade the corpus makes, for
 the same reason.
+
+## `measure_acronym_fabrication.py` — a ground-truth-free fabrication probe
+
+`python evals/extraction_cap/measure_acronym_fabrication.py` answers issue
+#423's fabrication half from data already on disk: it scans every
+`runs-*.json` under `evals/` and makes **zero model calls**.
+
+It needs no ground truth, which is the point. The test is
+**self-contradiction**: an acronym the extractor expands parenthetically
+should expand the same way every time, so two distinct expansions of one
+acronym within a fixture prove at least one emission is fabricated. That
+keeps it immune to the trap the adjudication queue creates elsewhere in this
+harness, where a fixture's numbers are under-reported until a human has
+worked its queue — a comparison across fixtures at different adjudication
+depths is invalid, but a comparison of a fixture against *itself* is not.
+
+Measured on the stored runs (2026-08-09), the result is one-sided:
+
+| fixture | language | emissions | distinct expansions |
+| --- | --- | --- | --- |
+| `large-03-skills-vs-tools` | EN | 40 | 1, always correct |
+| `medium-08-sdk-skills` | EN | 52 | 1, always correct |
+| `medium-09-sdk-skills-notes` | EN | 10 | 1, always correct |
+| `small-04-pre-build-skills` | **ES** | 11 | **5, none correct** |
+
+102 English emissions with zero fabrications against 11 Spanish emissions
+with zero correct ones. The correct expansion never appears in Spanish at
+all. This is why #423 is treated as language-specific rather than as a
+general hallucination bug: the English base rate is not low, it is zero.
