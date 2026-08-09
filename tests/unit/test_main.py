@@ -195,7 +195,7 @@ core (design D4/D5) into Typer's confirm-gate"."""
 
 _INTERNAL_HELP_PATTERNS = (
     re.compile(r"\bS\d+[a-z]?\b"),
-    re.compile(r"\bSlice \d+\b"),
+    re.compile(r"\bSlice \d+[a-z-]*"),
     re.compile(r"\bD\d+/D\d+\b"),
     re.compile(r"\bgap #\d+\b"),
 )
@@ -205,7 +205,13 @@ Added after the first version of this test passed while `forget --scope`
 still published the token "S2a" (review finding): a slice reference does not
 have to spell out the word "Slice" to be jargon. Patterns cover the
 abbreviated slice/story forms, paired design references like "D4/D5", and
-numbered gap references."""
+numbered gap references.
+
+The slice pattern deliberately does NOT end on a word boundary after its
+digits. It did at first, which meant it matched a bare "Slice 1" and missed
+"Slice 2a" and "Slice 2b-ii" -- there is no boundary between a digit and the
+letter after it, and the lettered forms are the ones this codebase actually
+uses most. `[a-z-]*` absorbs them while still refusing "Sliced"."""
 
 
 def _registered_command_names() -> list[str]:
