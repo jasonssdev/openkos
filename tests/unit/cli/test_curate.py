@@ -3510,3 +3510,101 @@ def test_review_false_never_lifts_the_non_tty_write_refusal_for_identity(
         "Identity: non-interactive write consent unavailable -- run "
         "`openkos adjudicate --apply-same --confirm-count <n>` instead."
     ) in _lines(result.stdout)
+
+
+def _mixed_structure_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A COMPLETE 2-edge Structure queue: one SPECIFIC suggestion and one
+    `related_to`, the type the prompt designates as correct when the
+    documents do not support a specific claim (#508)."""
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    specific = Edge(source_id="concepts/a", target_id="concepts/b")
+    vague = Edge(source_id="concepts/a", target_id="concepts/c")
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.candidate_edges", lambda *a, **k: [specific, vague]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_edge_types",
+        lambda *a, **k: EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(
+                    edge=specific, suggested_type="references", rationale="names it"
+                ),
+                EdgeSuggestion(
+                    edge=vague, suggested_type="related_to", rationale="cannot say how"
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+
+def test_accept_structure_still_prompts_for_a_related_to_suggestion(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--accept structure` applies the SPECIFIC suggestion silently but
+    still prompts for `related_to` (#508).
+
+    `related_to` is the answer the prompt calls correct when the documents
+    do not support a specific claim, so it is the one type whose bulk
+    acceptance adds no specific claim to the graph -- and, measured on a
+    real bundle, 67% of accepted edges. Accepting those unreviewed is
+    exactly the low-value material #385 warned about."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _mixed_structure_queue(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    # The cost gate's "y", then a decline for the `related_to` prompt that
+    # must still be asked.
+    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert "Relate concepts/a -> concepts/b" not in result.stdout
+    assert "Relate concepts/a -> concepts/c [related_to]? [y/N]" in result.stdout
+    assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
+    assert "  declined: concepts/a -> concepts/c [related_to]" in result.stdout
+
+
+def test_accept_structure_on_a_pipe_skips_related_to_instead_of_prompting(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a non-TTY run there is no channel to ask on, so an unacceptable
+    item is SKIPPED rather than prompted (#508).
+
+    Without this the run would reach `typer.prompt` with no terminal and
+    die mid-walk -- the same failure the Identity non-TTY guard exists to
+    prevent. Unattended acceptance therefore applies exactly the specific
+    suggestions and leaves the rest queued for a human."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _mixed_structure_queue(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto", "--accept", "structure"])
+
+    assert result.exit_code == 0
+    assert "Relate concepts/a" not in result.stdout
+    assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "concepts/b" in source_text
+    assert "concepts/c" not in source_text

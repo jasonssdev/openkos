@@ -120,6 +120,21 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   mid-session. Confidence-threshold auto-acceptance stays out: the two stages
   that cause the prompt volume expose no confidence at all — only
   adjudication does, and that is the destructive one (#385).
+- **An accepted Structure stage still asks about `related_to`**: bulk
+  acceptance was applying, unreviewed, exactly the suggestions where the
+  model had declined to claim anything. `related_to` is not a wrong answer —
+  the rubric defines it as an answer, and an honest one beats a guessed
+  `part_of` that asserts something false about how the knowledge fits
+  together. What sets it apart is narrower: applying it adds no claim to the
+  graph beyond the untyped link that was already there, which makes it the
+  cheapest place to spend a human glance and, at a measured 67% of accepted
+  edges, also the largest. So `--accept structure` now applies every
+  specific type without asking and routes this one to the operator. On a
+  pipe, where there is nothing to prompt on, it is counted as skipped rather
+  than applied — an unattended run writes the confident suggestions and
+  leaves the rest queued. This is the first slice of #508, and the one that
+  needed no prompt change: the numeric-confidence route stays blocked on
+  there being no eval harness for these suggesters at all (#508).
 
 ### Changed
 
