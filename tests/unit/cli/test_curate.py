@@ -44,6 +44,25 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 
 
+def _lines(output: str) -> list[str]:
+    """Split captured output so summary assertions compare WHOLE lines.
+    `render_summary` is the only owner of the `"{stage}: "` prefix, and a
+    substring check cannot tell a correct line from one whose notice
+    repeated that prefix -- `"Identity: applied 1, skipped 0."` is a
+    substring of `"Identity: Identity: applied 1, skipped 0."` (#504)."""
+    return output.splitlines()
+
+
+def _unavailable_line(stage: str, detail: str) -> str:
+    """The WHOLE summary line the sequencer prints when a stage's `run`
+    raises `OllamaUnavailable` -- assembled once so every caller compares
+    the entire line instead of a doubling-blind prefix of it (#504)."""
+    return (
+        f"{stage}: unavailable -- {detail}. Start it with `ollama serve`, "
+        "then try again. Or run `openkos doctor` to diagnose the environment."
+    )
+
+
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
@@ -354,7 +373,7 @@ def test_run_curate_reports_truncation_even_when_the_queue_is_empty(
         return curate.StageProbe(
             items=(),
             llm_calls=0,
-            empty_message="Structure: nothing to do.",
+            empty_message="Nothing to do.",
             notice=notice,
         )
 
@@ -380,9 +399,7 @@ def test_run_curate_prints_nothing_extra_when_the_probe_has_no_notice(
     _patch_stdin_isatty(monkeypatch, False)
 
     def _probe(ctx: curate.CurateContext) -> curate.StageProbe:
-        return curate.StageProbe(
-            items=(), llm_calls=0, empty_message="Structure: nothing to do."
-        )
+        return curate.StageProbe(items=(), llm_calls=0, empty_message="Nothing to do.")
 
     monkeypatch.setattr(
         curate,
@@ -619,7 +636,7 @@ def test_not_live_stage_probe_is_never_called(monkeypatch: pytest.MonkeyPatch) -
 
     assert outcomes == [
         curate.StageOutcome(
-            status="not-live", notice="Structure: not yet available in this version"
+            status="not-live", notice="not yet available in this version"
         )
     ]
 
@@ -879,7 +896,7 @@ def test_accepted_identity_pair_commits_via_shared_merge_cores(
 
     assert result.exit_code == 0
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
-    assert "Identity: applied 1, skipped 0." in result.stdout
+    assert "Identity: applied 1, skipped 0." in _lines(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -953,7 +970,7 @@ def test_identity_partial_batch_applies_completed_then_reports_failed_with_count
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
     assert (
         "Identity: failed -- boom (adjudicated 1 of 2 candidate group(s))."
-        in result.stdout
+        in _lines(result.stdout)
     )
     # Later stages still ran: their summary lines are present (pinned
     # invariant -- a generic OllamaError fails only its own stage).
@@ -985,8 +1002,7 @@ def test_identity_partial_batch_unavailable_still_walks_then_skips_later_stages(
 
     assert result.exit_code == 0
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
-    assert "Identity: unavailable -- connection refused" in result.stdout
-    assert "ollama serve" in result.stdout
+    assert _unavailable_line("Identity", "connection refused") in _lines(result.stdout)
 
 
 def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_stages(
@@ -1024,10 +1040,14 @@ def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_sta
 
     assert result.exit_code == 0
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
-    assert "Identity: unavailable -- model" in result.stdout
-    assert "is not installed" in result.stdout
-    assert "ollama pull" in result.stdout
-    assert "skipped -- Ollama unavailable (see above)." in result.stdout
+    assert (
+        f"Identity: unavailable -- model '{config.DEFAULT_MODEL}' is not "
+        f"installed. Pull it with `ollama pull {config.DEFAULT_MODEL}`, then "
+        "try again."
+    ) in _lines(result.stdout)
+    assert "Structure: skipped -- Ollama unavailable (see above)." in _lines(
+        result.stdout
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1791,7 +1811,7 @@ def test_structure_accepted_suggestion_writes_via_extracted_relate_core(
     )
     assert "references" in source_text
     assert "concepts/b" in source_text
-    assert "Structure: applied 1, skipped 0." in result.stdout
+    assert "Structure: applied 1, skipped 0." in _lines(result.stdout)
 
 
 def test_structure_declined_suggestion_writes_nothing(
@@ -1834,7 +1854,7 @@ def test_structure_declined_suggestion_writes_nothing(
     result = runner.invoke(app, ["curate"], input="y\nn\n")
 
     assert result.exit_code == 0
-    assert "Structure: applied 0, skipped 1." in result.stdout
+    assert "Structure: applied 0, skipped 1." in _lines(result.stdout)
     assert changed_paths(before, _snapshot(tmp_path)) == set()
 
 
@@ -1974,7 +1994,7 @@ def test_structure_partial_batch_applies_completed_then_reports_failed_with_coun
     assert "concepts/b" in source_text
     assert (
         "Structure: failed -- boom (suggested 1 of 2 untyped edge(s); "
-        "applied 1, skipped 0)." in result.stdout
+        "applied 1, skipped 0)." in _lines(result.stdout)
     )
     # Later stages still ran: their summary lines are present (pinned
     # invariant -- a generic OllamaError fails only its own stage).
@@ -2006,8 +2026,7 @@ def test_structure_partial_batch_unavailable_still_walks_then_skips_later_stages
         encoding="utf-8"
     )
     assert "references" in source_text
-    assert "Structure: unavailable -- connection refused" in result.stdout
-    assert "ollama serve" in result.stdout
+    assert _unavailable_line("Structure", "connection refused") in _lines(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -2068,7 +2087,7 @@ def test_metadata_accepted_tier_writes_via_extracted_set_volatility_core(
     assert result.exit_code == 0
     config_text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
     assert "Concept: volatile" in config_text or "volatile" in config_text
-    assert "Metadata: applied 1, skipped 0." in result.stdout
+    assert "Metadata: applied 1, skipped 0." in _lines(result.stdout)
 
 
 def test_metadata_sensitivity_gap_reported_never_written(
@@ -2229,7 +2248,7 @@ def test_metadata_partial_batch_applies_completed_then_reports_failed_with_count
     assert "volatile" in config_text
     assert (
         "Metadata: failed -- boom (suggested 1 of 2 concept type(s); "
-        "applied 1, skipped 0)." in result.stdout
+        "applied 1, skipped 0)." in _lines(result.stdout)
     )
     # The later stage still ran: its summary line is present (pinned
     # invariant -- a generic OllamaError fails only its own stage).
@@ -2257,8 +2276,7 @@ def test_metadata_partial_batch_unavailable_still_walks_then_skips_later_stages(
     assert result.exit_code == 0
     config_text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
     assert "volatile" in config_text
-    assert "Metadata: unavailable -- connection refused" in result.stdout
-    assert "ollama serve" in result.stdout
+    assert _unavailable_line("Metadata", "connection refused") in _lines(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -2395,8 +2413,8 @@ def test_contradictions_partial_batch_reports_completed_then_fails_with_counts(
     assert result.exit_code == 0
     assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
     assert "kept work" in result.stdout
-    assert (
-        "Contradictions: failed -- boom (judged 1 of 2 candidate(s))." in result.stdout
+    assert "Contradictions: failed -- boom (judged 1 of 2 candidate(s))." in _lines(
+        result.stdout
     )
     assert changed_paths(before, _snapshot(tmp_path)) == set()
 
@@ -2423,8 +2441,9 @@ def test_contradictions_partial_batch_unavailable_still_reports_completed(
 
     assert result.exit_code == 0
     assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
-    assert "Contradictions: unavailable -- connection refused" in result.stdout
-    assert "ollama serve" in result.stdout
+    assert _unavailable_line("Contradictions", "connection refused") in _lines(
+        result.stdout
+    )
     assert changed_paths(before, _snapshot(tmp_path)) == set()
 
 
@@ -2469,7 +2488,7 @@ def test_identity_probe_empty_queue_renders_no_candidate_groups_found(
     result = runner.invoke(app, ["curate"])
 
     assert result.exit_code == 0
-    assert "Identity: No candidate groups found." in result.stdout
+    assert "Identity: No candidate groups found." in _lines(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -2543,7 +2562,7 @@ def test_identity_all_confidential_group_makes_no_model_call(
     result = runner.invoke(app, ["curate"], input="y\n")
 
     assert result.exit_code == 0
-    assert "Identity: applied 0, skipped 0." in result.stdout
+    assert "Identity: applied 0, skipped 0." in _lines(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -2860,7 +2879,7 @@ def test_render_summary_lists_declined_item_identities_indented() -> None:
         status="applied",
         applied=1,
         skipped=2,
-        notice="Structure: applied 1, skipped 2.",
+        notice="applied 1, skipped 2.",
         skipped_items=(
             "concepts/a -> concepts/b [references]",
             "concepts/c -> concepts/d [part_of]",
@@ -2870,7 +2889,7 @@ def test_render_summary_lists_declined_item_identities_indented() -> None:
     lines = curate.render_summary(outcomes)
 
     assert len(lines) == 7  # 5 stage lines + 2 declined-item lines
-    idx = lines.index("Structure: Structure: applied 1, skipped 2.")
+    idx = lines.index("Structure: applied 1, skipped 2.")
     assert lines[idx + 1] == "  declined: concepts/a -> concepts/b [references]"
     assert lines[idx + 2] == "  declined: concepts/c -> concepts/d [part_of]"
 
@@ -2885,6 +2904,50 @@ def test_render_summary_prints_no_declined_lines_without_declined_items() -> Non
 
     assert len(lines) == 5
     assert all("declined:" not in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# issue #504 -- `render_summary` is the ONLY owner of the `"{stage}: "` prefix
+# ---------------------------------------------------------------------------
+
+
+def test_sequencer_notices_leave_the_stage_prefix_to_render_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`render_summary` prefixes every line with its stage's name, so a
+    notice that names its own stage renders it twice. Probe-derived
+    notices (`unavailable`, `empty_message`) never did, so the block read
+    half `"Identity: No candidate groups found."` and half
+    `"Identity: Identity: applied 1, skipped 0."` (#504). Whole-line
+    equality is the point: `"Structure: skipped -- ..."` is a SUBSTRING of
+    the doubled line, which is exactly how this survived."""
+    _patch_stdin_isatty(monkeypatch, False)
+
+    def _probe(ctx: curate.CurateContext) -> curate.StageProbe:
+        return curate.StageProbe(items=("one",), llm_calls=1)
+
+    def _raise(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        raise OllamaUnavailable("connection refused")
+
+    monkeypatch.setattr(
+        curate,
+        "_STAGES",
+        (
+            _fake_stage("Identity", probe=_probe, run=_raise, writes=False),
+            _fake_stage("Structure", probe=_probe, writes=False),
+        ),
+    )
+
+    outcomes = curate.run_curate(_fake_ctx(Path("unused-root"), auto=True))
+
+    assert curate.render_summary(outcomes) == [
+        "Identity: unavailable -- connection refused. Start it with "
+        "`ollama serve`, then try again."
+        " Or run `openkos doctor` to diagnose the environment.",
+        "Structure: skipped -- Ollama unavailable (see above).",
+    ]
 
 
 def _seed_identity_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2942,7 +3005,7 @@ def test_identity_unrecognized_answer_reprompts_then_applies(
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
     assert "Unrecognized answer 't'" in result.stdout
     assert "y or n" in result.stdout
-    assert "Identity: applied 1, skipped 0." in result.stdout
+    assert "Identity: applied 1, skipped 0." in _lines(result.stdout)
 
 
 def test_identity_declined_pair_identity_listed_in_summary(
@@ -2965,7 +3028,7 @@ def test_identity_declined_pair_identity_listed_in_summary(
     # The advertised contract is [y/N] -- `skip` is gone from the prompt.
     assert "Merge concepts/b into concepts/a? [y/N]" in result.stdout
     assert "[y/N/skip]" not in result.stdout
-    assert "Identity: applied 0, skipped 1." in result.stdout
+    assert "Identity: applied 0, skipped 1." in _lines(result.stdout)
     assert "  declined: concepts/b -> concepts/a" in result.stdout
 
 
@@ -2985,8 +3048,31 @@ def test_identity_applied_only_run_prints_no_declined_lines(
     result = runner.invoke(app, ["curate"], input="y\ny\n")
 
     assert result.exit_code == 0
-    assert "Identity: applied 1, skipped 0." in result.stdout
+    assert "Identity: applied 1, skipped 0." in _lines(result.stdout)
     assert "  declined:" not in result.stdout
+
+
+def test_identity_applied_summary_line_names_its_stage_once(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end companion to the sequencer-level #504 test: the stage's
+    OWN `run` builds this notice, so the doubling reaches the operator
+    through the real command, not only through a faked `_STAGES`."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _seed_identity_pair(tmp_path, monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert "Identity: applied 1, skipped 0." in _lines(result.stdout)
+    assert "Identity: Identity:" not in result.stdout
 
 
 def test_structure_declined_edge_identity_listed_in_summary(
@@ -3028,7 +3114,7 @@ def test_structure_declined_edge_identity_listed_in_summary(
     assert result.exit_code == 0
     assert "Relate concepts/a -> concepts/b [references]? [y/N]" in result.stdout
     assert "[y/N/skip]" not in result.stdout
-    assert "Structure: applied 0, skipped 1." in result.stdout
+    assert "Structure: applied 0, skipped 1." in _lines(result.stdout)
     assert "  declined: concepts/a -> concepts/b [references]" in result.stdout
 
 
@@ -3078,5 +3164,5 @@ def test_metadata_declined_tier_identity_listed_in_summary(
     assert result.exit_code == 0
     assert "Set Concept -> volatile? [y/N]" in result.stdout
     assert "[y/N/skip]" not in result.stdout
-    assert "Metadata: applied 0, skipped 1." in result.stdout
+    assert "Metadata: applied 0, skipped 1." in _lines(result.stdout)
     assert "  declined: Concept -> volatile" in result.stdout

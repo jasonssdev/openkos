@@ -121,8 +121,10 @@ class StageProbe:
 class StageOutcome:
     """Everything one stage's run left behind, for the end-of-run summary
     (design's Interfaces). `status` is the fixed six-way vocabulary every
-    stage outcome collapses to; `notice` is the human-readable line
-    `render_summary` prints for this stage."""
+    stage outcome collapses to; `notice` is the human-readable REMAINDER of
+    the line `render_summary` prints for this stage -- it must NOT name its
+    own stage, because `render_summary` owns the `"{stage}: "` prefix and
+    would otherwise print it twice (issue #504)."""
 
     status: Literal["applied", "declined", "empty", "unavailable", "failed", "not-live"]
     applied: int = 0
@@ -453,7 +455,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             applied=applied,
             skipped=skipped,
             notice=(
-                f"Identity: failed -- {batch.failure} (adjudicated "
+                f"failed -- {batch.failure} (adjudicated "
                 f"{len(batch.results)} of {len(groups)} candidate group(s))."
             ),
             skipped_items=tuple(declined),
@@ -464,7 +466,7 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         status=status,
         applied=applied,
         skipped=skipped,
-        notice=f"Identity: applied {applied}, skipped {skipped}.",
+        notice=f"applied {applied}, skipped {skipped}.",
         skipped_items=tuple(declined),
     )
 
@@ -639,7 +641,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             applied=applied,
             skipped=skipped,
             notice=(
-                f"Structure: failed -- {batch.failure} (suggested "
+                f"failed -- {batch.failure} (suggested "
                 f"{len(batch.results)} of {len(edges)} untyped edge(s); "
                 f"applied {applied}, skipped {skipped})."
             ),
@@ -651,7 +653,7 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         status=status,
         applied=applied,
         skipped=skipped,
-        notice=f"Structure: applied {applied}, skipped {skipped}.",
+        notice=f"applied {applied}, skipped {skipped}.",
         skipped_items=tuple(declined),
     )
 
@@ -839,7 +841,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             applied=applied,
             skipped=skipped,
             notice=(
-                f"Metadata: failed -- {batch.failure} (suggested "
+                f"failed -- {batch.failure} (suggested "
                 f"{len(batch.results)} of {len(type_names)} concept type(s); "
                 f"applied {applied}, skipped {skipped})."
             ),
@@ -851,7 +853,7 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         status=status,
         applied=applied,
         skipped=skipped,
-        notice=f"Metadata: applied {applied}, skipped {skipped}.",
+        notice=f"applied {applied}, skipped {skipped}.",
         skipped_items=tuple(declined),
     )
 
@@ -988,17 +990,16 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             status="failed",
             applied=len(high_confidence),
             notice=(
-                f"Contradictions: failed -- {batch.failure} (judged "
+                f"failed -- {batch.failure} (judged "
                 f"{len(batch.results)} of {plan.llm_calls} candidate(s))."
             ),
         )
 
     status: Literal["applied", "empty"] = "applied" if high_confidence else "empty"
     notice = (
-        f"Contradictions: {len(high_confidence)} high-confidence "
-        "contradiction(s) found."
+        f"{len(high_confidence)} high-confidence contradiction(s) found."
         if high_confidence
-        else "Contradictions: no high-confidence contradictions found."
+        else "no high-confidence contradictions found."
     )
     return StageOutcome(status=status, applied=len(high_confidence), notice=notice)
 
@@ -1084,20 +1085,14 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
 
     for stage in _STAGES:
         if not stage.live:
-            outcomes.append(
-                StageOutcome(
-                    status="not-live", notice=f"{stage.name}: {_NOT_LIVE_NOTICE}"
-                )
-            )
+            outcomes.append(StageOutcome(status="not-live", notice=_NOT_LIVE_NOTICE))
             continue
 
         if halted:
             outcomes.append(
                 StageOutcome(
                     status="empty",
-                    notice=(
-                        f"{stage.name}: not attempted -- Preconditions halted this run."
-                    ),
+                    notice="not attempted -- Preconditions halted this run.",
                 )
             )
             continue
@@ -1133,9 +1128,7 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             outcomes.append(
                 StageOutcome(
                     status="unavailable",
-                    notice=(
-                        f"{stage.name}: skipped -- Ollama unavailable (see above)."
-                    ),
+                    notice="skipped -- Ollama unavailable (see above).",
                 )
             )
             continue
@@ -1145,7 +1138,7 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             outcomes.append(
                 StageOutcome(
                     status="declined",
-                    notice=f"{stage.name}: declined -- no LLM calls made.",
+                    notice="declined -- no LLM calls made.",
                 )
             )
             continue
@@ -1159,8 +1152,8 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
                 StageOutcome(
                     status="declined",
                     notice=(
-                        f"{stage.name}: non-interactive write consent "
-                        f"unavailable -- run `{stage.unattended_hint}` instead."
+                        "non-interactive write consent unavailable -- run "
+                        f"`{stage.unattended_hint}` instead."
                     ),
                 )
             )
@@ -1177,14 +1170,14 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             outcome = stage.run(ctx, probe)
         except OllamaUnavailable as exc:
             notice = (
-                f"{stage.name}: unavailable -- {exc}. Start it with "
+                f"unavailable -- {exc}. Start it with "
                 f"`ollama serve`, then try again.{_DOCTOR_HINT}"
             )
             ctx.ollama_unavailable_notice = notice
             outcome = StageOutcome(status="unavailable", notice=notice)
         except OllamaModelNotFound:
             notice = (
-                f"{stage.name}: unavailable -- model '{ctx.cfg.model}' is not "
+                f"unavailable -- model '{ctx.cfg.model}' is not "
                 f"installed. Pull it with `ollama pull {ctx.cfg.model}`, then "
                 "try again."
             )
@@ -1196,9 +1189,7 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
         # only THIS stage; no run-scoped flag is set, so a later stage still
         # tries its own call.
         except OllamaError as exc:
-            outcome = StageOutcome(
-                status="failed", notice=f"{stage.name}: failed -- {exc}."
-            )
+            outcome = StageOutcome(status="failed", notice=f"failed -- {exc}.")
 
         outcomes.append(outcome)
 
@@ -1211,7 +1202,12 @@ def render_summary(outcomes: Sequence[StageOutcome]) -> list[str]:
     line names every stage outcome) -- plus, directly under a stage whose
     outcome carries `skipped_items`, one indented `  declined: {item}` line
     per operator-declined identity (issue #398), so the count-only stage
-    line is never the only record of what was passed over."""
+    line is never the only record of what was passed over.
+
+    This is the SINGLE owner of the `"{stage}: "` prefix (issue #504): a
+    `notice` that named its own stage rendered as `"Identity: Identity:
+    ..."`, while the probe-derived notices that never did rendered
+    correctly -- one summary block, two formats."""
     lines: list[str] = []
     for stage, outcome in zip(_STAGES, outcomes, strict=True):
         lines.append(f"{stage.name}: {outcome.notice or outcome.status}")
