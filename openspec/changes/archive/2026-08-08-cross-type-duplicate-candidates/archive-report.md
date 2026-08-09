@@ -94,8 +94,11 @@ Per the design (observation #2562):
 - **test_candidates.py** (~275 lines): Replace `:167` inverse; extend `:636`/`:660`/`:688`/`:1075` fixtures; new invariant tests
 - **test_adjudication.py**: Prompt-bytes regression tests (single-type unchanged, cross-type named/tagged)
 - **test_okf.py**: Survivor-type pin for cross-type merge
+- **test_adjudicate.py** (+37 lines): pins that a cross-type group's
+  adjudication payload carries no `member_types` key
 
-Total: 616 changed lines across 7 files, well within the 400-line review budget.
+Total: 616 changed lines across 7 files, well within the 2000-line session
+review budget.
 
 ## Specs Synced to Main
 
