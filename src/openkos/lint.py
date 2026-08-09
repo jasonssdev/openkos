@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
 
-from openkos import config
+from openkos import config, fsio
 from openkos.bundle import provenance as bundle_provenance
 from openkos.model import okf, types
 from openkos.model import relations as relation_vocabulary
@@ -1095,21 +1095,52 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
     return findings
 
 
-def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:
-    """Flag every on-disk name (file OR directory) under `bundle_dir` that
-    is not NFC, with the NFC rename as remediation (issue #474).
+@dataclass(frozen=True)
+class NonNfcEntry:
+    """One on-disk entry (file OR directory) under `bundle_dir` whose OWN
+    name is not NFC (issue #474 part 2, design D1) -- the richer sibling
+    `LintFinding` cannot carry, because `LintFinding.path` is already
+    NFC-normalized and so, by construction, cannot locate the raw entry
+    on a byte-exact filesystem. `check_non_nfc_names` projects this into
+    `LintFinding`s for `lint`; `normalize-names` (`cli/main.py`) consumes
+    it directly to build its rename plan."""
+
+    path: Path
+    """Raw, byte-exact on-disk `Path` -- what `LintFinding.path`'s
+    NFC-normalized spelling cannot carry."""
+    raw_name: str
+    """`path.name` exactly as the filesystem returned it."""
+    nfc_name: str
+    """`unicodedata.normalize("NFC", raw_name)`."""
+    rel_posix: str
+    """NFC bundle-relative POSIX path -- identical to the `LintFinding`
+    this entry projects to, and to `okf`'s canonical id spelling (#247)."""
+    depth: int
+    """`len(path.relative_to(bundle_dir).parts)` -- `normalize-names`'
+    `(-depth, rel_posix)` deepest-first apply-order sort key (design D4)."""
+    is_dir: bool
+    """`lstat`-derived; `False` on `OSError` (read-only-never-fail)."""
+    is_symlink: bool
+    """`lstat`-derived; `False` on `OSError` (read-only-never-fail)."""
+
+
+def scan_non_nfc_entries(bundle_dir: Path) -> list[NonNfcEntry]:
+    """The SINGLE definition of "offending entry" shared by `openkos
+    lint`'s `non-nfc-name` finding and `openkos normalize-names` (issue
+    #474 part 2, design D1) -- `check_non_nfc_names` below is a thin
+    projection of this scan's result into `LintFinding`s, and
+    `normalize-names` (`cli/main.py`) consumes this scan directly for its
+    richer raw-`Path`-carrying plan. One walk, one definition: the day
+    this scan's notion of "offending" changes, both callers agree by
+    construction, never by drifting independently.
 
     Concept ids are canonically NFC: `okf.concept_id_for` normalizes on
-    the way in (#430), so a decomposed on-disk spelling and its NFC id can
-    never be byte-equal -- the drift a macOS-created bundle (HFS+ forced
-    NFD; APFS preserves whatever it is given) syncs onto every other
-    platform. `okf.concept_path_for` absorbs that drift TOLERANTLY,
+    the way in (#430), so a decomposed on-disk spelling and its NFC id
+    can never be byte-equal -- the drift a macOS-created bundle (HFS+
+    forced NFD; APFS preserves whatever it is given) syncs onto every
+    other platform. `okf.concept_path_for` absorbs that drift TOLERANTLY,
     resolving the NFC id against the decomposed file, and its docstring
     ends by promising that a caller who wants to KNOW should ask `lint`.
-    This check is that answer. DETECTION ONLY: openkos never renames --
-    that migration decision is deliberately out of scope (human curates,
-    engine maintains), so the detail names the rename target but no verb
-    performs it.
 
     This walk takes `bundle_dir` and pulls `bundle_dir.rglob("*")` one
     entry at a time -- deliberately NOT the `collect_docs` walk, and
@@ -1119,13 +1150,101 @@ def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:
     ONLY and never opens a single file. It also CANNOT ride on
     `collect_docs`: that walk only surfaces readable, parseable `.md`
     docs, and a decomposed name on a directory, a non-`.md` file, or an
-    unreadable doc is exactly what this check must still see.
+    unreadable doc is exactly what this scan must still see.
 
     The test is each entry's OWN name -- `path.name !=
     unicodedata.normalize("NFC", path.name)` -- never the full path, so a
-    decomposed DIRECTORY produces exactly ONE finding, not one per
-    descendant: one rename fixes the whole subtree, and the report says
-    so once.
+    decomposed DIRECTORY produces exactly ONE entry, not one per
+    descendant: one rename fixes the whole subtree.
+
+    `is_dir`/`is_symlink` are stat'd ONLY for entries that already failed
+    the NFC test, so a clean bundle pays exactly what it paid before this
+    scan existed (design D1).
+
+    Each `next()` on the walk is guarded INDIVIDUALLY, so a broken walk
+    (a directory deleted mid-scan, a permission wall) degrades to the
+    entries collected so far -- read-only-never-fail, matching every
+    other guard in this module. The generator is deliberately never fed
+    through `sorted(...)`: that would consume the WHOLE walk before the
+    first entry exists, so a mid-walk OSError would discard everything
+    already seen and render a silently empty, false-clean report (review
+    R4-001). Determinism comes from sorting the RESULT by `rel_posix`
+    after the walk instead. This scan is READ-ONLY and NON-GATING: it
+    never writes and its result never affects any caller's exit code."""
+    entries: list[NonNfcEntry] = []
+    walk = bundle_dir.rglob("*")
+    while True:
+        try:
+            path = next(walk)
+        except StopIteration:
+            break
+        except OSError:
+            break  # a broken walk degrades to the entries collected so far
+        nfc_name = unicodedata.normalize("NFC", path.name)
+        if path.name == nfc_name:
+            continue
+        rel = path.relative_to(bundle_dir)
+        try:
+            is_symlink = path.is_symlink()
+        except OSError:
+            is_symlink = False
+        try:
+            is_dir = path.is_dir()
+        except OSError:
+            is_dir = False
+        entries.append(
+            NonNfcEntry(
+                path=path,
+                raw_name=path.name,
+                nfc_name=nfc_name,
+                rel_posix=unicodedata.normalize("NFC", rel.as_posix()),
+                depth=len(rel.parts),
+                is_dir=is_dir,
+                is_symlink=is_symlink,
+            )
+        )
+    entries.sort(key=lambda entry: entry.rel_posix)
+    return entries
+
+
+def scan_stranded_rename_temps(bundle_dir: Path) -> list[Path]:
+    """Names-only walk for entries whose name starts with
+    `fsio.RENAME_TEMP_PREFIX` -- `normalize-names`-only helper (issue #474
+    part 2, design D3), never called by `lint`. A temp can only be
+    stranded by a hard kill strictly between `fsio.rename_two_step`'s two
+    `os.rename` calls -- every ordinary failure path there already
+    restores the original name. This scan lets the NEXT run report it
+    (never touch it: auto-deleting would be data loss, auto-renaming
+    would be a guess).
+
+    Deliberately a SECOND names-only walk rather than folded into
+    `scan_non_nfc_entries`'s return value: `lint` would then pay for, and
+    have to unpack, a signal it never reports (design D3)."""
+    stranded: list[Path] = []
+    walk = bundle_dir.rglob("*")
+    while True:
+        try:
+            path = next(walk)
+        except StopIteration:
+            break
+        except OSError:
+            break  # read-only-never-fail, matching every other guard here
+        if path.name.startswith(fsio.RENAME_TEMP_PREFIX):
+            stranded.append(path)
+    stranded.sort()
+    return stranded
+
+
+def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:
+    """Flag every on-disk name (file OR directory) under `bundle_dir` that
+    is not NFC, with the NFC rename as remediation (issue #474).
+
+    A thin, 1:1 projection of `scan_non_nfc_entries` (design D1): `lint`
+    itself never writes (spec: Read-Only and Human-Readable Only), but the
+    rename is no longer the human's shell problem: `openkos
+    normalize-names` (#474 part 2) performs it, consuming this function's
+    own `scan_non_nfc_entries`, so detection and migration can never
+    disagree about what an offending entry is.
 
     `path` is the NFC-normalized bundle-relative POSIX path -- the
     canonical spelling, matching how every other verb spells the object
@@ -1136,40 +1255,21 @@ def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:
     invisible in rendered text and the escaped combining mark is the only
     way a human can SEE it, and the NFC rename target as remediation.
 
-    Each `next()` on the walk is guarded INDIVIDUALLY, so a broken walk
-    (a directory deleted mid-scan, a permission wall) degrades to the
-    findings collected so far -- read-only-never-fail, matching every
-    other guard in this module. The generator is deliberately never fed
-    through `sorted(...)`: that would consume the WHOLE walk before the
-    first finding exists, so a mid-walk OSError would discard everything
-    already seen and render a silently empty, false-clean report (review
-    R4-001). Determinism comes from sorting the FINDINGS by `path` after
-    the walk instead. This scan is READ-ONLY and NON-GATING: it never
-    writes and its findings never affect any caller's exit code."""
-    findings: list[LintFinding] = []
-    entries = bundle_dir.rglob("*")
-    while True:
-        try:
-            entry = next(entries)
-        except StopIteration:
-            break
-        except OSError:
-            break  # a broken walk degrades to the findings collected so far
-        nfc_name = unicodedata.normalize("NFC", entry.name)
-        if entry.name == nfc_name:
-            continue
-        findings.append(
-            LintFinding(
-                kind="non-nfc-name",
-                path=unicodedata.normalize(
-                    "NFC", entry.relative_to(bundle_dir).as_posix()
-                ),
-                detail=(
-                    f"on-disk name {entry.name!a} is not NFC -- "
-                    f"rename it to {nfc_name!r} so the spelling on disk "
-                    f"matches the canonical id (#430)"
-                ),
-            )
+    `scan_non_nfc_entries` already sorts by `rel_posix` (identical to this
+    projection's `path`), so no second sort is needed here -- the
+    `findings.sort(key=...)` this function used to run is now redundant
+    and has been dropped. This projection is READ-ONLY and NON-GATING: it
+    never writes and its findings never affect any caller's exit code."""
+    return [
+        LintFinding(
+            kind="non-nfc-name",
+            path=entry.rel_posix,
+            detail=(
+                f"on-disk name {entry.raw_name!a} is not NFC -- "
+                f"run `openkos normalize-names` to rename it to "
+                f"{entry.nfc_name!r} so the spelling on disk matches the "
+                f"canonical id (#430)"
+            ),
         )
-    findings.sort(key=lambda finding: finding.path)
-    return findings
+        for entry in scan_non_nfc_entries(bundle_dir)
+    ]

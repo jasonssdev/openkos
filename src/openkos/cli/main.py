@@ -5426,6 +5426,314 @@ def backfill_sensitivity_cmd(
     )
 
 
+@app.command("normalize-names")
+def normalize_names_cmd(
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+) -> None:
+    """Rename every on-disk name (file OR directory) under `bundle_dir`
+    that is not NFC to its NFC form -- the dedicated mutating verb that
+    remediates what `lint`'s `non-nfc-name` finding only reports (issue
+    #474 part 2). Structural twin of `backfill-sensitivity`
+    (design D6): Phase A snapshot -> preview -> confirm gate -> drift
+    re-check -> Phase B writes -> one `log.md` entry -> one `_autocommit`.
+
+    Phase A obtains its candidate set from `lint_check.scan_non_nfc_entries`
+    -- the SAME scan `openkos lint`'s `non-nfc-name` finding uses (design
+    D1) -- plus `lint_check.scan_stranded_rename_temps`, whose result is
+    printed as a stderr WARNING per stranded entry and never touched
+    (design D3: a temp can only be stranded by a hard kill between
+    `fsio.rename_two_step`'s two hops, and auto-deleting or auto-renaming
+    it would be data loss or a guess). Every candidate is classified as a
+    planned rename or a non-fatal skip (collision: an NFC-spelled sibling
+    already exists; symlink: never followed) -- design D4/D5 -- then
+    sorted `(-depth, rel_posix)` so a child renames before its ancestor.
+    An empty or all-skip plan prints an explicit no-op line, writes
+    nothing, and exits 0 -- which is also the idempotency property (a
+    second run over an already-normalized bundle plans zero renames).
+
+    The preview lists every planned rename (raw -> NFC target) and skip
+    (with its reason) in apply order; a decomposed directory previews as
+    ONE entry noting its subtree moves with it, never one line per
+    descendant (design D4). The confirm gate mirrors
+    `backfill_sensitivity_cmd`'s exact precedence: `--auto` skips it;
+    otherwise config `review: false` skips it; otherwise a TTY prompts via
+    `typer.confirm` and aborts (exit 1) on decline; otherwise (non-TTY, no
+    `--auto`) this refuses to write.
+
+    Immediately before Phase B, a PURPOSE-BUILT drift re-check
+    re-validates every planned rename against current on-disk state
+    (design D4): each entry's `raw_name` must still be present
+    byte-exactly, its `nfc_name` must still be absent byte-exactly, and it
+    must not have become a symlink. Any failure demotes that entry to a
+    reported skip, never a crash. `log.md` alone goes through the
+    existing `_reject_drifted_targets` (exit 3), matching every other
+    mutating verb. If the drift re-check empties the plan, the run writes
+    nothing, appends no log entry, and creates no commit.
+
+    Phase B applies `fsio.rename_two_step` per entry in apply order, then
+    appends exactly one dated `log.md` entry summarizing the run (design
+    D6's bounded line: counts always; the renamed pairs are listed inline
+    only when the total entry count is <= 5, so the line stays bounded
+    and single -- `insert_log_entry` rejects newlines), then issues
+    exactly one `_autocommit` scoped to every renamed entry's OLD and NEW
+    path plus `log.md` (design D7) -- staging scope, not resulting diff:
+    on a git configuration where the old and new spellings were already
+    recorded identically (e.g. macOS `core.precomposeunicode=true`,
+    design.md S1 Q7/Q8), staging both paths can legitimately produce no
+    diff, and `log.md`'s entry keeps the commit non-empty regardless.
+    `_autocommit` stays best-effort and non-fatal (not a repo, no git
+    identity, or any `GitError` -- including the untracked-old-path case,
+    Key Decisions Recorded a) -> stderr WARNING, exit code unchanged,
+    renames already applied stay on disk. There is no cross-file rollback:
+    a mid-Phase-B failure names every entry already landed (old and new
+    path) before the failure, mirroring `backfill_sensitivity_cmd`'s
+    design D9 pattern; any failure is caught (`OSError`/`ValueError`) and
+    reported on stderr (exit 1), never a raw traceback.
+
+    `index.md` is never touched (no concept id, `relations:` target,
+    `provenance:` reference, or file body content changes -- design D6);
+    no reindex is triggered (design D7).
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+    log_path = layout.bundle_dir / "log.md"
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            raise ValueError(workspace_reason)
+        cfg = config.read_config(root)
+        entries = lint_check.scan_non_nfc_entries(layout.bundle_dir)
+        stranded_temps = lint_check.scan_stranded_rename_temps(layout.bundle_dir)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos normalize-names: refusing to run -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    for stranded in stranded_temps:
+        rel = stranded.relative_to(root).as_posix()
+        typer.echo(
+            f"openkos normalize-names: WARNING -- {rel!r} looks like a "
+            "rename left stranded by an interrupted run (temp prefix "
+            f"{fsio.RENAME_TEMP_PREFIX!r}); its original spelling is not "
+            "recoverable from the temp name, so it is left untouched -- "
+            "rename it by hand once you know what it should be.",
+            err=True,
+        )
+
+    planned: list[lint_check.NonNfcEntry] = []
+    skips: list[tuple[lint_check.NonNfcEntry, str, str]] = []
+    for entry in entries:
+        if entry.is_symlink:
+            skips.append((entry, "symlink", "symlink"))
+            continue
+        try:
+            sibling_listing = os.listdir(entry.path.parent)  # noqa: PTH208
+        except OSError:
+            skips.append((entry, "vanished", "vanished"))
+            continue
+        if entry.nfc_name in sibling_listing:
+            skips.append((entry, "collision", f"{entry.nfc_name!r} already exists"))
+            continue
+        planned.append(entry)
+    planned.sort(key=lambda entry: (-entry.depth, entry.rel_posix))
+
+    if not planned:
+        if skips:
+            skip_kind_counts = Counter(kind for _entry, kind, _reason in skips)
+            skip_detail = ", ".join(
+                f"{kind}: {count}" for kind, count in sorted(skip_kind_counts.items())
+            )
+            typer.echo(
+                "openkos normalize-names: nothing to normalize -- every "
+                f"on-disk name under {layout.bundle_dir.name}/ is already "
+                f"NFC ({len(skips)} skipped -- {skip_detail})."
+            )
+        else:
+            typer.echo(
+                "openkos normalize-names: nothing to normalize -- every "
+                f"on-disk name under {layout.bundle_dir.name}/ is already NFC."
+            )
+        return
+
+    confirm_enabled = not auto and cfg.review
+    prompt_will_run = confirm_enabled and sys.stdin.isatty()
+
+    typer.echo(
+        f"openkos normalize-names: proposed renames ({len(planned)}, "
+        f"deepest first), {len(skips)} skipped:"
+    )
+    for entry in planned:
+        suffix = (
+            "  (directory -- its whole subtree moves with it)" if entry.is_dir else ""
+        )
+        typer.echo(f"  ~ {entry.rel_posix!r} -> {entry.nfc_name!r}{suffix}")
+    for entry, _kind, reason in skips:
+        typer.echo(f"  ! {entry.rel_posix!r} -- skipped: {reason}")
+    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+
+    if confirm_enabled:
+        if prompt_will_run:
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos normalize-names: refusing to write without "
+                "confirmation -- stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        log_bytes, log_text = _snapshot_read(log_path)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos normalize-names: failed while reading {log_path.name} -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    # Issue #306-style guard: `log.md` is re-validated against its
+    # pre-prompt snapshot immediately before the first write.
+    _reject_drifted_targets(layout, {log_path: log_bytes}, "normalize-names")
+
+    # Purpose-built drift re-check (design D4), immediately before Phase
+    # B: nothing here rewrites file BYTES, so `_reject_drifted_targets`'
+    # bytes-comparison contract does not apply to the rename targets
+    # themselves. Each planned entry is re-validated against current
+    # on-disk state; any failure demotes it to a reported skip, never a
+    # crash.
+    final_renames: list[lint_check.NonNfcEntry] = []
+    drift_skips: list[tuple[lint_check.NonNfcEntry, str, str]] = []
+    for entry in planned:
+        try:
+            current_listing = os.listdir(entry.path.parent)  # noqa: PTH208
+        except OSError:
+            drift_skips.append((entry, "vanished", "vanished"))
+            continue
+        if entry.raw_name not in current_listing:
+            drift_skips.append((entry, "vanished", "vanished"))
+            continue
+        if entry.nfc_name in current_listing:
+            drift_skips.append(
+                (entry, "collision", f"{entry.nfc_name!r} already exists")
+            )
+            continue
+        try:
+            drifted_to_symlink = entry.path.is_symlink()
+        except OSError:
+            drifted_to_symlink = False
+        if drifted_to_symlink:
+            drift_skips.append((entry, "symlink", "symlink"))
+            continue
+        final_renames.append(entry)
+
+    if not final_renames:
+        typer.echo(
+            "openkos normalize-names: every planned rename drifted away "
+            "before it could be applied -- nothing was written, no log "
+            "entry was appended, and no commit was created."
+        )
+        return
+
+    all_skips = skips + drift_skips
+    pairs = ", ".join(
+        f"{entry.rel_posix!r} -> {entry.nfc_name!r}" for entry in final_renames
+    )
+    skip_kind_counts = Counter(kind for _entry, kind, _reason in all_skips)
+    skip_detail = ", ".join(
+        f"{kind}: {count}" for kind, count in sorted(skip_kind_counts.items())
+    )
+    # Design D6's bounded log line: counts always; the renamed pairs are
+    # listed inline only for a small batch (<= 5 total entries), so the
+    # line stays single (`insert_log_entry` rejects newlines) and never
+    # grows unbounded with the batch size (Key Decisions Recorded, b).
+    total_entries = len(final_renames) + len(all_skips)
+    if total_entries <= 5:
+        log_line = (
+            f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
+            f"name(s) to NFC: {pairs}. Skipped {len(all_skips)}"
+            + (f" ({skip_detail})" if all_skips else "")
+            + "."
+        )
+    else:
+        log_line = (
+            f"**Normalize-names**: Renamed {len(final_renames)} on-disk "
+            f"name(s) to NFC. Skipped {len(all_skips)}"
+            + (f" ({skip_detail})" if all_skips else "")
+            + "."
+        )
+    try:
+        new_log_text = bundle_log.insert_log_entry(
+            log_text, datetime.now(UTC).astimezone().date(), log_line
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos normalize-names: failed while preparing the "
+            f"normalize-names -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    landed: list[str] = []
+    applied_raw_rels: list[str] = []
+    try:
+        for entry in final_renames:
+            # `entry.path` is the RAW spelling captured at Phase A/scan
+            # time; `entry.rel_posix` is already NFC-normalized (design
+            # D1), so it names the entry's NEW path, never its old one --
+            # using it for `old_rel` would stage the wrong pathspec.
+            old_rel = entry.path.relative_to(root).as_posix()
+            fsio.rename_two_step(entry.path, entry.nfc_name)
+            landed.append(old_rel)
+            applied_raw_rels.append(old_rel)
+        # New paths are resolved only AFTER the whole batch: the path
+        # `rename_two_step` returns names the entry under its ancestors'
+        # spellings AT RENAME TIME, and deepest-first means a later
+        # ancestor rename carries the entry along, so that momentary
+        # spelling goes stale before `_autocommit` ever sees it (review
+        # R3-001). The final spelling normalizes exactly the segments
+        # whose own rename APPLIED -- never a blanket NFC over the whole
+        # path, because an ancestor skipped at drift time (collision)
+        # keeps its raw spelling, and its NFC twin names the COLLIDING
+        # sibling, not this entry.
+        applied = set(applied_raw_rels)
+
+        def _final_rel(raw_rel: str) -> str:
+            parts = raw_rel.split("/")
+            return "/".join(
+                unicodedata.normalize("NFC", part)
+                if "/".join(parts[: index + 1]) in applied
+                else part
+                for index, part in enumerate(parts)
+            )
+
+        landed.extend(_final_rel(raw_rel) for raw_rel in applied_raw_rels)
+        fsio.write_atomic(log_path, new_log_text)
+        landed.append("bundle/log.md")
+    except (OSError, ValueError) as exc:
+        landed_suffix = (
+            f"Already landed (left renamed, not rolled back): {', '.join(landed)}."
+            if landed
+            else "No path was written."
+        )
+        typer.echo(
+            f"openkos normalize-names: failed while writing the "
+            f"normalize-names -- {exc}. {landed_suffix}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"openkos normalize-names: renamed {len(final_renames)} on-disk "
+        f"name(s) ({log_path.name} updated): {pairs}."
+    )
+
+    _autocommit(root, landed, "openkos: normalize-names")
+
+
 @app.command("backfill-source-titles")
 def backfill_source_titles_cmd(
     auto: bool = typer.Option(
@@ -8093,9 +8401,10 @@ def lint() -> None:
     what `collect_docs` cannot -- a decomposed name on a directory, a
     non-`.md` file, or an unreadable doc. Rendered via `finding.path`,
     never `.concept_id`, because the finding names an on-disk entry, not
-    a concept object. DETECTION ONLY: openkos never renames -- the detail
-    names the NFC target, but the migration is the human's call), each
-    with its own empty-state line when there is nothing to report. Every
+    a concept object. `lint` stays read-only and never renames; the
+    detail points at `openkos normalize-names`, the dedicated verb that
+    does (#474 part 2)), each with its own empty-state line when there is
+    nothing to report. Every
     successful read exits 0, whether the bundle is clean or
     has findings (spec: Non-Gating Exit Contract) -- `lint` is NOT a CI
     gate in MVP-1. No file under the workspace is ever created, modified,
