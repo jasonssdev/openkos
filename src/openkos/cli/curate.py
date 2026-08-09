@@ -742,6 +742,22 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     if llm is None:  # pragma: no cover -- sequencer invariant (needs_llm)
         raise RuntimeError("Structure stage requires an LLM client")
 
+    if _accepts(ctx, "Structure"):
+        # #513: `evals/edge_typing/` measures this suggester emitting a
+        # SPECIFIC type correctly about 60% of the time, so roughly two in
+        # five bulk-written types are wrong by the rubric -- and a wrong
+        # `part_of` asserts something false that everything reading the
+        # graph then believes. The operator asked for bulk acceptance and
+        # keeps it; what they do not keep is going in blind. Once per run,
+        # on stderr, so a piped summary stays clean.
+        typer.echo(
+            "openkos curate: Structure: suggested relation types are "
+            "applied without review -- accuracy is measured, not assumed "
+            "(see evals/edge_typing/ and issue #513). Re-run without "
+            "`--accept structure` to decide each one.",
+            err=True,
+        )
+
     batch = suggest_edge_types(
         edges,
         bundle_dir=ctx.layout.bundle_dir,

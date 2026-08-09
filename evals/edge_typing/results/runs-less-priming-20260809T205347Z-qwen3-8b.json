@@ -1,8 +1,8 @@
 {
-  "arm": "baseline-15edge",
+  "arm": "less-priming",
   "model": "qwen3:8b",
   "runs": 5,
-  "generated_at": "20260809T195002Z",
+  "generated_at": "20260809T205347Z",
   "outcomes": [
     {
       "source_id": "concepts/retry-budget",
@@ -166,6 +166,52 @@
       ]
     },
     {
+      "source_id": "concepts/aortic-valve",
+      "target_id": "concepts/human-heart",
+      "expected": "part_of",
+      "confusion": "part_of vs member_of (held out from the examples)",
+      "modal": "part_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/soprano-line",
+      "target_id": "concepts/voice-parts",
+      "expected": "member_of",
+      "confusion": "part_of vs member_of (held out from the examples)",
+      "modal": "member_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
       "source_id": "concepts/wal-segment",
       "target_id": "concepts/write-ahead-log",
       "expected": "part_of",
@@ -194,11 +240,11 @@
       "expected": "member_of",
       "confusion": "part_of vs member_of",
       "modal": "part_of",
-      "stability": 0.8,
-      "accuracy": 0.2,
+      "stability": 1.0,
+      "accuracy": 0.0,
       "answers": [
         "part_of",
-        "member_of",
+        "part_of",
         "part_of",
         "part_of",
         "part_of"

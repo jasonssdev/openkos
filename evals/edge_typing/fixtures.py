@@ -135,6 +135,33 @@ DOCS: tuple[ConceptDoc, ...] = (
         "accounts, environment, and a first small change.",
     ),
     ConceptDoc(
+        "concepts/aortic-valve",
+        "Aortic Valve",
+        "The aortic valve forms the outflow gate of the heart. Anatomically "
+        "it is situated within that organ and cannot be described apart from "
+        "the chamber it seals.",
+    ),
+    ConceptDoc(
+        "concepts/human-heart",
+        "Human Heart",
+        "The human heart is a single muscular organ. Its interior comprises "
+        "chambers and valves, the aortic valve among the structures it "
+        "contains.",
+    ),
+    ConceptDoc(
+        "concepts/soprano-line",
+        "Soprano Line",
+        "The soprano line belongs to the choir's roster of voice parts. It "
+        "is enrolled there on the same footing as alto, tenor and bass, each "
+        "an entry of equal standing.",
+    ),
+    ConceptDoc(
+        "concepts/voice-parts",
+        "Voice Parts",
+        "Voice parts is a roster whose entries are peers. Enrollment means "
+        "being a part on that roster, and no entry contains any other.",
+    ),
+    ConceptDoc(
         "concepts/wal-segment",
         "WAL Segment",
         "A WAL segment is one file inside the write-ahead log. The log is a "
@@ -288,6 +315,18 @@ EDGES: tuple[LabelledEdge, ...] = (
         "concepts/incident-review-culture",
         "related_to",
         "the honest abstention",
+    ),
+    LabelledEdge(
+        "concepts/aortic-valve",
+        "concepts/human-heart",
+        "part_of",
+        "part_of vs member_of (held out from the examples)",
+    ),
+    LabelledEdge(
+        "concepts/soprano-line",
+        "concepts/voice-parts",
+        "member_of",
+        "part_of vs member_of (held out from the examples)",
     ),
     LabelledEdge(
         "concepts/wal-segment",
