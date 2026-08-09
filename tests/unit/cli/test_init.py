@@ -1677,3 +1677,95 @@ def test_git_setup_runs_after_workspace_marker_exists(
 
     assert result.exit_code == 0
     assert observed["openkos_yaml_exists"] is True
+
+
+def test_sticky_note_precedes_the_call_to_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stickiness note is printed BEFORE `Next: run openkos ingest`
+    (#389).
+
+    It used to arrive after the call to action, and after the choice it
+    exists to inform. A warning that lands below "here is what to do next"
+    has already lost the reader it was written for."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    combined = result.output
+    sticky_at = combined.index("is sticky")
+    next_at = combined.index("Next: run")
+    assert sticky_at < next_at, combined
+
+
+def test_embedding_picker_is_preceded_by_the_stickiness_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When an interactive embedding-model picker will actually be shown,
+    the stickiness of the choice is stated BEFORE it (#389).
+
+    This is the placement the issue asks for: at the picker, where the
+    decision is being made, rather than as a postscript once it is already
+    written to disk.
+
+    An allowlisted model must be reported as INSTALLED for the picker to
+    render at all -- with an empty list `_pick_embedding_model` takes its
+    documented silent fallback and prints nothing, so an earlier version of
+    this test proved only what its non-interactive sibling already did
+    (review finding)."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main._probe_installed_models",
+        lambda: [InstalledModel(tag=config.DEFAULT_EMBEDDING_MODEL, family=None)],
+    )
+
+    result = runner.invoke(app, ["init"], input="\n\n")
+
+    assert result.exit_code == 0
+    # The picker genuinely rendered -- otherwise this test proves nothing
+    # about placement relative to it.
+    assert "Installed embedding models:" in result.output
+    lowered = result.output.lower()
+    assert lowered.index("sticky") < lowered.index("installed embedding models:")
+    assert lowered.index("sticky") < lowered.index("next: run")
+
+
+def test_stickiness_is_explained_once_per_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stickiness EXPLANATION is printed once, never twice (#389).
+
+    Moving the warning earlier is worthless if the reader then meets the
+    same sentence again a few lines down. On an interactive run the picker
+    note carries the explanation and the later line only confirms which tag
+    it applies to; on a non-interactive run there is no picker, so the later
+    line carries the explanation itself."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main._probe_installed_models",
+        lambda: [InstalledModel(tag=config.DEFAULT_EMBEDDING_MODEL, family=None)],
+    )
+
+    result = runner.invoke(app, ["init"], input="\n\n")
+
+    assert result.exit_code == 0
+    assert result.output.lower().count("forces a full corpus re-embed") == 1
+    # The resolved tag is still named, so the reader knows what is sticky.
+    assert config.DEFAULT_EMBEDDING_MODEL in result.output
+
+
+def test_non_interactive_run_still_gets_the_full_stickiness_explanation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no picker to carry it, the later line must still explain the
+    consequence, not just name the tag (#389)."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert result.output.lower().count("forces a full corpus re-embed") == 1
+    assert "is sticky" in result.output

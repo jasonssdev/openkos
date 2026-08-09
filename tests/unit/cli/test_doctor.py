@@ -11,8 +11,9 @@ check failed. `embedding-model-installed`, `workspace-vector-index-present`,
 checks, and `backend-host-locality` are all informational (non-critical):
 the git checks exist for the (not-yet-wired, PR2) `purge` verb, so a failing
 check must not flip the exit code, and the locality check (issue #240)
-reports rather than judges -- it always `[PASS]`es and carries its finding
-in the detail. Every test patches `openkos.cli.main.OllamaClient` with a fake
+reports rather than judges -- it is `[PASS]` while Ollama is reachable and
+`[SKIP]` when it is not (#389), never `[FAIL]`, and carries its finding in
+the detail on both branches. Every test patches `openkos.cli.main.OllamaClient` with a fake
 stub (D-seam) -- zero network, zero real Ollama process.
 """
 
@@ -981,8 +982,10 @@ def test_doctor_reports_locality_outside_a_workspace(
 ) -> None:
     """Outside a workspace the check still runs, falling back to the packaged
     `confidential_local_exemption` default exactly as checks 3-5 fall back to
-    the packaged model tags (#240) -- there is no `[SKIP]` branch, because
-    locality depends on neither workspace state nor Ollama reachability."""
+    the packaged model tags (#240). Workspace state is what this test varies,
+    and the check does not depend on it -- the separate skip when Ollama is
+    unreachable (#389) is about how the line READS beside a failure, not
+    about an inability to answer."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     monkeypatch.setattr(
@@ -999,3 +1002,54 @@ def test_doctor_reports_locality_outside_a_workspace(
         result.stdout
     )
     assert "[SKIP] Backend host locality" not in result.stdout
+
+
+def test_doctor_locality_does_not_read_as_passing_while_ollama_is_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With Ollama unreachable, the backend-host-locality line is `[SKIP]`,
+    not `[PASS]` (#389).
+
+    It reports CONFIGURATION, not liveness, which is correct -- but a green
+    `[PASS] Backend host locality` printed directly beneath
+    `[FAIL] Ollama reachable` reads as a contradiction to anyone scanning
+    the column. The configured host is still named in the detail, so the
+    fact survives; only the claim that it was verified goes away, matching
+    the same skip-when-unreachable rule the model and embedding checks
+    already follow."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/ollama")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "[FAIL] Ollama reachable" in result.stdout
+    assert "[PASS] Backend host locality" not in result.stdout
+    locality_line = next(
+        line for line in result.stdout.splitlines() if "Backend host locality" in line
+    )
+    assert locality_line.startswith("[SKIP]")
+    # The configured host is still reported; only the verification claim goes.
+    assert "configured" in locality_line
+
+
+def test_doctor_locality_still_passes_when_ollama_is_reachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The skip is scoped to the unreachable case: a healthy run still
+    reports locality as a `[PASS]` with its host and exemption state
+    (#389)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _fake_ollama_client())
+
+    result = runner.invoke(app, ["doctor"])
+
+    locality_line = next(
+        line for line in result.stdout.splitlines() if "Backend host locality" in line
+    )
+    assert locality_line.startswith("[PASS]")
+    assert "exemption" in locality_line

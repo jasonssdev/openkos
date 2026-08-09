@@ -906,6 +906,20 @@ def init(
     if sys.stdin.isatty() and (model is None or embedding_model is None):
         installed_models = _probe_installed_models()
 
+    # State the stickiness BEFORE the embedding picker runs (#389), not as a
+    # postscript once the answer is already on disk. This note used to land
+    # after the choice AND below the call to action, which is after both
+    # moments it exists to inform. The concrete note naming the resolved tag
+    # still prints later; this one reaches the reader while they are deciding.
+    stickiness_stated_at_the_picker = sys.stdin.isatty() and embedding_model is None
+    if stickiness_stated_at_the_picker:
+        typer.echo(
+            "openkos init: note -- the embedding model you pick here is "
+            "sticky: changing it in this workspace later forces a full "
+            "corpus re-embed on the next `openkos reindex`.",
+            err=True,
+        )
+
     try:
         resolved_model = _resolve_model(model, installed_models)
         resolved_embedding_model = _resolve_embedding_model(
@@ -945,6 +959,24 @@ def init(
         f"{layout.bundle_dir.name}/log.md, {layout.agents_path.name}, "
         f"{layout.config_path.name})."
     )
+    # ONE stickiness message per run (review finding on this change). Moving
+    # the warning earlier is worthless if the reader then meets the same
+    # sentence again a few lines down: when the picker already carried the
+    # explanation, this line only confirms which tag it applies to.
+    if stickiness_stated_at_the_picker:
+        typer.echo(
+            f"openkos init: the sticky embedding model is "
+            f"'{resolved_embedding_model}'.",
+            err=True,
+        )
+    else:
+        typer.echo(
+            f"openkos init: note -- the embedding model "
+            f"('{resolved_embedding_model}') is sticky: editing it in this "
+            "workspace's openkos.yaml later forces a full corpus re-embed the "
+            "next time `openkos reindex` runs.",
+            err=True,
+        )
     typer.echo("Next: run `openkos ingest <path>` to import your first source.")
 
     # Best-effort git setup (Slice 1, git-lifecycle): runs strictly AFTER
@@ -1036,12 +1068,6 @@ def init(
     # revision blamed "a future init of a different workspace", which cannot
     # force a re-embed here and read as a non-sequitur to anyone who did not
     # already know the model-tag gate is per-workspace.
-    typer.echo(
-        f"openkos init: note -- the embedding model ('{resolved_embedding_model}') "
-        "is sticky: editing it in this workspace's openkos.yaml later forces "
-        "a full corpus re-embed the next time `openkos reindex` runs.",
-        err=True,
-    )
 
 
 def _plural(n: int) -> str:
@@ -8046,9 +8072,15 @@ def reconcile(
             f"({log_path.name} updated)."
         )
     else:
+        # Name the STATUS the loser will carry, not only the act (#389).
+        # This verb said "recorded as superseding" while `list` shows
+        # `deprecated` in its STATUS column, so the operator met two words
+        # for the action they had just performed and its effect, with
+        # nothing connecting them.
         typer.echo(
             f"openkos reconcile: recorded '{winner_canonical}' as superseding "
-            f"'{loser_canonical}' ({log_path.name} updated)."
+            f"'{loser_canonical}'; '{loser_canonical}' now lists as "
+            f"deprecated ({log_path.name} updated)."
         )
 
     reconcile_message = (
@@ -10857,11 +10889,14 @@ def doctor() -> None:
     Ollama; (11) backend-host-locality -- informational, always, via the
     check-(3) client's own `OllamaClient.locality` (issue #240), reporting
     the REDACTED `display_host`, whether it is this machine, and whether the
-    confidential local exemption is consequently active. Like (8)/(9)/(10)
-    it has no `[SKIP]` branch, and unlike every other check it ALWAYS
-    `[PASS]`es: a non-local backend is a legitimate configuration, not a
-    fault, so the status only reports that the check ran and the DETAIL
-    carries the finding. It can therefore never change the exit code.
+    confidential local exemption is consequently active. It is `[PASS]` while
+    Ollama is reachable and `[SKIP]` when it is not (#389) -- not because it
+    cannot answer without the server, but because a green line printed
+    directly beneath `[FAIL] Ollama reachable` reads as a contradiction to
+    anyone scanning the column. It is NEVER `[FAIL]`: a non-local backend is
+    a legitimate configuration, not a fault, so the status only reports
+    whether the check was verified and the DETAIL carries the finding, on
+    both branches. It can therefore never change the exit code.
     Outside a workspace, checks (3)/(4)/(5)/(8)/(9)/(10)/(11) still run
     against `config.DEFAULT_MODEL`/`config.DEFAULT_EMBEDDING_MODEL`/
     `config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION` and (3)/(4) still
@@ -11104,19 +11139,18 @@ def doctor() -> None:
             )
         )
 
-    # 11. backend-host-locality (informational, always; NO SKIP branch --
-    # like checks 8/9/10 it depends on neither workspace state nor Ollama
-    # REACHABILITY: locality is a literal-form check over the host the chat
-    # client already resolved, so it answers even when the server is down.
+    # 11. backend-host-locality (informational, always; ALWAYS EMITTED).
     # Reuses the SAME `client` check 3 built, so what is reported is the
-    # host `doctor` itself would have sent to, never a re-derivation.
+    # host `doctor` itself would have sent to, never a re-derivation. It
+    # skips when Ollama is unreachable despite being ABLE to answer without
+    # the server: locality is a literal-form check over the host the client
+    # already resolved, so the skip is about how the line READS beside a
+    # failure, not about an inability to answer.
     #
-    # ALWAYS `pass` (issue #240). The two other shapes were considered and
-    # are both wrong: `[FAIL]` on a non-local backend would call a
-    # legitimate configuration broken, and any non-`pass` status invites a
-    # future reader to make this check critical, which would let an
-    # informational report flip an exit code that scripts gate on. The
-    # DETAIL carries the finding; the status only says the check ran.
+    # NEVER `fail` (issue #240): `[FAIL]` on a non-local backend would call a
+    # legitimate configuration broken, and a failing status invites a future
+    # reader to make this check critical, which would let an informational
+    # report flip an exit code that scripts gate on.
     #
     # Both terms are named separately because they are distinct facts and a
     # user debugging "why is my confidential concept in the prompt" needs to
@@ -11133,14 +11167,22 @@ def doctor() -> None:
     exemption_state = (
         "active" if (locality.is_local and exemption_enabled) else "inactive"
     )
+    # The detail differs per branch so the configured host survives the skip:
+    # only the claim that anything was VERIFIED goes away (#389).
     results.append(
         CheckResult(
             "Backend host locality",
-            "pass",
+            "pass" if reachable else "skip",
             critical=False,
             detail=(
                 f"{where} ({locality.display_host}); confidential local "
                 f"exemption {exemption_state}"
+                if reachable
+                else (
+                    f"configured for {where} ({locality.display_host}); not "
+                    "verified while Ollama is unreachable; confidential local "
+                    f"exemption {exemption_state}"
+                )
             ),
         )
     )
