@@ -11,8 +11,9 @@ check failed. `embedding-model-installed`, `workspace-vector-index-present`,
 checks, and `backend-host-locality` are all informational (non-critical):
 the git checks exist for the (not-yet-wired, PR2) `purge` verb, so a failing
 check must not flip the exit code, and the locality check (issue #240)
-reports rather than judges -- it always `[PASS]`es and carries its finding
-in the detail. Every test patches `openkos.cli.main.OllamaClient` with a fake
+reports rather than judges -- it is `[PASS]` while Ollama is reachable and
+`[SKIP]` when it is not (#389), never `[FAIL]`, and carries its finding in
+the detail on both branches. Every test patches `openkos.cli.main.OllamaClient` with a fake
 stub (D-seam) -- zero network, zero real Ollama process.
 """
 
@@ -981,8 +982,10 @@ def test_doctor_reports_locality_outside_a_workspace(
 ) -> None:
     """Outside a workspace the check still runs, falling back to the packaged
     `confidential_local_exemption` default exactly as checks 3-5 fall back to
-    the packaged model tags (#240) -- there is no `[SKIP]` branch, because
-    locality depends on neither workspace state nor Ollama reachability."""
+    the packaged model tags (#240). Workspace state is what this test varies,
+    and the check does not depend on it -- the separate skip when Ollama is
+    unreachable (#389) is about how the line READS beside a failure, not
+    about an inability to answer."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     monkeypatch.setattr(

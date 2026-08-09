@@ -11140,14 +11140,11 @@ def doctor() -> None:
         )
 
     # 11. backend-host-locality (informational, always; ALWAYS EMITTED).
-    # Unlike checks 8/9/10 this one now has a SKIP branch (#389), though not
-    # because it cannot answer: locality is a literal-form check over the
-    # host the chat client already resolved, so it still answers when the
-    # server is down. It skips because a green line beneath a red one reads
-    # as a contradiction to someone scanning the column, and the reader has
-    # no way to know the two answer different questions. The configured host
-    # stays in the detail either way, so nothing is lost by the downgrade.
-    # Reuses the SAME `client` check 3 built, so what is reported is the
+    # `pass` while reachable, `skip` when not, never `fail` -- the docstring
+    # above holds the reasoning for that shape (#389); it is not repeated
+    # here. Note it skips despite being ABLE to answer without the server:
+    # locality is a literal-form check over the host the chat client already
+    # resolved. Reuses the SAME `client` check 3 built, so what is reported is the
     # host `doctor` itself would have sent to, never a re-derivation.
     #
     # `pass` while Ollama is reachable, `skip` when it is not; NEVER
@@ -11173,14 +11170,8 @@ def doctor() -> None:
     exemption_state = (
         "active" if (locality.is_local and exemption_enabled) else "inactive"
     )
-    # SKIP rather than PASS when Ollama is unreachable (#389, same D6 rule the
-    # model and embedding checks follow). This line reports CONFIGURATION, not
-    # liveness, which is correct -- but a green `[PASS] Backend host locality`
-    # sitting directly beneath `[FAIL] Ollama reachable` reads as a
-    # contradiction to anyone scanning the column, and the reader has no way
-    # to know the two answer different questions. The configured host stays in
-    # the detail, so the FACT survives; only the claim that anything was
-    # verified goes away.
+    # The detail differs per branch so the configured host survives the skip:
+    # only the claim that anything was VERIFIED goes away (#389).
     results.append(
         CheckResult(
             "Backend host locality",
