@@ -11271,6 +11271,16 @@ def curate(
         "--include-deprecated",
         help="Include deprecated and superseded concepts (excluded by default).",
     ),
+    accept: str | None = typer.Option(
+        None,
+        "--accept",
+        metavar="STAGES",
+        help=(
+            "Comma-separated stages whose per-item prompts are accepted in "
+            "bulk (structure, metadata). Identity is never accepted in "
+            "bulk: its merges delete a concept."
+        ),
+    ),
 ) -> None:
     """One dependency-ordered decision session over the five kinds of
     pending human judgment: Preconditions, Identity, Structure, Metadata,
@@ -11327,6 +11337,12 @@ def curate(
     failure or a failed mid-walk write, 2 on a Typer usage error, 3 on a
     drift refusal (#319, propagated unchanged from
     `_reject_drifted_targets`)."""
+    # `--accept`'s vocabulary is checked BEFORE the workspace gate, so a
+    # typo is reported as itself rather than as a missing workspace --
+    # `list`'s TYPE and `set-volatility`'s tier already refuse in this
+    # order (issue #385).
+    explicit_accept = curate_module.parse_accepted_stages(accept)
+
     root = Path.cwd()
     reason = config.require_workspace(root)
     if reason is not None:
@@ -11351,6 +11367,9 @@ def curate(
     # `warn_if_walk_incomplete` (not just before `CurateContext`) so the
     # advisory can be told about this hatch too, the same way the other
     # five verbs already are.
+    accepted_stages = curate_module.resolve_accepted_stages(
+        explicit_accept, review=cfg.review
+    )
     local_exemption = _resolve_local_exemption(_chat_client(cfg), cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -11366,6 +11385,7 @@ def curate(
         include_confidential=include_confidential,
         include_deprecated=include_deprecated,
         local_exemption=local_exemption,
+        accepted_stages=accepted_stages,
     )
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):

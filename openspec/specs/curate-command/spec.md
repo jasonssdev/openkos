@@ -218,6 +218,73 @@ each stage's outcome at the end of the run.
 - WHEN `curate` finishes
 - THEN one summary line lists each of the five stages with its outcome
 
+### Requirement: Per-Stage Accept-All Is Opt-In And Never Covers Identity
+
+`curate` MUST accept a `--accept STAGES` option taking a comma-separated,
+case-insensitive list of stage names whose per-item write prompts are
+answered yes without asking. Only stages marked auto-acceptable may be
+named; today that is Structure and Metadata.
+
+`--accept identity` MUST be refused with exit 2, and so MUST any name that
+is not a stage at all. Both refusals MUST run BEFORE the workspace gate, so
+a typo is reported as itself rather than as a missing workspace, and the
+refusal MUST name the acceptable stages. Identity is excluded because a
+merge absorbs one concept into another and DELETES the absorbed file; no
+flag and no config value may apply one unreviewed.
+
+Naming a stage in `--accept` IS per-item write consent for that stage, so
+an accepted stage MUST also pass the non-TTY write refusal — `curate --auto
+--accept structure` on a pipe writes, matching `suggest-relations --auto`.
+Identity MUST remain subject to that refusal on every path.
+
+#### Scenario: An accepted stage applies without prompting
+
+- GIVEN a Structure queue with two valid suggestions
+- WHEN `curate --accept structure` runs
+- THEN both suggestions are written, no per-item prompt is printed, and the
+  summary reports `applied 2, skipped 0`
+
+#### Scenario: Identity cannot be accepted in bulk
+
+- GIVEN any workspace
+- WHEN `curate --accept identity` runs
+- THEN the exit code is 2, nothing is written, and stderr names the
+  acceptable stages
+
+#### Scenario: An unknown stage name is a usage error
+
+- GIVEN any workspace
+- WHEN `curate --accept strcture` runs
+- THEN the exit code is 2 and stderr names the offending value
+
+### Requirement: `review: false` Accepts Only The Non-Destructive Stages
+
+When `--accept` is absent, `review: false` in `openkos.yaml` MUST accept
+every auto-acceptable stage — the knob already means "do not confirm before
+saving" for the standalone verbs, and `curate` MUST stop ignoring it.
+
+It MUST NOT reach Identity. A value set for the standalone verbs cannot
+become retroactive authorization to delete a concept, so every merge still
+prompts, and on a non-TTY run Identity still refuses its write walk and
+prints the standalone-verb hint.
+
+An explicit `--accept` MUST override `review` and name the exact accepted
+set rather than widening it, so an operator running with `review: false`
+can still re-review a single stage without editing the config file.
+
+#### Scenario: `review: false` accepts Structure but never Identity
+
+- GIVEN `review: false` and both an Identity and a Structure queue
+- WHEN `curate` runs
+- THEN Structure applies without per-item prompts
+- AND every Identity merge is still prompted individually
+
+#### Scenario: An explicit `--accept` narrows `review: false`
+
+- GIVEN `review: false`, a Structure queue and a Metadata queue
+- WHEN `curate --accept structure` runs
+- THEN Structure applies silently and Metadata prompts per item
+
 ### Requirement: A Failed Writing Stage Discloses What It Already Applied
 
 A writing stage (Identity, Structure, Metadata) that fails part-way through

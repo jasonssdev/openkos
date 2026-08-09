@@ -159,6 +159,18 @@ class Stage:
     unattended_hint: str | None = None
     halts_run: bool = False
     live: bool = True
+    auto_acceptable: bool = False
+    """Whether `--accept` (or `review: false`) may turn this stage's
+    per-item walk into an accept-all (issue #385).
+
+    Defaults to `False` so the capability is opt-in per stage rather than
+    inherited by anything that happens to write. Identity keeps the default
+    ON PURPOSE and this is the ONE place that decision lives: a merge
+    absorbs one concept into another and DELETES the absorbed file, so no
+    flag and no config knob may apply one unreviewed. Making it a
+    descriptor field rather than a name check scattered through the CLI is
+    what keeps a future writing stage from silently inheriting accept-all
+    just by being added to `_STAGES`."""
 
 
 @dataclass
@@ -194,6 +206,15 @@ class CurateContext:
     Defaults to `False` so a `CurateContext` built without it -- a test
     fixture, a future caller -- fails closed exactly like every other seam
     in this change."""
+    accepted_stages: frozenset[str] = frozenset()
+    """Names of the stages whose per-item walk runs as an accept-all this
+    run (issue #385), resolved ONCE by `resolve_accepted_stages` from
+    `--accept` and `cfg.review`.
+
+    Empty by default, so a context built without it prompts for everything
+    -- the pre-#385 behavior. Membership is only ever populated from
+    `auto_acceptable` stages, which is why no code downstream re-checks
+    whether Identity slipped in: it structurally cannot."""
     ollama_client: LLMBackend | None = field(default=None, init=False)
     ollama_unavailable_notice: str | None = field(default=None, init=False)
     partial_progress: StageOutcome | None = field(default=None, init=False)
@@ -231,6 +252,97 @@ def cost_line(stage: Stage, probe: StageProbe) -> str:
     without this helper needing to change."""
     n = probe.llm_calls
     return f"{n} {stage.noun}(s) -> {n} LLM call(s)"
+
+
+def parse_accepted_stages(accept: str | None) -> frozenset[str] | None:
+    """Validate the raw `--accept` value and return the named stage set, or
+    `None` when the flag was not passed at all (issue #385).
+
+    PURE vocabulary: this never reads the workspace or the config, so it
+    can run BEFORE `require_workspace` and report a typo as itself rather
+    than as a missing workspace -- the same ordering `list`'s `TYPE` and
+    `set-volatility`'s tier already use.
+
+    Names are matched case-insensitively against `_STAGES`. Two refusals,
+    both exit 2 before any work:
+
+    - a name that is not a stage at all, because a typo must never read as
+      "accepted";
+    - a stage that exists but is not `auto_acceptable` -- today only
+      Identity, whose merges delete a concept. The message names the
+      acceptable stages rather than only rejecting, since the operator's
+      next move is to pick one of them.
+
+    `None` is distinct from `frozenset()`: the first means "not specified,
+    fall back to `review`", the second means "specified as nothing", which
+    an explicit `--accept ''` legitimately produces."""
+    if accept is None:
+        return None
+
+    acceptable = {stage.name.lower() for stage in _STAGES if stage.auto_acceptable}
+    known = {stage.name.lower(): stage.name for stage in _STAGES}
+    requested = [item.strip().lower() for item in accept.split(",") if item.strip()]
+    offered = ", ".join(sorted(acceptable))
+    for name in requested:
+        if name not in known:
+            typer.echo(
+                f"openkos curate: --accept: unknown stage '{name}' -- "
+                f"expected one of: {offered}.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        if name not in acceptable:
+            typer.echo(
+                f"openkos curate: --accept: '{name}' cannot be accepted in "
+                "bulk -- it applies destructive changes that must be "
+                f"reviewed one at a time. Acceptable stages: {offered}.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+    return frozenset(known[name] for name in requested)
+
+
+def resolve_accepted_stages(
+    explicit: frozenset[str] | None, *, review: bool
+) -> frozenset[str]:
+    """Fold `parse_accepted_stages`' result together with `openkos.yaml`'s
+    `review` knob into the set `CurateContext` carries (issue #385).
+
+    `review: false` has meant "do not confirm before saving" in 16 places
+    in `main.py` since long before `curate` existed; #385 is the issue that
+    finally makes this verb read it. It accepts every auto-acceptable stage
+    -- and ONLY those, so a knob set months ago for the standalone verbs
+    can never become retroactive authorization to delete a concept today.
+
+    An EXPLICIT `--accept` wins and names the exact set rather than
+    widening it: a flag that could only ever add would leave an operator
+    running with `review: false` no way to re-review a single stage without
+    editing the config file mid-session."""
+    if explicit is not None:
+        return explicit
+    if review:
+        return frozenset()
+    return frozenset(stage.name for stage in _STAGES if stage.auto_acceptable)
+
+
+def _accepts(ctx: CurateContext, stage_name: str) -> bool:
+    """Whether `stage_name`'s per-item walk runs as an accept-all (#385).
+
+    The one read of `ctx.accepted_stages`, so the three walks never grow
+    their own membership logic."""
+    return stage_name in ctx.accepted_stages
+
+
+def _confirm_item(ctx: CurateContext, stage_name: str, prompt_text: str) -> bool:
+    """`_confirm`, unless this stage was accepted in bulk for the run, in
+    which case the answer is yes and no prompt is printed (issue #385).
+
+    Identity calls `_confirm` DIRECTLY rather than routing through here:
+    that keeps the merge walk structurally incapable of being skipped, so
+    a future edit to the acceptance rules cannot reach it by accident."""
+    if _accepts(ctx, stage_name):
+        return True
+    return _confirm(prompt_text)
 
 
 def _partial_progress(
@@ -640,9 +752,11 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             f"[{suggestion.suggested_type}] {edge.source_id} -> {edge.target_id}"
         )
         typer.echo(f"  rationale: {suggestion.rationale}")
-        if not _confirm(
+        if not _confirm_item(
+            ctx,
+            "Structure",
             f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{suggestion.suggested_type}]? [y/N]"
+            f"[{suggestion.suggested_type}]? [y/N]",
         ):
             skipped += 1
             declined.append(
@@ -852,7 +966,11 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
 
         typer.echo(f"[{result.suggested_tier}] {result.type_name}")
         typer.echo(f"  rationale: {result.rationale}")
-        if not _confirm(f"Set {result.type_name} -> {result.suggested_tier}? [y/N]"):
+        if not _confirm_item(
+            ctx,
+            "Metadata",
+            f"Set {result.type_name} -> {result.suggested_tier}? [y/N]",
+        ):
             skipped += 1
             declined.append(f"{result.type_name} -> {result.suggested_tier}")
             continue
@@ -1103,6 +1221,7 @@ _STAGES: tuple[Stage, ...] = (
         writes=True,
         unattended_hint="openkos relate <source> <type> <target>",
         live=True,
+        auto_acceptable=True,
     ),
     Stage(
         name="Metadata",
@@ -1113,6 +1232,7 @@ _STAGES: tuple[Stage, ...] = (
         writes=True,
         unattended_hint="openkos set-volatility <concept> <tier>",
         live=True,
+        auto_acceptable=True,
     ),
     Stage(
         name="Contradictions",
@@ -1212,11 +1332,19 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             )
             continue
 
-        if stage.writes and not sys.stdin.isatty():
+        if stage.writes and not sys.stdin.isatty() and not _accepts(ctx, stage.name):
             # D3 rule 2: `--auto` consents to model spend, never to a
             # per-item write -- reached only when `gate` accepted via
             # `ctx.auto` on a non-TTY, since a TTY decline/non-TTY-no-auto
             # already short-circuited above.
+            #
+            # `--accept` is the missing consent channel (#385), so an
+            # accepted stage passes: naming it IS per-item write consent,
+            # which is exactly what this refusal says is absent. That makes
+            # `curate --auto --accept structure` parity with
+            # `suggest-relations --auto`, which has always written
+            # unattended. Identity can never reach this branch, since only
+            # `auto_acceptable` stages ever enter `accepted_stages`.
             outcomes.append(
                 StageOutcome(
                     status="declined",

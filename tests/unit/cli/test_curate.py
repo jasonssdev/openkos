@@ -241,6 +241,81 @@ def _stub_later_stages_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _set_review(tmp_path: Path, value: bool) -> None:
+    """Rewrite `openkos.yaml`'s `review:` line. Issue #385 makes `curate`
+    honor the knob that 16 sites in `main.py` already read, so tests need
+    to set it the same way an operator would -- in the file, not through a
+    flag."""
+    config_path = tmp_path / "openkos.yaml"
+    lines = config_path.read_text(encoding="utf-8").splitlines()
+    rewritten = [
+        f"review: {'true' if value else 'false'}"
+        if line.startswith("review:")
+        else line
+        for line in lines
+    ]
+    assert any(line.startswith("review:") for line in rewritten), (
+        "openkos.yaml has no `review:` line to rewrite"
+    )
+    config_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+
+def _same_verdict_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A COMPLETE 1-group Identity queue whose only pair adjudicates SAME
+    -- the shape whose merge would DELETE `concepts/b` if it were ever
+    auto-applied."""
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub-same",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+
+
+def _one_type_metadata_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A COMPLETE 1-type Metadata queue with a valid tier suggestion.
+    Installed AFTER a Structure fixture so it overrides that fixture's
+    empty `_concept_type_names` stub."""
+    from openkos.resolution.volatility_typing import (
+        TierSuggestion,
+        TierSuggestionBatch,
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate._concept_type_names", lambda *a, **k: ["Concept"]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_volatility",
+        lambda *a, **k: TierSuggestionBatch(
+            results=[
+                TierSuggestion(
+                    type_name="Concept",
+                    current_default="static",
+                    suggested_tier="volatile",
+                    rationale="tier rationale",
+                )
+            ]
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # 1.1/1.2 -- frozen dataclasses exist with design's fields
 # ---------------------------------------------------------------------------
@@ -3198,3 +3273,240 @@ def test_metadata_declined_tier_identity_listed_in_summary(
     assert "[y/N/skip]" not in result.stdout
     assert "Metadata: applied 0, skipped 1." in _lines(result.stdout)
     assert "  declined: Concept -> volatile" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# issue #385 -- per-stage accept-all, with Identity structurally excluded
+# ---------------------------------------------------------------------------
+
+
+def _two_edge_structure_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A COMPLETE 2-edge Structure queue with valid suggestions, and every
+    other stage probing empty -- the shape that costs two per-item prompts
+    today and zero once the stage is accepted (#385)."""
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    first = Edge(source_id="concepts/a", target_id="concepts/b")
+    second = Edge(source_id="concepts/a", target_id="concepts/c")
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.candidate_edges", lambda *a, **k: [first, second]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_edge_types",
+        lambda *a, **k: EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(
+                    edge=first, suggested_type="references", rationale="one"
+                ),
+                EdgeSuggestion(
+                    edge=second, suggested_type="references", rationale="two"
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+
+def test_accept_structure_applies_every_suggestion_without_a_per_item_prompt(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--accept structure` turns the stage's per-item walk into an
+    accept-all: both suggestions are written and the `[y/N]` prompt never
+    appears (spec: Per-Stage Accept-All Is Opt-In And Never Covers
+    Identity). Only ONE stdin answer is supplied -- the cost gate's -- so a
+    surviving per-item prompt would consume nothing and the run would
+    hang or decline rather than apply 2."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _two_edge_structure_queue(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Structure: applied 2, skipped 0." in _lines(result.stdout)
+    # The cost gate's own `Proceed? [y/N]` still prints, so guard on the
+    # PER-ITEM prompt literal rather than on `[y/N]` alone.
+    assert "Relate concepts/a" not in result.stdout
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "concepts/b" in source_text
+    assert "concepts/c" in source_text
+
+
+def test_accept_identity_is_refused_as_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--accept identity` is refused with exit 2 before any work: merging
+    DELETES the absorbed concept, so no flag may turn it into an
+    accept-all. The refusal names the stages that ARE acceptable rather
+    than only rejecting (spec: Per-Stage Accept-All Is Opt-In And Never
+    Covers Identity)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--accept", "identity"])
+
+    assert result.exit_code == 2
+    assert "identity" in result.stderr
+    assert "structure" in result.stderr
+    assert "metadata" in result.stderr
+
+
+def test_accept_rejects_an_unknown_stage_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unrecognized `--accept` value is a usage error (exit 2), not a
+    silently ignored no-op -- a typo must never read as "accepted"."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--accept", "strcture"])
+
+    assert result.exit_code == 2
+    assert "strcture" in result.stderr
+
+
+def test_review_false_accepts_the_non_destructive_stages(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`review: false` in `openkos.yaml` finally reaches `curate` (#385):
+    with no `--accept` flag it accepts every auto-acceptable stage, so
+    Structure applies both suggestions with no per-item prompt."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _set_review(tmp_path, False)
+    _two_edge_structure_queue(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Structure: applied 2, skipped 0." in _lines(result.stdout)
+    assert "Relate concepts/a" not in result.stdout
+
+
+def test_review_false_still_prompts_for_every_identity_merge(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`review: false` MUST NOT auto-apply a merge. The knob may have been
+    set months ago for the standalone verbs; it cannot become retroactive
+    authorization to delete a concept today (#385). The pair is declined
+    here by answering `n`, which is only reachable because the prompt
+    still ran."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _set_review(tmp_path, False)
+    _same_verdict_pair(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "Identity: applied 0, skipped 1." in _lines(result.stdout)
+
+
+def test_explicit_accept_narrows_review_false_rather_than_widening_it(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With `review: false` AND `--accept structure`, the flag wins and
+    names the EXACT accepted set: Structure applies silently, Metadata
+    falls back to its per-item prompt. An explicit flag that only ever
+    widened would give the operator no way to re-review one stage."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _set_review(tmp_path, False)
+    _two_edge_structure_queue(monkeypatch)
+    _one_type_metadata_queue(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    # Structure's cost gate, Metadata's cost gate, Metadata's per-item prompt.
+    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\ny\nn\n")
+
+    assert result.exit_code == 0
+    assert "Structure: applied 2, skipped 0." in _lines(result.stdout)
+    assert "Set Concept -> volatile? [y/N]" in result.stdout
+    assert "Metadata: applied 0, skipped 1." in _lines(result.stdout)
+
+
+def test_accept_lets_a_non_tty_run_write_that_stage(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--accept` IS per-item write consent, so it lifts the non-TTY write
+    refusal for exactly the named stages: `--auto --accept structure` on a
+    pipe writes instead of printing the standalone-verb hint. This is
+    parity with `suggest-relations --auto`, which already writes
+    unattended; Identity is unreachable by this path (#385)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _two_edge_structure_queue(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto", "--accept", "structure"])
+
+    assert result.exit_code == 0
+    assert "Structure: applied 2, skipped 0." in _lines(result.stdout)
+    assert "openkos relate" not in result.stdout
+
+
+def test_review_false_never_lifts_the_non_tty_write_refusal_for_identity(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`review: false` on a PIPED run with `--auto` must still refuse
+    Identity's write walk and print the standalone-verb hint (#385).
+
+    This pins the composite invariant from the other side: the non-TTY
+    refusal is lifted by `accepted_stages` membership, so if Identity ever
+    became auto-acceptable it would gain unattended merge authority --
+    concepts deleted by a config line and a pipe, with no prompt anywhere
+    in the run to decline at."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _set_review(tmp_path, False)
+    _same_verdict_pair(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert (
+        "Identity: non-interactive write consent unavailable -- run "
+        "`openkos adjudicate --apply-same --confirm-count <n>` instead."
+    ) in _lines(result.stdout)
