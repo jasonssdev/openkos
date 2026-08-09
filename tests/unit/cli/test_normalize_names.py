@@ -492,8 +492,22 @@ def test_byte_exact_fs_commit_shows_delete_and_add_per_rename(
     result = runner.invoke(app, ["normalize-names", "--auto"])
 
     assert result.exit_code == 0
+    # Two display defaults would hide the pair (Linux CI proved both):
+    # rename detection coalesces D+A into one R100 line, and
+    # `core.quotePath` octal-escapes the non-ASCII bytes. The oracle
+    # disables both to observe the raw delete-and-add the commit records.
     status = vcs_git._run(
-        ["git", "show", "--name-status", "--format=", "-1"], cwd=tmp_path
+        [
+            "git",
+            "-c",
+            "core.quotePath=false",
+            "show",
+            "--name-status",
+            "--no-renames",
+            "--format=",
+            "-1",
+        ],
+        cwd=tmp_path,
     ).stdout
     assert f"D\tbundle/{NFD_CAFE}.md" in status
     assert f"A\tbundle/{NFC_CAFE}.md" in status
