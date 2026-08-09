@@ -482,18 +482,17 @@ def _merged_body_candidates(
     return candidates
 
 
-_MERGED_CONTENT_HEADING_PREFIX = "\n\n## Merged content ("
+_MERGED_CONTENT_HEADING_PREFIX = okf.MERGED_CONTENT_HEADING_PREFIX
 """The heading `okf.build_merged_document` writes above an absorbed body.
 
-DUPLICATED LITERAL, deliberately and narrowly. `okf.build_merged_document` is
-the ONE authority that writes this heading; this module only needs to find it
-in order to cut a ledger snapshot back down to the survivor's own content.
-Promoting it to a shared constant on `okf` is the right end state and is left
-as a follow-up rather than done here, because that module is outside this
-change's reviewed scope. `tests/unit/cli/test_merge_core.py::
-test_build_merged_document_body_layout_is_pinned` pins the layout against a
-literal, so a change to the heading fails there loudly rather than silently
-degrading this split."""
+No longer a duplicated literal (#445): `okf` owns the string it writes, and
+this module aliases it to FIND that heading when cutting a ledger snapshot
+back down to the survivor's own content. The alias is kept so this module's
+own references stay local and its intent stays documented at the point of
+use. `tests/unit/cli/test_merge_core.py::
+test_build_merged_document_body_layout_is_pinned` pins the rendered layout
+against its own literal, so a change to the heading fails there loudly
+rather than silently degrading this split."""
 
 
 def _own_body_before_merge(before_body: str) -> str:

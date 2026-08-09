@@ -1849,3 +1849,87 @@ def test_llm_modules_do_not_import_config() -> None:
         assert not any("config" in name for name in imported), (
             f"{path} imports config: {imported}"
         )
+
+
+def test_generation_capped_message_names_the_ceiling_when_one_is_configured() -> None:
+    """With a ceiling configured, the message names it, so the operator knows
+    which number to raise (#440)."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        urlopen=_fake_urlopen(
+            _ok_body_with_done_reason("truncated mid-", "length"), captured
+        ),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert "8192" in str(caught.value)
+
+
+def test_generation_capped_message_blames_the_backend_when_no_ceiling_is_set() -> None:
+    """With NO ceiling configured, the message must not claim a configured
+    ceiling of `None` (#440).
+
+    `done_reason == "length"` is reachable without `num_predict` binding --
+    Ollama reports it when generation stops for length reasons at all,
+    including the model's own context window filling. The old message
+    interpolated the ceiling unconditionally and rendered "the configured
+    max_generation_tokens ceiling (None)", which is self-contradictory:
+    nothing was configured."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=None,
+        urlopen=_fake_urlopen(
+            _ok_body_with_done_reason("truncated mid-", "length"), captured
+        ),
+    )
+
+    with pytest.raises(OllamaGenerationCapped) as caught:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    message = str(caught.value)
+    assert "None" not in message
+    assert "configured" not in message
+    # Still says WHAT went wrong, not merely what did not.
+    assert "truncated" in message
+
+
+def test_chat_does_not_raise_when_done_reason_is_an_unexpected_string() -> None:
+    """A `done_reason` the client does not know about is not a cap (#440).
+
+    The check is an equality test against `"length"`, so this is correct by
+    construction -- pinned because "unexpected value" is exactly the case a
+    future backend change would introduce."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        urlopen=_fake_urlopen(
+            _ok_body_with_done_reason("a complete reply", "load"), captured
+        ),
+    )
+
+    result = client.chat([{"role": "user", "content": "hi"}])
+
+    assert result == "a complete reply"
+
+
+def test_chat_does_not_raise_when_done_reason_is_not_a_string() -> None:
+    """A non-string `done_reason` is not a cap either, and must not raise a
+    `TypeError` on the comparison (#440)."""
+    captured: list[urllib.request.Request] = []
+    body = json.dumps(
+        {
+            "message": {"role": "assistant", "content": "a complete reply"},
+            "done": True,
+            "done_reason": 7,
+        }
+    ).encode("utf-8")
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(body, captured))
+
+    result = client.chat([{"role": "user", "content": "hi"}])
+
+    assert result == "a complete reply"

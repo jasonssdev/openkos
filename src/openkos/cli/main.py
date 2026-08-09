@@ -9645,6 +9645,15 @@ def contradictions(
                 f"(merged content, absorbed {result.merged_absorbed_id}) "
                 f"(confidence: {result.confidence:.2f})"
             )
+            # Name the verb that resolves the condition (#445, same shape as
+            # #386's advisory ladder). A pair verdict needs no pointer: the
+            # operator can open both files. A merged-content verdict has ONE
+            # node, and the disagreeing second body lives in the ledger where
+            # no ordinary read will surface it -- `unmerge` is the only verb
+            # that separates them, and it takes exactly these two ids.
+            typer.echo(
+                f"  next: openkos unmerge {survivor_id} {result.merged_absorbed_id}"
+            )
         else:
             source_id, target_id = result.pair_ids
             typer.echo(
