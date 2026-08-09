@@ -36,7 +36,12 @@ control flow, or refactored (design D2): every signal this module reads
 comes from a function `status`/`lint` already ship
 (`vector_store_is_empty`, `lint_check.collect_docs` + its checks,
 `find_exact_title_groups`), so no walk logic is duplicated and the two
-verbs can drift in framing without drifting in truth.
+verbs can drift in framing without drifting in truth. ONE signal is sourced
+outside that set: `walk_incomplete` reads `okf._walk_errors` directly (#486),
+because neither `status` nor `lint` exposes the unlistable-directory signal
+as a function this module could call -- `status` folds it into its own
+rendered section. The principle it serves is the same one, though: the walk
+logic still lives in `okf`, and this module only reads its result.
 
 Cost contract, enforced STRUCTURALLY, not by discipline: `_BundleSignals` is
 the only object holding a `Path`. A tier callable receives only a
@@ -54,6 +59,7 @@ from dataclasses import dataclass
 
 from openkos import config
 from openkos import lint as lint_check
+from openkos.model import okf
 from openkos.resolution import CandidateGroup, find_exact_title_groups
 from openkos.state.derived import stale_derived_stores
 from openkos.state.vectorstore import vector_store_is_empty
@@ -99,7 +105,15 @@ class NextAction:
     """One ranked recommendation: a runnable command and a one-line reason."""
 
     command: str
-    """The exact, runnable command string -- verbatim, never re-derived."""
+    """The exact, runnable command string -- verbatim, never re-derived.
+
+    ONE tier is exempt, and only one (#486): the rank-0 bootstrap rung
+    returns `openkos ingest <path>` with a literal placeholder. Its own
+    docstring holds the reasoning; this sentence exists so the exception is
+    discoverable from the contract it bends. Every other tier's command is
+    runnable as printed. If a SECOND templated tier ever appears, replace
+    this exception with a structured `placeholder: bool` rather than growing
+    the list -- one exception is worth a sentence, two are worth a field."""
     reason: str
     """A single line explaining why this command was recommended."""
 
@@ -143,6 +157,7 @@ class _BundleSignals:
         self._declinations: list[str] = []
         self._exact_title_groups: list[CandidateGroup] | None = None
         self._stale_indexes: tuple[str, ...] | None = None
+        self._walk_incomplete: bool | None = None
 
     def record_declination(self, notice: str) -> None:
         """Note a real finding this run deliberately refused to turn into a
@@ -196,6 +211,36 @@ class _BundleSignals:
             self._docs = docs
             self._skip_notices = tuple(skip_notices)
         return self._docs
+
+    @property
+    def walk_incomplete(self) -> bool:
+        """1 walk (`okf._walk_errors`), memoized, and read by the rank-0
+        bootstrap tier ALONE -- after that tier's two zero-walk gates have
+        already decided the bundle looks empty (#486).
+
+        Deliberately not folded into `docs`: `lint_check.collect_docs`
+        reports the documents it could not READ, never the directories it
+        could not LIST, so an unlistable subtree leaves `docs` empty with no
+        skip notice at all. That is the exact gap that let a populated
+        bundle read as a fresh one.
+
+        This is a SECOND full traversal, not a free one, and the honest
+        bound is where it is paid rather than how big it is: an empty `docs`
+        means zero ELIGIBLE documents, never a small tree -- reserved files,
+        non-document assets and deep nesting are all still walked. What the
+        cost contract preserves is that no other tier's budget moves, and
+        that this one is reached only on a run already headed for the
+        bootstrap recommendation.
+
+        Unwrapped, like the helper's two other callers: `okf._walk_errors`
+        hands `os.walk` an `onerror` collector, so a directory-scan failure
+        becomes an entry in its result rather than an exception. There is no
+        `OSError` here left to catch, and swallowing anything else would
+        report "the walk was complete" -- the precise claim this property
+        exists to stop the bootstrap tier from making."""
+        if self._walk_incomplete is None:
+            self._walk_incomplete = bool(okf._walk_errors(self._layout.bundle_dir))
+        return self._walk_incomplete
 
     @property
     def observed_skip_notices(self) -> tuple[str, ...]:
@@ -281,6 +326,19 @@ def _tier_bootstrap_empty_bundle(signals: _BundleSignals) -> NextAction | None:
         return None
     if signals.docs:
         return None
+    if signals.walk_incomplete:
+        # "Empty" is now a claim this run cannot make (#486): the walk that
+        # produced zero documents provably could not list part of the
+        # bundle, so a populated subtree may be sitting right there. Recommend
+        # the verb that NAMES the unreadable directory rather than a first
+        # ingest that would be advice for a different bundle.
+        return NextAction(
+            command="openkos status",
+            reason=(
+                "This bundle looks empty, but at least one directory could "
+                "not be read -- check which one before ingesting anything."
+            ),
+        )
     return NextAction(
         command="openkos ingest <path>",
         reason=(

@@ -1421,3 +1421,102 @@ def test_next_stays_silent_about_staleness_when_the_indexes_are_fresh(
     result = next_action.next_action(config.WorkspaceLayout(tmp_path))
 
     assert result.action is None or "older than the bundle" not in result.action.reason
+
+
+def _break_os_walk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force `okf._walk_errors` to report exactly one directory-scan error,
+    deterministically -- mirrors the same helper in
+    `tests/unit/cli/test_contradictions.py`, without relying on real
+    `chmod` bits (which root and some CI filesystems ignore)."""
+    import os
+
+    original_walk = os.walk
+    walk_error = OSError(13, "Permission denied", "locked")
+
+    def fake_walk(
+        top: "str | os.PathLike[str]",
+        topdown: bool = True,
+        onerror: "Callable[[OSError], object] | None" = None,
+        followlinks: bool = False,
+    ) -> "object":
+        if onerror is not None:
+            onerror(walk_error)
+        yield from original_walk(top, topdown, onerror, followlinks)
+
+    monkeypatch.setattr(os, "walk", fake_walk)
+
+
+def test_bootstrap_does_not_claim_empty_when_the_walk_is_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle that merely LOOKS empty because a subdirectory could not be
+    listed is never told to ingest its first source (#486).
+
+    The bootstrap tier gates on `signals.docs`, populated by a walk that
+    silently drops any subdirectory it cannot list. `status` folds those
+    walk errors into its "Needs attention" section; `next` had no such
+    pass, so a bundle whose documents all live under an unreadable subtree
+    read as EMPTY and got "ingest your first source" -- with no hint that a
+    populated bundle exists and could not be scanned."""
+    _init_workspace(tmp_path, monkeypatch)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "first source" not in result.stdout
+    assert "Run: openkos ingest" not in result.stdout
+    # Names the real condition and points at the verb that shows WHICH
+    # directory is unreadable.
+    assert "Run: openkos status" in result.stdout
+    assert "could not be read" in result.stdout
+
+
+def test_bootstrap_still_recommends_ingest_on_a_genuinely_empty_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The incomplete-walk guard must not swallow the ordinary bootstrap
+    case (#486): with a readable, genuinely empty bundle the first-ingest
+    recommendation is still exactly what #386 established."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" in result.stdout
+    assert "first source" in result.stdout
+    assert "could not be read" not in result.stdout
+
+
+def test_incomplete_walk_redirect_still_names_the_file_level_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both kinds of damage in one run: unparseable FILES and an unlistable
+    DIRECTORY (#486).
+
+    The two travel different paths -- skip notices come from
+    `collect_docs`'s per-file errors, the redirect comes from
+    `okf._walk_errors`'s directory-scan errors -- and the redirect must not
+    swallow the notices on its way past.
+
+    `render_lines` appends the notices after BOTH branches, so today they
+    survive by construction rather than by this test's vigilance. That is
+    the point: this pins the D4 honesty guard against the ONE new way it
+    could be lost -- a future redirect that returns early or renders itself
+    -- and it is the only test where a file-level skip and a
+    directory-level failure occur in the same run."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_unparseable_doc(tmp_path)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    # The redirect fires: an unlistable directory means "empty" is not a
+    # claim this run can make, even though a file-level skip explains part
+    # of the emptiness.
+    assert "Run: openkos status" in result.stdout
+    assert "could not be read" in result.stdout
+    assert "Run: openkos ingest" not in result.stdout
+    # ...and the file-level damage is still named, not shadowed by it.
+    assert "concepts/broken.md: skipped (unparseable frontmatter)" in result.stdout
