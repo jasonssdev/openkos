@@ -104,7 +104,7 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   `[y/N]`, an unrecognized answer is re-asked with a notice naming the
   accepted tokens, and Enter keeps the documented `N` default. The
   end-of-walk summary now also names each operator-declined merge on its own
-  `declined: <absorbed> -> <survivor>` line, mirroring #398's decline
+  two-space-indented `  declined: <absorbed> -> <survivor>` line, mirroring #398's decline
   listing, so a typo-free decline set is revisitable. `--apply-same` was
   never affected — its typed-count gate is a separate code path with no
   per-merge prompt (#483).

@@ -647,7 +647,8 @@ absorbed a member that a later group references, that later group MUST print
 - GIVEN two SAME 2-member groups sharing one member id, the first merge
   accepted with `y`
 - WHEN `adjudicate --apply` continues to the second group
-- THEN stdout shows `skipped (member already merged)` for that group
+- THEN stdout shows `skipped (member unresolved -- already merged or missing)`
+  for that group
 - AND the run does not crash
 
 ### Requirement: `--apply` Rejects `--json`
@@ -693,8 +694,9 @@ At the end of the run, `adjudicate --apply` MUST print a summary line
 `applied X, skipped Y` where `Y` breaks down into N>2 skips, already-merged
 skips, and declined (N/empty) prompts. After the summary line, each
 operator-declined merge MUST be named on its own
-`declined: <absorbed> -> <survivor>` line (issue #483, mirroring #398's
-decline listing), and no such line may appear for a merge that was applied.
+`  declined: <absorbed> -> <survivor>` line — two-space indented, exactly as
+the implementation emits it (issue #483, mirroring #398's decline listing) —
+and no such line may appear for a merge that was applied.
 
 #### Scenario: Summary reflects applied and skipped counts
 
