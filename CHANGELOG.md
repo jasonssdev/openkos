@@ -120,6 +120,13 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   mid-session. Confidence-threshold auto-acceptance stays out: the two stages
   that cause the prompt volume expose no confidence at all — only
   adjudication does, and that is the destructive one (#385).
+- **`curate --accept structure` now says what bulk acceptance spends**: one
+  stderr line per accepted run, naming that suggested relation types go in
+  unreviewed and pointing at the measurement. `evals/edge_typing/` puts the
+  suggester's precision on specific types at 0.60, so roughly two in five
+  bulk-applied types are wrong by the rubric — and a wrong `part_of` asserts
+  something false that everything reading the graph then believes. The flag
+  stays, because the operator asked for it; going in blind does not (#513).
 - **`suggest_edge_types` finally has an eval, and it found something worse
   than the ergonomics problem it was built for**: `evals/edge_typing/` scores
   the relation-type suggester against labelled concept pairs whose answers

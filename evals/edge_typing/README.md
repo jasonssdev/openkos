@@ -43,34 +43,81 @@ half. Re-run **both** arms whenever `fixtures.py` changes.
 
 ## What it found
 
-Measured on `qwen3:8b`, 15 labelled edges, 5 runs per arm, same fixture:
+All numbers below are `qwen3:8b` unless stated, on the **17-edge fixture**,
+5 runs per arm (3 for the model sweep). Baseline was measured four times and
+lands at **0.41–0.45**, so treat anything inside that band as noise.
 
-| metric | baseline | `confidence` arm |
+### The model dominates everything else
+
+Same prompt, same fixture, only the model changed:
+
+| model | accuracy | stability |
 | --- | --- | --- |
-| type accuracy vs label | 0.35 | 0.37 |
-| mean stability | 0.99 | 0.96 |
-| `related_to` share | 0.65 | 0.67 |
-| mean run latency | 19.6s | 23.2s |
+| `gemma2:9b` | **0.63** | 0.92 |
+| `qwen2.5:7b` | 0.55 | 0.80 |
+| `llama3.1:8b` | 0.45 | 0.76 |
+| `qwen3:8b` *(current default)* | 0.44 | 0.98 |
+| `mistral:7b` | 0.27 | 0.92 |
 
-Two results, and the second one closed #508.
+The configured default is next to last. `gemma2:9b` is +0.19 over it — larger
+than any prompt change measured here, from a config value. That does not make
+it a safe swap: the default is global and extraction was tuned on `qwen3:8b`
+through `extraction_cap`, so changing it would move a pipeline this harness
+does not score. It is a finding, not a patch.
 
-**The suggester fails its own rubric on roughly two thirds of decidable
-pairs, and it does so with near-perfect stability.** It answers `related_to`
-where a document says *"it happened because…"*, and `part_of` where a
-document says *"one of the … each of them registered the same way"* — cases
-the prompt's own tie-break chain says must resolve to `caused_by` and
-`member_of`. Stability of 0.99 means it is not guessing: it is confidently,
-reproducibly wrong. That is a far larger problem than automation ergonomics.
+### Three prompt arms, none of them shippable
 
-**Asking for a confidence is quality-neutral and buys a real but
-insufficient signal.** Accuracy and distribution barely move, stability dips
-slightly, latency rises ~18%. The confidence does carry signal — thresholding
-lifts precision from 0.37 to 0.65 at `>=0.6` (27% of emissions admitted) and
-to 0.73 at `>=0.9` (15% admitted) — but 0.73 means roughly **one auto-applied
-relation in four is wrong by the rubric**. #385's concern was that bulk
-acceptance "would rapidly apply a lot of low-value material"; writing wrong
-types unattended at that rate is not an improvement on asking.
+| arm | accuracy | verdict |
+| --- | --- | --- |
+| baseline | 0.44 | — |
+| few-shot | 0.51 | rejected, see below |
+| less-priming | 0.41 | no effect |
+| evidence-first | 0.29 | actively harmful |
 
-So no threshold gate shipped, and the confidence field was reverted rather
-than left in production with no consumer. The harness stays: it is what makes
-the next attempt measurable instead of hopeful.
+**`evidence-first`** asked the model to quote the supporting sentence before
+choosing, and pushed `related_to` from 0.65 to 0.93 of emissions. Naming the
+abstention more often primed it — the failure `edge_typing.py` already
+records from #388's era, where "a clause forbidding a shape made that shape
+more frequent through priming".
+
+**`less-priming`** removed two `related_to` mentions from the guard paragraph
+while keeping its meaning. Nothing moved.
+
+**`few-shot`** added six worked examples and reads as a +0.07 win. It is not
+one. The entire gain sits on **2 of 17 edges**, both `member_of`, and both
+phrased like the `member_of` example — *"one of the … like the van and the
+truck"* against *"one of the scheduled maintenance jobs … each registered the
+same way"*. The `member_of` pair written in deliberately different language
+(*"a roster whose entries are peers"*) does not move, because baseline
+already answers it. Six examples, one confusion moved, only where the surface
+form matched: that is pattern-matching on phrasing the same author wrote on
+both sides, not a model that learned the distinction. Rejected.
+
+### What the suggester actually does
+
+Precision per emitted type, baseline, 17 edges × 5 runs — "when it says T,
+how often is T right":
+
+| emitted | correct | emissions | precision |
+| --- | --- | --- | --- |
+| `member_of` | 6 | 6 | 1.00 |
+| `produced_by` | 5 | 5 | 1.00 |
+| `part_of` | 10 | 19 | 0.53 |
+| `related_to` | 15 | 50 | 0.30 |
+| `references` | 0 | 5 | **0.00** |
+
+Two readings matter downstream:
+
+**Specific types aggregate to 0.60.** That is exactly what `curate --accept
+structure` writes unreviewed, so roughly two in five bulk-applied relation
+types are wrong by the rubric. `curate` now says so once per accepted run.
+
+**`related_to` at 0.30 is under-claiming, not caution.** Seven times in ten
+it is emitted where the documents state a specific relationship — the case
+the prompt's own tie-break (3) says must resolve to a specific type.
+
+Stability of 0.98 across all of this means the suggester is not guessing. It
+is confidently and reproducibly wrong, which rules out sampling-based
+mitigations: majority voting and self-consistency both sample from the same
+settled mistake, and #508 already measured and rejected a stated-confidence
+threshold.

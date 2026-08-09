@@ -3608,3 +3608,52 @@ def test_accept_structure_on_a_pipe_skips_related_to_instead_of_prompting(
     )
     assert "concepts/b" in source_text
     assert "concepts/c" not in source_text
+
+
+def test_accepted_structure_discloses_that_types_go_in_unreviewed(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An accepted Structure prints ONE advisory naming what bulk
+    acceptance actually spends (#513).
+
+    `evals/edge_typing/` measures the suggester emitting a specific type
+    correctly about 60% of the time, so roughly two in five bulk-written
+    relation types are wrong by the rubric -- and a wrong `part_of`
+    asserts something false that everything reading the graph believes.
+    The flag stays; going in blind does not."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _two_edge_structure_queue(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto", "--accept", "structure"])
+
+    assert result.exit_code == 0
+    assert result.stderr.count("applied without review") == 1
+    assert "openkos curate: Structure: suggested relation types are" in result.stderr
+
+
+def test_structure_without_accept_prints_no_bulk_advisory(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The advisory is scoped to bulk acceptance: a per-item walk reviews
+    every type as it goes, so there is nothing to warn about and the line
+    would be pure noise (#513)."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _two_edge_structure_queue(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\nn\nn\n")
+
+    assert result.exit_code == 0
+    assert "applied without review" not in result.stderr
