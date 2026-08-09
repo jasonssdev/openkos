@@ -257,6 +257,38 @@ Identity MUST remain subject to that refusal on every path.
 - WHEN `curate --accept strcture` runs
 - THEN the exit code is 2 and stderr names the offending value
 
+### Requirement: Bulk Acceptance Excludes The Least-Specific Relation Type
+
+An accepted Structure stage MUST still route a `related_to` suggestion to
+the operator. Every other suggestable type asserts a specific relationship;
+`related_to` is the answer the prompt designates as correct when the
+documents do not support one, so applying it adds no claim beyond the
+untyped link that already existed. It is therefore the cheapest place to
+spend a human glance, and at a measured 67% of accepted edges also the
+largest.
+
+On a TTY the exempted item falls back to the per-item prompt. On a non-TTY
+run there is no channel to ask on, so it MUST be counted as skipped rather
+than prompted — reaching the prompt with no terminal would kill the walk
+mid-run.
+
+This exemption is scoped to the item, not the stage: the same run still
+applies every specific suggestion without asking.
+
+#### Scenario: A specific type applies while `related_to` is prompted
+
+- GIVEN a Structure queue with one specific suggestion and one `related_to`
+- WHEN `curate --accept structure` runs on a TTY
+- THEN the specific suggestion is written with no prompt
+- AND the `related_to` suggestion is prompted per item
+
+#### Scenario: On a pipe the exempted item is skipped, not prompted
+
+- GIVEN the same queue
+- WHEN `curate --auto --accept structure` runs with stdout piped
+- THEN the specific suggestion is written, the `related_to` suggestion is
+  counted as skipped, and no prompt is printed
+
 ### Requirement: `review: false` Accepts Only The Non-Destructive Stages
 
 When `--accept` is absent, `review: false` in `openkos.yaml` MUST accept

@@ -155,6 +155,20 @@ against `produced_by` (brought about vs authored), and `references` against
 `related_to` is defined as an ANSWER, not as a shrug. The aim of this rubric
 is NOT to drive its share down -- see `_SYSTEM_PROMPT`."""
 
+LEAST_SPECIFIC_RELATION_TYPE = "related_to"
+"""The one suggestable type that asserts no specific relationship (#508).
+
+NOT a synonym for "wrong", and not a walk-back of the rubric above: it is
+the answer `_SYSTEM_PROMPT` calls CORRECT when the documents do not support
+a specific claim, and an honest one is better than a guessed `part_of`. What
+sets it apart is narrower and uncontested -- accepting it adds no claim to
+the graph beyond the untyped link that was already there.
+
+That is why `curate --accept structure` applies every other type in bulk but
+still routes this one to the operator: it is the cheapest place to spend a
+human glance, and at a measured 67% of accepted edges it is also where the
+volume is."""
+
 _RUBRIC_LINES = "\n".join(
     f"- {name}: {_RELATION_RUBRIC[name]}."
     for name in sorted(SUGGESTABLE_RELATION_TYPES)

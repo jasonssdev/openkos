@@ -81,6 +81,7 @@ from openkos.resolution.contradiction import (
     plan_candidates,
 )
 from openkos.resolution.edge_typing import (
+    LEAST_SPECIFIC_RELATION_TYPE,
     EdgeSuggestion,
     candidate_edges,
     candidate_truncation_notice,
@@ -333,15 +334,33 @@ def _accepts(ctx: CurateContext, stage_name: str) -> bool:
     return stage_name in ctx.accepted_stages
 
 
-def _confirm_item(ctx: CurateContext, stage_name: str, prompt_text: str) -> bool:
+def _confirm_item(
+    ctx: CurateContext,
+    stage_name: str,
+    prompt_text: str,
+    *,
+    acceptable_in_bulk: bool = True,
+) -> bool:
     """`_confirm`, unless this stage was accepted in bulk for the run, in
     which case the answer is yes and no prompt is printed (issue #385).
+
+    `acceptable_in_bulk=False` exempts ONE item from that acceptance
+    (issue #508): the stage is still accepted, but this particular
+    suggestion asserts nothing specific, so it is worth the operator's
+    glance even in a run that opted out of the rest. On a TTY it falls
+    back to the prompt; on a pipe there is no channel to ask on, so it is
+    SKIPPED rather than prompted -- reaching `typer.prompt` with no
+    terminal would kill the walk mid-run, which is the same failure the
+    Identity non-TTY guard exists to prevent.
 
     Identity calls `_confirm` DIRECTLY rather than routing through here:
     that keeps the merge walk structurally incapable of being skipped, so
     a future edit to the acceptance rules cannot reach it by accident."""
     if _accepts(ctx, stage_name):
-        return True
+        if acceptable_in_bulk:
+            return True
+        if not sys.stdin.isatty():
+            return False
     return _confirm(prompt_text)
 
 
@@ -757,6 +776,13 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             "Structure",
             f"Relate {edge.source_id} -> {edge.target_id} "
             f"[{suggestion.suggested_type}]? [y/N]",
+            # #508: `--accept structure` applies every specific type in
+            # bulk, but the least-specific one asserts nothing beyond the
+            # untyped link that already existed, so it still reaches a
+            # human. See `edge_typing.LEAST_SPECIFIC_RELATION_TYPE`.
+            acceptable_in_bulk=(
+                suggestion.suggested_type != LEAST_SPECIFIC_RELATION_TYPE
+            ),
         ):
             skipped += 1
             declined.append(
