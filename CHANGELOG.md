@@ -93,8 +93,43 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   concepts along typed edges — proposed and measured on its own terms, not a
   revert of this change (#434).
 
+### Changed
+
+- **BREAKING — `adjudicate --json` now emits an object, not a bare array**:
+  the payload is `{"partial": bool, "adjudicated": int, "total": int,
+  "results": [...]}`, where `results` is exactly the array previous versions
+  printed, unchanged field for field. The reason is that a partial batch
+  (#441) writes its completed verdicts to stdout and reports the failure on
+  stderr with exit 1 — so `openkos adjudicate --json > out.json` produced a
+  valid, complete-looking, but TRUNCATED file whose incompleteness survived
+  only in an exit code the redirect had already discarded. A consumer
+  reading that file later had no way to tell. The counters describe the
+  RUN — `total` groups queued, `adjudicated` groups the model answered for —
+  and are deliberately untouched by `--same-only`, which filters `results`
+  alone, so narrowing the view can never masquerade as a truncated batch.
+  Every consumer must now read `payload["results"]`; the shape is uniform
+  across complete, partial, and empty runs, so no consumer has to branch on
+  type. `adjudicate` is the only command in the CLI that emits JSON, which
+  is what made taking the break now cheap (#468).
+
 ### Fixed
 
+- **A `curate` stage that fails mid-batch now discloses what it already
+  wrote**: Identity merges by ABSORBING one concept into another and
+  deleting the absorbed file. When a batch failed after some of those
+  merges had committed, the summary reported the failure and stayed silent
+  about the destruction — the operator could not tell whether a concept had
+  been deleted. Two separate paths were losing the counts. The returned
+  `failed` outcome carried `applied`/`skipped` but Identity's notice never
+  printed them (Structure's and Metadata's already did). Worse, the
+  availability path re-raises `OllamaUnavailable`/`OllamaModelNotFound` on
+  purpose, so the sequencer keeps its run-scoped skip of later model-calling
+  stages — but a raise carries no return value, so the counts the stage had
+  just computed died with it and the summary was rebuilt with a default
+  `applied=0`. A concept could be absorbed and deleted, Ollama could then go
+  down, and the run would report only the dead server. Both paths now state
+  what was applied and skipped before the failure. Contradictions is
+  deliberately exempt: it is report-only and applies nothing (#468).
 - **`adjudicate --apply`'s per-merge prompt now validates its answer**: the
   walk advertised `[y/N/skip]` while implementing only two outcomes, and any
   unrecognized input (`t`, `a`, `si`, `1` — #398's typo evidence) was

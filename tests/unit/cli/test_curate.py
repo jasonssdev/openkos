@@ -53,14 +53,20 @@ def _lines(output: str) -> list[str]:
     return output.splitlines()
 
 
-def _unavailable_line(stage: str, detail: str) -> str:
+def _unavailable_line(stage: str, detail: str, progress: str | None = None) -> str:
     """The WHOLE summary line the sequencer prints when a stage's `run`
     raises `OllamaUnavailable` -- assembled once so every caller compares
-    the entire line instead of a doubling-blind prefix of it (#504)."""
-    return (
+    the entire line instead of a doubling-blind prefix of it (#504).
+
+    `progress` is the stage-authored disclosure of what a mid-batch failure
+    had ALREADY written before the availability failure surfaced (#468 item
+    4): pass it for a partial batch, leave it `None` for a stage that raised
+    before applying anything."""
+    line = (
         f"{stage}: unavailable -- {detail}. Start it with `ollama serve`, "
         "then try again. Or run `openkos doctor` to diagnose the environment."
     )
+    return line if progress is None else f"{line} {progress}"
 
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -967,10 +973,15 @@ def test_identity_partial_batch_applies_completed_then_reports_failed_with_count
     result = runner.invoke(app, ["curate"], input="y\ny\n")
 
     assert result.exit_code == 0
+    # The accepted merge DELETED `b.md` before the failure surfaced (#468
+    # item 4): the failure notice below must therefore disclose the write
+    # counts, exactly as Structure's and Metadata's already do. A notice
+    # that names only "1 of 2 adjudicated" leaves the operator unable to
+    # tell whether a concept was destroyed.
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
     assert (
-        "Identity: failed -- boom (adjudicated 1 of 2 candidate group(s))."
-        in _lines(result.stdout)
+        "Identity: failed -- boom (adjudicated 1 of 2 candidate group(s); "
+        "applied 1, skipped 0)." in _lines(result.stdout)
     )
     # Later stages still ran: their summary lines are present (pinned
     # invariant -- a generic OllamaError fails only its own stage).
@@ -1001,8 +1012,17 @@ def test_identity_partial_batch_unavailable_still_walks_then_skips_later_stages(
     result = runner.invoke(app, ["curate"], input="y\ny\n")
 
     assert result.exit_code == 0
+    # A concept was ABSORBED AND DELETED before Ollama went down. The
+    # re-raise discards the stage's return value, so without #468 item 4
+    # the sequencer builds this outcome with its default `applied=0` and
+    # the summary reports the dead server while staying silent about the
+    # destroyed concept.
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
-    assert _unavailable_line("Identity", "connection refused") in _lines(result.stdout)
+    assert _unavailable_line(
+        "Identity",
+        "connection refused",
+        "Already applied 1, skipped 0 before the failure.",
+    ) in _lines(result.stdout)
 
 
 def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_stages(
@@ -1043,7 +1063,7 @@ def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_sta
     assert (
         f"Identity: unavailable -- model '{config.DEFAULT_MODEL}' is not "
         f"installed. Pull it with `ollama pull {config.DEFAULT_MODEL}`, then "
-        "try again."
+        "try again. Already applied 1, skipped 0 before the failure."
     ) in _lines(result.stdout)
     assert "Structure: skipped -- Ollama unavailable (see above)." in _lines(
         result.stdout
@@ -2026,7 +2046,14 @@ def test_structure_partial_batch_unavailable_still_walks_then_skips_later_stages
         encoding="utf-8"
     )
     assert "references" in source_text
-    assert _unavailable_line("Structure", "connection refused") in _lines(result.stdout)
+    # The accepted relation was WRITTEN before Ollama went down (#468 item
+    # 4): the availability notice must disclose it, since the re-raise
+    # otherwise drops the counts the stage had already computed.
+    assert _unavailable_line(
+        "Structure",
+        "connection refused",
+        "Already applied 1, skipped 0 before the failure.",
+    ) in _lines(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -2276,7 +2303,12 @@ def test_metadata_partial_batch_unavailable_still_walks_then_skips_later_stages(
     assert result.exit_code == 0
     config_text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
     assert "volatile" in config_text
-    assert _unavailable_line("Metadata", "connection refused") in _lines(result.stdout)
+    # The accepted tier was WRITTEN before Ollama went down (#468 item 4).
+    assert _unavailable_line(
+        "Metadata",
+        "connection refused",
+        "Already applied 1, skipped 0 before the failure.",
+    ) in _lines(result.stdout)
 
 
 # ---------------------------------------------------------------------------

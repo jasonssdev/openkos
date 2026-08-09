@@ -218,6 +218,35 @@ each stage's outcome at the end of the run.
 - WHEN `curate` finishes
 - THEN one summary line lists each of the five stages with its outcome
 
+### Requirement: A Failed Writing Stage Discloses What It Already Applied
+
+A writing stage (Identity, Structure, Metadata) that fails part-way through
+its batch has, by construction, already committed the accepted writes that
+preceded the failure — Identity's merges DELETE the absorbed concept. Its
+summary line MUST therefore report the applied and skipped counts, on BOTH
+failure shapes: the `failed` outcome returned for a generic error, and the
+`unavailable` outcome the sequencer builds when the stage re-raises an
+availability failure to short-circuit later `needs_llm` stages.
+
+Contradictions is exempt: it is report-only and applies nothing, so it has
+no destructive work to disclose.
+
+#### Scenario: Generic mid-batch failure discloses write counts
+
+- GIVEN Identity has merged one accepted pair and its next chat fails with a
+  generic error
+- WHEN `curate` finishes
+- THEN Identity's summary line reports both the completed-of-total
+  adjudication counts and `applied 1, skipped 0`
+
+#### Scenario: Availability failure still discloses write counts
+
+- GIVEN a writing stage has applied one accepted item and Ollama then
+  becomes unavailable mid-batch
+- WHEN `curate` finishes
+- THEN that stage's summary line carries the availability remediation text
+  AND states what it had already applied and skipped before the failure
+
 ### Requirement: Exit Codes Match Existing Verb Conventions
 
 `curate` MUST exit 0 on a completed or declined run (including a

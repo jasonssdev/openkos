@@ -196,6 +196,22 @@ class CurateContext:
     in this change."""
     ollama_client: LLMBackend | None = field(default=None, init=False)
     ollama_unavailable_notice: str | None = field(default=None, init=False)
+    partial_progress: StageOutcome | None = field(default=None, init=False)
+    """What a WRITING stage had already applied when an availability failure
+    forced it to re-raise instead of return (issue #468 item 4).
+
+    The `OllamaUnavailable`/`OllamaModelNotFound` arms of the partial-batch
+    split (#441) stay raise-shaped so the sequencer keeps its run-scoped
+    skip of later `needs_llm` stages -- but a raise carries no return value,
+    so the `applied`/`skipped` the stage had just counted died with it and
+    the sequencer's handler built its outcome with the default `applied=0`.
+    A concept could be absorbed and DELETED, Ollama could then go down, and
+    the summary would report only the dead server.
+
+    A stage stashes the outcome it WOULD have returned here immediately
+    before re-raising; `_availability_outcome` consumes and clears it. Only
+    the three writing stages set it -- Contradictions is read-only, so it
+    has no destructive work to disclose."""
 
 
 def cost_line(stage: Stage, probe: StageProbe) -> str:
@@ -215,6 +231,47 @@ def cost_line(stage: Stage, probe: StageProbe) -> str:
     without this helper needing to change."""
     n = probe.llm_calls
     return f"{n} {stage.noun}(s) -> {n} LLM call(s)"
+
+
+def _partial_progress(
+    applied: int, skipped: int, declined: Sequence[str]
+) -> StageOutcome:
+    """The outcome a WRITING stage stashes on `ctx.partial_progress` just
+    before re-raising an availability failure (issue #468 item 4).
+
+    `status` is `"unavailable"` because that is what the sequencer's handler
+    goes on to report; the payload that matters is the counts, which the
+    raise would otherwise discard. `notice` is a COMPLETE sentence, appended
+    after the handler's remediation text so the summary line reads as one
+    continuous statement."""
+    return StageOutcome(
+        status="unavailable",
+        applied=applied,
+        skipped=skipped,
+        notice=f"Already applied {applied}, skipped {skipped} before the failure.",
+        skipped_items=tuple(declined),
+    )
+
+
+def _availability_outcome(ctx: CurateContext, notice: str) -> StageOutcome:
+    """The sequencer's `unavailable` outcome, folding in whatever a partial
+    WRITING stage had already applied before it re-raised (#468 item 4).
+
+    Consumes `ctx.partial_progress`, so a later stage's own availability
+    notice can never inherit an earlier stage's counts. A stage that raised
+    before applying anything leaves it `None` and the notice stays exactly
+    as it was before this change."""
+    progress = ctx.partial_progress
+    ctx.partial_progress = None
+    if progress is None:
+        return StageOutcome(status="unavailable", notice=notice)
+    return StageOutcome(
+        status="unavailable",
+        applied=progress.applied,
+        skipped=progress.skipped,
+        notice=f"{notice} {progress.notice}",
+        skipped_items=progress.skipped_items,
+    )
 
 
 def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
@@ -448,6 +505,11 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         # Availability failures stay raise-shaped so the sequencer's handler
         # keeps its run-scoped skip of later `needs_llm` stages; the walk
         # above already ran, so the completed verdicts survive (#441).
+        # The raise carries no return value, so hand the counts to the
+        # sequencer through `ctx` -- merges here DELETE a concept, and a
+        # notice about a dead server must not be the only record of that
+        # (#468 item 4).
+        ctx.partial_progress = _partial_progress(applied, skipped, declined)
         raise batch.failure
     if batch.failure is not None:
         return StageOutcome(
@@ -456,7 +518,8 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             skipped=skipped,
             notice=(
                 f"failed -- {batch.failure} (adjudicated "
-                f"{len(batch.results)} of {len(groups)} candidate group(s))."
+                f"{len(batch.results)} of {len(groups)} candidate group(s); "
+                f"applied {applied}, skipped {skipped})."
             ),
             skipped_items=tuple(declined),
         )
@@ -633,7 +696,10 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
         # keeps its run-scoped skip of later `needs_llm` stages; the walk
-        # above already ran, so the accepted writes survive (#441).
+        # above already ran, so the accepted writes survive (#441). The
+        # raise carries no return value, so hand the counts to the
+        # sequencer through `ctx` (#468 item 4).
+        ctx.partial_progress = _partial_progress(applied, skipped, declined)
         raise batch.failure
     if batch.failure is not None:
         return StageOutcome(
@@ -833,7 +899,10 @@ def _metadata_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
         # keeps its run-scoped skip of later `needs_llm` stages; the walk
-        # above already ran, so the accepted writes survive (#441).
+        # above already ran, so the accepted writes survive (#441). The
+        # raise carries no return value, so hand the counts to the
+        # sequencer through `ctx` (#468 item 4).
+        ctx.partial_progress = _partial_progress(applied, skipped, declined)
         raise batch.failure
     if batch.failure is not None:
         return StageOutcome(
@@ -1174,7 +1243,7 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
                 f"`ollama serve`, then try again.{_DOCTOR_HINT}"
             )
             ctx.ollama_unavailable_notice = notice
-            outcome = StageOutcome(status="unavailable", notice=notice)
+            outcome = _availability_outcome(ctx, notice)
         except OllamaModelNotFound:
             notice = (
                 f"unavailable -- model '{ctx.cfg.model}' is not "
@@ -1182,7 +1251,7 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
                 "try again."
             )
             ctx.ollama_unavailable_notice = notice
-            outcome = StageOutcome(status="unavailable", notice=notice)
+            outcome = _availability_outcome(ctx, notice)
         # The two specific handlers above MUST precede this generic one:
         # both subclass `OllamaError`, mirroring `adjudicate`'s ordering
         # discipline (main.py:7134-7141) -- a generic `OllamaError` fails
