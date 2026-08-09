@@ -85,6 +85,11 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
     replicates `lifecycle.deprecated_concept_ids`'s R2 fail-safe rule
     verbatim, including its no-cycle-detection exemption, rather than
     calling it -- calling it would be a second bundle walk.
+
+    Rows come back sorted by `concept_id` (#389). The walk's own order is
+    alphabetical over PATHS, where the `.md` suffix decides ties, which
+    puts a bare stem AFTER its numbered siblings -- see the sort comment
+    below.
     """
     own_status: dict[str, str] = {}
     rows_without_status: dict[str, BundleObject] = {}
@@ -140,21 +145,28 @@ def list_objects(bundle_dir: Path) -> list[BundleObject]:
 
     superseded = {target for _source, target in supersedes}
 
-    # `rows_without_status` preserves the walk's insertion order, which is
-    # already alphabetical (`okf._iter_docs` walks `sorted(rglob(...))`) --
-    # no re-sort needed.
-    return [
-        replace(
-            row,
-            status=(
-                "deprecated"
-                if own_status.get(concept_id) == "deprecated"
-                or concept_id in superseded
-                else "active"
-            ),
-        )
-        for concept_id, row in rows_without_status.items()
-    ]
+    # Sorted by CONCEPT ID, not by the walk's insertion order (#389).
+    # `okf._iter_docs` walks `sorted(rglob(...))`, which is alphabetical
+    # over PATHS -- and there the `.md` suffix breaks ties: `-` is 0x2D
+    # and `.` is 0x2E, so `claude-code-2.md` sorts BEFORE `claude-code.md`
+    # and a bare stem lands after its own numbered siblings. Discovery is
+    # this module's whole purpose, so it orders by the identifier it
+    # prints, never by the filename it happened to read.
+    return sorted(
+        (
+            replace(
+                row,
+                status=(
+                    "deprecated"
+                    if own_status.get(concept_id) == "deprecated"
+                    or concept_id in superseded
+                    else "active"
+                ),
+            )
+            for concept_id, row in rows_without_status.items()
+        ),
+        key=lambda row: row.concept_id,
+    )
 
 
 _LINK_DIRS: frozenset[str] = frozenset(ot.link_dir for ot in REGISTRY if ot.link_dir)
@@ -164,6 +176,17 @@ _NAME_TO_LINK_DIR: dict[str, str] = {
 """Built from `REGISTRY` directly -- NOT from `types.TYPE_TO_LINK_DIR`,
 which is `llm_classifiable`-only and therefore omits `Source` (design D7
 gotcha)."""
+
+LINK_DIR_TO_TYPE_NAME: dict[str, str] = {
+    ot.link_dir: ot.name for ot in REGISTRY if ot.link_dir
+}
+"""Reverse of `_NAME_TO_LINK_DIR`, for rendering a row's OKF type from the
+`link_dir` the walk already derived structurally (#399) -- the same
+first-path-segment trick `graph/summary.py` resolves node types with, so no
+document is re-read and no frontmatter `type` field is trusted over the
+directory the object actually lives in. Public because the CLI renders the
+column; the same `REGISTRY`-not-`TYPE_TO_LINK_DIR` gotcha above applies, so
+`Source` is present here too."""
 
 
 def resolve_link_dir(raw: str) -> str | None:
