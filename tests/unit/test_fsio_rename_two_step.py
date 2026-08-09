@@ -217,3 +217,139 @@ def test_survives_a_normalization_insensitive_rename(
     listing = os.listdir(tmp_path)  # noqa: PTH208 -- byte-exact listing check, matches the primitive
     assert f"{NFC_CAFE}.md" in listing
     assert f"{NFD_CAFE}.md" not in listing
+
+
+def test_guard_listing_failure_restores_the_original_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the destination-presence guard's OWN `os.listdir` raises
+    (a permission wall that appears right after hop 1), the entry is
+    restored to its original name and the listing error propagates
+    (#495 finding 1).
+
+    Before the fix this was the ONLY single-fault branch that stranded
+    the temp, contradicting the every-single-fault-path-restores
+    invariant stated at `lint.scan_stranded_rename_temps` and
+    `normalize_names_cmd`."""
+    src = tmp_path / f"{NFD_CAFE}.md"
+    src.write_text("body\n", encoding="utf-8")
+    real_listdir = os.listdir
+
+    def walled_listdir(path: str | Path) -> list[str]:
+        raise PermissionError("listing refused")
+
+    monkeypatch.setattr("openkos.fsio.os.listdir", walled_listdir)
+
+    with pytest.raises(OSError, match="listing refused"):
+        fsio.rename_two_step(src, f"{NFC_CAFE}.md")
+
+    monkeypatch.setattr("openkos.fsio.os.listdir", real_listdir)
+    listing = os.listdir(tmp_path)  # noqa: PTH208 -- byte-exact listing check, matches the primitive
+    assert f"{NFD_CAFE}.md" in listing  # restored to the original spelling
+    assert not any(name.startswith(fsio.RENAME_TEMP_PREFIX) for name in listing)
+
+
+def test_hop_two_failure_with_a_working_restore_leaves_the_original_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A SINGLE fault at hop 2 (`temp -> dst`) whose best-effort restore
+    SUCCEEDS leaves the entry at its original spelling with no temp on
+    disk, and propagates the hop-2 error (#495 finding 5).
+
+    The double-fault sibling test pins the both-fail path; this pins the
+    every-single-fault-path-restores half of the same invariant."""
+    src = tmp_path / f"{NFD_CAFE}.md"
+    src.write_text("body\n", encoding="utf-8")
+    real_rename = os.rename
+
+    def hop_two_failing_rename(src_path: str | Path, dst_path: str | Path) -> None:
+        if Path(dst_path).name == f"{NFC_CAFE}.md":
+            raise OSError("hop two failed")
+        real_rename(src_path, dst_path)  # hop 1 and the restore both succeed
+
+    monkeypatch.setattr("openkos.fsio.os.rename", hop_two_failing_rename)
+
+    with pytest.raises(OSError, match="hop two failed"):
+        fsio.rename_two_step(src, f"{NFC_CAFE}.md")
+
+    monkeypatch.setattr("openkos.fsio.os.rename", real_rename)
+    listing = os.listdir(tmp_path)  # noqa: PTH208 -- byte-exact listing check, matches the primitive
+    assert f"{NFD_CAFE}.md" in listing
+    assert not any(name.startswith(fsio.RENAME_TEMP_PREFIX) for name in listing)
+    assert (tmp_path / f"{NFD_CAFE}.md").read_text(encoding="utf-8") == "body\n"
+
+
+def test_guard_trip_with_a_failing_restore_strands_the_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A collision-guard trip whose best-effort restore ALSO fails raises
+    the guard's collision `OSError` -- never the restore's -- and leaves
+    the entry at its machine-detectable temp name (#495 finding 5).
+
+    This is the guard-branch twin of the hop-2 double-fault test: the
+    stranded temp is what `lint.scan_stranded_rename_temps` reports at
+    the next run (design D3)."""
+    src = tmp_path / "raw-entry.md"
+    src.write_text("source body\n", encoding="utf-8")
+    interloper = tmp_path / "target.md"
+    interloper.write_text("interloper body\n", encoding="utf-8")
+    real_rename = os.rename
+
+    def restore_failing_rename(src_path: str | Path, dst_path: str | Path) -> None:
+        if Path(dst_path).name == "raw-entry.md":
+            raise OSError("restore failed")  # the suppressed restore
+        real_rename(src_path, dst_path)  # hop 1 succeeds
+
+    monkeypatch.setattr("openkos.fsio.os.rename", restore_failing_rename)
+
+    with pytest.raises(OSError, match="refusing to overwrite") as caught:
+        fsio.rename_two_step(src, "target.md")
+
+    assert "restore failed" not in str(caught.value)
+    monkeypatch.setattr("openkos.fsio.os.rename", real_rename)
+    listing = os.listdir(tmp_path)  # noqa: PTH208 -- byte-exact listing check, matches the primitive
+    assert any(name.startswith(fsio.RENAME_TEMP_PREFIX) for name in listing)
+    assert interloper.read_text(encoding="utf-8") == "interloper body\n"
+
+
+def test_verification_double_fault_leaves_no_temp_to_strand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verification failure whose restore ALSO fails leaves the entry at
+    the name hop 2 produced -- NOT at the temp name -- so
+    `lint.scan_stranded_rename_temps` finds nothing (#495 finding 2).
+
+    The primitive's docstring used to claim every double fault strands a
+    machine-detectable temp; in this branch hop 2 already succeeded, so
+    the entry sits at its FINAL spelling and the prefix scan is blind to
+    it by construction. Nothing is lost -- the entry is either byte-
+    exactly the NFC target (the intended end state) or a canonically
+    equivalent non-NFC spelling, which `scan_non_nfc_entries` reports."""
+    from openkos import lint as lint_check
+
+    src = tmp_path / f"{NFD_CAFE}.md"
+    src.write_text("body\n", encoding="utf-8")
+    real_listdir = os.listdir
+    real_rename = os.rename
+
+    def fake_listdir(path: str | Path) -> list[str]:
+        return [name for name in real_listdir(path) if name != f"{NFC_CAFE}.md"]
+
+    def restore_failing_rename(src_path: str | Path, dst_path: str | Path) -> None:
+        if Path(dst_path).name == f"{NFD_CAFE}.md":
+            raise OSError("restore failed")  # the suppressed restore
+        real_rename(src_path, dst_path)  # hop 1 and hop 2 both succeed
+
+    monkeypatch.setattr("openkos.fsio.os.listdir", fake_listdir)
+    monkeypatch.setattr("openkos.fsio.os.rename", restore_failing_rename)
+
+    with pytest.raises(OSError, match="verification failed"):
+        fsio.rename_two_step(src, f"{NFC_CAFE}.md")
+
+    monkeypatch.setattr("openkos.fsio.os.listdir", real_listdir)
+    monkeypatch.setattr("openkos.fsio.os.rename", real_rename)
+    listing = os.listdir(tmp_path)  # noqa: PTH208 -- byte-exact listing check, matches the primitive
+    # Hop 2 landed and the restore failed, so the entry sits at its FINAL
+    # spelling -- the assertion the narrowed docstring claim rests on.
+    assert f"{NFC_CAFE}.md" in listing
+    assert lint_check.scan_stranded_rename_temps(tmp_path) == []

@@ -143,11 +143,20 @@ def rename_two_step(src: Path, nfc_name: str) -> Path:
     per design D2. When the restore succeeds, no
     `RENAME_TEMP_PREFIX`-named entry is left on disk. A stranded temp can
     result from a hard kill strictly between the two `os.rename` calls
-    below, OR from a double fault where the failure's suppressed restore
-    also fails (PR #492 informational finding) -- in every such case the
-    entry remains at its machine-detectable temp name and
+    below, OR from a double fault in the guard or hop-2 branch, where the
+    failure's suppressed restore also fails (PR #492 informational
+    finding) -- in both of those the entry is still at the temp name, so
     `lint.scan_stranded_rename_temps` reports it at the next run (design
     D3), never this primitive.
+
+    The post-rename VERIFICATION branch is the one exception, and does
+    not strand a temp at all (issue #495): hop 2 already succeeded there,
+    so a failed restore leaves the entry at the name hop 2 produced --
+    either byte-exactly `nfc_name` (the intended end state, merely
+    unverified) or a canonically equivalent non-NFC spelling, which
+    `lint.scan_non_nfc_entries` reports as an ordinary `non-nfc-name`
+    finding. The prefix scan is blind to that branch by construction, and
+    nothing is lost either way.
     """
     parent = src.parent
     original_name = src.name
@@ -162,7 +171,18 @@ def rename_two_step(src: Path, nfc_name: str) -> Path:
     # Byte-exact destination-presence guard (PR #492): a dst created
     # between the caller's drift re-check and this entry's rename would
     # be silently overwritten by `os.rename` below -- refuse instead.
-    if nfc_name in os.listdir(parent):  # noqa: PTH208
+    try:
+        dst_present = nfc_name in os.listdir(parent)  # noqa: PTH208
+    except OSError:
+        # The guard's OWN listing can fail -- a permission wall that
+        # appeared right after hop 1. Restore (best-effort, suppressed)
+        # so this branch obeys the same every-single-fault-path-restores
+        # invariant as the two below, instead of being the one branch
+        # that strands the temp (PR #496 review finding, issue #495).
+        with contextlib.suppress(OSError):
+            os.rename(temp_path, parent / original_name)  # noqa: PTH104
+        raise
+    if dst_present:
         with contextlib.suppress(OSError):
             os.rename(temp_path, parent / original_name)  # noqa: PTH104
         raise OSError(
