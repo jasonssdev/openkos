@@ -10889,11 +10889,14 @@ def doctor() -> None:
     Ollama; (11) backend-host-locality -- informational, always, via the
     check-(3) client's own `OllamaClient.locality` (issue #240), reporting
     the REDACTED `display_host`, whether it is this machine, and whether the
-    confidential local exemption is consequently active. Like (8)/(9)/(10)
-    it has no `[SKIP]` branch, and unlike every other check it ALWAYS
-    `[PASS]`es: a non-local backend is a legitimate configuration, not a
-    fault, so the status only reports that the check ran and the DETAIL
-    carries the finding. It can therefore never change the exit code.
+    confidential local exemption is consequently active. It is `[PASS]` while
+    Ollama is reachable and `[SKIP]` when it is not (#389) -- not because it
+    cannot answer without the server, but because a green line printed
+    directly beneath `[FAIL] Ollama reachable` reads as a contradiction to
+    anyone scanning the column. It is NEVER `[FAIL]`: a non-local backend is
+    a legitimate configuration, not a fault, so the status only reports
+    whether the check was verified and the DETAIL carries the finding, on
+    both branches. It can therefore never change the exit code.
     Outside a workspace, checks (3)/(4)/(5)/(8)/(9)/(10)/(11) still run
     against `config.DEFAULT_MODEL`/`config.DEFAULT_EMBEDDING_MODEL`/
     `config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION` and (3)/(4) still
