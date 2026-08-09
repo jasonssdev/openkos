@@ -989,6 +989,47 @@ def test_identity_partial_batch_unavailable_still_walks_then_skips_later_stages(
     assert "ollama serve" in result.stdout
 
 
+def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_stages(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An `OllamaModelNotFound` mid-batch takes the same re-raise arm
+    `OllamaUnavailable` does (#441): the completed verdicts still go through
+    the merge walk -- the merge cores need no model -- and the failure then
+    surfaces through the sequencer's run-scoped handling, with the
+    model-specific `ollama pull` remediation, so later `needs_llm` stages are
+    not asked to spend against a misconfigured server.
+
+    Unlike `test_ollama_model_not_found_also_short_circuits`, which raises
+    from a fake stage, this drives the class through `_identity_run`'s own
+    RETURNED-batch split, where a completed merge was already applied."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    from openkos.graph.base import Edge
+
+    # Structure keeps a non-empty queue (overriding `_stub_later_stages_empty`)
+    # so the run-scoped SKIP is observable: an empty queue reports "empty"
+    # before the sequencer ever consults the unavailable notice.
+    edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    _partial_identity_batch(tmp_path, monkeypatch, OllamaModelNotFound("model missing"))
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "Identity: unavailable -- model" in result.stdout
+    assert "is not installed" in result.stdout
+    assert "ollama pull" in result.stdout
+    assert "skipped -- Ollama unavailable (see above)." in result.stdout
+
+
 # ---------------------------------------------------------------------------
 # 1.19 -- N>2 group prints pairwise commands, no merge
 # ---------------------------------------------------------------------------

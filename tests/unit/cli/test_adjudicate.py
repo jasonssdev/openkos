@@ -952,6 +952,41 @@ def test_adjudicate_partial_batch_unavailable_keeps_remediation_and_counts(
     assert "kept work" in result.stdout
 
 
+def test_adjudicate_json_partial_batch_emits_completed_verdicts_then_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--json` over a partial batch serializes the completed verdicts as a
+    valid array BEFORE the failure epilogue (#441): stdout parses to exactly
+    the one adjudicated group, stderr carries the single completed-of-total
+    line, and the exit code stays the OllamaError-family 1.
+
+    This is the RETURNED-batch path, and it is what distinguishes a partial
+    array from the pre-#441 empty stdout:
+    `test_adjudicate_json_ollama_unavailable_still_errors_on_stderr_with_no_json`
+    covers the RAISE path, where nothing was adjudicated and stdout stays
+    empty."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_group_partial_batch(monkeypatch, OllamaError("boom"))
+
+    result = runner.invoke(app, ["adjudicate", "--json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == [
+        {
+            "member_ids": ["a", "b"],
+            "okf_type": "Concept",
+            "tier": "HIGH",
+            "verdict": "SAME",
+            "rationale": "kept work",
+        }
+    ]
+    assert result.stderr == (
+        "openkos adjudicate: failed after adjudicating 1 of 2 candidate "
+        "group(s) -- boom.\n"
+    )
+    assert "Traceback" not in result.stderr
+
+
 def test_adjudicate_apply_partial_batch_walks_completed_pairs_before_failing(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -1004,6 +1039,79 @@ def _group_cd() -> CandidateGroup:
         tier=Tier.LOW,
         trigger="stub-failed",
     )
+
+
+# ---------------------------------------------------------------------------
+# issue #468 item 4: `--apply-same` counts only the COMPLETED groups
+# ---------------------------------------------------------------------------
+
+
+def test_adjudicate_apply_same_partial_batch_confirms_completed_count_only(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--apply-same` over a partial batch previews, counts and merges only
+    the COMPLETED groups: two groups were queued, one adjudicated SAME, and
+    the gate asks for -- and accepts -- `1`, not `2`. The merge really
+    commits, and only afterwards does the batch failure surface on stderr
+    and set the exit code to 1 despite that successful write.
+
+    This pins CURRENT behavior for issue #468 item 4: at confirm time the
+    operator is told `Total: 1` and nothing else, so nothing in the gate
+    discloses that a second group was queued and failed. Whether that
+    disclosure should be added is still an open decision."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    _seed_commit(
+        tmp_path,
+        [
+            "bundle/concepts/a.md",
+            "bundle/concepts/b.md",
+            "bundle/concepts/c.md",
+            "bundle/concepts/d.md",
+        ],
+    )
+    group_done = _two_member_group(("concepts/a", "concepts/b"), trigger="stub-done")
+    group_failed = _two_member_group(
+        ("concepts/c", "concepts/d"), trigger="stub-failed", tier=Tier.LOW
+    )
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[_adjudicated(group_done, verdict=Verdict.SAME, rationale="same")],
+            failure=OllamaError("boom"),
+            failed_index=2,
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(
+            groups=(group_done, group_failed), produced=2, retained=2
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+    before_commits = _commit_count(tmp_path)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+
+    assert result.exit_code == 1
+    # The count printed and required is the COMPLETED eligible count, never
+    # the queued 2 -- and `--confirm-count 1` therefore proceeds.
+    assert "Total: 1" in result.stdout
+    assert "Total: 2" not in result.stdout
+    assert "aborted -- confirmation count" not in result.stderr
+    assert "applied 1 of 1 previewed" in result.stdout
+    # The write really happened, commit and all, before the failure line.
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "d.md").exists()
+    assert _commit_count(tmp_path) == before_commits + 1
+    assert "failed after adjudicating 1 of 2 candidate group(s)" in result.stderr
 
 
 def test_adjudicate_no_auto_flag_offered(
