@@ -47,7 +47,7 @@ All numbers below are `qwen3:8b` unless stated, on the **17-edge fixture**,
 5 runs per arm (3 for the model sweep). Baseline was measured four times and
 lands at **0.41–0.45**, so treat anything inside that band as noise.
 
-### The model dominates everything else
+### The model dominates everything else, and size dominates family
 
 Same prompt, same fixture, only the model changed:
 
@@ -59,11 +59,37 @@ Same prompt, same fixture, only the model changed:
 | `qwen3:8b` *(current default)* | 0.44 | 0.98 |
 | `mistral:7b` | 0.27 | 0.92 |
 
-The configured default is next to last. `gemma2:9b` is +0.19 over it — larger
-than any prompt change measured here, from a config value. That does not make
-it a safe swap: the default is global and extraction was tuned on `qwen3:8b`
-through `extraction_cap`, so changing it would move a pipeline this harness
-does not score. It is a finding, not a patch.
+The configured default is next to last, and **+0.37 is available from a
+config value** — larger than any prompt change measured here.
+
+Parameter count is the dominant axis, not family: `qwen3` 8b→14b is +0.22,
+`gemma2` 9b→27b is +0.18. Family only separates sharply among the small
+models, where the spread runs 0.27–0.63. Latency scales with it but stays
+affordable — a 74-edge session is ~9 minutes on `gemma2:27b` against ~1.6 on
+the default.
+
+None of this is a safe swap, and the reason is measured rather than assumed.
+`extraction_cap --runs 3` puts subject recall per fixture at:
+
+| fixture | `qwen3:8b` | `qwen3:14b` | `gemma2:27b` |
+| --- | --- | --- | --- |
+| `large-03` (EN) | 0.81 | 0.81 | **0.24** |
+| `medium-08` | 0.83 | 0.83 | **0.33** |
+| `medium-09` | 0.83 | 0.75 | 0.58 |
+| `small-04` (ES) | 0.76 | 0.52 | **0.00** |
+
+**The best relation typer measured is the worst extractor measured.** The
+`gemma2` family under-produces on extraction at both sizes — 3.3 objects per
+run at 9b and 3.2 at 27b against the default's 6.8 — the opposite of how it
+behaves here. So the +0.37 can only be collected by a per-task model (#515),
+never by moving the default.
+
+One trap worth naming, because it caught me: `qwen3:14b` produces 10.2 objects
+per run against the default's 6.8, which reads as an upgrade and is not. The
+extra volume is decay and unjudged titles — `medium-09`'s known-facet count
+triples — so in that harness `produced` is not a quality signal. Its
+adjudication debt also leaves its recall under-reported, so "worse" is not
+established either.
 
 ### Three prompt arms, none of them shippable
 
