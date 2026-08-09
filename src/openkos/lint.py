@@ -1215,9 +1215,13 @@ def scan_stranded_rename_temps(bundle_dir: Path) -> list[Path]:
     `fsio.RENAME_TEMP_PREFIX` -- `normalize-names`-only helper (issue #474
     part 2, design D3), never called by `lint`. A temp can be stranded
     by a hard kill strictly between `fsio.rename_two_step`'s two
-    `os.rename` calls, or by a double fault where a failure's
-    best-effort (suppressed) restore also fails (PR #492) -- every
-    single-fault failure path there restores the original name. This
+    `os.rename` calls, or by a double fault in its guard or hop-2 branch
+    where the best-effort (suppressed) restore also fails (PR #492) --
+    every single-fault failure path there restores the original name.
+    A double fault in that primitive's post-rename VERIFICATION branch
+    leaves no temp for this scan to find (issue #495): hop 2 already
+    succeeded, so the entry sits at its final spelling and surfaces
+    through `scan_non_nfc_entries` instead, if at all. This
     scan lets the NEXT run report it
     (never touch it: auto-deleting would be data loss, auto-renaming
     would be a guess).

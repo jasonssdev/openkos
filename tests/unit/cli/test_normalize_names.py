@@ -8,6 +8,7 @@ the dedicated mutating verb that renames every on-disk name under
 import os
 import sys
 import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,23 @@ runner = CliRunner()
 
 NFD_CAFE = unicodedata.normalize("NFD", "café")
 NFC_CAFE = unicodedata.normalize("NFC", "café")
+
+
+class _OsWithListdir:
+    """Stand-in for a module's `os` binding that overrides ONLY `listdir`
+    and proxies every other attribute to the real module.
+
+    Patching the dotted target `"<module>.os.listdir"` mutates the single
+    shared `os` module object, so every OTHER importer -- notably
+    `fsio.rename_two_step`'s internal guard and verification listings --
+    sees the fake too. Rebinding the module's own `os` NAME to this proxy
+    keeps the injection scoped to the module under test (issue #495)."""
+
+    def __init__(self, listdir: Callable[[str | Path], list[str]]) -> None:
+        self.listdir = listdir
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(os, name)
 
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -365,7 +383,14 @@ def test_rerun_after_partial_success_keeps_collision_skip_and_writes_nothing(
             listing.append(nfc_collider_name)
         return listing
 
-    monkeypatch.setattr("openkos.cli.main.os.listdir", listdir_with_nfc_sibling)
+    # Bound into `main`'s namespace ALONE, via a proxy (#495 finding 4):
+    # `setattr("openkos.cli.main.os.listdir", ...)` would set the attribute
+    # on the ONE shared `os` module object, so `fsio.rename_two_step`'s own
+    # guard and verification listings would see the injected sibling too --
+    # currently harmless (the fake is path-gated and the injected name never
+    # collides with the entry being renamed), but the reach is real and this
+    # test's claim is about what the CLI's CLASSIFIER sees.
+    monkeypatch.setattr("openkos.cli.main.os", _OsWithListdir(listdir_with_nfc_sibling))
 
     first = runner.invoke(app, ["normalize-names", "--auto"])
 
@@ -760,3 +785,37 @@ def test_small_batch_log_entry_lists_pairs_inline_one_line(
     assert len(lines) == 1
     stem = unicodedata.normalize("NFC", "small-café")
     assert f"{stem}.md" in lines[0]
+
+
+def test_log_write_failure_names_old_paths_only(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mid-Phase-B failure AT the `log.md` write reports every landed
+    entry by its OLD path only -- never a mix of old and final spellings
+    (#495 finding 3).
+
+    The command's docstring promises exactly this ("names every entry
+    already landed by its OLD path only"); the final paths are resolved
+    for `_autocommit`'s staging scope, which is reached only on the
+    success path."""
+    _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
+    _write_nfd_file(tmp_path, "", "renombrar-café")
+    nfd_rel = "bundle/" + unicodedata.normalize("NFD", "renombrar-café") + ".md"
+    nfc_rel = "bundle/" + unicodedata.normalize("NFC", "renombrar-café") + ".md"
+    real_write_atomic = fsio.write_atomic
+
+    def failing_log_write(path: Path, text: str) -> None:
+        if path.name == "log.md":
+            raise OSError("log write refused")
+        real_write_atomic(path, text)
+
+    monkeypatch.setattr("openkos.cli.main.fsio.write_atomic", failing_log_write)
+
+    result = runner.invoke(app, ["normalize-names", "--auto"])
+
+    assert result.exit_code == 1
+    assert "Already landed (left renamed, not rolled back)" in result.output
+    assert nfd_rel in result.output  # the OLD spelling is named
+    assert nfc_rel not in result.output  # the final spelling is NOT

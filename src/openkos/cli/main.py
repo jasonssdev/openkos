@@ -5446,8 +5446,10 @@ def normalize_names_cmd(
     D1) -- plus `lint_check.scan_stranded_rename_temps`, whose result is
     printed as a stderr WARNING per stranded entry and never touched
     (design D3: a temp can be stranded by a hard kill between
-    `fsio.rename_two_step`'s two hops or by a double fault where the
-    suppressed restore also fails, PR #492, and auto-deleting or
+    `fsio.rename_two_step`'s two hops or by a double fault in its guard
+    or hop-2 branch where the suppressed restore also fails, PR #492 --
+    its post-rename verification branch strands no temp, issue #495 --
+    and auto-deleting or
     auto-renaming it would be data loss or a guess). Every candidate is
     classified as a planned rename or a non-fatal skip (collision: an
     NFC-spelled sibling already exists; symlink: never followed;
@@ -5715,8 +5717,13 @@ def normalize_names_cmd(
                 for index, part in enumerate(parts)
             )
 
-        landed.extend(_final_rel(raw_rel) for raw_rel in applied_raw_rels)
+        # Strictly AFTER the write (issue #495): `landed` doubles as the
+        # failure report, which promises OLD paths only, and as
+        # `_autocommit`'s staging scope, which needs the final spellings
+        # too. Extending before the write let a failure AT the write
+        # report both spellings for the same entry.
         fsio.write_atomic(log_path, new_log_text)
+        landed.extend(_final_rel(raw_rel) for raw_rel in applied_raw_rels)
         landed.append("bundle/log.md")
     except (OSError, ValueError) as exc:
         landed_suffix = (
