@@ -474,9 +474,20 @@ def test_byte_exact_fs_commit_shows_delete_and_add_per_rename(
     path and an add of the new path per rename (spec: "On a byte-exact
     filesystem, the commit records a delete and an add per rename").
     macOS is excluded: `core.precomposeunicode=true` makes git record NFC
-    from the start, so there is no D/A to observe (design.md S1 Q7/Q8)."""
+    from the start, so there is no D/A to observe (design.md S1 Q7/Q8).
+
+    The decomposed file is COMMITTED before the run: a D/A pair
+    presupposes git tracked the old spelling, which is the realistic
+    bundle state (`ingest`'s own autocommit tracks every bundle file).
+    An untracked old path is the OTHER contract -- the non-fatal GitError
+    WARNING pinned by `test_untracked_old_path_git_error_is_non_fatal_
+    warning` -- and building it here by accident is exactly what CI
+    caught on Linux (review R3-002)."""
     _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
     _write_nfd_file(tmp_path, "", "café")
+    vcs_git.commit_paths(
+        tmp_path, [f"bundle/{NFD_CAFE}.md"], "test: track the decomposed name"
+    )
 
     result = runner.invoke(app, ["normalize-names", "--auto"])
 
@@ -499,9 +510,18 @@ def test_run_commits_successfully_with_no_warning_for_renamed_paths(
     unconditionally, since neither `commit_paths` nor `_autocommit` is
     changed by this verb (design D7; the macOS-shaped case where the
     rename itself contributes nothing to the diff is exercised for real
-    on macOS, and this assertion holds regardless of platform)."""
+    on macOS, and this assertion holds regardless of platform).
+
+    The decomposed file is COMMITTED before the run for the same reason
+    as the D/A test above: an untracked old path is the WARNING contract,
+    not the clean-commit one, and on a byte-exact filesystem `git add`
+    on the vanished untracked pathspec fails -- Linux CI proved it
+    (review R3-002)."""
     _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
     _write_nfd_file(tmp_path, "", "café")
+    vcs_git.commit_paths(
+        tmp_path, [f"bundle/{NFD_CAFE}.md"], "test: track the decomposed name"
+    )
 
     result = runner.invoke(app, ["normalize-names", "--auto"])
 
