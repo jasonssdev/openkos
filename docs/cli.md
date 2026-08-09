@@ -412,8 +412,11 @@ Identity reuses `adjudicate --apply`'s exact merge walk rather than reimplementi
 | `--auto` | Accept every stage's cost gate without prompting (model spend only — per-item write prompts are never auto-accepted). |
 | `--include-confidential` | Include confidential concepts, forwarded to every stage's underlying call. Excluded by default when the LLM backend is **not** verifiably on this machine. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 | `--include-deprecated` | Include deprecated and superseded concepts, forwarded the same way. Excluded by default. |
+| `--accept STAGES` | Comma-separated, case-insensitive list of stages whose per-item write prompts are answered yes without asking: `structure`, `metadata`. **`identity` is refused (exit 2)** — a merge deletes the absorbed concept, so no flag may apply one unreviewed; an unknown name is refused the same way, and both refusals run before the workspace gate so a typo reports as itself. Naming a stage IS per-item write consent for it, so an accepted stage also passes the non-TTY write refusal: `curate --auto --accept structure` writes on a pipe, matching `suggest-relations --auto`. |
 
-Exit codes: `0` for any completed or declined run — including every declined gate, empty queue, and the Preconditions halt; `1` on a workspace/config failure or a failed mid-walk write; `2` on a usage error; `3` on the post-confirm drift refusal, the one retryable failure (see Conventions).
+`review: false` in `openkos.yaml` now reaches `curate` (#385): with no `--accept` flag it accepts every acceptable stage — `structure` and `metadata` — and **never** Identity, since a value set for the standalone verbs cannot become retroactive authorization to delete a concept. An explicit `--accept` overrides it and names the exact set rather than widening it, so an operator running with `review: false` can still re-review one stage without editing the config file.
+
+Exit codes: `0` for any completed or declined run — including every declined gate, empty queue, and the Preconditions halt; `1` on a workspace/config failure or a failed mid-walk write; `2` on a usage error, including a rejected `--accept` value; `3` on the post-confirm drift refusal, the one retryable failure (see Conventions).
 
 ### `openkos list [TYPE]`
 

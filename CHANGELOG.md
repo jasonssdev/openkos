@@ -93,6 +93,34 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   concepts along typed edges — proposed and measured on its own terms, not a
   revert of this change (#434).
 
+### Added
+
+- **`curate` gains a per-stage accept-all, and finally honors `review`**: a
+  test run needed 74 individual confirmations in the Structure stage alone,
+  while `openkos.yaml` had carried `review: true` ("show proposed changes and
+  confirm before saving") all along and this verb never read it. `curate
+  --accept structure,metadata` now answers those stages' per-item prompts
+  without asking, and `review: false` does the same for every acceptable
+  stage when no flag is passed. **Identity is excluded, structurally**: a
+  merge absorbs one concept into another and deletes the absorbed file, so
+  `--accept identity` is refused with exit 2, `review: false` never reaches
+  it, and its walk calls the confirm helper directly rather than through the
+  acceptance path — three independent guards, because the failure mode is a
+  silently deleted concept. Acceptability is a field on the stage descriptor,
+  so a future writing stage cannot inherit accept-all merely by being added
+  to the table. An unknown stage name is refused the same way, and both
+  refusals run before the workspace gate so a typo reports as itself rather
+  than as a missing workspace, matching how `list`'s `TYPE` already behaves.
+  Naming a stage IS per-item write consent, so an accepted stage also passes
+  the non-TTY write refusal — `curate --auto --accept structure` writes on a
+  pipe, which is parity with `suggest-relations --auto` rather than new
+  authority, and Identity remains refused on that path too. An explicit
+  `--accept` overrides `review` and names the exact set instead of widening
+  it, so an operator can still re-review one stage without editing the config
+  mid-session. Confidence-threshold auto-acceptance stays out: the two stages
+  that cause the prompt volume expose no confidence at all — only
+  adjudication does, and that is the destructive one (#385).
+
 ### Changed
 
 - **BREAKING — `adjudicate --json` now emits an object, not a bare array**:
