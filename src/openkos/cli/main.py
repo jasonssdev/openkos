@@ -5445,11 +5445,14 @@ def normalize_names_cmd(
     -- the SAME scan `openkos lint`'s `non-nfc-name` finding uses (design
     D1) -- plus `lint_check.scan_stranded_rename_temps`, whose result is
     printed as a stderr WARNING per stranded entry and never touched
-    (design D3: a temp can only be stranded by a hard kill between
-    `fsio.rename_two_step`'s two hops, and auto-deleting or auto-renaming
-    it would be data loss or a guess). Every candidate is classified as a
-    planned rename or a non-fatal skip (collision: an NFC-spelled sibling
-    already exists; symlink: never followed) -- design D4/D5 -- then
+    (design D3: a temp can be stranded by a hard kill between
+    `fsio.rename_two_step`'s two hops or by a double fault where the
+    suppressed restore also fails, PR #492, and auto-deleting or
+    auto-renaming it would be data loss or a guess). Every candidate is
+    classified as a planned rename or a non-fatal skip (collision: an
+    NFC-spelled sibling already exists; symlink: never followed;
+    vanished: the entry's parent listing became unreadable between the
+    scan and classification) -- design D4/D5 -- then
     sorted `(-depth, rel_posix)` so a child renames before its ancestor.
     An empty or all-skip plan prints an explicit no-op line, writes
     nothing, and exits 0 -- which is also the idempotency property (a
@@ -5489,8 +5492,10 @@ def normalize_names_cmd(
     identity, or any `GitError` -- including the untracked-old-path case,
     Key Decisions Recorded a) -> stderr WARNING, exit code unchanged,
     renames already applied stay on disk. There is no cross-file rollback:
-    a mid-Phase-B failure names every entry already landed (old and new
-    path) before the failure, mirroring `backfill_sensitivity_cmd`'s
+    a mid-Phase-B failure names every entry already landed by its OLD
+    path only -- final paths are resolved strictly after the whole batch
+    (review R3-001), so they do not exist yet at failure time --
+    mirroring `backfill_sensitivity_cmd`'s
     design D9 pattern; any failure is caught (`OSError`/`ValueError`) and
     reported on stderr (exit 1), never a raw traceback.
 

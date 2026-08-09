@@ -1449,6 +1449,76 @@ def test_adjudicate_apply_n_gt2_skip_prints_pairwise_merge_commands_in_order(
     assert "N>2: 1" in result.stdout
 
 
+def test_adjudicate_apply_cross_type_n_gt2_group_is_skipped_with_joined_label(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 3-member CROSS-TYPE exact-title group (Concept + Decision +
+    Entity sharing one normalized title, #437's cross-type bucketing) is
+    found by the REAL `find_candidates_report` -- not a hand-built stub --
+    and `--apply` routes it through `_echo_n_gt2_skip` (issue #480): the
+    skip line renders the group's sorted, `+`-joined `okf_type` label,
+    the pairwise merge guidance follows, and the group is never merged --
+    zero writes (bundle bytes AND mtimes unchanged) and zero commits.
+    Only `adjudicate_candidates` is patched, with a recorder returning
+    SAME for exactly the groups it receives, per the module docstring's
+    convention -- so the captured input doubles as the proof that
+    `find_candidates` produced the cross-type group."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    for sub, doc_type in [
+        ("concepts", "Concept"),
+        ("entities", "Entity"),
+        ("decisions", "Decision"),
+    ]:
+        _write_doc(
+            tmp_path / "bundle" / sub / "stoicism.md",
+            doc_type=doc_type,
+            title="Stoicism",
+        )
+    captured: list[CandidateGroup] = []
+
+    def _recording_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        captured.extend(candidates)
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(group, verdict=Verdict.SAME, rationale="same")
+                for group in candidates
+            ]
+        )
+
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _recording_adjudicate)
+    before = _snapshot(tmp_path / "bundle")
+    commits_before = _commit_count(tmp_path)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"])
+
+    assert result.exit_code == 0
+    # The real `find_candidates` found the cross-type triple as ONE group.
+    assert [(group.okf_type, group.member_ids) for group in captured] == [
+        (
+            "Concept+Decision+Entity",
+            ("concepts/stoicism", "decisions/stoicism", "entities/stoicism"),
+        )
+    ]
+    # `_echo_n_gt2_skip` renders the joined label on the skip line, then
+    # the pairwise guidance, and never prompts.
+    assert (
+        "[Concept+Decision+Entity] ('concepts/stoicism', 'decisions/stoicism', "
+        "'entities/stoicism'): skipped (N>2, merge manually)" in result.stdout
+    )
+    assert "run in order (each reversible via unmerge):" in result.stdout
+    assert "openkos merge concepts/stoicism decisions/stoicism" in result.stdout
+    assert "openkos merge concepts/stoicism entities/stoicism" in result.stdout
+    assert "[y/N]" not in result.stdout
+    assert "applied 0, skipped 1 (N>2: 1" in result.stdout
+    # Never merged: zero writes, zero commits.
+    assert _snapshot(tmp_path / "bundle") == before
+    assert _commit_count(tmp_path) == commits_before
+
+
 def test_adjudicate_apply_overlapping_groups_second_reports_already_merged(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -1692,6 +1762,82 @@ def test_adjudicate_apply_unrecognized_answer_reprompts_then_applies(
     )
     assert not (tmp_path / "bundle" / "concepts" / "b.md").exists()
     assert "applied 1" in result.stdout
+
+
+def test_adjudicate_apply_piped_reprompt_shifts_every_later_answer_by_one(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PINS current multi-group piped-stdin semantics, and DOCUMENTS them
+    as the scripting hazard of issue #489: an unrecognized answer makes
+    `curate._confirm`'s re-prompt consume the NEXT stdin line, so EVERY
+    later piped answer shifts by one position. Two SAME 2-member groups
+    with piped input `t\\nn\\ny\\n`: the first group's `t` is unrecognized
+    and re-prompted, the re-prompt consumes the `n` a scripter would have
+    aimed at the SECOND group (first group declined), and the trailing
+    `y` lands on the second group (applied). A script that pipes
+    one-answer-per-group input therefore silently mis-targets every
+    answer after a single typo -- which is exactly why `--apply-same
+    --confirm-count <N>` is the documented unattended path (#489); this
+    test changes no behavior."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    first_group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub1",
+    )
+    second_group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/c", "concepts/d"),
+        tier=Tier.HIGH,
+        trigger="stub2",
+    )
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        groups = [first_group, second_group]
+        return CandidateGroupReport(
+            groups=tuple(groups), produced=len(groups), retained=len(groups)
+        )
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(first_group, verdict=Verdict.SAME, rationale="r1"),
+                _adjudicated(second_group, verdict=Verdict.SAME, rationale="r2"),
+            ]
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="t\nn\ny\n")
+
+    assert result.exit_code == 0
+    assert (
+        "Unrecognized answer 't' -- expected y or n (Enter = N). Asking again."
+        in result.stdout
+    )
+    # Line 2 (`n`) answered the FIRST group's re-prompt, not the second
+    # group: the first pair is declined and stays on disk.
+    assert (tmp_path / "bundle" / "concepts" / "a.md").exists()
+    assert (tmp_path / "bundle" / "concepts" / "b.md").exists()
+    assert "  declined: concepts/b -> concepts/a" in result.stdout
+    # Line 3 (`y`) shifted onto the SECOND group and applied it.
+    assert not (tmp_path / "bundle" / "concepts" / "d.md").exists()
+    assert "applied 1" in result.stdout
+    assert "  declined: concepts/d -> concepts/c" not in result.stdout
 
 
 def test_adjudicate_apply_prompt_advertises_y_n_without_skip(

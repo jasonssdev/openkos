@@ -127,14 +127,27 @@ def rename_two_step(src: Path, nfc_name: str) -> Path:
     ONLY the NFD name on disk, which is exactly the silent-success result
     this primitive exists to rule out.
 
-    On either the second rename failing or the post-rename verification
-    failing, the entry is restored to `src.name` (the original on-disk
-    spelling) and `OSError` is raised -- loudly, per design D2 -- leaving
-    no `RENAME_TEMP_PREFIX`-named entry stranded on disk. A stranded temp
-    can only result from a hard kill strictly between the two `os.rename`
-    calls below, which no exception handler here can observe; that case
-    is covered by `lint.scan_stranded_rename_temps` at the next run
-    (design D3), never by this primitive.
+    Immediately before the second rename, a byte-exact destination-
+    presence guard checks `nfc_name` against `os.listdir(parent)`: a dst
+    that appeared since the caller's own drift re-check (the batched
+    check in `normalize-names` runs BEFORE its per-entry renames, so a
+    later entry's window is real) would otherwise be SILENTLY overwritten
+    by `os.rename` -- instead, the original name is restored and
+    `OSError` is raised naming the collision (PR #492 risk finding).
+
+    On the collision guard firing, the second rename failing, or the
+    post-rename verification failing, a restore of the entry to
+    `src.name` (the original on-disk spelling) is ATTEMPTED --
+    best-effort, its own `OSError` suppressed so the ORIGINAL failure
+    propagates, never the restore's -- and `OSError` is raised loudly,
+    per design D2. When the restore succeeds, no
+    `RENAME_TEMP_PREFIX`-named entry is left on disk. A stranded temp can
+    result from a hard kill strictly between the two `os.rename` calls
+    below, OR from a double fault where the failure's suppressed restore
+    also fails (PR #492 informational finding) -- in every such case the
+    entry remains at its machine-detectable temp name and
+    `lint.scan_stranded_rename_temps` reports it at the next run (design
+    D3), never this primitive.
     """
     parent = src.parent
     original_name = src.name
@@ -146,10 +159,25 @@ def rename_two_step(src: Path, nfc_name: str) -> Path:
     # survives it (design D2/D3) -- `Path.rename` would not be patchable
     # the same way.
     os.rename(src, temp_path)  # noqa: PTH104
+    # Byte-exact destination-presence guard (PR #492): a dst created
+    # between the caller's drift re-check and this entry's rename would
+    # be silently overwritten by `os.rename` below -- refuse instead.
+    if nfc_name in os.listdir(parent):  # noqa: PTH208
+        with contextlib.suppress(OSError):
+            os.rename(temp_path, parent / original_name)  # noqa: PTH104
+        raise OSError(
+            f"rename_two_step: refusing to overwrite -- {nfc_name!r} is "
+            f"already present byte-exactly in {parent} (collision with "
+            f"an entry created after the caller's drift re-check)"
+        )
     try:
         os.rename(temp_path, dst)  # noqa: PTH104
     except OSError:
-        os.rename(temp_path, parent / original_name)  # noqa: PTH104
+        # Best-effort restore, suppressed (PR #492): a double fault must
+        # propagate the ORIGINAL hop-2 OSError, never the restore's; the
+        # entry then remains at the machine-detectable temp name.
+        with contextlib.suppress(OSError):
+            os.rename(temp_path, parent / original_name)  # noqa: PTH104
         raise
     # Byte-exact directory-listing verification, never `Path.exists()`
     # (design D2): the macOS spike observed `exists()` return `True` with
