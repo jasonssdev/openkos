@@ -8274,7 +8274,10 @@ def list_objects_cmd(
     Rows are `ID  TYPE  SENSITIVITY  STATUS  TITLE`, `ljust`-aligned over
     the header labels and the rows actually shown (post-filter,
     post-truncation) -- the same pattern `status`'s bundle-contents
-    section uses (`cli/main.py:4989-4992`, design D6). `TYPE` sits beside
+    section uses (its `label_width` block over `_bundle_content_lines`,
+    design D6; cited by symbol, not by line number, because the line
+    range this docstring used to name had drifted into an unrelated
+    function). `TYPE` sits beside
     `ID` because both answer "what am I looking at" (#399): without it two
     objects of different kinds with the same title print identically, and
     the only discriminator is the directory prefix buried inside the id.

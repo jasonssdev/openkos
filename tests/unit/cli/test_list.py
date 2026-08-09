@@ -612,3 +612,39 @@ def test_list_prints_a_type_column_distinguishing_same_titled_objects(
     assert "Source" in source_row
     # The two rows share a title; the TYPE column is what tells them apart.
     assert procedure_row != source_row
+
+
+def test_list_type_column_falls_back_to_unknown_outside_the_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An object whose `link_dir` is not one of the registry's directories
+    renders `(unknown)` in the TYPE column rather than crashing or
+    printing a bare directory name (#399).
+
+    Reachable two ways, both covered here: a document under a directory
+    the registry does not know, and a document at the bundle ROOT, whose
+    `link_dir` is the empty string by construction -- the walk matches
+    root-level files too, and no registry entry has an empty `link_dir`."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "widgets" / "sprocket.md", title="Sprocket")
+    _write_doc(bundle / "stray.md", title="Stray")
+
+    result = runner.invoke(app, ["list"])
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    unregistered_row = next(
+        line for line in lines if line.startswith("widgets/sprocket")
+    )
+    assert "(unknown)" in unregistered_row
+    root_row = next(line for line in lines if line.startswith("stray "))
+    assert "(unknown)" in root_row
+    # Registered objects in the same listing still name their real type.
+    _write_doc(bundle / "people" / "jane.md", type_="Person", title="Jane")
+    again = runner.invoke(app, ["list"])
+    assert again.exit_code == 0
+    jane_row = next(
+        line for line in again.stdout.splitlines() if line.startswith("people/jane")
+    )
+    assert "Person" in jane_row
