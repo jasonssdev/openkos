@@ -57,9 +57,16 @@ class OllamaModelNotFound(OllamaError):
 
 class OllamaGenerationCapped(OllamaError):
     """Raised when `chat()`'s response reports `done_reason == "length"`
-    (issue #422): the model hit the configured `max_generation_tokens`
-    ceiling before it finished, so the reply was cut off mid-generation and
-    is unusable.
+    (issue #422): generation stopped for length before it finished, so the
+    reply was cut off mid-generation and is unusable.
+
+    The cause is NOT always this client's `max_generation_tokens` (#440).
+    Ollama reports `"length"` whenever generation stops for length reasons,
+    which includes the model's own context window filling, so an
+    unconfigured client can legitimately reach this branch. The raised
+    message therefore branches: it names the ceiling only when one was
+    actually configured, and otherwise says the backend's own limit cut the
+    reply off.
 
     A truncated reply is not a partial success -- `llm.parsing.
     extract_json_items` returns `[]` on a mid-JSON truncation, so there is
@@ -502,6 +509,20 @@ class OllamaClient:
         # does not equal `"length"` (fail-open on the signal; the bound
         # itself, not this check, is what protects the caller).
         if isinstance(data, dict) and data.get("done_reason") == "length":
+            # The message branches on whether a ceiling was actually
+            # configured (#440). `done_reason == "length"` is reachable
+            # WITHOUT `num_predict` binding -- Ollama reports it whenever
+            # generation stops for length reasons, including the model's own
+            # context window filling -- so an unconfigured client blaming
+            # "the configured ceiling (None)" would contradict itself and
+            # send the operator looking for a setting they never set.
+            if self._max_generation_tokens is None:
+                raise OllamaGenerationCapped(
+                    "Ollama stopped generation for length before the reply "
+                    "finished, with no max_generation_tokens ceiling set on "
+                    "this client -- the backend's own limit cut it off; the "
+                    "response is truncated and unusable."
+                )
             raise OllamaGenerationCapped(
                 "Ollama stopped generation at the configured "
                 f"max_generation_tokens ceiling ({self._max_generation_tokens}) "

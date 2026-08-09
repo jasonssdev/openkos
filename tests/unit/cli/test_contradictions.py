@@ -1565,3 +1565,77 @@ def test_contradictions_first_candidate_failure_keeps_failure_over_zero_state(
     assert result.stderr == (
         "openkos contradictions: failed after judging 0 of 1 candidate(s) -- boom.\n"
     )
+
+
+def test_contradictions_merged_body_verdict_names_unmerge_as_the_next_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A merged-content verdict names `unmerge` with the two ids it takes
+    (#445).
+
+    This matters more here than for an ordinary pair verdict: with two
+    nodes an operator can open both files, but a merged-content verdict has
+    only ONE node -- the second body lives in the ledger, where no ordinary
+    read will show it. `unmerge <survivor> <absorbed>` is the one verb that
+    separates them, and the output used to name the condition without
+    naming the verb that resolves it."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
+            [
+                _verdict(
+                    source="concepts/apatheia",
+                    target="concepts/apatheia",
+                    confidence=0.9,
+                    rationale="the two readings disagree",
+                    merged_absorbed_id="concepts/apatheia-2",
+                )
+            ],
+            1,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "openkos unmerge concepts/apatheia concepts/apatheia-2" in result.stdout
+    # The verb is LIFO-enforced and this command raises one candidate per
+    # ledger entry, not just the newest, so the hint must state the
+    # precondition rather than promise the command will succeed.
+    assert "LIFO-enforced" in result.stdout
+    assert "most recent unreversed merge" in result.stdout
+
+
+def test_contradictions_pair_verdict_does_not_name_unmerge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ordinary two-node pair verdict does NOT suggest `unmerge` (#445):
+    nothing was merged, both bodies are readable on disk, and pointing at a
+    reversal verb would be wrong."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
+            [
+                _verdict(
+                    source="concepts/a",
+                    target="concepts/b",
+                    confidence=0.9,
+                    rationale="dates conflict",
+                )
+            ],
+            1,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "unmerge" not in result.stdout

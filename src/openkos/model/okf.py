@@ -53,6 +53,20 @@ MERGED_FROM_KEY: Final = "merged_from"
 """The survivor frontmatter key holding the reversibility ledger (ADR-0002):
 an ordinary OKF data key, not a new file type, per §4.1 tolerance."""
 
+MERGED_CONTENT_HEADING_PREFIX: Final = "\n\n## Merged content ("
+"""The heading `build_merged_document` writes above an absorbed body, up to
+the absorbed id (#445).
+
+Shared because two modules need the same string for opposite reasons: this
+module WRITES it, and `resolution/contradiction.py` FINDS it in order to cut
+a ledger snapshot back down to the survivor's own content. It lived as two
+independent literals until #409's review flagged the duplication; one
+constant is better than two literals that must agree.
+`tests/unit/cli/test_merge_core.py::
+test_build_merged_document_body_layout_is_pinned` pins the rendered layout
+against its own literal, so a change here still fails loudly there rather
+than silently altering merged documents."""
+
 TYPE_ALTERNATIVE_KEY: Final = "type_alternative"
 """The optional frontmatter key a derived object carries WHEN the model
 reported a runner-up type it also weighed (issue #401); ABSENT otherwise --
@@ -1068,7 +1082,7 @@ def build_merged_document(
     else:
         merged.pop(RELATIONS_KEY, None)
 
-    separator = f"\n\n## Merged content ({absorbed_id})\n\n"
+    separator = f"{MERGED_CONTENT_HEADING_PREFIX}{absorbed_id})\n\n"
     merged_body = survivor_body.rstrip("\n") + separator + absorbed_body
     if not merged_body.endswith("\n"):
         merged_body += "\n"
