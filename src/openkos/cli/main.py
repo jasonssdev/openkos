@@ -9651,8 +9651,18 @@ def contradictions(
             # node, and the disagreeing second body lives in the ledger where
             # no ordinary read will surface it -- `unmerge` is the only verb
             # that separates them, and it takes exactly these two ids.
+            #
+            # The LIFO qualifier is not decoration (review finding on this
+            # change): `resolution.contradiction` raises ONE candidate PER
+            # `merged_from` entry, not just the newest, while
+            # `bundle.merge.plan_unmerge` refuses any `absorbed_id` that is
+            # not the ledger's tail. On a survivor with two unreversed
+            # merges, the older verdict's command therefore REFUSES -- so the
+            # line states the precondition instead of promising success.
             typer.echo(
                 f"  next: openkos unmerge {survivor_id} {result.merged_absorbed_id}"
+                "  (LIFO-enforced: refuses unless this is the survivor's "
+                "most recent unreversed merge)"
             )
         else:
             source_id, target_id = result.pair_ids

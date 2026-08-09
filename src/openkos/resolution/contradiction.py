@@ -482,19 +482,6 @@ def _merged_body_candidates(
     return candidates
 
 
-_MERGED_CONTENT_HEADING_PREFIX = okf.MERGED_CONTENT_HEADING_PREFIX
-"""The heading `okf.build_merged_document` writes above an absorbed body.
-
-No longer a duplicated literal (#445): `okf` owns the string it writes, and
-this module aliases it to FIND that heading when cutting a ledger snapshot
-back down to the survivor's own content. The alias is kept so this module's
-own references stay local and its intent stays documented at the point of
-use. `tests/unit/cli/test_merge_core.py::
-test_build_merged_document_body_layout_is_pinned` pins the rendered layout
-against its own literal, so a change to the heading fails there loudly
-rather than silently degrading this split."""
-
-
 def _own_body_before_merge(before_body: str) -> str:
     """Cut `entry.survivor_before`'s body down to the survivor's OWN content
     at that merge point, dropping every previously-absorbed section.
@@ -518,7 +505,10 @@ def _own_body_before_merge(before_body: str) -> str:
     appended LIFO, so everything from the first `## Merged content (` onward
     belongs to strictly earlier entries. A body with no such heading (the
     first merge on a survivor) is returned unchanged."""
-    cut = before_body.find(_MERGED_CONTENT_HEADING_PREFIX)
+    # The heading string is owned by `okf`, which WRITES it; this module only
+    # FINDS it (#445). Referenced directly rather than through a module-local
+    # alias, so there is exactly one name for one string.
+    cut = before_body.find(okf.MERGED_CONTENT_HEADING_PREFIX)
     if cut == -1:
         return before_body
     return before_body[:cut]

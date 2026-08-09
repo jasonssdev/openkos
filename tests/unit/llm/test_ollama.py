@@ -1892,10 +1892,20 @@ def test_generation_capped_message_blames_the_backend_when_no_ceiling_is_set() -
         client.chat([{"role": "user", "content": "hi"}])
 
     message = str(caught.value)
+    # Pinned POSITIVELY against the sentence actually raised, not only by the
+    # absence of "None"/"configured": absence assertions alone would keep
+    # passing against any vaguer message that merely avoided those two words
+    # (review finding on this change).
+    assert message == (
+        "Ollama stopped generation for length before the reply finished, "
+        "with no max_generation_tokens ceiling set on this client -- the "
+        "backend's own limit cut it off; the response is truncated and "
+        "unusable."
+    )
+    # The two words the old message got wrong stay explicitly excluded, so a
+    # regression back to "the configured ceiling (None)" fails here loudly.
     assert "None" not in message
     assert "configured" not in message
-    # Still says WHAT went wrong, not merely what did not.
-    assert "truncated" in message
 
 
 def test_chat_does_not_raise_when_done_reason_is_an_unexpected_string() -> None:

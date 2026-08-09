@@ -1603,6 +1603,11 @@ def test_contradictions_merged_body_verdict_names_unmerge_as_the_next_step(
 
     assert result.exit_code == 0
     assert "openkos unmerge concepts/apatheia concepts/apatheia-2" in result.stdout
+    # The verb is LIFO-enforced and this command raises one candidate per
+    # ledger entry, not just the newest, so the hint must state the
+    # precondition rather than promise the command will succeed.
+    assert "LIFO-enforced" in result.stdout
+    assert "most recent unreversed merge" in result.stdout
 
 
 def test_contradictions_pair_verdict_does_not_name_unmerge(
