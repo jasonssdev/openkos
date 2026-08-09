@@ -21,6 +21,7 @@ candidates.
 
 import json
 import os
+import re
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -955,13 +956,18 @@ def test_adjudicate_partial_batch_unavailable_keeps_remediation_and_counts(
 def test_adjudicate_json_partial_batch_emits_completed_verdicts_then_exits_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`--json` over a partial batch serializes the completed verdicts as a
-    valid array BEFORE the failure epilogue (#441): stdout parses to exactly
-    the one adjudicated group, stderr carries the single completed-of-total
-    line, and the exit code stays the OllamaError-family 1.
+    """`--json` over a partial batch serializes the completed verdicts
+    BEFORE the failure epilogue (#441): stdout parses to exactly the one
+    adjudicated group, stderr carries the single completed-of-total line,
+    and the exit code stays the OllamaError-family 1.
+
+    The envelope declares the truncation IN BAND (#468 item 5): `partial`
+    is true and `adjudicated` falls short of `total`, so a redirected
+    `> out.json` still carries the fact that work is missing after the exit
+    code is gone.
 
     This is the RETURNED-batch path, and it is what distinguishes a partial
-    array from the pre-#441 empty stdout:
+    payload from the pre-#441 empty stdout:
     `test_adjudicate_json_ollama_unavailable_still_errors_on_stderr_with_no_json`
     covers the RAISE path, where nothing was adjudicated and stdout stays
     empty."""
@@ -971,15 +977,20 @@ def test_adjudicate_json_partial_batch_emits_completed_verdicts_then_exits_one(
     result = runner.invoke(app, ["adjudicate", "--json"])
 
     assert result.exit_code == 1
-    assert json.loads(result.stdout) == [
-        {
-            "member_ids": ["a", "b"],
-            "okf_type": "Concept",
-            "tier": "HIGH",
-            "verdict": "SAME",
-            "rationale": "kept work",
-        }
-    ]
+    assert json.loads(result.stdout) == {
+        "partial": True,
+        "adjudicated": 1,
+        "total": 2,
+        "results": [
+            {
+                "member_ids": ["a", "b"],
+                "okf_type": "Concept",
+                "tier": "HIGH",
+                "verdict": "SAME",
+                "rationale": "kept work",
+            }
+        ],
+    }
     assert result.stderr == (
         "openkos adjudicate: failed after adjudicating 1 of 2 candidate "
         "group(s) -- boom.\n"
@@ -3394,23 +3405,34 @@ def test_adjudicate_json_flag_emits_clean_json_and_suppresses_human_output(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload == [
-        {
-            "member_ids": ["a", "b"],
-            "okf_type": "person",
-            "tier": "HIGH",
-            "verdict": "SAME",
-            "rationale": "same rationale",
-        },
-        {
-            "member_ids": ["c", "d"],
-            "okf_type": "org",
-            "tier": "LOW",
-            "verdict": "DIFFERENT",
-            "rationale": "diff rationale",
-        },
-    ]
-    assert "adjudicated " not in result.stdout
+    assert payload == {
+        "partial": False,
+        "adjudicated": 2,
+        "total": 2,
+        "results": [
+            {
+                "member_ids": ["a", "b"],
+                "okf_type": "person",
+                "tier": "HIGH",
+                "verdict": "SAME",
+                "rationale": "same rationale",
+            },
+            {
+                "member_ids": ["c", "d"],
+                "okf_type": "org",
+                "tier": "LOW",
+                "verdict": "DIFFERENT",
+                "rationale": "diff rationale",
+            },
+        ],
+    }
+    # The human tally is `adjudicated N: x SAME, ...` (main.py:1134). Guard
+    # on that SHAPE, not on the bare word: since #468 item 5 the envelope
+    # legitimately carries an `"adjudicated"` KEY, so the old
+    # `"adjudicated " not in stdout` check now passes only by the accident
+    # of `json.dumps` emitting `"adjudicated": 2` with no space before the
+    # colon -- a guard that survives by punctuation is not a guard.
+    assert re.search(r"^adjudicated \d+:", result.stdout, re.MULTILINE) is None
     assert "Legend:" not in result.stdout
     assert "Next: openkos merge" not in result.stdout
 
@@ -3473,33 +3495,49 @@ def test_adjudicate_json_same_only_composability_filters_to_same_verdicts(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert len(payload) == 1
-    assert payload[0]["verdict"] == "SAME"
-    assert payload[0]["rationale"] == "same rationale"
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["verdict"] == "SAME"
+    assert payload["results"][0]["rationale"] == "same rationale"
+    # The display filter dropped two of the three results; the RUN still
+    # adjudicated all three and completed (#468 item 5) -- `--same-only`
+    # must never masquerade as a truncated batch.
+    assert payload["adjudicated"] == 3
+    assert payload["total"] == 3
+    assert payload["partial"] is False
 
 
-def test_adjudicate_json_no_candidates_emits_empty_array_not_prose(
+def test_adjudicate_json_no_candidates_emits_empty_results_not_prose(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`adjudicate --json` on a fresh, empty bundle (zero candidate groups)
-    emits `[]`, bypassing the "No candidates found." guard entirely (spec:
-    Empty State Emits Valid Empty Array Under `--json`, no candidates)."""
+    emits an envelope with an empty `results`, bypassing the "No candidates
+    found." guard entirely (spec: Empty State Emits Valid Empty `results`
+    Under `--json`, no candidates). Nothing was queued, so the run is
+    complete, not partial."""
     _init_workspace(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["adjudicate", "--json"])
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == []
+    assert json.loads(result.stdout) == {
+        "partial": False,
+        "adjudicated": 0,
+        "total": 0,
+        "results": [],
+    }
     assert "No candidates found." not in result.stdout
 
 
-def test_adjudicate_json_same_only_all_filtered_out_emits_empty_array_not_prose(
+def test_adjudicate_json_same_only_all_filtered_out_emits_empty_results_not_prose(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`adjudicate --json --same-only` where every result is DIFFERENT emits
-    `[]`, bypassing the "No SAME-verdict candidates to display" guard
-    entirely (spec: Empty State Emits Valid Empty Array Under `--json`,
-    `--same-only` filters all results out)."""
+    an empty `results`, bypassing the "No SAME-verdict candidates to
+    display" guard entirely (spec: Empty State Emits Valid Empty `results`
+    Under `--json`, `--same-only` filters all results out).
+
+    `results` is empty but `adjudicated` is 1: the model answered for the
+    one group queued, the DISPLAY filter removed it (#468 item 5)."""
     _init_workspace(tmp_path, monkeypatch)
     different_group = CandidateGroup(
         okf_type="org", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
@@ -3534,7 +3572,12 @@ def test_adjudicate_json_same_only_all_filtered_out_emits_empty_array_not_prose(
     result = runner.invoke(app, ["adjudicate", "--json", "--same-only"])
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == []
+    assert json.loads(result.stdout) == {
+        "partial": False,
+        "adjudicated": 1,
+        "total": 1,
+        "results": [],
+    }
     assert "No SAME-verdict candidates to display" not in result.stdout
 
 
@@ -3569,11 +3612,103 @@ def test_adjudicate_json_ollama_unavailable_still_errors_on_stderr_with_no_json(
 # ---------------------------------------------------------------------------
 
 
-def test_adjudication_payload_empty_results_returns_empty_list() -> None:
-    """`_adjudication_payload([], same_only=False)` returns `[]` -- proves the
-    builder handles the no-results case without any group to map (spec:
-    Empty State Emits Valid Empty Array Under `--json`)."""
-    assert main._adjudication_payload([], same_only=False) == []
+def test_adjudication_payload_empty_results_returns_empty_results_list() -> None:
+    """`_adjudication_payload([], ...)` returns the envelope with an EMPTY
+    `results` list -- proves the builder handles the no-results case without
+    any group to map, and that the empty state is still self-describing
+    rather than a bare `[]` (spec: Empty State Emits Valid Empty `results`
+    Under `--json`)."""
+    assert main._adjudication_payload([], same_only=False, total=0, partial=False) == {
+        "partial": False,
+        "adjudicated": 0,
+        "total": 0,
+        "results": [],
+    }
+
+
+def test_adjudication_payload_complete_run_marks_partial_false_with_equal_counts() -> (
+    None
+):
+    """A complete run over two groups reports `partial: False` and
+    `adjudicated == total` -- the envelope a consumer reads to know the
+    payload is whole (spec: Machine-Readable `--json` Output Mode)."""
+    same_group = CandidateGroup(
+        okf_type="person", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="org", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+    results = [
+        _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+        _adjudicated(
+            different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+        ),
+    ]
+
+    payload = main._adjudication_payload(
+        results, same_only=False, total=2, partial=False
+    )
+
+    assert payload["partial"] is False
+    assert payload["adjudicated"] == 2
+    assert payload["total"] == 2
+
+
+def test_adjudication_payload_partial_run_marks_partial_true_with_short_count() -> None:
+    """A partial batch reports `partial: True` and `adjudicated < total` --
+    THE point of issue #468 item 5: `openkos adjudicate --json > out.json`
+    used to write a truncated array indistinguishable from a complete run,
+    recoverable only from an exit code the redirect threw away."""
+    group = CandidateGroup(
+        okf_type="person", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    results = [_adjudicated(group, verdict=Verdict.SAME, rationale="kept work")]
+
+    payload = main._adjudication_payload(
+        results, same_only=False, total=2, partial=True
+    )
+
+    assert payload["partial"] is True
+    assert payload["adjudicated"] == 1
+    assert payload["total"] == 2
+    assert payload["results"] == [
+        {
+            "member_ids": ["a", "b"],
+            "okf_type": "person",
+            "tier": "HIGH",
+            "verdict": "SAME",
+            "rationale": "kept work",
+        }
+    ]
+
+
+def test_adjudication_payload_same_only_does_not_shrink_adjudicated_count() -> None:
+    """`same_only=True` filters `results` but MUST NOT touch `adjudicated`:
+    the counters describe the RUN (what the model was asked and answered),
+    `results` is a display view of it. Conflating them would report a
+    complete run as partial merely because the operator filtered the
+    output (spec: `--same-only` Composes With `--json`)."""
+    same_group = CandidateGroup(
+        okf_type="person", member_ids=("a", "b"), tier=Tier.HIGH, trigger="stub-same"
+    )
+    different_group = CandidateGroup(
+        okf_type="org", member_ids=("c", "d"), tier=Tier.LOW, trigger="stub-diff"
+    )
+    results = [
+        _adjudicated(same_group, verdict=Verdict.SAME, rationale="same rationale"),
+        _adjudicated(
+            different_group, verdict=Verdict.DIFFERENT, rationale="diff rationale"
+        ),
+    ]
+
+    payload = main._adjudication_payload(
+        results, same_only=True, total=2, partial=False
+    )
+
+    assert payload["adjudicated"] == 2
+    assert payload["total"] == 2
+    assert payload["partial"] is False
+    assert len(payload["results"]) == 1
 
 
 def test_adjudication_payload_single_same_result_exact_field_set() -> None:
@@ -3593,9 +3728,11 @@ def test_adjudication_payload_single_same_result_exact_field_set() -> None:
         rationale="Same individual; identical canonical name and role.",
     )
 
-    payload = main._adjudication_payload([result], same_only=False)
+    payload = main._adjudication_payload(
+        [result], same_only=False, total=1, partial=False
+    )
 
-    assert payload == [
+    assert payload["results"] == [
         {
             "member_ids": ["concept-a", "concept-b"],
             "okf_type": "person",
@@ -3604,7 +3741,7 @@ def test_adjudication_payload_single_same_result_exact_field_set() -> None:
             "rationale": "Same individual; identical canonical name and role.",
         }
     ]
-    assert "confidence" not in payload[0]
+    assert "confidence" not in payload["results"][0]
 
 
 def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tier() -> (
@@ -3633,9 +3770,11 @@ def test_adjudication_payload_mixed_verdicts_preserves_order_and_renders_low_tie
         ),
     ]
 
-    payload = main._adjudication_payload(results, same_only=False)
+    payload = main._adjudication_payload(
+        results, same_only=False, total=3, partial=False
+    )
 
-    assert payload == [
+    assert payload["results"] == [
         {
             "member_ids": ["a", "b"],
             "okf_type": "person",
@@ -3677,9 +3816,11 @@ def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None
         group, verdict=Verdict.DIFFERENT, rationale="different entities"
     )
 
-    payload = main._adjudication_payload([result], same_only=False)
+    payload = main._adjudication_payload(
+        [result], same_only=False, total=1, partial=False
+    )
 
-    assert payload == [
+    assert payload["results"] == [
         {
             "member_ids": ["concepts/a", "entities/b"],
             "okf_type": "Concept+Entity",
@@ -3688,7 +3829,7 @@ def test_adjudication_payload_cross_type_group_has_no_member_types_key() -> None
             "rationale": "different entities",
         }
     ]
-    assert set(payload[0].keys()) == {
+    assert set(payload["results"][0].keys()) == {
         "member_ids",
         "okf_type",
         "tier",
@@ -3714,11 +3855,13 @@ def test_adjudication_payload_same_only_filters_to_same_verdicts() -> None:
         ),
     ]
 
-    payload = main._adjudication_payload(results, same_only=True)
+    payload = main._adjudication_payload(
+        results, same_only=True, total=2, partial=False
+    )
 
-    assert len(payload) == 1
-    assert payload[0]["verdict"] == "SAME"
-    assert payload[0]["rationale"] == "same rationale"
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["verdict"] == "SAME"
+    assert payload["results"][0]["rationale"] == "same rationale"
 
 
 def test_adjudicate_include_confidential_keeps_the_general_advisory(

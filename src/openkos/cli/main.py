@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal
+from typing import Final, Literal, TypedDict
 
 import typer
 from rich.console import Console
@@ -1134,9 +1134,35 @@ def _format_verdict_tally(same: int, different: int, uncertain: int) -> str:
     return f"adjudicated {total}: {parts}"
 
 
+class AdjudicationPayload(TypedDict):
+    """The `adjudicate --json` envelope (issue #468 item 5).
+
+    `results` was the WHOLE payload until #468: a bare JSON array. A partial
+    batch (#441) emits the completed verdicts and reports the failure on
+    stderr with exit 1, which means `openkos adjudicate --json > out.json`
+    wrote a valid-looking but truncated array whose incompleteness lived
+    ONLY in an exit code the redirect discarded. These three counters put
+    that fact in the file itself.
+
+    `adjudicated` and `total` describe the RUN -- groups the model answered
+    for, and groups queued -- so they are deliberately NOT affected by
+    `--same-only`, which filters `results` alone. Conflating them would
+    report a complete run as truncated merely because the operator asked
+    for a narrower view."""
+
+    partial: bool
+    adjudicated: int
+    total: int
+    results: list[dict[str, object]]
+
+
 def _adjudication_payload(
-    results: Sequence[AdjudicatedCandidate], *, same_only: bool
-) -> list[dict[str, object]]:
+    results: Sequence[AdjudicatedCandidate],
+    *,
+    same_only: bool,
+    total: int,
+    partial: bool,
+) -> AdjudicationPayload:
     """Build the pure, I/O-free `adjudicate --json` payload from `results`,
     preserving `results` order and omitting `confidence` and any
     survivor/absorbed field (spec: Machine-Readable `--json` Output Mode).
@@ -1145,18 +1171,29 @@ def _adjudication_payload(
     `.value` (lowercase) -- mirrors the human path's ternary but sourced
     directly from the enum member's name. `verdict` mirrors the human path's
     `.value.upper()` rendering. `same_only=True` keeps only `Verdict.SAME`
-    entries, the same predicate the human `--same-only` display filter uses."""
-    return [
-        {
-            "member_ids": list(result.candidate.member_ids),
-            "okf_type": result.candidate.okf_type,
-            "tier": result.candidate.tier.name,
-            "verdict": result.verdict.value.upper(),
-            "rationale": result.rationale,
-        }
-        for result in results
-        if not same_only or result.verdict is Verdict.SAME
-    ]
+    entries, the same predicate the human `--same-only` display filter uses.
+
+    `total` is the count of candidate groups QUEUED and `partial` comes from
+    `batch.failure is not None` -- both are the caller's to supply, because
+    neither is recoverable from `results` alone: a batch that failed on its
+    very first group and one that completed a single-group run produce the
+    same `results` list (issue #468 item 5)."""
+    return {
+        "partial": partial,
+        "adjudicated": len(results),
+        "total": total,
+        "results": [
+            {
+                "member_ids": list(result.candidate.member_ids),
+                "okf_type": result.candidate.okf_type,
+                "tier": result.candidate.tier.name,
+                "verdict": result.verdict.value.upper(),
+                "rationale": result.rationale,
+            }
+            for result in results
+            if not same_only or result.verdict is Verdict.SAME
+        ],
+    }
 
 
 def _render_adjudicate_report(
@@ -9053,7 +9090,15 @@ def adjudicate(
     results = batch.results
     if json_output:
         typer.echo(
-            json.dumps(_adjudication_payload(results, same_only=same_only), indent=2)
+            json.dumps(
+                _adjudication_payload(
+                    results,
+                    same_only=same_only,
+                    total=len(candidates),
+                    partial=batch.failure is not None,
+                ),
+                indent=2,
+            )
         )
     elif apply:
         _run_adjudicate_apply(root, layout, index_path, log_path, results)

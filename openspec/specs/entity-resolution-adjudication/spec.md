@@ -387,20 +387,29 @@ tally, legend, and hint lines.
 
 ### Requirement: Machine-Readable `--json` Output Mode
 
-`openkos adjudicate` MUST accept a `--json` flag. When set, on the SUCCESS
-path, stdout MUST be a single valid JSON array, one object per entry in the
-full `results` set (independent of `--same-only`), with EXACTLY these fields
-per object: `member_ids` (list of strings, already sorted), `okf_type`
+`openkos adjudicate` MUST accept a `--json` flag. When set, stdout MUST be a
+single valid JSON OBJECT with EXACTLY these four keys: `partial` (boolean),
+`adjudicated` (integer), `total` (integer), and `results` (array).
+
+`results` holds one object per entry in the `results` set, with EXACTLY these
+fields per object: `member_ids` (list of strings, already sorted), `okf_type`
 (string), `tier` (`"HIGH"` or `"LOW"`), `verdict` (`"SAME"`, `"DIFFERENT"`, or
 `"UNCERTAIN"`), `rationale` (string). The object MUST NOT contain a
 `confidence` field or any survivor/absorbed field.
+
+`total` MUST be the number of candidate groups QUEUED for adjudication and
+`adjudicated` the number the model returned verdicts for. Both describe the
+RUN and MUST NOT be reduced by the `--same-only` display filter, which
+narrows `results` alone. `partial` MUST be `true` exactly when the batch
+carried a failure — that is, when the run stopped before adjudicating every
+queued group.
 
 #### Scenario: Exact field set, no confidence
 
 - GIVEN adjudication results with mixed verdicts
 - WHEN `adjudicate --json` runs
-- THEN each parsed JSON object has exactly the keys `member_ids`, `okf_type`,
-  `tier`, `verdict`, `rationale`
+- THEN each parsed object inside `results` has exactly the keys `member_ids`,
+  `okf_type`, `tier`, `verdict`, `rationale`
 - AND no object contains a `confidence` key
 
 #### Scenario: Example mixed-verdict payload
@@ -409,23 +418,55 @@ per object: `member_ids` (list of strings, already sorted), `okf_type`
 - WHEN `adjudicate --json` runs
 - THEN stdout parses to:
   ```json
-  [
-    {
-      "member_ids": ["concept-a", "concept-b"],
-      "okf_type": "person",
-      "tier": "HIGH",
-      "verdict": "SAME",
-      "rationale": "Same individual; identical canonical name and role."
-    },
-    {
-      "member_ids": ["concept-c", "concept-d"],
-      "okf_type": "org",
-      "tier": "LOW",
-      "verdict": "DIFFERENT",
-      "rationale": "Distinct organizations despite similar names."
-    }
-  ]
+  {
+    "partial": false,
+    "adjudicated": 2,
+    "total": 2,
+    "results": [
+      {
+        "member_ids": ["concept-a", "concept-b"],
+        "okf_type": "person",
+        "tier": "HIGH",
+        "verdict": "SAME",
+        "rationale": "Same individual; identical canonical name and role."
+      },
+      {
+        "member_ids": ["concept-c", "concept-d"],
+        "okf_type": "org",
+        "tier": "LOW",
+        "verdict": "DIFFERENT",
+        "rationale": "Distinct organizations despite similar names."
+      }
+    ]
+  }
   ```
+
+### Requirement: Partial Batches Are Self-Describing Under `--json`
+
+A partial batch emits its completed verdicts on stdout and reports the
+failure on stderr with exit code 1. Because a redirect such as
+`openkos adjudicate --json > out.json` preserves stdout but discards both
+stderr and the exit code, the emitted payload MUST declare its own
+incompleteness in band: `partial` MUST be `true` and `adjudicated` MUST be
+less than `total`.
+
+#### Scenario: Partial batch declares the truncation in the payload
+
+- GIVEN two queued candidate groups where the model answers for one and the
+  batch then fails
+- WHEN `adjudicate --json` runs
+- THEN the parsed payload has `"partial": true`, `"adjudicated": 1`, and
+  `"total": 2`
+- AND `results` holds exactly the one completed verdict
+- AND the exit code is 1
+
+#### Scenario: `--same-only` never reports a complete run as partial
+
+- GIVEN three queued candidate groups that all adjudicate successfully, only
+  one of them SAME
+- WHEN `adjudicate --json --same-only` runs
+- THEN `results` holds exactly one object
+- AND `"adjudicated"` is 3, `"total"` is 3, and `"partial"` is `false`
 
 ### Requirement: `--json` Fully Suppresses Human Output
 
@@ -444,51 +485,55 @@ stdout content MUST parse cleanly via `json.loads`.
 ### Requirement: `--same-only` Composes With `--json`
 
 `adjudicate --json` MUST include every result by default, regardless of
-verdict. `adjudicate --json --same-only` MUST filter the emitted array to
-objects where `verdict == "SAME"` only.
+verdict. `adjudicate --json --same-only` MUST filter `results` to objects
+where `verdict == "SAME"` only, leaving `partial`, `adjudicated`, and `total`
+untouched.
 
 #### Scenario: `--json` alone includes all verdicts
 
 - GIVEN results with SAME, DIFFERENT, and UNCERTAIN verdicts
 - WHEN `adjudicate --json` runs
-- THEN the parsed array contains one object per result, all verdicts present
+- THEN `results` contains one object per result, all verdicts present
 
 #### Scenario: `--json --same-only` filters to SAME
 
 - GIVEN results with SAME, DIFFERENT, and UNCERTAIN verdicts
 - WHEN `adjudicate --json --same-only` runs
-- THEN the parsed array contains only objects with `"verdict": "SAME"`
+- THEN `results` contains only objects with `"verdict": "SAME"`
 
-### Requirement: Empty State Emits Valid Empty Array Under `--json`
+### Requirement: Empty State Emits Valid Empty `results` Under `--json`
 
 WHEN there are no candidate groups, OR `--same-only` filters every result out,
-`adjudicate --json` MUST emit stdout that is a valid empty JSON array `[]`,
-NOT the plain-text "no candidates" message used in the non-JSON path.
+`adjudicate --json` MUST emit the standard envelope with an empty `results`
+array, NOT the plain-text "no candidates" message used in the non-JSON path.
 
 #### Scenario: No candidates, `--json`
 
 - GIVEN a bundle with no candidate groups
 - WHEN `adjudicate --json` runs
-- THEN `json.loads(stdout) == []`
+- THEN `json.loads(stdout)` equals
+  `{"partial": false, "adjudicated": 0, "total": 0, "results": []}`
 
 #### Scenario: `--same-only` filters all results out, `--json`
 
-- GIVEN results containing zero SAME verdicts
+- GIVEN one queued candidate group whose verdict is not SAME
 - WHEN `adjudicate --json --same-only` runs
-- THEN `json.loads(stdout) == []`
+- THEN `json.loads(stdout)` equals
+  `{"partial": false, "adjudicated": 1, "total": 1, "results": []}`
 
 ### Requirement: Deterministic, Pretty-Printed JSON
 
-The JSON array MUST preserve the order of the `results` set (no re-sorting),
-with `member_ids` already sorted, and MUST be pretty-printed with `indent=2`.
-Identical input MUST yield byte-identical stdout across runs.
+The `results` array MUST preserve the order of the `results` set (no
+re-sorting), with `member_ids` already sorted, and the payload MUST be
+pretty-printed with `indent=2`. Identical input MUST yield byte-identical
+stdout across runs.
 
 #### Scenario: Stable ordering across runs
 
 - GIVEN the same fixture bundle and model responses
 - WHEN `adjudicate --json` runs twice
-- THEN both stdout outputs are byte-identical and array order matches
-  `results` order
+- THEN both stdout outputs are byte-identical and `results` order matches
+  the `results` set order
 
 #### Scenario: Output is indented JSON
 
