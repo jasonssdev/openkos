@@ -8271,10 +8271,17 @@ def list_objects_cmd(
     already derived inside `listing.list_objects`'s own single pass
     (spec: Exactly One Bundle Walk; design D3).
 
-    Rows are `ID  SENSITIVITY  STATUS  TITLE`, `ljust`-aligned over the
-    header labels and the rows actually shown (post-filter,
+    Rows are `ID  TYPE  SENSITIVITY  STATUS  TITLE`, `ljust`-aligned over
+    the header labels and the rows actually shown (post-filter,
     post-truncation) -- the same pattern `status`'s bundle-contents
-    section uses (`cli/main.py:4989-4992`, design D6). A title is rendered
+    section uses (`cli/main.py:4989-4992`, design D6). `TYPE` sits beside
+    `ID` because both answer "what am I looking at" (#399): without it two
+    objects of different kinds with the same title print identically, and
+    the only discriminator is the directory prefix buried inside the id.
+    It is rendered from `listing.LINK_DIR_TO_TYPE_NAME` over the
+    structurally derived `link_dir`, never by re-reading a document's
+    `type` field, and falls back to `(unknown)` for an object living
+    outside the registry's directories. A title is rendered
     `(unreadable)` when the underlying document failed to read/parse, or
     `(untitled)` when it read fine but declared no title -- two distinct
     markers for two distinct follow-ups. Deprecated and superseded objects
@@ -8344,17 +8351,25 @@ def list_objects_cmd(
     total = len(rows)
     shown = rows if all_objects else rows[:limit]
 
+    type_names = {
+        row.concept_id: listing.LINK_DIR_TO_TYPE_NAME.get(row.link_dir, "(unknown)")
+        for row in shown
+    }
+
     id_w = max(len("ID"), *(len(row.concept_id) for row in shown))
+    type_w = max(len("TYPE"), *(len(name) for name in type_names.values()))
     sens_w = max(len("SENSITIVITY"), *(len(row.sensitivity) for row in shown))
     stat_w = max(len("STATUS"), *(len(row.status) for row in shown))
 
     typer.echo(
-        f"{'ID'.ljust(id_w)}  {'SENSITIVITY'.ljust(sens_w)}  {'STATUS'.ljust(stat_w)}  TITLE"
+        f"{'ID'.ljust(id_w)}  {'TYPE'.ljust(type_w)}  "
+        f"{'SENSITIVITY'.ljust(sens_w)}  {'STATUS'.ljust(stat_w)}  TITLE"
     )
     for row in shown:
         title = row.title or ("(unreadable)" if not row.readable else "(untitled)")
         typer.echo(
-            f"{row.concept_id.ljust(id_w)}  {row.sensitivity.ljust(sens_w)}  "
+            f"{row.concept_id.ljust(id_w)}  {type_names[row.concept_id].ljust(type_w)}  "
+            f"{row.sensitivity.ljust(sens_w)}  "
             f"{row.status.ljust(stat_w)}  {title}"
         )
 

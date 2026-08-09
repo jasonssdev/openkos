@@ -341,11 +341,12 @@ def test_list_all_prints_every_row_with_no_footer(
     assert "use --all" not in result.stdout
 
 
-def test_list_column_layout_is_id_sensitivity_status_title_in_order(
+def test_list_column_layout_is_id_type_sensitivity_status_title_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each row prints `ID`, `SENSITIVITY`, `STATUS`, `TITLE`, in that order,
-    `ljust`-aligned (spec: Row layout, design D6)."""
+    """Each row prints `ID`, `TYPE`, `SENSITIVITY`, `STATUS`, `TITLE`, in
+    that order, `ljust`-aligned (spec: Row layout, design D6; `TYPE`
+    added by #399)."""
     _init_workspace(tmp_path, monkeypatch)
     _write_doc(
         tmp_path / "bundle" / "people" / "jane.md",
@@ -359,7 +360,8 @@ def test_list_column_layout_is_id_sensitivity_status_title_in_order(
     lines = result.stdout.splitlines()
     header_idx = next(i for i, line in enumerate(lines) if line.startswith("ID"))
     header = lines[header_idx]
-    assert header.index("ID") < header.index("SENSITIVITY")
+    assert header.index("ID") < header.index("TYPE")
+    assert header.index("TYPE") < header.index("SENSITIVITY")
     assert header.index("SENSITIVITY") < header.index("STATUS")
     assert header.index("STATUS") < header.index("TITLE")
     row_line = next(line for line in lines if line.startswith("people/jane"))
@@ -536,3 +538,77 @@ def test_list_json_flag_is_rejected_as_unknown_option(
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
     assert "no such option" in result.stderr.lower()
+
+
+def test_list_sorts_by_id_not_by_file_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rows are ordered by concept id, so a bare stem precedes its own
+    numbered siblings (#389).
+
+    `listing.list_objects` inherited its order from `okf._iter_docs`,
+    which walks `sorted(rglob(...))` -- a sort over PATHS, where the
+    `.md` suffix decides ties. `-` is 0x2D and `.` is 0x2E, so
+    `claude-code-2.md` sorts BEFORE `claude-code.md` and the discovery
+    verb showed `claude-code` last, where nobody would look for it."""
+    _init_workspace(tmp_path, monkeypatch)
+    concepts = tmp_path / "bundle" / "concepts"
+    for stem in ("claude-code", "claude-code-2", "claude-code-3"):
+        _write_doc(concepts / f"{stem}.md", title=stem)
+
+    result = runner.invoke(app, ["list"])
+
+    assert result.exit_code == 0
+    listed = [
+        line.split()[0]
+        for line in result.stdout.splitlines()
+        if line.startswith("concepts/")
+    ]
+    assert listed == [
+        "concepts/claude-code",
+        "concepts/claude-code-2",
+        "concepts/claude-code-3",
+    ]
+
+
+def test_list_prints_a_type_column_distinguishing_same_titled_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `TYPE` column names each object's OKF type, so two objects of
+    different kinds that share a title no longer print identically
+    (#399).
+
+    The discriminator used to be the directory prefix buried inside the
+    ID column, which the reader had to know to decode. `status` already
+    reports the same type breakdown, so the product already treats it as
+    worth surfacing."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundle"
+    _write_doc(
+        bundle / "procedures" / "kill-adk-process.md",
+        type_="Procedure",
+        title="Kill ADK process",
+    )
+    _write_doc(
+        bundle / "sources" / "02-running-agent.md",
+        type_="Source",
+        title="Kill ADK process",
+    )
+
+    result = runner.invoke(app, ["list"])
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    header = next(line for line in lines if line.startswith("ID"))
+    assert "TYPE" in header
+    assert header.index("ID") < header.index("TYPE") < header.index("SENSITIVITY")
+    procedure_row = next(
+        line for line in lines if line.startswith("procedures/kill-adk-process")
+    )
+    source_row = next(
+        line for line in lines if line.startswith("sources/02-running-agent")
+    )
+    assert "Procedure" in procedure_row
+    assert "Source" in source_row
+    # The two rows share a title; the TYPE column is what tells them apart.
+    assert procedure_row != source_row
