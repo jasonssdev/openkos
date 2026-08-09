@@ -906,6 +906,19 @@ def init(
     if sys.stdin.isatty() and (model is None or embedding_model is None):
         installed_models = _probe_installed_models()
 
+    # State the stickiness BEFORE the embedding picker runs (#389), not as a
+    # postscript once the answer is already on disk. This note used to land
+    # after the choice AND below the call to action, which is after both
+    # moments it exists to inform. The concrete note naming the resolved tag
+    # still prints later; this one reaches the reader while they are deciding.
+    if sys.stdin.isatty() and embedding_model is None:
+        typer.echo(
+            "openkos init: note -- the embedding model you pick here is "
+            "sticky: changing it in this workspace later forces a full "
+            "corpus re-embed on the next `openkos reindex`.",
+            err=True,
+        )
+
     try:
         resolved_model = _resolve_model(model, installed_models)
         resolved_embedding_model = _resolve_embedding_model(
@@ -944,6 +957,12 @@ def init(
         f"({layout.raw_dir.name}/, {layout.bundle_dir.name}/index.md, "
         f"{layout.bundle_dir.name}/log.md, {layout.agents_path.name}, "
         f"{layout.config_path.name})."
+    )
+    typer.echo(
+        f"openkos init: note -- the embedding model ('{resolved_embedding_model}') "
+        "is sticky: editing it in this workspace's openkos.yaml later forces "
+        "a full corpus re-embed the next time `openkos reindex` runs.",
+        err=True,
     )
     typer.echo("Next: run `openkos ingest <path>` to import your first source.")
 
@@ -1036,12 +1055,6 @@ def init(
     # revision blamed "a future init of a different workspace", which cannot
     # force a re-embed here and read as a non-sequitur to anyone who did not
     # already know the model-tag gate is per-workspace.
-    typer.echo(
-        f"openkos init: note -- the embedding model ('{resolved_embedding_model}') "
-        "is sticky: editing it in this workspace's openkos.yaml later forces "
-        "a full corpus re-embed the next time `openkos reindex` runs.",
-        err=True,
-    )
 
 
 def _plural(n: int) -> str:
@@ -8046,9 +8059,15 @@ def reconcile(
             f"({log_path.name} updated)."
         )
     else:
+        # Name the STATUS the loser will carry, not only the act (#389).
+        # This verb said "recorded as superseding" while `list` shows
+        # `deprecated` in its STATUS column, so the operator met two words
+        # for the action they had just performed and its effect, with
+        # nothing connecting them.
         typer.echo(
             f"openkos reconcile: recorded '{winner_canonical}' as superseding "
-            f"'{loser_canonical}' ({log_path.name} updated)."
+            f"'{loser_canonical}'; '{loser_canonical}' now lists as "
+            f"deprecated ({log_path.name} updated)."
         )
 
     reconcile_message = (
@@ -11133,14 +11152,28 @@ def doctor() -> None:
     exemption_state = (
         "active" if (locality.is_local and exemption_enabled) else "inactive"
     )
+    # SKIP rather than PASS when Ollama is unreachable (#389, same D6 rule the
+    # model and embedding checks follow). This line reports CONFIGURATION, not
+    # liveness, which is correct -- but a green `[PASS] Backend host locality`
+    # sitting directly beneath `[FAIL] Ollama reachable` reads as a
+    # contradiction to anyone scanning the column, and the reader has no way
+    # to know the two answer different questions. The configured host stays in
+    # the detail, so the FACT survives; only the claim that anything was
+    # verified goes away.
     results.append(
         CheckResult(
             "Backend host locality",
-            "pass",
+            "pass" if reachable else "skip",
             critical=False,
             detail=(
                 f"{where} ({locality.display_host}); confidential local "
                 f"exemption {exemption_state}"
+                if reachable
+                else (
+                    f"configured for {where} ({locality.display_host}); not "
+                    "verified while Ollama is unreachable; confidential local "
+                    f"exemption {exemption_state}"
+                )
             ),
         )
     )

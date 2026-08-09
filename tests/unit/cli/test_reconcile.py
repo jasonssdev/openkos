@@ -913,3 +913,22 @@ def test_case_differing_pair_refuses_on_a_case_insensitive_filesystem(
     assert "refusing to reconcile --" in result.stderr
     assert "resolve to the same file" in result.stderr
     assert snapshot_with_mtime(tmp_path) == before
+
+
+def test_reconcile_names_the_status_the_loser_will_show_as(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The success line names the lifecycle status the superseded concept
+    will carry, not only the act of superseding (#389).
+
+    `reconcile` reported "recorded as superseding" while `list` shows
+    `deprecated` in its STATUS column, so the operator saw two different
+    words for the action they just performed and its effect, with nothing
+    connecting them."""
+    id_a, id_b = _pair_on_a_tty(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", id_a, id_b, "--winner", id_a, "--auto"])
+
+    assert result.exit_code == 0
+    assert "superseding" in result.stdout
+    assert "deprecated" in result.stdout

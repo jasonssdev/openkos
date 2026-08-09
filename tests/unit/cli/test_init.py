@@ -1677,3 +1677,47 @@ def test_git_setup_runs_after_workspace_marker_exists(
 
     assert result.exit_code == 0
     assert observed["openkos_yaml_exists"] is True
+
+
+def test_sticky_note_precedes_the_call_to_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stickiness note is printed BEFORE `Next: run openkos ingest`
+    (#389).
+
+    It used to arrive after the call to action, and after the choice it
+    exists to inform. A warning that lands below "here is what to do next"
+    has already lost the reader it was written for."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    combined = result.output
+    sticky_at = combined.index("is sticky")
+    next_at = combined.index("Next: run")
+    assert sticky_at < next_at, combined
+
+
+def test_embedding_picker_is_preceded_by_the_stickiness_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When an interactive embedding-model picker will actually be shown,
+    the stickiness of the choice is stated BEFORE it (#389).
+
+    This is the placement the issue asks for: at the picker, where the
+    decision is being made, rather than as a postscript once it is already
+    written to disk."""
+    monkeypatch.chdir(tmp_path)
+    _simulate_tty(monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main._probe_installed_models",
+        lambda: [],
+    )
+
+    result = runner.invoke(app, ["init"], input="\n\n")
+
+    assert result.exit_code == 0
+    assert "sticky" in result.output.lower()
+    lowered = result.output.lower()
+    assert lowered.index("sticky") < lowered.index("next: run")

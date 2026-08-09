@@ -999,3 +999,54 @@ def test_doctor_reports_locality_outside_a_workspace(
         result.stdout
     )
     assert "[SKIP] Backend host locality" not in result.stdout
+
+
+def test_doctor_locality_does_not_read_as_passing_while_ollama_is_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With Ollama unreachable, the backend-host-locality line is `[SKIP]`,
+    not `[PASS]` (#389).
+
+    It reports CONFIGURATION, not liveness, which is correct -- but a green
+    `[PASS] Backend host locality` printed directly beneath
+    `[FAIL] Ollama reachable` reads as a contradiction to anyone scanning
+    the column. The configured host is still named in the detail, so the
+    fact survives; only the claim that it was verified goes away, matching
+    the same skip-when-unreachable rule the model and embedding checks
+    already follow."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("Ollama not reachable")),
+    )
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/ollama")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "[FAIL] Ollama reachable" in result.stdout
+    assert "[PASS] Backend host locality" not in result.stdout
+    locality_line = next(
+        line for line in result.stdout.splitlines() if "Backend host locality" in line
+    )
+    assert locality_line.startswith("[SKIP]")
+    # The configured host is still reported; only the verification claim goes.
+    assert "configured" in locality_line
+
+
+def test_doctor_locality_still_passes_when_ollama_is_reachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The skip is scoped to the unreachable case: a healthy run still
+    reports locality as a `[PASS]` with its host and exemption state
+    (#389)."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _fake_ollama_client())
+
+    result = runner.invoke(app, ["doctor"])
+
+    locality_line = next(
+        line for line in result.stdout.splitlines() if "Backend host locality" in line
+    )
+    assert locality_line.startswith("[PASS]")
+    assert "exemption" in locality_line
