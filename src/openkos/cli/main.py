@@ -11140,20 +11140,17 @@ def doctor() -> None:
         )
 
     # 11. backend-host-locality (informational, always; ALWAYS EMITTED).
-    # `pass` while reachable, `skip` when not, never `fail` -- the docstring
-    # above holds the reasoning for that shape (#389); it is not repeated
-    # here. Note it skips despite being ABLE to answer without the server:
-    # locality is a literal-form check over the host the chat client already
-    # resolved. Reuses the SAME `client` check 3 built, so what is reported is the
-    # host `doctor` itself would have sent to, never a re-derivation.
+    # Reuses the SAME `client` check 3 built, so what is reported is the
+    # host `doctor` itself would have sent to, never a re-derivation. It
+    # skips when Ollama is unreachable despite being ABLE to answer without
+    # the server: locality is a literal-form check over the host the client
+    # already resolved, so the skip is about how the line READS beside a
+    # failure, not about an inability to answer.
     #
-    # `pass` while Ollama is reachable, `skip` when it is not; NEVER
-    # `fail` (issue #240). That third shape was considered and
-    # is wrong: `[FAIL]` on a non-local backend would call a
-    # legitimate configuration broken, and a failing status invites a
-    # future reader to make this check critical, which would let an
-    # informational report flip an exit code that scripts gate on. The
-    # DETAIL carries the finding; the status only says the check ran.
+    # NEVER `fail` (issue #240): `[FAIL]` on a non-local backend would call a
+    # legitimate configuration broken, and a failing status invites a future
+    # reader to make this check critical, which would let an informational
+    # report flip an exit code that scripts gate on.
     #
     # Both terms are named separately because they are distinct facts and a
     # user debugging "why is my confidential concept in the prompt" needs to
