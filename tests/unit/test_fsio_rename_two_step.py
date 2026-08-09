@@ -117,6 +117,74 @@ def test_temp_name_matches_rename_temp_prefix(
     assert observed_temp_names[0].startswith(fsio.RENAME_TEMP_PREFIX)
 
 
+def test_double_fault_propagates_the_original_hop_two_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When hop 2 (`temp -> dst`) fails AND the best-effort restore
+    (`temp -> original`) also fails, the ORIGINAL hop-2 `OSError`
+    propagates -- never the restore's (PR #492 informational finding):
+    the restore is suppressed exactly like the sibling
+    verification-failure branch, so the caller's error report names the
+    fault that actually stopped the rename. The entry MAY remain at the
+    temp name in this double-fault case -- that is exactly what
+    `lint.scan_stranded_rename_temps` reports at the next run (design
+    D3), so detectability is preserved."""
+    src = tmp_path / f"{NFD_CAFE}.md"
+    src.write_text("body\n", encoding="utf-8")
+    real_rename = os.rename
+
+    def double_faulting_rename(src_path: str | Path, dst_path: str | Path) -> None:
+        dst_name = Path(dst_path).name
+        if dst_name.startswith(fsio.RENAME_TEMP_PREFIX):
+            real_rename(src_path, dst_path)  # hop 1 succeeds
+            return
+        if dst_name == f"{NFC_CAFE}.md":
+            raise OSError("hop two failed")
+        raise OSError("restore failed")  # the best-effort restore also fails
+
+    monkeypatch.setattr("openkos.fsio.os.rename", double_faulting_rename)
+
+    with pytest.raises(OSError, match="hop two failed"):
+        fsio.rename_two_step(src, f"{NFC_CAFE}.md")
+
+    monkeypatch.setattr("openkos.fsio.os.rename", real_rename)
+    listing = os.listdir(tmp_path)  # noqa: PTH208 -- byte-exact listing check, matches the primitive
+    # The entry is stranded at the temp name -- machine-detectable by the
+    # `RENAME_TEMP_PREFIX` scan, never silently lost.
+    assert any(name.startswith(fsio.RENAME_TEMP_PREFIX) for name in listing)
+
+
+def test_existing_destination_raises_and_restores_instead_of_overwriting(
+    tmp_path: Path,
+) -> None:
+    """A destination that is already present byte-exactly in the parent
+    listing when hop 2 is about to run refuses with `OSError` naming the
+    collision, restores the source's original name, and leaves the
+    destination's bytes untouched (PR #492 risk finding: a dst created
+    between the caller's batched drift re-check and this entry's rename
+    would otherwise be SILENTLY overwritten by `os.rename`).
+
+    ASCII stand-in names, deliberately: on a normalization-insensitive
+    lookup filesystem (macOS APFS, design.md S1 Q4) the raw and NFC
+    spellings of one name cannot coexist as two byte-distinct entries, so
+    a REAL on-disk collision can only be staged portably with names that
+    are not canonically equivalent -- and the guard's contract is pure
+    byte-exact `os.listdir` membership, indifferent to canonical
+    equivalence."""
+    src = tmp_path / "raw-entry.md"
+    src.write_text("source body\n", encoding="utf-8")
+    interloper = tmp_path / "target.md"
+    interloper.write_text("interloper body\n", encoding="utf-8")
+
+    with pytest.raises(OSError, match=r"target\.md"):
+        fsio.rename_two_step(src, "target.md")
+
+    listing = os.listdir(tmp_path)  # noqa: PTH208 -- byte-exact listing check, matches the primitive
+    assert "raw-entry.md" in listing  # source restored to its original name
+    assert not any(name.startswith(fsio.RENAME_TEMP_PREFIX) for name in listing)
+    assert interloper.read_text(encoding="utf-8") == "interloper body\n"
+
+
 def test_survives_a_normalization_insensitive_rename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

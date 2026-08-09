@@ -325,6 +325,73 @@ def test_immediate_rerun_after_success_plans_nothing_writes_nothing(
     assert _commit_count(tmp_path) == commits_after_first
 
 
+def test_rerun_after_partial_success_keeps_collision_skip_and_writes_nothing(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Combined partial-success idempotency (spec scenario: "Re-run after
+    partial success"): a bundle holding BOTH a renameable NFD entry and
+    an unresolved collision (an NFC-spelled sibling already exists). The
+    first run renames the renameable entry and reports the collision as a
+    skip; the SECOND run still reports the collision as a skip, plans
+    nothing else, writes nothing (no `log.md` entry), and creates no
+    commit.
+
+    The NFC sibling is injected at the LISTING level (a patched
+    `os.listdir` appending its byte-exact name for the bundle dir) rather
+    than created on disk: on a normalization-INSENSITIVE lookup
+    filesystem (macOS APFS, design.md S1 Q4) opening the NFC spelling
+    resolves to the existing NFD entry, so two byte-distinct canonical
+    spellings cannot coexist for real -- the same portability constraint
+    `test_untracked_old_path_git_error_is_non_fatal_warning` documents.
+    The collision CONTRACT is byte-exact listing membership, which is
+    exactly what the injection exercises; the real-sibling content
+    preservation is pinned separately by
+    `test_collision_skip_not_overwritten`."""
+    _init_workspace_git(tmp_path, tmp_path_factory, monkeypatch)
+    _write_nfd_file(tmp_path, "", "renombrar-café")
+    _write_nfd_file(tmp_path, "", "otro-café")
+    nfd_renameable = unicodedata.normalize("NFD", "renombrar-café") + ".md"
+    nfc_renameable = unicodedata.normalize("NFC", "renombrar-café") + ".md"
+    nfd_collided = unicodedata.normalize("NFD", "otro-café") + ".md"
+    nfc_collider_name = unicodedata.normalize("NFC", "otro-café") + ".md"
+    bundle = tmp_path / "bundle"
+    real_listdir = os.listdir
+
+    def listdir_with_nfc_sibling(path: str | Path) -> list[str]:
+        listing = list(real_listdir(path))
+        if Path(path) == bundle and nfc_collider_name not in listing:
+            listing.append(nfc_collider_name)
+        return listing
+
+    monkeypatch.setattr("openkos.cli.main.os.listdir", listdir_with_nfc_sibling)
+
+    first = runner.invoke(app, ["normalize-names", "--auto"])
+
+    assert first.exit_code == 0
+    listing_after_first = real_listdir(bundle)
+    assert nfc_renameable in listing_after_first  # renameable entry renamed
+    assert nfd_renameable not in listing_after_first
+    assert nfd_collided in listing_after_first  # collision left untouched
+    assert f"skipped: {nfc_collider_name!r} already exists" in first.output
+    log_after_first = (bundle / "log.md").read_bytes()
+    commits_after_first = _commit_count(tmp_path)
+
+    second = runner.invoke(app, ["normalize-names", "--auto"])
+
+    assert second.exit_code == 0
+    # Still reported as a collision skip, and nothing else is planned.
+    assert "nothing to normalize" in second.output
+    assert "collision: 1" in second.output
+    assert "proposed renames" not in second.output
+    # Zero writes, zero commits: log bytes and commit count unchanged,
+    # and the collided entry keeps its raw spelling byte-exactly.
+    assert (bundle / "log.md").read_bytes() == log_after_first
+    assert _commit_count(tmp_path) == commits_after_first
+    assert nfd_collided in real_listdir(bundle)
+
+
 # -- stranded-temp reporting ----------------------------------------------------
 
 

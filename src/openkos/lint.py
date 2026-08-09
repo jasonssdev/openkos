@@ -1119,7 +1119,10 @@ class NonNfcEntry:
     """`len(path.relative_to(bundle_dir).parts)` -- `normalize-names`'
     `(-depth, rel_posix)` deepest-first apply-order sort key (design D4)."""
     is_dir: bool
-    """`lstat`-derived; `False` on `OSError` (read-only-never-fail)."""
+    """`Path.is_dir()`-derived -- stat-based, so it FOLLOWS symlinks
+    (never lstat); safe because every consumer gates on `is_symlink`
+    first, so a symlink's target-derived value is never acted on.
+    `False` on `OSError` (read-only-never-fail)."""
     is_symlink: bool
     """`lstat`-derived; `False` on `OSError` (read-only-never-fail)."""
 
@@ -1210,10 +1213,12 @@ def scan_non_nfc_entries(bundle_dir: Path) -> list[NonNfcEntry]:
 def scan_stranded_rename_temps(bundle_dir: Path) -> list[Path]:
     """Names-only walk for entries whose name starts with
     `fsio.RENAME_TEMP_PREFIX` -- `normalize-names`-only helper (issue #474
-    part 2, design D3), never called by `lint`. A temp can only be
-    stranded by a hard kill strictly between `fsio.rename_two_step`'s two
-    `os.rename` calls -- every ordinary failure path there already
-    restores the original name. This scan lets the NEXT run report it
+    part 2, design D3), never called by `lint`. A temp can be stranded
+    by a hard kill strictly between `fsio.rename_two_step`'s two
+    `os.rename` calls, or by a double fault where a failure's
+    best-effort (suppressed) restore also fails (PR #492) -- every
+    single-fault failure path there restores the original name. This
+    scan lets the NEXT run report it
     (never touch it: auto-deleting would be data loss, auto-renaming
     would be a guess).
 
