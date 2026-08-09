@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Final, Literal
 
 import typer
 from rich.console import Console
@@ -107,6 +107,22 @@ from openkos.state.vectorstore import (
 from openkos.vcs import git as vcs_git
 
 app = typer.Typer()
+
+# Every command sets `help=` and `rich_help_panel=` (#389).
+#
+# `help=` exists so Typer publishes THAT text instead of the raw `__doc__`.
+# The docstrings keep their design, spec and issue references for
+# maintainers; the published surface stays free of them. This is not only
+# about `--help`: MCP tool descriptions are usually derived from the same
+# source, and text that does not help a person will not help an agent.
+#
+# Panels group by WHAT THE READER IS TRYING TO DO -- not by write-ness, not
+# by cost. "Get started" is the first hour. "Explore" asks the bundle
+# questions. "Curate" decides things about its contents. "Maintain" tends
+# the machinery behind it. "Remove" deletes. Use that rule when adding a
+# command rather than matching the nearest-looking neighbour; before #389
+# the listing was declaration order, which put `purge` -- irreversible and
+# rare -- fourth, and `query`, the value moment, near the bottom.
 
 # doctor and init's Ollama preflight are both fast interactive diagnostics:
 # use a short timeout so a hung/firewalled host fails quickly instead of
@@ -815,7 +831,13 @@ def _autocommit(root: Path, paths: Sequence[str], message: str) -> None:
         )
 
 
-@app.command()
+@app.command(
+    help=(
+        "Create a new OpenKOS workspace in the current directory, with its "
+        "bundle layout, config file and local index stores."
+    ),
+    rich_help_panel="Get started",
+)
 def init(
     model: str | None = typer.Option(
         None,
@@ -2821,7 +2843,14 @@ def _ingest_batch(
         raise typer.Exit(code=1 if hard_skip_count else 3)
 
 
-@app.command()
+@app.command(
+    help=(
+        "Ingest a file, a directory, or a glob's matches into the bundle: "
+        "extracts concepts, writes them as documents, and updates the "
+        "catalog."
+    ),
+    rich_help_panel="Get started",
+)
 def ingest(
     src: Path = typer.Argument(
         ...,
@@ -3519,7 +3548,13 @@ def _resolve_concept_path(bundle_dir: Path, concept_id: str) -> tuple[Path, str]
 _ForgetScope = Literal["self", "source"]
 
 
-@app.command()
+@app.command(
+    help=(
+        "Delete a concept and its catalog entry, leaving the source "
+        "material it came from in place."
+    ),
+    rich_help_panel="Remove",
+)
 def forget(
     concept_id: str = typer.Argument(
         ..., help="Bundle-relative concept id (path minus '.md') to remove."
@@ -3529,7 +3564,7 @@ def forget(
         "--scope",
         help=(
             "'self' (default) removes only <concept_id>, byte-identical to "
-            "a single-concept forget (S2a). 'source' expands the purge set "
+            "a single-concept forget. 'source' expands the purge set "
             "to <concept_id> plus every concept whose ENTIRE `provenance` "
             "resolves back to it -- the orphan-after-delete closure "
             "computed by `bundle.provenance.find_provenance_descendants`; "
@@ -4167,7 +4202,13 @@ def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
         )
 
 
-@app.command()
+@app.command(
+    help=(
+        "Irreversibly expunge a concept AND the source material behind it. "
+        "There is no undo."
+    ),
+    rich_help_panel="Remove",
+)
 def purge(
     concept_id: str = typer.Argument(
         ..., help="Bundle-relative concept id (path minus '.md') to purge."
@@ -4652,7 +4693,13 @@ def purge(
     )
 
 
-@app.command()
+@app.command(
+    help=(
+        "Write one typed relation between two concepts, exactly as given. "
+        "No inference, no model call."
+    ),
+    rich_help_panel="Curate",
+)
 def relate(
     source_id: str = typer.Argument(
         ...,
@@ -4839,7 +4886,16 @@ def relate(
     )
 
 
-@app.command("set-sensitivity")
+@app.command(
+    "set-sensitivity",
+    help=(
+        "Set one concept's sensitivity level directly, without a sweep or a "
+        "model call. Scope is exactly the named concept and never its "
+        "siblings -- except that raising a Source's level also raises every "
+        "concept derived from it, and only ever upward."
+    ),
+    rich_help_panel="Curate",
+)
 def set_sensitivity_cmd(
     concept_id: str = typer.Argument(
         ...,
@@ -5224,7 +5280,14 @@ def set_sensitivity_cmd(
     )
 
 
-@app.command("backfill-sensitivity")
+@app.command(
+    "backfill-sensitivity",
+    help=(
+        "Raise sensitivity across the whole bundle where a concept sits "
+        "below the level its source requires. Never lowers one."
+    ),
+    rich_help_panel="Maintain",
+)
 def backfill_sensitivity_cmd(
     auto: bool = typer.Option(
         False,
@@ -5426,7 +5489,14 @@ def backfill_sensitivity_cmd(
     )
 
 
-@app.command("normalize-names")
+@app.command(
+    "normalize-names",
+    help=(
+        "Rename on-disk files and directories whose names are not in "
+        "normalized Unicode form, so tools compare them consistently."
+    ),
+    rich_help_panel="Maintain",
+)
 def normalize_names_cmd(
     auto: bool = typer.Option(
         False,
@@ -5746,7 +5816,14 @@ def normalize_names_cmd(
     _autocommit(root, landed, "openkos: normalize-names")
 
 
-@app.command("backfill-source-titles")
+@app.command(
+    "backfill-source-titles",
+    help=(
+        "Re-derive the title of every source-type concept from its own "
+        "content, across the whole bundle."
+    ),
+    rich_help_panel="Maintain",
+)
 def backfill_source_titles_cmd(
     auto: bool = typer.Option(
         False,
@@ -5999,7 +6076,14 @@ def backfill_source_titles_cmd(
     _autocommit(root, landed, "openkos: backfill-source-titles")
 
 
-@app.command("set-volatility")
+@app.command(
+    "set-volatility",
+    help=(
+        "Set the freshness window for one kind of concept, recorded in the "
+        "workspace config."
+    ),
+    rich_help_panel="Curate",
+)
 def set_volatility_cmd(
     concept_type: str = typer.Argument(
         ..., help="Exact PascalCase REGISTRY type name, e.g. 'Person'."
@@ -6770,7 +6854,13 @@ def set_volatility_core(config_path: Path, prepared: PreparedSetVolatility) -> N
     fsio.write_atomic(config_path, prepared.new_config_text)
 
 
-@app.command()
+@app.command(
+    help=(
+        "Fuse two concepts into one, keeping a ledger entry that makes the "
+        "merge reversible with unmerge."
+    ),
+    rich_help_panel="Curate",
+)
 def merge(
     survivor_id: str = typer.Argument(
         ...,
@@ -7021,7 +7111,13 @@ def merge(
     )
 
 
-@app.command()
+@app.command(
+    help=(
+        "Reverse the most recent merge on a concept, restoring both "
+        "documents to their pre-merge state."
+    ),
+    rich_help_panel="Curate",
+)
 def unmerge(
     survivor_id: str = typer.Argument(
         ...,
@@ -7581,7 +7677,13 @@ def _reconciliation_state_description(
     return "a symmetric reconciliation ('reconciled_with')"
 
 
-@app.command()
+@app.command(
+    help=(
+        "Record how you resolved a contradiction between two concepts, so "
+        "the decision is kept rather than repeated."
+    ),
+    rich_help_panel="Curate",
+)
 def reconcile(
     id_a: str = typer.Argument(
         ...,
@@ -7992,7 +8094,13 @@ def _bundle_content_lines(survey: okf.BundleSurvey) -> list[tuple[str, int]]:
     return lines
 
 
-@app.command()
+@app.command(
+    help=(
+        "Report what the bundle contains right now: counts by type, recent "
+        "activity, and anything needing attention."
+    ),
+    rich_help_panel="Explore",
+)
 def status() -> None:
     """Report what the bundle currently contains: read-only, Phase-A only.
 
@@ -8186,7 +8294,14 @@ def status() -> None:
         typer.echo("  No concept relationships yet.")
 
 
-@app.command("next")
+@app.command(
+    "next",
+    help=(
+        "Print the single command worth running next, chosen from the "
+        "bundle's current state. Read-only and deterministic."
+    ),
+    rich_help_panel="Get started",
+)
 def next_cmd() -> None:
     """Print the one command worth running next: read-only, deterministic.
 
@@ -8222,7 +8337,14 @@ def next_cmd() -> None:
         typer.echo(line)
 
 
-@app.command("list")
+@app.command(
+    "list",
+    help=(
+        "List bundle objects with their id, type, sensitivity and lifecycle "
+        "status. Optionally filtered to one type."
+    ),
+    rich_help_panel="Explore",
+)
 def list_objects_cmd(
     concept_type: str | None = typer.Argument(
         None,
@@ -8380,7 +8502,13 @@ def list_objects_cmd(
         typer.echo(f"Showing {len(shown)} of {total} — use --all to see the rest.")
 
 
-@app.command()
+@app.command(
+    help=(
+        "Health-check the bundle's contents: stale stamps, orphan pages, "
+        "malformed names and other findings you may want to act on."
+    ),
+    rich_help_panel="Explore",
+)
 def lint() -> None:
     """Health-check the bundle for stale stamps and orphan pages: read-only, Phase-A only.
 
@@ -8570,7 +8698,13 @@ def lint() -> None:
             typer.echo(f"  {finding.path}: {finding.detail}")
 
 
-@app.command()
+@app.command(
+    help=(
+        "Report concepts from different sources that look like duplicates, "
+        "without judging or changing anything."
+    ),
+    rich_help_panel="Explore",
+)
 def duplicates(
     include_deprecated: bool = typer.Option(
         False,
@@ -8660,7 +8794,13 @@ def duplicates(
     typer.echo("Next: openkos merge <survivor> <absorbed>")
 
 
-@app.command()
+@app.command(
+    help=(
+        "Report which candidate duplicates the model judges to be the same "
+        "concept, with its reasoning. Read-only unless you pass an apply flag."
+    ),
+    rich_help_panel="Curate",
+)
 def adjudicate(
     same_only: bool = typer.Option(
         False,
@@ -8998,7 +9138,14 @@ def _zero_edge_state_message(
     return none_survived.format(count=count)
 
 
-@app.command("suggest-relations")
+@app.command(
+    "suggest-relations",
+    help=(
+        "Suggest a type for every untyped link between concepts, for you to "
+        "review before anything is written."
+    ),
+    rich_help_panel="Curate",
+)
 def suggest_relations_cmd(
     auto: bool = typer.Option(
         False,
@@ -9253,7 +9400,15 @@ def suggest_relations_cmd(
         raise typer.Exit(code=1) from batch.failure
 
 
-@app.command("suggest-volatility")
+@app.command(
+    "suggest-volatility",
+    help=(
+        "Suggest how quickly each kind of concept goes stale, so freshness "
+        "checks use a sensible window per type. Advisory; writes nothing on "
+        "its own."
+    ),
+    rich_help_panel="Curate",
+)
 def suggest_volatility_cmd(
     include_confidential: bool = typer.Option(
         False,
@@ -9400,7 +9555,13 @@ def suggest_volatility_cmd(
         raise typer.Exit(code=1) from batch.failure
 
 
-@app.command()
+@app.command(
+    help=(
+        "Report concepts whose content disagrees, using the model to judge "
+        "already-related pairs. Advisory only; writes nothing."
+    ),
+    rich_help_panel="Explore",
+)
 def contradictions(
     show_all: bool = typer.Option(
         False,
@@ -9898,7 +10059,13 @@ def _stage_filed_answer(
     )
 
 
-@app.command()
+@app.command(
+    help=(
+        "Answer a natural-language question from the bundle, with citations "
+        "back to the documents the answer came from."
+    ),
+    rich_help_panel="Explore",
+)
 def query(
     question: str = typer.Argument(
         ..., help="Natural-language question to answer from the bundle."
@@ -10327,7 +10494,13 @@ def query(
     )
 
 
-@app.command()
+@app.command(
+    help=(
+        "Rebuild the local search indexes from the bundle's documents, so "
+        "query and duplicate detection see current content."
+    ),
+    rich_help_panel="Maintain",
+)
 def reindex(
     force: bool = typer.Option(
         False,
@@ -10629,7 +10802,13 @@ def _render_check(r: CheckResult) -> None:
         typer.echo(f"  -> {r.remediation}")
 
 
-@app.command()
+@app.command(
+    help=(
+        "Check this machine's environment: whether the model backend is "
+        "reachable, correctly configured, and running where you expect."
+    ),
+    rich_help_panel="Maintain",
+)
 def doctor() -> None:
     """Read-only environment health scan: fixed checks against the local
     workspace and local Ollama, printed as `[PASS]`/`[FAIL]`/`[SKIP]` lines
@@ -10979,7 +11158,13 @@ def doctor() -> None:
         raise typer.Exit(code=1)
 
 
-@app.command()
+@app.command(
+    help=(
+        "Work through every pending decision in one guided session, in "
+        "dependency order, so each answer informs the next."
+    ),
+    rich_help_panel="Curate",
+)
 def curate(
     auto: bool = typer.Option(
         False,
@@ -11098,3 +11283,48 @@ def curate(
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):
         typer.echo(line)
+
+
+PANEL_ORDER: Final[tuple[str, ...]] = (
+    "Get started",
+    "Explore",
+    "Curate",
+    "Maintain",
+    "Remove",
+)
+"""The order help panels are printed in (#389).
+
+Grouping alone did not fix the ordering half of that issue. Rich prints
+panels in the order it FIRST meets a command belonging to each, which is
+declaration order -- and `forget`/`purge` are declared early, so "Remove"
+landed second and made the irreversible verbs MORE prominent than the flat
+list did. This is the reading order instead: start, then ask, then decide,
+then maintain, and only then delete.
+
+Sorting the registry is what makes it explicit rather than a side effect of
+where a function happens to sit in this file. The sort is stable, so order
+WITHIN a panel is still declaration order."""
+
+
+def _panel_rank(info: typer.models.CommandInfo) -> int:
+    """Rank one command for the panel sort, failing LOUDLY and legibly.
+
+    A bare `PANEL_ORDER.index(...)` raises at import time, which takes the
+    whole CLI down -- every command, including `--help` -- for one typo, and
+    the built-in message names neither the command nor the bad value
+    (review finding on this change). Failing hard is still right: a
+    misplaced command should not ship quietly. What was wrong was failing
+    hard and mutely."""
+    try:
+        return PANEL_ORDER.index(info.rich_help_panel)
+    except ValueError:
+        name = info.name or (info.callback.__name__ if info.callback else "<unnamed>")
+        raise RuntimeError(
+            f"command {name!r} declares rich_help_panel="
+            f"{info.rich_help_panel!r}, which is not one of {PANEL_ORDER}. "
+            "Put the command in an existing panel, or add the new panel to "
+            "PANEL_ORDER at the position it should be read in."
+        ) from None
+
+
+app.registered_commands.sort(key=_panel_rank)
