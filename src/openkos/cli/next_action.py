@@ -54,6 +54,7 @@ from dataclasses import dataclass
 
 from openkos import config
 from openkos import lint as lint_check
+from openkos.model import okf
 from openkos.resolution import CandidateGroup, find_exact_title_groups
 from openkos.state.derived import stale_derived_stores
 from openkos.state.vectorstore import vector_store_is_empty
@@ -99,7 +100,16 @@ class NextAction:
     """One ranked recommendation: a runnable command and a one-line reason."""
 
     command: str
-    """The exact, runnable command string -- verbatim, never re-derived."""
+    """The exact, runnable command string -- verbatim, never re-derived.
+
+    ONE tier is exempt, and only one (#486): the rank-0 bootstrap rung
+    returns `openkos ingest <path>` with a literal placeholder, because no
+    document exists anywhere to supply the argument and only the user knows
+    what to ingest first (see `_tier_bootstrap_empty_bundle`). Every other
+    tier's command is runnable as printed. If a SECOND templated tier ever
+    appears, replace this exception with a structured `placeholder: bool`
+    rather than growing the list -- one exception is worth a sentence, two
+    are worth a field."""
     reason: str
     """A single line explaining why this command was recommended."""
 
@@ -143,6 +153,7 @@ class _BundleSignals:
         self._declinations: list[str] = []
         self._exact_title_groups: list[CandidateGroup] | None = None
         self._stale_indexes: tuple[str, ...] | None = None
+        self._walk_incomplete: bool | None = None
 
     def record_declination(self, notice: str) -> None:
         """Note a real finding this run deliberately refused to turn into a
@@ -196,6 +207,38 @@ class _BundleSignals:
             self._docs = docs
             self._skip_notices = tuple(skip_notices)
         return self._docs
+
+    @property
+    def walk_incomplete(self) -> bool:
+        """1 walk (`okf._walk_errors`), memoized, and read by the rank-0
+        bootstrap tier ALONE -- after that tier's two zero-walk gates have
+        already decided the bundle looks empty (#486).
+
+        Deliberately not folded into `docs`: `lint_check.collect_docs`
+        reports the documents it could not READ, never the directories it
+        could not LIST, so an unlistable subtree leaves `docs` empty with no
+        skip notice at all. That is the exact gap that let a populated
+        bundle read as a fresh one.
+
+        The placement is what preserves the cost contract. Every other
+        tier's walk budget is untouched because no other tier reads this,
+        and the one tier that does reaches it only when `vector_store_empty`
+        and an empty `docs` both already hold -- a bundle whose walk is by
+        then trivially cheap. Never raises: an advisory that breaks `next`
+        would be worse than the ambiguity it resolves."""
+        if self._walk_incomplete is None:
+            # `OSError` only, NOT the broad `except Exception` its sibling
+            # signals use. This one fails OPEN into a claim -- a swallowed
+            # exception here reports "the walk was complete" and restores the
+            # very bug this property exists to prevent, so only the failure
+            # mode a directory scan genuinely has is absorbed. A bare
+            # `Exception` here hid a missing import during development and
+            # silently produced the wrong recommendation.
+            try:
+                self._walk_incomplete = bool(okf._walk_errors(self._layout.bundle_dir))
+            except OSError:
+                self._walk_incomplete = False
+        return self._walk_incomplete
 
     @property
     def observed_skip_notices(self) -> tuple[str, ...]:
@@ -281,6 +324,19 @@ def _tier_bootstrap_empty_bundle(signals: _BundleSignals) -> NextAction | None:
         return None
     if signals.docs:
         return None
+    if signals.walk_incomplete:
+        # "Empty" is now a claim this run cannot make (#486): the walk that
+        # produced zero documents provably could not list part of the
+        # bundle, so a populated subtree may be sitting right there. Recommend
+        # the verb that NAMES the unreadable directory rather than a first
+        # ingest that would be advice for a different bundle.
+        return NextAction(
+            command="openkos status",
+            reason=(
+                "This bundle looks empty, but at least one directory could "
+                "not be read -- check which one before ingesting anything."
+            ),
+        )
     return NextAction(
         command="openkos ingest <path>",
         reason=(

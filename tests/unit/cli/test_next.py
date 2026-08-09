@@ -1421,3 +1421,68 @@ def test_next_stays_silent_about_staleness_when_the_indexes_are_fresh(
     result = next_action.next_action(config.WorkspaceLayout(tmp_path))
 
     assert result.action is None or "older than the bundle" not in result.action.reason
+
+
+def _break_os_walk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force `okf._walk_errors` to report exactly one directory-scan error,
+    deterministically -- mirrors the same helper in
+    `tests/unit/cli/test_contradictions.py`, without relying on real
+    `chmod` bits (which root and some CI filesystems ignore)."""
+    import os
+
+    original_walk = os.walk
+    walk_error = OSError(13, "Permission denied", "locked")
+
+    def fake_walk(
+        top: "str | os.PathLike[str]",
+        topdown: bool = True,
+        onerror: "Callable[[OSError], object] | None" = None,
+        followlinks: bool = False,
+    ) -> "object":
+        if onerror is not None:
+            onerror(walk_error)
+        yield from original_walk(top, topdown, onerror, followlinks)
+
+    monkeypatch.setattr(os, "walk", fake_walk)
+
+
+def test_bootstrap_does_not_claim_empty_when_the_walk_is_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle that merely LOOKS empty because a subdirectory could not be
+    listed is never told to ingest its first source (#486).
+
+    The bootstrap tier gates on `signals.docs`, populated by a walk that
+    silently drops any subdirectory it cannot list. `status` folds those
+    walk errors into its "Needs attention" section; `next` had no such
+    pass, so a bundle whose documents all live under an unreadable subtree
+    read as EMPTY and got "ingest your first source" -- with no hint that a
+    populated bundle exists and could not be scanned."""
+    _init_workspace(tmp_path, monkeypatch)
+    _break_os_walk(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "first source" not in result.stdout
+    assert "Run: openkos ingest" not in result.stdout
+    # Names the real condition and points at the verb that shows WHICH
+    # directory is unreadable.
+    assert "Run: openkos status" in result.stdout
+    assert "could not be read" in result.stdout
+
+
+def test_bootstrap_still_recommends_ingest_on_a_genuinely_empty_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The incomplete-walk guard must not swallow the ordinary bootstrap
+    case (#486): with a readable, genuinely empty bundle the first-ingest
+    recommendation is still exactly what #386 established."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos ingest" in result.stdout
+    assert "first source" in result.stdout
+    assert "could not be read" not in result.stdout

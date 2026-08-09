@@ -9661,7 +9661,7 @@ def contradictions(
             # line states the precondition instead of promising success.
             typer.echo(
                 f"  next: openkos unmerge {survivor_id} {result.merged_absorbed_id}"
-                "  (LIFO-enforced: refuses unless this is the survivor's "
+                " (LIFO-enforced: refuses unless this is the survivor's "
                 "most recent unreversed merge)"
             )
         else:
