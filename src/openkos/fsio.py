@@ -153,10 +153,12 @@ def rename_two_step(src: Path, nfc_name: str) -> Path:
     not strand a temp at all (issue #495): hop 2 already succeeded there,
     so a failed restore leaves the entry at the name hop 2 produced --
     either byte-exactly `nfc_name` (the intended end state, merely
-    unverified) or a canonically equivalent non-NFC spelling, which
-    `lint.scan_non_nfc_entries` reports as an ordinary `non-nfc-name`
-    finding. The prefix scan is blind to that branch by construction, and
-    nothing is lost either way.
+    unverified) or a canonically equivalent non-NFC spelling. Only that
+    SECOND outcome is reported anywhere, as an ordinary `non-nfc-name`
+    finding from `lint.scan_non_nfc_entries`; the first is already NFC
+    and nothing flags it, which is correct because nothing is wrong with
+    it. The prefix scan is blind to this branch either way, and no entry
+    is lost.
     """
     parent = src.parent
     original_name = src.name

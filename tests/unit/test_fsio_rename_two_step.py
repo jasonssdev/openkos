@@ -353,3 +353,42 @@ def test_verification_double_fault_leaves_no_temp_to_strand(
     # spelling -- the assertion the narrowed docstring claim rests on.
     assert f"{NFC_CAFE}.md" in listing
     assert lint_check.scan_stranded_rename_temps(tmp_path) == []
+
+
+def test_guard_listing_double_fault_strands_the_detectable_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the guard's own `os.listdir` raises AND its best-effort restore
+    ALSO fails, the LISTING error propagates -- never the restore's -- and
+    the entry is left at its machine-detectable temp name, exactly as the
+    primitive's docstring claims for the guard branch.
+
+    The sibling single-fault test pins the restore-succeeds half; this is
+    the double-fault half, matching the dedicated double-fault test each
+    of the other two restoring branches already has."""
+    from openkos import lint as lint_check
+
+    src = tmp_path / f"{NFD_CAFE}.md"
+    src.write_text("body\n", encoding="utf-8")
+    real_listdir = os.listdir
+    real_rename = os.rename
+
+    def walled_listdir(path: str | Path) -> list[str]:
+        raise PermissionError("listing refused")
+
+    def restore_failing_rename(src_path: str | Path, dst_path: str | Path) -> None:
+        if Path(dst_path).name == f"{NFD_CAFE}.md":
+            raise OSError("restore failed")  # the suppressed restore
+        real_rename(src_path, dst_path)  # hop 1 succeeds
+
+    monkeypatch.setattr("openkos.fsio.os.listdir", walled_listdir)
+    monkeypatch.setattr("openkos.fsio.os.rename", restore_failing_rename)
+
+    with pytest.raises(OSError, match="listing refused") as caught:
+        fsio.rename_two_step(src, f"{NFC_CAFE}.md")
+
+    assert "restore failed" not in str(caught.value)
+    monkeypatch.setattr("openkos.fsio.os.listdir", real_listdir)
+    monkeypatch.setattr("openkos.fsio.os.rename", real_rename)
+    # Stranded at the temp name -- what the NEXT run reports (design D3).
+    assert lint_check.scan_stranded_rename_temps(tmp_path) != []
