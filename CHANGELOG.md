@@ -120,6 +120,25 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
   mid-session. Confidence-threshold auto-acceptance stays out: the two stages
   that cause the prompt volume expose no confidence at all — only
   adjudication does, and that is the destructive one (#385).
+- **`suggest_edge_types` finally has an eval, and it found something worse
+  than the ergonomics problem it was built for**: `evals/edge_typing/` scores
+  the relation-type suggester against labelled concept pairs whose answers
+  the existing rubric decides on its own. It exists because #508 named a
+  cap-harness A/B as the gate on any prompt change here and that gate did not
+  exist — `evals/` scored extraction and nothing scored this suggester, so a
+  change would have been adopted on intuition. Measured on `qwen3:8b` over 15
+  pairs, the suggester answers **roughly two thirds of them against its own
+  rubric** — `related_to` where a document says "it happened because", and
+  `part_of` where one says "one of the … each registered the same way" — at a
+  stability of 0.99, meaning it is not guessing but confidently and
+  reproducibly wrong. Asking the model for a confidence turned out
+  quality-neutral (accuracy 0.35 → 0.37, stability 0.99 → 0.96, ~18% more
+  latency) and the signal it buys is real but insufficient: thresholding
+  lifts precision to 0.73 at its best operating point, which still writes a
+  wrong relation type roughly once in four. So no threshold gate shipped and
+  the confidence field was reverted rather than left in production with no
+  consumer. The harness stays, because it is what makes the next attempt
+  measurable instead of hopeful (#508).
 - **An accepted Structure stage still asks about `related_to`**: bulk
   acceptance was applying, unreviewed, exactly the suggestions where the
   model had declined to claim anything. `related_to` is not a wrong answer —
