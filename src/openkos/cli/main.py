@@ -3564,7 +3564,7 @@ def forget(
         "--scope",
         help=(
             "'self' (default) removes only <concept_id>, byte-identical to "
-            "a single-concept forget (S2a). 'source' expands the purge set "
+            "a single-concept forget. 'source' expands the purge set "
             "to <concept_id> plus every concept whose ENTIRE `provenance` "
             "resolves back to it -- the orphan-after-delete closure "
             "computed by `bundle.provenance.find_provenance_descendants`; "
@@ -8796,8 +8796,8 @@ def duplicates(
 
 @app.command(
     help=(
-        "Decide which candidate duplicates are really the same concept, "
-        "with the model proposing and you confirming."
+        "Report which candidate duplicates the model judges to be the same "
+        "concept, with its reasoning. Read-only unless you pass an apply flag."
     ),
     rich_help_panel="Curate",
 )
@@ -9404,7 +9404,8 @@ def suggest_relations_cmd(
     "suggest-volatility",
     help=(
         "Suggest how quickly each kind of concept goes stale, so freshness "
-        "checks use a sensible window per type."
+        "checks use a sensible window per type. Advisory; writes nothing on "
+        "its own."
     ),
     rich_help_panel="Curate",
 )
@@ -11304,4 +11305,26 @@ Sorting the registry is what makes it explicit rather than a side effect of
 where a function happens to sit in this file. The sort is stable, so order
 WITHIN a panel is still declaration order."""
 
-app.registered_commands.sort(key=lambda info: PANEL_ORDER.index(info.rich_help_panel))
+
+def _panel_rank(info: typer.models.CommandInfo) -> int:
+    """Rank one command for the panel sort, failing LOUDLY and legibly.
+
+    A bare `PANEL_ORDER.index(...)` raises at import time, which takes the
+    whole CLI down -- every command, including `--help` -- for one typo, and
+    the built-in message names neither the command nor the bad value
+    (review finding on this change). Failing hard is still right: a
+    misplaced command should not ship quietly. What was wrong was failing
+    hard and mutely."""
+    try:
+        return PANEL_ORDER.index(info.rich_help_panel)
+    except ValueError:
+        name = info.name or (info.callback.__name__ if info.callback else "<unnamed>")
+        raise RuntimeError(
+            f"command {name!r} declares rich_help_panel="
+            f"{info.rich_help_panel!r}, which is not one of {PANEL_ORDER}. "
+            "Put the command in an existing panel, or add the new panel to "
+            "PANEL_ORDER at the position it should be read in."
+        ) from None
+
+
+app.registered_commands.sort(key=_panel_rank)

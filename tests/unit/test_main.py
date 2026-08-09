@@ -11,6 +11,7 @@ from importlib import metadata, resources
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 import openkos.cli.main
@@ -181,7 +182,6 @@ _INTERNAL_HELP_MARKERS = (
     "design D",
     "ADR-",
     "MVP-",
-    "Slice ",
     "spec:",
     "decision #",
     "issue #",
@@ -192,6 +192,20 @@ Each of these appears in real command docstrings today. Typer publishes the
 raw `__doc__` unless a command sets `help=`, so before #389 an end user read
 things like "Wires the pure `bundle.provenance.resolve_backfill_raises` sweep
 core (design D4/D5) into Typer's confirm-gate"."""
+
+_INTERNAL_HELP_PATTERNS = (
+    re.compile(r"\bS\d+[a-z]?\b"),
+    re.compile(r"\bSlice \d+\b"),
+    re.compile(r"\bD\d+/D\d+\b"),
+    re.compile(r"\bgap #\d+\b"),
+)
+"""Traceability vocabulary that a fixed substring list cannot catch.
+
+Added after the first version of this test passed while `forget --scope`
+still published the token "S2a" (review finding): a slice reference does not
+have to spell out the word "Slice" to be jargon. Patterns cover the
+abbreviated slice/story forms, paired design references like "D4/D5", and
+numbered gap references."""
 
 
 def _registered_command_names() -> list[str]:
@@ -217,7 +231,11 @@ def test_no_command_help_publishes_internal_references() -> None:
     Checked per COMMAND, not only on the top-level listing: the same
     docstrings feed MCP tool descriptions, and text that does not help a
     person will not help an agent either. `help=` decouples the two, so
-    traceability stays in the docstring and a clean line gets published."""
+    traceability stays in the docstring and a clean line gets published.
+
+    The whole rendered page is scanned, OPTION and ARGUMENT help included --
+    those are published too, and the first version of this test missed a
+    slice token sitting in one of them."""
     runner = CliRunner()
 
     offenders: dict[str, list[str]] = {}
@@ -228,6 +246,11 @@ def test_no_command_help_publishes_internal_references() -> None:
         assert result.exit_code == 0, name
         text = _strip_ansi(result.stdout)
         hits = [marker for marker in _INTERNAL_HELP_MARKERS if marker in text]
+        hits += [
+            match
+            for pattern in _INTERNAL_HELP_PATTERNS
+            for match in pattern.findall(text)
+        ]
         if hits:
             offenders[name] = hits
 
@@ -273,9 +296,30 @@ def test_top_level_help_prints_panels_in_reading_order() -> None:
 def test_every_command_belongs_to_a_known_panel() -> None:
     """Every registered command declares a panel from `PANEL_ORDER` (#389).
 
-    The registry sort indexes into that tuple, so a command added with a
-    typo'd or missing panel would raise at import time. This states the
-    requirement where a contributor will read it, instead of leaving them to
-    decode a `ValueError` from a lambda."""
+    This does NOT prevent the import-time failure -- the sort runs when the
+    module loads, long before pytest collects anything, so a bad panel value
+    stops the whole CLI and this assertion never gets to run (review finding
+    on the first version of this test, which claimed otherwise). What it does
+    is state the requirement where a contributor will read it, and keep the
+    invariant visible in the suite. `_panel_rank` carries the legible failure
+    for the case this test cannot reach."""
     for command in openkos.cli.main.app.registered_commands:
         assert command.rich_help_panel in openkos.cli.main.PANEL_ORDER, command.name
+
+
+def test_unknown_panel_fails_with_a_message_naming_the_command() -> None:
+    """A command declaring an unknown panel fails with the command name and
+    the allowed values, not a bare `ValueError` from a lambda (#389).
+
+    This is the failure a contributor actually meets: it happens at import,
+    so it takes the whole CLI down. Failing hard is right -- a misplaced
+    command should not ship quietly -- but failing hard and mutely was not."""
+    bad = typer.models.CommandInfo(name="pretend", rich_help_panel="Nope")
+
+    with pytest.raises(RuntimeError) as caught:
+        openkos.cli.main._panel_rank(bad)
+
+    message = str(caught.value)
+    assert "pretend" in message
+    assert "Nope" in message
+    assert "Get started" in message  # the allowed values are shown
