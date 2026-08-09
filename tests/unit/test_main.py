@@ -173,3 +173,109 @@ def test_version_flag_is_discoverable_in_help_text() -> None:
     # installed version"), so assert the help string too, on the same line.
     (version_line,) = [ln for ln in help_text.splitlines() if "--version" in ln]
     assert "Show the installed openkos version and exit." in version_line
+
+
+# --- #389: the published help surface ---------------------------------------
+
+_INTERNAL_HELP_MARKERS = (
+    "design D",
+    "ADR-",
+    "MVP-",
+    "Slice ",
+    "spec:",
+    "decision #",
+    "issue #",
+)
+"""Traceability vocabulary that belongs in source, never in published help.
+
+Each of these appears in real command docstrings today. Typer publishes the
+raw `__doc__` unless a command sets `help=`, so before #389 an end user read
+things like "Wires the pure `bundle.provenance.resolve_backfill_raises` sweep
+core (design D4/D5) into Typer's confirm-gate"."""
+
+
+def _registered_command_names() -> list[str]:
+    """Every command name the app publishes, taken from Typer's own registry
+    so a newly added command is covered without editing this test."""
+    names = []
+    for command in openkos.cli.main.app.registered_commands:
+        if command.name:
+            names.append(command.name)
+            continue
+        # Typer types `callback` as optional; every command in this app has
+        # one, and a registration without a name OR a callback would be a
+        # bug worth failing on rather than skipping silently.
+        assert command.callback is not None
+        names.append(command.callback.__name__.replace("_", "-"))
+    return names
+
+
+def test_no_command_help_publishes_internal_references() -> None:
+    """No published `--help` text carries developer traceability vocabulary
+    (#389).
+
+    Checked per COMMAND, not only on the top-level listing: the same
+    docstrings feed MCP tool descriptions, and text that does not help a
+    person will not help an agent either. `help=` decouples the two, so
+    traceability stays in the docstring and a clean line gets published."""
+    runner = CliRunner()
+
+    offenders: dict[str, list[str]] = {}
+    for name in _registered_command_names():
+        result = runner.invoke(
+            openkos.cli.main.app, [name, "--help"], env={"COLUMNS": "200"}
+        )
+        assert result.exit_code == 0, name
+        text = _strip_ansi(result.stdout)
+        hits = [marker for marker in _INTERNAL_HELP_MARKERS if marker in text]
+        if hits:
+            offenders[name] = hits
+
+    assert offenders == {}
+
+
+def test_top_level_help_groups_commands_into_panels() -> None:
+    """The 26 commands are grouped by what the reader is trying to do,
+    instead of listed flat in declaration order (#389).
+
+    Declaration order put `purge` -- irreversible and rare -- fourth, while
+    `query`, the value moment, sat near the bottom."""
+    runner = CliRunner()
+
+    result = runner.invoke(openkos.cli.main.app, ["--help"], env={"COLUMNS": "200"})
+
+    assert result.exit_code == 0
+    help_text = _strip_ansi(result.stdout)
+    for panel in ("Get started", "Explore", "Curate", "Maintain", "Remove"):
+        assert panel in help_text, panel
+
+
+def test_top_level_help_prints_panels_in_reading_order() -> None:
+    """Panels print in reading order -- start, ask, decide, maintain, delete
+    -- not in the order their first command happens to be declared (#389).
+
+    Grouping alone did not fix the ordering half of the issue. Rich prints a
+    panel when it first meets a command belonging to it, and `forget`/`purge`
+    are declared early, so "Remove" landed SECOND and made the irreversible
+    verbs more prominent than the flat list had."""
+    runner = CliRunner()
+
+    result = runner.invoke(openkos.cli.main.app, ["--help"], env={"COLUMNS": "200"})
+
+    assert result.exit_code == 0
+    help_text = _strip_ansi(result.stdout)
+    positions = [help_text.index(panel) for panel in openkos.cli.main.PANEL_ORDER]
+    assert positions == sorted(positions), dict(
+        zip(openkos.cli.main.PANEL_ORDER, positions, strict=True)
+    )
+
+
+def test_every_command_belongs_to_a_known_panel() -> None:
+    """Every registered command declares a panel from `PANEL_ORDER` (#389).
+
+    The registry sort indexes into that tuple, so a command added with a
+    typo'd or missing panel would raise at import time. This states the
+    requirement where a contributor will read it, instead of leaving them to
+    decode a `ValueError` from a lambda."""
+    for command in openkos.cli.main.app.registered_commands:
+        assert command.rich_help_panel in openkos.cli.main.PANEL_ORDER, command.name
