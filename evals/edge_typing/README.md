@@ -147,3 +147,28 @@ is confidently and reproducibly wrong, which rules out sampling-based
 mitigations: majority voting and self-consistency both sample from the same
 settled mistake, and #508 already measured and rejected a stated-confidence
 threshold.
+
+## What `s/edge` in a report does and does not tell you
+
+The per-edge timing this harness prints is measured on **these fixtures**,
+whose documents average 145 characters (94–197). Real bundles are larger,
+and the cost per edge grows with them, because `_build_messages` puts the
+**full body of both documents** into the prompt while the reply — a short
+JSON object with a type and a rationale — stays roughly constant. It is the
+input side that scales.
+
+Measured on one machine, one model (`gemma2:27b`), one day:
+
+| corpus | avg document | s/edge |
+| --- | --- | --- |
+| these fixtures | ~145 chars | 6.8 |
+| `examples/good-life-demo` | ~1,220 chars | 11.5 |
+
+An 8.4× larger input cost 1.70× the time. Re-running this harness on the
+same machine reproduced 6.8, which is what rules out machine load as the
+explanation rather than corpus size.
+
+So: use this number to compare **models against each other**, which is what
+the harness is for. Do not publish it as how long a real run takes without
+saying what document size it was measured on — that mistake put an
+optimistic figure in `docs/cli.md` (corrected since).

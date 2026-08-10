@@ -598,7 +598,7 @@ Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing
 
 **Only `edge_typing` has evidence behind it, which is why only it is packaged.** The sweep in [#516](https://github.com/jasonssdev/openkos/issues/516) measured eight models on the same 17-edge fixture through `evals/edge_typing/`:
 
-| model | relation-type accuracy | s/edge |
+| model | relation-type accuracy | s/edge *(on ~145-char fixtures)* |
 |---|---|---|
 | `gemma2:27b` | **0.81** | 7.0 |
 | `qwen3:14b` | 0.66 | 2.1 |
@@ -606,7 +606,28 @@ Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing
 | `qwen3:8b` *(default)* | 0.44 | 1.3 |
 | `mistral:7b` | 0.27 | 1.3 |
 
-That is why the default is **per task and not global**: `gemma2:27b` nearly doubles relation-type accuracy **and** collapses extraction on the same corpus (0.24 subject recall on the long English fixture, 0.00 on the Spanish one, against `qwen3:8b`'s 0.81 and 0.76). No model measured is a safe global replacement. Note the latency too — a 74-edge Structure stage is roughly 9 minutes on `gemma2:27b` against 1.6 on the default, which is why `curate`'s cost gate names the model whenever a stage resolves one other than `model:`.
+That is why the default is **per task and not global**: `gemma2:27b` nearly doubles relation-type accuracy **and** collapses extraction on the same corpus (0.24 subject recall on the long English fixture, 0.00 on the Spanish one, against `qwen3:8b`'s 0.81 and 0.76). No model measured is a safe global replacement.
+
+#### How long edge typing actually takes
+
+The `s/edge` column above is measured on the harness fixtures, whose documents average **145 characters**. Real documents are larger, and the cost per edge grows with them: the prompt carries the **full body of both documents**, while the reply (a short JSON object) stays roughly constant, so it is the input side that scales.
+
+Measured on one machine, same model, same day:
+
+| corpus | avg document | s/edge |
+| --- | --- | --- |
+| harness fixtures | ~145 chars | 6.8 |
+| `examples/good-life-demo` | ~1,220 chars | 11.5 |
+
+An 8.4× larger input costs 1.70× the time — sublinear, but real. Budget from the upper end unless your documents are unusually short:
+
+| untyped edges | short documents | ~1 KB documents |
+| --- | --- | --- |
+| 20 | 2.3 min | 3.8 min |
+| 74 | 8.4 min | 14.2 min |
+| 200 | 22.7 min | 38.4 min |
+
+For comparison, the same 74 edges on `qwen3:8b` are roughly 1.6 minutes. That gap is why `curate`'s cost gate names the model whenever a stage resolves one other than `model:` — the same edge count means a materially different wait.
 
 **The other four keys are accepted, not packaged and not recommended.** `extraction` was tuned on `qwen3:8b` through `evals/extraction_cap/`, and `adjudication`, `volatility_typing`, and `contradiction` have no harness at all — there is no fixture on which to justify a value, so setting one is a guess. If you want to move one, build the harness first and measure every candidate on the same fixture ([#508](https://github.com/jasonssdev/openkos/issues/508)'s rule).
 

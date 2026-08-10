@@ -322,9 +322,12 @@ def model_notice(ctx: CurateContext, stage: Stage) -> str | None:
       workspace, including the ones that never opted into `models:`.
     - The disclosure gap #515 identified only EXISTS when a stage runs on
       something other than the default: `74 untyped edge(s) -> 74 LLM
-      call(s)` is ~1.6 minutes on `qwen3:8b` and ~9 on `gemma2:27b` (#516's
-      sweep). When the two agree, the line already describes what is being
-      consented to.
+      call(s)` is ~1.6 minutes on `qwen3:8b` and 8-14 on `gemma2:27b`,
+      the spread depending on document size (the prompt carries both
+      bodies in full, so the input scales while the short JSON reply does
+      not -- 6.8 s/edge measured on the harness's ~145-char fixtures,
+      11.5 on a bundle averaging ~1.2 KB). When the two models agree, the
+      line already describes what is being consented to.
 
     So a workspace with no `models:` sees today's output byte for byte, and
     one that opted in is told which model its consent is buying."""
