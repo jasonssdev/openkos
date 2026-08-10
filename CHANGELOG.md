@@ -187,6 +187,33 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- **BREAKING — relation typing now runs on `gemma2:27b` by default, which
+  you must pull**: `edge_typing` ships a packaged per-task default, so
+  `curate`'s Structure stage and `suggest-relations` resolve `gemma2:27b`
+  unless you say otherwise. This is the fix #513 asked for: the previous
+  default answered about two thirds of rubric-decidable pairs *against its
+  own rubric*, stably — 0.44 accuracy against `gemma2:27b`'s 0.81 on the
+  same 17-edge fixture (#516). Confidently wrong types are written into
+  `relations:` and land in the graph, where everything downstream believes
+  them.
+
+  **It costs a 15.6 GB `ollama pull gemma2:27b`, and existing workspaces
+  are affected without editing anything.** Until it is pulled, the Structure
+  stage reports unavailable with that pull command and every other stage
+  runs normally — no other verb is touched. Decline it with `models:
+  {edge_typing: null}`, which resolves the task back to the global `model:`;
+  that explicit null is the only opt-out, since restating the global tag
+  would silently go stale the next time you change `model:`. Nothing else is
+  packaged: the same model is the *worst* extractor measured (0.24 subject
+  recall on the long English fixture, 0.00 on the Spanish one), so
+  `extraction` deliberately stays on `qwen3:8b`.
+- **`doctor` now checks the per-task models too**: a twelfth,
+  informational check reports whether every model a task resolves is
+  installed, naming the task and offering the pull command. Without it a
+  packaged default nobody has yet was invisible until `curate` failed
+  part-way through a session. It never changes the exit code — a missing
+  per-task model fails only the stage that named it — and `[SKIP]`s when
+  Ollama is unreachable, so it never double-reports that root cause.
 - **`curate` now tracks Ollama availability per model rather than per run**:
   before per-task models a single `OllamaUnavailable` settled reachability
   for the whole run, because every stage contacted the same tag. That claim

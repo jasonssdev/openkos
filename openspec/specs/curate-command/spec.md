@@ -350,8 +350,13 @@ no destructive work to disclose.
 ### Requirement: Each Stage Resolves Its Own Task Model
 
 Every `needs_llm` stage MUST declare which measured task its LLM calls
-belong to, and MUST contact the model `models:` names for that task,
-falling back to the global `model:` when the workspace names none (#515).
+belong to, and MUST contact the model resolved for that task by this
+precedence: an explicit `models:` entry, then the packaged per-task default
+(`DEFAULT_TASK_MODELS`), then the global `model:` (#515, #513). An explicit
+YAML null in `models:` MUST decline a packaged default and resolve to the
+global `model:` — the operator's stated choice always wins over a shipped
+one, and a packaged default that costs a large download MUST have an
+opt-out that does not require restating the global tag.
 Stage tasks are `adjudication` (Identity), `edge_typing` (Structure),
 `volatility_typing` (Metadata), and `contradiction` (Contradictions);
 Preconditions makes no LLM calls and declares no task.
@@ -380,6 +385,19 @@ named.
 - WHEN `curate` reaches the Structure stage
 - THEN Structure contacts `gemma2:27b` and every other stage contacts
   `qwen3:8b`
+
+#### Scenario: The packaged default applies without any config
+
+- GIVEN `openkos.yaml` has no `models:` key
+- WHEN `curate` reaches the Structure stage
+- THEN Structure contacts the packaged `edge_typing` model and every other
+  stage contacts the global `model:`
+
+#### Scenario: An explicit null declines the packaged default
+
+- GIVEN `openkos.yaml` sets `models.edge_typing: null`
+- WHEN `curate` reaches the Structure stage
+- THEN Structure contacts the global `model:`
 
 #### Scenario: The cost gate discloses a non-default model
 

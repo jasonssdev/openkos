@@ -432,11 +432,18 @@ def test_suggest_relations_builds_ollama_client_from_configured_model(
 ) -> None:
     """`suggest-relations` builds the `OllamaClient` from the model
     configured in `openkos.yaml`, not a hardcoded value (spec: mirrors
-    `adjudicate`'s wiring)."""
+    `adjudicate`'s wiring).
+
+    `edge_typing: null` is what makes this verb follow the GLOBAL `model:`
+    again: #513 packages `gemma2:27b` as this task's default, so without
+    the explicit opt-out the packaged tag would win and this test would be
+    pinning the packaged default rather than the configured one. The
+    packaged path has its own test below."""
     _init_workspace(tmp_path, monkeypatch)
     configured_model = "llama3.2:1b-openkos-test"
     (tmp_path / "openkos.yaml").write_text(
-        f"model: {configured_model}\n", encoding="utf-8"
+        f"model: {configured_model}\nmodels:\n  edge_typing: null\n",
+        encoding="utf-8",
     )
     _patch_candidate_edges(
         monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
@@ -457,6 +464,40 @@ def test_suggest_relations_builds_ollama_client_from_configured_model(
     llm = kwargs["llm"]
     assert isinstance(llm, OllamaClient)
     assert llm._model == configured_model
+
+
+def test_suggest_relations_uses_the_packaged_edge_typing_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no `models:` key at all, this verb runs on the PACKAGED
+    `edge_typing` model (#513), not the global `model:`.
+
+    This is the behavior change the packaged default buys, and it applies to
+    the standalone verb as well as `curate`'s Structure stage — both run
+    `suggest_edge_types`, and the task key is what keeps them together."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "openkos.yaml").write_text(
+        "model: llama3.2:1b-openkos-test\n", encoding="utf-8"
+    )
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    captured: dict[str, object] = {}
+
+    def _recording_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        captured["kwargs"] = kwargs
+        return EdgeSuggestionBatch(results=[])
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _recording_suggest)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    llm = kwargs["llm"]
+    assert isinstance(llm, OllamaClient)
+    assert llm._model == "gemma2:27b"
 
 
 def test_suggest_relations_ollama_unavailable_maps_to_exit_one(

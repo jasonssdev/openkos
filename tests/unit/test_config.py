@@ -1910,13 +1910,16 @@ def test_resolve_task_model_falls_back_to_the_global_default_when_unkeyed(
 
 
 def test_resolve_task_model_falls_back_when_models_is_absent(tmp_path: Path) -> None:
-    """A workspace with no `models:` at all resolves every task to the global
-    default -- byte-for-byte today's behavior, so #515 is inert until an
-    operator opts in."""
+    """A workspace with no `models:` resolves every UNPACKAGED task to the
+    global default.
+
+    Narrowed from "every task" when #513 packaged a default for
+    `edge_typing`: the fallback is still the rule, and the packaged map is
+    the one stated exception, covered by its own tests below."""
     (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
     cfg = config.read_config(tmp_path)
 
-    for task in sorted(config.TASK_MODEL_KEYS):
+    for task in sorted(config.TASK_MODEL_KEYS - set(config.DEFAULT_TASK_MODELS)):
         assert config.resolve_task_model(cfg, task) == "qwen3:8b"
 
 
@@ -1941,4 +1944,106 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
         union_judge=True,
     )
 
+    # A non-mapping `models` cannot express an opt-out, so an unreachable
+    # map degrades to the ordinary precedence: packaged default for
+    # `edge_typing` (#513), global `model:` for a task without one. What
+    # this pins is that neither path RAISES.
+    assert config.resolve_task_model(cfg, "edge_typing") == "gemma2:27b"
+    assert config.resolve_task_model(cfg, "extraction") == "qwen3:8b"
+
+
+# --- #513: `edge_typing` ships a packaged per-task default -------------------
+
+
+def test_default_task_models_packages_only_the_measured_task() -> None:
+    """`DEFAULT_TASK_MODELS` ships a per-task default for `edge_typing` alone.
+
+    #516's sweep measured `gemma2:27b` at 0.81 relation-type accuracy against
+    the global default's 0.44 — the fix #513 asked for. The other four tasks
+    stay unlisted: `extraction` was tuned on `qwen3:8b` and `gemma2` collapses
+    it (0.24 subject recall on the long English fixture, 0.00 on the Spanish
+    one), and the remaining three have no harness at all, so #508's rule
+    forbids picking a value for them."""
+    assert config.DEFAULT_TASK_MODELS == {"edge_typing": "gemma2:27b"}
+    assert set(config.DEFAULT_TASK_MODELS) <= config.TASK_MODEL_KEYS
+
+
+def test_edge_typing_resolves_to_the_packaged_default_without_config(
+    tmp_path: Path,
+) -> None:
+    """A workspace that says nothing gets the measured model for edge typing.
+
+    This is the behavior change #513 bought: the packaged default no longer
+    answers two thirds of rubric-decidable pairs against its own rubric."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "edge_typing") == "gemma2:27b"
+
+
+def test_the_packaged_default_covers_only_edge_typing(tmp_path: Path) -> None:
+    """Every other task still resolves to the global `model:`. The packaged
+    default is one task wide, not a second global."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+    cfg = config.read_config(tmp_path)
+
+    for task in sorted(config.TASK_MODEL_KEYS - {"edge_typing"}):
+        assert config.resolve_task_model(cfg, task) == "qwen3:8b"
+
+
+def test_an_explicit_models_entry_beats_the_packaged_default(
+    tmp_path: Path,
+) -> None:
+    """Precedence: an explicit `models:` entry wins over the packaged
+    default, which wins over the global `model:`. The operator's stated
+    choice is never overridden by a shipped one."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: qwen3:8b\nmodels:\n  edge_typing: qwen3:14b\n", encoding="utf-8"
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "edge_typing") == "qwen3:14b"
+
+
+def test_an_explicit_null_opts_back_out_to_the_global_model(
+    tmp_path: Path,
+) -> None:
+    """`edge_typing: null` means "use the global model for this task".
+
+    Packaging a default that costs a 15.6 GB pull makes an opt-out
+    mandatory, and repeating the global tag is not one: a workspace that
+    later changes `model:` would silently keep pointing this task at the
+    stale copy. An explicit null says what is meant — follow `model:`,
+    whatever it is — and is the ONLY way to decline a packaged per-task
+    default."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: qwen3:8b\nmodels:\n  edge_typing: null\n", encoding="utf-8"
+    )
+    cfg = config.read_config(tmp_path)
+
     assert config.resolve_task_model(cfg, "edge_typing") == "qwen3:8b"
+
+
+def test_an_explicit_null_survives_read_config_validation(tmp_path: Path) -> None:
+    """The null opt-out is stored, not dropped. Dropping it would make the
+    key absent, which is exactly the state that resolves to the packaged
+    default — the opt-out would silently do nothing."""
+    (tmp_path / "openkos.yaml").write_text(
+        "models:\n  edge_typing: null\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.models == {"edge_typing": None}
+
+
+def test_a_blank_model_value_is_still_refused(tmp_path: Path) -> None:
+    """A blank string is NOT the opt-out and is still refused. `null` is an
+    explicit statement; `"   "` is a typo, and conflating them would let a
+    slip silently change which model runs."""
+    (tmp_path / "openkos.yaml").write_text(
+        'models:\n  edge_typing: "   "\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"'models.edge_typing' must not be blank"):
+        config.read_config(tmp_path)

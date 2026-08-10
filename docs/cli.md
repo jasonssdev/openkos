@@ -580,17 +580,23 @@ When the ceiling is reached before the model finishes, the client raises `Ollama
 
 ### `models` — a different model per task
 
-`model:` is the model every LLM-calling verb uses. `models:` overrides it for one task at a time; every task you do not name keeps `model:`.
+`model:` is the model most LLM-calling verbs use. `models:` overrides it for one task at a time.
+
+**`edge_typing` ships a packaged default of `gemma2:27b`**, which requires `ollama pull gemma2:27b` — **15.6 GB**. Every other task keeps `model:`.
 
 ```yaml
-model: qwen3:8b        # unchanged default for everything
+model: qwen3:8b        # used by every task except edge_typing
 models:
-  edge_typing: gemma2:27b
+  edge_typing: null    # decline the packaged default; use `model:` instead
 ```
 
-Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing`, `contradiction`. They are keyed by **task**, not by command — `edge_typing` covers both `curate`'s Structure stage and standalone `suggest-relations`, so the two cannot drift onto different models. An unknown key, a non-string value, or a blank value is refused when the config is read, rather than silently falling back: a typo that quietly resolved to the global default would keep writing relation types from a model you did not choose.
+Resolution order, highest first: an explicit `models:` entry → the packaged default → `model:`. Your stated choice always wins over the shipped one.
 
-**Only `edge_typing` has evidence behind it.** The sweep in [#516](https://github.com/jasonssdev/openkos/issues/516) measured eight models on the same 17-edge fixture through `evals/edge_typing/`:
+**To decline the 15.6 GB download**, set `edge_typing: null`. That is the only opt-out — writing the global tag again would work today but silently go stale the moment you change `model:`. `openkos doctor` reports whether every per-task model is installed, so you find out before `curate` fails mid-session; that check is informational and never changes the exit code, because a missing per-task model fails only the stage that named it.
+
+Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing`, `contradiction`. They are keyed by **task**, not by command — `edge_typing` covers both `curate`'s Structure stage and standalone `suggest-relations`, so the two cannot drift onto different models. An unknown key, a non-string non-null value, or a blank value is refused when the config is read, rather than silently falling back: a typo that quietly resolved to the global default would keep writing relation types from a model you did not choose.
+
+**Only `edge_typing` has evidence behind it, which is why only it is packaged.** The sweep in [#516](https://github.com/jasonssdev/openkos/issues/516) measured eight models on the same 17-edge fixture through `evals/edge_typing/`:
 
 | model | relation-type accuracy | s/edge |
 |---|---|---|
@@ -600,9 +606,9 @@ Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing
 | `qwen3:8b` *(default)* | 0.44 | 1.3 |
 | `mistral:7b` | 0.27 | 1.3 |
 
-That is why this setting exists rather than a new default: `gemma2:27b` nearly doubles relation-type accuracy **and** collapses extraction on the same corpus (0.24 subject recall on the long English fixture, 0.00 on the Spanish one, against `qwen3:8b`'s 0.81 and 0.76). No model measured is a safe global replacement. Note the latency too — a 74-edge Structure stage is roughly 9 minutes on `gemma2:27b` against 1.6 on the default, which is why `curate`'s cost gate names the model whenever a stage resolves one other than `model:`.
+That is why the default is **per task and not global**: `gemma2:27b` nearly doubles relation-type accuracy **and** collapses extraction on the same corpus (0.24 subject recall on the long English fixture, 0.00 on the Spanish one, against `qwen3:8b`'s 0.81 and 0.76). No model measured is a safe global replacement. Note the latency too — a 74-edge Structure stage is roughly 9 minutes on `gemma2:27b` against 1.6 on the default, which is why `curate`'s cost gate names the model whenever a stage resolves one other than `model:`.
 
-**The other four keys are accepted, not recommended.** `extraction` was tuned on `qwen3:8b` through `evals/extraction_cap/`, and `adjudication`, `volatility_typing`, and `contradiction` have no harness at all — there is no fixture on which to justify a value, so setting one is a guess. If you want to move one, build the harness first and measure every candidate on the same fixture ([#508](https://github.com/jasonssdev/openkos/issues/508)'s rule).
+**The other four keys are accepted, not packaged and not recommended.** `extraction` was tuned on `qwen3:8b` through `evals/extraction_cap/`, and `adjudication`, `volatility_typing`, and `contradiction` have no harness at all — there is no fixture on which to justify a value, so setting one is a guess. If you want to move one, build the harness first and measure every candidate on the same fixture ([#508](https://github.com/jasonssdev/openkos/issues/508)'s rule).
 
 A named model that is not installed fails **only the stage or verb that named it**, with the usual `ollama pull <model>` remediation. It never falls back to `model:` — a visible failure is better than silently getting a model you did not ask for.
 

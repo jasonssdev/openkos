@@ -1141,6 +1141,17 @@ def test_identity_partial_batch_model_not_found_still_walks_then_skips_later_sta
     # before the sequencer ever consults the unavailable notice.
     edge = Edge(source_id="concepts/a", target_id="concepts/b", relation_type=None)
     monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [edge])
+    # `edge_typing: null` declines the packaged default (#513) so Structure
+    # shares Identity's model again. Without it Structure resolves
+    # `gemma2:27b`, a DIFFERENT model, and is correctly no longer skipped --
+    # which would make this test about the per-model keying rather than
+    # about the skip reaching later stages. That keying has its own test
+    # (`test_unavailability_no_longer_skips_a_stage_on_a_DIFFERENT_model`).
+    cfg_path = tmp_path / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: null\n",
+        encoding="utf-8",
+    )
     _partial_identity_batch(tmp_path, monkeypatch, OllamaModelNotFound("model missing"))
     _simulate_tty(monkeypatch)
 
@@ -3754,11 +3765,14 @@ def test_unavailability_no_longer_skips_a_stage_on_a_DIFFERENT_model(
 def test_unavailability_still_skips_a_later_stage_on_the_SAME_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With no `models:` override every stage resolves the same tag, so one
-    dead connection still settles the question for all of them.
+    """Two stages resolving the SAME tag still share one verdict: a dead
+    connection settles the question for both.
 
-    This is the invariant #515 preserves for every workspace that has not
-    opted in: the per-model keying is what CHANGED, not the skip itself.
+    The per-model keying is what #515 changed, not the skip itself. Both
+    tasks here are deliberately ones WITHOUT a packaged default (#513
+    ships one for `edge_typing`), so with no `models:` override they
+    resolve the same global tag -- which is the condition this test is
+    about.
     """
     _patch_stdin_isatty(monkeypatch, True)
     monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
@@ -3781,14 +3795,14 @@ def test_unavailability_still_skips_a_later_stage_on_the_SAME_model(
         probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
         run=_failing_run,
         writes=False,
-        task="edge_typing",
+        task="volatility_typing",
     )
     second = _fake_stage(
         "Second",
         probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
         run=_second_run,
         writes=False,
-        task="volatility_typing",
+        task="contradiction",
     )
     monkeypatch.setattr(curate, "_STAGES", (first, second))
     monkeypatch.setattr(curate, "OllamaClient", lambda **kwargs: _OfflineOllama())

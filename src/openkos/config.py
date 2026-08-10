@@ -40,6 +40,30 @@ is advisable: #508's rule is that a per-task default must be justified on a
 fixture, and three of these have no fixture at all. The docs say which is
 which; the schema does not pretend to."""
 
+DEFAULT_TASK_MODELS: dict[str, str | None] = {"edge_typing": "gemma2:27b"}
+"""Packaged per-task model defaults (issue #513), overriding `DEFAULT_MODEL`
+for the tasks listed here and no others.
+
+`edge_typing` ships `gemma2:27b` because #516's eight-model sweep measured
+it at 0.81 relation-type accuracy on `evals/edge_typing/`'s 17-edge fixture
+against `qwen3:8b`'s 0.44. #513 is precisely that gap: the previous default
+contradicted the prompt's own rubric on about two thirds of the pairs the
+rubric decides, stably, so no sampling or confidence mitigation could
+recover it. A wrong `part_of` asserts something false about how the
+knowledge fits together, and everything reading the graph believes it.
+
+**This default costs a 15.6 GB `ollama pull`.** That is why nothing else is
+listed and why the trade is worth stating plainly: the same model is the
+worst extractor measured (0.24 subject recall on the long English fixture,
+0.00 on the Spanish one, against the default's 0.81/0.76), so packaging it
+globally would have been indefensible. It is packaged for ONE task, where
+it is the best measured, and `extraction` deliberately stays on the model
+`evals/extraction_cap/` tuned.
+
+Declining it is an explicit `models: {edge_typing: null}` -- see
+`resolve_task_model`. A packaged default that costs a large download and
+offers no opt-out other than naming another tag would be a trap."""
+
 DEFAULT_EMBEDDING_MODEL = "bge-m3"
 """The packaged default Ollama embedding model tag (ADR-0006: reliability-
 first -- `bge-m3` proved measurably more resilient to transient embed
@@ -783,10 +807,18 @@ def read_config(root: Path) -> Config:
                     f"{layout.config_path.name}: 'models' names unknown task "
                     f"{task!r}; valid tasks are: {known}"
                 )
+            if tag is None:
+                # An explicit YAML null is the opt-out from a PACKAGED
+                # per-task default (#513): "use the global `model:` for this
+                # task". It is kept in the map rather than dropped -- an
+                # absent key is exactly the state that resolves to the
+                # packaged default, so dropping it would make the opt-out
+                # silently do nothing.
+                continue
             if not isinstance(tag, str):
                 raise ValueError(
                     f"{layout.config_path.name}: 'models.{task}' must be a "
-                    f"string model tag, got {type(tag).__name__}"
+                    f"string model tag or null, got {type(tag).__name__}"
                 )
             if not tag.strip():
                 raise ValueError(
@@ -845,8 +877,19 @@ def read_config(root: Path) -> Config:
 
 
 def resolve_task_model(cfg: Config, task: str | None) -> str:
-    """Return the model tag `task` should run on: `cfg.models[task]` when the
-    workspace named one, else the global `cfg.model` (issue #515).
+    """Return the model tag `task` should run on (issues #515, #513).
+
+    Precedence, highest first:
+
+    1. `cfg.models[task]` -- what the workspace explicitly asked for. An
+       explicit YAML null here DECLINES a packaged default and falls to
+       `cfg.model`, which is the only way to opt out of one.
+    2. `DEFAULT_TASK_MODELS[task]` -- the packaged per-task default, today
+       `edge_typing: gemma2:27b` (#513).
+    3. `cfg.model` -- the global default.
+
+    The operator's stated choice always beats a shipped one, and the shipped
+    one beats the global default only for the tasks it names.
 
     `task=None` means "this caller is not one of the measured tasks" and
     resolves to `cfg.model`. It is a first-class answer, not a missing
@@ -876,12 +919,22 @@ def resolve_task_model(cfg: Config, task: str | None) -> str:
     standalone verbs discover that at the `llm.chat` seam and fail only the
     stage that named it (#515 decision 2)."""
     raw: object = cfg.models
-    if task is None or not isinstance(raw, dict):
+    if task is None:
         return cfg.model
-    tag = raw.get(task)
-    if not isinstance(tag, str) or not tag.strip():
+    if isinstance(raw, dict) and task in raw:
+        tag = raw[task]
+        # An explicit null declines a packaged per-task default and follows
+        # the global `model:` (#513) -- checked BEFORE the packaged map, or
+        # the opt-out could never win. A malformed value cannot reach here
+        # through `read_config`, which refuses it; a hand-built `Config` is
+        # degraded rather than raising, since this runs at every chat seam.
+        if isinstance(tag, str) and tag.strip():
+            return tag.strip()
         return cfg.model
-    return tag.strip()
+    packaged = DEFAULT_TASK_MODELS.get(task)
+    if isinstance(packaged, str) and packaged.strip():
+        return packaged.strip()
+    return cfg.model
 
 
 _TYPE_TIERS_HEADER_PREFIX = "type_tiers:"
