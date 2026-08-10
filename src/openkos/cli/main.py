@@ -10911,7 +10911,7 @@ def doctor() -> None:
     with actionable remediation, usable even before `openkos init`.
 
     Deliberately NEW control-flow shape versus `status`/`lint`/`query`:
-    instead of exiting on the first failure, this runs ALL eleven checks,
+    instead of exiting on the first failure, this runs ALL twelve checks,
     appends each to a `list[CheckResult]`, renders every line
     unconditionally, then exits ONCE (`code=1`) if any CRITICAL check
     failed (spec: Doctor Runs And Prints All Applicable Checks). Remediation
@@ -11096,6 +11096,76 @@ def doctor() -> None:
                 remediation=f"ollama pull {embedding_model}",
             )
         )
+
+    # 5b. task-models-installed (informational, always; SKIP-blocked if
+    # unreachable, same D6 one-root-cause rationale as checks 4 and 5).
+    #
+    # ONE check covering every per-task model rather than one check per task
+    # (issue #513): the check COUNT stays fixed regardless of how many tasks
+    # a workspace keys, which is what lets the doctor spec keep pinning a
+    # total. Only models DIFFERING from the global tag are examined -- a task
+    # resolving `cfg.model` is already covered by check 4, and reporting it
+    # twice would double-count one root cause.
+    #
+    # Informational, never critical: a missing per-task model fails only the
+    # stage that named it (#515 decision 2), so `ingest`, `query`, and
+    # `adjudicate` all still work. Exiting 1 on a workspace that is fine for
+    # every other verb would be a false alarm rather than a diagnosis.
+    task_models = {
+        task: config.resolve_task_model(cfg, task)
+        for task in sorted(config.TASK_MODEL_KEYS)
+        if cfg is not None
+    }
+    if cfg is None:
+        task_models = {
+            task: tag
+            for task, tag in config.DEFAULT_TASK_MODELS.items()
+            if isinstance(tag, str)
+        }
+    extra_models = {task: tag for task, tag in task_models.items() if tag != model}
+    task_label = "Task models installed"
+    if not extra_models:
+        results.append(
+            CheckResult(
+                task_label,
+                "pass",
+                critical=False,
+                detail="none configured beyond the global model",
+            )
+        )
+    elif not reachable:
+        results.append(
+            CheckResult(
+                task_label,
+                "skip",
+                critical=False,
+                detail="blocked: Ollama unreachable",
+            )
+        )
+    else:
+        missing = {
+            task: tag
+            for task, tag in extra_models.items()
+            if not model_tag_matches(tag, installed_tags)
+        }
+        if missing:
+            named = ", ".join(f"{task} -> {tag}" for task, tag in missing.items())
+            results.append(
+                CheckResult(
+                    task_label,
+                    "fail",
+                    critical=False,
+                    detail=f"missing: {named}",
+                    remediation=" && ".join(
+                        f"ollama pull {tag}" for tag in dict.fromkeys(missing.values())
+                    ),
+                )
+            )
+        else:
+            named = ", ".join(f"{task} -> {tag}" for task, tag in extra_models.items())
+            results.append(
+                CheckResult(task_label, "pass", critical=False, detail=named)
+            )
 
     # 6. bundle-readable (informational, workspace-only; SKIP outside)
     if in_workspace:

@@ -1,7 +1,8 @@
 """Unit tests for the `doctor` CLI command: read-only environment health scan.
 
-`doctor` runs ALL eleven checks (workspace-initialized, config-valid,
+`doctor` runs ALL twelve checks (workspace-initialized, config-valid,
 Ollama-reachable, model-installed, embedding-model-installed,
+task-models-installed,
 bundle-readable, workspace-vector-index-present, vector-extension-loadable,
 git-available, git-filter-repo-available, backend-host-locality), renders
 every result
@@ -88,9 +89,10 @@ def test_doctor_all_healthy_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A fully healthy workspace prints one `[PASS]` per applicable check
-    (eleven total, since #240 added the informational backend-locality
-    report) and exits 0 (Scenario: Healthy workspace prints all
-    applicable checks). `.openkos/vectors.db` is pre-created so the #142
+    (twelve total: #240 added the informational backend-locality report,
+    and #513 added the informational task-models check) and exits 0
+    (Scenario: Healthy workspace prints all applicable checks).
+    `.openkos/vectors.db` is pre-created so the #142
     workspace-vector-index-present check also passes."""
     _init_workspace(tmp_path, monkeypatch)
     openkos_dir = tmp_path / ".openkos"
@@ -98,7 +100,11 @@ def test_doctor_all_healthy_exits_zero(
     (openkos_dir / "vectors.db").write_bytes(b"")
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
-        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+        _fake_ollama_client(
+            # `gemma2:27b` is the packaged `edge_typing` default (#513): a
+            # workspace missing it is no longer "fully healthy".
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
+        ),
     )
     monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
@@ -107,7 +113,7 @@ def test_doctor_all_healthy_exits_zero(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 11
+    assert result.stdout.count("[PASS]") == 12
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
@@ -430,7 +436,15 @@ def test_doctor_model_installed_honors_latest_normalization(
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(
-            installed=[f"{configured_model}:latest", DEFAULT_EMBEDDING_MODEL]
+            installed=[
+                f"{configured_model}:latest",
+                DEFAULT_EMBEDDING_MODEL,
+                # #513 packages a per-task default for `edge_typing`, so a
+                # workspace is only fully healthy when that model is present
+                # too. Listed here so this test keeps pinning `:latest`
+                # normalization rather than the packaged default's absence.
+                "gemma2:27b",
+            ]
         ),
     )
 
@@ -866,7 +880,9 @@ def test_doctor_prints_version_banner_first(
     (openkos_dir / "vectors.db").write_bytes(b"")
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
-        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+        _fake_ollama_client(
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
+        ),
     )
     monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
     monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
@@ -878,7 +894,7 @@ def test_doctor_prints_version_banner_first(
     assert re.match(r"^openkos \d+\.\d+\.\d+", lines[0])
     assert lines[1] == f"openkos doctor: checking environment at {tmp_path}"
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 11
+    assert result.stdout.count("[PASS]") == 12
 
 
 # --- issue #240: the informational backend-locality check --------------------
@@ -1053,3 +1069,137 @@ def test_doctor_locality_still_passes_when_ollama_is_reachable(
     )
     assert locality_line.startswith("[PASS]")
     assert "exemption" in locality_line
+
+
+# --- #513: doctor sees the per-task models, not just the global one ---------
+
+
+def test_doctor_reports_a_missing_task_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A packaged per-task default that is not installed is REPORTED.
+
+    Packaging `edge_typing: gemma2:27b` (#513) means every workspace now
+    points a task at a 15.6 GB model nobody has by default. Before this
+    check, `doctor` looked only at `cfg.model` and reported a clean bill of
+    health, and the operator discovered the gap when `curate`'s Structure
+    stage failed part-way through a session. That is the failure this
+    check exists to move earlier.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[FAIL] Task models installed" in result.stdout
+    assert "edge_typing" in result.stdout
+    assert "ollama pull gemma2:27b" in result.stdout
+
+
+def test_a_missing_task_model_does_not_change_the_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The task-model check is INFORMATIONAL, never critical.
+
+    A missing per-task model fails only the stage that named it (#515
+    decision 2) — every other verb still works. Making this critical would
+    exit 1 on a workspace that is fine for `ingest`, `query`, and
+    `adjudicate`, which would be a false alarm rather than a diagnosis."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[FAIL] Task models installed" in result.stdout
+    assert result.exit_code == 0
+
+
+def test_doctor_passes_when_every_task_model_is_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the packaged model present the check passes and names it."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(
+            installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL, "gemma2:27b"]
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert result.stdout.count("[PASS]") == 12
+    assert "[PASS] Task models installed" in result.stdout
+    assert "[FAIL]" not in result.stdout
+
+
+def test_opting_out_of_the_packaged_default_makes_the_check_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`edge_typing: null` declines the packaged default, so there is no
+    per-task model left to be missing and the check passes without the
+    15.6 GB pull. This is the escape hatch working end to end."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "vectors.db").write_bytes(b"")
+    cfg_path = tmp_path / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: null\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Task models installed" in result.stdout
+    assert "[FAIL]" not in result.stdout
+
+
+def test_task_model_check_skips_when_ollama_is_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`[SKIP]`, never `[FAIL]`, when Ollama is down — the same D6 one-root-
+    cause discipline checks 4 and 5 already follow. Reporting a model as
+    "not installed" when nothing could be listed would be a guess."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(error=OllamaUnavailable("connection refused")),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[SKIP] Task models installed" in result.stdout

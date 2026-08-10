@@ -11,14 +11,17 @@ max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call m
 #   volatile: 7d
 # type_tiers:             # per-concept-type volatility tier overrides (overrides
 #   Person: volatile      # the built-in registry default; see docs/adr/0007)
-# models:                 # per-task model overrides; every unlisted task keeps
-#   edge_typing: gemma2:27b   # `model:` above. ONLY edge_typing has a harness
-                          # behind it (evals/edge_typing/): gemma2:27b scored
-                          # 0.81 there against qwen3:8b's 0.44, but is far
-                          # worse at extraction -- so it is offered here, not
-                          # shipped as a default. Measure before adding a key:
-                          # valid tasks are extraction, adjudication,
-                          # edge_typing, volatility_typing, contradiction.
+# models:                 # per-task model overrides. edge_typing DEFAULTS to
+#   edge_typing: null     # gemma2:27b (0.81 vs qwen3:8b's 0.44 on
+                          # evals/edge_typing/) and needs `ollama pull
+                          # gemma2:27b` -- 15.6 GB. Uncomment BOTH lines
+                          # above to decline it and use `model:` instead;
+                          # uncommenting only one is invalid YAML. `openkos
+                          # doctor` reports whether it is installed.
+                          # Every other task keeps `model:`. Only edge_typing
+                          # has a harness; measure before adding a key. Valid
+                          # tasks: extraction, adjudication, edge_typing,
+                          # volatility_typing, contradiction.
 # union_judge: true       # union-of-runs + selector-judge extraction (default
                           # on); set false to restore the single-run, single-cap
                           # extraction path byte-for-byte
