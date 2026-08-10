@@ -187,6 +187,18 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- **Corrected the published edge-typing latency**: the docs said a 74-edge
+  Structure stage was "roughly 9 minutes" on `gemma2:27b`. That figure came
+  from the harness, whose fixtures average 145 characters, and it is the
+  optimistic end of a range rather than a single number. Measured on one
+  machine, same model, same day: **6.8 s/edge on those fixtures, 11.5 s/edge
+  on a bundle averaging ~1.2 KB per document** — so 74 edges is 8.4 to 14.2
+  minutes depending on your corpus. The cause is structural, not
+  environmental: the prompt carries the full body of **both** documents while
+  the reply stays a short JSON object, so an 8.4× larger input costs 1.70×
+  the time. Re-running the harness on the same machine reproduced 6.8,
+  ruling out load as the explanation. The docs now publish the range, say
+  which corpus each end was measured on, and explain what makes it vary.
 - **BREAKING — relation typing now runs on `gemma2:27b` by default, which
   you must pull**: `edge_typing` ships a packaged per-task default, so
   `curate`'s Structure stage and `suggest-relations` resolve `gemma2:27b`
