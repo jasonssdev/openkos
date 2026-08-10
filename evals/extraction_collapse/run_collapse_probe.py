@@ -243,7 +243,37 @@ also must not read it as an all-clear: on an unpinned model nothing in the
 run establishes that this probe can see the defect at all."""
 
 
-def control_note(control: ArmResult | None, model: str = CONTROL_MODEL) -> str:
+CONTROL_PROMPT_SHA = "295b498ef64340dc8f482f5a299c8df9e8fc53b53acda4d53309062bc67a9ddd"
+"""The prompt identity the control's premise was recorded against.
+
+The control says "this source collapses". That was measured under a
+SPECIFIC prompt, and the whole point of the probe is to change that prompt.
+So when a candidate actually works, the control stops collapsing and the
+old note cried SENSITIVITY UNCONFIRMED -- reporting the best result of the
+day as an instrument failure. Success and blindness were indistinguishable.
+
+Pinning the prompt separates them: unchanged prompt plus a quiet control is
+a genuine alarm; changed prompt plus a quiet control is the finding. Covers
+BOTH channels, the system prompt and the user framing `_build_messages`
+applies, because the language anchor moved only the second one."""
+
+
+def current_prompt_sha() -> str:
+    """Hash of both prompt channels, over a fixed canary source."""
+    import hashlib
+
+    from openkos.extraction import concept
+
+    canary = concept._build_messages("probe canary text", "TS3005b.summary")
+    blob = concept._SYSTEM_PROMPT + "\n\n" + str(canary[1]["content"])
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def control_note(
+    control: ArmResult | None,
+    model: str = CONTROL_MODEL,
+    prompt_sha: str = CONTROL_PROMPT_SHA,
+) -> str:
     """How to read the positive control, or its absence.
 
     A probe that has never watched the defect fire cannot tell "framing is
@@ -280,12 +310,23 @@ def control_note(control: ArmResult | None, model: str = CONTROL_MODEL) -> str:
             "establishes that the probe can see the defect at this model, so "
             "read the verdicts below as observations, not as absence."
         )
+    if prompt_sha != CONTROL_PROMPT_SHA:
+        return (
+            f"positive control: the prompt has CHANGED since the control's "
+            f"premise was recorded, and the known-collapsing source now "
+            f"holds at {control.mean_objects:.1f} object(s) over "
+            f"{control.runs} run(s). That is the headline: this candidate "
+            "moved the case #522 was built on. It is NOT a blind probe -- "
+            "but it does mean nothing in this run re-confirms sensitivity, "
+            "so weigh it against the over-enumeration and drift sections "
+            "rather than on the collapse verdicts alone."
+        )
     return (
         f"positive control: SENSITIVITY UNCONFIRMED -- the known-collapsing "
         f"source held at {control.mean_objects:.1f} object(s) over "
-        f"{control.runs} run(s). Either the defect is not firing today or "
-        "this probe cannot see it; until that is settled, read no other "
-        "verdict in this report."
+        f"{control.runs} run(s) under the UNCHANGED prompt. Either the "
+        "defect is not firing today or this probe cannot see it; until that "
+        "is settled, read no other verdict in this report."
     )
 
 
@@ -314,10 +355,11 @@ def render(
     results: dict[str, tuple[ArmResult, ArmResult]],
     control: ArmResult | None = None,
     model: str = CONTROL_MODEL,
+    prompt_sha: str = CONTROL_PROMPT_SHA,
 ) -> str:
     """The whole report, from the collected arms."""
     lines: list[str] = ["", "=" * 72, "COLLAPSE PROBE (#522)", "=" * 72, ""]
-    lines.append(control_note(control, model))
+    lines.append(control_note(control, model, prompt_sha))
     if control is not None and control.retained:
         lines.append(f"  control objects per run: {control.retained}")
     lines.append("")
@@ -644,6 +686,35 @@ def _self_test() -> int:
         (
             "SENSITIVITY UNCONFIRMED"
             not in control_note(
+                ArmResult("ctl", "control", "EN", retained=[4, 5, 4]),
+                prompt_sha="0" * 64,
+            ),
+            "a control that stops collapsing under a CHANGED prompt is the "
+            "headline result, not a blind probe -- crying unconfirmed there "
+            "makes every successful experiment look like an instrument "
+            "failure, which is what happened to the enumerate-first run",
+        ),
+        (
+            "moved the case"
+            in control_note(
+                ArmResult("ctl", "control", "EN", retained=[4, 5, 4]),
+                prompt_sha="0" * 64,
+            ),
+            "and it must say so positively, so the result is not merely "
+            "un-warned but reported",
+        ),
+        (
+            "SENSITIVITY UNCONFIRMED"
+            in control_note(
+                ArmResult("ctl", "control", "EN", retained=[4, 5, 4]),
+                prompt_sha=CONTROL_PROMPT_SHA,
+            ),
+            "under the UNCHANGED prompt a non-collapsing control is still a "
+            "genuine alarm, and that must survive the fix",
+        ),
+        (
+            "SENSITIVITY UNCONFIRMED"
+            not in control_note(
                 ArmResult("ctl", "control", "EN", retained=[8, 9, 8]),
                 model="qwen3:14b",
             ),
@@ -836,7 +907,7 @@ def main(argv: list[str] | None = None) -> int:
             union_judge=args.union_judge,
         )
 
-    print(render(results, control, args.model))
+    print(render(results, control, args.model, current_prompt_sha()))
     return 0
 
 
