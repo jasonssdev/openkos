@@ -16,6 +16,25 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **`openkos next` now recommends `normalize-names`**: a bundle whose
+  on-disk names are not NFC — the drift a macOS-created bundle syncs onto
+  every other platform — gets a ranked recommendation instead of a finding
+  only `lint` would surface (#491). Ranked **last**, below every other
+  tier: a decomposed name blocks nothing and is not unsafe, since
+  `okf.concept_path_for` already resolves an NFC id against a decomposed
+  file. It is hygiene, and hygiene outranks nothing.
+
+  That placement is also the whole cost story. #491 anticipated needing a
+  persistent "last known non-NFC count" cache to avoid re-walking, on the
+  premise that the tiers are *"contractually zero-walk"*. They are not —
+  zero-walk is tier 1's property alone, and `walk_incomplete` already pays
+  a second full traversal, justified by being reached only on a run headed
+  for one specific recommendation. Ranking this tier last gives it the same
+  justification: on a bundle with real work pending, the walk is not
+  cheaper, it simply never runs. The signal comes from the same
+  `scan_non_nfc_entries` that `lint` and the verb consume, so the
+  recommendation cannot disagree with what `normalize-names` would do.
+
 - **A different model per task, so edge typing can use one that is good at
   it**: a new optional `models:` map in `openkos.yaml` overrides `model:`
   for a single task — `extraction`, `adjudication`, `edge_typing`,

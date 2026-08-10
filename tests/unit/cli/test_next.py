@@ -10,6 +10,7 @@ every cost-contract assertion patches a PUBLIC module attribute via
 (design's Testing Strategy).
 """
 
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 
@@ -1520,3 +1521,141 @@ def test_incomplete_walk_redirect_still_names_the_file_level_skips(
     assert "Run: openkos ingest" not in result.stdout
     # ...and the file-level damage is still named, not shadowed by it.
     assert "concepts/broken.md: skipped (unparseable frontmatter)" in result.stdout
+
+
+# --- #491: `next` recommends `normalize-names` for non-NFC on-disk names ----
+
+NFD_CAFE = unicodedata.normalize("NFD", "café")
+"""Built with an explicit NFD normalize, never a literal: a source file is
+saved NFC by most editors, so a pasted 'café' would silently stop being a
+decomposed name and the test would assert nothing (mirrors
+`test_lint_non_nfc.py`'s own convention)."""
+
+
+def _spy_non_nfc(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Count `scan_non_nfc_entries` calls through the name `next_action`
+    actually resolves, mirroring `_spy_walks`."""
+    calls = {"n": 0}
+    real = lint_check.scan_non_nfc_entries
+
+    def _counting(bundle_dir: Path) -> list[lint_check.NonNfcEntry]:
+        calls["n"] += 1
+        return real(bundle_dir)
+
+    monkeypatch.setattr(
+        "openkos.cli.next_action.lint_check.scan_non_nfc_entries", _counting
+    )
+    return calls
+
+
+def test_non_nfc_tier_is_ranked_last() -> None:
+    """The non-NFC tier sits AFTER the duplicate-groups tier.
+
+    Placement is the whole cost argument (#491). Its walk is only reached
+    on a run where every ranked tier above it found nothing -- exactly the
+    justification `walk_incomplete` already uses for its own extra
+    traversal ("no other tier's budget moves"). Ranked last also matches
+    the module's ordering principle: a decomposed filename blocks nothing,
+    is not missing, and is not unsafe -- it is hygiene, which outranks
+    nothing."""
+    assert next_action._TIERS[-1] is next_action._tier_non_nfc_names
+    assert (
+        next_action._TIERS.index(next_action._tier_duplicate_groups)
+        == len(next_action._TIERS) - 2
+    )
+
+
+def test_non_nfc_scan_is_memoized_when_read_twice(tmp_path: Path) -> None:
+    """Reading the property twice pays exactly one walk, matching every
+    other signal on `_BundleSignals`."""
+    _init_workspace_dirs = tmp_path / "bundle"
+    _init_workspace_dirs.mkdir(parents=True, exist_ok=True)
+    signals = next_action._BundleSignals(config.WorkspaceLayout(tmp_path))
+    calls = {"n": 0}
+    real = lint_check.scan_non_nfc_entries
+
+    def _counting(bundle_dir: Path) -> list[lint_check.NonNfcEntry]:
+        calls["n"] += 1
+        return real(bundle_dir)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("openkos.cli.next_action.lint_check.scan_non_nfc_entries", _counting)
+        first = signals.non_nfc_entries
+        second = signals.non_nfc_entries
+
+    assert calls["n"] == 1
+    # Same object, not merely equal: the second read must return the
+    # memoized list rather than a fresh one that happens to match.
+    assert first is second
+
+
+def test_an_earlier_tier_never_pays_the_non_nfc_walk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A run that stops at an earlier tier NEVER opens the non-NFC walk.
+
+    This is the cost property #491 exists to protect, and it is what makes
+    the extra traversal defensible without any persistent cache: the walk
+    is not merely memoized, it is never reached at all unless every ranked
+    tier above it came up empty."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_unextracted_source(tmp_path)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / f"{NFD_CAFE}.md").write_text(
+        "---\ntype: Concept\ntitle: Cafe\n---\nBody.\n", encoding="utf-8"
+    )
+    _spy_walks(monkeypatch)
+    non_nfc_calls = _spy_non_nfc(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos ingest raw/notes.txt" in result.stdout
+    assert non_nfc_calls["n"] == 0
+
+
+def test_clean_bundle_with_a_non_nfc_name_recommends_normalize_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """With every ranked tier clean, a decomposed on-disk name is what
+    `next` recommends acting on."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    concepts = tmp_path / "bundle" / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / f"{NFD_CAFE}.md").write_text(
+        "---\ntype: Concept\ntitle: Cafe\n---\nBody.\n", encoding="utf-8"
+    )
+    _spy_walks(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos normalize-names" in result.stdout
+
+
+def test_clean_bundle_without_non_nfc_names_recommends_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """An all-NFC bundle with every tier clean produces no action -- the
+    new tier must not manufacture one."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    concepts = tmp_path / "bundle" / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / "cafe.md").write_text(
+        "---\ntype: Concept\ntitle: Cafe\n---\nBody.\n", encoding="utf-8"
+    )
+    _spy_walks(monkeypatch)
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos normalize-names" not in result.stdout

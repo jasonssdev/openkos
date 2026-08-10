@@ -18,14 +18,17 @@ what is unsafe, then what is merely ambiguous*:
    every later judgment is made over a starved corpus;
 2. an unextracted source is knowledge absent from the bundle entirely;
 3. a descendant below its Source's sensitivity is present but mislabelled;
-4. a duplicate group is present, correctly labelled, and merely ambiguous.
+4. a duplicate group is present, correctly labelled, and merely ambiguous;
+5. a non-NFC on-disk name (#491) is none of those -- the bundle WORKS, since
+   `okf.concept_path_for` resolves an NFC id against a decomposed file. It
+   is hygiene, and hygiene outranks nothing.
 
 Absence outranks ambiguity BECAUSE the ambiguity cannot be judged correctly
 over an incomplete set -- adjudicating duplicates before the missing
 documents are in is work that may have to be redone.
 
-Cost order corroborates this ranking (tier 1 is also the cheapest, tier 4
-also the most expensive) but DOES NOT DRIVE IT, and the individual tier
+Cost order corroborates this ranking (tier 1 is also the cheapest, tiers 4
+and 5 the most expensive) but DOES NOT DRIVE IT, and the individual tier
 docstrings below mention only cost because that is what their own
 implementation has to honour. Do not infer from them that the sequence is
 cost-derived and reorder on cost grounds: a cheaper check that answers a
@@ -35,7 +38,8 @@ less blocking question still belongs lower.
 control flow, or refactored (design D2): every signal this module reads
 comes from a function `status`/`lint` already ship
 (`vector_store_is_empty`, `lint_check.collect_docs` + its checks,
-`find_exact_title_groups`), so no walk logic is duplicated and the two
+`find_exact_title_groups`, `lint_check.scan_non_nfc_entries`), so no walk
+logic is duplicated and the two
 verbs can drift in framing without drifting in truth. ONE signal is sourced
 outside that set: `walk_incomplete` reads `okf._walk_errors` directly (#486),
 because neither `status` nor `lint` exposes the unlistable-directory signal
@@ -158,6 +162,7 @@ class _BundleSignals:
         self._exact_title_groups: list[CandidateGroup] | None = None
         self._stale_indexes: tuple[str, ...] | None = None
         self._walk_incomplete: bool | None = None
+        self._non_nfc_entries: list[lint_check.NonNfcEntry] | None = None
 
     def record_declination(self, notice: str) -> None:
         """Note a real finding this run deliberately refused to turn into a
@@ -261,6 +266,36 @@ class _BundleSignals:
                 find_exact_title_groups(self._layout.bundle_dir)
             )
         return self._exact_title_groups
+
+    @property
+    def non_nfc_entries(self) -> list[lint_check.NonNfcEntry]:
+        """1 walk (`lint_check.scan_non_nfc_entries`), memoized, read by the
+        LAST tier alone (#491).
+
+        A names-only traversal: `scan_non_nfc_entries` pulls
+        `bundle_dir.rglob("*")` and reads NAMES, never opening a file
+        (`lint.py`'s own docstring makes that the reason it is not a
+        violation of the no-fifth-walk guard). So it is cheaper per entry
+        than `docs`, which reads and parses every one.
+
+        It also cannot ride on `docs`: `collect_docs` surfaces only
+        readable, parseable `.md` documents, while a decomposed name can
+        sit on a directory or a non-`.md` file, neither of which that walk
+        would ever report.
+
+        The cost argument is placement, not caching -- the same one
+        `walk_incomplete` makes for its own extra traversal. This property
+        is reached only when every ranked tier above came up empty, so no
+        other tier's budget moves and a bundle with real work pending never
+        pays for it. That is why #491's proposed persistent
+        "last known non-NFC count" cache is not needed: the walk this
+        module has to avoid is the one on a busy bundle, and ranking last
+        avoids it outright rather than making it cheaper."""
+        if self._non_nfc_entries is None:
+            self._non_nfc_entries = list(
+                lint_check.scan_non_nfc_entries(self._layout.bundle_dir)
+            )
+        return self._non_nfc_entries
 
 
 _SAFE_ARGUMENT = re.compile(r"\A(?!-)[\w./-]+\Z")
@@ -520,6 +555,45 @@ def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
     )
 
 
+def _tier_non_nfc_names(signals: _BundleSignals) -> NextAction | None:
+    """Rank 5: on-disk names that are not NFC (issue #491).
+
+    Ranked LAST, below even the duplicate-groups tier, and the position is
+    the whole cost argument. A decomposed filename blocks nothing, is not
+    missing, and is not unsafe -- `okf.concept_path_for` already resolves
+    an NFC id against a decomposed file, so the bundle WORKS. It is
+    hygiene: the spelling on disk disagrees with the canonical id, which
+    every other verb uses. By the module's ordering principle -- what
+    blocks, then what is missing, then what is unsafe, then what is merely
+    ambiguous -- hygiene outranks nothing.
+
+    Ranking it last is also what makes its extra traversal defensible
+    without any persistent cache, exactly as `walk_incomplete` argues for
+    its own: the walk is reached only on a run where every ranked tier
+    above found nothing, so no other tier's budget moves and a bundle with
+    real work pending never pays it.
+
+    The command is `openkos normalize-names` (#474 part 2), which
+    remediates precisely what `lint`'s `non-nfc-name` finding reports, and
+    reads from the SAME `scan_non_nfc_entries` -- so the recommendation
+    and the verb can never disagree about what is offending.
+
+    Reports only the count of the finding that fired (D5)."""
+    entries = signals.non_nfc_entries
+    if not entries:
+        return None
+    count = len(entries)
+    return NextAction(
+        command="openkos normalize-names",
+        reason=(
+            f"{count} on-disk name{_plural(count)} "
+            f"{_agree(count, 'is', 'are')} not NFC, so the spelling on disk "
+            "disagrees with the canonical id. Review them first with "
+            "`openkos lint`."
+        ),
+    )
+
+
 Tier = Callable[[_BundleSignals], NextAction | None]
 
 _TIERS: tuple[Tier, ...] = (
@@ -529,6 +603,7 @@ _TIERS: tuple[Tier, ...] = (
     _tier_unextracted_source,
     _tier_below_source_sensitivity,
     _tier_duplicate_groups,
+    _tier_non_nfc_names,
 )
 """D1 order: ingest-first (empty bundle, #386), reindex (missing), reindex
 (stale, #381), ingest, backfill-sensitivity, curate. A higher-ranked tier's
