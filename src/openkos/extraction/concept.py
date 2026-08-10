@@ -51,10 +51,10 @@ _SYSTEM_PROMPT = (
     '- "Procedure": the candidate is ONE repeatable how-to -- a method, '
     "protocol, recipe, or step-by-step process meant to be performed "
     "again.\n"
-    '- "Decision": the candidate is ONE choice that was made -- carrying '
-    "its rationale, the alternatives considered, and its current status -- "
-    "a self-contained decision record, not a general idea or a dated "
-    "happening.\n"
+    '- "Decision": the candidate is ONE choice that was made -- a '
+    "commitment to a course of action, with whatever rationale, "
+    "alternatives, or status the source records; those details sharpen a "
+    "decision record but are not required for one.\n"
     '- "Project": the candidate is ONE ongoing effort defined by a goal '
     "and a timespan -- a multi-step undertaking spanning time toward that "
     "goal, not a single bounded happening or a repeatable how-to.\n"
@@ -107,11 +107,11 @@ _SYSTEM_PROMPT = (
     "site, not about what happened there.\n"
     '    - Among occurrents, "Event" is a single time-bound happening '
     'while "Procedure" is a repeatable how-to.\n'
-    "    - A choice made with rationale, alternatives considered, and a "
-    'current status is "Decision" -- distinct from "Concept" (a general '
-    "idea, topic, theory, or framework, with no decision-record shape) "
-    'and from "Event" (a dated happening with no rationale or '
-    "alternatives weighed).\n"
+    "    - A choice that was made -- a commitment to do or not do "
+    'something -- is "Decision", whether or not the source records its '
+    'rationale or alternatives; distinct from "Concept" (a general idea, '
+    "topic, theory, or framework, where no choice was made) and from "
+    '"Event" (a dated happening, where nothing was decided).\n'
     "    - An ongoing effort defined by a goal and a timespan is "
     '"Project" -- distinct from "Event" (a single bounded happening) and '
     'from "Procedure" (a repeatable how-to meant to be performed again, '

@@ -2340,3 +2340,51 @@ def test_extract_concept_regression_suite_still_green_and_prompt_untouched() -> 
 
     assert len(llm.calls) == 1
     assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+def test_decision_rubric_does_not_require_rationale_or_alternatives() -> None:
+    """A bare committed choice qualifies as `Decision` (#521).
+
+    The rubric used to REQUIRE a decision record's full shape -- "carrying
+    its rationale, the alternatives considered, and its current status".
+    Read literally, that disqualified the most common real note a user
+    writes: "we decided to postpone Slack until July" carries none of the
+    three. AMI's own human-annotated decisions are the same shape ("The
+    remote will feature an LCD screen."), which is why measuring decision
+    recall against them was measuring a definition mismatch rather than a
+    model.
+
+    Those details still SHARPEN a decision record; they are no longer the
+    price of admission. This pins the loosening at the prompt, since the
+    behavior it buys is only observable through a model.
+    """
+    llm = _FakeLLM(reply=_array(_DECISION_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "are not required for one" in system_content
+    assert "whether or not the source records its rationale" in system_content
+    # The old mandatory phrasing must be gone from BOTH places it appeared:
+    # the type definition and the Concept/Event tie-break.
+    assert "carrying its rationale" not in system_content
+    assert "A choice made with rationale" not in system_content
+
+
+def test_decision_stays_distinct_from_concept_and_event() -> None:
+    """Loosening the entry price must not dissolve the boundary.
+
+    If `Decision` no longer needs rationale or alternatives, the only thing
+    keeping a topic from being filed as one is the explicit contrast with
+    `Concept` and `Event`. Dropping that contrast while loosening the
+    requirement would turn every discussed subject into a decision -- a
+    worse failure than the one #521 set out to fix, and one no fixture
+    would obviously catch.
+    """
+    llm = _FakeLLM(reply=_array(_DECISION_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "where no choice was made" in system_content
+    assert "where nothing was decided" in system_content
