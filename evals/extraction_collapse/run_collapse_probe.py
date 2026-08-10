@@ -79,6 +79,7 @@ from collapse_fixtures import (  # noqa: E402
     FLOOR,
     HYPOTHESES,
     MAX_LENGTH_SKEW,
+    STUB_TYPES,
     TREATMENT,
     PairedSource,
     length_skew,
@@ -97,6 +98,10 @@ class ArmResult:
     arm: str
     language: str
     retained: list[int] = field(default_factory=list)
+    produced: list[int] = field(default_factory=list)
+    """Objects the model PROPOSED, before the cap or backstop truncated
+    them. Without it the probe cannot tell a source that yielded four from
+    one that yielded fifteen and was cut to four."""
     types_per_run: list[collections.Counter[str]] = field(default_factory=list)
     titles_per_run: list[tuple[str, ...]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -125,6 +130,33 @@ class ArmResult:
         and a single metric covering both could show one improving while the
         other got worse."""
         return sum(1 for n in self.retained if n == 0)
+
+    @property
+    def truncated_runs(self) -> int:
+        """Runs where the cap or `_UNION_BACKSTOP` discarded proposals.
+
+        Truncation is over-production that the retained count HIDES: 14b hit
+        the backstop on the control while every verdict in the same report
+        read NOT REPRODUCED."""
+        return sum(
+            1
+            for kept, made in zip(self.retained, self.produced, strict=False)
+            if made > kept
+        )
+
+    @property
+    def stub_objects(self) -> int:
+        """Objects of a type the prompt itself forbids for these fixtures.
+
+        See `STUB_TYPES`: the people named in every pair are participants,
+        and the anti-enumeration paragraph rules them out by name, so these
+        need no adjudication to count as wrong."""
+        return sum(
+            count
+            for types in self.types_per_run
+            for name, count in types.items()
+            if name in STUB_TYPES
+        )
 
     @property
     def mean_objects(self) -> float:
@@ -200,7 +232,18 @@ def verdict(
     )
 
 
-def control_note(control: ArmResult | None) -> str:
+CONTROL_MODEL = "qwen3:8b"
+"""The model the positive control's premise is pinned to.
+
+#522 records `TS3005b.summary.txt` collapsing on `qwen3:8b`, and the SAME
+table records `qwen3:14b` yielding 7 objects on it. So the control is
+evidence about one model, not about the probe in general, and a sweep across
+models must not read its silence there as the instrument being blind. It
+also must not read it as an all-clear: on an unpinned model nothing in the
+run establishes that this probe can see the defect at all."""
+
+
+def control_note(control: ArmResult | None, model: str = CONTROL_MODEL) -> str:
     """How to read the positive control, or its absence.
 
     A probe that has never watched the defect fire cannot tell "framing is
@@ -225,6 +268,17 @@ def control_note(control: ArmResult | None) -> str:
             f"{control.runs} run(s), as #522 recorded. The probe can see the "
             "defect, so a verdict of NOT REPRODUCED elsewhere is about the "
             "fixture."
+        )
+    if model != CONTROL_MODEL:
+        return (
+            f"positive control: not applicable to {model} -- its premise is "
+            f"pinned to {CONTROL_MODEL}, where #522 records this source "
+            f"collapsing; the same table records larger models yielding "
+            f"several objects on it, so holding at {control.mean_objects:.1f} "
+            "here is expected rather than suspicious. This run therefore "
+            f"carries no sensitivity evidence for {model}: nothing in it "
+            "establishes that the probe can see the defect at this model, so "
+            "read the verdicts below as observations, not as absence."
         )
     return (
         f"positive control: SENSITIVITY UNCONFIRMED -- the known-collapsing "
@@ -259,10 +313,11 @@ def _arm_line(result: ArmResult) -> list[str]:
 def render(
     results: dict[str, tuple[ArmResult, ArmResult]],
     control: ArmResult | None = None,
+    model: str = CONTROL_MODEL,
 ) -> str:
     """The whole report, from the collected arms."""
     lines: list[str] = ["", "=" * 72, "COLLAPSE PROBE (#522)", "=" * 72, ""]
-    lines.append(control_note(control))
+    lines.append(control_note(control, model))
     if control is not None and control.retained:
         lines.append(f"  control objects per run: {control.retained}")
     lines.append("")
@@ -278,6 +333,52 @@ def render(
         lines += _arm_line(floor)
         lines.append(f"    -> {call}: {why}")
         lines.append("")
+
+    # Its own section, and unconditional, for the same reason the empty
+    # section is: the 14b run reported NOT REPRODUCED on every pair while
+    # emitting participant stubs and hitting the backstop. A probe that
+    # measures one failure mode and stays silent on its opposite will bless a
+    # prompt change that trades one for the other.
+    lines += ["", "=" * 72, "OVER-ENUMERATION (#522)", "=" * 72, ""]
+    lines.append(
+        "The opposite failure: enumerating every named entity instead of the "
+        "source's subjects. Stub counts are objects of a type the prompt's "
+        "own anti-enumeration paragraph forbids for these fixtures "
+        "(see STUB_TYPES); truncation means the cap or backstop discarded "
+        "proposals, which the retained count hides."
+    )
+    lines.append("")
+    stubs = 0
+    truncated = 0
+    for pair_id, arms in results.items():
+        for arm in arms:
+            stubs += arm.stub_objects
+            truncated += arm.truncated_runs
+            if arm.stub_objects or arm.truncated_runs:
+                lines.append(
+                    f"  {pair_id} [{arm.arm}]: {arm.stub_objects} stub "
+                    f"object(s), {arm.truncated_runs} truncated run(s), "
+                    f"mean {arm.mean_objects:.1f}"
+                )
+    if control is not None:
+        stubs += control.stub_objects
+        truncated += control.truncated_runs
+        if control.stub_objects or control.truncated_runs:
+            lines.append(
+                f"  positive control: {control.stub_objects} stub object(s), "
+                f"{control.truncated_runs} truncated run(s), "
+                f"mean {control.mean_objects:.1f}"
+            )
+    if stubs or truncated:
+        lines.append("")
+        lines.append(
+            f"  {stubs} stub object(s) and {truncated} truncated run(s) "
+            "overall -- the model contradicting an instruction it was given, "
+            "which needs no adjudication to score."
+        )
+    else:
+        lines.append("  none -- no stub objects, no truncated runs.")
+    lines.append("")
 
     # Its own section, and unconditional: an empty section that reads "none"
     # is the point. These were found by reading raw per-run lines, which is
@@ -391,6 +492,7 @@ def run_arm(
             result.errors.append(f"run {index}: {type(exc).__name__}: {exc}")
             continue
         result.retained.append(outcome.report.retained)
+        result.produced.append(outcome.report.produced)
         result.types_per_run.append(
             collections.Counter(obj.type for obj in outcome.objects)
         )
@@ -468,6 +570,17 @@ def _self_test() -> int:
     quiet_flat.types_per_run = [collections.Counter({"Concept": 4})] * 2
     made["quiet"] = (quiet_meeting, quiet_flat)
 
+    # Reproduces the 14b shape (#522): many objects, three of them Person
+    # stubs for participants merely named, plus a run the backstop truncated.
+    over_enumerating_arm = ArmResult("quiet", "flat", "EN")
+    over_enumerating_arm.retained = [4, 4]
+    over_enumerating_arm.produced = [4, 7]
+    over_enumerating_arm.types_per_run = [
+        collections.Counter({"Concept": 3, "Person": 1}),
+        collections.Counter({"Concept": 2, "Person": 2}),
+    ]
+    made["quiet"] = (quiet_meeting, over_enumerating_arm)
+
     report = render(made)
 
     # Explicit checks rather than `assert`: this file ships outside `tests/`,
@@ -527,6 +640,55 @@ def _self_test() -> int:
         (
             "not run" in control_note(None),
             "an absent control must read as absent, never as confirmation",
+        ),
+        (
+            "SENSITIVITY UNCONFIRMED"
+            not in control_note(
+                ArmResult("ctl", "control", "EN", retained=[8, 9, 8]),
+                model="qwen3:14b",
+            ),
+            "the control is pinned to one model: on a DIFFERENT model it not "
+            "collapsing is expected, and crying SENSITIVITY UNCONFIRMED makes "
+            "the harness invalidate its own report on every model sweep",
+        ),
+        (
+            "no sensitivity evidence"
+            in control_note(
+                ArmResult("ctl", "control", "EN", retained=[8, 9, 8]),
+                model="qwen3:14b",
+            ),
+            "but a non-applicable control is not an all-clear either -- "
+            "nothing then establishes the probe can see the defect at that "
+            "model, and the report must say so",
+        ),
+        (
+            "SENSITIVITY UNCONFIRMED"
+            in control_note(
+                ArmResult("ctl", "control", "EN", retained=[8, 9, 8]),
+                model=CONTROL_MODEL,
+            ),
+            "on the pinned model a non-collapsing control IS unconfirmed "
+            "sensitivity, and that must survive the model-awareness fix",
+        ),
+        (
+            ArmResult(
+                "x", "arm", "EN", retained=[12, 5], produced=[15, 5]
+            ).truncated_runs
+            == 1,
+            "a run whose proposals were truncated by the backstop is "
+            "over-production, and the probe was blind to it: 14b hit the cap "
+            "while every verdict read NOT REPRODUCED",
+        ),
+        (
+            over_enumerating_arm.stub_objects == 3,
+            "objects of a type the prompt's own anti-enumeration paragraph "
+            "forbids for this fixture must be counted -- 14b emitted Ana, "
+            "Marta and Luis as Person stubs and no metric noticed",
+        ),
+        (
+            "OVER-ENUMERATION (#522)" in report,
+            "over-production needs its own section: a prompt change that "
+            "fixes 8b by wrecking 14b would otherwise read as a clean win",
         ),
         (
             "meeting register"
@@ -674,7 +836,7 @@ def main(argv: list[str] | None = None) -> int:
             union_judge=args.union_judge,
         )
 
-    print(render(results, control))
+    print(render(results, control, args.model))
     return 0
 
 
