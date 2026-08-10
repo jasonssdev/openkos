@@ -117,6 +117,16 @@ class ArmResult:
         return self.runs > 0 and self.collapsed_runs * 2 > self.runs
 
     @property
+    def empty_runs(self) -> int:
+        """Runs where the model itself returned `[]` (#524).
+
+        Counted separately from `collapsed_runs` and never folded into it:
+        collapsing to one object and returning nothing are different defects,
+        and a single metric covering both could show one improving while the
+        other got worse."""
+        return sum(1 for n in self.retained if n == 0)
+
+    @property
     def mean_objects(self) -> float:
         return sum(self.retained) / self.runs if self.runs else 0.0
 
@@ -230,7 +240,8 @@ def _arm_line(result: ArmResult) -> list[str]:
         f"    {result.arm:<8} {result.runs} run(s), "
         f"objects {result.retained or '-'}, "
         f"mean {result.mean_objects:.1f}, "
-        f"collapsed {result.collapsed_runs}/{result.runs}"
+        f"collapsed {result.collapsed_runs}/{result.runs}, "
+        f"empty {result.empty_runs}/{result.runs}"
     ]
     if result.emitted_types:
         seen = ", ".join(sorted(result.emitted_types))
@@ -267,6 +278,47 @@ def render(
         lines += _arm_line(floor)
         lines.append(f"    -> {call}: {why}")
         lines.append("")
+
+    # Its own section, and unconditional: an empty section that reads "none"
+    # is the point. These were found by reading raw per-run lines, which is
+    # how a defect survives a harness that technically recorded it.
+    lines += ["", "=" * 72, "EMPTY EXTRACTIONS (#524)", "=" * 72, ""]
+    lines.append(
+        "The prompt's positive default says a source with substantive content "
+        "yields AT LEAST ONE object, and that [] is a last resort for blank or "
+        "unintelligible input. Every arm below is substantive."
+    )
+    lines.append("")
+    empties = 0
+    total = 0
+    for pair_id, arms in results.items():
+        for arm in arms:
+            empties += arm.empty_runs
+            total += arm.runs
+            if arm.empty_runs:
+                lines.append(
+                    f"  {pair_id} [{arm.arm}]: {arm.empty_runs} of "
+                    f"{arm.runs} run(s) returned []"
+                )
+    if control is not None:
+        empties += control.empty_runs
+        total += control.runs
+        if control.empty_runs:
+            lines.append(
+                f"  positive control: {control.empty_runs} of "
+                f"{control.runs} run(s) returned []"
+            )
+    if empties:
+        rate = empties / total if total else 0.0
+        lines.append("")
+        lines.append(
+            f"  {empties} of {total} run(s) overall ({rate:.0%}) -- silent "
+            "data loss: in the real pipeline such a source contributes "
+            "nothing to the knowledge base."
+        )
+    else:
+        lines.append("  none -- every run returned at least one object.")
+    lines.append("")
 
     # Reported per pair AND unioned, because they answer different questions:
     # the per-pair rows above say whether an axis is implicated, this says
@@ -308,19 +360,29 @@ def render(
     return "\n".join(lines)
 
 
-def run_arm(source: PairedSource, llm: object, runs: int) -> ArmResult:
+def run_arm(
+    source: PairedSource, llm: object, runs: int, *, union_judge: bool = False
+) -> ArmResult:
     """Extract from one arm `runs` times.
+
+    `union_judge` (#456) selects `extract_concept_union` -- union-of-runs plus
+    selector-judge -- over the single-pass `extract_concept`. It matters for
+    #524 specifically: `DEFAULT_UNION_JUDGE` is `True`, so the union path is
+    what production actually runs, and a single empty reply there may be
+    covered by the other run. An empty rate measured on the single-pass path
+    is therefore an upper bound on the shipped configuration, not its rate.
 
     `source_title` comes from the fixture rather than a filename: the title is
     part of what the meeting arm IS, and `extract_concept` feeds it to the
     twin-dropping pass, so borrowing one arm's title for the other would leak
     the framing this probe is trying to isolate."""
-    from openkos.extraction.concept import extract_concept
+    from openkos.extraction.concept import extract_concept, extract_concept_union
 
+    extractor = extract_concept_union if union_judge else extract_concept
     result = ArmResult(pair_id=source.pair_id, arm=source.arm, language=source.language)
     for index in range(1, runs + 1):
         try:
-            outcome = extract_concept(
+            outcome = extractor(
                 source.text,
                 source_title=source.source_title,
                 llm=llm,  # type: ignore[arg-type]
@@ -391,9 +453,16 @@ def _self_test() -> int:
     both_flat.types_per_run = [collections.Counter({"Concept": 1})] * 2
     made["both"] = (both_meeting, both_flat)
 
+    # One EMPTY run here on purpose (#524): the report must surface it even
+    # in a pair whose verdict is unremarkable, because that is exactly where
+    # an empty hides.
     quiet_meeting = ArmResult("quiet", "meeting", "EN")
-    quiet_meeting.retained = [4, 3]
-    quiet_meeting.types_per_run = [collections.Counter({"Concept": 4})] * 2
+    quiet_meeting.retained = [0, 4, 3]
+    quiet_meeting.types_per_run = [
+        collections.Counter(),
+        collections.Counter({"Concept": 4}),
+        collections.Counter({"Concept": 3}),
+    ]
     quiet_flat = ArmResult("quiet", "flat", "EN")
     quiet_flat.retained = [4, 4]
     quiet_flat.types_per_run = [collections.Counter({"Concept": 4})] * 2
@@ -477,6 +546,26 @@ def _self_test() -> int:
             "here rather than only at run time so a fixture edit cannot reach "
             "a measurement first",
         ),
+        (
+            ArmResult("x", "arm", "EN", retained=[0, 1, 1]).empty_runs == 1,
+            "an empty run must be counted (#524): the model returning [] on "
+            "substantive content is silent data loss, not a small object count",
+        ),
+        (
+            not ArmResult("x", "arm", "EN", retained=[0, 0, 1]).collapses,
+            "empty runs must NOT count toward collapse -- #522 and #524 are "
+            "different defects and a metric that merges them can show one "
+            "fixed by making the other worse",
+        ),
+        (
+            "EMPTY EXTRACTIONS (#524)" in report,
+            "empties must get their own section: they were found by reading "
+            "raw run lines, which is exactly how a defect stays unfixed",
+        ),
+        (
+            "1 of 3" in report,
+            "the empty section must carry the rate, not merely a flag",
+        ),
         (AXIS_IMPLICATED in report, "the report must carry the verdict"),
         (
             NO_FLOOR in report,
@@ -518,6 +607,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
+        "--union-judge",
+        action="store_true",
+        help="run extract_concept_union (#456) instead of the single-pass "
+        "extract_concept. DEFAULT_UNION_JUDGE is True, so this is the path "
+        "production actually runs (#524).",
+    )
+    parser.add_argument(
         "--positive-control",
         default=str(
             HERE.parent / "decision_extraction" / "sources" / "TS3005b.summary.txt"
@@ -542,7 +638,8 @@ def main(argv: list[str] | None = None) -> int:
     sampling = (
         f", temperature {args.temperature}" if args.temperature is not None else ""
     ) + (f", seed {args.seed}" if args.seed is not None else "")
-    print(f"model {args.model}, {args.runs} run(s) per arm{sampling}\n")
+    path = "extract_concept_union" if args.union_judge else "extract_concept"
+    print(f"model {args.model}, {args.runs} run(s) per arm, {path}{sampling}\n")
 
     results: dict[str, tuple[ArmResult, ArmResult]] = {}
     for pair_id, pair in pairs().items():
@@ -556,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
         arms: list[ArmResult] = []
         for source in pair:
             print(f"  {pair_id} [{source.arm}]")
-            arms.append(run_arm(source, llm, args.runs))
+            arms.append(run_arm(source, llm, args.runs, union_judge=args.union_judge))
         results[pair_id] = (arms[0], arms[1])
 
     control: ArmResult | None = None
@@ -574,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             llm,
             args.runs,
+            union_judge=args.union_judge,
         )
 
     print(render(results, control))
