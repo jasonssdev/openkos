@@ -155,6 +155,7 @@ def _cfg(exemption: bool) -> config.Config:
         confidential_local_exemption=exemption,
         volatility_windows={},
         type_tiers={},
+        models={},
         union_judge=config.DEFAULT_UNION_JUDGE,
     )
 

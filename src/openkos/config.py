@@ -21,6 +21,25 @@ from openkos.model import types
 DEFAULT_MODEL = "qwen3:8b"
 """The packaged default Ollama model tag, offered when no `--model` is given."""
 
+TASK_MODEL_KEYS = frozenset(
+    {
+        "extraction",
+        "adjudication",
+        "edge_typing",
+        "volatility_typing",
+        "contradiction",
+    }
+)
+"""Every task `models:` may name (issue #515), keyed by TASK rather than by
+verb -- see `Config.models` for why that distinction is load-bearing.
+
+Only `edge_typing` has a harness behind it today (`evals/edge_typing/`, the
+sweep in #516). The other four are accepted because restricting the schema
+to the one measured task would be arbitrary, NOT because a value for them
+is advisable: #508's rule is that a per-task default must be justified on a
+fixture, and three of these have no fixture at all. The docs say which is
+which; the schema does not pretend to."""
+
 DEFAULT_EMBEDDING_MODEL = "bge-m3"
 """The packaged default Ollama embedding model tag (ADR-0006: reliability-
 first -- `bge-m3` proved measurably more resilient to transient embed
@@ -602,6 +621,28 @@ class Config:
     passes through verbatim -- unknown-type/invalid-tier validation and the
     override step in the `volatility`/`type_tiers`/registry-default/fallback
     precedence stay in `lint.window_for_doc`, not here."""
+    models: dict[str, str]
+    """Per-task model overrides (issue #515): `{}` when absent or explicitly
+    null, mirroring `volatility_windows`/`type_tiers`'s `is not None`
+    fallback so this adds no new parsing convention.
+
+    Keyed by TASK, never by verb: `suggest_edge_types` is used by BOTH
+    `curate`'s Structure stage and standalone `suggest-relations`, and a
+    per-verb key would let those two drift onto different models -- the
+    drift #385's design already prevents by routing both through one write
+    core. The eval harnesses also score the task, not the verb, so a
+    per-task key is the only shape a measurement can justify.
+
+    Unlike its two passthrough precedents, entries ARE validated at read
+    time (see `read_config`): an unknown key or a malformed value is
+    refused rather than degraded. Silently falling back to the global
+    default is the dangerous option here -- the operator would keep writing
+    relation types believing they are getting the model they named.
+
+    A resolved value is never a promise the model is INSTALLED. That
+    failure is per-stage and surfaces at the `llm.chat` seam with the
+    actionable `ollama pull <model>` wording, failing only the stage that
+    named it."""
     union_judge: bool
     """Whether `ingest` uses the union-of-runs + selector-judge extraction
     pipeline (design D9, #456), defaulting to `DEFAULT_UNION_JUDGE` when the
@@ -651,6 +692,7 @@ def read_config(root: Path) -> Config:
     confidential_local_exemption = raw.get("confidential_local_exemption")
     volatility_windows = raw.get("volatility_windows")
     type_tiers = raw.get("type_tiers")
+    models = raw.get("models")
     union_judge = raw.get("union_judge")
     if model is not None and not isinstance(model, str):
         raise ValueError(
@@ -719,6 +761,37 @@ def read_config(root: Path) -> Config:
             f"{layout.config_path.name}: 'confidential_local_exemption' must be "
             f"a boolean, got {type(confidential_local_exemption).__name__}"
         )
+    if models is not None:
+        # Validated entry by entry, NOT passed through like
+        # `volatility_windows`/`type_tiers` (issue #515). Those two degrade a
+        # malformed value silently because a wrong freshness window shows up
+        # as a stale-stamp the operator can see and re-lint. A wrong model
+        # key does not: the run completes, the suggestions look ordinary, and
+        # relation types get written by a model the operator did not choose.
+        # #515 decision 2 refuses a silent fallback to the global default for
+        # a model that is not installed, and that reasoning does not
+        # distinguish a name that is missing from a name that is malformed.
+        if not isinstance(models, dict):
+            raise ValueError(
+                f"{layout.config_path.name}: 'models' must be a mapping of "
+                f"task -> model tag, got {type(models).__name__}"
+            )
+        for task, tag in models.items():
+            if task not in TASK_MODEL_KEYS:
+                known = ", ".join(sorted(TASK_MODEL_KEYS))
+                raise ValueError(
+                    f"{layout.config_path.name}: 'models' names unknown task "
+                    f"{task!r}; valid tasks are: {known}"
+                )
+            if not isinstance(tag, str):
+                raise ValueError(
+                    f"{layout.config_path.name}: 'models.{task}' must be a "
+                    f"string model tag, got {type(tag).__name__}"
+                )
+            if not tag.strip():
+                raise ValueError(
+                    f"{layout.config_path.name}: 'models.{task}' must not be blank"
+                )
     if union_judge is not None and not isinstance(union_judge, bool):
         # Validated, never coerced (design D9), mirroring
         # `confidential_local_exemption`'s own guard: `isinstance(x, bool)`
@@ -766,8 +839,49 @@ def read_config(root: Path) -> Config:
             volatility_windows if volatility_windows is not None else {}
         ),
         type_tiers=(type_tiers if type_tiers is not None else {}),
+        models=(models if models is not None else {}),
         union_judge=(union_judge if union_judge is not None else DEFAULT_UNION_JUDGE),
     )
+
+
+def resolve_task_model(cfg: Config, task: str | None) -> str:
+    """Return the model tag `task` should run on: `cfg.models[task]` when the
+    workspace named one, else the global `cfg.model` (issue #515).
+
+    `task=None` means "this caller is not one of the measured tasks" and
+    resolves to `cfg.model`. It is a first-class answer, not a missing
+    argument: `query` synthesizes an answer with no harness behind it, and
+    `curate`'s locality probe asks about the HOST rather than any task. Both
+    pass `None` deliberately, which lets every chat seam call this one
+    function instead of branching around it.
+
+    This is the whole per-task mechanism. `models:` is ADDITIVE -- a
+    workspace that keys `edge_typing` moves edge typing and nothing else, so
+    a config with no `models:` at all resolves every task to `cfg.model`
+    exactly as it did before this existed. That property is what let #515
+    collect edge typing's measured +0.37 without moving the extraction
+    pipeline `evals/extraction_cap/` tuned on `qwen3:8b`, which no harness
+    would have caught.
+
+    Never raises. `read_config` already refuses a malformed `models`, but
+    `Config` is a plain dataclass a fixture or a future caller can build
+    directly, and this function is read at every chat seam: an
+    `AttributeError` here would take down a verb that has a perfectly good
+    global default sitting right next to it. A non-mapping `models`, a
+    missing key, and a non-`str` value all fall back to `cfg.model` -- the
+    same defensive widening `lint.resolve_windows` applies to its own two
+    passthrough maps, for the same reason.
+
+    Returning a tag is NOT a claim the model is installed. `curate` and the
+    standalone verbs discover that at the `llm.chat` seam and fail only the
+    stage that named it (#515 decision 2)."""
+    raw: object = cfg.models
+    if task is None or not isinstance(raw, dict):
+        return cfg.model
+    tag = raw.get(task)
+    if not isinstance(tag, str) or not tag.strip():
+        return cfg.model
+    return tag.strip()
 
 
 _TYPE_TIERS_HEADER_PREFIX = "type_tiers:"
