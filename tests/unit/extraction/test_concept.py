@@ -398,11 +398,14 @@ def test_two_bare_objects_back_to_back_without_array_wrapping_returns_empty_list
     None
 ):
     """Two unwrapped bare objects back-to-back (`{...}{...}`, no `[...]`) are
-    NOT recovered: the greedy step-4 regex spans first-brace-to-last-brace
-    across both objects, that span fails `json.loads`, and the reply
-    degrades to `[]` -- the intentional fail-closed outcome for malformed,
-    non-array-wrapped multi-object replies (D2 recovers only a lone
-    object)."""
+    NOT recovered -- the intentional fail-closed outcome for malformed,
+    non-array-wrapped multi-object replies (D2 recovers only a lone object).
+
+    This used to be a side effect of the greedy `\\{.*\\}` step spanning both
+    objects and failing `json.loads`. That regex is gone, and the rule is
+    now stated in `parsing.extract_json_items`: returning the FIRST of
+    several bare objects would be silent truncation reported as success,
+    which is worse than a visible zero."""
     llm = _FakeLLM(reply=_CONCEPT_ITEM + _CONCEPT_ITEM)
 
     result = _objects("text", source_title="t", llm=llm)
