@@ -1464,6 +1464,13 @@ def test_prompt_frames_source_title_as_non_authoritative_metadata() -> None:
         "Standup 2026-08-07",
         "Project kickoff with the design team",
         "Engineering huddle",
+        # Spanish (#522). The guard shipped English-only, so a Spanish
+        # meeting source received exactly the priming the guard exists to
+        # remove -- and the collapse probe measured it collapsing 10/10.
+        "Reunión con el equipo de producto",
+        "Reunion de equipo",
+        "Reuniones semanales de producto",
+        "REUNIÓN DE SEGUIMIENTO",
     ],
 )
 def test_prompt_omits_meeting_shaped_source_title(title: str) -> None:
@@ -1496,6 +1503,14 @@ def test_prompt_omits_meeting_shaped_source_title(title: str) -> None:
         "Understanding session cookies",
         "Designing the sync engine",
         "Sales call transcript review",
+        # Spanish polysemes held OUT of the lexicon on #459's own grounds
+        # (#522). `junta` is a board or a mechanical gasket far more often
+        # than a gathering; `sesión` and `llamada` are the direct analogues
+        # of the excluded `session` and `call`.
+        "Junta directiva de accionistas",
+        "Junta de culata del motor",
+        "Sesión de diseño del producto",
+        "Llamada a la API de pagos",
     ],
 )
 def test_prompt_keeps_non_meeting_source_title(title: str) -> None:

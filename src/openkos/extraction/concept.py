@@ -257,7 +257,8 @@ class ExtractionResult:
 
 
 _MEETING_SHAPED_TITLE_RE: Final = re.compile(
-    r"\b(meeting|standup|retrospective|kickoff|huddle)\b", re.IGNORECASE
+    r"\b(meeting|standup|retrospective|kickoff|huddle|reuni[oó]n(?:es)?)\b",
+    re.IGNORECASE,
 )
 """A source title that names the document AS A GATHERING -- an
 extractable-Event-shaped container title (issue #459).
@@ -273,7 +274,21 @@ gatherings. Excluded on those grounds: `session` (auth/web sessions),
 (durations), `retro` (retro design/gaming). Extend only with a word whose
 gathering reading dominates technical corpora, and re-measure through
 `evals/extraction_cap/run_cap_eval.py` before adopting (#459's
-measure-first rule)."""
+measure-first rule).
+
+The lexicon shipped English-only, which made the guard silently inert on
+Spanish sources -- they received exactly the priming it exists to remove
+(#522). `evals/extraction_collapse/` measured a 747 B Spanish meeting note
+titled `Reunión con el equipo de producto` collapsing to one `Event` in
+10 of 10 union-path runs on `qwen3:8b`.
+
+`reuni[oó]n(?:es)?` covers the accented and unaccented spellings and the
+plural, because all three occur in real filenames and headings. Held OUT
+on #459's own asymmetry, and for the same reason `session`, `sync` and
+`call` are: `junta` is a board or a mechanical gasket far more often than
+a gathering, and `sesión`/`llamada` are the direct analogues of the
+excluded English words. `retrospectiva` is arguable and deliberately left
+for its own measurement rather than bundled in here."""
 
 
 def _build_messages(source_text: str, source_title: str) -> list[Message]:
