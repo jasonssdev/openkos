@@ -257,7 +257,8 @@ class ExtractionResult:
 
 
 _MEETING_SHAPED_TITLE_RE: Final = re.compile(
-    r"\b(meeting|standup|retrospective|kickoff|huddle)\b", re.IGNORECASE
+    r"\b(meeting|standup|retrospective|kickoff|huddle|reuni[oó]n(?:es)?)\b",
+    re.IGNORECASE,
 )
 """A source title that names the document AS A GATHERING -- an
 extractable-Event-shaped container title (issue #459).
@@ -273,7 +274,40 @@ gatherings. Excluded on those grounds: `session` (auth/web sessions),
 (durations), `retro` (retro design/gaming). Extend only with a word whose
 gathering reading dominates technical corpora, and re-measure through
 `evals/extraction_cap/run_cap_eval.py` before adopting (#459's
-measure-first rule)."""
+measure-first rule).
+
+The lexicon shipped English-only, which made the guard silently inert on
+Spanish sources -- they received exactly the priming it exists to remove
+(#522). `evals/extraction_collapse/` measured a 747 B Spanish meeting note
+titled `Reunión con el equipo de producto` collapsing to one `Event` in
+10 of 10 union-path runs on `qwen3:8b`.
+
+`reuni[oó]n(?:es)?` covers the accented and unaccented spellings and the
+plural, because all three occur in real filenames and headings. Held OUT
+on #459's own asymmetry, and for the same reason `session`, `sync` and
+`call` are: `junta` is a board or a mechanical gasket far more often than
+a gathering, and `sesión`/`llamada` are the direct analogues of the
+excluded English words. `retrospectiva` is arguable and deliberately left
+for its own measurement rather than bundled in here."""
+
+
+_LANGUAGE_ANCHOR: Final = (
+    'Write every "title", "description" and "body" in the same language as '
+    "the SOURCE TEXT below."
+)
+"""Language anchor for the no-title path ONLY (#522).
+
+Omitting a meeting-shaped title also removes the only source-language text
+from the user turn, and `_SYSTEM_PROMPT` is entirely English. Measured on
+`evals/extraction_collapse/`, qwen3:8b, union path: a Spanish source whose
+title was omitted emitted English titles in 28 of 30 runs, against 0 of 20
+with the title present -- and in the same comparison a genuine subject
+("Tareas pendientes") stopped being extracted at all.
+
+Deliberately NOT added to the titled path, which almost every source takes:
+that path already carries source-language text, and #459's asymmetry cuts
+both ways -- an unmeasured addition to the common path is exactly the shape
+of change that regressed `large-03` from 0.75 to 0.57."""
 
 
 def _build_messages(source_text: str, source_title: str) -> list[Message]:
@@ -297,7 +331,7 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
     title is genuinely descriptive FOR HUMANS, it is only the model's
     generation that it primes into a single-Event summary."""
     if _MEETING_SHAPED_TITLE_RE.search(source_title):
-        user_content = f"SOURCE TEXT:\n{source_text}"
+        user_content = f"{_LANGUAGE_ANCHOR}\n\nSOURCE TEXT:\n{source_text}"
     else:
         user_content = (
             f"SOURCE TITLE (metadata only, not authoritative -- treat as "
