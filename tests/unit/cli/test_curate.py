@@ -149,11 +149,13 @@ class _FakeConfig:
         review: bool = True,
         chat_timeout: float = config.DEFAULT_CHAT_TIMEOUT,
         max_generation_tokens: int = config.DEFAULT_MAX_GENERATION_TOKENS,
+        models: dict[str, str] | None = None,
     ) -> None:
         self.model = model
         self.review = review
         self.chat_timeout = chat_timeout
         self.max_generation_tokens = max_generation_tokens
+        self.models = models or {}
 
 
 class _FakeLayout:
@@ -167,11 +169,16 @@ class _FakeLayout:
         self.vectors_db_path = root / ".openkos" / "vectors.db"
 
 
-def _fake_ctx(tmp_path: Path, *, auto: bool = False) -> curate.CurateContext:
+def _fake_ctx(
+    tmp_path: Path,
+    *,
+    auto: bool = False,
+    models: dict[str, str] | None = None,
+) -> curate.CurateContext:
     return curate.CurateContext(
         root=tmp_path,
         layout=_FakeLayout(tmp_path),  # type: ignore[arg-type]
-        cfg=_FakeConfig(),  # type: ignore[arg-type]
+        cfg=_FakeConfig(models=models),  # type: ignore[arg-type]
         auto=auto,
     )
 
@@ -188,6 +195,7 @@ def _fake_stage(
     unattended_hint: str | None = "openkos stub --apply",
     halts_run: bool = False,
     live: bool = True,
+    task: str | None = None,
 ) -> curate.Stage:
     def _default_probe(ctx: curate.CurateContext) -> curate.StageProbe:
         return curate.StageProbe()
@@ -207,6 +215,7 @@ def _fake_stage(
         unattended_hint=unattended_hint,
         halts_run=halts_run,
         live=live,
+        task=task,
     )
 
 
@@ -843,7 +852,9 @@ def test_ollama_model_not_found_also_short_circuits(
     ctx = _fake_ctx(Path("unused-root"), auto=True)
     curate.run_curate(ctx)
 
-    assert ctx.ollama_unavailable_notice is not None
+    # #515 re-keyed this from a run-scoped flag to a per-model map; the
+    # assertion is the same claim, addressed by the model that failed.
+    assert list(ctx.ollama_unavailable_notices) == ["stub-model"]
 
 
 def test_generic_ollama_error_fails_only_that_stage(
@@ -885,7 +896,9 @@ def test_generic_ollama_error_fails_only_that_stage(
     assert calls == ["First", "Second"]
     assert outcomes[0].status == "failed"
     assert outcomes[1].status == "applied"
-    assert ctx.ollama_unavailable_notice is None
+    # A generic `OllamaError` marks NO model unreachable, so nothing is
+    # skipped downstream -- the ordering discipline #515 left untouched.
+    assert ctx.ollama_unavailable_notices == {}
 
 
 # ---------------------------------------------------------------------------
@@ -3657,3 +3670,261 @@ def test_structure_without_accept_prints_no_bulk_advisory(
 
     assert result.exit_code == 0
     assert "applied without review" not in result.stderr
+
+
+# --- #515: per-task models make availability a PER-MODEL fact ---------------
+
+
+def test_every_llm_stage_declares_the_task_it_spends_on() -> None:
+    """Each `needs_llm` stage names a task in `TASK_MODEL_KEYS`; Preconditions
+    names none.
+
+    A stage that forgets `task=` keeps the global model in silence -- the
+    same silent-wrong-model failure #515 decision 2 refuses, just on the
+    `curate` side of the seam. `curate.py` cannot import `main.py`, so
+    nothing else forces these five to agree with the config schema.
+    """
+    declared = {stage.name: stage.task for stage in curate._STAGES}
+
+    assert declared == {
+        "Preconditions": None,
+        "Identity": "adjudication",
+        "Structure": "edge_typing",
+        "Metadata": "volatility_typing",
+        "Contradictions": "contradiction",
+    }
+    for task in declared.values():
+        assert task is None or task in config.TASK_MODEL_KEYS
+
+
+def test_unavailability_no_longer_skips_a_stage_on_a_DIFFERENT_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run-scoped skip becomes PER-MODEL (#515 decision 3).
+
+    Structure failing for want of `gemma2:27b` says nothing about whether
+    Metadata's model is reachable. Before per-task models the two were the
+    same tag, so one failure genuinely did settle the question; now it does
+    not, and skipping on that basis would refuse work that would have
+    succeeded.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
+    calls: list[str] = []
+
+    def _failing_run(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        calls.append("First")
+        raise OllamaUnavailable("connection refused")
+
+    def _second_run(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        calls.append("Second")
+        return curate.StageOutcome(status="applied", applied=1)
+
+    first = _fake_stage(
+        "First",
+        probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+        run=_failing_run,
+        writes=False,
+        task="edge_typing",
+    )
+    second = _fake_stage(
+        "Second",
+        probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+        run=_second_run,
+        writes=False,
+        task="volatility_typing",
+    )
+    monkeypatch.setattr(curate, "_STAGES", (first, second))
+    monkeypatch.setattr(curate, "OllamaClient", lambda **kwargs: _OfflineOllama())
+
+    ctx = _fake_ctx(
+        Path("unused-root"), auto=True, models={"edge_typing": "gemma2:27b"}
+    )
+    outcomes = curate.run_curate(ctx)
+
+    assert calls == ["First", "Second"]
+    assert outcomes[0].status == "unavailable"
+    assert outcomes[1].status == "applied"
+
+
+def test_unavailability_still_skips_a_later_stage_on_the_SAME_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no `models:` override every stage resolves the same tag, so one
+    dead connection still settles the question for all of them.
+
+    This is the invariant #515 preserves for every workspace that has not
+    opted in: the per-model keying is what CHANGED, not the skip itself.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
+    calls: list[str] = []
+
+    def _failing_run(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        calls.append("First")
+        raise OllamaUnavailable("connection refused")
+
+    def _second_run(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        calls.append("Second")
+        return curate.StageOutcome(status="applied", applied=1)
+
+    first = _fake_stage(
+        "First",
+        probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+        run=_failing_run,
+        writes=False,
+        task="edge_typing",
+    )
+    second = _fake_stage(
+        "Second",
+        probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+        run=_second_run,
+        writes=False,
+        task="volatility_typing",
+    )
+    monkeypatch.setattr(curate, "_STAGES", (first, second))
+    monkeypatch.setattr(curate, "OllamaClient", lambda **kwargs: _OfflineOllama())
+
+    ctx = _fake_ctx(Path("unused-root"), auto=True)  # no `models:` override
+    outcomes = curate.run_curate(ctx)
+
+    assert calls == ["First"]
+    assert outcomes[1].status == "unavailable"
+    assert "see above" in (outcomes[1].notice or "")
+
+
+def test_stages_sharing_a_model_share_one_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clients are cached BY MODEL, not rebuilt per stage.
+
+    The cost of keying availability per model (#515 decision 3) is one
+    failed connection per DISTINCT model instead of one per run. That cost
+    is only bounded if stages resolving the same tag reuse one client --
+    otherwise the change would multiply connections by stage count.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
+    built: list[str] = []
+
+    def _record(**kwargs: object) -> _OfflineOllama:
+        built.append(str(kwargs["model"]))
+        return _OfflineOllama()
+
+    monkeypatch.setattr(curate, "OllamaClient", _record)
+    stages = tuple(
+        _fake_stage(
+            name,
+            probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+            writes=False,
+            task=task,
+        )
+        for name, task in (
+            ("First", "edge_typing"),
+            ("Second", "volatility_typing"),
+            ("Third", "contradiction"),
+        )
+    )
+    monkeypatch.setattr(curate, "_STAGES", stages)
+
+    ctx = _fake_ctx(
+        Path("unused-root"), auto=True, models={"edge_typing": "gemma2:27b"}
+    )
+    curate.run_curate(ctx)
+
+    # `gemma2:27b` once for Structure's task; `stub-model` once, SHARED by
+    # the two stages that both fall back to the global default.
+    assert built == ["gemma2:27b", "stub-model"]
+
+
+def test_model_not_found_names_the_STAGE_model_not_the_global_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `ollama pull` remediation names the model the stage actually
+    asked for.
+
+    Naming `cfg.model` here would send the operator to pull a model that is
+    already installed while the one that is missing stays missing -- the
+    remediation would be actively wrong, which is worse than absent.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)
+
+    def _failing_run(
+        ctx: curate.CurateContext, probe: curate.StageProbe
+    ) -> curate.StageOutcome:
+        raise OllamaModelNotFound("model missing")
+
+    stage = _fake_stage(
+        "First",
+        probe=lambda ctx: curate.StageProbe(items=(1,), llm_calls=1),
+        run=_failing_run,
+        writes=False,
+        task="edge_typing",
+    )
+    monkeypatch.setattr(curate, "_STAGES", (stage,))
+    monkeypatch.setattr(curate, "OllamaClient", lambda **kwargs: _OfflineOllama())
+
+    ctx = _fake_ctx(
+        Path("unused-root"), auto=True, models={"edge_typing": "gemma2:27b"}
+    )
+    outcomes = curate.run_curate(ctx)
+
+    notice = outcomes[0].notice or ""
+    assert "ollama pull gemma2:27b" in notice
+    assert "stub-model" not in notice
+
+
+def test_cost_gate_names_the_model_when_the_stage_resolves_a_different_one(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The gate discloses WHICH model the operator is consenting to spend on.
+
+    `74 untyped edge(s) -> 74 LLM call(s)` means ~1.6 minutes on the default
+    and ~9 on `gemma2:27b` (#516's sweep). Asking for consent to a cost the
+    line does not describe is the same disclosure gap #468 closed elsewhere.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Structure", noun="untyped edge", task="edge_typing")
+    probe = curate.StageProbe(items=(1,), llm_calls=74)
+    ctx = _fake_ctx(
+        Path("unused-root"), auto=True, models={"edge_typing": "gemma2:27b"}
+    )
+
+    curate.gate(stage, probe, ctx)
+
+    err = capsys.readouterr().err
+    assert "74 untyped edge(s) -> 74 LLM call(s)" in err
+    assert "gemma2:27b" in err
+
+
+def test_cost_gate_output_is_unchanged_when_the_stage_uses_the_global_model(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A stage on the global model prints EXACTLY the pre-#515 gate output.
+
+    The `curate-command` spec pins this line byte-identical for a below-cap
+    corpus ("Below-Cap Cost-Line Output Is Byte-Identical To Pre-Change
+    Behavior"). Disclosing the model on a SEPARATE line, only when it
+    differs from the global default, satisfies #515's disclosure duty
+    without touching that requirement: a workspace with no `models:` sees
+    output identical to today's, byte for byte.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Identity", noun="candidate group", task="adjudication")
+    probe = curate.StageProbe(items=(1,), llm_calls=6)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    assert capsys.readouterr().err == "6 candidate group(s) -> 6 LLM call(s)\n"

@@ -130,7 +130,7 @@ app = typer.Typer()
 _PREFLIGHT_TIMEOUT = 5.0
 
 
-def _chat_client(cfg: config.Config) -> OllamaClient:
+def _chat_client(cfg: config.Config, *, task: str | None = None) -> OllamaClient:
     """Build the CHAT client for a workspace, honoring its `chat_timeout`.
 
     Every chat verb goes through here (issue #405). Constructing
@@ -156,9 +156,28 @@ def _chat_client(cfg: config.Config) -> OllamaClient:
     Also honors `cfg.max_generation_tokens` (issue #422): the safety rail
     on how much a single chat call may GENERATE, distinct from
     `chat_timeout`'s bound on how long the client WAITS.
+
+    `task` (issue #515) names which measured task this client is for, so
+    `config.resolve_task_model` can honor a `models:` override. Omitting it
+    keeps `cfg.model` -- and the two callers that omit it do so
+    deliberately, not by oversight:
+
+    - `query` synthesizes an answer, which is NOT one of the five keys in
+      `TASK_MODEL_KEYS`. It has no harness, so #508's rule ("a per-task
+      default must be justified on a fixture") forbids inventing a key for
+      it here.
+    - `curate`'s `_resolve_local_exemption` probe asks the client for its
+      `locality`, a property of the HOST it would connect to. That answer
+      is identical whichever model tag the client carries, so resolving a
+      task model for it would imply a per-task locality that does not
+      exist.
+
+    The per-task tag changes WHICH model runs and nothing else: both safety
+    rails still apply, which matters most precisely for the large models
+    #516's sweep favors at edge typing.
     """
     return OllamaClient(
-        model=cfg.model,
+        model=config.resolve_task_model(cfg, task),
         timeout=cfg.chat_timeout,
         max_generation_tokens=cfg.max_generation_tokens,
     )
@@ -3326,7 +3345,7 @@ def _ingest_single(
             stamp_sensitivity=source_sensitivity,
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             bundle_dir=layout.bundle_dir,
-            llm=_chat_client(cfg),
+            llm=_chat_client(cfg, task="extraction"),
             include_confidential=include_confidential,
             union_judge=cfg.union_judge,
         )
@@ -9042,7 +9061,7 @@ def adjudicate(
     notice = candidate_group_truncation_notice(report)
     if notice is not None:
         typer.echo(notice, err=True)
-    llm = _chat_client(cfg)
+    llm = _chat_client(cfg, task="adjudication")
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -9320,7 +9339,7 @@ def suggest_relations_cmd(
     # the SAME client the later `suggest_edge_types` will send through
     # (issue #240). Construction performs no I/O -- it only resolves and
     # stores the host -- so nothing is contacted by moving it up.
-    llm = _chat_client(cfg)
+    llm = _chat_client(cfg, task="edge_typing")
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -9558,7 +9577,7 @@ def suggest_volatility_cmd(
         )
         raise typer.Exit(code=1) from exc
 
-    llm = _chat_client(cfg)
+    llm = _chat_client(cfg, task="volatility_typing")
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,
@@ -9736,7 +9755,7 @@ def contradictions(
         )
         raise typer.Exit(code=1) from exc
 
-    llm = _chat_client(cfg)
+    llm = _chat_client(cfg, task="contradiction")
     local_exemption = _resolve_local_exemption(llm, cfg)
     observability.warn_if_walk_incomplete(
         layout.bundle_dir,

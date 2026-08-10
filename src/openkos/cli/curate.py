@@ -173,17 +173,32 @@ class Stage:
     what keeps a future writing stage from silently inheriting accept-all
     just by being added to `_STAGES`."""
 
+    task: str | None = None
+    """Which measured task this stage's LLM calls belong to (issue #515), or
+    `None` for a stage that makes none.
+
+    Keyed by TASK rather than by stage NAME on purpose: `Structure` and the
+    standalone `suggest-relations` verb both run `suggest_edge_types`, and
+    naming the task is what routes them to the same `models:` entry. A
+    stage-name key would let the two drift onto different models -- the
+    drift #385's design already prevents by routing both through one write
+    core.
+
+    A `needs_llm` stage that leaves this `None` silently keeps the global
+    model; `test_every_llm_stage_declares_the_task_it_spends_on` is what
+    turns that into a failing test rather than a quiet wrong-model run."""
+
 
 @dataclass
 class CurateContext:
     """Everything one `curate` invocation threads through every stage.
 
     Deliberately NOT frozen (unlike `Stage`/`StageProbe`/`StageOutcome`):
-    `ollama_client` and `ollama_unavailable_notice` are run-scoped mutable
-    state the sequencer fills in as the run progresses (design D7's lazy
-    client and short-circuit flag) -- there is exactly one `CurateContext`
-    per run, built once by the `curate` command and threaded by reference,
-    never copied."""
+    `ollama_client`, `ollama_clients` and `ollama_unavailable_notices` are
+    run-scoped mutable state the sequencer fills in as the run progresses
+    (design D7's lazy client and short-circuit flag, re-keyed per model by
+    #515) -- there is exactly one `CurateContext` per run, built once by the
+    `curate` command and threaded by reference, never copied."""
 
     root: Path
     layout: config.WorkspaceLayout
@@ -217,7 +232,35 @@ class CurateContext:
     `auto_acceptable` stages, which is why no code downstream re-checks
     whether Identity slipped in: it structurally cannot."""
     ollama_client: LLMBackend | None = field(default=None, init=False)
-    ollama_unavailable_notice: str | None = field(default=None, init=False)
+    """The client for the stage currently running -- reassigned by the
+    sequencer before each `needs_llm` stage's `run`.
+
+    Was a build-once, run-scoped client before per-task models (#515). It
+    stays a single attribute because every stage `run` reads exactly this
+    one, and reshaping four call sites to look up their own client would
+    have moved the model decision INTO the stages, where a stage could
+    disagree with the model its own cost gate had just disclosed."""
+    ollama_clients: dict[str, LLMBackend] = field(default_factory=dict, init=False)
+    """Every client built this run, keyed by MODEL TAG (issue #515).
+
+    Keyed by model rather than by stage so the stages that resolve the same
+    tag -- every stage, in a workspace with no `models:` override -- share
+    one client. Without that sharing, keying availability per model would
+    multiply connections by stage count instead of by distinct model."""
+    ollama_unavailable_notices: dict[str, str] = field(default_factory=dict, init=False)
+    """Which MODELS proved unreachable this run, keyed by tag (#515).
+
+    Replaces a single run-scoped `ollama_unavailable_notice`. That flag
+    encoded a claim that stopped being true once stages could run on
+    different models: Structure failing for want of `gemma2:27b` says
+    nothing about whether Metadata's model is reachable, and skipping
+    Metadata on that basis would refuse work that would have succeeded.
+
+    The deliberate cost, stated rather than discovered: against a genuinely
+    dead server, a run now pays one failed connection per DISTINCT model
+    instead of one per run. Those failures are fast (a refused connection,
+    not a timeout), and the alternative is silently skipping stages that had
+    nothing to do with the failure."""
     partial_progress: StageOutcome | None = field(default=None, init=False)
     """What a WRITING stage had already applied when an availability failure
     forced it to re-raise instead of return (issue #468 item 4).
@@ -253,6 +296,42 @@ def cost_line(stage: Stage, probe: StageProbe) -> str:
     without this helper needing to change."""
     n = probe.llm_calls
     return f"{n} {stage.noun}(s) -> {n} LLM call(s)"
+
+
+def stage_model(ctx: CurateContext, stage: Stage) -> str:
+    """The model tag `stage` resolves to this run (issue #515).
+
+    One function so the cost gate, the client cache, the availability map,
+    and the `ollama pull` remediation cannot disagree about which model a
+    stage is talking to. A gate that disclosed one model while the run
+    contacted another would be worse than no disclosure at all."""
+    return config.resolve_task_model(ctx.cfg, stage.task)
+
+
+def model_notice(ctx: CurateContext, stage: Stage) -> str | None:
+    """The gate's model-disclosure line, or `None` when there is nothing to
+    disclose (issue #515).
+
+    Returns a line ONLY when the stage resolves a model other than the
+    global `model:`. Two reasons it is a separate line rather than a suffix
+    on `cost_line`, and conditional rather than unconditional:
+
+    - The `curate-command` spec pins the below-cap cost line byte-identical
+      ("Below-Cap Cost-Line Output Is Byte-Identical To Pre-Change
+      Behavior"). A suffix would rewrite that pinned literal for every
+      workspace, including the ones that never opted into `models:`.
+    - The disclosure gap #515 identified only EXISTS when a stage runs on
+      something other than the default: `74 untyped edge(s) -> 74 LLM
+      call(s)` is ~1.6 minutes on `qwen3:8b` and ~9 on `gemma2:27b` (#516's
+      sweep). When the two agree, the line already describes what is being
+      consented to.
+
+    So a workspace with no `models:` sees today's output byte for byte, and
+    one that opted in is told which model its consent is buying."""
+    model = stage_model(ctx, stage)
+    if model == ctx.cfg.model:
+        return None
+    return f"openkos curate: {stage.name}: this stage runs on '{model}'."
 
 
 def parse_accepted_stages(accept: str | None) -> frozenset[str] | None:
@@ -419,8 +498,16 @@ def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
 
     `probe.notice` is deliberately NOT printed here: `run_curate` echoes it
     the moment the probe returns, so it survives the branches that never
-    reach this gate (#378)."""
+    reach this gate (#378).
+
+    The model-disclosure line (#515) IS printed here, unlike `probe.notice`,
+    and for the mirror-image reason: it describes what this consent is
+    buying, so it belongs on the branches that ASK. A stage that never
+    reaches the gate spends nothing, and has no model spend to disclose."""
     typer.echo(cost_line(stage, probe), err=True)
+    notice = model_notice(ctx, stage)
+    if notice is not None:
+        typer.echo(notice, err=True)
     if ctx.auto:
         return True
     if sys.stdin.isatty():
@@ -1253,6 +1340,7 @@ _STAGES: tuple[Stage, ...] = (
         writes=True,
         unattended_hint="openkos adjudicate --apply-same --confirm-count <n>",
         live=True,
+        task="adjudication",
     ),
     Stage(
         name="Structure",
@@ -1264,6 +1352,7 @@ _STAGES: tuple[Stage, ...] = (
         unattended_hint="openkos relate <source> <type> <target>",
         live=True,
         auto_acceptable=True,
+        task="edge_typing",
     ),
     Stage(
         name="Metadata",
@@ -1275,6 +1364,7 @@ _STAGES: tuple[Stage, ...] = (
         unattended_hint="openkos set-volatility <concept> <tier>",
         live=True,
         auto_acceptable=True,
+        task="volatility_typing",
     ),
     Stage(
         name="Contradictions",
@@ -1284,6 +1374,7 @@ _STAGES: tuple[Stage, ...] = (
         needs_llm=True,
         writes=False,
         live=True,
+        task="contradiction",
     ),
 )
 """D1 order, all five entries declared at runtime (design D2): Preconditions,
@@ -1355,7 +1446,14 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             outcomes.append(StageOutcome(status="empty", notice=probe.empty_message))
             continue
 
-        if stage.needs_llm and ctx.ollama_unavailable_notice is not None:
+        # #515: keyed by THIS stage's model, not by the run. A stage is
+        # skipped only when the model IT would contact already failed --
+        # `gemma2:27b` being missing says nothing about the reachability of
+        # the tag a later stage resolves. In a workspace with no `models:`
+        # every stage resolves the same tag, so this is byte-for-byte the
+        # pre-#515 run-scoped skip.
+        model = stage_model(ctx, stage)
+        if stage.needs_llm and model in ctx.ollama_unavailable_notices:
             outcomes.append(
                 StageOutcome(
                     status="unavailable",
@@ -1398,12 +1496,26 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
             )
             continue
 
-        if stage.needs_llm and ctx.ollama_client is None:
-            ctx.ollama_client = OllamaClient(
-                model=ctx.cfg.model,
-                timeout=ctx.cfg.chat_timeout,
-                max_generation_tokens=ctx.cfg.max_generation_tokens,
-            )
+        if stage.needs_llm:
+            cached = ctx.ollama_clients.get(model)
+            if cached is None:
+                # `model=config.resolve_task_model(...)` rather than the
+                # `model` local computed above, though the two are equal by
+                # construction: `test_chat_timeout_wiring.py` reads THIS
+                # source to prove every chat client carries the workspace's
+                # `chat_timeout` and `max_generation_tokens`, and it
+                # recognizes a chat client by the shape of its `model=`
+                # argument. A bare local name is indistinguishable there
+                # from the liveness probes' own `model=` locals, which must
+                # NOT be governed by those two settings -- so writing the
+                # resolver call keeps that guard able to see this site.
+                cached = OllamaClient(
+                    model=config.resolve_task_model(ctx.cfg, stage.task),
+                    timeout=ctx.cfg.chat_timeout,
+                    max_generation_tokens=ctx.cfg.max_generation_tokens,
+                )
+                ctx.ollama_clients[model] = cached
+            ctx.ollama_client = cached
 
         try:
             outcome = stage.run(ctx, probe)
@@ -1412,15 +1524,20 @@ def run_curate(ctx: CurateContext) -> list[StageOutcome]:
                 f"unavailable -- {exc}. Start it with "
                 f"`ollama serve`, then try again.{_DOCTOR_HINT}"
             )
-            ctx.ollama_unavailable_notice = notice
+            ctx.ollama_unavailable_notices[model] = notice
             outcome = _availability_outcome(ctx, notice)
         except OllamaModelNotFound:
+            # Names the model THIS stage resolved, not `cfg.model` (#515).
+            # A remediation naming the global default would send the
+            # operator to pull a model that is already installed while the
+            # one actually missing stays missing -- actively wrong guidance,
+            # which is worse than none.
             notice = (
-                f"unavailable -- model '{ctx.cfg.model}' is not "
-                f"installed. Pull it with `ollama pull {ctx.cfg.model}`, then "
+                f"unavailable -- model '{model}' is not "
+                f"installed. Pull it with `ollama pull {model}`, then "
                 "try again."
             )
-            ctx.ollama_unavailable_notice = notice
+            ctx.ollama_unavailable_notices[model] = notice
             outcome = _availability_outcome(ctx, notice)
         # The two specific handlers above MUST precede this generic one:
         # both subclass `OllamaError`, mirroring `adjudicate`'s ordering

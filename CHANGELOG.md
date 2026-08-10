@@ -16,6 +16,29 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Added
 
+- **A different model per task, so edge typing can use one that is good at
+  it**: a new optional `models:` map in `openkos.yaml` overrides `model:`
+  for a single task — `extraction`, `adjudication`, `edge_typing`,
+  `volatility_typing`, or `contradiction` — leaving every task it does not
+  name on the global default. This exists because the eight-model sweep in
+  #516 found the best relation typer measured is the worst extractor
+  measured: `gemma2:27b` scores 0.81 on `evals/edge_typing/`'s fixture
+  against the default `qwen3:8b`'s 0.44, and on the same corpus collapses
+  extraction to 0.24 subject recall on the long English fixture and 0.00 on
+  the Spanish one. A +0.37 was sitting in a config value that a single
+  global `model:` could not express without moving the extraction pipeline
+  blind. Keyed by task rather than by verb, so `curate`'s Structure stage
+  and standalone `suggest-relations` — both `suggest_edge_types` — cannot
+  drift onto different models. Only `edge_typing` has a harness behind it;
+  the other four keys are accepted because restricting the schema would be
+  arbitrary, and the docs say plainly which has evidence. An unknown key or
+  a malformed value is refused when the config is read rather than
+  degraded, and a named model that is not installed fails only the stage
+  that named it, with the usual `ollama pull` remediation naming that model
+  — never a silent fallback to the default, which would keep writing
+  relation types from a model the operator did not choose. Nothing changes
+  for a workspace that does not opt in (#515).
+
 - **`lint` and `status` now detect an unbacked provenance claim**: a
   `relations:` entry typed `derived_from` whose target the same document's
   `provenance:` never records asserts a compilation that never happened.
@@ -164,6 +187,23 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ### Changed
 
+- **`curate` now tracks Ollama availability per model rather than per run**:
+  before per-task models a single `OllamaUnavailable` settled reachability
+  for the whole run, because every stage contacted the same tag. That claim
+  stops being true once stages can resolve different models — Structure
+  failing for want of `gemma2:27b` says nothing about whether Metadata's
+  model is reachable, and skipping Metadata on that basis refuses work that
+  would have succeeded. The deliberate cost, stated rather than discovered:
+  against a genuinely dead server a run now pays one failed connection per
+  *distinct* model instead of one per run. Clients are cached by model so
+  stages sharing a tag share one connection, and a workspace with no
+  `models:` override resolves one tag everywhere — observable behavior
+  unchanged. `curate`'s cost gate also now names the model on a separate
+  line whenever a stage resolves one other than the global default, since
+  the same `74 untyped edge(s) -> 74 LLM call(s)` line means roughly 1.6
+  minutes on `qwen3:8b` and 9 on `gemma2:27b`; the pinned cost-line literal
+  itself is untouched, so gate output is byte-identical without `models:`
+  (#515).
 - **BREAKING — `adjudicate --json` now emits an object, not a bare array**:
   the payload is `{"partial": bool, "adjudicated": int, "total": int,
   "results": [...]}`, where `results` is exactly the array previous versions

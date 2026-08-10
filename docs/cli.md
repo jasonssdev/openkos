@@ -540,6 +540,8 @@ max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call m
 #   volatile: 7d
 # type_tiers:             # per-concept-type volatility tier overrides (overrides
 #   Person: volatile      # the built-in registry default; see docs/adr/0007)
+# models:                 # per-task model overrides; unlisted tasks keep `model:`
+#   edge_typing: gemma2:27b   # measure before adding a key — see below
 
 # Layout — where the engine keeps things, relative to this file.
 raw: raw/                 # immutable sources; any extension, never rewritten
@@ -575,6 +577,34 @@ The default is grounded in a measurement (2026-08-06): five extraction calls thr
 A value that is absent or explicitly null falls back to the default. A non-positive value, a boolean, a fraction, or one of Ollama's own `num_predict` sentinels (`0` = return no completion, `-1` = unlimited, `-2` = fill the context window) is refused when the config is read, rather than silently accepted: `-1` would silently disable the very bound this setting installs.
 
 When the ceiling is reached before the model finishes, the client raises `OllamaGenerationCapped` rather than returning the truncated reply — a truncated JSON reply cannot be salvaged (`extract_json_items` returns `[]` on a mid-object truncation), so this lands in the same loud, per-source failure handling a hung call already gets, rather than a silent empty result. It does **not** protect against a slow-but-terminating generation (`chat_timeout` covers that), and it does not improve extraction quality — only `_MAX_OBJECTS_PER_SOURCE` and the prompt itself govern what gets kept.
+
+### `models` — a different model per task
+
+`model:` is the model every LLM-calling verb uses. `models:` overrides it for one task at a time; every task you do not name keeps `model:`.
+
+```yaml
+model: qwen3:8b        # unchanged default for everything
+models:
+  edge_typing: gemma2:27b
+```
+
+Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing`, `contradiction`. They are keyed by **task**, not by command — `edge_typing` covers both `curate`'s Structure stage and standalone `suggest-relations`, so the two cannot drift onto different models. An unknown key, a non-string value, or a blank value is refused when the config is read, rather than silently falling back: a typo that quietly resolved to the global default would keep writing relation types from a model you did not choose.
+
+**Only `edge_typing` has evidence behind it.** The sweep in [#516](https://github.com/jasonssdev/openkos/issues/516) measured eight models on the same 17-edge fixture through `evals/edge_typing/`:
+
+| model | relation-type accuracy | s/edge |
+|---|---|---|
+| `gemma2:27b` | **0.81** | 7.0 |
+| `qwen3:14b` | 0.66 | 2.1 |
+| `gemma2:9b` | 0.63 | 2.8 |
+| `qwen3:8b` *(default)* | 0.44 | 1.3 |
+| `mistral:7b` | 0.27 | 1.3 |
+
+That is why this setting exists rather than a new default: `gemma2:27b` nearly doubles relation-type accuracy **and** collapses extraction on the same corpus (0.24 subject recall on the long English fixture, 0.00 on the Spanish one, against `qwen3:8b`'s 0.81 and 0.76). No model measured is a safe global replacement. Note the latency too — a 74-edge Structure stage is roughly 9 minutes on `gemma2:27b` against 1.6 on the default, which is why `curate`'s cost gate names the model whenever a stage resolves one other than `model:`.
+
+**The other four keys are accepted, not recommended.** `extraction` was tuned on `qwen3:8b` through `evals/extraction_cap/`, and `adjudication`, `volatility_typing`, and `contradiction` have no harness at all — there is no fixture on which to justify a value, so setting one is a guess. If you want to move one, build the harness first and measure every candidate on the same fixture ([#508](https://github.com/jasonssdev/openkos/issues/508)'s rule).
+
+A named model that is not installed fails **only the stage or verb that named it**, with the usual `ollama pull <model>` remediation. It never falls back to `model:` — a visible failure is better than silently getting a model you did not ask for.
 
 ### Sensitivity and the local backend
 

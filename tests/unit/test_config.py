@@ -1752,3 +1752,193 @@ def test_read_config_rejects_a_non_bool_union_judge(
 
     with pytest.raises(ValueError, match=r"union_judge"):
         config.read_config(tmp_path)
+
+
+# --- #515: per-task model overrides (`models:`) ---
+
+
+def test_task_model_keys_are_the_five_measured_tasks() -> None:
+    """The task-key vocabulary is keyed by TASK, not by verb (#515 design
+    decision 1): `suggest_edge_types` is used by both `curate`'s Structure
+    stage and standalone `suggest-relations`, and keying by verb would let
+    those two drift onto different models -- the drift #385's design already
+    prevents by routing both through one write core. The harnesses score the
+    task, not the verb, so a per-task key is what a measurement can
+    justify."""
+    assert (
+        frozenset(
+            {
+                "extraction",
+                "adjudication",
+                "edge_typing",
+                "volatility_typing",
+                "contradiction",
+            }
+        )
+        == config.TASK_MODEL_KEYS
+    )
+
+
+def test_read_config_models_defaults_to_empty_map_when_absent(
+    tmp_path: Path,
+) -> None:
+    """`models` absent from `openkos.yaml` falls back to `{}`, mirroring
+    `volatility_windows`/`type_tiers` -- the precedent #515 follows so this
+    adds no new parsing convention."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.models == {}
+
+
+def test_read_config_models_falls_back_to_empty_map_on_explicit_null(
+    tmp_path: Path,
+) -> None:
+    """A `models: null` (present but explicit null) falls back to `{}`,
+    mirroring every other field's `is not None` fallback."""
+    (tmp_path / "openkos.yaml").write_text("models: null\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.models == {}
+
+
+def test_read_config_models_passes_through_verbatim(tmp_path: Path) -> None:
+    """A present, well-formed `models` map passes through verbatim. Whether
+    the named model is INSTALLED is not this layer's question -- that failure
+    is per-stage and lands at the `llm.chat` seam (#515 decision 2)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "models:\n  edge_typing: gemma2:27b\n  extraction: qwen3:8b\n",
+        encoding="utf-8",
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.models == {"edge_typing": "gemma2:27b", "extraction": "qwen3:8b"}
+
+
+def test_read_config_models_accepts_an_unmeasured_task_key(tmp_path: Path) -> None:
+    """The schema accepts ANY key in `TASK_MODEL_KEYS`, not only the one with
+    a harness (#515 decision 4). Only `edge_typing` has measured evidence
+    today; restricting the schema to it would be arbitrary."""
+    (tmp_path / "openkos.yaml").write_text(
+        "models:\n  contradiction: llama3.1:8b\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.models == {"contradiction": "llama3.1:8b"}
+
+
+def test_read_config_rejects_models_that_is_not_a_mapping(tmp_path: Path) -> None:
+    """A non-mapping `models` is REFUSED, not degraded to `{}`.
+
+    This departs from `volatility_windows`/`type_tiers`, which degrade
+    silently, and it does so on #515 decision 2's own stated grounds: a
+    silent fallback to the global default means the operator keeps writing
+    relation types believing they are getting the 0.81 model while actually
+    getting the 0.44 one. That reasoning does not distinguish a model that
+    is missing from a value that is malformed."""
+    (tmp_path / "openkos.yaml").write_text("models: gemma2:27b\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"'models' must be a mapping"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_an_unknown_task_key(tmp_path: Path) -> None:
+    """An unknown task key is refused and the message names the valid keys.
+    A typo (`edge_types:`) would otherwise resolve to the global default in
+    silence -- the exact failure decision 2 refuses."""
+    (tmp_path / "openkos.yaml").write_text(
+        "models:\n  edge_types: gemma2:27b\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"unknown task 'edge_types'"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_a_non_string_model_value(tmp_path: Path) -> None:
+    """A non-string value is refused, mirroring how top-level `model`
+    validates its own type rather than coercing."""
+    (tmp_path / "openkos.yaml").write_text(
+        "models:\n  edge_typing: 27\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"'models.edge_typing' must be a string"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_a_blank_model_value(tmp_path: Path) -> None:
+    """A blank/whitespace-only value is refused: it is not a model tag, and
+    forwarding it to Ollama would fail at the transport with a message about
+    an empty model rather than about a bad config value."""
+    (tmp_path / "openkos.yaml").write_text(
+        'models:\n  edge_typing: "   "\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"'models.edge_typing' must not be blank"):
+        config.read_config(tmp_path)
+
+
+def test_resolve_task_model_returns_the_override_when_the_task_is_keyed(
+    tmp_path: Path,
+) -> None:
+    """A keyed task resolves to its own model -- the whole point of #515:
+    collect edge typing's +0.37 without moving extraction."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: qwen3:8b\nmodels:\n  edge_typing: gemma2:27b\n", encoding="utf-8"
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "edge_typing") == "gemma2:27b"
+
+
+def test_resolve_task_model_falls_back_to_the_global_default_when_unkeyed(
+    tmp_path: Path,
+) -> None:
+    """An UNKEYED task keeps the global `model:`. `models:` is additive: a
+    workspace that names one task moves that task only, and `qwen3:8b` stays
+    the default for everything else (#515: no model measured is a safe
+    global replacement)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: qwen3:8b\nmodels:\n  edge_typing: gemma2:27b\n", encoding="utf-8"
+    )
+    cfg = config.read_config(tmp_path)
+
+    assert config.resolve_task_model(cfg, "extraction") == "qwen3:8b"
+
+
+def test_resolve_task_model_falls_back_when_models_is_absent(tmp_path: Path) -> None:
+    """A workspace with no `models:` at all resolves every task to the global
+    default -- byte-for-byte today's behavior, so #515 is inert until an
+    operator opts in."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+    cfg = config.read_config(tmp_path)
+
+    for task in sorted(config.TASK_MODEL_KEYS):
+        assert config.resolve_task_model(cfg, task) == "qwen3:8b"
+
+
+def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
+    """`read_config` refuses a non-mapping `models`, but `Config` is a plain
+    dataclass a test fixture or future caller can construct directly. This
+    resolver never raises on one -- it is read on every chat seam, and an
+    `AttributeError` there would take down a verb that has a perfectly good
+    global default to fall back to."""
+    cfg = config.Config(
+        model="qwen3:8b",
+        review=True,
+        default_sensitivity="internal",
+        freshness_window="30d",
+        embedding_model="mxbai-embed-large",
+        chat_timeout=600.0,
+        max_generation_tokens=4096,
+        confidential_local_exemption=False,
+        volatility_windows={},
+        type_tiers={},
+        models=None,  # type: ignore[arg-type]
+        union_judge=True,
+    )
+
+    assert config.resolve_task_model(cfg, "edge_typing") == "qwen3:8b"
