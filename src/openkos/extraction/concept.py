@@ -188,8 +188,20 @@ _SYSTEM_PROMPT = (
     "field records the closeness of the call; it does not change your "
     "answer, so choose the better type exactly as you would have "
     "otherwise.\n\n"
-    "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
-    "fences around it. Each element matches exactly this shape:\n"
+    # Enumerate-first (#522). The prompt already says to identify candidates
+    # before classifying -- twice, in the opening paragraph and in the D3
+    # multiplicity test -- and the 8B tier still collapses to one object.
+    # Neither clause makes the model PRODUCE the enumeration, so it can skip
+    # the step silently. Meanwhile a source that enumerates its own topics in
+    # its opening sentence separated 10/10 against 0/10 on the collapse
+    # probe. This asks the model to do what that source was doing for it.
+    # Semicolons, not a bracketed list, keep the line clear of the payload's
+    # own delimiters even though `parsing` now recovers either.
+    "First write ONE line beginning with SUBJECTS: naming each distinct "
+    "subject you identified in the source, separated by semicolons. Then, on "
+    "the following line, return the JSON array and nothing else -- NO "
+    "further prose, NO markdown, and NO code fences around it. Each element "
+    "matches exactly this shape:\n"
     '[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"'
     '|"Decision"|"Project"|"Concept"|"Entity", "title": "...", '
     '"description": "...", "body": "...", "type_alternative": '

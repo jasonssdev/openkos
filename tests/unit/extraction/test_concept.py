@@ -1233,7 +1233,7 @@ def test_prompt_json_array_template_shape() -> None:
     concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
 
     system_content = llm.calls[0][0]["content"]
-    assert "Return ONLY a JSON array" in system_content
+    assert "return the JSON array and nothing else" in system_content
     assert '[{"type": "Person"' in system_content
     assert "Do NOT wrap the array in an outer object." in system_content
     assert '"extract": true|false' not in system_content
@@ -2380,3 +2380,31 @@ def test_extract_concept_regression_suite_still_green_and_prompt_untouched() -> 
 
     assert len(llm.calls) == 1
     assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+def test_prompt_asks_the_model_to_enumerate_its_subjects_first() -> None:
+    """#522: the prompt already says to identify candidates first, twice, and
+    the 8B tier still collapses. Neither clause forces the model to PRODUCE
+    the enumeration, so it can skip the step -- while a source that
+    enumerates its own topics separated 10/10 against 0/10 on the collapse
+    probe. This asks the model to do what the source was doing."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept("some source text", source_title="Notes", llm=llm)
+
+    system_content = llm.calls[0][0]["content"]
+    assert "SUBJECTS:" in system_content
+    assert "semicolons" in system_content
+
+
+def test_extraction_survives_a_subjects_line_before_the_array() -> None:
+    """End to end through the real parser, not just the prompt text: the
+    reply shape this change invites must still yield its objects."""
+    llm = _FakeLLM(
+        reply=("SUBJECTS: stoicism; the porch; Zeno\n" + _array(_CONCEPT_ITEM))
+    )
+
+    result = _objects("text", source_title="t", llm=llm)
+
+    assert len(result) == 1
+    assert result[0].title == "Stoicism"
