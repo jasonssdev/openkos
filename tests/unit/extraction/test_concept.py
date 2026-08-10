@@ -1493,6 +1493,28 @@ def test_prompt_omits_meeting_shaped_source_title(title: str) -> None:
     assert title not in user_content
     assert "SOURCE TITLE" not in user_content
     assert "a distinctive phrase zzqq" in user_content
+    # #522: omitting the title also removes the only non-English text in the
+    # user turn, and the system prompt is entirely English. On a Spanish
+    # source that flipped output titles to English in 28 of 30 measured runs.
+    # The no-title path therefore carries its own language anchor.
+    assert "same language as the SOURCE TEXT" in user_content
+
+
+def test_titled_prompt_carries_no_language_anchor() -> None:
+    """The anchor belongs to the no-title path ONLY (#522).
+
+    A source that keeps its title already has source-language text in the
+    user turn, so it needs no instruction -- and adding one there would be
+    an unmeasured change to the path almost every source takes. #459's
+    asymmetry applies to added text as much as to removed text."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept(
+        "a distinctive phrase zzqq", source_title="Designing the sync engine", llm=llm
+    )
+
+    user_content = llm.calls[0][1]["content"]
+    assert "same language as the SOURCE TEXT" not in user_content
 
 
 @pytest.mark.parametrize(
