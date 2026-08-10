@@ -20,7 +20,13 @@ reads roles, so a new axis needs no new harness.
 uv run python -u evals/extraction_collapse/run_collapse_probe.py --self-test
 uv run python -u evals/extraction_collapse/run_collapse_probe.py --runs 5
 uv run python -u evals/extraction_collapse/run_collapse_probe.py --runs 5 --model qwen3:14b
+uv run python -u evals/extraction_collapse/run_collapse_probe.py --runs 10 --union-judge
 ```
+
+`--union-judge` runs `extract_concept_union` instead of the single-pass
+`extract_concept`. `DEFAULT_UNION_JUDGE` is `True`, so **that flag is the
+shipped configuration** — a number measured without it describes a path most
+users never take.
 
 `--self-test` makes no model calls and needs no Ollama.
 
@@ -92,7 +98,7 @@ yielding `1, 1, 5` across runs, so a single run is a sample, not a finding.
 | --- | --- |
 | `collapse_fixtures.py` | the matched pairs, and the length-skew guard |
 | `run_collapse_probe.py` | the harness, its verdict logic, and `--self-test` |
-| `report.md` | the canonical run |
+| `report.md` | the canonical run, single-pass and union |
 
 `collapse_fixtures.py` is deliberately not named `fixtures.py`: CI runs
 `mypy .` over the whole repository and `edge_typing/fixtures.py` already

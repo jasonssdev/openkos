@@ -74,6 +74,42 @@ available explanation, not a complete one.
 The effect size is worth stating plainly too: the announced arm holds a mean
 of **1.8** objects, not 3. The contrast is one object against two.
 
+## The path production actually runs
+
+Everything above is `extract_concept`, the single-pass extractor. But
+`DEFAULT_UNION_JUDGE` is `True`, so the shipped configuration runs
+`extract_concept_union` — two passes unioned, plus a selector judge. The
+probe was measuring a path most users never take.
+
+Re-measured with `--union-judge`, same model, 10 runs per arm:
+
+| pair | axis | treatment | floor | verdict |
+| --- | --- | --- | --- | --- |
+| `producto` (ES) | meeting register | meeting 10/10 collapsed | flat 9/10 collapsed | `NO FLOOR` |
+| `versioning` (EN) | meeting register | meeting 0/10, mean **4.5** | flat 0/10, mean **4.5** | `NOT REPRODUCED` |
+| `anuncio` (ES) | announced topics | unannounced **10/10** | announced **0/10** | `AXIS IMPLICATED` |
+
+Control: still 10/10.
+
+**The collapse survives union+judge**, which is what #522 already suspected
+and this confirms on the default path. The announcement axis comes out
+*cleaner* here than single-pass — 10/10 against 0/10, where single-pass gave
+10/10 against 2/10 — and `versioning`'s two arms return **identical** means
+with zero collapses either side, so the meeting register does nothing at all.
+
+## `[]` does not reproduce on the default path (#524)
+
+The empty returns recorded below are single-pass only: **0 empties in 70
+union-path runs**. The second pass covers the first, so [#524][524] is real
+but confined to `union_judge: false`, which is not the default. The rate
+measured single-pass is an upper bound on the shipped configuration, not its
+rate.
+
+That also argues against fixing it with prompt wording: a change aimed at a
+5% defect on a non-default path risks the default path, which is how the
+`Decision` rubric change and the anti-twin clause (`concept.py:145-148`) both
+went wrong before.
+
 ## Two observations recorded for follow-up, not interpreted here
 
 **The survivor is the source-title twin.** Every ES collapse returned one
