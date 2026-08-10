@@ -30,6 +30,26 @@ users never take.
 
 `--self-test` makes no model calls and needs no Ollama.
 
+## The positive control is pinned to a model AND a prompt
+
+`TS3005b.summary.txt` is the case #522 was built on, and it runs unpaired so
+a report of "no collapses" can be told apart from a probe that cannot see
+one. Its premise — *this source collapses* — was measured under a specific
+model and a specific prompt, so the note reads three ways:
+
+| situation | what the report says |
+| --- | --- |
+| control collapses | sensitivity confirmed; other verdicts are about the fixtures |
+| quiet, prompt unchanged | `SENSITIVITY UNCONFIRMED` — read no other verdict |
+| quiet, prompt **changed** | the headline: this candidate moved the case #522 was built on |
+
+That third row exists because the second one fired on the best result of the
+day. The enumerate-first experiment stopped the control collapsing for the
+first time ever, and the probe reported it as an instrument failure —
+success and blindness were indistinguishable. The hash covers both prompt
+channels, the system prompt and the user framing `_build_messages` applies,
+since the language anchor moved only the second.
+
 ## Why it exists
 
 [#522][522] requires that any fix be judged on **whether it fixes the
