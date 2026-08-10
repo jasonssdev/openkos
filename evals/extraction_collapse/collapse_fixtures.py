@@ -276,6 +276,26 @@ would re-fit the hypothesis to the observation that produced it. A support
 queue, two new subjects and a different decision are what make `anuncio` a
 test instead."""
 
+STUB_TYPES: frozenset[str] = frozenset({"Person", "Organization"})
+"""Types that, ON THESE FIXTURES, the prompt's own rule already forbids.
+
+This is a property of the fixtures, not a general rule about extraction. Every
+pair here names people (Ana, Marta, Luis, Priya, Dan, Rocío, Iván) and teams
+purely as participants in what happened; no arm is ABOUT any of them. The
+anti-enumeration paragraph in `concept.py` covers exactly that case by name:
+
+    a person, place, or organization merely mentioned or named in passing is
+    NOT a standalone object [...] extract the Event and the Decisions, not
+    five Person stubs.
+
+So a `Person` or `Organization` object here is the model contradicting an
+instruction it was given, which needs no adjudication to score. It exists
+because `qwen3:14b` emitted Ana, Marta and Luis as objects while every
+collapse verdict in the same report read `NOT REPRODUCED` -- the probe was
+measuring one failure mode and blind to its opposite.
+
+A fixture genuinely about a person would have to override this."""
+
 MAX_LENGTH_SKEW = 0.15
 """How far the two arms of a pair may differ in length before the pair stops
 measuring framing.
