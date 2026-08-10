@@ -147,6 +147,51 @@ in total across the whole run.
 - THEN it recommends `openkos duplicates` having performed at most three
   bundle walks in total
 
+### Requirement: Non-NFC On-Disk Names Are Ranked Last
+
+`openkos next` MUST recommend `openkos normalize-names` when at least one
+on-disk name under the bundle is not NFC, and this tier MUST be ranked
+LAST — below every other tier, including the duplicate-group tier (#491).
+
+The ranking is not a cost decision but an ordering one: a decomposed name
+blocks nothing, is not missing, and is not unsafe, since
+`okf.concept_path_for` already resolves an NFC id against a decomposed
+file. It is hygiene, and hygiene outranks nothing.
+
+Its signal MUST come from `lint.scan_non_nfc_entries` — the same scan
+`lint`'s `non-nfc-name` finding and the `normalize-names` verb consume — so
+the recommendation can never disagree with the verb about what is
+offending. The signal MUST be memoized on the shared signal holder like
+every other, and MUST NOT be read by any other tier.
+
+Because it is ranked last, this tier's walk MUST NOT be performed on any
+run where a higher-ranked tier produced a finding. That placement, not a
+persistent cache, is what keeps a bundle with real work pending from paying
+for it.
+
+#### Scenario: A clean bundle with a decomposed name recommends the verb
+
+- GIVEN a bundle where every higher-ranked tier finds nothing and one
+  on-disk name is not NFC
+- WHEN `openkos next` runs
+- THEN it recommends `openkos normalize-names`
+
+#### Scenario: An earlier tier's finding never pays the non-NFC walk
+
+- GIVEN a bundle containing both an unextracted source and a non-NFC
+  on-disk name
+- WHEN `openkos next` runs
+- THEN it recommends the higher-ranked tier's command and performs no
+  non-NFC scan at all
+
+#### Scenario: An all-NFC bundle recommends nothing from this tier
+
+- GIVEN a bundle where every higher-ranked tier finds nothing and every
+  on-disk name is already NFC
+- WHEN `openkos next` runs
+- THEN no action is recommended and `openkos normalize-names` is not
+  mentioned
+
 ### Requirement: Per-Tier Command Reflects the Finding's Own Command
 
 For tiers 2 and 3, `openkos next` MUST print the exact command string the
