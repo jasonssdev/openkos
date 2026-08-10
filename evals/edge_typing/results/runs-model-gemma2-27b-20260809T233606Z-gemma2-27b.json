@@ -1,0 +1,399 @@
+{
+  "arm": "model-gemma2-27b",
+  "model": "gemma2:27b",
+  "runs": 5,
+  "generated_at": "20260809T233606Z",
+  "outcomes": [
+    {
+      "source_id": "concepts/retry-budget",
+      "target_id": "concepts/request-scheduler",
+      "expected": "part_of",
+      "confusion": "part_of vs member_of",
+      "modal": "depends_on",
+      "stability": 0.8,
+      "accuracy": 0.2,
+      "answers": [
+        "depends_on",
+        "part_of",
+        "depends_on",
+        "depends_on",
+        "depends_on"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/nightly-backup-job",
+      "target_id": "concepts/scheduled-maintenance-jobs",
+      "expected": "member_of",
+      "confusion": "part_of vs member_of",
+      "modal": "member_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/report-renderer",
+      "target_id": "concepts/template-cache",
+      "expected": "depends_on",
+      "confusion": "depends_on vs part_of",
+      "modal": "depends_on",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "depends_on",
+        "depends_on",
+        "depends_on",
+        "depends_on",
+        "depends_on"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/checkout-outage",
+      "target_id": "concepts/payment-gateway-migration",
+      "expected": "caused_by",
+      "confusion": "caused_by vs produced_by",
+      "modal": "caused_by",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "caused_by",
+        "caused_by",
+        "caused_by",
+        "caused_by",
+        "caused_by"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/quarterly-risk-report",
+      "target_id": "concepts/risk-committee",
+      "expected": "produced_by",
+      "confusion": "caused_by vs produced_by",
+      "modal": "produced_by",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "produced_by",
+        "produced_by",
+        "produced_by",
+        "produced_by",
+        "produced_by"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/migration-runbook",
+      "target_id": "concepts/rollback-policy",
+      "expected": "references",
+      "confusion": "references vs related_to",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/onboarding-checklist",
+      "target_id": "concepts/incident-review-culture",
+      "expected": "related_to",
+      "confusion": "the honest abstention",
+      "modal": "related_to",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/aortic-valve",
+      "target_id": "concepts/human-heart",
+      "expected": "part_of",
+      "confusion": "part_of vs member_of (held out from the examples)",
+      "modal": "part_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/soprano-line",
+      "target_id": "concepts/voice-parts",
+      "expected": "member_of",
+      "confusion": "part_of vs member_of (held out from the examples)",
+      "modal": "member_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/wal-segment",
+      "target_id": "concepts/write-ahead-log",
+      "expected": "part_of",
+      "confusion": "part_of vs member_of",
+      "modal": "part_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of",
+        "part_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/eu-west-replica",
+      "target_id": "concepts/read-replicas",
+      "expected": "member_of",
+      "confusion": "part_of vs member_of",
+      "modal": "member_of",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of",
+        "member_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/search-api",
+      "target_id": "concepts/ranking-service",
+      "expected": "depends_on",
+      "confusion": "depends_on vs part_of",
+      "modal": "depends_on",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "depends_on",
+        "depends_on",
+        "depends_on",
+        "depends_on",
+        "depends_on"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/data-loss-incident",
+      "target_id": "concepts/storage-upgrade",
+      "expected": "caused_by",
+      "confusion": "caused_by vs produced_by",
+      "modal": "caused_by",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "caused_by",
+        "caused_by",
+        "caused_by",
+        "caused_by",
+        "caused_by"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/architecture-decision-record",
+      "target_id": "concepts/platform-team",
+      "expected": "produced_by",
+      "confusion": "caused_by vs produced_by",
+      "modal": "produced_by",
+      "stability": 0.4,
+      "accuracy": 0.4,
+      "answers": [
+        "produced_by",
+        "related_to",
+        "produced_by",
+        "member_of",
+        "member_of"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/deploy-guide",
+      "target_id": "concepts/incident-severity-matrix",
+      "expected": "references",
+      "confusion": "references vs related_to",
+      "modal": "references",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "answers": [
+        "references",
+        "references",
+        "references",
+        "references",
+        "references"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/hiring-loop",
+      "target_id": "concepts/documentation-style",
+      "expected": "related_to",
+      "confusion": "the honest abstention",
+      "modal": "depends_on",
+      "stability": 0.6,
+      "accuracy": 0.4,
+      "answers": [
+        "depends_on",
+        "depends_on",
+        "depends_on",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "source_id": "concepts/cost-dashboard",
+      "target_id": "concepts/oncall-rotation",
+      "expected": "related_to",
+      "confusion": "the honest abstention",
+      "modal": "related_to",
+      "stability": 0.8,
+      "accuracy": 0.8,
+      "answers": [
+        "references",
+        "related_to",
+        "related_to",
+        "related_to",
+        "related_to"
+      ],
+      "confidences": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}
