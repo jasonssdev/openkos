@@ -188,8 +188,38 @@ _SYSTEM_PROMPT = (
     "field records the closeness of the call; it does not change your "
     "answer, so choose the better type exactly as you would have "
     "otherwise.\n\n"
-    "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
-    "fences around it. Each element matches exactly this shape:\n"
+    # Enumerate-first (#522). The prompt already says to identify candidates
+    # before classifying -- twice, in the opening paragraph and in the D3
+    # multiplicity test -- and the 8B tier still collapses to one object.
+    # Neither clause makes the model PRODUCE the enumeration, so it can skip
+    # the step silently. Meanwhile a source that enumerates its own topics in
+    # its opening sentence separated 10/10 against 0/10 on the collapse
+    # probe. This asks the model to do what that source was doing for it.
+    # Semicolons, not a bracketed list, keep the line clear of the payload's
+    # own delimiters even though `parsing` now recovers either.
+    # v1 fixed the collapse everywhere -- the positive control stopped
+    # collapsing for the first time in 25 runs -- and paid for it twice: 35
+    # stub objects against 2 the run before ('Rocío', 'Iván' as Person), and
+    # 10/10 English titles on a Spanish source.
+    #
+    # v2 added an anti-participant clause, which WORKED (stubs went to
+    # zero), and an explicit "write it in the language of the SOURCE TEXT",
+    # which did NOT: all four Spanish arms still emitted English titles.
+    # `_LANGUAGE_ANCHOR` (#528) succeeds on the same arm without instructing
+    # anything, purely by keeping source-language text in the turn. At this
+    # tier language is anchored by EXAMPLE, not by instruction -- and this
+    # line is the model's first generated tokens, so writing it in English
+    # anchors everything after it to English.
+    #
+    # v2 therefore carries the source's language and the anti-enumeration
+    # paragraph's own limit into the invitation itself.
+    "First write ONE line beginning with SUBJECTS: naming each distinct "
+    "subject you identified, separated by semicolons and written in the "
+    "language of the SOURCE TEXT. Name only what the source is genuinely "
+    "about: do NOT list a person, place, or organization merely mentioned "
+    "in passing. Then, on the following line, return the JSON array and "
+    "nothing else -- NO further prose, NO markdown, and NO code fences "
+    "around it. Each element matches exactly this shape:\n"
     '[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"'
     '|"Decision"|"Project"|"Concept"|"Entity", "title": "...", '
     '"description": "...", "body": "...", "type_alternative": '
