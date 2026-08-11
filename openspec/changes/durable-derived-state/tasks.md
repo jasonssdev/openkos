@@ -37,27 +37,27 @@ both PRs in the same release closes the gap; state it here explicitly.
 
 ### Phase 1: Foundation
 
-- [ ] 1.1 Generalize `okf.concept_path_for`'s resolver (`src/openkos/model/okf.py:1179-1269`) to accept `(root, suffix)`; export `STATE_DIRNAME`.
-- [ ] 1.2 RED: unit tests for `ledger.py` path mapping incl. NFC/NFD-on-byte-exact-FS, mirroring `concept_path_for`'s own suite (new `tests/unit/bundle/test_ledger.py`).
-- [ ] 1.3 GREEN: create `src/openkos/bundle/ledger.py` — `ledger_path_for`, `read_entries`, `iter_ledgers`. Leaf module; must not import `openkos.graph`.
+- [x] 1.1 Generalize `okf.concept_path_for`'s resolver (`src/openkos/model/okf.py:1179-1269`) to accept `(root, suffix)`; export `STATE_DIRNAME`.
+- [x] 1.2 RED: unit tests for `ledger.py` path mapping incl. NFC/NFD-on-byte-exact-FS, mirroring `concept_path_for`'s own suite (new `tests/unit/bundle/test_ledger.py`).
+- [x] 1.3 GREEN: create `src/openkos/bundle/ledger.py` — `ledger_path_for`, `read_entries`, `iter_ledgers`. Leaf module; must not import `openkos.graph`.
 
 ### Phase 2: Two-phase write and recovery
 
-- [ ] 2.1 RED: recovery truth table test — construct each on-disk state (`.pending` absent; present+hash-match; present+hash-mismatch) directly, assert the verdict (none / roll-forward / roll-back).
-- [ ] 2.2 GREEN: implement `write_pending`, `commit_pending`, `discard_pending`, `recover` in `ledger.py` per the truth table.
-- [ ] 2.3 RED: crash-injection integration tests — monkeypatch `fsio.write_atomic`/`os.replace` to raise at each of S1/V/S2/D, run `recover`, assert the truth-table verdict.
-- [ ] 2.4 RED: `_autocommit` staging test (threat matrix row) — assert `MergeResult.committed_paths` contains the new sidecar path under `bundle/.state/ledger/**`; must fail before the wiring exists.
-- [ ] 2.5 GREEN: `plan_merge` (`src/openkos/bundle/merge.py`) takes `existing_entries`, returns `ledger_entries` instead of writing `MERGED_FROM_KEY` into frontmatter; `plan_unmerge` takes `entries` instead of decoding from `survivor_text`.
-- [ ] 2.6 GREEN: `merge_core` (`src/openkos/cli/main.py:6689-6734`) writes S1 (pending sidecar) → V (survivor) → S2 (commit pending) → D (delete absorbed); commit_paths includes the sidecar path so 2.4 goes green.
-- [ ] 2.7 GREEN: `unmerge_core` restores survivor/absorbed/index/log, pops the ledger tail last (re-runnable no-op on retry).
-- [ ] 2.8 RED then GREEN: preflight refusal — `merge`/`unmerge` refuse with no `--force` while a `.pending` exists for the touched survivor; test asserts the refusal message and no partial write.
-- [ ] 2.9 RED then GREEN: merge → unmerge byte-for-byte parity test comparing survivor/absorbed/index/log bytes before and after a round trip.
+- [x] 2.1 RED: recovery truth table test — construct each on-disk state (`.pending` absent; present+hash-match; present+hash-mismatch) directly, assert the verdict (none / roll-forward / roll-back).
+- [x] 2.2 GREEN: implement `write_pending`, `commit_pending`, `discard_pending`, `recover` in `ledger.py` per the truth table.
+- [x] 2.3 RED: crash-injection integration tests — monkeypatch `fsio.write_atomic`/`os.replace` to raise at each of S1/V/S2/D, run `recover`, assert the truth-table verdict.
+- [x] 2.4 RED: `_autocommit` staging test (threat matrix row) — assert `MergeResult.committed_paths` contains the new sidecar path under `bundle/.state/ledger/**`; must fail before the wiring exists.
+- [x] 2.5 GREEN: `plan_merge` (`src/openkos/bundle/merge.py`) takes `existing_entries`, returns `ledger_entries` instead of writing `MERGED_FROM_KEY` into frontmatter; `plan_unmerge` takes `entries` instead of decoding from `survivor_text`.
+- [x] 2.6 GREEN: `merge_core` (`src/openkos/cli/main.py:6689-6734`) writes S1 (pending sidecar) → V (survivor) → S2 (commit pending) → D (delete absorbed); commit_paths includes the sidecar path so 2.4 goes green.
+- [x] 2.7 GREEN: `unmerge_core` restores survivor/absorbed/index/log, pops the ledger tail last (re-runnable no-op on retry).
+- [x] 2.8 RED then GREEN: preflight refusal — `merge`/`unmerge` refuse with no `--force` while a `.pending` exists for the touched survivor; test asserts the refusal message and no partial write.
+- [x] 2.9 RED then GREEN: merge → unmerge byte-for-byte parity test comparing survivor/absorbed/index/log bytes before and after a round trip. (Already fully covered by the pre-existing `tests/unit/cli/test_merge_roundtrip.py::test_single_merge_then_unmerge_is_byte_identical_modulo_log` and `test_sequential_lifo_merge_then_unmerge_is_byte_identical_modulo_log`, which continue to pass unchanged against the sidecar-backed ledger — no new test authored, since these already satisfy the acceptance criterion.)
 
 ### Phase 3: Documentation
 
-- [ ] 3.1 Create `docs/adr/0013-relocate-merge-ledger-to-bundle-state.md` from `docs/adr/template.md`, status `Proposed`, superseding ADR-0002's storage clause only (not Context/Decision/Consequences/Alternatives), cross-referencing ADR-0005 (relation_rewrites), ADR-0011 (provenance_rewrites), ADR-0008 (per-entry sensitivity gate rationale).
-- [ ] 3.2 Edit `docs/adr/0002-reversible-merge-ledger.md` **Status line only** — mark superseded-in-part by ADR-0013; do not touch Context/Decision/Consequences/Alternatives (`openspec/config.yaml:76-77`).
-- [ ] 3.3 Add ADR-0013's row to `docs/adr/README.md` index.
+- [x] 3.1 Create `docs/adr/0013-relocate-merge-ledger-to-bundle-state.md` from `docs/adr/template.md`, status `Proposed`, superseding ADR-0002's storage clause only (not Context/Decision/Consequences/Alternatives), cross-referencing ADR-0005 (relation_rewrites), ADR-0011 (provenance_rewrites), ADR-0008 (per-entry sensitivity gate rationale).
+- [x] 3.2 Edit `docs/adr/0002-reversible-merge-ledger.md` **Status line only** — mark superseded-in-part by ADR-0013; do not touch Context/Decision/Consequences/Alternatives (`openspec/config.yaml:76-77`).
+- [x] 3.3 Add ADR-0013's row to `docs/adr/README.md` index.
 
 ---
 
