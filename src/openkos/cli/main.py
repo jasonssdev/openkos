@@ -556,6 +556,49 @@ def _reject_torn_ledger_write(
     raise typer.Exit(code=1)
 
 
+def _reject_flagged_ledger_write(
+    root: Path, bundle_dir: Path, survivor_canonical: str, force: bool
+) -> None:
+    """Refuse (exit 1, writes nothing) when `survivor_canonical`'s ledger
+    sidecar is flagged by doctor's Check B (post-merge mutation,
+    `bundle_ledger.scan_nesting_violations`) -- UNLESS `--force` is passed
+    (spec: "`merge` Refuses On A Doctor-Flagged Ledger, With `--force`").
+
+    `merge` calls this in Phase A, before any write. `--force` bypasses
+    ONLY this refusal -- it is orthogonal to the confirm-gate precedence
+    (`--auto`/`review: false`/TTY prompt) that governs the write itself,
+    mirroring `forget --force`'s independence from `--auto`. Unlike
+    `_reject_torn_ledger_write` (Check A, mechanically exact and trivially
+    repairable), Check B's corruption is not always repairable, so this
+    refusal has an escape hatch for an operator who has already confirmed
+    it is safe to proceed."""
+    if force:
+        return
+    violations = bundle_ledger.scan_nesting_violations(bundle_dir)
+    if not any(survivor_id == survivor_canonical for survivor_id, _ in violations):
+        return
+    if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
+        reset_remedy = "run `git reset --hard <first-merge>~1` then `openkos reindex`"
+    else:
+        reset_remedy = (
+            "no git reset point is available in this workspace (no "
+            "repository, no configured git identity, or no commit "
+            "history) -- there is no remedy that restores reversibility "
+            "for the affected merge(s)"
+        )
+    typer.echo(
+        f"openkos merge: refusing to merge -- {survivor_canonical!r}'s ledger "
+        "is flagged by the merge-ledger-integrity check (post-merge "
+        "mutation). If the ledger is merely unmigrated (still embedded in "
+        "the survivor's own frontmatter, not corrupted), run `openkos "
+        f"repair`; if corrupted, {reset_remedy} -- reversibility of merges "
+        "made before this fix is not guaranteed. Re-run with --force to "
+        "bypass this refusal.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
 def _sweep_ledger_sidecars_for_ids(
     bundle_dir: Path, purge_ids: Iterable[str]
 ) -> list[Path]:
@@ -7119,6 +7162,15 @@ def merge(
         "--auto",
         help="Skip the confirmation prompt and write immediately (unattended).",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Bypass the doctor-flagged ledger-integrity refusal (Check B, "
+            "post-merge mutation) for the survivor's sidecar. Independent "
+            "of --auto -- it never skips the confirmation prompt."
+        ),
+    ),
 ) -> None:
     """Fuse two distinct concept-ids into one: the first DESTRUCTIVE
     entity-resolution write (spec: Merge Fuses Two Distinct Concept-IDs).
@@ -7253,6 +7305,7 @@ def merge(
         raise typer.Exit(code=1) from exc
 
     _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "merge")
+    _reject_flagged_ledger_write(root, layout.bundle_dir, survivor_canonical, force)
 
     now = datetime.now(UTC)
 

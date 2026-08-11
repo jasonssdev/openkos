@@ -1,7 +1,7 @@
 # Proposal: Relocate the merge ledger to `bundle/.state/ledger/`
 
 > **Correction to the exploration (read first).** Exploration §Answer-up-front and the
-> orchestrator brief both cite `bundle/concepts/adk.md` at ~8370 lines as measured evidence.
+> change brief both cite `bundle/concepts/adk.md` at ~8370 lines as measured evidence.
 > **That file does not exist in this repository** — there is no `bundle/` directory here at all
 > (`Glob bundle/**/*.md` → no matches). The 8370-line figure is a *user-workspace observation
 > reported in issue #550*, not a repo artifact. It is still valid evidence of the failure mode;
@@ -117,8 +117,8 @@ a ledger the `doctor` check flags.
 ## Assumptions resolved by the user (2026-08-11)
 
 The proposal question round could not run under `auto` execution mode. The three
-assumptions it would have raised were resolved by the orchestrator and the user
-afterwards; they are now decisions, not assumptions.
+assumptions it would have raised were resolved during proposal review with the
+user afterwards; they are now decisions, not assumptions.
 
 1. **The repair verb is in scope** (Slice 1b), not manual-only migration with
    `doctor` remediation text as the whole answer. Rationale: hand-migration for a
@@ -139,8 +139,8 @@ afterwards; they are now decisions, not assumptions.
 
 ## Open design input — atomicity is weaker than ADR-0002 assumed
 
-Raised by the orchestrator during proposal review; **not yet answered, and
-`sdd-design` owns it.**
+Raised during proposal review; **not yet answered, and the design phase owns
+it.**
 
 ADR-0002's crash-safety invariant (survivor-write-before-absorbed-delete) was
 formulated for a world where the ledger entry and the survivor's own bytes were

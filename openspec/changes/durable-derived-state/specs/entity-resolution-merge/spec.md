@@ -32,35 +32,47 @@ refuse-plus-`--force` shape.
 - THEN the ledger-integrity refusal is bypassed but the existing
   confirm-gate precedence still governs the write
 
-### Requirement: Repair Verb Refuses To Migrate A Flagged Ledger (Slice 1b)
+### Requirement: Repair Verb Refuses On Any Sign Of Cross-Survivor Pollution Risk (Slice 1b)
 
 The migration/repair verb (extracting a pre-fix, frontmatter-embedded
-`merged_from` history into a `bundle/.state/ledger/` sidecar) MUST run the
-SAME doctor merge-ledger-integrity check against a concept's embedded
-history before migrating it, and MUST refuse (exit non-zero, write nothing
-for that concept) when the check flags it as post-merge-mutated. A
-mechanical verbatim migration of a corrupted, already-mutated ledger would
-convert a git-revertible bug into permanent durable fact, so this refusal
-has no override flag. The refusal message MUST state that the only path
-for a flagged ledger is `git reset --hard <first-merge>~1` followed by
-`openkos reindex`, and that reversibility of merges made before this fix
-is not guaranteed for that concept.
+`merged_from` history into a `bundle/.state/ledger/` sidecar) MUST refuse
+the WHOLE run (exit non-zero, write nothing) whenever ANY survivor in the
+bundle — migrated or unmigrated — carries 2 or more merge-ledger entries,
+rather than running the doctor merge-ledger-integrity check (Check B,
+nested-prefix equality) per concept and refusing only the flagged ones.
+This bundle-wide, entry-count gate is deliberately COARSER than Check B:
+Check B has two honest false negatives it cannot see past — a
+single-entry ledger has nothing nested to compare, and cross-survivor
+pollution is invisible at any index, because `merge_core`'s `other_files`
+scan touches every non-reserved bundle file, so a merge of X into Y can
+rewrite bytes inside a THIRD survivor Z's embedded snapshot without Z's
+own ledger ever showing a nested-prefix mismatch. A per-concept, Check-B-
+only gate would let exactly that corruption through; the bundle-wide
+≥2-entries gate does not, at the cost of also refusing some concepts Check
+B alone would have cleared. A mechanical verbatim migration of a
+corrupted, already-mutated ledger would convert a git-revertible bug into
+permanent durable fact, so this refusal has no override flag of any kind.
+The refusal message MUST state that the only path forward is `git reset
+--hard <first-merge>~1` followed by `openkos reindex`, and that
+reversibility of merges made before this fix is not guaranteed.
 
 #### Scenario: Repair verb migrates a clean ledger verbatim
-- GIVEN a concept whose embedded `merged_from` history passes the
-  merge-ledger-integrity check
-- WHEN the repair verb runs against it
-- THEN its entries are extracted verbatim into a new
+- GIVEN a bundle where no survivor (migrated or unmigrated) carries 2 or
+  more merge-ledger entries, and a concept has an embedded `merged_from`
+  history
+- WHEN the repair verb runs
+- THEN that concept's entries are extracted verbatim into a new
   `bundle/.state/ledger/` sidecar and the frontmatter `merged_from` key is
   removed
 
-#### Scenario: Repair verb refuses a flagged ledger, with no override
-- GIVEN a concept whose embedded `merged_from` history is flagged by the
-  merge-ledger-integrity check as post-merge-mutated
-- WHEN the repair verb runs against it
-- THEN it refuses for that concept, exits non-zero, writes nothing for it,
-  and states the reset-and-replay path is the only remedy — no `--force`
-  or equivalent flag bypasses this refusal
+#### Scenario: Repair verb refuses the whole run, with no override
+- GIVEN any survivor in the bundle — migrated or unmigrated — carries 2 or
+  more merge-ledger entries
+- WHEN the repair verb runs
+- THEN it refuses the ENTIRE run, exits non-zero, writes nothing for any
+  concept, and states the reset-and-replay path is the only remedy — no
+  `--force` or equivalent flag bypasses this refusal, even for concepts
+  whose own ledger Check B alone would have cleared
 
 ## MODIFIED Requirements
 
