@@ -530,6 +530,32 @@ def _snapshot_read(path: Path) -> tuple[bytes, str]:
     return data, text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _reject_torn_ledger_write(
+    bundle_dir: Path, survivor_canonical: str, verb: str
+) -> None:
+    """Refuse (exit 1, writes nothing) when a `.pending` intent marker
+    already exists for `survivor_canonical`'s ledger sidecar (design
+    Decision 5, Check A -- a torn two-phase write from a prior crashed
+    `merge`). `merge`/`unmerge` both call this in Phase A, before any
+    write, and with NO `--force` override: unlike the doctor-flagged
+    (post-merge-mutation) refusal, a torn `.pending` is mechanically
+    exact and trivially repairable (`bundle_ledger.recover`), and forcing
+    past it would commit a known-inconsistent ledger on top of an
+    unresolved crash artifact."""
+    pending_path = bundle_ledger.pending_path_for(survivor_canonical, bundle_dir)
+    if not pending_path.is_file():
+        return
+    typer.echo(
+        f"openkos {verb}: refusing to {verb} -- {survivor_canonical!r}'s ledger "
+        "has a torn write pending (a prior merge crashed mid-commit). Run "
+        "`openkos doctor` to inspect it; this refusal has no --force override "
+        "because the marker is trivially repairable and forcing past it would "
+        "commit a known-inconsistent ledger.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
 def _reject_drifted_targets(
     layout: config.WorkspaceLayout,
     expected: Mapping[Path, bytes],
@@ -7129,6 +7155,8 @@ def merge(
         typer.echo(f"openkos merge: refusing to merge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "merge")
+
     now = datetime.now(UTC)
 
     try:
@@ -7409,6 +7437,8 @@ def unmerge(
     except (OSError, ValueError) as exc:
         typer.echo(f"openkos unmerge: refusing to unmerge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
+
+    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "unmerge")
 
     now = datetime.now(UTC)
 

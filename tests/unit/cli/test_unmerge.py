@@ -739,6 +739,30 @@ def test_unmerge_path_traversal_on_absorbed_id_refuses_no_write(
     assert _snapshot(tmp_path) == before
 
 
+def test_unmerge_refuses_on_a_torn_pending_ledger_write_no_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 2.8, design Decision 5 Check A: `unmerge` refuses (exit 1,
+    writes nothing) while a `.pending` intent marker exists for the
+    survivor's ledger sidecar, with NO `--force` override."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    bundle_dir = tmp_path / "bundle"
+    pending_path = bundle_ledger.pending_path_for("concepts/survivor", bundle_dir)
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    pending_path.write_text("stale pending marker", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "torn write pending" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
 def test_unmerge_phase_b_ordering_survivor_ledger_kept_until_last(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
