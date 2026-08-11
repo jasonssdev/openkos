@@ -1186,6 +1186,58 @@ def test_expansion_strip_leaves_description_and_body_alone() -> None:
     assert result[0].body == "Machine Control Protocol again."
 
 
+# --- Empty-reply retry (#524) ------------------------------------------------
+
+
+def test_empty_reply_is_retried_once_on_the_single_call_path() -> None:
+    """#524: the model returns `[]` on substantive meeting sources in ~5% of
+    single-pass runs (re-measured post-#529: still occurring), violating the
+    prompt's own positive default. The failure is non-deterministic, so ONE
+    retry drops the rate quadratically -- the union path already gets this
+    for free from its second run."""
+    llm = _SequencedLLM(["[]", _array(_CONCEPT_ITEM)])
+
+    result = _objects("A substantive note about Stoicism.", source_title="N", llm=llm)
+
+    assert [r.title for r in result] == ["Stoicism"]
+    assert len(llm.calls) == 2
+
+
+def test_empty_reply_is_retried_at_most_once() -> None:
+    """Two empty replies mean `[]` is the answer -- a genuinely blank or
+    unintelligible source must not loop."""
+    llm = _SequencedLLM(["[]", "[]"])
+
+    result = _objects("Some text.", source_title="N", llm=llm)
+
+    assert result == []
+    assert len(llm.calls) == 2
+
+
+def test_non_empty_reply_is_never_retried() -> None:
+    """The retry keys on ZERO validated results only."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    _objects("Some text.", source_title="N", llm=llm)
+
+    assert len(llm.calls) == 1
+
+
+def test_empty_chunk_replies_are_not_retried() -> None:
+    """Chunked scope guard: a window with no extractable content is normal
+    (#454's fan-out), not the #524 failure -- per-chunk retries would
+    multiply calls on long material for nothing."""
+    long_source = "\n".join(f"line {i} of a very long transcript." for i in range(700))
+    assert len(long_source) > concept_mod._CHUNK_THRESHOLD
+    windows = concept_mod._chunk_lines(long_source)
+    llm = _SequencedLLM(["[]"] * len(windows))
+
+    result = _objects(long_source, source_title="N", llm=llm)
+
+    assert result == []
+    assert len(llm.calls) == len(windows)
+
+
 # --- extract_concept: zero / one / N results, OllamaError propagation -------
 
 
