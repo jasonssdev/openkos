@@ -54,7 +54,14 @@ and deliberately keeps its only object. No fixture in `extraction_cap`
 is of that class -- all four are multi-subject expository prose -- so the
 false-positive rate below says nothing about it. A guard that REPLACES the
 single object would be unbounded there; one that only ADDS subjects the
-first pass missed is bounded whatever this rate turns out to be."""
+first pass missed is bounded whatever this rate turns out to be.
+
+An instrument for it now exists: `NEGATIVE_CONTROL` in `collapse_fixtures.py`
+is a source of exactly that class, 1-4 KB, where one object is the CORRECT
+answer. It changes nothing below. `run_collapse_probe.py` writes no
+`runs-*.json`, so its negative-control section is where that measurement is
+read, and it has to be RUN -- the rate here stays blind to the case until
+somebody spends the calls."""
 
 
 def main() -> None:

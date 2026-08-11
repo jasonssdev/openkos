@@ -5,16 +5,20 @@ exactly one property, its **axis**. Both arms are extracted `--runs` times.
 If the arm the hypothesis predicts will collapse does, and its twin holds,
 the axis is implicated.
 
-Two axes ship today:
+Three axes ship today:
 
 | pair | axis | hypothesis |
 | --- | --- | --- |
 | `producto`, `versioning` | meeting register | a source recording a meeting collapses to the meeting (#522's original claim) |
 | `anuncio` | whether the opening sentence enumerates the source's topics | a source that does not announce its own topics collapses regardless of register |
+| `lesson` | short lesson framing: an umbrella-topic title plus an opening sentence naming the lesson | a short titled lesson collapses to a single object echoing its own title, though its body covers three distinct sub-subjects |
 
 Each arm carries a **role** as well as a label: `TREATMENT` is the arm
 predicted to collapse, `FLOOR` is the arm that has to hold. The verdict logic
 reads roles, so a new axis needs no new harness.
+
+One fixture is **not** a pair: the negative control, where returning one
+object is the *correct* answer. See below.
 
 ```
 uv run python -u evals/extraction_collapse/run_collapse_probe.py --self-test
@@ -49,6 +53,43 @@ first time ever, and the probe reported it as an instrument failure —
 success and blindness were indistinguishable. The hash covers both prompt
 channels, the system prompt and the user framing `_build_messages` applies,
 since the language anchor moved only the second.
+
+## The negative control measures the opposite failure
+
+Every verdict above reads one object as a collapse. On a **genuinely
+single-subject** source it is the right answer, and a candidate that returns
+`[]` there has traded one defect for a worse one. No pair can express that —
+a pair's floor arm is multi-subject by construction — so `NEGATIVE_CONTROL`
+runs unpaired, exactly as the positive control does, and is reported in its
+own section against `NEGATIVE_CONTROL_OBJECTS` instead of through a verdict.
+
+| situation | what the report says |
+| --- | --- |
+| one object returned | `no false positive` — plus how many runs restated the source title |
+| any run returned `[]` | `FALSE POSITIVE` — outranks every collapse verdict above it |
+| more than one object | `SPLIT` — a different miss, reported separately so the two cannot be traded |
+| every run errored | `NO RESULT` — a connection failure is not a false positive |
+
+It is the `mcp-launch` shape named in `_drop_source_title_twins`: a title
+naming one thing, a body about that one thing, whose lone object restates
+the title. That object survives only because of the rule's floor (`len(...)
+<= 1`, and the all-twins case), which is why a change to the twin rule is
+exactly what this control exists to price. `--no-negative-control` skips it.
+
+## The 1–4 KB band
+
+`lesson` and the negative control are the only fixtures here written to a
+**length** target: roughly 1–4 KB, the size a course lesson file is. Nothing
+else under `evals/` sits in that band on single-topic material —
+`extraction_cap/` is multi-subject expository prose at 7.6–17 KB, the three
+meeting pairs are 600–800 B, and `decision_extraction/` runs on transcripts.
+`measure_single_object_rate.py` states the consequence under
+`SINGLE_SUBJECT_UNMEASURED`: a false-positive rate for the twin rule measured
+without this band says nothing about the shape whose floor the rule protects.
+
+The band is checked in `--self-test`, not assumed, for the same reason
+`MAX_LENGTH_SKEW` is: a fixture that drifts out of it keeps reporting under
+the same name while measuring something else.
 
 ## Why it exists
 
@@ -105,9 +146,15 @@ yielding `1, 1, 5` across runs, so a single run is a sample, not a finding.
 - **`NO FLOOR` is not a quiet pass.** If both arms collapse, the honest
   reading is that the fixture affords nothing here, not that the meeting arm
   alone is a finding. The self-test fails if the code ever reports it as one.
-- **Only short sources, only two pairs.** #522 observes collapse from 695 B
+- **Only short sources, only three pairs.** #522 observes collapse from 695 B
   to 40.8 KB. These fixtures sit at the small end, where a run is cheap. A
   pair at transcript scale is worth adding and is not here.
+- **The `lesson` axis and the negative control have never been run.** They
+  ship as an instrument, not as a result: `report.md` predates both, and no
+  number in it describes either. Read them as unmeasured until a run says
+  otherwise.
+- **One negative control is one document.** A `[]` rate measured on it is
+  evidence about that document, not a false-positive rate for the twin rule.
 - **Constructed, not adjudicated.** Same limitation `edge_typing/fixtures.py`
   states: written to make one defect visible, not to certify behavior on
   organic material.
@@ -116,9 +163,10 @@ yielding `1, 1, 5` across runs, so a single run is a sample, not a finding.
 
 | file | what |
 | --- | --- |
-| `collapse_fixtures.py` | the matched pairs, and the length-skew guard |
-| `run_collapse_probe.py` | the harness, its verdict logic, and `--self-test` |
-| `report.md` | the canonical run, single-pass and union |
+| `collapse_fixtures.py` | the matched pairs, the negative control, the length-skew guard and the 1–4 KB band |
+| `run_collapse_probe.py` | the harness, its verdict logic, the negative-control note, and `--self-test` |
+| `measure_single_object_rate.py` | how often `retained == 1` fires, from stored runs and zero model calls |
+| `report.md` | the canonical run, single-pass and union — it predates `lesson` and the negative control |
 
 `collapse_fixtures.py` is deliberately not named `fixtures.py`: CI runs
 `mypy .` over the whole repository and `edge_typing/fixtures.py` already

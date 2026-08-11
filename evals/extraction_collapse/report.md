@@ -3,6 +3,9 @@
 Canonical run: `qwen3:8b`, 10 runs per arm, 3 pairs plus the positive
 control. 2026-08-10, issue [#522][522].
 
+The `lesson` pair and the negative control were added **after** this run and
+appear nowhere in it — see [Added after this run](#added-after-this-run-and-not-measured-by-it).
+
 ```
 uv run python -u evals/extraction_collapse/run_collapse_probe.py --runs 10
 ```
@@ -125,6 +128,34 @@ session. The prompt carries an explicit positive default — a source with
 substantive content yields AT LEAST ONE object, and `[]` is a last resort for
 blank or unintelligible input. Three violations are not noise. This deserves
 its own issue.
+
+## Added after this run, and not measured by it
+
+Two fixtures ship as instrument only. **No number above describes either**,
+and neither has been run at any model or size.
+
+| fixture | axis | why it exists |
+| --- | --- | --- |
+| `lesson` (EN) | short lesson framing: an umbrella-topic title plus an opening sentence naming the lesson | the reported shape — a titled lesson whose body covers three distinct sub-subjects — has no fixture in this repository |
+| negative control (unpaired) | none; it is not a pair | a genuinely single-subject source where **one object is correct**, so a change that returns `[]` there is visible |
+
+Both are written to 1–4 KB, the size a course lesson file is. Every other
+fixture reachable from `evals/` is either 600–800 B of meeting or flat
+statements, multi-subject expository prose at 7.6–17 KB
+(`extraction_cap/`), or an AMI transcript. So the false-positive rate for
+any change to `_drop_source_title_twins` has, until now, been measurable only
+against multi-subject prose — which is the gap
+`measure_single_object_rate.py` records under `SINGLE_SUBJECT_UNMEASURED`.
+
+The negative control does **not** go through `verdict()`, and must not: that
+function maps `retained == 1` to a collapse by construction, so running a
+source whose right answer is one object through it would report the correct
+result as the defect. It runs unpaired, like the positive control, and gets
+its own section. The observation two headings above — *the survivor is the
+source-title twin* — is exactly what it prices: the control's lone object is
+expected to restate its title, and the report counts how often it does.
+
+Same limitation as everything else here: constructed, not adjudicated.
 
 ## Next
 
