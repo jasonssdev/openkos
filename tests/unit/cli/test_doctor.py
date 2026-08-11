@@ -27,8 +27,10 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from openkos.bundle import ledger as bundle_ledger
 from openkos.cli.main import app
-from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL
+from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL, WorkspaceLayout
+from openkos.model import okf
 from openkos.llm.ollama import (
     BackendHostLocality,
     InstalledModel,
@@ -113,7 +115,7 @@ def test_doctor_all_healthy_exits_zero(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 12
+    assert result.stdout.count("[PASS]") == 14
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
@@ -631,7 +633,7 @@ def test_doctor_vector_extension_loadable_shows_pass(
 
     assert result.exit_code == 0
     assert "[PASS] Vector extension loadable" in result.stdout
-    assert result.stdout.count("[PASS]") == 10
+    assert result.stdout.count("[PASS]") == 12
 
 
 def test_doctor_vector_extension_not_loadable_fails_but_exit_stays_zero(
@@ -894,7 +896,7 @@ def test_doctor_prints_version_banner_first(
     assert re.match(r"^openkos \d+\.\d+\.\d+", lines[0])
     assert lines[1] == f"openkos doctor: checking environment at {tmp_path}"
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 12
+    assert result.stdout.count("[PASS]") == 14
 
 
 # --- issue #240: the informational backend-locality check --------------------
@@ -1150,7 +1152,7 @@ def test_doctor_passes_when_every_task_model_is_installed(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 12
+    assert result.stdout.count("[PASS]") == 14
     assert "[PASS] Task models installed" in result.stdout
     assert "[FAIL]" not in result.stdout
 
@@ -1203,3 +1205,231 @@ def test_task_model_check_skips_when_ollama_is_unreachable(
     result = runner.invoke(app, ["doctor"])
 
     assert "[SKIP] Task models installed" in result.stdout
+
+
+# --- merge-ledger integrity checks (durable-derived-state slice 1b) -------
+
+
+def _make_ledger_entry(
+    absorbed_id: str = "concepts/absorbed",
+    *,
+    survivor_before: str = "survivor text",
+) -> okf.MergeLedgerEntry:
+    return okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at="2026-07-20T00:00:00Z",
+        absorbed_id=absorbed_id,
+        absorbed_snapshot="absorbed text",
+        survivor_before=survivor_before,
+        index_before="index text",
+        log_before="log text",
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+    )
+
+
+def _fake_client_and_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+
+def test_doctor_ledger_checks_skip_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[SKIP] Merge ledger torn writes" in result.stdout
+    assert "[SKIP] Merge ledger entries free of post-merge mutation" in result.stdout
+
+
+def test_doctor_ledger_checks_pass_trivially_when_no_ledgers_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario: "A workspace with no ledger sidecars passes trivially"."""
+    _init_workspace(tmp_path, monkeypatch)
+    _fake_client_and_git(monkeypatch)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[PASS] Merge ledger torn writes" in result.stdout
+    assert "[PASS] Merge ledger entries free of post-merge mutation" in result.stdout
+
+
+def test_doctor_torn_write_check_fails_with_repair_remediation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _fake_client_and_git(monkeypatch)
+    bundle_dir = WorkspaceLayout(tmp_path).bundle_dir
+    survivor_path = bundle_dir / "concepts" / "survivor.md"
+    survivor_path.parent.mkdir(parents=True, exist_ok=True)
+    survivor_text = "---\ntype: Concept\ntitle: Survivor\n---\nBody.\n"
+    survivor_path.write_text(survivor_text, encoding="utf-8")
+    bundle_ledger.write_pending(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[_make_ledger_entry()],
+        expected_survivor_sha256=bundle_ledger.survivor_sha256(survivor_text),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    # Informational: never affects the exit code (critical=False).
+    assert result.exit_code == 0
+    assert "[FAIL] Merge ledger torn writes" in result.stdout
+    fail_and_after = result.stdout.split("[FAIL] Merge ledger torn writes", 1)[1]
+    assert "  -> " in fail_and_after
+    assert "openkos repair" in fail_and_after
+
+
+def test_doctor_nesting_violation_check_names_both_remedies_when_reset_point_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario: "A corrupted ledger fails with both remediation paths"."""
+    _init_workspace(tmp_path, monkeypatch)
+    _fake_client_and_git(monkeypatch)
+    bundle_dir = WorkspaceLayout(tmp_path).bundle_dir
+    entry_0 = _make_ledger_entry(absorbed_id="concepts/absorbed-0")
+    tampered = okf.MergeLedgerEntry(
+        schema=entry_0.schema,
+        merged_at=entry_0.merged_at,
+        absorbed_id=entry_0.absorbed_id,
+        absorbed_snapshot="TAMPERED",
+        survivor_before=entry_0.survivor_before,
+        index_before=entry_0.index_before,
+        log_before=entry_0.log_before,
+        link_rewrites=entry_0.link_rewrites,
+        sensitivity_before=entry_0.sensitivity_before,
+        sensitivity_after=entry_0.sensitivity_after,
+    )
+    embedded_metadata = {
+        "type": "Concept",
+        "title": "Survivor",
+        "merged_from": okf.encode_merged_from([tampered]),
+    }
+    entry_1 = _make_ledger_entry(
+        absorbed_id="concepts/absorbed-1",
+        survivor_before=okf.dump_frontmatter(embedded_metadata),
+    )
+    bundle_ledger.write_entries(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[entry_0, entry_1],
+    )
+    monkeypatch.setattr("openkos.cli.main.vcs_git.has_reset_point", lambda root: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    label = "[FAIL] Merge ledger entries free of post-merge mutation"
+    assert label in result.stdout
+    fail_and_after = result.stdout.split(label, 1)[1]
+    assert "  -> " in fail_and_after
+    assert "openkos repair" in fail_and_after
+    assert "git reset --hard" in fail_and_after
+    assert "openkos reindex" in fail_and_after
+    assert "reversibility" in fail_and_after.lower()
+    assert "not guaranteed" in fail_and_after.lower()
+
+
+def test_doctor_nesting_violation_check_reports_no_reset_point_without_git_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The orchestrator-flagged gap: `_autocommit` is best-effort and
+    silently no-ops with no configured git identity, so a workspace whose
+    ledger is corrupted AND that never had a git identity configured has
+    NO reset point at all -- `doctor` must say so explicitly rather than
+    print an unusable `git reset --hard` remedy."""
+    _init_workspace(tmp_path, monkeypatch)
+    _fake_client_and_git(monkeypatch)
+    bundle_dir = WorkspaceLayout(tmp_path).bundle_dir
+    entry_0 = _make_ledger_entry(absorbed_id="concepts/absorbed-0")
+    tampered = okf.MergeLedgerEntry(
+        schema=entry_0.schema,
+        merged_at=entry_0.merged_at,
+        absorbed_id=entry_0.absorbed_id,
+        absorbed_snapshot="TAMPERED",
+        survivor_before=entry_0.survivor_before,
+        index_before=entry_0.index_before,
+        log_before=entry_0.log_before,
+        link_rewrites=entry_0.link_rewrites,
+        sensitivity_before=entry_0.sensitivity_before,
+        sensitivity_after=entry_0.sensitivity_after,
+    )
+    embedded_metadata = {
+        "type": "Concept",
+        "title": "Survivor",
+        "merged_from": okf.encode_merged_from([tampered]),
+    }
+    entry_1 = _make_ledger_entry(
+        absorbed_id="concepts/absorbed-1",
+        survivor_before=okf.dump_frontmatter(embedded_metadata),
+    )
+    bundle_ledger.write_entries(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[entry_0, entry_1],
+    )
+    # No git identity was ever configured -- `_autocommit` never ran, so no
+    # reset point exists, regardless of whether a `.git` directory exists.
+    monkeypatch.setattr("openkos.cli.main.vcs_git.has_reset_point", lambda root: False)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    label = "[FAIL] Merge ledger entries free of post-merge mutation"
+    assert label in result.stdout
+    fail_and_after = result.stdout.split(label, 1)[1]
+    assert "no git reset point is available" in fail_and_after
+    assert "git reset --hard" not in fail_and_after
+    assert "reversibility" in fail_and_after.lower()
+    assert "not guaranteed" in fail_and_after.lower()
+
+
+def test_doctor_ledger_checks_never_write_to_the_ledger_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario: "The check never writes" -- doctor stays read-only even
+    when it finds a torn write AND a nesting violation."""
+    _init_workspace(tmp_path, monkeypatch)
+    _fake_client_and_git(monkeypatch)
+    bundle_dir = WorkspaceLayout(tmp_path).bundle_dir
+    survivor_path = bundle_dir / "concepts" / "survivor.md"
+    survivor_path.parent.mkdir(parents=True, exist_ok=True)
+    survivor_text = "---\ntype: Concept\ntitle: Survivor\n---\nBody.\n"
+    survivor_path.write_text(survivor_text, encoding="utf-8")
+    bundle_ledger.write_pending(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[_make_ledger_entry()],
+        expected_survivor_sha256=bundle_ledger.survivor_sha256(survivor_text),
+    )
+    ledger_root = bundle_ledger.ledger_root(bundle_dir)
+    before = {
+        path: path.read_bytes() for path in sorted(ledger_root.rglob("*")) if path.is_file()
+    }
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    after = {
+        path: path.read_bytes() for path in sorted(ledger_root.rglob("*")) if path.is_file()
+    }
+    assert after == before

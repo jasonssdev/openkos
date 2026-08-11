@@ -11522,6 +11522,93 @@ def doctor() -> None:
         )
     )
 
+    # 12. merge-ledger-torn-writes (informational, workspace-only; SKIP
+    # outside -- Check A, design Decision 5: mechanically exact, zero false
+    # positives/negatives). A `.pending` marker means a two-phase write was
+    # interrupted mid-flight; `doctor` PREVIEWS what `recover` would decide
+    # (`bundle_ledger.scan_torn_writes`, read-only) but never repairs --
+    # only the repair verb (1b) writes.
+    if in_workspace:
+        torn = bundle_ledger.scan_torn_writes(config.WorkspaceLayout(root).bundle_dir)
+        if torn:
+            results.append(
+                CheckResult(
+                    "Merge ledger torn writes",
+                    "fail",
+                    critical=False,
+                    detail=f"{len(torn)} pending marker(s)",
+                    remediation="openkos repair",
+                )
+            )
+        else:
+            results.append(
+                CheckResult("Merge ledger torn writes", "pass", critical=False)
+            )
+    else:
+        results.append(CheckResult("Merge ledger torn writes", "skip", critical=False))
+
+    # 13. merge-ledger-entries-free-of-post-merge-mutation (informational,
+    # workspace-only; SKIP outside -- Check B, design Decision 5: doctor-
+    # command spec "Merge-Ledger Integrity Check"). Nested-prefix equality
+    # over every committed sidecar (`bundle_ledger.scan_nesting_violations`,
+    # read-only); a `[FAIL]` names BOTH remedies -- the repair verb (a
+    # ledger merely unmigrated, not corrupted) and `git reset --hard
+    # <first-merge>~1` + `openkos reindex` (a ledger the check judges
+    # corrupted) -- and states pre-fix reversibility is not guaranteed.
+    # The git-reset half is gated on `vcs_git.has_reset_point` (gap fix,
+    # task 2.4/2.5): `_autocommit` is best-effort and silently no-ops with
+    # no repo, no configured git identity, or any `GitError`/`OSError`, so
+    # a workspace that never actually committed has no reset point at all
+    # -- printing that remedy unconditionally would name a command that
+    # cannot work.
+    if in_workspace:
+        bundle_dir = config.WorkspaceLayout(root).bundle_dir
+        violations = bundle_ledger.scan_nesting_violations(bundle_dir)
+        if violations:
+            if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
+                reset_remedy = (
+                    "run `git reset --hard <first-merge>~1` then `openkos "
+                    "reindex`"
+                )
+            else:
+                reset_remedy = (
+                    "no git reset point is available in this workspace (no "
+                    "repository, no configured git identity, or no commit "
+                    "history) -- there is no remedy that restores "
+                    "reversibility for the affected merge(s)"
+                )
+            results.append(
+                CheckResult(
+                    "Merge ledger entries free of post-merge mutation",
+                    "fail",
+                    critical=False,
+                    detail=f"{len(violations)} entr{'y' if len(violations) == 1 else 'ies'}",
+                    remediation=(
+                        "if a ledger is merely unmigrated (still embedded in "
+                        "the survivor's own frontmatter, not corrupted), run "
+                        f"`openkos repair`; if corrupted, {reset_remedy} -- "
+                        "reversibility of merges made before this fix is not "
+                        "guaranteed"
+                    ),
+                )
+            )
+        else:
+            results.append(
+                CheckResult(
+                    "Merge ledger entries free of post-merge mutation",
+                    "pass",
+                    critical=False,
+                )
+            )
+    else:
+        results.append(
+            CheckResult(
+                "Merge ledger entries free of post-merge mutation",
+                "skip",
+                critical=False,
+            )
+        )
+
     # Leading version banner (cli-version-flag, #181): informational only, NOT
     # a CheckResult -- it is deliberately outside `results` so it can never
     # affect the check count or the exit code.
