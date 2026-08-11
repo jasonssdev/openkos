@@ -208,6 +208,138 @@ def discard_pending(concept_id: str, bundle_dir: Path) -> None:
     pending_path_for(concept_id, bundle_dir).unlink()
 
 
+def iter_pending(bundle_dir: Path) -> list[Path]:
+    """Every uncommitted `<concept_id>.ledger.okf.pending` marker under
+    `bundle_dir`'s ledger root, sorted -- the read-only enumeration
+    primitive `doctor`'s torn-write check (Check A, durable-derived-state
+    slice 1b) uses. A missing ledger root returns `[]` rather than
+    raising, mirroring `iter_ledgers`."""
+    root = ledger_root(bundle_dir)
+    if not root.is_dir():
+        return []
+    return sorted(root.rglob(f"*{PENDING_SUFFIX}"))
+
+
+def scan_torn_writes(bundle_dir: Path) -> list[tuple[Path, RecoveryVerdict]]:
+    """Read-only PREVIEW of what `recover` would decide for every pending
+    marker under `bundle_dir`'s ledger root -- `doctor`'s Check A (check
+    12, design Decision 5): the SAME hash-bound truth table `recover`
+    implements, but this NEVER writes, replaces, or unlinks anything
+    (doctor stays read-only per `openspec/specs/doctor-command/spec.md`;
+    the repair verb, not doctor, performs the write).
+
+    A marker whose `survivor_id` field is missing or non-string cannot be
+    resolved to a survivor at all -- reported as `"roll-back"`-shaped
+    (nothing to roll forward TO) rather than raised, mirroring the
+    defensive-skip posture `cli._sweep_ledger_sidecars_for_ids` already
+    uses for a malformed sidecar."""
+    results: list[tuple[Path, RecoveryVerdict]] = []
+    for pending_path in iter_pending(bundle_dir):
+        metadata, _ = okf.load_frontmatter(pending_path.read_text(encoding="utf-8"))
+        survivor_id = metadata.get("survivor_id")
+        expected_sha256 = metadata.get("expected_survivor_sha256")
+
+        actual_sha256: str | None = None
+        if isinstance(survivor_id, str) and survivor_id:
+            survivor_path = okf.concept_path_for(survivor_id, bundle_dir)
+            if survivor_path.is_file():
+                actual_sha256 = survivor_sha256(
+                    survivor_path.read_text(encoding="utf-8")
+                )
+
+        if actual_sha256 is not None and actual_sha256 == expected_sha256:
+            results.append((pending_path, "roll-forward"))
+        else:
+            results.append((pending_path, "roll-back"))
+    return results
+
+
+def scan_nesting_violations(bundle_dir: Path) -> list[tuple[str, int]]:
+    """`doctor`'s Check B (check 13, design Decision 5): nested-prefix
+    equality over every committed sidecar under `bundle_dir`.
+
+    Entry *k*'s `survivor_before` snapshot, when it embeds ledger entries
+    via the OLD, pre-relocation frontmatter `merged_from` key (a
+    migration-era entry written BEFORE this slice), must decode back to
+    EXACTLY the sidecar's own current entries `0..k-1`; any inequality is
+    exactly #550 consequence 2 -- a later merge rewrote bytes inside an
+    earlier embedded snapshot -- and is flagged.
+
+    An entry whose `survivor_before` embeds NOTHING is silently skipped,
+    not flagged: every entry created AFTER the ledger relocation has a
+    `survivor_before` that never carried a `merged_from` key at all (it
+    lives in this sidecar, not in frontmatter), so the corruption class
+    this check exists for is structurally extinct there (design Decision
+    5: "Check B is a migration-era check"). This also covers the single-
+    entry case (`k` never reaches `1`) -- the design's documented honest
+    false negative: nothing nested, so the check is blind to it.
+
+    Returns `(survivor_id, entry_index)` pairs for every violation found.
+    Read-only: never writes, modifies, or deletes anything."""
+    violations: list[tuple[str, int]] = []
+    for ledger_path in iter_ledgers(bundle_dir):
+        metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
+        survivor_id = metadata.get("survivor_id")
+        if not isinstance(survivor_id, str) or not survivor_id:
+            continue
+        entries = okf.decode_merged_from(metadata)
+        for k in range(1, len(entries)):
+            embedded_metadata, _ = okf.load_frontmatter(entries[k].survivor_before)
+            embedded_entries = okf.decode_merged_from(embedded_metadata)
+            if not embedded_entries:
+                continue
+            if embedded_entries != entries[:k]:
+                violations.append((survivor_id, k))
+    return violations
+
+
+def scan_unmigrated(bundle_dir: Path) -> list[tuple[str, list[okf.MergeLedgerEntry]]]:
+    """Every survivor whose OWN frontmatter still carries a `merged_from`
+    key (pre-relocation, never migrated to a sidecar) -- the repair verb's
+    migration source (task 3, PR#3). Walks `okf._iter_docs`, the SAME walk
+    `fts.build_index`/`reindex` use; a doc `_iter_docs` could not read or
+    parse is silently skipped, mirroring every other reader's degrade-not-
+    crash posture over a transient per-doc failure.
+
+    A committed sidecar under `bundle/.state/ledger/` is never a candidate
+    here: it is not `.md`-suffixed, so `_iter_docs`'s `rglob("*.md")` walk
+    never even reaches it (design Decision 2's free EXCLUDE)."""
+    unmigrated: list[tuple[str, list[okf.MergeLedgerEntry]]] = []
+    for scan in okf._iter_docs(bundle_dir):
+        if scan.read_error is not None or scan.parse_error is not None:
+            continue
+        metadata = scan.metadata or {}
+        if okf.MERGED_FROM_KEY not in metadata:
+            continue
+        concept_id = okf.concept_id_for(scan.path, bundle_dir)
+        unmigrated.append((concept_id, okf.decode_merged_from(metadata)))
+    return unmigrated
+
+
+def bundle_wide_max_entries(bundle_dir: Path) -> int:
+    """The LARGEST entry count any single survivor carries anywhere in the
+    bundle -- migrated (committed sidecar) and unmigrated (frontmatter-
+    embedded) ledgers counted together. `0` when no ledger of either kind
+    exists.
+
+    The repair verb's cross-survivor-pollution gate (design Decision 5):
+    `merge_core`'s `other_files` (`cli/main.py:6542`) can rewrite bytes
+    inside a THIRD survivor's embedded snapshot, a corruption Check B
+    cannot see at every index -- so the migration gate is deliberately
+    coarser than the check, refusing whenever ANY survivor bundle-wide
+    carries 2 or more entries, regardless of which specific ledger a
+    per-entry check would have flagged."""
+    counts: dict[str, int] = {}
+    for ledger_path in iter_ledgers(bundle_dir):
+        metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
+        survivor_id = metadata.get("survivor_id")
+        if isinstance(survivor_id, str) and survivor_id:
+            counts[survivor_id] = len(okf.decode_merged_from(metadata))
+    for concept_id, entries in scan_unmigrated(bundle_dir):
+        counts[concept_id] = counts.get(concept_id, 0) + len(entries)
+    return max(counts.values(), default=0)
+
+
 def recover(concept_id: str, bundle_dir: Path) -> RecoveryVerdict:
     """Total function of on-disk state (design Decision 1's truth table, no
     heuristic): absent `.pending` is `"none"`; present with a matching

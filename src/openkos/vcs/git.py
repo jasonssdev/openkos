@@ -457,6 +457,25 @@ def has_git_identity(cwd: Path) -> bool:
     return email_result.returncode == 0 and bool(email_result.stdout.strip())
 
 
+def has_reset_point(cwd: Path) -> bool:
+    """`True` iff `HEAD` has at least one ancestor commit at `cwd` -- the
+    necessary (not sufficient) condition for a `git reset --hard
+    <commit>~1` remedy to name ANY real commit at all.
+
+    `doctor`'s corrupted-ledger remediation (durable-derived-state slice
+    1b) probes this before printing "reset and replay" as an available
+    remedy: `_autocommit` (`cli/main.py::_autocommit`) is best-effort and
+    silently no-ops with no git repo, no configured git identity, or any
+    `GitError`/`OSError` -- so a workspace that never actually committed
+    has no reset point at all, regardless of whether a `.git` directory
+    exists. `False` on ANY probe failure (no repo, zero commits, exactly
+    one commit with no parent, or the probe itself erroring) -- fail-
+    closed, since a remedy this function cannot confirm must never be
+    printed as available."""
+    result = _run(["git", "rev-parse", "--verify", "--quiet", "HEAD~1"], cwd=cwd)
+    return result.returncode == 0
+
+
 def commit_paths(cwd: Path, rel_paths: Sequence[str], message: str) -> None:
     """Stage EXACTLY `rel_paths` (`git add -- <rel_paths>`, never `-A`/
     `-a`) and commit them with `message`.

@@ -3,7 +3,6 @@
 Change: `durable-derived-state`
 Date: 2026-08-11
 Phase: explore (no implementation)
-Engram topic: `sdd/durable-derived-state/explore` (obs #2672)
 
 ## Answer up front
 
@@ -26,7 +25,7 @@ files under it (`cli/main.py:4240-4266`, `4385-4390`), with no carve-out
 possible that does not contradict its documented "rebuildable cache, never
 source of truth" contract.
 
-> **Path-notation warning (added by the orchestrator after `sdd-propose`).** This
+> **Path-notation warning (added during proposal review).** This
 > document uses two different `bundle/` prefixes and they are NOT the same thing.
 > `bundle/merge.py`, `bundle/references.py` etc. are shorthand for source modules
 > under **`src/openkos/bundle/`**. `bundle/concepts/…`, `bundle/index.md`, and the
@@ -285,7 +284,7 @@ Recommended shape:
 4. **Pre-fix unreversible merges (§6):** surfaced by `doctor` as a hard warning,
    or left to a CHANGELOG note?
 
-## Orchestrator verification note
+## Verification note
 
 Every file:line citation above was re-checked against the working tree at
 `2a03a56` before this artifact was written. All confirmed. Two corrections were

@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import unicodedata
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -554,6 +554,104 @@ def _reject_torn_ledger_write(
         err=True,
     )
     raise typer.Exit(code=1)
+
+
+def _reject_flagged_ledger_write(
+    root: Path, bundle_dir: Path, survivor_canonical: str, force: bool
+) -> None:
+    """Refuse (exit 1, writes nothing) when `survivor_canonical`'s ledger
+    sidecar is flagged by doctor's Check B (post-merge mutation,
+    `bundle_ledger.scan_nesting_violations`) -- UNLESS `--force` is passed
+    (spec: "`merge` Refuses On A Doctor-Flagged Ledger, With `--force`").
+
+    `merge` calls this in Phase A, before any write. `--force` bypasses
+    ONLY this refusal -- it is orthogonal to the confirm-gate precedence
+    (`--auto`/`review: false`/TTY prompt) that governs the write itself,
+    mirroring `forget --force`'s independence from `--auto`. Unlike
+    `_reject_torn_ledger_write` (Check A, mechanically exact and trivially
+    repairable), Check B's corruption is not always repairable, so this
+    refusal has an escape hatch for an operator who has already confirmed
+    it is safe to proceed."""
+    if force:
+        return
+    violations = bundle_ledger.scan_nesting_violations(bundle_dir)
+    if not any(survivor_id == survivor_canonical for survivor_id, _ in violations):
+        return
+    if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
+        reset_remedy = "run `git reset --hard <first-merge>~1` then `openkos reindex`"
+    else:
+        reset_remedy = (
+            "no git reset point is available in this workspace (no "
+            "repository, no configured git identity, or no commit "
+            "history) -- there is no remedy that restores reversibility "
+            "for the affected merge(s)"
+        )
+    typer.echo(
+        f"openkos merge: refusing to merge -- {survivor_canonical!r}'s ledger "
+        "is flagged by the merge-ledger-integrity check (post-merge "
+        "mutation). If the ledger is merely unmigrated (still embedded in "
+        "the survivor's own frontmatter, not corrupted), run `openkos "
+        f"repair`; if corrupted, {reset_remedy} -- reversibility of merges "
+        "made before this fix is not guaranteed. Re-run with --force to "
+        "bypass this refusal.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+def _sweep_ledger_sidecars_for_ids(
+    bundle_dir: Path, purge_ids: Iterable[str]
+) -> list[Path]:
+    """Privacy sweep of `bundle/.state/ledger/` for `purge_ids` membership
+    (forget-command spec: "Deletion Sweep Includes Ledger Storage";
+    privacy-purge spec: "Whole-History Expunge Covers The Ledger Sidecar
+    Store" -- shared by `forget`'s and `purge`'s own Phase B, so the sweep
+    is written exactly once):
+
+    - Each purge-set member's OWN ledger sidecar (if it is/was itself a
+      merge survivor) is deleted OUTRIGHT -- the member's own merge history
+      is no longer meaningful once the member itself is gone.
+    - Every OTHER live sidecar has any entry whose `absorbed_id` is in
+      `purge_ids` dropped (`ledger.write_entries` with the remaining
+      entries, or removed entirely when none remain) -- so a purge-set
+      member's pre-merge body does not survive merely because it was
+      absorbed into a DIFFERENT survivor that is not itself being
+      forgotten/purged.
+
+    Returns every ledger path touched (deleted, or rewritten), bundle-dir-
+    relative-capable via the caller, so it can be folded into the SAME
+    Phase B write/`_autocommit` the concept-file deletion already uses --
+    never a second, independent write pass.
+
+    A sidecar whose `survivor_id` field is missing or non-string is skipped
+    defensively rather than guessed at -- this sweep only ever REMOVES
+    content, so a malformed sidecar it cannot safely identify is left for
+    `doctor` to flag, not silently rewritten under an invented id."""
+    purge_ids_set = set(purge_ids)
+    touched: list[Path] = []
+    deleted: set[Path] = set()
+    for member in sorted(purge_ids_set):
+        own_path = bundle_ledger.ledger_path_for(member, bundle_dir)
+        if own_path.is_file():
+            fsio.remove_file(own_path)
+            touched.append(own_path)
+            deleted.add(own_path)
+    for ledger_path in bundle_ledger.iter_ledgers(bundle_dir):
+        if ledger_path in deleted:
+            continue
+        metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
+        survivor_id = metadata.get("survivor_id")
+        if not isinstance(survivor_id, str) or not survivor_id:
+            continue
+        entries = okf.decode_merged_from(metadata)
+        remaining = [e for e in entries if e.absorbed_id not in purge_ids_set]
+        if len(remaining) == len(entries):
+            continue
+        bundle_ledger.write_entries(
+            survivor_id, bundle_dir, survivor_id=survivor_id, entries=remaining
+        )
+        touched.append(ledger_path)
+    return touched
 
 
 def _reject_drifted_targets(
@@ -4126,6 +4224,7 @@ def forget(
     )
 
     unlinked_count = 0
+    ledger_touched: list[Path] = []
     try:
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
@@ -4136,6 +4235,12 @@ def forget(
         for member in sorted(purge_ids):
             fsio.remove_file(layout.bundle_dir / f"{member}.md")
             unlinked_count += 1
+        # Merge-ledger sidecar privacy sweep (forget-command spec:
+        # "Deletion Sweep Includes Ledger Storage"), same Phase B write:
+        # a purge-set member's content must not survive `forget` merely
+        # because it was previously absorbed into (or is the survivor of)
+        # a merge.
+        ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
     except (OSError, ValueError) as exc:
         message = f"openkos forget: failed while writing the forget -- {exc}."
         # K-of-N observability on a mid-cascade unlink failure (`--scope
@@ -4173,6 +4278,10 @@ def forget(
             "bundle/index.md",
             "bundle/log.md",
             *(f"bundle/{member}.md" for member in purge_ids),
+            *(
+                f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
+                for p in ledger_touched
+            ),
         ],
         forget_message,
     )
@@ -4538,6 +4647,21 @@ def purge(
                         "(its bundle file is still targeted)"
                     )
             expunge_targets.append(f"bundle/{member}.md")
+        # Whole-History Expunge Covers The Ledger Sidecar Store
+        # (privacy-purge spec, task 3.4): every purge-set member's OWN
+        # `bundle/.state/ledger/` sidecar (i.e. it is/was itself a merge
+        # survivor) is expunged in this SAME `git filter-repo` pass -- no
+        # second invocation. An absorbed-but-not-itself-a-survivor member
+        # has no sidecar of its own; its historical body may still live as
+        # an `absorbed_snapshot` fragment inside a DIFFERENT survivor's
+        # sidecar, which stays a documented gap (see design's threat
+        # matrix note) rather than a whole-file expunge target here.
+        for member in sorted(purge_ids):
+            member_sidecar = bundle_ledger.ledger_path_for(member, layout.bundle_dir)
+            if member_sidecar.is_file():
+                expunge_targets.append(
+                    f"bundle/{member_sidecar.relative_to(layout.bundle_dir).as_posix()}"
+                )
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos purge: failed while preparing the purge -- {exc}.", err=True
@@ -4749,6 +4873,7 @@ def purge(
         )
         _purge_clean_live_index(layout, purge_ids)
         _purge_clean_live_log(layout, purge_ids)
+        _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
         _purge_rebuild_indexes(layout)
         raise typer.Exit(code=1) from exc
     except vcs_git.GitError as exc:
@@ -4760,6 +4885,14 @@ def purge(
 
     _purge_clean_live_index(layout, purge_ids)
     _purge_clean_live_log(layout, purge_ids)
+    # Whole-History Expunge Covers The Ledger Sidecar Store
+    # (privacy-purge spec): each purge-set member's OWN sidecar was already
+    # removed from the working tree by `expunge_paths`' filter-repo checkout
+    # (it was in `expunge_targets` above); this is the LIVE-tree half --
+    # dropping any OTHER survivor's sidecar entry whose `absorbed_id` is a
+    # purge-set member, reusing the exact same primitive `forget`'s Phase B
+    # calls, so the sweep is written exactly once.
+    ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
     _purge_rebuild_indexes(layout)
 
     # Post-rewrite live-tree auto-commit (design: "purge empty-diff guard",
@@ -4772,7 +4905,14 @@ def purge(
     # repo), fall through and attempt `_autocommit` anyway -- its own
     # try/except keeps that non-fatal too, matching this whole step's
     # never-fail-the-already-irreversible-purge contract.
-    commit_paths_rel = ["bundle/index.md", "bundle/log.md"]
+    commit_paths_rel = [
+        "bundle/index.md",
+        "bundle/log.md",
+        *(
+            f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
+            for p in ledger_touched
+        ),
+    ]
     try:
         should_commit = vcs_git.paths_dirty(root, commit_paths_rel)
     except vcs_git.GitError:
@@ -7022,6 +7162,15 @@ def merge(
         "--auto",
         help="Skip the confirmation prompt and write immediately (unattended).",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Bypass the doctor-flagged ledger-integrity refusal (Check B, "
+            "post-merge mutation) for the survivor's sidecar. Independent "
+            "of --auto -- it never skips the confirmation prompt."
+        ),
+    ),
 ) -> None:
     """Fuse two distinct concept-ids into one: the first DESTRUCTIVE
     entity-resolution write (spec: Merge Fuses Two Distinct Concept-IDs).
@@ -7156,6 +7305,7 @@ def merge(
         raise typer.Exit(code=1) from exc
 
     _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "merge")
+    _reject_flagged_ledger_write(root, layout.bundle_dir, survivor_canonical, force)
 
     now = datetime.now(UTC)
 
@@ -8792,6 +8942,11 @@ def lint() -> None:
     # issue #474: a names-only walk, never the docs list -- collect_docs
     # cannot see a decomposed directory, non-`.md` file, or unreadable doc.
     non_nfc = lint_check.check_non_nfc_names(layout.bundle_dir)
+    # task 3.6: a names-only walk over `bundle/.state/` alone, never the
+    # `docs` list -- `collect_docs`/`_iter_docs` never descends there.
+    state_dir_markdown = lint_check.check_state_dir_contains_no_markdown(
+        layout.bundle_dir
+    )
     notices = window_notices + skip_notices
     report = lint_check.LintReport(
         stale=stale,
@@ -8803,6 +8958,7 @@ def lint() -> None:
         dangling_provenance=dangling_provenance,
         unbacked_provenance=unbacked_provenance,
         non_nfc=non_nfc,
+        state_dir_markdown=state_dir_markdown,
         notices=notices,
     )
 
@@ -8874,6 +9030,13 @@ def lint() -> None:
         # on-disk entry (possibly a directory or non-`.md` file), not a
         # concept object, so the path is the honest spelling.
         for finding in report.non_nfc:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("State-dir markdown:")
+    if not report.state_dir_markdown:
+        typer.echo("  No `.md` files under bundle/.state/.")
+    else:
+        for finding in report.state_dir_markdown:
             typer.echo(f"  {finding.path}: {finding.detail}")
 
 
@@ -11412,6 +11575,92 @@ def doctor() -> None:
         )
     )
 
+    # 12. merge-ledger-torn-writes (informational, workspace-only; SKIP
+    # outside -- Check A, design Decision 5: mechanically exact, zero false
+    # positives/negatives). A `.pending` marker means a two-phase write was
+    # interrupted mid-flight; `doctor` PREVIEWS what `recover` would decide
+    # (`bundle_ledger.scan_torn_writes`, read-only) but never repairs --
+    # only the repair verb (1b) writes.
+    if in_workspace:
+        torn = bundle_ledger.scan_torn_writes(config.WorkspaceLayout(root).bundle_dir)
+        if torn:
+            results.append(
+                CheckResult(
+                    "Merge ledger torn writes",
+                    "fail",
+                    critical=False,
+                    detail=f"{len(torn)} pending marker(s)",
+                    remediation="openkos repair",
+                )
+            )
+        else:
+            results.append(
+                CheckResult("Merge ledger torn writes", "pass", critical=False)
+            )
+    else:
+        results.append(CheckResult("Merge ledger torn writes", "skip", critical=False))
+
+    # 13. merge-ledger-entries-free-of-post-merge-mutation (informational,
+    # workspace-only; SKIP outside -- Check B, design Decision 5: doctor-
+    # command spec "Merge-Ledger Integrity Check"). Nested-prefix equality
+    # over every committed sidecar (`bundle_ledger.scan_nesting_violations`,
+    # read-only); a `[FAIL]` names BOTH remedies -- the repair verb (a
+    # ledger merely unmigrated, not corrupted) and `git reset --hard
+    # <first-merge>~1` + `openkos reindex` (a ledger the check judges
+    # corrupted) -- and states pre-fix reversibility is not guaranteed.
+    # The git-reset half is gated on `vcs_git.has_reset_point` (gap fix,
+    # task 2.4/2.5): `_autocommit` is best-effort and silently no-ops with
+    # no repo, no configured git identity, or any `GitError`/`OSError`, so
+    # a workspace that never actually committed has no reset point at all
+    # -- printing that remedy unconditionally would name a command that
+    # cannot work.
+    if in_workspace:
+        bundle_dir = config.WorkspaceLayout(root).bundle_dir
+        violations = bundle_ledger.scan_nesting_violations(bundle_dir)
+        if violations:
+            if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
+                reset_remedy = (
+                    "run `git reset --hard <first-merge>~1` then `openkos reindex`"
+                )
+            else:
+                reset_remedy = (
+                    "no git reset point is available in this workspace (no "
+                    "repository, no configured git identity, or no commit "
+                    "history) -- there is no remedy that restores "
+                    "reversibility for the affected merge(s)"
+                )
+            results.append(
+                CheckResult(
+                    "Merge ledger entries free of post-merge mutation",
+                    "fail",
+                    critical=False,
+                    detail=f"{len(violations)} entr{'y' if len(violations) == 1 else 'ies'}",
+                    remediation=(
+                        "if a ledger is merely unmigrated (still embedded in "
+                        "the survivor's own frontmatter, not corrupted), run "
+                        f"`openkos repair`; if corrupted, {reset_remedy} -- "
+                        "reversibility of merges made before this fix is not "
+                        "guaranteed"
+                    ),
+                )
+            )
+        else:
+            results.append(
+                CheckResult(
+                    "Merge ledger entries free of post-merge mutation",
+                    "pass",
+                    critical=False,
+                )
+            )
+    else:
+        results.append(
+            CheckResult(
+                "Merge ledger entries free of post-merge mutation",
+                "skip",
+                critical=False,
+            )
+        )
+
     # Leading version banner (cli-version-flag, #181): informational only, NOT
     # a CheckResult -- it is deliberately outside `results` so it can never
     # affect the check count or the exit code.
@@ -11423,6 +11672,129 @@ def doctor() -> None:
 
     if any(r.status == "fail" and r.critical for r in results):
         raise typer.Exit(code=1)
+
+
+@app.command(
+    help=(
+        "Migrate legacy, frontmatter-embedded merge ledgers into "
+        "bundle/.state/ledger/, refusing on any sign of a torn write or "
+        "cross-survivor pollution risk."
+    ),
+    rich_help_panel="Maintain",
+)
+def repair() -> None:
+    """Read-write migration verb (durable-derived-state slice 1b): extracts
+    every survivor's OWN frontmatter-embedded `merged_from` ledger (pre-
+    relocation, unmigrated) into its `bundle/.state/ledger/` sidecar,
+    VERBATIM, and strips the `merged_from` key from the survivor's own
+    frontmatter -- nothing else about the survivor changes.
+
+    TWO refusal gates, BOTH with NO override flag at all (unlike `merge`'s
+    `--force`): migrating a corrupted ledger verbatim would convert a
+    git-revertible bug into a permanent durable fact, so this verb is
+    deliberately MORE conservative than `merge`/`unmerge`'s own refusals.
+
+    Gate 1 (Check A, torn write): any `.pending` marker anywhere in the
+    bundle refuses the WHOLE run -- `openkos doctor` names the affected
+    survivor(s); `openkos repair` does not repair a torn write itself
+    (`bundle_ledger.recover` does, on the NEXT `merge`/`unmerge` that
+    touches that survivor).
+
+    Gate 2 (cross-survivor-pollution gate, design Decision 5): refuses the
+    WHOLE run whenever ANY survivor bundle-wide -- migrated OR unmigrated
+    -- carries 2 or more entries, regardless of what Check B's per-ledger
+    nested-prefix check would have found on its own. Deliberately coarser
+    than Check B: a merge of X into Y can rewrite bytes inside a THIRD
+    survivor Z's embedded snapshot (`merge_core`'s `other_files`,
+    `cli/main.py:6542`), a corruption Check B cannot see at every index.
+
+    Before writing, reports whether this run's own effect is undoable via
+    `git reset --hard` (`vcs_git.has_reset_point`, the same gap-fix probe
+    `doctor` uses): `_autocommit` is best-effort and silently no-ops with
+    no repo, no configured git identity, or any `GitError`/`OSError`, so a
+    workspace that never committed has no safety net for THIS run either.
+    """
+    root = Path.cwd()
+    workspace_reason = config.require_workspace(root)
+    if workspace_reason is not None:
+        typer.echo(f"openkos repair: refusing to run -- {workspace_reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    bundle_dir = layout.bundle_dir
+
+    torn = bundle_ledger.scan_torn_writes(bundle_dir)
+    if torn:
+        typer.echo(
+            f"openkos repair: refusing to run -- {len(torn)} pending "
+            "marker(s) found (a prior merge crashed mid-commit); this "
+            "refusal has no override. Run `openkos doctor` to inspect, or "
+            "`openkos merge`/`openkos unmerge` on the affected survivor to "
+            "trigger recovery.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if bundle_ledger.bundle_wide_max_entries(bundle_dir) >= 2:
+        typer.echo(
+            "openkos repair: refusing to run -- at least one survivor in "
+            "this bundle carries 2 or more merge-ledger entries. Migrating "
+            "a possibly-corrupted ledger verbatim would convert a "
+            "git-revertible bug into a permanent durable fact, so this "
+            "refusal has NO override. Run `openkos doctor` to inspect; if "
+            "it reports a corrupted ledger, its own remediation is the way "
+            "forward, not this verb.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    unmigrated = bundle_ledger.scan_unmigrated(bundle_dir)
+    if not unmigrated:
+        typer.echo(
+            "openkos repair: nothing to migrate -- no unmigrated merge ledger found."
+        )
+        return
+
+    if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
+        typer.echo(
+            "openkos repair: this run's writes can be undone with `git "
+            "reset --hard HEAD` before this run's own auto-commit lands, "
+            "or `git reset --hard <commit-before-this-run>` after."
+        )
+    else:
+        typer.echo(
+            "openkos repair: WARNING -- no git reset point is available in "
+            "this workspace (no repository, no configured git identity, or "
+            "no commit history); this run's writes cannot be undone via "
+            "git.",
+            err=True,
+        )
+
+    touched: list[str] = []
+    for concept_id, entries in unmigrated:
+        bundle_ledger.write_entries(
+            concept_id, bundle_dir, survivor_id=concept_id, entries=entries
+        )
+        sidecar_path = bundle_ledger.ledger_path_for(concept_id, bundle_dir)
+        touched.append(f"bundle/{sidecar_path.relative_to(bundle_dir).as_posix()}")
+
+        survivor_path = okf.concept_path_for(concept_id, bundle_dir)
+        metadata, body = okf.load_frontmatter(survivor_path.read_text(encoding="utf-8"))
+        metadata.pop(okf.MERGED_FROM_KEY, None)
+        fsio.write_atomic(survivor_path, okf.dump_frontmatter(metadata, body))
+        touched.append(f"bundle/{survivor_path.relative_to(bundle_dir).as_posix()}")
+
+    typer.echo(
+        f"openkos repair: migrated {len(unmigrated)} ledger"
+        f"{'s' if len(unmigrated) != 1 else ''} to bundle/.state/ledger/."
+    )
+
+    _autocommit(
+        root,
+        touched,
+        f"openkos: repair (migrate {len(unmigrated)} ledger(s) to "
+        "bundle/.state/ledger/)",
+    )
 
 
 @app.command(

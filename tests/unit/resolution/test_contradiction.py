@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from openkos import lifecycle, sensitivity
+from openkos.bundle import ledger
 from openkos.graph.base import Edge, GraphStore
 from openkos.graph.proximity import ProximityPair
 from openkos.graph.sqlite_graph import build_graph
@@ -1971,6 +1972,16 @@ def test_local_exemption_defaults_to_false_on_find_contradictions(
 # ---------------------------------------------------------------------------
 
 
+def test_ledger_suffix_constant_matches_bundle_ledger_module() -> None:
+    """`contradiction_mod._LEDGER_SUFFIX` is a deliberate, layering-forced
+    duplicate of `bundle.ledger.LEDGER_SUFFIX` (resolution may import
+    `openkos.model.okf` read-only, never `openkos.bundle` -- see
+    `contradiction_mod._LEDGER_SUFFIX`'s docstring). This parity test is the
+    guard that keeps the duplicate from drifting, mirroring `vcs/git.py`'s
+    `_identity`/`test_scrub_snippet_parity.py` precedent."""
+    assert contradiction_mod._LEDGER_SUFFIX == ledger.LEDGER_SUFFIX
+
+
 def _write_survivor_with_merges(
     path: Path,
     *,
@@ -1979,16 +1990,25 @@ def _write_survivor_with_merges(
     sensitivity_value: str | None = "private",
     entries: Sequence[okf.MergeLedgerEntry] = (),
 ) -> None:
-    """Write a concept `.md` file whose `merged_from` ledger is `entries`,
-    encoded through the real `okf.encode_merge_ledger_entry` codec (never
-    hand-spliced YAML)."""
+    """Write a concept `.md` file and -- when `entries` is non-empty -- its
+    ledger sidecar under `bundle/.state/ledger/`, via the real
+    `ledger.write_entries` primitive (design: "Relocate the merge ledger to
+    `bundle/.state/ledger/`"; PR#1). The concept's OWN frontmatter never
+    carries `merged_from` any more -- entries live only in the sidecar."""
     path.parent.mkdir(parents=True, exist_ok=True)
     metadata: dict[str, object] = {"type": "Concept", "title": title}
     if sensitivity_value is not None:
         metadata["sensitivity"] = sensitivity_value
-    if entries:
-        metadata["merged_from"] = [okf.encode_merge_ledger_entry(e) for e in entries]
     path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+    if entries:
+        bundle_dir = path.parents[1]
+        survivor_id = okf.concept_id_for(path, bundle_dir)
+        ledger.write_entries(
+            survivor_id,
+            bundle_dir,
+            survivor_id=survivor_id,
+            entries=list(entries),
+        )
 
 
 def _ledger_entry(
@@ -2094,14 +2114,21 @@ def test_merged_body_candidates_excludes_deprecated_survivor(tmp_path: Path) -> 
 def test_merged_body_candidates_corrupt_ledger_degrades_that_survivor_only(
     tmp_path: Path,
 ) -> None:
-    """A survivor whose `merged_from` frontmatter is corrupt (non-list)
+    """A survivor whose ledger SIDECAR is corrupt (non-list `merged_from`)
     contributes zero candidates for THAT survivor rather than raising or
     aborting the whole walk -- a sibling survivor with a valid ledger is
     unaffected."""
     bundle_dir = tmp_path / "bundle"
     (bundle_dir / "concepts").mkdir(parents=True)
     (bundle_dir / "concepts" / "corrupt.md").write_text(
-        "---\ntype: Concept\ntitle: Corrupt\nmerged_from: not-a-list\n---\nBody.\n",
+        "---\ntype: Concept\ntitle: Corrupt\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    corrupt_ledger_path = ledger.ledger_path_for("concepts/corrupt", bundle_dir)
+    corrupt_ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    corrupt_ledger_path.write_text(
+        "---\nschema: openkos.merge_ledger_sidecar/v1\n"
+        "survivor_id: concepts/corrupt\nmerged_from: not-a-list\n---\n",
         encoding="utf-8",
     )
     entry = _ledger_entry()
@@ -2449,6 +2476,46 @@ def test_load_ledger_bodies_degrades_when_survivor_current_doc_missing(
 
     assert before_doc == ("concepts/missing-survivor", "")
     assert absorbed_doc == ("concepts/absorbed", "")
+
+
+def test_merged_content_blocked_called_once_per_ledger_entry_not_per_survivor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`merged_content_blocked` MUST be invoked once PER ledger entry read
+    from a survivor's `bundle/.state/ledger/` sidecar, never once per
+    survivor (sensitivity-aware-llm delta: "Per-Entry Merged-Content Gate,
+    Never Per-Survivor"). A hoisted per-survivor call would still let
+    `find_contradictions` complete, so this asserts on invocation COUNT and
+    per-entry ARGUMENTS, not merely on the final verdicts."""
+    bundle_dir = tmp_path / "bundle"
+    entries = [_ledger_entry(absorbed_id=f"concepts/absorbed-{i}") for i in range(3)]
+    _write_survivor_with_merges(
+        bundle_dir / "concepts" / "survivor.md", entries=entries
+    )
+
+    seen_entries: list[okf.MergeLedgerEntry] = []
+    real_gate = sensitivity.merged_content_blocked
+
+    def _spy(
+        current_sensitivity: object, entry: okf.MergeLedgerEntry, **kwargs: object
+    ) -> bool:
+        seen_entries.append(entry)
+        return real_gate(current_sensitivity, entry, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sensitivity, "merged_content_blocked", _spy)
+    llm = _FakeLLM(replies=[_valid_reply(verdict="consistent")] * 3)
+
+    contradiction_mod.find_contradictions(bundle_dir, llm=llm)
+
+    assert len(seen_entries) == 3, (
+        "merged_content_blocked must be called once PER ledger entry -- "
+        f"got {len(seen_entries)} call(s) for 3 entries"
+    )
+    assert {entry.absorbed_id for entry in seen_entries} == {
+        "concepts/absorbed-0",
+        "concepts/absorbed-1",
+        "concepts/absorbed-2",
+    }
 
 
 def test_load_ledger_bodies_degrades_when_gate_blocks(tmp_path: Path) -> None:

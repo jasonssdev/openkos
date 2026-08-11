@@ -197,6 +197,11 @@ class LintReport:
     a caller who wants to know a bundle carries decomposed names should
     ask `lint`; this field is where that answer lands (see
     `check_non_nfc_names`)."""
+    state_dir_markdown: list[LintFinding] = field(default_factory=list)
+    """`"state-dir-markdown"` findings (task 3.6, safety net for design
+    Decision 3's EXCLUDE/INCLUDE separation): a `.md` file found under
+    `bundle/.state/`, where only non-`.md` derived-state sidecars (the
+    merge ledger) belong -- see `check_state_dir_contains_no_markdown`."""
     notices: list[str] = field(default_factory=list)
 
 
@@ -1242,6 +1247,52 @@ def scan_stranded_rename_temps(bundle_dir: Path) -> list[Path]:
             stranded.append(path)
     stranded.sort()
     return stranded
+
+
+def scan_markdown_under_state_dir(bundle_dir: Path) -> list[Path]:
+    """Names-only walk for any `*.md` file under `bundle_dir/.state/`
+    (`okf.STATE_DIRNAME`) -- the safety net for the EXCLUDE/INCLUDE
+    separation (design: "Relocate the merge ledger to `bundle/.state/
+    ledger/`", Decision 3): the merge-ledger sidecar store's whole
+    portability rationale depends on its files NEVER matching `*.md`, so
+    every EXCLUDE walk (`rglob("*.md")`) structurally skips it with zero
+    code at each site. A future author who reintroduces a `.md` file under
+    `.state/` (by hand, or via a suffix change) would silently defeat that
+    guarantee -- this scan enforces it is never true, rather than merely
+    documented.
+
+    Deliberately a SEPARATE, NAMES-ONLY walk (mirrors
+    `scan_non_nfc_entries`'s own rationale): `collect_docs`/`_iter_docs`
+    never descends into `.state/` at all (by the very same `*.md` glob this
+    scan exists to police), so there is no shared walk to reuse."""
+    state_dir = bundle_dir / okf.STATE_DIRNAME
+    if not state_dir.is_dir():
+        return []
+    return sorted(state_dir.rglob("*.md"))
+
+
+def check_state_dir_contains_no_markdown(bundle_dir: Path) -> list[LintFinding]:
+    """Flag every `*.md` file found under `bundle_dir/.state/` (task 3.6):
+    a `.state/` subtree exists ONLY for non-`.md` derived-state sidecars
+    (the merge ledger today); any `.md` file there would silently defeat
+    the ledger's zero-code EXCLUDE-walk guarantee (see
+    `scan_markdown_under_state_dir`). Read-only and NON-GATING, matching
+    every other `lint` finding -- `lint` never writes and never fails the
+    run; the detail names the concrete risk rather than an abstract rule
+    violation."""
+    return [
+        LintFinding(
+            kind="state-dir-markdown",
+            path=path.relative_to(bundle_dir).as_posix(),
+            detail=(
+                f"'{path.relative_to(bundle_dir).as_posix()}' is a `.md` "
+                "file under `bundle/.state/` -- every inbound-reference/"
+                "EXCLUDE walk in this codebase relies on `.state/` never "
+                "matching `*.md`; move or rename this file so it does not"
+            ),
+        )
+        for path in scan_markdown_under_state_dir(bundle_dir)
+    ]
 
 
 def check_non_nfc_names(bundle_dir: Path) -> list[LintFinding]:
