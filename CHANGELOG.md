@@ -14,6 +14,10 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.2.3] - 2026-08-11
+
 ### Added
 
 - **`openkos next` now recommends `normalize-names`**: a bundle whose
@@ -664,7 +668,8 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/jasonssdev/openkos/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/jasonssdev/openkos/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jasonssdev/openkos/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/jasonssdev/openkos/compare/v0.1.1...v0.1.2
