@@ -106,9 +106,51 @@ both PRs in the same release closes the gap; state it here explicitly.
 
 ---
 
+## Remediation (`fix/doctor-flagged-refusals`, base: PR #3 branch) — verify-report CRITICAL fix
+
+`sdd-verify` found `entity-resolution-merge/spec.md`'s ADDED requirement
+"`merge` Refuses On A Doctor-Flagged Ledger, With `--force`" entirely
+unimplemented, untested, and undisclosed. This closes that gap and
+reconciles two stale spec deltas against the already-correct
+implementation.
+
+- [x] R.1 RED then GREEN: `merge()` gains a `--force` option; new
+      `_reject_flagged_ledger_write` (Check B, `scan_nesting_violations`)
+      runs in Phase A before any write, refuses (exit 1, writes nothing)
+      naming both remediation paths (repair verb; `git reset --hard
+      <first-merge>~1` + `openkos reindex`, gated on
+      `vcs_git.has_reset_point`) plus the non-guaranteed-reversibility
+      statement, unless `--force` is passed.
+- [x] R.2 RED then GREEN: `--force` bypasses ONLY the Check B refusal —
+      orthogonal to the existing confirm-gate precedence (`--auto`/
+      `review: false`/TTY prompt), mirroring `forget --force`'s shape.
+- [x] R.3 Mutation-tested both the refusal gate and the `--force` bypass
+      line individually; both caught their targeted mutation, reverted.
+- [x] R.4 Spec correction: `entity-resolution-merge/spec.md`'s "Repair
+      Verb Refuses..." requirement rewritten to describe the SHIPPED
+      bundle-wide ≥2-entries gate (not a per-concept Check-B gate),
+      recording why it is deliberately coarser (Check B's two false
+      negatives: single-entry ledgers, cross-survivor pollution via
+      `merge_core`'s `other_files`). The "no override flag" property is
+      preserved unchanged.
+- [x] R.5 Spec correction: `doctor-command/spec.md` gains the missing
+      "Merge-Ledger Torn-Write Check" (Check A) ADDED requirement,
+      matching the already-implemented, already-tested behavior; both
+      checks remain explicitly informational/read-only.
+
+### Scenario coverage (entity-resolution-merge/spec.md, both ADDED requirements)
+
+| Scenario | Status |
+|---|---|
+| Merge onto a flagged ledger refuses by default | Covered — `test_merge_refuses_on_a_doctor_flagged_ledger_no_force` (new) |
+| `--force` bypasses the refusal, not the confirm gate | Covered — `test_merge_force_bypasses_flagged_ledger_refusal` + `test_merge_force_bypasses_refusal_not_confirm_gate` (new) |
+| Repair verb migrates a clean ledger verbatim | Covered — pre-existing `test_repair_migrates_a_clean_single_entry_ledger_verbatim` (spec text now matches this test's actual gate) |
+| Repair verb refuses the whole run, with no override | Covered — pre-existing `test_repair_refuses_with_no_override_when_any_survivor_has_two_or_more_entries` + `test_repair_refuses_when_a_different_survivor_has_two_or_more_entries` (spec text now matches these tests' actual gate) |
+
 ## Key Learnings
 
 1. `references.py` and `sensitivity.py` need zero edits — both are structurally excluded/generic already, so tasks only assert the exclusion holds rather than change the files.
 2. The `_autocommit` non-fatal fallback creates a genuine remedy gap for corrupted ledgers with no git identity — doctor must detect and report a missing reset point, not just recommend one blindly.
 3. Two opposite walks (EXCLUDE for reference scans, INCLUDE for privacy sweeps) must stay structurally separate — one shared `iter_ledgers` helper serves only the INCLUDE side.
 4. Feature-branch-chain state alone does not guarantee PR #2 ships with PR #1 in the same release — that constraint had to be written into the tasks file explicitly.
+5. A spec/implementation gap can be entirely undisclosed by a prior apply pass even with all tasks marked `[x]` and every quality gate green — `sdd-verify`'s independent requirement-by-requirement read is what caught it.
