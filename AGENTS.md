@@ -30,6 +30,7 @@ Every change must respect these. A technically good change that violates one is 
 ## Repository conventions
 
 - **Specs are the contract.** Behavior is agreed in `openspec/` before it is built: `openspec/specs/{domain}/spec.md` is the living per-domain contract; `openspec/changes/{change-name}/` carries a change in flight (proposal, delta specs, design, tasks) until archive merges its deltas into the main spec; `openspec/config.yaml` holds the per-phase rules. It is tracked and reviewed like any other file. Required for anything touching the knowledge model, the OKF conformance surface, the ingestion pipeline, or public interfaces (CLI, API, MCP); below that bar, see `CONTRIBUTING.md`.
+- **Docs describe the shape, not the diff.** `docs/` changes only when the general shape changes — a layer, a workflow, a principle. Behavioral detail lives in `openspec/specs/`, decisions in ADRs, particulars in issues and the CHANGELOG. Do not sync `docs/` on every merged change; do not write counts that rot ("26 verbs" — `--help` is the authority); do not mark behavior with "since #NNN" — state it timelessly, history carries the when. (Full policy: `CONTRIBUTING.md`, "Where knowledge about the project lives".)
 - **Python 3.12+**, `src/` layout, package `openkos`, `uv` for envs/deps.
 - **`pyproject.toml` is the single config source** — deps, the console entry point (`openkos = "openkos.cli.main:app"`), and Ruff / MyPy / Pytest settings.
 - **Ship types:** keep `src/openkos/py.typed`.

@@ -30,6 +30,23 @@ Every contribution should be consistent with the project's core commitments. If 
 
 ---
 
+## Where knowledge about the project lives
+
+Documentation is layered, and each layer has a different change cadence. Respecting the split keeps the docs true without a sync tax on every merged change:
+
+- **`docs/` — the durable shape.** Principles, the knowledge model, the architecture, the user journey. These describe how OpenKOS works *in general*, and change only when the shape itself changes — a new layer, a removed channel, a redefined workflow. Closing an issue is not, by itself, a reason to touch them.
+- **`openspec/specs/` — the behavior contract.** Living, per-domain, always-current statements of what the system MUST do. Behavioral detail belongs here, not in `docs/`.
+- **`docs/adr/` — decisions.** Immutable records of significant, hard-to-reverse choices and the reasoning behind them.
+- **Issues, pull requests, and `CHANGELOG.md` — the particulars.** What changed, when, and in which release.
+
+Three style rules keep `docs/` low-churn:
+
+1. **No counts that rot.** Not "26 verbs" but "the CLI's verbs" — `openkos --help` is the authority for the list.
+2. **No "since #NNN".** Describe behavior as it is; git history and the changelog carry the *when*. A link to a closed issue is fine as a historical footnote explaining why a design was *retired*; a ticket number woven into a feature's description is not.
+3. **Name the authority instead of copying the value.** Model tags, caps, and windows live in `openkos.yaml`, the specs, and the ADRs. Docs may show a current default where the user must literally type it (the README quickstart); everywhere else, point at the authority.
+
+---
+
 ## Before you start work
 
 **Open an issue before anything larger than a small, obvious fix.** This saves you from building something that cannot be merged. Small changes — typos, doc clarifications, a tightly scoped bug fix — can go straight to a pull request.

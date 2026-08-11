@@ -1,10 +1,61 @@
 # OpenKOS
 
+[![PyPI](https://img.shields.io/pypi/v/openkos)](https://pypi.org/project/openkos/)
+[![Python](https://img.shields.io/pypi/pyversions/openkos)](https://pypi.org/project/openkos/)
+[![CI](https://github.com/jasonssdev/openkos/actions/workflows/ci.yml/badge.svg)](https://github.com/jasonssdev/openkos/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/jasonssdev/openkos/blob/main/LICENSE)
+
 **Open Knowledge Orchestration System** — a local-first engine for the Open Knowledge Format.
 
 OpenKOS turns your scattered text into a living, portable knowledge base your AI agents can actually use — compiled once, kept current, and stored as plain [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) files so it is never locked to any app, model, or vendor.
 
-> **Project status: alpha.** OpenKOS runs: the Compiler and the Graph-and-Memory arcs (MVP 1 and MVP 2) are complete — 25 CLI verbs, hybrid retrieval, and the full forget/purge lifecycle all ship today. The API may still change between releases, but OpenKOS is published and installable now — `pip install openkos`, see [Getting started](#getting-started). Early contributors and feedback are welcome — see [Contributing](#contributing).
+> **Project status: alpha.** The Compiler and the Graph-and-Memory arcs (MVP 1 and MVP 2) are complete and shipped. The API may still change between releases, but OpenKOS is published and installable now. Early contributors and feedback are welcome — see [Contributing](#contributing).
+
+---
+
+## Quickstart
+
+Five steps from a fresh machine to your first cited answer. Everything runs on your computer: no accounts, no API keys, nothing leaves your machine.
+
+**1 · Install [Ollama](https://ollama.com)** — the local AI runtime OpenKOS talks to. Download it, open it once, and it stays running in the background.
+
+**2 · Pull the two default models** (one time, ~6 GB total):
+
+```bash
+ollama pull qwen3:8b   # chat model — extraction and answers (~5 GB)
+ollama pull bge-m3     # embedding model — semantic search (~1.2 GB)
+```
+
+> There is a third, **optional** model for naming relations during curation (`ollama pull gemma2:27b`, **15.6 GB**). Skip it for now — if a command wants it, the error message tells you exactly what to pull.
+
+**3 · Install the engine** (needs Python 3.12+ and [git](https://git-scm.com)):
+
+```bash
+uv tool install openkos   # or: pipx install openkos — or: pip install openkos
+```
+
+To track the latest unreleased `main` instead: `uv tool install git+https://github.com/jasonssdev/openkos`.
+
+**4 · Check the setup before anything can fail:**
+
+```bash
+openkos doctor
+```
+
+Every line should read `[PASS]` except *Workspace initialized* — you haven't created one yet. `doctor` is also the first thing to run whenever something misbehaves later.
+
+**5 · Create a knowledge base and run the loop:**
+
+```bash
+mkdir ~/knowledge && cd ~/knowledge
+openkos init                          # picks your models, scaffolds the workspace
+openkos ingest ./meeting-notes.txt    # compile a source — a file, a folder, or a glob
+openkos query "what did we decide?"   # an answer with citations, from your own knowledge
+```
+
+From here, `openkos next` always tells you the one thing worth doing, and `openkos --help` lists every command, grouped. The full reference is [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md); the end-to-end experience is [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md).
+
+**What `init` set up for you.** `raw/` holds your immutable sources; `bundle/` is the pure-OKF knowledge base — plain markdown you can open in Obsidian, VS Code, or GitHub, and take anywhere; `openkos.yaml` is the engine config. The folder is also a git repository **you never have to operate**: every command commits its own changes, and `git log` / `git diff` / `git revert` are always there for inspection and undo.
 
 ---
 
@@ -33,67 +84,6 @@ In June 2026 Google Cloud published a vendor-neutral specification for that patt
 | Portability | Trapped in one app | Plain OKF files — open in Obsidian, VS Code, GitHub, anything |
 | Privacy | Your knowledge leaves your machine | Local-first, offline-capable, local models |
 
-## What it feels like
-
-```bash
-# point OpenKOS at a folder of text and compile it into an OKF bundle
-openkos ingest ./sources
-
-# ask a question and get a cited answer from the compiled knowledge
-openkos query "what did I conclude about how to live well?"
-
-# check the base stays honest — stale `as of` stamps and orphan pages
-openkos lint
-```
-
-*(The full command set — 25 verbs spanning ingest, cited query, the typed graph, entity resolution, volatility tiers (`suggest-volatility`/`set-volatility`), the guided `curate`/`next` curation loop, and the forget/purge lifecycle — is in [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md).)*
-
-## Getting started
-
-> Alpha: the commands below run today. OpenKOS is on **PyPI** — install the released version below, or install from the GitHub repository to track the latest `main`. The API may still change between releases.
-
-OpenKOS is a local-first command-line tool. You install the engine once, then create a knowledge bundle per knowledge base — much like installing git once and running `git init` in many repositories.
-
-**Prerequisites:** Python 3.12+; [git](https://git-scm.com); [git-filter-repo](https://github.com/newren/git-filter-repo) (only needed for `purge`); and a local model runtime — [Ollama](https://ollama.com) with the chat model (`ollama pull qwen3:8b`) and the embedding model (`ollama pull bge-m3`) pulled. No accounts, no API keys: nothing leaves your machine.
-
-**Install the engine** (once):
-
-```bash
-uv tool install openkos   # or: pipx install openkos — or: pip install openkos
-```
-
-This installs the `openkos` command on your PATH. To try it once without a persistent install, run it ephemerally:
-
-```bash
-uvx openkos --help
-```
-
-Prefer the latest unreleased `main`? Install from the repository instead — the same command with a git URL:
-
-```bash
-uv tool install git+https://github.com/jasonssdev/openkos
-```
-
-**Create a bundle** (per knowledge base). By convention the first workspace lives at the root of your home directory, named `knowledge`:
-
-```bash
-mkdir ~/knowledge && cd ~/knowledge
-openkos init
-```
-
-`init` scaffolds the workspace — `raw/` for your immutable sources and `bundle/` for the compiled OKF bundle (starting with just `index.md` and `log.md`; concept-type folders are never pre-created, only added as you ingest) — then writes `AGENTS.md` and, last, the `openkos.yaml` marker. It refuses without writing anything if the directory already looks like a workspace.
-
-**You never run git yourself.** `init` also turns the workspace into a git repository, writes a `.gitignore` (the derived `.openkos/` stays out of version control), and makes the first commit; from then on every mutating command auto-commits its own writes. Git remains fully available for inspection and undo (`git log`, `git diff`, `git revert`) — it is just no longer a chore. Sources sit beside the bundle rather than inside it, so `bundle/` stays pure OKF: portable, conformant, and shareable on its own.
-
-**Then the loop:**
-
-```bash
-openkos ingest ./meeting-notes.txt   # compile a source into the bundle
-openkos query "what did we decide?"  # get a cited answer
-```
-
-See [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md) for the full command reference and [`docs/user-journey.md`](https://github.com/jasonssdev/openkos/blob/main/docs/user-journey.md) for the end-to-end experience.
-
 ## Philosophy
 
 - **Local-first and private by default.** Runs on your machine, works offline, built for local models. The cloud is optional, never required.
@@ -117,7 +107,7 @@ The wedge, in one line: **the local-first, personal producer-consumer-runtime fo
 OpenKOS ships in three MVP arcs, each usable on its own. Full detail in [`docs/roadmap.md`](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md).
 
 - **MVP 1 — The Compiler. (Complete.)** The Karpathy loop, locally, over text: ingest → OKF concepts with provenance → cited query → freshness lint. Useful in an afternoon.
-- **MVP 2 — The Graph and Memory. (Complete.)** Entity/relationship extraction and reversible merge, a typed knowledge graph (an OpenKOS layer over OKF's untyped links — other tools still read the bundle fine), hybrid retrieval (lexical FTS5 + local vectors + graph, fused via RRF with PageRank), a fail-closed sensitivity filter (confidential concepts never leave the machine — held back from any backend that is not verifiably local), reference-aware `forget` plus an irreversible `purge` (right-to-be-forgotten), and answers that file back into the base (`query --save`, the two-output rule).
+- **MVP 2 — The Graph and Memory. (Complete.)** Entity/relationship extraction and reversible merge, a typed knowledge graph (an OpenKOS layer over OKF's untyped links — other tools still read the bundle fine), hybrid retrieval (lexical and semantic, rank-fused), a fail-closed sensitivity filter (confidential concepts never leave the machine — held back from any backend that is not verifiably local), a guided curation loop, reference-aware `forget` plus an irreversible `purge` (right-to-be-forgotten), and answers that file back into the base (the two-output rule).
 - **MVP 3 — The Runtime and Interoperability.** An MCP server and APIs so agents use OpenKOS as durable memory; full OKF import/export with the wider ecosystem.
 
 Beyond that: a desktop app, graph visualization, richer memory, and federation — explored only after the MVPs prove out with real users.
@@ -137,7 +127,7 @@ Beyond that: a desktop app, graph visualization, richer memory, and federation �
 - [`docs/testing.md`](https://github.com/jasonssdev/openkos/blob/main/docs/testing.md) — manual end-to-end testing walkthrough
 - [`docs/cli.md`](https://github.com/jasonssdev/openkos/blob/main/docs/cli.md) — the command-line reference
 - [`docs/brand.md`](https://github.com/jasonssdev/openkos/blob/main/docs/brand.md) — visual identity: isotype, wordmark, palette, typography
-- [`docs/adr/`](https://github.com/jasonssdev/openkos/blob/main/docs/adr/) — architecture decision records (the log begins with the first code-time decision)
+- [`docs/adr/`](https://github.com/jasonssdev/openkos/blob/main/docs/adr/) — architecture decision records
 
 ## Contributing
 
