@@ -193,6 +193,44 @@ document. The band is the fixture's point and is the last thing to spend.
 
 Same limitation as everything else here: constructed, not adjudicated.
 
+## Their second run: both halves now work, and the first `AXIS IMPLICATED` pair
+
+`qwen3:8b`, `--runs 5 --seed 7`, single-pass — same model, same seed, same
+flags as the run above, so the two are directly comparable.
+
+| fixture | result |
+| --- | --- |
+| `lesson` treatment | 1 object in 5 of 5, always `Procedure` |
+| `lesson` floor (`untitled`) | **3 objects in 5 of 5**, `Concept` |
+| verdict | **`AXIS IMPLICATED`** |
+| negative control | 1 object in 5 of 5, `Concept`, **droppable twins 5/5, exempt 0/5** |
+
+**The reported shape reproduces.** A short lesson under an umbrella-topic
+title collapses to one object while the same three facts, retitled and
+unframed, yield three. That is the first pair in this harness to implicate
+its axis on constructed material, and it puts the observation behind #551 on
+measured ground for the first time.
+
+**The negative control now carries evidence.** Its lone object is a
+`Concept` restating the source title in every run — a *droppable* twin. Its
+survival is therefore attributable to the floor at `concept.py:474-475` and
+to nothing else, which is exactly the reading the earlier `Procedure` version
+could not support. Any change that narrows that floor and returns `[]` here
+is now visible as a false positive.
+
+### What this measures about the twin rule, and what it does not
+
+The `lesson` treatment arm's lone object came back as a `Procedure` in every
+run. `_is_twin` exempts `Procedure` by type (#413), so on this fixture the
+twin rule would not have dropped that object under any floor — the mechanism
+proposed as the fix cannot reach the shape it was proposed for.
+
+That is one fixture at one model and one size, not a general claim. But it
+points the same way as the rest of the evidence here: the collapse is a
+*generation* outcome, and a filter downstream of generation can convert one
+weak object into zero, never one into three. The floor arm proves the three
+objects were available to be found.
+
 ## Next
 
 The constraint in #522 stands: a prompt change must be A/B'd through
