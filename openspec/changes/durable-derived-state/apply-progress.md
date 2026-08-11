@@ -87,7 +87,7 @@ actual overrun driven by fixing the two pre-existing
 merged-body test suite, which the forecast did not account for).
 
 PR #3 (1b, reindex/doctor/repair) is NOT started — out of this slice's
-scope per the orchestrator's explicit boundary.
+scope per the slice boundary.
 
 ---
 
@@ -129,7 +129,7 @@ subsequently mutation-tested and confirmed to catch a reverted guard.
 |---|---|---|
 | `src/openkos/state/reindex.py` | Modified | `EMBED_COMPOSITION_TAG`/`_effective_model_tag`/`_compose_embed_text`; embed text now composed from title/description/tags/body instead of raw bytes; the composition-scheme change is forced through the existing model-tag full-re-embed gate (closes #554) |
 | `src/openkos/bundle/ledger.py` | Modified | `iter_pending`, `scan_torn_writes` (read-only preview of `recover`'s truth table), `scan_nesting_violations` (Check B, migration-era nested-prefix equality), `scan_unmigrated` (repair's migration source), `bundle_wide_max_entries` (repair's cross-survivor-pollution gate) |
-| `src/openkos/vcs/git.py` | Modified | `has_reset_point`: `HEAD~1` resolvability probe, backing doctor's/repair's reset-point-exists gate (the orchestrator-flagged gap: `_autocommit` is best-effort and silently no-ops with no repo/identity/`GitError`) |
+| `src/openkos/vcs/git.py` | Modified | `has_reset_point`: `HEAD~1` resolvability probe, backing doctor's/repair's reset-point-exists gate (a gap found during review: `_autocommit` is best-effort and silently no-ops with no repo/identity/`GitError`) |
 | `src/openkos/cli/main.py` | Modified | Doctor checks 12 (torn writes) and 13 (post-merge mutation, both remedies named, reset-point-gated); new `repair` command (two no-override refusal gates, verbatim frontmatter→sidecar extraction, reset-point-gated pre-write notice, `_autocommit` on success) |
 | `tests/unit/state/test_reindex.py` | Modified | 3 new composition/migration tests; `_tagged()` helper; 6 pre-existing tag-literal assertions updated to the new suffixed format |
 | `tests/unit/bundle/test_ledger.py` | Modified | 14 new tests: `iter_pending`, `scan_torn_writes` (×3), `scan_nesting_violations` (×5), `scan_unmigrated` (×3), `bundle_wide_max_entries` (×1) |
@@ -169,14 +169,14 @@ assertions and 4 pre-existing doctor `[PASS]`-count assertions across the
 model-tag-suffix and two-new-checks behavior changes.
 
 All 34/34 tasks across PR #1, #2, and #3 are now complete. The
-`durable-derived-state` change is ready for `sdd-verify`.
+`durable-derived-state` change is ready for verification.
 
 ---
 
 ## Remediation — `merge`'s doctor-flagged refusal (fix/doctor-flagged-refusals) — DONE
 
 Branch: `fix/doctor-flagged-refusals`, based on `feat/reindex-doctor-repair-1b`.
-`sdd-verify`'s FAIL report found `entity-resolution-merge/spec.md`'s ADDED
+Verification's FAIL report found `entity-resolution-merge/spec.md`'s ADDED
 requirement "`merge` Refuses On A Doctor-Flagged Ledger, With `--force`"
 entirely unimplemented, untested, and undisclosed by the prior apply pass.
 This remediation implements it and reconciles two separate stale-spec
@@ -224,4 +224,4 @@ Scenario coverage, all four scenarios across both ADDED requirements in
 3. "Repair verb migrates a clean ledger verbatim" — covered by pre-existing `test_repair_migrates_a_clean_single_entry_ledger_verbatim`; spec text corrected to match.
 4. "Repair verb refuses the whole run, with no override" — covered by pre-existing bundle-wide-gate tests; spec text corrected to match.
 
-Ready for `sdd-verify` re-run.
+Ready for a verification re-run.

@@ -95,7 +95,7 @@ both PRs in the same release closes the gap; state it here explicitly.
 - [x] 2.2 RED then GREEN: Check B (post-merge mutation) — nested-prefix equality: entry k's `survivor_before` embeds entries `0..k-1`; decode and compare to the survivor's current entries `0..k-1`; any inequality flags `[FAIL]`. Doctor check 13, informational only (does not affect exit code), stays read-only.
 - [x] 2.3 RED then GREEN: doctor scenario tests from `openspec/changes/durable-derived-state/specs/doctor-command/spec.md` — clean ledgers pass; corrupted ledger fails with both remediation paths; check never writes; no-ledger workspace passes trivially.
 - [x] 2.4 RED then GREEN (gap — no artifact covered this): `doctor`'s corrupted-ledger `[FAIL]` remediation MUST verify a git reset point actually exists (auto-commit history reachable back to `<first-merge>~1`) before printing "reset and replay" as the remedy. If no reset point exists (no git repo, no configured git identity, or history does not reach the first merge), the remediation text MUST say so explicitly and MUST NOT claim reset-and-replay is available.
-- [x] 2.5 RED (gap — required by orchestrator, no artifact covered this): test covering a workspace with a corrupted ledger AND no configured git identity (`_autocommit` never ran) — assert `doctor` reports "no reset point available" rather than the standard reset-and-replay remediation.
+- [x] 2.5 RED (gap — required during review, no artifact covered this): test covering a workspace with a corrupted ledger AND no configured git identity (`_autocommit` never ran) — assert `doctor` reports "no reset point available" rather than the standard reset-and-replay remediation.
 
 ### Phase 3: Repair verb
 
@@ -108,7 +108,7 @@ both PRs in the same release closes the gap; state it here explicitly.
 
 ## Remediation (`fix/doctor-flagged-refusals`, base: PR #3 branch) — verify-report CRITICAL fix
 
-`sdd-verify` found `entity-resolution-merge/spec.md`'s ADDED requirement
+Verification found `entity-resolution-merge/spec.md`'s ADDED requirement
 "`merge` Refuses On A Doctor-Flagged Ledger, With `--force`" entirely
 unimplemented, untested, and undisclosed. This closes that gap and
 reconciles two stale spec deltas against the already-correct
@@ -153,4 +153,4 @@ implementation.
 2. The `_autocommit` non-fatal fallback creates a genuine remedy gap for corrupted ledgers with no git identity — doctor must detect and report a missing reset point, not just recommend one blindly.
 3. Two opposite walks (EXCLUDE for reference scans, INCLUDE for privacy sweeps) must stay structurally separate — one shared `iter_ledgers` helper serves only the INCLUDE side.
 4. Feature-branch-chain state alone does not guarantee PR #2 ships with PR #1 in the same release — that constraint had to be written into the tasks file explicitly.
-5. A spec/implementation gap can be entirely undisclosed by a prior apply pass even with all tasks marked `[x]` and every quality gate green — `sdd-verify`'s independent requirement-by-requirement read is what caught it.
+5. A spec/implementation gap can be entirely undisclosed by a prior apply pass even with all tasks marked `[x]` and every quality gate green — the verification phase's independent requirement-by-requirement read is what caught it.
