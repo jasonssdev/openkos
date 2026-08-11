@@ -153,7 +153,7 @@ Per proposal. Repair verb (1b) is opt-in, prints the `git reset --hard` inverse 
 | **1a-ii** | INCLUDE sweeps (forget/purge/sensitivity), `contradiction.py:471`, `lint` guard, `_autocommit`/`filter-repo` path coverage, per-sweep tests | ~350 |
 | **1b** | `reindex.py` embed composition (#554), `doctor` checks A+B, repair verb | ~500–700 |
 
-The proposal's single 1a (~700–900) exceeds the 400-line review budget by more than 2×. **Recommend `sdd-tasks` split 1a into 1a-i and 1a-ii as chained PRs.** The split is clean: 1a-i is the store and its crash semantics; 1a-ii is everything that *reads* the store. 1a-i alone leaves the bundle correct but the privacy sweeps not yet extended — so **1a-ii must not be deferred past the same release**, and 1a-i's PR body must say so.
+The proposal's single 1a (~700–900) exceeds the 400-line review budget by more than 2×. **Recommend splitting 1a into 1a-i and 1a-ii as chained PRs.** The split is clean: 1a-i is the store and its crash semantics; 1a-ii is everything that *reads* the store. 1a-i alone leaves the bundle correct but the privacy sweeps not yet extended — so **1a-ii must not be deferred past the same release**, and 1a-i's PR body must say so.
 
 ## Open questions
 

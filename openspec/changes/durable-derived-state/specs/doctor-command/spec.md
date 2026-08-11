@@ -4,6 +4,39 @@ Slice 1b (depends on Slice 1a's ledger relocation).
 
 ## ADDED Requirements
 
+### Requirement: Merge-Ledger Torn-Write Check
+
+`doctor` MUST add one new check, `merge ledger torn writes`, that scans
+`bundle/.state/ledger/` for any `*.ledger.okf.pending` two-phase-write
+marker — the trace a `merge`/`unmerge` leaves behind when it crashes
+mid-commit. This check is mechanically exact (a marker either exists or it
+does not, and its recorded hash either matches the survivor's current
+content or it does not), so it has zero false positives and zero false
+negatives, unlike the post-merge-mutation check below. It MUST be
+informational (its failure alone MUST NOT affect the exit code) and MUST
+follow the existing `[PASS]`/`[FAIL]`/`[SKIP]` + `-> <remediation>` shape.
+A `[FAIL]` line's remediation MUST name the repair verb, which resolves
+the pending marker on the next `merge`/`unmerge` that touches the affected
+survivor. This check MUST NOT write, modify, or delete any file — `doctor`
+stays read-only; it detects and advises, it never repairs.
+
+#### Scenario: A workspace with no pending markers passes
+- GIVEN a workspace where no `merge`/`unmerge` has ever crashed mid-commit
+- WHEN `openkos doctor` runs
+- THEN the merge-ledger torn-writes check prints `[PASS]`
+
+#### Scenario: A torn write fails with the repair remediation
+- GIVEN a `*.ledger.okf.pending` marker under `bundle/.state/ledger/`
+- WHEN `openkos doctor` runs
+- THEN the check prints `[FAIL]` followed by remediation naming the
+  repair verb
+
+#### Scenario: The check never writes
+- GIVEN any combination of pending and non-pending ledger sidecars
+- WHEN `openkos doctor` runs
+- THEN no file under `bundle/.state/ledger/` (or anywhere else) is
+  created, modified, or deleted by this check
+
 ### Requirement: Merge-Ledger Integrity Check
 
 `doctor` MUST add one new check, `merge ledger entries free of post-merge

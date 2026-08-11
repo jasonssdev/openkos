@@ -428,6 +428,39 @@ class _CandidateSpec:
     merge_entry: okf.MergeLedgerEntry | None = None
 
 
+_LEDGER_SUFFIX = ".ledger.okf"
+"""MUST stay byte-identical to `openkos.bundle.ledger.LEDGER_SUFFIX`
+(asserted by `tests/unit/resolution/test_contradiction.py::
+test_ledger_suffix_constant_matches_bundle_ledger_module`).
+
+Deliberately duplicated rather than imported: `resolution` may import
+`openkos.model.okf` read-only but never `openkos.bundle` (design.md
+Layering; enforced by `tests/unit/resolution/test_layering.py::
+test_resolution_only_imports_model_okf_from_canonical`), so this module
+cannot call `bundle.ledger.read_entries` directly even though that is the
+ledger sidecar store's one canonical owner. `okf.concept_path_for`'s
+`(root, suffix)` generalization (task 1.1 of "Relocate the merge ledger to
+`bundle/.state/ledger/`") exists PRECISELY so a read-only consumer like this
+one can reconstruct the same sidecar path using only `openkos.model.okf`
+primitives -- mirrors the `_FILE_INFO_CALLBACK_SNIPPET`/`_identity`
+duplication-plus-parity-test precedent in `vcs/git.py`."""
+
+
+def _read_ledger_entries(
+    survivor_id: str, bundle_dir: Path
+) -> list[okf.MergeLedgerEntry]:
+    """Read `survivor_id`'s ledger sidecar entries directly via
+    `openkos.model.okf`, reproducing `bundle.ledger.read_entries`'s exact
+    contract (no sidecar on disk returns `[]`) without importing
+    `openkos.bundle` (see `_LEDGER_SUFFIX`'s docstring for why)."""
+    ledger_root = bundle_dir / okf.STATE_DIRNAME / "ledger"
+    path = okf.concept_path_for(survivor_id, ledger_root, suffix=_LEDGER_SUFFIX)
+    if not path.is_file():
+        return []
+    metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
+    return okf.decode_merged_from(metadata)
+
+
 def _merged_body_candidates(
     bundle_dir: Path, deprecated: frozenset[str]
 ) -> list[_CandidateSpec]:
@@ -466,9 +499,8 @@ def _merged_body_candidates(
         survivor_id = okf.concept_id_for(scan.path, bundle_dir)
         if survivor_id in deprecated:
             continue
-        metadata = scan.metadata or {}
         try:
-            entries = okf.decode_merged_from(metadata)
+            entries = _read_ledger_entries(survivor_id, bundle_dir)
         except Exception:  # noqa: S112 -- broad: a corrupt ledger degrades this doc only
             continue
         for entry in entries:

@@ -2729,6 +2729,13 @@ def _merge_ledger_entry(absorbed_id: str) -> object:
 
 
 def _write_survivor_with_merges(path: Path, *, title: str, absorbed: list[str]) -> None:
+    """Write a concept `.md` file, and -- when `absorbed` is non-empty --
+    its ledger sidecar under `bundle/.state/ledger/`, via the real
+    `ledger.write_entries` primitive (design: "Relocate the merge ledger to
+    `bundle/.state/ledger/`"; PR#1/PR#2). Mirrors `test_contradiction.py`'s
+    own `_write_survivor_with_merges`: the concept's OWN frontmatter never
+    carries `merged_from` any more."""
+    from openkos.bundle import ledger as bundle_ledger
     from openkos.model import okf
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2736,12 +2743,18 @@ def _write_survivor_with_merges(path: Path, *, title: str, absorbed: list[str]) 
         "type": "Concept",
         "title": title,
         "sensitivity": "private",
-        "merged_from": [
-            okf.encode_merge_ledger_entry(_merge_ledger_entry(a))  # type: ignore[arg-type]
-            for a in absorbed
-        ],
     }
     path.write_text(okf.dump_frontmatter(metadata, "Current body."), encoding="utf-8")
+    if absorbed:
+        bundle_dir = path.parents[1]
+        survivor_id = okf.concept_id_for(path, bundle_dir)
+        entries = [_merge_ledger_entry(a) for a in absorbed]
+        bundle_ledger.write_entries(
+            survivor_id,
+            bundle_dir,
+            survivor_id=survivor_id,
+            entries=entries,  # type: ignore[arg-type]
+        )
 
 
 class _CountingLLM:

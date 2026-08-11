@@ -21,6 +21,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import references as bundle_references
 from openkos.cli import main
@@ -243,6 +244,92 @@ def test_successful_forget_of_sources_entry(
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     assert "**Tombstone**" in log_text
     assert "**Forget**" not in log_text
+
+
+def test_forgetting_a_survivor_deletes_its_own_ledger_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forget-command spec: "Deletion Sweep Includes Ledger Storage",
+    scenario "Forgetting a survivor sweeps its own ledger entries" --
+    forgetting a concept that is itself a merge survivor deletes its
+    `bundle/.state/ledger/` sidecar in the SAME Phase B write that deletes
+    the concept file, not left behind."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_plain_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.output
+    sidecar_path = bundle_ledger.ledger_path_for(
+        "concepts/survivor", tmp_path / "bundle"
+    )
+    assert sidecar_path.is_file(), "fixture setup: merge must create a sidecar"
+
+    result = runner.invoke(app, ["forget", "concepts/survivor", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert not sidecar_path.is_file()
+
+
+def test_sweep_ledger_sidecars_drops_matching_entries_from_other_survivors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`main._sweep_ledger_sidecars_for_ids` -- the shared privacy-sweep
+    primitive `forget`/`purge` Phase B both call -- drops any entry whose
+    `absorbed_id` is in the purge set from every OTHER survivor's sidecar,
+    while leaving unrelated entries in that same sidecar byte-identical
+    (forget-command spec, "Deletion Sweep Includes Ledger Storage";
+    privacy-purge spec, "Unrelated sidecar entries are untouched").
+
+    Exercised as a direct unit test on the shared primitive, rather than
+    through a full `forget`/`purge` CLI round trip: an `absorbed_id`
+    recorded in one survivor's sidecar can never itself be resolved as a
+    LIVE forget/purge target through `_resolve_concept_path`'s existence
+    gate (the merge that absorbed it already deleted its own file, by
+    design) -- so this exact code PATH is reachable in production only via
+    id-reuse (a later concept re-using a previously-absorbed id) or a
+    `--scope source` cascade landing on it, not via a single simple CLI
+    fixture. Testing the primitive directly proves its OWN contract
+    unambiguously."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/keep-survivor", title="Keep")
+    _write_plain_concept(tmp_path, "concepts/other-thing", title="Other")
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/keep-survivor", "concepts/other-thing", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.output
+    _write_plain_concept(tmp_path, "concepts/keep-survivor-2", title="Keep 2")
+    _write_plain_concept(tmp_path, "concepts/purge-target", title="Purge target")
+    merge_result_2 = runner.invoke(
+        app,
+        ["merge", "concepts/keep-survivor-2", "concepts/purge-target", "--auto"],
+    )
+    assert merge_result_2.exit_code == 0, merge_result_2.output
+    bundle_dir = tmp_path / "bundle"
+    unrelated_sidecar = bundle_ledger.ledger_path_for(
+        "concepts/keep-survivor", bundle_dir
+    )
+    target_sidecar = bundle_ledger.ledger_path_for(
+        "concepts/keep-survivor-2", bundle_dir
+    )
+    assert unrelated_sidecar.is_file()
+    assert target_sidecar.is_file()
+
+    touched = main._sweep_ledger_sidecars_for_ids(bundle_dir, ["concepts/purge-target"])
+
+    assert target_sidecar in touched
+    assert unrelated_sidecar not in touched
+    unrelated_metadata, _ = okf.load_frontmatter(
+        unrelated_sidecar.read_text(encoding="utf-8")
+    )
+    assert {
+        entry.absorbed_id for entry in okf.decode_merged_from(unrelated_metadata)
+    } == {"concepts/other-thing"}
+    assert not target_sidecar.is_file(), (
+        "the target survivor's sidecar held only the swept entry, so it "
+        "must be removed entirely rather than left as an empty container"
+    )
 
 
 @pytest.mark.parametrize(
