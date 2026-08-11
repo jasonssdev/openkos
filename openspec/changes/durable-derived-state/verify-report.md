@@ -1,83 +1,75 @@
-# Verification Report: durable-derived-state
+# Verification Report: durable-derived-state (re-verification)
 
-**Change**: durable-derived-state (issue #550), three chained PRs, tip `feat/reindex-doctor-repair-1b`.
+**Change**: durable-derived-state (issue #550), four chained branches, tip `fix/doctor-flagged-refusals`.
 **Mode**: Full artifact set (proposal/specs/design/tasks/apply-progress) — full verification.
-**Verdict**: **FAIL** — one undisclosed CRITICAL spec/implementation gap blocks archive.
+**Context**: re-verification after a prior FAIL (1 CRITICAL, 2 WARNING, 1 SUGGESTION); this run re-checks the remediation branch's claims against the working tree.
+**Verdict**: **PASS** — the CRITICAL is genuinely closed, both spec reconciliations are honest, nothing else regressed. Archive is unblocked.
 
 ## Command Evidence (independently re-run at the tip)
 
 | Command | Result |
 |---|---|
-| `uv run pytest` | 4208 passed, 1 skipped in 128.69s (unpiped, per Strict TDD mandate) |
-| `uv run pytest tests/unit/bundle/test_ledger.py tests/unit/cli/test_repair.py tests/unit/cli/test_doctor.py tests/unit/resolution/test_contradiction.py -q` | 208 passed (targeted re-run of priority-check surface) |
-| `ruff check` / `ruff format --check` | clean |
-| `mypy .` | no issues, 192 source files |
-| Coverage | 97.05% (gate 90% branch) |
-| `git status` | clean |
+| `uv run pytest -q` (unpiped) | 4211 passed, 1 skipped in 126.53s |
+| `uv run ruff check .` | All checks passed |
+| `uv run mypy .` | Success: no issues found in 192 source files |
+| `git status` | clean, nothing to commit |
+
+Test count rose from 4208→4211 (3 new tests), matching the three new tests the remediation commit adds to `tests/unit/cli/test_merge.py`.
+
+## 1. Is the CRITICAL genuinely closed?
+
+**Yes.** `merge()` (`src/openkos/cli/main.py:7151`) now declares a `--force` option (`:7165-7173`) and calls `_reject_flagged_ledger_write(root, layout.bundle_dir, survivor_canonical, force)` at `:7308`, immediately after the pre-existing `_reject_torn_ledger_write` call, in Phase A (before any write, before the confirm prompt at `:7356`).
+
+`_reject_flagged_ledger_write` (`:559-598`) runs `bundle_ledger.scan_nesting_violations(bundle_dir)`, filters violations to the survivor being merged, and — unless `force` is `True` — echoes both remediation paths (the repair verb, and `git reset --hard <first-merge>~1` + `openkos reindex`, the latter gated on `vcs_git.has_reset_point`) plus a non-guaranteed-reversibility statement, then exits 1.
+
+Three new tests bind this, not just decorate it:
+
+- `test_merge_refuses_on_a_doctor_flagged_ledger_no_force` (`tests/unit/cli/test_merge.py:501`) — builds a genuinely flagged ledger (`_write_flagged_ledger` embeds a tampered nested snapshot that `scan_nesting_violations` detects), asserts exit 1, both remediation strings present, and the bundle snapshot unchanged. A guard-removed implementation would let the merge complete and the snapshot-unchanged assertion would fail — this is discriminating, not a tautology.
+- `test_merge_force_bypasses_flagged_ledger_refusal` (`:531`) — same flagged fixture, adds `--force`, asserts exit 0 and the absorbed file is gone (merge completed). If `--force` did not bypass the check, exit would be 1 and the file would still exist.
+- `test_merge_force_bypasses_refusal_not_confirm_gate` (`:550`) — TTY simulation with `--force` but no `--auto`: `input="n\n"` still exits 1 with an unchanged snapshot, `input="y\n"` completes. This proves `--force` bypasses ONLY the integrity refusal, not the confirm gate — an implementation that let `--force` also skip the prompt would make the first sub-case (decline) succeed instead of refuse, and the test would fail.
+
+The apply-progress evidence table (lines 189-190) records that both gates were mutation-tested: reverting the `scan_nesting_violations` membership check to `if True: return` was caught by the no-force test; reverting `if force: return` to `if False: return` was caught by both force-bypass tests. I did not re-run the mutations myself, but the test bodies read as genuinely assertion-discriminating on inspection above (independent of trusting the mutation-testing claim), and `openkos merge --help` (re-run live) confirms the shipped help text: "Bypass the doctor-flagged ledger-integrity refusal... Independent of --auto -- it never skips the confirmation prompt."
+
+## 2. Are the two spec reconciliations honest?
+
+**Yes, both.**
+
+- `entity-resolution-merge/spec.md`: the "`merge` Refuses On A Doctor-Flagged Ledger, With `--force`" requirement's two scenarios ("refuses by default", "`--force` bypasses the refusal, not the confirm gate") match the shipped behavior exactly — verified against the code above. The "Repair Verb..." requirement was reworded to describe the bundle-wide `>=2` entries gate (not a per-concept Check-B gate) and states this is "deliberately COARSER than Check B" because Check B has "two honest false negatives it cannot see past" (single-entry ledgers, cross-survivor pollution invisible at any index). The scenario "Repair verb refuses the whole run, with no override" explicitly says "no `--force` or equivalent flag bypasses this refusal, even for concepts whose own ledger Check B alone would have cleared" — matching `repair()`'s actual two refusal gates (torn-write, bundle-wide entry count), neither of which has any override.
+- `doctor-command/spec.md` gained the "Merge-Ledger Torn-Write Check" requirement (Check A) with its own three scenarios, alongside the pre-existing Check B requirement — this is a strict addition describing already-shipped, already-tested behavior (`doctor` checks 12/13), not a behavior change.
+
+**Repair has no override flag of any kind — confirmed independently.** `repair()`'s signature (`src/openkos/cli/main.py:11685`) takes zero `typer.Option`/`typer.Argument` parameters at all. Both refusal gates (`torn` at `:11726` and `bundle_ledger.bundle_wide_max_entries(bundle_dir) >= 2` at `:11738`) are unconditional — there is no flag anywhere in the function body or its CLI registration that could bypass either. This matches the rule the task said was applied ("implementation is right, spec is stale") rather than the spec being bent to match a shortcut: the shipped bundle-wide gate is coarser (refuses more) than the spec originally implied, not less protective, and the rewritten requirement text says so honestly rather than hiding it.
+
+## 3. Did the remediation break anything it touched?
+
+No regressions found. `merge()`'s confirm gate (`:7356-7365`), `--auto` precedence, and the pre-existing `_reject_torn_ledger_write` call remain textually unchanged and in the same order — `_reject_flagged_ledger_write` was inserted as a new line immediately after, not interleaved with existing logic. Full suite (4211 passed, 1 skipped), ruff, and mypy are all clean at the tip. `git status` is clean.
+
+## 4. Re-adjudication of the two prior WARNINGs and the SUGGESTION
+
+| # | Prior finding | Status now |
+|---|---|---|
+| WARNING 1 | `privacy-purge/spec.md` Scenario 2 (cross-survivor sidecar rewrite during purge) unimplemented | **Unchanged.** The remediation branch did not touch `privacy-purge/spec.md` or purge code. Scenario 2 remains formally unsatisfied, still independently justified as unreachable via the CLI today (`_resolve_concept_path`'s existence gate). Still a tracked-follow-up-level gap, not a regression. |
+| WARNING 2 | `doctor-command/spec.md` under-documented Check A | **Resolved.** The remediation commit added the full "Merge-Ledger Torn-Write Check" requirement with three scenarios, matching the already-implemented/tested Check A behavior. Verified by reading the spec file directly. |
+| SUGGESTION | `scan_nesting_violations`'s "skip entries with nothing embedded" rule not documented in `design.md` | **Unchanged.** Grepped `design.md` for "nothing embedded" / "nothing to compare" / related phrasing — still absent. Still a documentation-only suggestion, not a behavior risk. |
+
+## 5. Non-goals still hold
+
+- `bundle/.state/pending/` (an unbuilt "pending work store" path, issue #572) — `find` across the working tree returns nothing under that path; the only `.pending` concept in the codebase is the ledger's own two-phase-write marker, a distinct in-scope mechanism.
+- `unmerge --to` (issue #562) — `unmerge()`'s signature (`:7421` onward) has only `survivor_id`, `absorbed_id`, `--auto`; grepped for `"--to"` in `main.py` and found no match anywhere in the file.
 
 ## Task Completeness
 
-34/34 tasks across PR #1/#2/#3 marked `[x]`. Cross-checked task IDs against `apply-progress.md`'s TDD Cycle Evidence tables and the actual test files/functions named — all cited tests exist and pass (spot-checked `test_merged_content_blocked_called_once_per_ledger_entry_not_per_survivor`, `test_single_merge_then_unmerge_is_byte_identical_modulo_log`, `test_repair_refuses_with_no_override_when_any_survivor_has_two_or_more_entries`, `test_rglob_md_walk_excludes_ledger_sidecar`). Task completion claim: **PASS**.
-
-## Priority Requirement-by-Requirement Table
-
-| # | Requirement | Verdict | Evidence |
-|---|---|---|---|
-| 1 | No `merged_from` key remains in concept frontmatter after merge; entries under `bundle/.state/ledger/` | PASS | `merge.py::plan_merge` returns `ledger_entries`, never writes `MERGED_FROM_KEY` into survivor metadata (confirmed by reading `merge.py`/`ledger.py`); `bundle/ledger.py::ledger_path_for` roots every sidecar under `bundle/.state/ledger/**.ledger.okf`, `.okf` suffix (never `.md`) |
-| 2 | merge → unmerge byte-for-byte parity, genuinely through the sidecar (not just via old frontmatter path) | PASS — coverage gap claim REJECTED | `test_merge_roundtrip.py::_bundle_bytes_snapshot` uses `bundle_dir.rglob("*")` (not `*.md`), so it snapshots every file including `bundle/.state/ledger/*.ledger.okf`. `_assert_byte_parity_except_log` asserts `post_snapshot.keys() == pre_snapshot.keys()` — an un-cleaned-up sidecar left behind by `unmerge` would be a new key and fail the test. Confirmed `ledger.write_entries` deletes the sidecar file when `entries` becomes empty. The pre-existing test genuinely observes the sidecar location; task 2.9's "no new test needed" claim is verified true, not a hidden gap. |
-| 3 | `merged_content_blocked` invoked once PER LEDGER ENTRY, never once per survivor | PASS | `test_merged_content_blocked_called_once_per_ledger_entry_not_per_survivor` spies on `sensitivity.merged_content_blocked`, asserts `len(seen_entries) == 3` for a 3-entry survivor. A hoisted-to-per-survivor implementation would yield 1, not 3 — the test cannot pass under the wrong behavior. Genuinely discriminating, not a tautology. |
-| 4 | Two opposite walks (EXCLUDE ledger from reference scans; INCLUDE ledger in forget/purge/sensitivity sweeps) as separate mechanisms, not one shared predicate | PASS | EXCLUDE side is structural: `LEDGER_SUFFIX = ".ledger.okf"` never matches `rglob("*.md")` — zero shared code with the INCLUDE side. INCLUDE side is `bundle_ledger.iter_ledgers()`, called from `cli/main.py:596` (lint), `_sweep_ledger_sidecars_for_ids` (forget/purge), and internally by `ledger.py`'s own `scan_torn_writes`/`scan_nesting_violations`. `test_ledger_walk_exclusion.py` locks in the EXCLUDE side; `test_forget.py`/`test_purge.py`/`test_observability.py` cover the INCLUDE side. No single function serves both directions. |
-| 5 | `_autocommit` stages `bundle/.state/ledger/**` at BOTH call sites (`merge` command + curate's `_commit_one_merge`) | PASS | `cli/main.py:1585` (`_commit_one_merge`) and `cli/main.py:7350` (`merge()`) both append `result.ledger_sidecar_path`/`merge_result.ledger_sidecar_path` to their `_autocommit` path list. Backed by `test_merge.py`'s `_autocommit` staging test (task 2.4). |
-| 6 | `purge`'s `git filter-repo` path set covers `bundle/.state/ledger/**` | PARTIAL — matches disclosed gap, spec Scenario 2 unimplemented | `expunge_targets` (cli/main.py:4616-4621) includes each purge-set member's OWN sidecar (privacy-purge spec Scenario 1 — PASS, tested by `test_purging_a_merge_survivor_removes_its_ledger_sidecar_from_history`, mutation-tested). Scenario 2 (an absorbed concept's body surviving as a fragment inside a DIFFERENT survivor's sidecar) is genuinely NOT implemented — `git filter-repo`'s callback is hardcoded to `bundle/index.md`/`bundle/log.md` line-rewriting and cannot rewrite YAML frontmatter fragments inside another file. This was disclosed (task 3.4, apply-progress) and is independently justified: `_resolve_concept_path`'s existence gate means an already-absorbed id can never be a live purge target today, so Scenario 2 is currently unreachable via the CLI. Documented gap, not hidden — but the spec scenario remains formally unsatisfied. Should be filed as follow-up, tracked against the existence-gate precondition. |
-| 7 | `doctor` stays read-only; `repair` refuses flagged ledgers with no override | PASS (with a scope caveat, see Deviation 3 below) | `doctor`'s checks 12/13 (`scan_torn_writes`, `scan_nesting_violations`) only read; `test_doctor.py`'s "never writes" scenario passes. `repair` has two refusal gates (torn-write, bundle-wide ≥2-entries), neither has an override flag — confirmed by reading `repair()`'s body and by an independent confirmation during review that the `repair` verb takes no parameters. |
-| 8 | Reindex embed text matches `fts.py`'s title/description/tags/body composition; forced through the existing embedding-model-tag re-embed gate; #554 verified closed | PASS on mechanism / **#554 is OPEN, not closed** | `_compose_embed_text` in `reindex.py` builds `"\n\n".join(title, description, tags_text, body)` from the identical four fields `fts.py::_populate_docs_table` indexes (`title`, `description`, `tags`, `body`) — verified by reading both functions side by side. `_effective_model_tag` composes `EMBED_COMPOSITION_TAG` (`"compose-v1"`) into the SAME `model_tag` string the pre-existing model-change gate (`stored_model_tag != effective_model_tag`) already compares — no parallel gate was invented. **Independently checked via `gh issue view 554`: issue #554 is currently OPEN.** This is expected, not a defect — the change has not merged to `main` yet (still on a feature branch), so no "Closes #554" keyword has fired. Flagging per the explicit review instruction not to assume it closed; it will close automatically on merge if the eventual merging PR/commit uses the closing keyword — confirm that keyword is present before merge. |
-
-## CRITICAL — Undisclosed spec/implementation gap (new finding, not in the apply phase's disclosed list)
-
-**`entity-resolution-merge/spec.md`'s two ADDED requirements are entirely unimplemented, untested, and were never disclosed as a gap or deviation:**
-
-1. **"`merge` Refuses On A Doctor-Flagged Ledger, With `--force`"** (Slice 1a, unless-noted default) — the spec requires `openkos merge` to run the doctor merge-ledger-integrity check (Check B, post-merge-mutation) against the survivor's sidecar before Phase A completes, refuse with exit non-zero when flagged, and support `--force` to bypass. **`merge`'s `typer.Option` list has no `--force` parameter at all** (only `--auto`) — confirmed by reading `merge()`'s full signature (`cli/main.py:7108-7122`). `merge` calls `_reject_torn_ledger_write` (Check A only) and never calls `scan_nesting_violations` (Check B) anywhere in its flow. Zero scenarios of this requirement are covered.
-2. **"Repair Verb Refuses To Migrate A Flagged Ledger" (Slice 1b)** — the spec requires `repair` to run the SAME check against a concept's embedded history before migrating it and refuse **per concept** (writing nothing for that concept, migrating the rest). The actual implementation instead refuses the **entire run** whenever ANY survivor bundle-wide carries ≥2 entries (design's own, different, coarser Decision-5 gate) — this is a materially different mechanism than the spec text describes (all-or-nothing vs. per-concept), and it does not invoke Check B (`scan_nesting_violations`) as a refusal input at all; it only uses the entry-count proxy.
-
-Evidence: `grep`-confirmed zero occurrences of `--force` handling tied to ledger/merge-flag refusal anywhere in `main.py`; the only two hits for "doctor-flagged" in the whole tree are code comments (`main.py:540`, `test_merge.py:422`) that explicitly contrast the implemented torn-write refusal against this OTHER, unbuilt refusal — i.e., the implementers were aware the doctor-flagged refusal is a distinct, separate mechanism, and built neither it nor any override flag for it.
-
-This is a genuine spec requirement (with 4 concrete scenarios) that is neither implemented nor covered by a passing test, and — unlike the five deviations the apply phase proactively disclosed — this one is absent from `apply-progress.md`'s Deviations sections entirely. It was not raised for adjudication. **This blocks archive** until either (a) implemented and tested, or (b) the spec is formally amended/descoped with maintainer sign-off and the gap is explicitly tracked as a follow-up rather than silently left unspecified-vs-implemented.
-
-## Disclosed Deviations — Adjudication
-
-| # | Deviation | Verdict |
-|---|---|---|
-| 1 | Check B's `[FAIL]` names both remedies unconditionally | **Not actually a deviation** — re-reading `doctor-command/spec.md`'s own text: "A `[FAIL]` line's remediation MUST name BOTH the repair verb... and `git reset --hard`..." — the spec literally requires naming both, unconditionally, every time. The implementation matches the spec text exactly. No action needed. |
-| 2 | `scan_nesting_violations` skips entries with nothing embedded in `survivor_before` | **Acceptable, low risk.** Logically necessary (a post-relocation entry never carries a nested `merged_from` snapshot, so there is nothing to compare) and backed by a dedicated regression test. Design's prose implies but doesn't spell out this exact rule — a SUGGESTION-level documentation gap in design.md, not a behavior risk. |
-| 3 | `doctor-command/spec.md` documents only Check B, not Check A, though both are implemented per tasks.md/design.md | **Real spec drift; does not block archive, but must be filed as a follow-up.** Check A is fully implemented and tested (task 2.1, `test_doctor.py`), so behavior is correct and complete — the gap is purely in the spec ARTIFACT under-describing shipped behavior. This is lower severity than the undisclosed CRITICAL gap above because it is (a) actually disclosed, (b) the implementation is a superset of the spec rather than a shortfall, and (c) `design.md` (a later, more authoritative artifact per project convention) does fully specify Check A. Recommend a targeted spec.md correction PR, not a re-open of this change. |
-| 4 | `has_reset_point` checks `HEAD~1` resolvability, not that history reaches the actual first corrupting merge | **Acceptable, documented as necessary-not-sufficient in the function's own docstring.** No spec text promises exact-commit precision; doctor's own remediation text already treats `<first-merge>~1` as a human-filled placeholder. |
-| 5 | Doctor CLI wiring / repair command body written together with tests rather than strict RED-first | **Acceptable under Strict TDD verify rules.** Disclosed, not glossed over; safety-critical gates (reset-point gate, bundle-wide-entries gate) were subsequently mutation-tested and confirmed to catch a reverted guard — the assurance substitutes for pure ordering discipline on these two files only. Every other task in PR#3 followed literal RED-first. |
-
-## Non-Goals Held
-
-- `bundle/.state/pending/` — confirmed absent from the working tree (`find` returned nothing); nothing references a "pending work store" path outside the ledger's own `.pending` two-phase-write marker (a distinctly different, in-scope concept). #572 not started, not painted into a corner.
-- `unmerge --to` — confirmed `unmerge()`'s signature has only `survivor_id`, `absorbed_id`, `--auto`; no `--to` parameter exists anywhere in `cli/main.py`. #562 not started.
-
-## Assertion Quality Audit (Strict TDD)
-
-Spot-checked the priority-surface test files (`test_ledger.py`, `test_repair.py`, `test_doctor.py`, `test_contradiction.py`, `test_merge_roundtrip.py`, `test_ledger_walk_exclusion.py`, `test_merge.py`): no tautologies, no assertion-free production-code calls, no ghost loops over possibly-empty collections found in the sampled tests. The two tests most load-bearing for the priority checklist (per-entry call-count test, byte-parity key-set test) both assert on values that a wrong implementation would visibly change (count, key sets) — genuinely discriminating, not smoke tests.
-
-## Coverage / Quality (already independently confirmed during review, re-stated for completeness)
-
-Full suite 4208 passed / 1 skipped; ruff clean; mypy clean (192 files); coverage 97.05% against a 90% branch gate; `git status` clean.
+Tasks R.1–R.5 (the remediation slice) are all marked `[x]` in `tasks.md`, matching the shipped commit: `--force` option + `_reject_flagged_ledger_write` (R.1), orthogonality to the confirm gate (R.2), mutation-testing both gates (R.3), the `entity-resolution-merge/spec.md` correction (R.4), and the `doctor-command/spec.md` correction (R.5). All prior 34 tasks across PR #1/#2/#3 remain `[x]` and unaffected.
 
 ## Summary of Issues
 
-**CRITICAL (1)**
-- `entity-resolution-merge/spec.md`'s two ADDED requirements (merge's doctor-flagged `--force` refusal; repair's per-concept flagged-ledger refusal) are entirely unimplemented, untested, and undisclosed. Blocks archive.
+**CRITICAL (0)** — the prior CRITICAL is closed.
 
-**WARNING (2)**
-- `privacy-purge/spec.md` Scenario 2 (cross-survivor sidecar content rewrite during purge) remains unimplemented — disclosed, independently justified as currently unreachable, but the spec scenario is formally unsatisfied. File as tracked follow-up.
-- `doctor-command/spec.md` under-documents Check A (torn-write check exists and is tested, but the spec delta only describes Check B). File a spec-correction follow-up; does not reflect a behavior gap.
+**WARNING (1)**
+- `privacy-purge/spec.md` Scenario 2 (cross-survivor sidecar content rewrite during purge) remains unimplemented — disclosed, independently justified as currently unreachable via the CLI, but the spec scenario is formally unsatisfied. File as a tracked follow-up.
 
 **SUGGESTION (1)**
-- `scan_nesting_violations`'s "skip entries with nothing embedded" rule should be added explicitly to `design.md`'s prose (currently only implied), to avoid re-litigating the same investigation on a future read.
+- `scan_nesting_violations`'s "skip entries with nothing embedded" rule should be added explicitly to `design.md`'s prose (currently only implied by the code), to avoid re-investigating the same question on a future read.
 
 ## Verdict
 
-**FAIL.** All eight priority requirements flagged during review as most important resolve to PASS or an already-adjudicated PARTIAL/documented-gap, and the five disclosed deviations are reasonable engineering tradeoffs (one is not even a real deviation). Command evidence, task completion, and non-goal boundaries all hold. The blocker is a NEW finding: `entity-resolution-merge/spec.md` contains two ADDED requirements with four concrete scenarios that have zero implementation and zero test coverage, and this gap was never surfaced by the apply phase's own disclosure process. Recommend routing back to implementation (or an explicit, maintainer-approved spec descope) before archive.
+**PASS.** The CRITICAL from the prior review — `merge`'s missing doctor-flagged-ledger refusal — is now implemented with a genuinely discriminating test suite (three tests, each of which would fail under the specific wrong behavior it targets), matching the exact two scenarios the spec text describes. `--force` is confirmed, by direct code reading and by a TTY-decline/accept test pair, to bypass only the integrity refusal and never the confirm gate. Both spec reconciliations reflect real, already-shipped behavior rather than a bent spec, and `repair` retains zero override flags of any kind, per its own function signature. The remaining WARNING and SUGGESTION are unchanged, pre-existing, disclosed, and non-blocking. Archive is unblocked.
