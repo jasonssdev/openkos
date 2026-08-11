@@ -13,6 +13,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.cli import main
 from openkos.cli.main import _apply_link_rewrite_idempotently, app
@@ -21,6 +22,12 @@ from tests.unit.cli.conftest import changed_paths, confirm_after, echo_after
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
+
+
+def _ledger_entries(tmp_path: Path, survivor_id: str) -> list[okf.MergeLedgerEntry]:
+    """Read `survivor_id`'s ledger sidecar (durable-derived-state slice 1a) --
+    the ledger no longer lives in the survivor's own frontmatter."""
+    return bundle_ledger.read_entries(survivor_id, tmp_path / "bundle")
 
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,10 +166,13 @@ def test_successful_merge_writes_ledger_rewrites_links_removes_absorbed(
     survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
         encoding="utf-8"
     )
-    assert "merged_from" in survivor_text
+    assert "merged_from" not in survivor_text
     assert "## Merged content (concepts/absorbed)" in survivor_text
     assert "Absorbed body." in survivor_text
     assert "sensitivity: confidential" in survivor_text
+    entries = _ledger_entries(tmp_path, "concepts/survivor")
+    assert len(entries) == 1
+    assert entries[0].absorbed_id == "concepts/absorbed"
 
     other_text = (tmp_path / "bundle" / "concepts" / "other.md").read_text(
         encoding="utf-8"
@@ -402,6 +412,175 @@ def test_path_traversal_on_absorbed_id_refuses_no_write(
     assert _snapshot(tmp_path) == before
 
 
+def test_merge_refuses_on_a_torn_pending_ledger_write_no_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task 2.8, design Decision 5 Check A: `merge` refuses (exit 1, writes
+    nothing) while a `.pending` intent marker exists for the survivor's
+    ledger sidecar -- a torn two-phase write from a prior crashed merge --
+    and there is NO `--force` override for this refusal at all (distinct
+    from the doctor-flagged, `--force`-escapable refusal)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    bundle_dir = tmp_path / "bundle"
+    pending_path = bundle_ledger.pending_path_for("concepts/survivor", bundle_dir)
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    pending_path.write_text("stale pending marker", encoding="utf-8")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "torn write pending" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def _make_flagged_ledger_entry(
+    absorbed_id: str = "concepts/absorbed-0",
+    *,
+    survivor_before: str = "survivor text",
+) -> okf.MergeLedgerEntry:
+    """A minimal V3 ledger entry, mirroring `test_doctor.py`'s
+    `_make_ledger_entry` helper -- kept as a local copy since `test_doctor`
+    is a sibling test module, not a shared fixture location."""
+    return okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at="2026-07-20T00:00:00Z",
+        absorbed_id=absorbed_id,
+        absorbed_snapshot="absorbed text",
+        survivor_before=survivor_before,
+        index_before="index text",
+        log_before="log text",
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+    )
+
+
+def _write_flagged_ledger(tmp_path: Path, survivor_id: str) -> None:
+    """Commit a two-entry ledger sidecar for `survivor_id` whose entry 1
+    embeds a TAMPERED copy of entry 0 in its `survivor_before` -- doctor's
+    Check B (`bundle_ledger.scan_nesting_violations`) flags this as
+    post-merge mutation, mirroring `test_doctor.py`'s corrupted-ledger
+    fixtures."""
+    bundle_dir = tmp_path / "bundle"
+    entry_0 = _make_flagged_ledger_entry(absorbed_id="concepts/absorbed-0")
+    tampered = okf.MergeLedgerEntry(
+        schema=entry_0.schema,
+        merged_at=entry_0.merged_at,
+        absorbed_id=entry_0.absorbed_id,
+        absorbed_snapshot="TAMPERED",
+        survivor_before=entry_0.survivor_before,
+        index_before=entry_0.index_before,
+        log_before=entry_0.log_before,
+        link_rewrites=entry_0.link_rewrites,
+        sensitivity_before=entry_0.sensitivity_before,
+        sensitivity_after=entry_0.sensitivity_after,
+    )
+    embedded_metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": "Survivor",
+        "merged_from": okf.encode_merged_from([tampered]),
+    }
+    entry_1 = _make_flagged_ledger_entry(
+        absorbed_id="concepts/absorbed-1",
+        survivor_before=okf.dump_frontmatter(embedded_metadata),
+    )
+    bundle_ledger.write_entries(
+        survivor_id,
+        bundle_dir,
+        survivor_id=survivor_id,
+        entries=[entry_0, entry_1],
+    )
+
+
+def test_merge_refuses_on_a_doctor_flagged_ledger_no_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario: "Merge onto a flagged ledger refuses by default" -- doctor's
+    Check B (`bundle_ledger.scan_nesting_violations`) flags the survivor's
+    sidecar as post-merge-mutated, so `merge` refuses in Phase A (exit
+    non-zero, writes nothing) without `--force`, naming both remediation
+    paths and the non-guaranteed-reversibility statement."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_flagged_ledger(tmp_path, "concepts/survivor")
+    monkeypatch.setattr("openkos.cli.main.vcs_git.has_reset_point", lambda root: True)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "openkos repair" in result.stderr
+    assert "git reset --hard" in result.stderr
+    assert "openkos reindex" in result.stderr
+    assert "reversibility" in result.stderr.lower()
+    assert "not guaranteed" in result.stderr.lower()
+    assert "--force" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_merge_force_bypasses_flagged_ledger_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force` bypasses the doctor-flagged refusal and the merge
+    completes (with `--auto` also skipping the unrelated confirm gate)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_flagged_ledger(tmp_path, "concepts/survivor")
+
+    result = runner.invoke(
+        app,
+        ["merge", "concepts/survivor", "concepts/absorbed", "--auto", "--force"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert not (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()
+
+
+def test_merge_force_bypasses_refusal_not_confirm_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario: "`--force` bypasses the refusal, not the confirm gate" --
+    on an interactive TTY WITHOUT `--auto`, `--force` bypasses ONLY the
+    ledger-integrity refusal; the existing confirm-gate precedence still
+    governs the write, so declining still leaves the bundle untouched."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    _write_flagged_ledger(tmp_path, "concepts/survivor")
+    _simulate_tty(monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["merge", "concepts/survivor", "concepts/absorbed", "--force"],
+        input="n\n",
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert _snapshot(tmp_path) == before
+
+    result = runner.invoke(
+        app,
+        ["merge", "concepts/survivor", "concepts/absorbed", "--force"],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert not (tmp_path / "bundle" / "concepts" / "absorbed.md").exists()
+
+
 def test_missing_workspace_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -454,8 +633,14 @@ def test_phase_b_ordering_catalog_and_survivor_before_absorbed_removal(
     survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
         encoding="utf-8"
     )
-    assert "merged_from" in survivor_text
+    assert "merged_from" not in survivor_text
     assert "sensitivity: confidential" in survivor_text
+    # The ledger sidecar's two-phase write (S1/V/S2) lands BEFORE D (the
+    # absorbed-file removal that just raised): the merge is already
+    # durably recorded, only the (recoverable) cleanup step failed.
+    entries = _ledger_entries(tmp_path, "concepts/survivor")
+    assert len(entries) == 1
+    assert entries[0].absorbed_id == "concepts/absorbed"
 
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert "concepts/absorbed.md" not in index_text
@@ -532,6 +717,7 @@ def test_retry_after_mid_rewrite_failure_completes_the_merge(
         tmp_path / "bundle" / "concepts" / "survivor.md"
     ).read_text(encoding="utf-8")
     assert "merged_from" not in survivor_after_failure  # ledger not yet committed
+    assert _ledger_entries(tmp_path, "concepts/survivor") == []
 
     retry = runner.invoke(
         app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
@@ -543,7 +729,7 @@ def test_retry_after_mid_rewrite_failure_completes_the_merge(
     survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
         encoding="utf-8"
     )
-    assert "merged_from" in survivor_text
+    assert "merged_from" not in survivor_text
 
     linker1_text = (tmp_path / "bundle" / "concepts" / "linker1.md").read_text(
         encoding="utf-8"
@@ -601,11 +787,7 @@ def test_retry_produces_a_correct_fully_reversible_ledger(
     )
     assert retry.exit_code == 0, retry.stderr
 
-    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
-        encoding="utf-8"
-    )
-    metadata, _ = okf.load_frontmatter(survivor_text)
-    entries = okf.decode_merged_from(metadata)
+    entries = _ledger_entries(tmp_path, "concepts/survivor")
     assert len(entries) == 1
     rewrites = entries[0].link_rewrites
     assert {rw.file for rw in rewrites} == {

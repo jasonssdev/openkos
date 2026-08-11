@@ -121,6 +121,52 @@ def _init_repo_with_identity(
     )
 
 
+# --- has_reset_point (durable-derived-state slice 1b: doctor's corrupted-
+# ledger remediation gap) --------------------------------------------------
+
+
+def test_has_reset_point_false_with_zero_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+
+    assert git.has_reset_point(repo) is False
+
+
+def test_has_reset_point_false_with_exactly_one_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single commit has no ancestor -- `HEAD~1` cannot resolve, so no
+    `git reset --hard <commit>~1` remedy names a real commit."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "one.txt").write_text("one", encoding="utf-8")
+    git.commit_paths(repo, ["one.txt"], "first commit")
+
+    assert git.has_reset_point(repo) is False
+
+
+def test_has_reset_point_true_with_two_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "one.txt").write_text("one", encoding="utf-8")
+    git.commit_paths(repo, ["one.txt"], "first commit")
+    (repo / "two.txt").write_text("two", encoding="utf-8")
+    git.commit_paths(repo, ["two.txt"], "second commit")
+
+    assert git.has_reset_point(repo) is True
+
+
+def test_has_reset_point_false_outside_a_git_repository(tmp_path: Path) -> None:
+    assert git.has_reset_point(tmp_path) is False
+
+
 def test_commit_paths_stages_exactly_the_given_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -21,10 +21,17 @@ class MergePlan:
     bundle file has been written yet (Phase A). `merged_survivor` is the
     FULL frontmatter+body text a later unit writes verbatim (survivor
     before deleting the absorbed file, per design's Phase B ordering
-    invariant)."""
+    invariant) -- it carries NO `merged_from` key at all (durable-derived-
+    state slice 1a): the ledger now lives in a sidecar
+    (`bundle/ledger.py`), never the survivor's own frontmatter.
+    `ledger_entries` is the FULL new sidecar content -- every entry the
+    caller passed in via `existing_entries` plus this merge's own
+    `ledger_entry`, in LIFO (append) order -- for a later unit to write to
+    that sidecar."""
 
     merged_survivor: str
     ledger_entry: okf.MergeLedgerEntry
+    ledger_entries: list[okf.MergeLedgerEntry]
 
 
 @dataclass(frozen=True)
@@ -51,6 +58,7 @@ class UnmergePlan:
     relation_rewrites: list[okf.RelationRewrite]
     provenance_rewrites: list[okf.ProvenanceRewrite]
     entry: okf.MergeLedgerEntry
+    remaining_entries: list[okf.MergeLedgerEntry]
 
 
 def _reject_same_or_blank(survivor_id: str, absorbed_id: str) -> None:
@@ -86,6 +94,7 @@ def plan_merge(
     index_text: str,
     log_text: str,
     merged_at: str,
+    existing_entries: list[okf.MergeLedgerEntry] | None = None,
     link_rewrites: list[okf.LinkRewrite] | None = None,
     relation_rewrites: list[okf.RelationRewrite] | None = None,
     provenance_rewrites: list[okf.ProvenanceRewrite] | None = None,
@@ -110,21 +119,25 @@ def plan_merge(
     (the reader still accepts v1 and v2 entries already on disk from before
     this merge).
 
-    The new entry is appended to the survivor's EXISTING `merged_from` list
-    (decoded from `survivor_text`'s own frontmatter), so the returned
-    `merged_survivor` carries every prior entry plus this one, in LIFO
-    order. Raises `ValueError` on a same/blank id (spec: Same-id or unknown
-    id rejected) -- this layer has no notion of "existing on disk", so
-    "unknown" here means a blank id; the CLI's `_resolve_concept_path` is
-    what checks disk existence (a later unit).
+    `existing_entries` (durable-derived-state slice 1a) is the survivor's
+    CURRENT sidecar content, read by the caller via `bundle.ledger.
+    read_entries` -- this layer no longer decodes it from `survivor_text`'s
+    own frontmatter, since the ledger no longer lives there. Defaults to
+    `[]` (a survivor merging for the first time). The new entry is appended
+    to it, in LIFO order, and returned as `MergePlan.ledger_entries` for a
+    later unit to write to the sidecar; `merged_survivor` itself carries no
+    `merged_from` key at all. Raises `ValueError` on a same/blank id (spec:
+    Same-id or unknown id rejected) -- this layer has no notion of
+    "existing on disk", so "unknown" here means a blank id; the CLI's
+    `_resolve_concept_path` is what checks disk existence (a later unit).
     """
     _reject_same_or_blank(survivor_id, absorbed_id)
 
     survivor_metadata, survivor_body = okf.load_frontmatter(survivor_text)
     absorbed_metadata, absorbed_body = okf.load_frontmatter(absorbed_text)
 
-    existing_entries = okf.decode_merged_from(survivor_metadata)
-    _reject_already_merged(absorbed_id, existing_entries)
+    existing = list(existing_entries) if existing_entries is not None else []
+    _reject_already_merged(absorbed_id, existing)
 
     merged_metadata, merged_body = okf.build_merged_document(
         survivor_metadata,
@@ -157,35 +170,42 @@ def plan_merge(
         else [],
     )
 
-    merged_metadata[okf.MERGED_FROM_KEY] = okf.encode_merged_from(
-        [*existing_entries, entry]
-    )
     merged_survivor = okf.dump_frontmatter(merged_metadata, merged_body)
+    ledger_entries = [*existing, entry]
 
-    return MergePlan(merged_survivor=merged_survivor, ledger_entry=entry)
+    return MergePlan(
+        merged_survivor=merged_survivor,
+        ledger_entry=entry,
+        ledger_entries=ledger_entries,
+    )
 
 
 def plan_unmerge(
     *,
     survivor_id: str,
     absorbed_id: str,
-    survivor_text: str,
+    entries: list[okf.MergeLedgerEntry],
 ) -> UnmergePlan:
-    """Pure planning: reverse ONLY the LIFO-tail `merged_from` entry on
-    `survivor_text`, without writing anything (spec: Unmerge Achieves
-    Round-Trip Parity).
+    """Pure planning: reverse ONLY the LIFO-tail entry of `entries`, without
+    writing anything (spec: Unmerge Achieves Round-Trip Parity).
+
+    `entries` (durable-derived-state slice 1a) is the survivor's CURRENT
+    sidecar content, read by the caller via `bundle.ledger.read_entries` --
+    this layer no longer decodes it from a `survivor_text` frontmatter key,
+    since the ledger no longer lives there; restoring `restored_survivor`
+    from `tail.survivor_before` needs nothing else off the survivor's
+    current on-disk bytes at all.
 
     `absorbed_id` MUST equal the tail entry's `absorbed_id`, else this
     raises `ValueError` with no write -- reversing a non-tail entry is
     unsafe due to nested snapshots/overlapping rewrites (scenario:
-    Absorbed-id is not the LIFO tail). A survivor with an empty
-    `merged_from` ledger (nothing to unmerge for this pair) also raises
-    `ValueError` (scenario: Unmerge of a non-merged pair).
+    Absorbed-id is not the LIFO tail). An empty `entries` list (nothing to
+    unmerge for this pair) also raises `ValueError` (scenario: Unmerge of a
+    non-merged pair). `remaining_entries` is `entries` with the tail
+    popped -- the sidecar's new content once a later unit writes it.
     """
     _reject_same_or_blank(survivor_id, absorbed_id)
 
-    metadata, _ = okf.load_frontmatter(survivor_text)
-    entries = okf.decode_merged_from(metadata)
     if not entries:
         raise ValueError(f"{survivor_id!r} has no merged_from entries to unmerge")
 
@@ -205,4 +225,5 @@ def plan_unmerge(
         relation_rewrites=list(tail.relation_rewrites),
         provenance_rewrites=list(tail.provenance_rewrites),
         entry=tail,
+        remaining_entries=list(entries[:-1]),
     )
