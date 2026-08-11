@@ -1152,6 +1152,23 @@ def test_stripped_fabrications_merge_to_one_object_in_union() -> None:
     assert [r.title for r in outcome.objects] == ["MCP"]
 
 
+def test_strip_leaves_a_title_without_expansions_byte_identical() -> None:
+    """Regression (#538 CI): the strip used to collapse whitespace on EVERY
+    title, not just rewritten ones -- silently repairing a title with an
+    embedded newline that `okf.build_concept`'s stricter single-line gate
+    exists to reject, so the builder-degrade path stopped degrading. A title
+    the expansion rule does not touch must pass through byte-identical."""
+    item = (
+        '{"type": "Concept", "title": "Stoic Framework\\nExtra Line", '
+        '"description": "A framework.", "body": ""}'
+    )
+    llm = _FakeLLM(reply=_array(item))
+
+    result = _objects(_MCP_SOURCE, source_title="Pre-built Skills", llm=llm)
+
+    assert result[0].title == "Stoic Framework\nExtra Line"
+
+
 def test_expansion_strip_leaves_description_and_body_alone() -> None:
     """Scope: only the TITLE's parenthetical expansion makes a checkable
     claim this rule owns. Description and body pass through untouched."""

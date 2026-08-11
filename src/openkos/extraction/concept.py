@@ -547,9 +547,16 @@ def _strip_ungrounded_expansions(
     for result in results:
         title = _ACRONYM_FIRST_RE.sub(_acronym_first, result.title)
         title = _EXPANSION_FIRST_RE.sub(_expansion_first, title)
-        title = " ".join(title.split())
+        # An untouched title passes through BYTE-IDENTICAL -- this rule owns
+        # the parenthetical expansion and nothing else. Normalizing every
+        # title here silently repaired malformed ones (an embedded newline)
+        # that `okf.build_concept`'s stricter single-line gate exists to
+        # reject, un-degrading the builder's fail-closed path. The regexes
+        # consume the whitespace before the parenthetical, so a rewrite
+        # leaves no doubled spaces to clean; `strip()` covers a stripped
+        # expansion that opened or closed the title.
         if title != result.title:
-            result = replace(result, title=title)
+            result = replace(result, title=title.strip())
         stripped.append(result)
     return stripped
 
