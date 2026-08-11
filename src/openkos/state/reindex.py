@@ -71,7 +71,6 @@ from openkos.model import okf
 from openkos.state import derived, fts
 from openkos.state.vectorstore import VectorStore, content_hash
 
-
 EMBED_COMPOSITION_TAG: Final = "compose-v1"
 """Suffix identifying THIS embed-text composition scheme (#554): title,
 description, tags, and body, the same field set `fts.py`'s

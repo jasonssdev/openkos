@@ -293,6 +293,53 @@ def scan_nesting_violations(bundle_dir: Path) -> list[tuple[str, int]]:
     return violations
 
 
+def scan_unmigrated(bundle_dir: Path) -> list[tuple[str, list[okf.MergeLedgerEntry]]]:
+    """Every survivor whose OWN frontmatter still carries a `merged_from`
+    key (pre-relocation, never migrated to a sidecar) -- the repair verb's
+    migration source (task 3, PR#3). Walks `okf._iter_docs`, the SAME walk
+    `fts.build_index`/`reindex` use; a doc `_iter_docs` could not read or
+    parse is silently skipped, mirroring every other reader's degrade-not-
+    crash posture over a transient per-doc failure.
+
+    A committed sidecar under `bundle/.state/ledger/` is never a candidate
+    here: it is not `.md`-suffixed, so `_iter_docs`'s `rglob("*.md")` walk
+    never even reaches it (design Decision 2's free EXCLUDE)."""
+    unmigrated: list[tuple[str, list[okf.MergeLedgerEntry]]] = []
+    for scan in okf._iter_docs(bundle_dir):
+        if scan.read_error is not None or scan.parse_error is not None:
+            continue
+        metadata = scan.metadata or {}
+        if okf.MERGED_FROM_KEY not in metadata:
+            continue
+        concept_id = okf.concept_id_for(scan.path, bundle_dir)
+        unmigrated.append((concept_id, okf.decode_merged_from(metadata)))
+    return unmigrated
+
+
+def bundle_wide_max_entries(bundle_dir: Path) -> int:
+    """The LARGEST entry count any single survivor carries anywhere in the
+    bundle -- migrated (committed sidecar) and unmigrated (frontmatter-
+    embedded) ledgers counted together. `0` when no ledger of either kind
+    exists.
+
+    The repair verb's cross-survivor-pollution gate (design Decision 5):
+    `merge_core`'s `other_files` (`cli/main.py:6542`) can rewrite bytes
+    inside a THIRD survivor's embedded snapshot, a corruption Check B
+    cannot see at every index -- so the migration gate is deliberately
+    coarser than the check, refusing whenever ANY survivor bundle-wide
+    carries 2 or more entries, regardless of which specific ledger a
+    per-entry check would have flagged."""
+    counts: dict[str, int] = {}
+    for ledger_path in iter_ledgers(bundle_dir):
+        metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
+        survivor_id = metadata.get("survivor_id")
+        if isinstance(survivor_id, str) and survivor_id:
+            counts[survivor_id] = len(okf.decode_merged_from(metadata))
+    for concept_id, entries in scan_unmigrated(bundle_dir):
+        counts[concept_id] = counts.get(concept_id, 0) + len(entries)
+    return max(counts.values(), default=0)
+
+
 def recover(concept_id: str, bundle_dir: Path) -> RecoveryVerdict:
     """Total function of on-disk state (design Decision 1's truth table, no
     heuristic): absent `.pending` is `"none"`; present with a matching

@@ -30,7 +30,6 @@ from typer.testing import CliRunner
 from openkos.bundle import ledger as bundle_ledger
 from openkos.cli.main import app
 from openkos.config import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL, WorkspaceLayout
-from openkos.model import okf
 from openkos.llm.ollama import (
     BackendHostLocality,
     InstalledModel,
@@ -38,6 +37,7 @@ from openkos.llm.ollama import (
     OllamaError,
     OllamaUnavailable,
 )
+from openkos.model import okf
 from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 
@@ -1316,7 +1316,7 @@ def test_doctor_nesting_violation_check_names_both_remedies_when_reset_point_exi
         sensitivity_before=entry_0.sensitivity_before,
         sensitivity_after=entry_0.sensitivity_after,
     )
-    embedded_metadata = {
+    embedded_metadata: dict[str, object] = {
         "type": "Concept",
         "title": "Survivor",
         "merged_from": okf.encode_merged_from([tampered]),
@@ -1371,7 +1371,7 @@ def test_doctor_nesting_violation_check_reports_no_reset_point_without_git_ident
         sensitivity_before=entry_0.sensitivity_before,
         sensitivity_after=entry_0.sensitivity_after,
     )
-    embedded_metadata = {
+    embedded_metadata: dict[str, object] = {
         "type": "Concept",
         "title": "Survivor",
         "merged_from": okf.encode_merged_from([tampered]),
@@ -1423,13 +1423,17 @@ def test_doctor_ledger_checks_never_write_to_the_ledger_directory(
     )
     ledger_root = bundle_ledger.ledger_root(bundle_dir)
     before = {
-        path: path.read_bytes() for path in sorted(ledger_root.rglob("*")) if path.is_file()
+        path: path.read_bytes()
+        for path in sorted(ledger_root.rglob("*"))
+        if path.is_file()
     }
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
     after = {
-        path: path.read_bytes() for path in sorted(ledger_root.rglob("*")) if path.is_file()
+        path: path.read_bytes()
+        for path in sorted(ledger_root.rglob("*"))
+        if path.is_file()
     }
     assert after == before

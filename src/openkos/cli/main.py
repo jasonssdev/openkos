@@ -11567,8 +11567,7 @@ def doctor() -> None:
         if violations:
             if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
                 reset_remedy = (
-                    "run `git reset --hard <first-merge>~1` then `openkos "
-                    "reindex`"
+                    "run `git reset --hard <first-merge>~1` then `openkos reindex`"
                 )
             else:
                 reset_remedy = (
@@ -11620,6 +11619,129 @@ def doctor() -> None:
 
     if any(r.status == "fail" and r.critical for r in results):
         raise typer.Exit(code=1)
+
+
+@app.command(
+    help=(
+        "Migrate legacy, frontmatter-embedded merge ledgers into "
+        "bundle/.state/ledger/, refusing on any sign of a torn write or "
+        "cross-survivor pollution risk."
+    ),
+    rich_help_panel="Maintain",
+)
+def repair() -> None:
+    """Read-write migration verb (durable-derived-state slice 1b): extracts
+    every survivor's OWN frontmatter-embedded `merged_from` ledger (pre-
+    relocation, unmigrated) into its `bundle/.state/ledger/` sidecar,
+    VERBATIM, and strips the `merged_from` key from the survivor's own
+    frontmatter -- nothing else about the survivor changes.
+
+    TWO refusal gates, BOTH with NO override flag at all (unlike `merge`'s
+    `--force`): migrating a corrupted ledger verbatim would convert a
+    git-revertible bug into a permanent durable fact, so this verb is
+    deliberately MORE conservative than `merge`/`unmerge`'s own refusals.
+
+    Gate 1 (Check A, torn write): any `.pending` marker anywhere in the
+    bundle refuses the WHOLE run -- `openkos doctor` names the affected
+    survivor(s); `openkos repair` does not repair a torn write itself
+    (`bundle_ledger.recover` does, on the NEXT `merge`/`unmerge` that
+    touches that survivor).
+
+    Gate 2 (cross-survivor-pollution gate, design Decision 5): refuses the
+    WHOLE run whenever ANY survivor bundle-wide -- migrated OR unmigrated
+    -- carries 2 or more entries, regardless of what Check B's per-ledger
+    nested-prefix check would have found on its own. Deliberately coarser
+    than Check B: a merge of X into Y can rewrite bytes inside a THIRD
+    survivor Z's embedded snapshot (`merge_core`'s `other_files`,
+    `cli/main.py:6542`), a corruption Check B cannot see at every index.
+
+    Before writing, reports whether this run's own effect is undoable via
+    `git reset --hard` (`vcs_git.has_reset_point`, the same gap-fix probe
+    `doctor` uses): `_autocommit` is best-effort and silently no-ops with
+    no repo, no configured git identity, or any `GitError`/`OSError`, so a
+    workspace that never committed has no safety net for THIS run either.
+    """
+    root = Path.cwd()
+    workspace_reason = config.require_workspace(root)
+    if workspace_reason is not None:
+        typer.echo(f"openkos repair: refusing to run -- {workspace_reason}.", err=True)
+        raise typer.Exit(code=1)
+
+    layout = config.WorkspaceLayout(root)
+    bundle_dir = layout.bundle_dir
+
+    torn = bundle_ledger.scan_torn_writes(bundle_dir)
+    if torn:
+        typer.echo(
+            f"openkos repair: refusing to run -- {len(torn)} pending "
+            "marker(s) found (a prior merge crashed mid-commit); this "
+            "refusal has no override. Run `openkos doctor` to inspect, or "
+            "`openkos merge`/`openkos unmerge` on the affected survivor to "
+            "trigger recovery.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if bundle_ledger.bundle_wide_max_entries(bundle_dir) >= 2:
+        typer.echo(
+            "openkos repair: refusing to run -- at least one survivor in "
+            "this bundle carries 2 or more merge-ledger entries. Migrating "
+            "a possibly-corrupted ledger verbatim would convert a "
+            "git-revertible bug into a permanent durable fact, so this "
+            "refusal has NO override. Run `openkos doctor` to inspect; if "
+            "it reports a corrupted ledger, its own remediation is the way "
+            "forward, not this verb.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    unmigrated = bundle_ledger.scan_unmigrated(bundle_dir)
+    if not unmigrated:
+        typer.echo(
+            "openkos repair: nothing to migrate -- no unmigrated merge ledger found."
+        )
+        return
+
+    if vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root):
+        typer.echo(
+            "openkos repair: this run's writes can be undone with `git "
+            "reset --hard HEAD` before this run's own auto-commit lands, "
+            "or `git reset --hard <commit-before-this-run>` after."
+        )
+    else:
+        typer.echo(
+            "openkos repair: WARNING -- no git reset point is available in "
+            "this workspace (no repository, no configured git identity, or "
+            "no commit history); this run's writes cannot be undone via "
+            "git.",
+            err=True,
+        )
+
+    touched: list[str] = []
+    for concept_id, entries in unmigrated:
+        bundle_ledger.write_entries(
+            concept_id, bundle_dir, survivor_id=concept_id, entries=entries
+        )
+        sidecar_path = bundle_ledger.ledger_path_for(concept_id, bundle_dir)
+        touched.append(f"bundle/{sidecar_path.relative_to(bundle_dir).as_posix()}")
+
+        survivor_path = okf.concept_path_for(concept_id, bundle_dir)
+        metadata, body = okf.load_frontmatter(survivor_path.read_text(encoding="utf-8"))
+        metadata.pop(okf.MERGED_FROM_KEY, None)
+        fsio.write_atomic(survivor_path, okf.dump_frontmatter(metadata, body))
+        touched.append(f"bundle/{survivor_path.relative_to(bundle_dir).as_posix()}")
+
+    typer.echo(
+        f"openkos repair: migrated {len(unmigrated)} ledger"
+        f"{'s' if len(unmigrated) != 1 else ''} to bundle/.state/ledger/."
+    )
+
+    _autocommit(
+        root,
+        touched,
+        f"openkos: repair (migrate {len(unmigrated)} ledger(s) to "
+        "bundle/.state/ledger/)",
+    )
 
 
 @app.command(
