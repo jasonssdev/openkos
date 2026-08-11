@@ -58,6 +58,7 @@ this same single end-of-run commit.
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 from openkos.llm.base import Embedder
 from openkos.llm.ollama import (
@@ -69,6 +70,42 @@ from openkos.llm.ollama import (
 from openkos.model import okf
 from openkos.state import derived, fts
 from openkos.state.vectorstore import VectorStore, content_hash
+
+
+EMBED_COMPOSITION_TAG: Final = "compose-v1"
+"""Suffix identifying THIS embed-text composition scheme (#554): title,
+description, tags, and body, the same field set `fts.py`'s
+`_populate_docs_table` indexes (`fts.py:220-234`) -- rather than a
+document's raw frontmatter+body bytes verbatim. Composed into the caller's
+`model_tag` (`_effective_model_tag`) so a scheme change forces exactly one
+full re-embed of every already-stored vector through the SAME
+embedding-model-tag gate that already forces a re-embed on an actual model
+change, rather than a second, parallel version marker (design: "find it and
+use it; do not invent a parallel one"). Bump this token, not the gate's
+mechanics, on the next embed-text-shape change."""
+
+
+def _effective_model_tag(model_tag: str | None) -> str | None:
+    """Compose `model_tag` with `EMBED_COMPOSITION_TAG` for the tag-gate
+    comparison and persistence -- `None` stays `None` (the tag gate's
+    pure-no-op default, unaffected by the composition scheme)."""
+    if model_tag is None:
+        return None
+    return f"{model_tag}#{EMBED_COMPOSITION_TAG}"
+
+
+def _compose_embed_text(metadata: dict[str, object], body: str) -> str:
+    """Compose the text handed to the `Embedder` from a document's title,
+    description, tags, and body -- the SAME four fields `fts.py`'s
+    `_populate_docs_table` indexes (`fts.py:220-234`), rather than the
+    document's raw frontmatter+body bytes verbatim (closes #554: a
+    document whose earlier ledger-embedded history dominated its raw byte
+    count no longer truncates its own concept content out of the embed)."""
+    title = str(metadata.get("title") or "")
+    description = str(metadata.get("description") or "")
+    tags = metadata.get("tags")
+    tags_text = " ".join(str(tag) for tag in tags) if isinstance(tags, list) else ""
+    return "\n\n".join(part for part in (title, description, tags_text, body) if part)
 
 
 @dataclass(frozen=True)
@@ -238,7 +275,10 @@ def reindex(
     """
     cached_hashes = db.meta_hashes()
     stored_model_tag = db.read_model_tag()
-    model_changed = model_tag is not None and stored_model_tag != model_tag
+    effective_model_tag = _effective_model_tag(model_tag)
+    model_changed = (
+        effective_model_tag is not None and stored_model_tag != effective_model_tag
+    )
     seen: set[str] = set()
     cache_hits = 0
     skipped = 0
@@ -272,7 +312,14 @@ def reindex(
             skipped += 1
             continue
 
-        to_embed.append((concept_id, text, digest))
+        try:
+            metadata, body = okf.load_frontmatter(text)
+        except Exception:  # broad: a concurrent edit can corrupt frontmatter
+            skipped += 1
+            continue
+
+        embed_text = _compose_embed_text(metadata, body)
+        to_embed.append((concept_id, embed_text, digest))
 
     embedded = 0
     embed_failed = 0
@@ -340,8 +387,13 @@ def reindex(
     # cannot narrow `model_tag` from a separate bool variable (round-2
     # review correction, SUGGESTION finding).
     tag_written = False
-    if model_changed and skipped == 0 and embed_failed == 0 and model_tag is not None:
-        db.write_model_tag(model_tag)
+    if (
+        model_changed
+        and skipped == 0
+        and embed_failed == 0
+        and effective_model_tag is not None
+    ):
+        db.write_model_tag(effective_model_tag)
         tag_written = True
 
     if to_embed or to_prune or tag_written:
