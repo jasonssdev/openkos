@@ -29,6 +29,14 @@ OKF_VERSION: Final = "0.1"
 RESERVED_FILENAMES: Final[frozenset[str]] = frozenset({"index.md", "log.md"})
 """§6/§7 give these a fixed structure; §9 rule 1 exempts them from frontmatter."""
 
+STATE_DIRNAME: Final = ".state"
+"""The bundle-relative directory holding derived, non-`.md` runtime state --
+today `bundle/.state/ledger/` (durable-derived-state slice 1a; ADR-0013).
+Never walked by `_iter_docs`/`rglob("*.md")` (this name carries no `.md`
+suffix of its own), so nothing under it is a concept document by
+construction; `lint` separately flags any `.md` file that turns up here as a
+structural-exclusion regression."""
+
 _LOG_HEADING_RE: Final = re.compile(r"^## (.+)$", re.MULTILINE)
 """Every level-2 heading in a `log.md`, per §7. `### ` cannot false-match:
 `^## ` requires a space in the 3rd position."""
@@ -1176,9 +1184,17 @@ def concept_id_for(path: Path, bundle_dir: Path) -> str:
     return unicodedata.normalize("NFC", relative)
 
 
-def concept_path_for(concept_id: str, bundle_dir: Path) -> Path:
-    """The `.md` path `concept_id` names within `bundle_dir` -- the inverse of
-    `concept_id_for`, and the reason that one is safe (issue #430).
+def concept_path_for(concept_id: str, bundle_dir: Path, *, suffix: str = ".md") -> Path:
+    """The `suffix` path `concept_id` names within `bundle_dir` -- the inverse
+    of `concept_id_for`, and the reason that one is safe (issue #430).
+
+    `suffix` defaults to `.md` (the concept-file case every existing caller
+    exercises) and is otherwise the resolver `bundle.ledger` reuses for the
+    merge-ledger sidecar tree (`bundle/.state/ledger/<concept_id>.ledger.okf`,
+    durable-derived-state slice 1a): the normalization-fallback reasoning
+    below is identical regardless of the trailing extension, so this is a
+    generalization of the SAME resolver rather than a second implementation
+    (design decision: do not invent a second id-to-path mapping).
 
     Making ids canonically NFC obliges this direction to accept that the NAME
     ON DISK may still be decomposed. `concept_id_for`'s own reasoning covers
@@ -1235,14 +1251,14 @@ def concept_path_for(concept_id: str, bundle_dir: Path) -> Path:
     The fallback is deliberately silent -- no counter, no log line. It reports
     a SPELLING, and a caller that wants to know a bundle carries decomposed
     names should ask `lint`, which walks it anyway."""
-    direct = bundle_dir / f"{concept_id}.md"
+    direct = bundle_dir / f"{concept_id}{suffix}"
     if direct.exists() or concept_id.isascii():
         return direct
     current = bundle_dir
     segments = concept_id.split("/")
     for index, segment in enumerate(segments):
         leaf = index == len(segments) - 1
-        name = f"{segment}.md" if leaf else segment
+        name = f"{segment}{suffix}" if leaf else segment
         if segment.isascii():
             exact = current / name
             if leaf and (exact.is_symlink() or not exact.is_file()):

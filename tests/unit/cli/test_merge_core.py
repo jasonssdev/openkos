@@ -12,6 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import relations as bundle_relations
@@ -294,9 +295,11 @@ def test_merge_core_writes_index_log_touched_files_survivor_last_and_ledger(
     assert not absorbed_path.exists()
 
     survivor_text = survivor_path.read_text(encoding="utf-8")
-    assert "merged_from" in survivor_text
-    assert now.isoformat() in survivor_text
+    assert "merged_from" not in survivor_text
     assert "Absorbed body" not in survivor_text or "Absorbed" in survivor_text
+    entries = bundle_ledger.read_entries(survivor_canonical, bundle_dir)
+    assert len(entries) == 1
+    assert now.isoformat() in entries[0].merged_at
 
     other_text = (bundle_dir / "concepts" / "other.md").read_text(encoding="utf-8")
     assert "/concepts/survivor.md" in other_text
@@ -308,6 +311,56 @@ def test_merge_core_writes_index_log_touched_files_survivor_last_and_ledger(
 
     log_text = log_path.read_text(encoding="utf-8")
     assert "**Merge**" in log_text
+
+
+def test_merge_core_committed_paths_include_the_ledger_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`MergeResult.committed_paths` MUST include the new sidecar path under
+    `bundle/.state/ledger/**` (threat matrix, durable-derived-state design):
+    `_autocommit` stages exactly `committed_paths` via a scoped `git add --
+    <paths>` (never `-A`), so a sidecar missing from this list would never
+    enter git and the whole portability rationale for relocating the ledger
+    would silently fail. Task 2.4 -- must fail before merge_core writes the
+    ledger via the two-phase sidecar store (task 2.6)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path, "concepts/survivor", title="Survivor", sensitivity="private"
+    )
+    _write_concept(
+        tmp_path, "concepts/absorbed", title="Absorbed", sensitivity="confidential"
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+    now = datetime(2026, 3, 15, 12, 30, tzinfo=UTC)
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=now,
+    )
+
+    result = merge_core(bundle_dir, index_path, log_path, prepared)
+
+    sidecar_paths = [
+        path for path in result.committed_paths if "bundle/.state/ledger/" in path
+    ]
+    assert sidecar_paths, (
+        f"expected a bundle/.state/ledger/** entry in committed_paths, got "
+        f"{result.committed_paths!r}"
+    )
+    assert sidecar_paths[0].endswith(".ledger.okf")
 
 
 def test_merge_core_makes_zero_vcs_side_effect_and_is_unmerge_reversible(
@@ -577,9 +630,7 @@ def test_merge_core_provenance_and_relation_snapshots_byte_identical_to_pre_merg
     )
     merge_core(bundle_dir, index_path, log_path, prepared)
 
-    survivor_text = survivor_path.read_text(encoding="utf-8")
-    metadata, _ = okf.load_frontmatter(survivor_text)
-    entry = okf.decode_merged_from(metadata)[-1]
+    entry = bundle_ledger.read_entries(survivor_canonical, bundle_dir)[-1]
 
     assert len(entry.provenance_rewrites) == 1
     assert len(entry.relation_rewrites) == 1

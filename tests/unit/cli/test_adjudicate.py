@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.llm.base import Message
@@ -1773,7 +1774,10 @@ def test_adjudicate_apply_accepts_merge_updates_filesystem_and_ledger(
     survivor_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
         encoding="utf-8"
     )
-    assert "merged_from" in survivor_text
+    assert "merged_from" not in survivor_text
+    entries = bundle_ledger.read_entries("concepts/a", tmp_path / "bundle")
+    assert len(entries) == 1
+    assert entries[0].absorbed_id == "concepts/b"
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert "concepts/b" not in index_text
 

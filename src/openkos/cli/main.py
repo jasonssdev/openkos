@@ -26,6 +26,7 @@ from openkos import config, fsio, source_title
 from openkos import lint as lint_check
 from openkos.bundle import bundle, listing, source_titles
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.bundle import log as bundle_log
 from openkos.bundle import merge as bundle_merge
@@ -527,6 +528,32 @@ def _snapshot_read(path: Path) -> tuple[bytes, str]:
     data = path.read_bytes()
     text = data.decode("utf-8")
     return data, text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _reject_torn_ledger_write(
+    bundle_dir: Path, survivor_canonical: str, verb: str
+) -> None:
+    """Refuse (exit 1, writes nothing) when a `.pending` intent marker
+    already exists for `survivor_canonical`'s ledger sidecar (design
+    Decision 5, Check A -- a torn two-phase write from a prior crashed
+    `merge`). `merge`/`unmerge` both call this in Phase A, before any
+    write, and with NO `--force` override: unlike the doctor-flagged
+    (post-merge-mutation) refusal, a torn `.pending` is mechanically
+    exact and trivially repairable (`bundle_ledger.recover`), and forcing
+    past it would commit a known-inconsistent ledger on top of an
+    unresolved crash artifact."""
+    pending_path = bundle_ledger.pending_path_for(survivor_canonical, bundle_dir)
+    if not pending_path.is_file():
+        return
+    typer.echo(
+        f"openkos {verb}: refusing to {verb} -- {survivor_canonical!r}'s ledger "
+        "has a torn write pending (a prior merge crashed mid-commit). Run "
+        "`openkos doctor` to inspect it; this refusal has no --force override "
+        "because the marker is trivially repairable and forcing past it would "
+        "commit a known-inconsistent ledger.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
 
 
 def _reject_drifted_targets(
@@ -1500,6 +1527,7 @@ def _commit_one_merge(
             *(f"bundle/{rel}" for rel in merge_result.touched_files),
             f"bundle/{prepared.survivor_canonical}.md",
             f"bundle/{prepared.absorbed_canonical}.md",
+            merge_result.ledger_sidecar_path,
         ],
         f"openkos: merge {prepared.absorbed_canonical} into "
         f"{prepared.survivor_canonical}",
@@ -6487,12 +6515,16 @@ class MergeResult:
     """Pure Phase-B result of `merge_core`: what got written, for the
     command's success echo and `_autocommit` path list. `merge_core` itself
     performs NO VCS side effect (design decision: `_autocommit` stays in the
-    command)."""
+    command). `ledger_sidecar_path` (durable-derived-state slice 1a) is the
+    workspace-relative `bundle/.state/ledger/**` path callers MUST add to
+    their own `_autocommit` path list, or the ledger silently never enters
+    git (threat matrix, design's "portability rationale")."""
 
     survivor_canonical: str
     absorbed_canonical: str
     touched_files: list[str]
     committed_paths: list[str]
+    ledger_sidecar_path: str
 
 
 def prepare_merge(
@@ -6571,6 +6603,11 @@ def prepare_merge(
         survivor_id=survivor_canonical,
     )
 
+    # Durable-derived-state slice 1a: the survivor's existing ledger entries
+    # now live in a sidecar (`bundle/ledger.py`), never the survivor's own
+    # frontmatter -- `plan_merge` no longer decodes them from `survivor_text`.
+    existing_entries = bundle_ledger.read_entries(survivor_canonical, bundle_dir)
+
     plan = bundle_merge.plan_merge(
         survivor_id=survivor_canonical,
         absorbed_id=absorbed_canonical,
@@ -6579,6 +6616,7 @@ def prepare_merge(
         index_text=index_text,
         log_text=log_text,
         merged_at=now.isoformat(),
+        existing_entries=existing_entries,
         link_rewrites=link_rewrites,
         relation_rewrites=relation_rewrites,
         provenance_rewrites=provenance_rewrites,
@@ -6680,12 +6718,15 @@ def merge_core(
     prepared: PreparedMerge,
 ) -> MergeResult:
     """Phase B (after confirm): ordered writes -- `index.md` then `log.md`,
-    every touched file's rewrite, the merged survivor (carrying the
-    `merged_from` ledger) LAST among writes, then removes the absorbed file
-    -- extracted verbatim from `merge`'s former inline body
-    (`main.py:2559-2596`, design: merge-core Extraction, Slice 2b-i).
-    Non-interactive; raises `OSError`/`ValueError`. Performs NO VCS side
-    effect -- `_autocommit` stays the command's responsibility."""
+    every touched file's rewrite, then the ledger sidecar's two-phase write
+    around the merged survivor -- S1 (`bundle_ledger.write_pending`), V (the
+    merged survivor, unchanged call site), S2
+    (`bundle_ledger.commit_pending`) -- and finally removes the absorbed
+    file (D) (durable-derived-state slice 1a, design Decision 1; extracted
+    verbatim from `merge`'s former inline body, `main.py:2559-2596`, design:
+    merge-core Extraction, Slice 2b-i). Non-interactive; raises
+    `OSError`/`ValueError`. Performs NO VCS side effect -- `_autocommit`
+    stays the command's responsibility."""
     fsio.write_atomic(index_path, prepared.new_index_text)
     fsio.write_atomic(log_path, prepared.new_log_text)
 
@@ -6724,14 +6765,36 @@ def merge_core(
     for rel in prepared.touched_files:
         fsio.write_atomic(bundle_dir / rel, rewritten_texts[rel])
 
-    # The merged survivor (with its `merged_from` ledger) is committed
-    # LAST among the writes, only once every rewrite above has
+    # The merged survivor is committed only once every rewrite above has
     # succeeded -- see `merge`'s docstring for why that ordering is what
-    # makes a mid-rewrite failure cleanly retryable.
+    # makes a mid-rewrite failure cleanly retryable. The ledger sidecar's
+    # two-phase write wraps that write (design Decision 1): S1 binds
+    # `expected_survivor_sha256` to the EXACT bytes V is about to write,
+    # so `recover` can tell "V landed, only S2 (the commit rename) was
+    # torn" from "V never landed" purely from on-disk state.
     survivor_path = bundle_dir / f"{survivor_canonical}.md"
     absorbed_path = bundle_dir / f"{absorbed_canonical}.md"
-    fsio.write_atomic(survivor_path, prepared.plan.merged_survivor)
-    fsio.remove_file(absorbed_path)
+    expected_survivor_sha256 = bundle_ledger.survivor_sha256(
+        prepared.plan.merged_survivor
+    )
+    bundle_ledger.write_pending(
+        survivor_canonical,
+        bundle_dir,
+        survivor_id=survivor_canonical,
+        entries=prepared.plan.ledger_entries,
+        expected_survivor_sha256=expected_survivor_sha256,
+    )  # S1
+    fsio.write_atomic(survivor_path, prepared.plan.merged_survivor)  # V
+    bundle_ledger.commit_pending(survivor_canonical, bundle_dir)  # S2
+    fsio.remove_file(absorbed_path)  # D
+
+    sidecar_rel = (
+        bundle_ledger.ledger_path_for(survivor_canonical, bundle_dir)
+        .relative_to(bundle_dir)
+        .as_posix()
+    )
+
+    ledger_sidecar_path = f"bundle/{sidecar_rel}"
 
     return MergeResult(
         survivor_canonical=survivor_canonical,
@@ -6743,7 +6806,9 @@ def merge_core(
             *(f"bundle/{rel}" for rel in prepared.touched_files),
             f"bundle/{survivor_canonical}.md",
             f"bundle/{absorbed_canonical}.md",
+            ledger_sidecar_path,
         ],
+        ledger_sidecar_path=ledger_sidecar_path,
     )
 
 
@@ -7090,6 +7155,8 @@ def merge(
         typer.echo(f"openkos merge: refusing to merge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "merge")
+
     now = datetime.now(UTC)
 
     try:
@@ -7188,6 +7255,7 @@ def merge(
             *(f"bundle/{rel}" for rel in result.touched_files),
             f"bundle/{survivor_canonical}.md",
             f"bundle/{absorbed_canonical}.md",
+            result.ledger_sidecar_path,
         ],
         f"openkos: merge {absorbed_canonical} into {survivor_canonical}",
     )
@@ -7370,22 +7438,27 @@ def unmerge(
         typer.echo(f"openkos unmerge: refusing to unmerge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "unmerge")
+
     now = datetime.now(UTC)
 
     try:
         cfg = config.read_config(root)
         # One `_snapshot_read` observation (issues #306, #313, #318): the
-        # decoded text is what `plan_unmerge` derives the plan from, and
-        # the raw bytes are the guard's baseline for that same state. Taken
-        # here rather than batched with the `index.md`/`log.md` snapshots
-        # below, because `plan_unmerge` runs in between and the plan is
-        # derived from THIS text.
-        survivor_bytes, survivor_text = _snapshot_read(survivor_path)
-
+        # raw bytes are the drift guard's baseline for the survivor.
+        # Durable-derived-state slice 1a: `plan_unmerge` no longer needs the
+        # DECODED text at all -- the ledger entries live in a sidecar
+        # (`bundle/ledger.py`), never the survivor's own frontmatter, and
+        # `restored_survivor` comes straight from the tail entry's
+        # `survivor_before`, not from parsing this file.
+        survivor_bytes, _survivor_text = _snapshot_read(survivor_path)
+        existing_entries = bundle_ledger.read_entries(
+            survivor_canonical, layout.bundle_dir
+        )
         plan = bundle_merge.plan_unmerge(
             survivor_id=survivor_canonical,
             absorbed_id=absorbed_canonical,
-            survivor_text=survivor_text,
+            entries=existing_entries,
         )
 
         absorbed_path = layout.bundle_dir / f"{absorbed_canonical}.md"
@@ -7577,11 +7650,11 @@ def unmerge(
             fsio.write_atomic(layout.bundle_dir / rel, provenance_reversed_texts[rel])
 
         # The absorbed file is recreated BEFORE the survivor is restored:
-        # the survivor's `merged_from` ledger entry (the only record of
-        # `absorbed_snapshot`) is deliberately kept intact on disk until
-        # the absorbed file it describes has actually landed, so a failure
-        # between these two steps never loses the absorbed content --
-        # it is still recoverable from the (not-yet-overwritten) survivor.
+        # the ledger sidecar entry (the only record of `absorbed_snapshot`,
+        # durable-derived-state slice 1a) is deliberately kept intact on
+        # disk until the absorbed file it describes has actually landed, so
+        # a failure between these two steps never loses the absorbed
+        # content -- it is still recoverable from the sidecar.
         #
         # Create-only (#323): Phase A promised that "a file already exists
         # at that path" refuses the unmerge, but that existence check
@@ -7600,6 +7673,18 @@ def unmerge(
         # the just-restored `log_before` -- the append-only trail net-grows
         # by exactly this one line.
         fsio.write_atomic(log_path, new_log_text)
+
+        # The ledger sidecar's tail entry is popped LAST of all (task 2.7):
+        # every restore above is idempotent to re-write on a retry, so
+        # popping the tail only after they have all landed makes a partial
+        # failure here safely re-runnable -- a re-run recomputes the exact
+        # same restores and pops the exact same (still-present) tail entry.
+        bundle_ledger.write_entries(
+            survivor_canonical,
+            layout.bundle_dir,
+            survivor_id=survivor_canonical,
+            entries=plan.remaining_entries,
+        )
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos unmerge: failed while writing the unmerge -- {exc}.", err=True
@@ -7612,6 +7697,11 @@ def unmerge(
         f"({index_path.name}, {log_path.name} updated)."
     )
 
+    ledger_sidecar_rel = (
+        bundle_ledger.ledger_path_for(survivor_canonical, layout.bundle_dir)
+        .relative_to(layout.bundle_dir)
+        .as_posix()
+    )
     _autocommit(
         root,
         [
@@ -7622,6 +7712,7 @@ def unmerge(
             *(f"bundle/{rel}" for rel in provenance_rewrite_files),
             f"bundle/{absorbed_canonical}.md",
             f"bundle/{survivor_canonical}.md",
+            f"bundle/{ledger_sidecar_rel}",
         ],
         f"openkos: unmerge {absorbed_canonical}",
     )
