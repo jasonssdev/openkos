@@ -59,6 +59,20 @@ def test_select_embeds_source_text_and_every_candidate_title() -> None:
     assert "Epictetus" in sent
 
 
+def test_judge_prompt_states_the_framing_rejection_rule() -> None:
+    """#533: the judge is the only stage positioned to rescue tail-heavy
+    replies, and the measured failure is that it kept the framing objects
+    the extractor front-loads (`Meeting Discussion on Remote Control
+    Design` at position 1 in 10 of 10 stored TS3005b runs, decision
+    coverage flat at 4 of 14 WITH the judge in the loop). The system
+    prompt must carry an explicit rejection of container/framing
+    candidates -- this pins the clause so a prompt edit cannot silently
+    drop it."""
+    prompt = judge_mod._JUDGE_SYSTEM_PROMPT
+    assert "names the source document, meeting, or gathering itself" in prompt
+    assert "NEVER a genuine subject" in prompt
+
+
 # --- valid reply parsing --------------------------------------------------
 
 

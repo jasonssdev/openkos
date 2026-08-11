@@ -489,6 +489,51 @@ def _drop_source_title_twins(
     return non_twins
 
 
+def _drop_framing_objects(
+    results: list[ExtractionResult], *, source_title: str
+) -> list[ExtractionResult]:
+    """Deterministic framing-object enforcement (#522/#533): on a
+    meeting-shaped source, an object whose OWN title is meeting-shaped names
+    the gathering as a container, never a subject the source discusses.
+
+    Measured across 273 stored runs (zero model calls, published on #522):
+    when the model emits such an object it sits at position 1 in 49 of 59
+    AMI runs -- and NEVER at any other position -- so it wins the retained
+    prefix at every cap value (#533), and in the extreme case it is the
+    only object emitted at all (27 of 49 stored collapses were exactly
+    `AMI meeting TS3005a`, #522). `_drop_source_title_twins` cannot catch
+    it for two measured reasons: the model RECONSTRUCTS the container title
+    from content when the title is withheld (so exact comparison has
+    nothing to match), and the twin rule's single-object floor disarms it
+    precisely when the reply collapsed to nothing else.
+
+    Hence the two deliberate differences from the twin rule:
+
+    - The match is `_MEETING_SHAPED_TITLE_RE` against the OBJECT's title,
+      not exact equality against the source title.
+    - There is NO single-object floor. A framing object is never a subject
+      at any reply length, so a reply containing only it yields `[]` --
+      honest, where keeping the container stub would store framing as
+      knowledge.
+
+    Gated on the SOURCE title being meeting-shaped -- the same gate that
+    already strips the title from the prompt channel (#459) -- because on
+    an ordinary document a gathering word can name a genuine subject
+    (`Sprint Retrospective Practices` in an agile handbook), and #459's
+    asymmetry applies here identically: a false positive is silent data
+    loss. A `Procedure` is never framing, whatever its title (#413's role
+    exemption: an object carrying the steps is not a lazy restatement of
+    the gathering)."""
+    if not _MEETING_SHAPED_TITLE_RE.search(source_title):
+        return results
+    return [
+        result
+        for result in results
+        if result.type == _TWIN_EXEMPT_TYPE
+        or not _MEETING_SHAPED_TITLE_RE.search(result.title)
+    ]
+
+
 _MAX_OBJECTS_PER_SOURCE = 6
 """Hard ceiling on validated objects returned per source (design D4): a
 safety ceiling applied AFTER per-item validation, not a target -- the
@@ -776,6 +821,7 @@ def extract_concept(
         for window in windows:
             merged.extend(_extract_once(window, source_title, llm))
         results = _dedup_merged(merged)
+    results = _drop_framing_objects(results, source_title=source_title)
     results = _drop_source_title_twins(results, source_title=source_title)
     retained = results[:_MAX_OBJECTS_PER_SOURCE]
     return ExtractionOutcome(
@@ -907,10 +953,18 @@ def extract_concept_union(
     """
     if len(source_text) <= _CHUNK_THRESHOLD:
         run1 = _drop_source_title_twins(
-            _extract_once(source_text, source_title, llm), source_title=source_title
+            _drop_framing_objects(
+                _extract_once(source_text, source_title, llm),
+                source_title=source_title,
+            ),
+            source_title=source_title,
         )
         run2 = _drop_source_title_twins(
-            _extract_once(source_text, source_title, llm), source_title=source_title
+            _drop_framing_objects(
+                _extract_once(source_text, source_title, llm),
+                source_title=source_title,
+            ),
+            source_title=source_title,
         )
         merged = _merge_union(run1 + run2)
         chunk_count = 1
@@ -922,7 +976,8 @@ def extract_concept_union(
         for window in windows:
             chunked.extend(_extract_once(window, source_title, llm))
         merged = _drop_source_title_twins(
-            _dedup_merged(chunked), source_title=source_title
+            _drop_framing_objects(_dedup_merged(chunked), source_title=source_title),
+            source_title=source_title,
         )
         run_count = 1
 

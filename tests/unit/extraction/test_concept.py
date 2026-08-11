@@ -923,6 +923,146 @@ def test_twin_exempt_type_is_in_the_vocabulary() -> None:
     assert concept_mod._TWIN_EXEMPT_TYPE in CLASSIFIABLE_TYPES
 
 
+# --- The framing-object rule (#522/#533) -------------------------------------
+
+_AMI_FRAMING_EVENT_ITEM = (
+    '{"type": "Event", "title": "AMI meeting TS3005a", '
+    '"description": "A meeting about remote control design.", "body": ""}'
+)
+
+_MEETING_DISCUSSION_FRAMING_ITEM = (
+    '{"type": "Event", "title": "Meeting Discussion on Remote Control Design", '
+    '"description": "The discussion held during the meeting.", "body": ""}'
+)
+
+_BATTERY_DECISION_ITEM = (
+    '{"type": "Decision", "title": "Use a Rechargeable Battery", '
+    '"description": "The team chose a rechargeable battery over disposables, '
+    'weighing cost against convenience.", '
+    '"body": "Chosen for cost and environmental reasons; status: adopted."}'
+)
+
+_SPANISH_FRAMING_EVENT_ITEM = (
+    '{"type": "Event", "title": "Reunión con el equipo de producto", '
+    '"description": "La reunión del equipo de producto.", "body": ""}'
+)
+
+
+def test_framing_variant_dropped_even_when_not_a_title_twin() -> None:
+    """#522/#533: on a meeting-shaped source, an object whose OWN title is
+    meeting-shaped names the gathering, not a subject -- and the model
+    reconstructs such titles from content, so exact comparison against the
+    source title cannot catch them (`Meeting Discussion on Remote Control
+    Design` beside source `AMI meeting TS3005b`, measured at position 1 in
+    10 of 10 stored runs)."""
+    llm = _FakeLLM(
+        reply=_array(_MEETING_DISCUSSION_FRAMING_ITEM, _BATTERY_DECISION_ITEM)
+    )
+
+    result = _objects(
+        "The team discussed the battery and settled on rechargeable.",
+        source_title="AMI meeting TS3005b",
+        llm=llm,
+    )
+
+    assert [r.title for r in result] == ["Use a Rechargeable Battery"]
+
+
+def test_framing_object_dropped_even_as_the_only_object() -> None:
+    """#522: the twin rule's single-object floor disarmed it exactly when
+    the failure was worst -- a source that collapses TO its own container
+    title kept it (27 of 49 stored collapses). A framing object is never a
+    subject at any reply length, so the floor does not apply to it and the
+    honest result is `[]`."""
+    llm = _FakeLLM(reply=_array(_AMI_FRAMING_EVENT_ITEM))
+
+    result = _objects(
+        "Speaker A: welcome everyone. Speaker B: thanks.",
+        source_title="AMI meeting TS3005a",
+        llm=llm,
+    )
+
+    assert result == []
+
+
+def test_spanish_framing_object_dropped_alone() -> None:
+    """#522: the measured Spanish collapse shape -- a 747 B meeting note
+    collapsing to one `Event` restating `Reunión con el equipo de producto`
+    in 10 of 10 union-path runs. `reuni[oó]n` is already in the lexicon, so
+    the rule must fire on it too."""
+    llm = _FakeLLM(reply=_array(_SPANISH_FRAMING_EVENT_ITEM))
+
+    result = _objects(
+        "Se propuso un plan y se acordó el versionado.",
+        source_title="Reunión con el equipo de producto",
+        llm=llm,
+    )
+
+    assert result == []
+
+
+def test_framing_rule_inert_on_a_non_meeting_source() -> None:
+    """Scope guard: the rule is gated on the SOURCE being meeting-shaped.
+    On an ordinary document a title carrying a gathering word can be a
+    genuine subject (`Sprint Retrospective Practices` in an agile handbook),
+    and deleting it would be silent data loss -- the asymmetry #459
+    documented for the prompt gate applies to the output gate identically."""
+    retro_item = (
+        '{"type": "Concept", "title": "Sprint Retrospective Practices", '
+        '"description": "Techniques for running useful retrospectives.", '
+        '"body": ""}'
+    )
+    llm = _FakeLLM(reply=_array(retro_item, _CONCEPT_ITEM))
+
+    result = _objects(
+        "A handbook chapter on retrospectives and stoicism.",
+        source_title="Agile Handbook",
+        llm=llm,
+    )
+
+    assert [r.title for r in result] == ["Sprint Retrospective Practices", "Stoicism"]
+
+
+def test_procedure_exempt_from_framing_drop() -> None:
+    """#413's role exemption extends to the framing rule: a `Procedure`
+    carrying the steps is not a lazy restatement of the gathering, even
+    when its title carries a meeting word on a meeting-shaped source."""
+    checklist = (
+        '{"type": "Procedure", "title": "Standup Facilitation Checklist", '
+        '"description": "How to run the daily standup.", '
+        '"body": "Timebox to 15 minutes; park discussions; rotate facilitator."}'
+    )
+    llm = _FakeLLM(reply=_array(checklist))
+
+    result = _objects(
+        "Notes on how we run our standup.",
+        source_title="Weekly standup notes",
+        llm=llm,
+    )
+
+    assert len(result) == 1
+    assert result[0].type == "Procedure"
+
+
+def test_union_framing_drop_applies_per_run_before_merge() -> None:
+    """#533: a framing object must never reach the judge -- it consumes a
+    candidate slot and (measured) always wins the prefix. Dropped from each
+    run's contribution before the union is built, like the twin rule."""
+    run1 = _array(_MEETING_DISCUSSION_FRAMING_ITEM, _DECISION_ITEM)
+    run2 = _array(_DECISION_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Frame the Essay Around Control")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    assert "Meeting Discussion on Remote Control Design" not in {
+        r.title for r in outcome.objects
+    }
+    judge_call = llm.calls[2]
+    assert "Meeting Discussion on Remote Control Design" not in judge_call[1]["content"]
+
+
 # --- extract_concept: zero / one / N results, OllamaError propagation -------
 
 
