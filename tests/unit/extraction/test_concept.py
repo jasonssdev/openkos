@@ -1063,6 +1063,112 @@ def test_union_framing_drop_applies_per_run_before_merge() -> None:
     assert "Meeting Discussion on Remote Control Design" not in judge_call[1]["content"]
 
 
+# --- Ungrounded acronym expansions (#423) ------------------------------------
+
+_FABRICATED_MCP_ITEM = (
+    '{"type": "Concept", "title": "MCP (Machine Control Protocol)", '
+    '"description": "A protocol for connecting tools.", "body": ""}'
+)
+
+_GROUNDED_MCP_ITEM = (
+    '{"type": "Concept", "title": "MCP (Model Context Protocol)", '
+    '"description": "A protocol for connecting tools.", "body": ""}'
+)
+
+_MCP_SOURCE = (
+    "Skills combine with the Model Context Protocol to reach external "
+    "systems like BigQuery."
+)
+
+
+def test_ungrounded_expansion_stripped_from_title() -> None:
+    """#423: a parenthetical acronym expansion the source never contains was
+    not read off the source -- it is fabricated content (the measured shape:
+    `MCP (Machine Control Protocol)` and four other false expansions, all on
+    the Spanish fixture, 17 stored emissions, zero on English). The title
+    keeps the acronym and loses the invented claim."""
+    llm = _FakeLLM(reply=_array(_FABRICATED_MCP_ITEM))
+
+    result = _objects(_MCP_SOURCE, source_title="Pre-built Skills", llm=llm)
+
+    assert [r.title for r in result] == ["MCP"]
+
+
+def test_grounded_expansion_is_kept() -> None:
+    """The complement: an expansion the source states verbatim is a checkable
+    claim that checks out. `MCP (Model Context Protocol)` on the English
+    fixtures expanded correctly in 102 of 102 stored emissions -- the rule
+    must not touch it."""
+    llm = _FakeLLM(reply=_array(_GROUNDED_MCP_ITEM))
+
+    result = _objects(_MCP_SOURCE, source_title="Pre-built Skills", llm=llm)
+
+    assert [r.title for r in result] == ["MCP (Model Context Protocol)"]
+
+
+def test_expansion_first_ungrounded_collapses_to_acronym() -> None:
+    """The expansion-first form makes the same factual claim in the other
+    order: `Machine Control Protocol (MCP)` with no grounding keeps only the
+    acronym."""
+    item = (
+        '{"type": "Concept", "title": "Machine Control Protocol (MCP)", '
+        '"description": "A protocol.", "body": ""}'
+    )
+    llm = _FakeLLM(reply=_array(item))
+
+    result = _objects(_MCP_SOURCE, source_title="Pre-built Skills", llm=llm)
+
+    assert [r.title for r in result] == ["MCP"]
+
+
+def test_grounding_ignores_case_and_line_breaks() -> None:
+    """Grounding uses the same strip/casefold/whitespace-collapse rule as
+    every other title comparison in this module -- a source that writes the
+    expansion across a line break still grounds it."""
+    source = "the model context\nprotocol is how skills reach tools."
+    llm = _FakeLLM(reply=_array(_GROUNDED_MCP_ITEM))
+
+    result = _objects(source, source_title="Pre-built Skills", llm=llm)
+
+    assert [r.title for r in result] == ["MCP (Model Context Protocol)"]
+
+
+def test_stripped_fabrications_merge_to_one_object_in_union() -> None:
+    """#423 x #456: two runs fabricating DIFFERENT expansions used to merge
+    as two distinct objects. Stripping runs before the union merge, so both
+    collapse to one `MCP` candidate."""
+    other_fabrication = (
+        '{"type": "Concept", "title": "MCP (Multi-Cloud Platform)", '
+        '"description": "A protocol for connecting tools.", "body": ""}'
+    )
+    llm = _SequencedLLM(
+        [_array(_FABRICATED_MCP_ITEM), _array(other_fabrication), _keep_reply("MCP")]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        _MCP_SOURCE, source_title="Pre-built Skills", llm=llm
+    )
+
+    assert [r.title for r in outcome.objects] == ["MCP"]
+
+
+def test_expansion_strip_leaves_description_and_body_alone() -> None:
+    """Scope: only the TITLE's parenthetical expansion makes a checkable
+    claim this rule owns. Description and body pass through untouched."""
+    item = (
+        '{"type": "Concept", "title": "MCP (Machine Control Protocol)", '
+        '"description": "Machine Control Protocol everywhere.", '
+        '"body": "Machine Control Protocol again."}'
+    )
+    llm = _FakeLLM(reply=_array(item))
+
+    result = _objects(_MCP_SOURCE, source_title="Pre-built Skills", llm=llm)
+
+    assert result[0].title == "MCP"
+    assert result[0].description == "Machine Control Protocol everywhere."
+    assert result[0].body == "Machine Control Protocol again."
+
+
 # --- extract_concept: zero / one / N results, OllamaError propagation -------
 
 

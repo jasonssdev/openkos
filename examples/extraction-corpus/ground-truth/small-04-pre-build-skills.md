@@ -84,7 +84,7 @@ guessed.
 - Pre-built Skills | Skills preconstruidas en Claude | Skills preconstruidas | Skills Preconstruidas de Anthropic | Pre-built Skills in Claude AI
 - MCP Workflows | Workflows con MCP | Workflows empresariales | Workflow Empresarial | Flujo de trabajo empresarial
 - BigQuery Integration | BigQuery | Integration with BigQuery | MCP Integration with BigQuery | BigQuery Integration with MCP
-- Model Context Protocol (MCP) | MCP (Machine Control Protocol) | MCP (Multi-Cloud Platform) | MCP (Multi-Component Processing) | MCP (Machine Context Protocol) | MCP (Machine Connection Protocol) | MCP (Model Communication Protocol)
+- Model Context Protocol (MCP) | MCP | MCP (Machine Control Protocol) | MCP (Multi-Cloud Platform) | MCP (Multi-Component Processing) | MCP (Machine Context Protocol) | MCP (Machine Connection Protocol) | MCP (Model Communication Protocol)
 
 `Workflows empresariales` (and its casings) is the document's own frame for
 the combine-skills-and-MCP arc — judged the `MCP Workflows` subject, not a
@@ -99,6 +99,12 @@ and the subject WAS recovered; the hallucinated-title defect is real but is a
 different failure, tracked in its own issue, and leaving these unjudged would
 have misread it as "extraction misses MCP on Spanish sources". No metric in
 `evals/extraction_cap/` sees title fidelity today.
+
+Since #423's fix, the pipeline strips a parenthetical expansion the source
+does not contain (`concept._strip_ungrounded_expansions`), so the canonical
+post-fix emission for this subject is bare `MCP` -- aliased above. The
+fabricated variants stay listed so PRE-fix stored runs keep rescoring the
+same; the pipeline can no longer emit them.
 
 ## Facets, not subjects
 
