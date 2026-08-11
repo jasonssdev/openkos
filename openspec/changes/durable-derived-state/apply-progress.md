@@ -88,3 +88,85 @@ merged-body test suite, which the forecast did not account for).
 
 PR #3 (1b, reindex/doctor/repair) is NOT started — out of this slice's
 scope per the orchestrator's explicit boundary.
+
+---
+
+## PR #3 (1b) — Reindex composition, doctor, repair verb — DONE
+
+Branch: `feat/reindex-doctor-repair-1b`, based on PR #2's branch. All 10
+tasks complete (Phase 1: reindex embed composition, Phase 2: doctor checks
+A and B, Phase 3: repair verb).
+
+### TDD Cycle Evidence
+
+| Task | RED | GREEN | REFACTOR | Notes |
+|---|---|---|---|---|
+| 1.1 | 3 new `test_reindex.py` tests fail (raw-bytes assertions, tag-force assertion) before composition/tag-suffix existed | pass after `_compose_embed_text`/`_effective_model_tag` | mutation-tested (reverted `_compose_embed_text` call, both composition tests caught it, reverted) | 6 pre-existing model-tag-literal tests updated to expect the `#compose-v1` suffix — the tag's stored value genuinely changes; using `_tagged()` helper keyed off `reindex.EMBED_COMPOSITION_TAG` instead of a second hardcoded literal |
+| 2.1 | 10 new `test_ledger.py` tests (`iter_pending`/`scan_torn_writes`) fail with `AttributeError` before the functions existed | pass after implementation | n/a (read-only preview logic duplicates `recover`'s truth table deliberately — mutating `recover` itself was rejected, doctor must never write) | |
+| 2.2 | `scan_nesting_violations` tests fail with `AttributeError` before implementation | pass after implementation | mutation-tested (`if embedded_entries != entries[:k]` replaced with `if False`, the mutated-legacy-snapshot test caught it, reverted) | |
+| 2.3 | 6 new `test_doctor.py` scenario tests (skip-outside-workspace, pass-trivially, torn-write-fails, both-remedies, no-reset-point, never-writes) written against spec.md's 4 scenarios plus design's Check A | doctor CLI wiring written alongside (not strictly test-first for this batch — noted as a process deviation below) then verified GREEN | 4 pre-existing `[PASS]` count assertions updated 12→14/10→12 (two new checks land in every all-pass run) | |
+| 2.4/2.5 | Both covered by the SAME `test_doctor_nesting_violation_check_reports_no_reset_point_without_git_identity` test (monkeypatches `has_reset_point` to `False`) plus a dedicated `vcs.git` unit: `test_has_reset_point_false_with_exactly_one_commit`/`_true_with_two_commits`/`_false_outside_a_git_repository` | pass | mutation-tested (`vcs_git.repo_root(root) is not None and vcs_git.has_reset_point(root)` replaced with `if True`, the no-git-identity test caught it, reverted) | |
+| 3.1 | `test_repair_refuses_with_no_override_when_a_torn_write_exists` written before `repair` command existed (command not registered) | pass after CLI wiring | n/a | |
+| 3.2 | `test_repair_refuses_with_no_override_when_any_survivor_has_two_or_more_entries` + cross-survivor variant | pass | mutation-tested (`if bundle_ledger.bundle_wide_max_entries(bundle_dir) >= 2` replaced with `if False`, both tests caught it, reverted) | |
+| 3.3 | `test_repair_migrates_a_clean_single_entry_ledger_verbatim` | pass | n/a | |
+| 3.4 | Two tests: reset-point-exists prints `git reset --hard`; no-reset-point prints the explicit warning and still migrates | pass | n/a | |
+
+**Process deviation, disclosed rather than glossed**: task 2.3 (doctor CLI
+wiring) and task 3's `repair` command body were written together with
+their test scaffolding in the same edit batch, rather than strict
+RED-then-implementation-after ordering for those two files specifically —
+every OTHER task in this PR (1.1, 2.1, 2.2, 2.4/2.5, 3.1, 3.2) followed
+literal RED-first. For 2.3/3's CLI wiring, tests were authored immediately
+after and run to confirm they exercise real, non-trivial assertions (exact
+remediation wording, exit codes, byte-for-byte "nothing written" checks on
+refusal paths) rather than tautologies, and the two most safety-critical
+gates (2.4/2.5's reset-point gate, 3.2's bundle-wide-entries gate) were
+subsequently mutation-tested and confirmed to catch a reverted guard.
+
+### Files Changed
+
+| File | Action | What |
+|---|---|---|
+| `src/openkos/state/reindex.py` | Modified | `EMBED_COMPOSITION_TAG`/`_effective_model_tag`/`_compose_embed_text`; embed text now composed from title/description/tags/body instead of raw bytes; the composition-scheme change is forced through the existing model-tag full-re-embed gate (closes #554) |
+| `src/openkos/bundle/ledger.py` | Modified | `iter_pending`, `scan_torn_writes` (read-only preview of `recover`'s truth table), `scan_nesting_violations` (Check B, migration-era nested-prefix equality), `scan_unmigrated` (repair's migration source), `bundle_wide_max_entries` (repair's cross-survivor-pollution gate) |
+| `src/openkos/vcs/git.py` | Modified | `has_reset_point`: `HEAD~1` resolvability probe, backing doctor's/repair's reset-point-exists gate (the orchestrator-flagged gap: `_autocommit` is best-effort and silently no-ops with no repo/identity/`GitError`) |
+| `src/openkos/cli/main.py` | Modified | Doctor checks 12 (torn writes) and 13 (post-merge mutation, both remedies named, reset-point-gated); new `repair` command (two no-override refusal gates, verbatim frontmatter→sidecar extraction, reset-point-gated pre-write notice, `_autocommit` on success) |
+| `tests/unit/state/test_reindex.py` | Modified | 3 new composition/migration tests; `_tagged()` helper; 6 pre-existing tag-literal assertions updated to the new suffixed format |
+| `tests/unit/bundle/test_ledger.py` | Modified | 14 new tests: `iter_pending`, `scan_torn_writes` (×3), `scan_nesting_violations` (×5), `scan_unmigrated` (×3), `bundle_wide_max_entries` (×1) |
+| `tests/unit/vcs/test_git_adapter.py` | Modified | 4 new `has_reset_point` tests (zero/one/two commits, outside a repo) |
+| `tests/unit/cli/test_doctor.py` | Modified | 6 new ledger-check scenario tests; 4 pre-existing `[PASS]` count assertions updated |
+| `tests/unit/cli/test_repair.py` | Created | 9 tests covering both refusal gates (own-survivor and cross-survivor), the happy-path migration, both reset-point branches, multi-survivor migration, and the graceful no-op |
+
+### Deviations from design
+
+1. **Check B's "unmigrated vs. corrupted" ambiguity resolved conservatively**: design's remediation text says a `[FAIL]` names the repair verb "for a ledger that is merely unmigrated, not corrupted" — but Check B only scans `iter_ledgers` (already-committed sidecars), so by construction every entry it inspects already migrated. The implemented remediation text names BOTH remedies unconditionally on any `[FAIL]`, since `doctor` cannot itself distinguish "unmigrated" from "corrupted" for an entry it already found in the sidecar — the human decides based on `openkos repair`'s own (separately gated) refusal-or-success outcome. Documented in the CLI docstring, not silently narrowed.
+2. **`scan_nesting_violations`'s scope, not directly spelled out in design's prose**: the design's own text ("Check B is a migration-era check... structurally extinct for post-1a entries") implies but does not spell out the mechanical rule implemented here — an entry whose `survivor_before` embeds NOTHING (no `merged_from` key at all, true for every post-relocation entry) is silently skipped rather than flagged. Without this, a freshly created post-1a-only ledger with 2+ entries would falsely `[FAIL]` on every single run, since `survivor_before` for a post-relocation entry never carries a `merged_from` key. Verified against a dedicated regression test (`test_scan_nesting_violations_skips_a_post_relocation_entry_with_nothing_embedded`) before writing the production code, precisely because this gap was not explicit in either artifact.
+3. **spec.md's doctor-command delta only documents Check B**, not Check A (torn writes) — tasks.md and design.md both require Check A as doctor's check 12. Implemented per tasks.md/design.md (the more detailed, later artifacts); spec.md's delta appears to have been scoped before design's Decision 5 split the single "ledger integrity" idea into two independently-mechanized checks. Not corrected in spec.md itself (out of this apply phase's scope — a spec artifact edit belongs to an earlier SDD phase).
+4. **`has_reset_point`'s precision is a documented, deliberate approximation**: it verifies `HEAD~1` is resolvable (at least two commits exist), not that history specifically reaches `<first-merge>~1` for the ACTUAL corrupted merge — doctor/design's own remediation text names `<first-merge>~1` as a placeholder the human fills in, and `doctor` has no way to identify which historical commit was the first corrupting merge without deeper git-log analysis, out of scope for this slice. Documented in the function's own docstring as a necessary-not-sufficient condition.
+
+### Issues Found
+
+- None beyond the deviations above.
+
+### Status
+
+10/10 PR #3 tasks complete. All quality gates green:
+- `uv run pytest`: **4208 passed, 1 skipped in ~120s** (full suite, unpiped)
+- `uv run ruff check .`: All checks passed!
+- `uv run ruff format --check .`: 192 files already formatted
+- `uv run mypy .`: Success: no issues found in 192 source files
+- Coverage: **97.05%** (gate 90%, branch coverage)
+
+`git diff --numstat feat/ledger-readers-1a-ii..HEAD`: `src/` +415/-4,
+`tests/` +993/-14. Combined ~1422 changed lines — well over the PR#3
+forecast (~500-700) and the 400-line review budget; this is the tracker's
+final child PR aggregating into the feature branch, with no further slice
+to split into, so the overrun is reported rather than resequenced. The
+overrun is driven by the doctor-check and repair-verb test suites (14 new
+`test_ledger.py` tests, 9 new `test_repair.py` tests, 6 new
+`test_doctor.py` tests) plus fixing 6 pre-existing model-tag-literal
+assertions and 4 pre-existing doctor `[PASS]`-count assertions across the
+model-tag-suffix and two-new-checks behavior changes.
+
+All 34/34 tasks across PR #1, #2, and #3 are now complete. The
+`durable-derived-state` change is ready for `sdd-verify`.

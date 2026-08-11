@@ -87,22 +87,22 @@ both PRs in the same release closes the gap; state it here explicitly.
 
 ### Phase 1: Reindex embed composition
 
-- [ ] 1.1 RED then GREEN: `src/openkos/state/reindex.py` embed text matches `fts.py:220-234`'s title/description/tags/body scheme instead of `raw_bytes.decode("utf-8")` verbatim; verify and close #554 explicitly.
+- [x] 1.1 RED then GREEN: `src/openkos/state/reindex.py` embed text matches `fts.py:220-234`'s title/description/tags/body scheme instead of `raw_bytes.decode("utf-8")` verbatim; verify and close #554 explicitly.
 
 ### Phase 2: Doctor checks A and B
 
-- [ ] 2.1 RED then GREEN: Check A (torn ledger write) — any `*.ledger.okf.pending` with hash mismatch/match reported as `doctor`'s check 12 (mechanically exact truth-table check, read-only).
-- [ ] 2.2 RED then GREEN: Check B (post-merge mutation) — nested-prefix equality: entry k's `survivor_before` embeds entries `0..k-1`; decode and compare to the survivor's current entries `0..k-1`; any inequality flags `[FAIL]`. Doctor check 13, informational only (does not affect exit code), stays read-only.
-- [ ] 2.3 RED then GREEN: doctor scenario tests from `openspec/changes/durable-derived-state/specs/doctor-command/spec.md` — clean ledgers pass; corrupted ledger fails with both remediation paths; check never writes; no-ledger workspace passes trivially.
-- [ ] 2.4 RED then GREEN (gap — no artifact covered this): `doctor`'s corrupted-ledger `[FAIL]` remediation MUST verify a git reset point actually exists (auto-commit history reachable back to `<first-merge>~1`) before printing "reset and replay" as the remedy. If no reset point exists (no git repo, no configured git identity, or history does not reach the first merge), the remediation text MUST say so explicitly and MUST NOT claim reset-and-replay is available.
-- [ ] 2.5 RED (gap — required by orchestrator, no artifact covered this): test covering a workspace with a corrupted ledger AND no configured git identity (`_autocommit` never ran) — assert `doctor` reports "no reset point available" rather than the standard reset-and-replay remediation.
+- [x] 2.1 RED then GREEN: Check A (torn ledger write) — any `*.ledger.okf.pending` with hash mismatch/match reported as `doctor`'s check 12 (mechanically exact truth-table check, read-only).
+- [x] 2.2 RED then GREEN: Check B (post-merge mutation) — nested-prefix equality: entry k's `survivor_before` embeds entries `0..k-1`; decode and compare to the survivor's current entries `0..k-1`; any inequality flags `[FAIL]`. Doctor check 13, informational only (does not affect exit code), stays read-only.
+- [x] 2.3 RED then GREEN: doctor scenario tests from `openspec/changes/durable-derived-state/specs/doctor-command/spec.md` — clean ledgers pass; corrupted ledger fails with both remediation paths; check never writes; no-ledger workspace passes trivially.
+- [x] 2.4 RED then GREEN (gap — no artifact covered this): `doctor`'s corrupted-ledger `[FAIL]` remediation MUST verify a git reset point actually exists (auto-commit history reachable back to `<first-merge>~1`) before printing "reset and replay" as the remedy. If no reset point exists (no git repo, no configured git identity, or history does not reach the first merge), the remediation text MUST say so explicitly and MUST NOT claim reset-and-replay is available.
+- [x] 2.5 RED (gap — required by orchestrator, no artifact covered this): test covering a workspace with a corrupted ledger AND no configured git identity (`_autocommit` never ran) — assert `doctor` reports "no reset point available" rather than the standard reset-and-replay remediation.
 
 ### Phase 3: Repair verb
 
-- [ ] 3.1 RED then GREEN: repair verb refuses on Check A (torn `.pending` present) with no override.
-- [ ] 3.2 RED then GREEN: repair verb refuses whenever any survivor in the bundle carries ≥2 entries bundle-wide (cross-survivor pollution gate), regardless of Check B's per-ledger result.
-- [ ] 3.3 RED then GREEN: repair verb on a clean, single-entry-per-survivor bundle extracts entries out of frontmatter into `bundle/.state/ledger/` verbatim.
-- [ ] 3.4 GREEN: repair verb prints the `git reset --hard` inverse and the reset-point-exists caveat (Phase 2.4) before writing.
+- [x] 3.1 RED then GREEN: repair verb refuses on Check A (torn `.pending` present) with no override.
+- [x] 3.2 RED then GREEN: repair verb refuses whenever any survivor in the bundle carries ≥2 entries bundle-wide (cross-survivor pollution gate), regardless of Check B's per-ledger result.
+- [x] 3.3 RED then GREEN: repair verb on a clean, single-entry-per-survivor bundle extracts entries out of frontmatter into `bundle/.state/ledger/` verbatim.
+- [x] 3.4 GREEN: repair verb prints the `git reset --hard` inverse and the reset-point-exists caveat (Phase 2.4) before writing.
 
 ---
 
