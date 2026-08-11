@@ -137,6 +137,35 @@ def _encode_container(
     }
 
 
+def write_entries(
+    concept_id: str,
+    bundle_dir: Path,
+    *,
+    survivor_id: str,
+    entries: list[okf.MergeLedgerEntry],
+) -> Path:
+    """(Re)write the committed sidecar to hold EXACTLY `entries`, replacing
+    whatever it held before -- the primitive `unmerge` uses to pop the
+    LIFO-tail entry off the sidecar, LAST among its writes, so a retry
+    (the restores above are byte-identical on re-run) is a re-runnable
+    no-op rather than a second pop (task 2.7). Unlike `write_pending`/
+    `commit_pending`, this is a single `fsio.write_atomic` -- no intent
+    marker -- because `unmerge`'s own restore sequence, not a hash-bound
+    marker, is what makes a partial run safely retryable here. An empty
+    `entries` list removes the sidecar file entirely (a survivor with no
+    remaining merges keeps no empty ledger on disk); removing an
+    already-absent sidecar is a no-op, not an error."""
+    path = ledger_path_for(concept_id, bundle_dir)
+    if not entries:
+        if path.is_file():
+            path.unlink()
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    container = _encode_container(survivor_id, entries)
+    fsio.write_atomic(path, okf.dump_frontmatter(container))
+    return path
+
+
 def write_pending(
     concept_id: str,
     bundle_dir: Path,

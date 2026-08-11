@@ -12,6 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.bundle import provenance as bundle_provenance
 from openkos.bundle import relations as bundle_relations
@@ -294,9 +295,11 @@ def test_merge_core_writes_index_log_touched_files_survivor_last_and_ledger(
     assert not absorbed_path.exists()
 
     survivor_text = survivor_path.read_text(encoding="utf-8")
-    assert "merged_from" in survivor_text
-    assert now.isoformat() in survivor_text
+    assert "merged_from" not in survivor_text
     assert "Absorbed body" not in survivor_text or "Absorbed" in survivor_text
+    entries = bundle_ledger.read_entries(survivor_canonical, bundle_dir)
+    assert len(entries) == 1
+    assert now.isoformat() in entries[0].merged_at
 
     other_text = (bundle_dir / "concepts" / "other.md").read_text(encoding="utf-8")
     assert "/concepts/survivor.md" in other_text
@@ -627,9 +630,7 @@ def test_merge_core_provenance_and_relation_snapshots_byte_identical_to_pre_merg
     )
     merge_core(bundle_dir, index_path, log_path, prepared)
 
-    survivor_text = survivor_path.read_text(encoding="utf-8")
-    metadata, _ = okf.load_frontmatter(survivor_text)
-    entry = okf.decode_merged_from(metadata)[-1]
+    entry = bundle_ledger.read_entries(survivor_canonical, bundle_dir)[-1]
 
     assert len(entry.provenance_rewrites) == 1
     assert len(entry.relation_rewrites) == 1

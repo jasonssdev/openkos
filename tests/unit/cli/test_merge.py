@@ -13,6 +13,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
 from openkos.cli import main
 from openkos.cli.main import _apply_link_rewrite_idempotently, app
@@ -21,6 +22,12 @@ from tests.unit.cli.conftest import changed_paths, confirm_after, echo_after
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 
 runner = CliRunner()
+
+
+def _ledger_entries(tmp_path: Path, survivor_id: str) -> list[okf.MergeLedgerEntry]:
+    """Read `survivor_id`'s ledger sidecar (durable-derived-state slice 1a) --
+    the ledger no longer lives in the survivor's own frontmatter."""
+    return bundle_ledger.read_entries(survivor_id, tmp_path / "bundle")
 
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,10 +166,13 @@ def test_successful_merge_writes_ledger_rewrites_links_removes_absorbed(
     survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
         encoding="utf-8"
     )
-    assert "merged_from" in survivor_text
+    assert "merged_from" not in survivor_text
     assert "## Merged content (concepts/absorbed)" in survivor_text
     assert "Absorbed body." in survivor_text
     assert "sensitivity: confidential" in survivor_text
+    entries = _ledger_entries(tmp_path, "concepts/survivor")
+    assert len(entries) == 1
+    assert entries[0].absorbed_id == "concepts/absorbed"
 
     other_text = (tmp_path / "bundle" / "concepts" / "other.md").read_text(
         encoding="utf-8"
@@ -454,8 +464,14 @@ def test_phase_b_ordering_catalog_and_survivor_before_absorbed_removal(
     survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
         encoding="utf-8"
     )
-    assert "merged_from" in survivor_text
+    assert "merged_from" not in survivor_text
     assert "sensitivity: confidential" in survivor_text
+    # The ledger sidecar's two-phase write (S1/V/S2) lands BEFORE D (the
+    # absorbed-file removal that just raised): the merge is already
+    # durably recorded, only the (recoverable) cleanup step failed.
+    entries = _ledger_entries(tmp_path, "concepts/survivor")
+    assert len(entries) == 1
+    assert entries[0].absorbed_id == "concepts/absorbed"
 
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert "concepts/absorbed.md" not in index_text
@@ -532,6 +548,7 @@ def test_retry_after_mid_rewrite_failure_completes_the_merge(
         tmp_path / "bundle" / "concepts" / "survivor.md"
     ).read_text(encoding="utf-8")
     assert "merged_from" not in survivor_after_failure  # ledger not yet committed
+    assert _ledger_entries(tmp_path, "concepts/survivor") == []
 
     retry = runner.invoke(
         app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
@@ -543,7 +560,7 @@ def test_retry_after_mid_rewrite_failure_completes_the_merge(
     survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
         encoding="utf-8"
     )
-    assert "merged_from" in survivor_text
+    assert "merged_from" not in survivor_text
 
     linker1_text = (tmp_path / "bundle" / "concepts" / "linker1.md").read_text(
         encoding="utf-8"
@@ -601,11 +618,7 @@ def test_retry_produces_a_correct_fully_reversible_ledger(
     )
     assert retry.exit_code == 0, retry.stderr
 
-    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
-        encoding="utf-8"
-    )
-    metadata, _ = okf.load_frontmatter(survivor_text)
-    entries = okf.decode_merged_from(metadata)
+    entries = _ledger_entries(tmp_path, "concepts/survivor")
     assert len(entries) == 1
     rewrites = entries[0].link_rewrites
     assert {rw.file for rw in rewrites} == {

@@ -26,6 +26,7 @@ import pytest
 from typer.testing import CliRunner
 
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf as okf_module
@@ -479,6 +480,17 @@ def _mk_relate(tmp_path: Path) -> _VerbSpec:
 
 
 def _mk_merge(tmp_path: Path) -> _VerbSpec:
+    # `test_reindex_never_autocommits` runs every builder in sequence
+    # against the SAME `tmp_path` -- an earlier `_mk_merge`/`_mk_unmerge`
+    # call may already have left a ledger sidecar for `concepts/survivor`
+    # (durable-derived-state slice 1a: the ledger now lives OUTSIDE the
+    # concept file, so overwriting `survivor.md` below no longer resets
+    # it). Clear any stale sidecar so this builder is a fresh scenario
+    # regardless of call order.
+    stale_sidecar = bundle_ledger.ledger_path_for(
+        "concepts/survivor", tmp_path / "bundle"
+    )
+    stale_sidecar.unlink(missing_ok=True)
     _write_concept(tmp_path, "concepts/survivor", title="Survivor")
     _write_concept(tmp_path, "concepts/absorbed", title="Absorbed")
     _seed_commit(

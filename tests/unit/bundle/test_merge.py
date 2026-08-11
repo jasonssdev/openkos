@@ -181,7 +181,10 @@ def test_plan_merge_link_rewrites_default_to_empty_list() -> None:
     assert plan.ledger_entry.link_rewrites == []
 
 
-def test_plan_merge_ledger_persisted_in_survivor_frontmatter() -> None:
+def test_plan_merge_survivor_carries_no_merged_from_key() -> None:
+    """Durable-derived-state slice 1a: the ledger now lives in a sidecar
+    (`bundle/ledger.py`), never the survivor's own frontmatter (spec: "No
+    `merged_from` key remains in survivor frontmatter")."""
     plan = bundle_merge.plan_merge(
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed",
@@ -193,16 +196,19 @@ def test_plan_merge_ledger_persisted_in_survivor_frontmatter() -> None:
     )
 
     metadata, _ = okf.load_frontmatter(plan.merged_survivor)
-    decoded = okf.decode_merged_from(metadata)
 
-    assert decoded == [plan.ledger_entry]
+    assert okf.MERGED_FROM_KEY not in metadata
+    assert plan.ledger_entries == [plan.ledger_entry]
 
 
 def test_plan_merge_sequential_survivor_before_retains_prior_entry() -> None:
     """Sequential-merge setup (LIFO groundwork): merging a THIRD object into
     a survivor that already absorbed one produces a `survivor_before` that
-    is the survivor's FULL bytes from the first merge -- RETAINING that
-    prior `merged_from` entry verbatim, never stripping it."""
+    is the survivor's FULL bytes from the first merge, and `ledger_entries`
+    retains the prior sidecar entry verbatim, never stripping it -- the
+    caller (`bundle.ledger.read_entries`) is what supplies `existing_entries`
+    now that the ledger lives in a sidecar rather than the survivor's own
+    frontmatter."""
     first_plan = bundle_merge.plan_merge(
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed-b",
@@ -222,15 +228,14 @@ def test_plan_merge_sequential_survivor_before_retains_prior_entry() -> None:
         index_text=_INDEX_TEXT,
         log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
+        existing_entries=first_plan.ledger_entries,
     )
 
     assert second_plan.ledger_entry.survivor_before == survivor_after_first_merge
-    metadata, _ = okf.load_frontmatter(second_plan.merged_survivor)
-    decoded = okf.decode_merged_from(metadata)
-    assert len(decoded) == 2
-    assert decoded[0].absorbed_id == "concepts/absorbed-b"
-    assert decoded[1].absorbed_id == "concepts/absorbed-c"
-    assert decoded[0] == first_plan.ledger_entry
+    assert len(second_plan.ledger_entries) == 2
+    assert second_plan.ledger_entries[0].absorbed_id == "concepts/absorbed-b"
+    assert second_plan.ledger_entries[1].absorbed_id == "concepts/absorbed-c"
+    assert second_plan.ledger_entries[0] == first_plan.ledger_entry
 
 
 def test_plan_merge_rejects_duplicate_absorbed_id() -> None:
@@ -257,6 +262,7 @@ def test_plan_merge_rejects_duplicate_absorbed_id() -> None:
             index_text=_INDEX_TEXT,
             log_text=_LOG_TEXT,
             merged_at="2026-07-20T00:00:00Z",
+            existing_entries=first_plan.ledger_entries,
         )
 
 
@@ -317,7 +323,7 @@ def test_plan_unmerge_restores_survivor_and_absorbed_from_snapshots() -> None:
     unmerge_plan = bundle_merge.plan_unmerge(
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed",
-        survivor_text=plan.merged_survivor,
+        entries=plan.ledger_entries,
     )
 
     assert unmerge_plan.restored_survivor == survivor_text
@@ -325,6 +331,7 @@ def test_plan_unmerge_restores_survivor_and_absorbed_from_snapshots() -> None:
     assert unmerge_plan.restored_index == _INDEX_TEXT
     assert unmerge_plan.restored_log == _LOG_TEXT
     assert unmerge_plan.link_rewrites == []
+    assert unmerge_plan.remaining_entries == []
 
 
 def test_plan_unmerge_lifo_tail_targeting() -> None:
@@ -348,13 +355,14 @@ def test_plan_unmerge_lifo_tail_targeting() -> None:
         index_text=_INDEX_TEXT,
         log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
+        existing_entries=first_plan.ledger_entries,
     )
 
     with pytest.raises(ValueError, match="LIFO tail"):
         bundle_merge.plan_unmerge(
             survivor_id="concepts/survivor",
             absorbed_id="concepts/absorbed-b",
-            survivor_text=second_plan.merged_survivor,
+            entries=second_plan.ledger_entries,
         )
 
 
@@ -379,22 +387,25 @@ def test_plan_unmerge_sequential_lifo_tail_then_prior_entry() -> None:
         index_text=_INDEX_TEXT,
         log_text=_LOG_TEXT,
         merged_at="2026-07-20T00:00:00Z",
+        existing_entries=first_plan.ledger_entries,
     )
 
     tail_unmerge = bundle_merge.plan_unmerge(
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed-c",
-        survivor_text=second_plan.merged_survivor,
+        entries=second_plan.ledger_entries,
     )
     assert tail_unmerge.restored_survivor == first_plan.merged_survivor
+    assert tail_unmerge.remaining_entries == first_plan.ledger_entries
 
     prior_unmerge = bundle_merge.plan_unmerge(
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed-b",
-        survivor_text=tail_unmerge.restored_survivor,
+        entries=tail_unmerge.remaining_entries,
     )
     assert prior_unmerge.restored_survivor == _survivor_text()
     assert prior_unmerge.restored_absorbed == _absorbed_text()
+    assert prior_unmerge.remaining_entries == []
 
 
 def test_plan_unmerge_rejects_non_merged_pair() -> None:
@@ -403,7 +414,7 @@ def test_plan_unmerge_rejects_non_merged_pair() -> None:
         bundle_merge.plan_unmerge(
             survivor_id="concepts/survivor",
             absorbed_id="concepts/never-merged",
-            survivor_text=_survivor_text(),
+            entries=[],
         )
 
 
@@ -412,7 +423,7 @@ def test_plan_unmerge_rejects_self_merge_ids() -> None:
         bundle_merge.plan_unmerge(
             survivor_id="concepts/same",
             absorbed_id="concepts/same",
-            survivor_text=_survivor_text(),
+            entries=[],
         )
 
 
@@ -456,7 +467,7 @@ def test_plan_unmerge_rejects_blank_ids() -> None:
         bundle_merge.plan_unmerge(
             survivor_id="  ",
             absorbed_id="concepts/absorbed",
-            survivor_text=_survivor_text(),
+            entries=[],
         )
 
 
@@ -516,10 +527,7 @@ def test_plan_merge_threads_provenance_rewrites_into_ledger_entry() -> None:
 
     assert plan.ledger_entry.provenance_rewrites == [provenance_rewrite]
     assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V3
-
-    metadata, _ = okf.load_frontmatter(plan.merged_survivor)
-    decoded = okf.decode_merged_from(metadata)
-    assert decoded == [plan.ledger_entry]
+    assert plan.ledger_entries == [plan.ledger_entry]
 
 
 def test_plan_unmerge_provenance_rewrites_round_trip() -> None:
@@ -543,7 +551,7 @@ def test_plan_unmerge_provenance_rewrites_round_trip() -> None:
     unmerge_plan = bundle_merge.plan_unmerge(
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed",
-        survivor_text=plan.merged_survivor,
+        entries=plan.ledger_entries,
     )
 
     assert unmerge_plan.provenance_rewrites == [provenance_rewrite]

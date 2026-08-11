@@ -17,6 +17,7 @@ from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.model import okf
@@ -73,6 +74,29 @@ def _write_concept(
         description=f"{title}.",
     )
     index_path.write_text(new_index_text, encoding="utf-8")
+
+
+def _write_raw_ledger_sidecar(
+    bundle_dir: Path, survivor_id: str, raw_entries: list[dict[str, object]]
+) -> None:
+    """Write a ledger sidecar directly from RAW (possibly pre-v3, missing-key)
+    entry dicts -- bypassing `okf.encode_merged_from` (which requires a full
+    `MergeLedgerEntry`) so a hand-authored v1/v2 on-disk shape can still be
+    exercised (durable-derived-state slice 1a: the ledger lives in a sidecar,
+    never the survivor's own frontmatter, but the reader's v1/v2/v3
+    tolerance is unchanged)."""
+    path = bundle_ledger.ledger_path_for(survivor_id, bundle_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        okf.dump_frontmatter(
+            {
+                "schema": bundle_ledger.LEDGER_SIDECAR_SCHEMA,
+                "survivor_id": survivor_id,
+                "merged_from": raw_entries,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _write_concept_with_provenance(
@@ -491,12 +515,12 @@ def test_unmerge_v1_and_v2_ledger_entries_still_unmerge_exactly(
                 "type": "Concept",
                 "title": "SurvivorA",
                 "sensitivity": "public",
-                "merged_from": [v1_entry],
             },
             "# SurvivorA\n\nBody.\n",
         ),
         encoding="utf-8",
     )
+    _write_raw_ledger_sidecar(tmp_path / "bundle", "concepts/survivor-a", [v1_entry])
 
     v1_result = runner.invoke(
         app, ["unmerge", "concepts/survivor-a", "concepts/absorbed-a", "--auto"]
@@ -536,12 +560,12 @@ def test_unmerge_v1_and_v2_ledger_entries_still_unmerge_exactly(
                 "type": "Concept",
                 "title": "SurvivorB",
                 "sensitivity": "public",
-                "merged_from": [v2_entry],
             },
             "# SurvivorB\n\nBody.\n",
         ),
         encoding="utf-8",
     )
+    _write_raw_ledger_sidecar(tmp_path / "bundle", "concepts/survivor-b", [v2_entry])
 
     v2_result = runner.invoke(
         app, ["unmerge", "concepts/survivor-b", "concepts/absorbed-b", "--auto"]
@@ -761,10 +785,14 @@ def test_unmerge_phase_b_ordering_survivor_ledger_kept_until_last(
     absorbed_path = tmp_path / "bundle" / "concepts" / "absorbed.md"
     assert absorbed_path.is_file()
 
-    # The survivor was never overwritten -- its `merged_from` ledger entry
-    # (the ledger/git recovery path) is still intact on disk.
+    # The survivor was never overwritten, and the ledger sidecar's tail
+    # entry (the ledger/git recovery path, popped only LAST) is still
+    # intact on disk.
     survivor_text = survivor_path.read_text(encoding="utf-8")
-    assert "merged_from" in survivor_text
+    assert "merged_from" not in survivor_text
+    assert (
+        len(bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle")) == 1
+    )
 
     # The catalog/log already reflect the pre-merge state.
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
@@ -835,12 +863,15 @@ def test_retry_after_mid_reverse_failure_completes_the_unmerge(
     assert first.exit_code == 1
     assert isinstance(first.exception, SystemExit)
 
-    # Nothing destructive has happened: the survivor's `merged_from` tail
-    # entry is still intact on disk.
+    # Nothing destructive has happened: the ledger sidecar's tail entry is
+    # still intact on disk (popped only LAST).
     survivor_after_failure = (
         tmp_path / "bundle" / "concepts" / "survivor.md"
     ).read_text(encoding="utf-8")
-    assert "merged_from" in survivor_after_failure
+    assert "merged_from" not in survivor_after_failure
+    assert (
+        len(bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle")) == 1
+    )
 
     # The key assertion: a clean retry completes the restoration instead of
     # being permanently refused by a stale "new_link not found" error.
@@ -967,12 +998,12 @@ def test_unmerge_v1_ledger_entry_without_relation_rewrites_key_still_unmerges(
                 "type": "Concept",
                 "title": "Survivor",
                 "sensitivity": "public",
-                "merged_from": [v1_entry],
             },
             "# Survivor\n\nBody.\n",
         ),
         encoding="utf-8",
     )
+    _write_raw_ledger_sidecar(tmp_path / "bundle", "concepts/survivor", [v1_entry])
 
     result = runner.invoke(
         app, ["unmerge", "concepts/survivor", "concepts/absorbed", "--auto"]
@@ -1410,13 +1441,17 @@ def test_a_create_at_the_absorbed_path_during_the_prompt_is_not_clobbered(
     # The documented mid-Phase-B partial state, pinned exactly:
     # `index.md`/`log.md` land FIRST and were already restored to their
     # pre-merge bytes (idempotent to re-write on a retry); the survivor is
-    # untouched, so its `merged_from` ledger still holds the absorbed
-    # snapshot (the absorbed content stays recoverable); the second log
-    # write (the `**Unmerge**` audit line) never ran.
+    # untouched, and the ledger sidecar still holds the absorbed snapshot
+    # (the absorbed content stays recoverable, popped only LAST) since the
+    # pop never ran; the second log write (the `**Unmerge**` audit line)
+    # never ran either.
     assert (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8") == pre_index
     assert (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8") == pre_log
     assert survivor_path.read_text(encoding="utf-8") == merged_survivor
-    assert "merged_from" in merged_survivor
+    assert "merged_from" not in merged_survivor
+    assert (
+        len(bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle")) == 1
+    )
     after = _snapshot(tmp_path)
     changed = changed_paths(before, after)
     assert changed == {
