@@ -876,9 +876,17 @@ def extract_concept(
     `openkos.model.okf.build_concept` once per returned object.
     """
     if len(source_text) <= _CHUNK_THRESHOLD:
-        results = _strip_ungrounded_expansions(
-            _extract_once(source_text, source_title, llm), source_text=source_text
-        )
+        results = _extract_once(source_text, source_title, llm)
+        if not results:
+            # #524: the model answers `[]` on substantive sources in ~5% of
+            # single-pass runs (meeting-framed material, re-measured
+            # post-#529), against the prompt's own positive default. The
+            # failure is non-deterministic, so one retry drops the rate
+            # quadratically; two empties in a row mean `[]` IS the answer.
+            # Single-call path only -- an empty CHUNK is normal fan-out
+            # (#454), and the union path's second run already covers it.
+            results = _extract_once(source_text, source_title, llm)
+        results = _strip_ungrounded_expansions(results, source_text=source_text)
         chunk_count = 1
     else:
         # #454: above the threshold the single call collapses to one object
