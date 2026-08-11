@@ -103,6 +103,14 @@ Scope, tracked as its own issues — **all four shipped**:
 
 The shared theme is the same principle already stated in the philosophy — *the human curates, the engine maintains* — applied to the engine's own operation: work the engine can carry should not be bookkeeping the user carries, and work the engine already does on the user's behalf should be reported rather than silent.
 
+### Durable pending work — the second prerequisite
+
+**This has not started.** Orchestration hardening solved *sequencing*: which advisor to run, when, and in what order. It did not make what the advisors produce survive. A curation session computes contradictions, candidate edges, and duplicate groups at real model cost and then lets them go — findings are printed to a terminal and lost, typed edges have no path to being applied outside the loop that produced them, and candidates past the display cap are unreachable by any verb. The reporting verbs inherit the same gap: they describe a bundle as settled while judgments already made about it live nowhere.
+
+An MCP server inherits this one more sharply than it inherited sequencing. An agent asking *what is pending in this base?* cannot be answered by recomputing every advisor on every call — the answer has to be something that already exists. Pending work needs to be a first-class object in the bundle, written down, ranked, retractable, and re-openable, before it can be exposed as a tool.
+
+The principle is the one above taken a step further: work the engine has already done on the user's behalf should not have to be done twice because nobody wrote it down.
+
 Deliverables:
 
 - An MCP server exposing the bundle as tools (query, get, navigate) any compatible agent can call
