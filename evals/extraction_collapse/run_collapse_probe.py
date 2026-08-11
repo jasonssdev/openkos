@@ -8,12 +8,20 @@ REAL pipeline -- `openkos.extraction.concept.extract_concept` over
   When a source yields a single object, is that the one property this pair
   varies, or the content it carries?
 
-Two axes ship today, and the harness is deliberately agnostic between them:
+Three axes ship today, and the harness is deliberately agnostic between them:
 
 - **meeting register** (`producto`, `versioning`) -- #522's original claim,
   that a source recording a meeting collapses to the meeting.
 - **announced multiplicity** (`anuncio`) -- that a source which does not
   enumerate its own topics collapses regardless of register.
+- **short lesson framing** (`lesson`) -- that a short titled lesson collapses
+  to a single object echoing its own umbrella title.
+
+Plus one fixture that is NOT a pair and NOT a verdict: the NEGATIVE CONTROL,
+a genuinely single-subject source where returning one object is CORRECT. It
+runs unpaired, exactly as the positive control does, and answers the opposite
+question -- what a change COSTS on material the collapse rules must not
+touch. See its section in the report and `collapse_fixtures.py`.
 
 ## Why this exists before any prompt change
 
@@ -79,15 +87,54 @@ from collapse_fixtures import (  # noqa: E402
     FLOOR,
     HYPOTHESES,
     MAX_LENGTH_SKEW,
+    NEGATIVE_CONTROL,
+    NEGATIVE_CONTROL_OBJECTS,
+    SHORT_SINGLE_TOPIC_BAND,
+    SOURCES,
     STUB_TYPES,
     TREATMENT,
     PairedSource,
     length_skew,
     pairs,
+    short_band_sources,
 )
 
 COLLAPSE_SIZE = 1
-"""An arm's run collapsed when it returned exactly this many objects."""
+"""An arm's run collapsed when it returned exactly this many objects.
+
+The same number as `NEGATIVE_CONTROL_OBJECTS`, and the opposite meaning: on a
+paired arm one object is the defect, on the negative control it is the right
+answer. Two names because one name would make a correct run read as a
+collapse the first time somebody skimmed the code."""
+
+
+TWIN_EXEMPT_TYPE = "Procedure"
+"""Mirror of `concept._TWIN_EXEMPT_TYPE` (#413): the ONE type
+`_drop_source_title_twins` never treats as a twin, whatever its title.
+
+    result.type != _TWIN_EXEMPT_TYPE and _normalize_title(...) == ...
+
+This constant exists because the probe printed a false sentence without it.
+The first negative control held at one object in 5 of 5 live runs and the
+report read "no false positive -- the twin shape the floor keeps", while the
+lone object was a `Procedure` every time. A `Procedure` is exempt BY TYPE, so
+that object would have survived with both of the rule's floors deleted: the
+control could not fail, and the harness said it had passed.
+
+Mirrored rather than imported so the `ArmResult` properties stay pure data
+with no `openkos` import. `_exempt_type_parity()` in the self-test is the
+alarm if the rule ever renames it, because a stale mirror here would silently
+restore exactly the false claim the constant was added to stop."""
+
+
+def _normalize_title(title: str) -> str:
+    """Strip, collapse internal whitespace, casefold.
+
+    The same normalization `_drop_source_title_twins` applies, reimplemented
+    here rather than imported: the harness must be able to report the twin
+    shape with no model and no `openkos` import, which is what makes the
+    self-test free."""
+    return " ".join(title.split()).casefold()
 
 
 @dataclass
@@ -105,6 +152,21 @@ class ArmResult:
     types_per_run: list[collections.Counter[str]] = field(default_factory=list)
     titles_per_run: list[tuple[str, ...]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    source_title: str = ""
+    """The title this arm was extracted under. Recorded so `title_twin_runs`
+    can be computed after the fact; empty when the caller did not supply it,
+    in which case that count reports zero rather than guessing."""
+    titled_objects_per_run: list[tuple[tuple[str, str], ...]] = field(
+        default_factory=list
+    )
+    """`(title, type)` per object per run.
+
+    `titles_per_run` and `types_per_run` each throw away the half of the pair
+    the other keeps -- one is a tuple of titles, the other a Counter of types
+    with no object identity left in it -- and the twin rule reads BOTH: a
+    title equal to the source title is a droppable twin only when the type is
+    not `TWIN_EXEMPT_TYPE`. Neither existing field can answer that, which is
+    how the exempt-type reading went unnoticed."""
 
     @property
     def runs(self) -> int:
@@ -120,6 +182,55 @@ class ArmResult:
     def collapses(self) -> bool:
         """A STRICT majority of successful runs returned one object."""
         return self.runs > 0 and self.collapsed_runs * 2 > self.runs
+
+    @property
+    def correct_runs(self) -> int:
+        """Runs that returned exactly `NEGATIVE_CONTROL_OBJECTS` objects.
+
+        Arithmetically identical to `collapsed_runs`, and named twice on
+        purpose. On a paired arm one object is the collapse; on a genuinely
+        single-subject source it is the right answer. Only the negative
+        control reads this."""
+        return sum(1 for n in self.retained if n == NEGATIVE_CONTROL_OBJECTS)
+
+    def _twin_runs(self, *, exempt: bool) -> int:
+        """Runs holding a title-restating object, split by the type exemption."""
+        if not self.source_title:
+            return 0
+        wanted = _normalize_title(self.source_title)
+        return sum(
+            1
+            for objects in self.titled_objects_per_run
+            if any(
+                _normalize_title(title) == wanted
+                and (kind == TWIN_EXEMPT_TYPE) is exempt
+                for title, kind in objects
+            )
+        )
+
+    @property
+    def title_twin_runs(self) -> int:
+        """Runs in which some DROPPABLE object restated the source title.
+
+        Droppable means both halves of `_is_twin`: the normalized title
+        equals the source title AND the type is not `TWIN_EXEMPT_TYPE`. Only
+        such an object is standing on the rule's floor -- it is the one the
+        rule would delete if the floor were removed, so it is the only one
+        whose survival is evidence ABOUT the floor.
+
+        The qualifier is the whole point. Counting on titles alone printed
+        "the twin shape the floor keeps" beside a number that did not depend
+        on the floor at all."""
+        return self._twin_runs(exempt=False)
+
+    @property
+    def exempt_twin_runs(self) -> int:
+        """Runs where the title-restating object was of `TWIN_EXEMPT_TYPE`.
+
+        Kept by the #413 type exemption, NOT by the floor. Reported rather
+        than discarded because it is the difference between a control that
+        could have failed and one that could not."""
+        return self._twin_runs(exempt=True)
 
     @property
     def empty_runs(self) -> int:
@@ -330,6 +441,89 @@ def control_note(
     )
 
 
+NEGATIVE_HELD = "no false positive"
+NEGATIVE_FALSE_POSITIVE = "FALSE POSITIVE"
+NEGATIVE_SPLIT = "SPLIT"
+NEGATIVE_NO_RESULT = "NO RESULT"
+NEGATIVE_INERT = "NO FLOOR EVIDENCE"
+"""The control returned one object, but nothing about that object was the
+floor's doing -- so the run cannot distinguish a working floor from a deleted
+one. The same distinction the positive control draws when its model is not
+the pinned one: not applicable is not an all-clear."""
+
+
+def negative_control_note(negative: ArmResult | None) -> str:
+    """How to read the negative control, or its absence.
+
+    Every verdict above this reads one object as a collapse. The negative
+    control is the one source in this harness where one object is CORRECT,
+    so it answers the question the pairs structurally cannot: what does a
+    candidate change COST on material the collapse rules must leave alone?
+
+    The failure it watches for is `[]` or a dropped lone object, NOT a count
+    of one. That is why it never goes through `verdict()`: `verdict()` maps
+    `retained == 1` to a collapse by construction, and running this fixture
+    through it would report the right answer as the defect."""
+    if negative is None:
+        return (
+            "negative control: not run. Nothing in this report then says what "
+            "a candidate costs on a source whose correct answer is exactly "
+            f"{NEGATIVE_CONTROL_OBJECTS} object -- the only false positive "
+            "the collapse verdicts cannot see."
+        )
+    if negative.runs == 0:
+        errors = "; ".join(negative.errors) or "no successful run"
+        return f"negative control: {NEGATIVE_NO_RESULT} -- {errors}"
+    if negative.empty_runs:
+        return (
+            f"negative control: {NEGATIVE_FALSE_POSITIVE} -- "
+            f"{negative.empty_runs} of {negative.runs} run(s) returned [] on "
+            "a genuinely single-subject source, where one object is the right "
+            "answer. That is silent data loss on healthy material, and it "
+            "outweighs every collapse verdict above: a candidate that empties "
+            "this document has traded one defect for a worse one."
+        )
+    if negative.correct_runs * 2 > negative.runs:
+        if negative.title_twin_runs * 2 > negative.runs:
+            return (
+                f"negative control: {NEGATIVE_HELD} -- held at "
+                f"{NEGATIVE_CONTROL_OBJECTS} object in "
+                f"{negative.correct_runs} of {negative.runs} run(s), which is "
+                f"CORRECT here, and in {negative.title_twin_runs} of "
+                f"{negative.runs} run(s) that object was a DROPPABLE "
+                "source-title twin -- one the twin rule would delete if its "
+                "floor were removed, so its survival is evidence about the "
+                "floor and not about anything else."
+            )
+        reason = (
+            f"the lone object came back as a {TWIN_EXEMPT_TYPE} in "
+            f"{negative.exempt_twin_runs} of {negative.runs} run(s), and "
+            "_is_twin exempts that type BY TYPE (#413), so it would survive "
+            "with both of the rule's floors deleted"
+            if negative.exempt_twin_runs
+            else "the lone object did not restate the source title, so the "
+            "twin rule never had a candidate to drop and its floor was "
+            "never load-bearing"
+        )
+        return (
+            f"negative control: {NEGATIVE_INERT} -- held at "
+            f"{NEGATIVE_CONTROL_OBJECTS} object in {negative.correct_runs} of "
+            f"{negative.runs} run(s), but {reason}. This run therefore "
+            "carries NO false-positive evidence about the twin rule: the "
+            "control could not have failed here, which is not the same as "
+            "passing. Fix the fixture before reading this as a pass."
+        )
+    return (
+        f"negative control: {NEGATIVE_SPLIT} -- a majority of "
+        f"{negative.runs} run(s) returned more than "
+        f"{NEGATIVE_CONTROL_OBJECTS} object (mean "
+        f"{negative.mean_objects:.1f}) on a genuinely single-subject source. "
+        "That is not the false positive this control exists to catch, which "
+        "is []; it does mean the baseline here is not one object, so read any "
+        "later [] rate against this run and not against a clean 1.0."
+    )
+
+
 def _arm_line(result: ArmResult) -> list[str]:
     lines = [
         f"    {result.arm:<8} {result.runs} run(s), "
@@ -356,6 +550,7 @@ def render(
     control: ArmResult | None = None,
     model: str = CONTROL_MODEL,
     prompt_sha: str = CONTROL_PROMPT_SHA,
+    negative: ArmResult | None = None,
 ) -> str:
     """The whole report, from the collected arms."""
     lines: list[str] = ["", "=" * 72, "COLLAPSE PROBE (#522)", "=" * 72, ""]
@@ -375,6 +570,45 @@ def render(
         lines += _arm_line(floor)
         lines.append(f"    -> {call}: {why}")
         lines.append("")
+
+    # Unconditional, and placed directly under the verdicts it reframes: every
+    # row above reads one object as a collapse, and this is the one source
+    # here where one object is right. A candidate that fixes the rows above by
+    # emptying this document is a regression the pairs cannot express.
+    lines += ["", "=" * 72, "NEGATIVE CONTROL -- ONE OBJECT IS CORRECT", "=" * 72, ""]
+    lines.append(
+        "A genuinely single-subject source (the mcp-launch shape: a title "
+        "naming one thing, a body about that one thing). Run unpaired, like "
+        "the positive control, because a pair's floor arm is multi-subject by "
+        "construction and cannot host this question. The failure watched for "
+        f"here is [] or a dropped lone object -- never a count of one. A "
+        f"{TWIN_EXEMPT_TYPE} lone object is exempt from the twin rule BY TYPE "
+        "(#413) and proves nothing, so it is reported as such rather than as "
+        "a pass."
+    )
+    lines.append("")
+    lines.append(f"  {negative_control_note(negative)}")
+    if negative is not None:
+        # NOT `_arm_line`, which reads "collapsed 3/3". Here that same number
+        # is the arm being RIGHT 3 times, and a line that calls it a collapse
+        # inside a section explaining that one object is correct is how a
+        # reader ends up filing the control as a defect.
+        lines.append(
+            f"    {negative.arm:<8} {negative.runs} run(s), "
+            f"objects {negative.retained or '-'}, "
+            f"mean {negative.mean_objects:.1f}, "
+            f"correct {negative.correct_runs}/{negative.runs}, "
+            f"empty {negative.empty_runs}/{negative.runs}, "
+            f"droppable twins {negative.title_twin_runs}/{negative.runs}, "
+            f"{TWIN_EXEMPT_TYPE}-exempt twins "
+            f"{negative.exempt_twin_runs}/{negative.runs}"
+        )
+        if negative.emitted_types:
+            negative_types = ", ".join(sorted(negative.emitted_types))
+            lines.append(f"             types seen: {negative_types}")
+        for err in negative.errors:
+            lines.append(f"             ERROR {err}")
+    lines.append("")
 
     # Its own section, and unconditional, for the same reason the empty
     # section is: the 14b run reported NOT REPRODUCED on every pair while
@@ -402,14 +636,19 @@ def render(
                     f"object(s), {arm.truncated_runs} truncated run(s), "
                     f"mean {arm.mean_objects:.1f}"
                 )
-    if control is not None:
-        stubs += control.stub_objects
-        truncated += control.truncated_runs
-        if control.stub_objects or control.truncated_runs:
+    for label, unpaired in (
+        ("positive control", control),
+        ("negative control", negative),
+    ):
+        if unpaired is None:
+            continue
+        stubs += unpaired.stub_objects
+        truncated += unpaired.truncated_runs
+        if unpaired.stub_objects or unpaired.truncated_runs:
             lines.append(
-                f"  positive control: {control.stub_objects} stub object(s), "
-                f"{control.truncated_runs} truncated run(s), "
-                f"mean {control.mean_objects:.1f}"
+                f"  {label}: {unpaired.stub_objects} stub object(s), "
+                f"{unpaired.truncated_runs} truncated run(s), "
+                f"mean {unpaired.mean_objects:.1f}"
             )
     if stubs or truncated:
         lines.append("")
@@ -443,13 +682,21 @@ def render(
                     f"  {pair_id} [{arm.arm}]: {arm.empty_runs} of "
                     f"{arm.runs} run(s) returned []"
                 )
-    if control is not None:
-        empties += control.empty_runs
-        total += control.runs
-        if control.empty_runs:
+    # The negative control is counted here too, not only in its own section:
+    # an empty there is the worst empty in the report, and a reader who came
+    # for #524 must not have to know the section exists to find it.
+    for label, unpaired in (
+        ("positive control", control),
+        ("negative control", negative),
+    ):
+        if unpaired is None:
+            continue
+        empties += unpaired.empty_runs
+        total += unpaired.runs
+        if unpaired.empty_runs:
             lines.append(
-                f"  positive control: {control.empty_runs} of "
-                f"{control.runs} run(s) returned []"
+                f"  {label}: {unpaired.empty_runs} of "
+                f"{unpaired.runs} run(s) returned []"
             )
     if empties:
         rate = empties / total if total else 0.0
@@ -522,7 +769,12 @@ def run_arm(
     from openkos.extraction.concept import extract_concept, extract_concept_union
 
     extractor = extract_concept_union if union_judge else extract_concept
-    result = ArmResult(pair_id=source.pair_id, arm=source.arm, language=source.language)
+    result = ArmResult(
+        pair_id=source.pair_id,
+        arm=source.arm,
+        language=source.language,
+        source_title=source.source_title,
+    )
     for index in range(1, runs + 1):
         try:
             outcome = extractor(
@@ -539,6 +791,9 @@ def run_arm(
             collections.Counter(obj.type for obj in outcome.objects)
         )
         result.titles_per_run.append(tuple(obj.title for obj in outcome.objects))
+        result.titled_objects_per_run.append(
+            tuple((obj.title, obj.type) for obj in outcome.objects)
+        )
         print(
             f"    run {index}: {outcome.report.retained} kept "
             f"of {outcome.report.produced} proposed  "
@@ -565,6 +820,19 @@ def _axis_guard_rejects_undeclared() -> bool:
         return False
     finally:
         collapse_fixtures.AXES[victim] = saved
+
+
+def _exempt_type_parity() -> bool:
+    """Does the mirrored `TWIN_EXEMPT_TYPE` still match the rule's own?
+
+    The mirror is what lets `ArmResult` stay pure data, and a stale mirror is
+    worse than no mirror: the harness would go back to counting an exempt
+    object as a droppable twin and printing a floor claim about it. Imported
+    here and nowhere else, so only the self-test pays for it -- and it costs
+    no model call, which is what makes this checkable for free."""
+    from openkos.extraction.concept import _TWIN_EXEMPT_TYPE
+
+    return TWIN_EXEMPT_TYPE == _TWIN_EXEMPT_TYPE
 
 
 def _self_test() -> int:
@@ -623,7 +891,65 @@ def _self_test() -> int:
     ]
     made["quiet"] = (quiet_meeting, over_enumerating_arm)
 
+    # The negative control, where ONE object is the CORRECT answer. Its four
+    # readings are driven with no model here because the whole value of the
+    # control is that they are distinguishable BEFORE any of them costs a run.
+    held = ArmResult(
+        "negative-control",
+        "single-subject",
+        "EN",
+        source_title="Replica Lag",
+    )
+    held.retained = [1, 1, 1]
+    held.types_per_run = [collections.Counter({"Concept": 1})] * 3
+    held.titles_per_run = [("Replica Lag",)] * 3
+    held.titled_objects_per_run = [(("Replica Lag", "Concept"),)] * 3
+
+    emptied = ArmResult("negative-control", "single-subject", "EN")
+    emptied.retained = [0, 1, 1]
+    emptied.types_per_run = [
+        collections.Counter(),
+        collections.Counter({"Concept": 1}),
+        collections.Counter({"Concept": 1}),
+    ]
+
+    split = ArmResult("negative-control", "single-subject", "EN")
+    split.retained = [3, 3, 1]
+    split.types_per_run = [
+        collections.Counter({"Concept": 3}),
+        collections.Counter({"Concept": 3}),
+        collections.Counter({"Event": 1}),
+    ]
+
+    # The live shape that made this whole branch necessary: five correct runs
+    # whose lone object was a `Procedure`, which `_is_twin` exempts BY TYPE.
+    # It must NOT read as a pass -- that object survives a deleted floor.
+    exempt = ArmResult(
+        "negative-control",
+        "single-subject",
+        "EN",
+        source_title="Nightly Index Rebuild",
+    )
+    exempt.retained = [1, 1, 1]
+    exempt.types_per_run = [collections.Counter({TWIN_EXEMPT_TYPE: 1})] * 3
+    exempt.titles_per_run = [("Nightly Index Rebuild",)] * 3
+    exempt.titled_objects_per_run = [(("Nightly Index Rebuild", TWIN_EXEMPT_TYPE),)] * 3
+
+    # One object, correct count, but its title is not the source title: the
+    # twin rule never had a candidate, so the floor was never load-bearing.
+    renamed = ArmResult(
+        "negative-control",
+        "single-subject",
+        "EN",
+        source_title="Replica Lag",
+    )
+    renamed.retained = [1, 1, 1]
+    renamed.types_per_run = [collections.Counter({"Concept": 1})] * 3
+    renamed.titles_per_run = [("Replication Delay",)] * 3
+    renamed.titled_objects_per_run = [(("Replication Delay", "Concept"),)] * 3
+
     report = render(made)
+    negative_report = render(made, negative=held)
 
     # Explicit checks rather than `assert`: this file ships outside `tests/`,
     # where the project's per-file-ignores do not exempt S101, and a self-test
@@ -780,6 +1106,130 @@ def _self_test() -> int:
             "a measurement first",
         ),
         (
+            NEGATIVE_HELD in negative_control_note(held),
+            "a single-subject source returning its one object is the CORRECT "
+            "answer and must read as such -- reporting it as a collapse is "
+            "the false positive this control exists to prevent",
+        ),
+        (
+            NEGATIVE_FALSE_POSITIVE in negative_control_note(emptied),
+            "[] on a genuinely single-subject source is the false positive "
+            "being measured, and it must outrank every collapse verdict in "
+            "the same report",
+        ),
+        (
+            NEGATIVE_SPLIT in negative_control_note(split),
+            "splitting a single-subject source is a DIFFERENT miss from "
+            "emptying it, and one label covering both would hide a candidate "
+            "trading one for the other",
+        ),
+        (
+            NEGATIVE_FALSE_POSITIVE not in negative_control_note(split),
+            "and a split must not be reported as the [] false positive: the "
+            "objects are still there",
+        ),
+        (
+            NEGATIVE_NO_RESULT
+            in negative_control_note(
+                ArmResult("negative-control", "single-subject", "EN")
+            ),
+            "a negative control whose every run errored has measured "
+            "nothing, and must not be read as [] -- a connection failure is "
+            "not a false positive",
+        ),
+        (
+            "not run" in negative_control_note(None),
+            "an absent negative control must read as absent, never as an "
+            "all-clear on single-subject material",
+        ),
+        (
+            held.correct_runs == 3 and held.collapses,
+            "the paired verdict logic reads this control's CORRECT answer as "
+            "a collapse -- which is exactly why the control never goes "
+            "through verdict(), and why correct_runs is named separately "
+            "from collapsed_runs",
+        ),
+        (
+            held.title_twin_runs == 3
+            and ArmResult(
+                "x",
+                "arm",
+                "EN",
+                titled_objects_per_run=[(("Replica Lag", "Concept"),)],
+            ).title_twin_runs
+            == 0,
+            "the lone object restating the source title is the shape the "
+            "floor in _drop_source_title_twins protects, so it must be "
+            "counted -- and counted as zero, not guessed, when no source "
+            "title was recorded",
+        ),
+        (
+            exempt.title_twin_runs == 0 and exempt.exempt_twin_runs == 3,
+            "a Procedure restating the source title is NOT a droppable twin "
+            "-- _is_twin exempts it by type (#413) -- so it must not be "
+            "counted as one, and must still be counted somewhere",
+        ),
+        (
+            NEGATIVE_INERT in negative_control_note(exempt),
+            "the live 5/5 Procedure run must read as NO FLOOR EVIDENCE: that "
+            "object survives with both floors deleted, so the control could "
+            "not have failed, and the harness printed a floor claim about it",
+        ),
+        (
+            NEGATIVE_HELD not in negative_control_note(exempt),
+            "and it must NOT also read as a pass -- 'could not fail' and "
+            "'did not fail' are the distinction this branch exists to draw",
+        ),
+        (
+            TWIN_EXEMPT_TYPE in negative_control_note(exempt),
+            "the note must NAME the exempt type, because the fix is to "
+            "rewrite the fixture and a reader cannot do that from a verdict "
+            "that will not say what came back",
+        ),
+        (
+            NEGATIVE_INERT in negative_control_note(renamed)
+            and TWIN_EXEMPT_TYPE not in negative_control_note(renamed),
+            "a lone object whose title is NOT the source title also proves "
+            "nothing about the floor -- the rule had no candidate to drop -- "
+            "and its reason differs from the exempt-type one",
+        ),
+        (
+            _exempt_type_parity(),
+            "the mirrored TWIN_EXEMPT_TYPE must still equal the rule's own: "
+            "a stale mirror silently restores the false floor claim it was "
+            "added to stop",
+        ),
+        (
+            "correct 3/3" in negative_report,
+            "the negative control's run line must count CORRECT runs, not "
+            "collapsed ones: the paired wording would file three right "
+            "answers as three defects",
+        ),
+        (
+            "NEGATIVE CONTROL" in report and "NEGATIVE CONTROL" in negative_report,
+            "the negative control needs its own section UNCONDITIONALLY: a "
+            "report that omits it when it did not run reads as if nothing "
+            "was at stake on single-subject material",
+        ),
+        (
+            all(s.pair_id != NEGATIVE_CONTROL.pair_id for s in SOURCES),
+            "the negative control must stay OUT of SOURCES -- pairs() would "
+            "reject a lone arm, and it should: an unpaired fixture read "
+            "through the paired verdict logic is not a finding",
+        ),
+        (
+            all(
+                SHORT_SINGLE_TOPIC_BAND[0]
+                <= len(source.text.encode("utf-8"))
+                <= SHORT_SINGLE_TOPIC_BAND[1]
+                for source in short_band_sources()
+            ),
+            "the short single-topic fixtures must stay in the 1-4 KB band: "
+            "the band IS the shape they were written to measure, and a "
+            "fixture that drifts out of it measures something else while "
+            "still reporting under the same name",
+        ),
+        (
             ArmResult("x", "arm", "EN", retained=[0, 1, 1]).empty_runs == 1,
             "an empty run must be counted (#524): the model returning [] on "
             "substantive content is silent data loss, not a small object count",
@@ -860,6 +1310,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="skip the positive control (it costs one source's runs)",
     )
+    parser.add_argument(
+        "--no-negative-control",
+        action="store_true",
+        help="skip the negative control -- a genuinely single-subject source "
+        "where ONE object is correct, run unpaired to show what a candidate "
+        "costs on material the collapse rules must leave alone. It ships in "
+        "the repository, so unlike the positive control it always runs unless "
+        "this flag says otherwise (it costs one source's runs).",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -907,7 +1366,22 @@ def main(argv: list[str] | None = None) -> int:
             union_judge=args.union_judge,
         )
 
-    print(render(results, control, args.model, current_prompt_sha()))
+    negative: ArmResult | None = None
+    if not args.no_negative_control:
+        print(f"  negative control [{NEGATIVE_CONTROL.arm}]")
+        negative = run_arm(
+            NEGATIVE_CONTROL, llm, args.runs, union_judge=args.union_judge
+        )
+
+    print(
+        render(
+            results,
+            control,
+            args.model,
+            current_prompt_sha(),
+            negative=negative,
+        )
+    )
     return 0
 
 
