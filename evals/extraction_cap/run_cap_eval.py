@@ -90,6 +90,8 @@ from typing import Any, NamedTuple
 from openkos.extraction.concept import (
     _TWIN_EXEMPT_TYPE,
     ExtractionOutcome,
+    ExtractionReport,
+    ExtractionResult,
     extract_concept,
     extract_concept_union,
 )
@@ -528,6 +530,17 @@ class RunOutcome:
     retained: int
     verdicts: tuple[str, ...]
     latency_s: float
+    types: tuple[str | None, ...] = ()
+    """The OKF type the model gave each position, aligned with `titles`.
+
+    `None` means the type is NOT AVAILABLE FROM THE PIPELINE, never that the
+    object was untyped: `ExtractionOutcome` carries full objects only for the
+    retained prefix and bare strings for the casualties, so every cap-discarded
+    position is `None` by construction (#534).
+
+    Unlike `verdicts`, a type is an OBSERVATION of what the model said, so it
+    cannot go stale against a later adjudication and is safe to persist.
+    """
     twin_deleted_subjects: tuple[str, ...] = ()
     error: str | None = None
 
@@ -557,6 +570,19 @@ def _positions_of(outcome: ExtractionOutcome) -> tuple[str, ...]:
     so concatenating them reconstructs exactly what it needs.
     """
     return tuple(r.title for r in outcome.objects) + tuple(
+        outcome.report.discarded_titles
+    )
+
+
+def _types_of(outcome: ExtractionOutcome) -> tuple[str | None, ...]:
+    """The type per position, aligned with `_positions_of` (#534).
+
+    The casualties are bare titles by design -- see `_positions_of` -- so their
+    type is unrecoverable here and lands as `None`. That is the honest record:
+    the retained prefix is exactly what reaches a bundle, and this answers
+    every type question about it without a fresh sweep.
+    """
+    return tuple(r.type for r in outcome.objects) + (None,) * len(
         outcome.report.discarded_titles
     )
 
@@ -838,6 +864,7 @@ def runs_to_json(cells: Sequence[Cell], *, model: str, runs: int, stamp: str) ->
                 "run_index": o.run_index,
                 "status": o.status,
                 "titles": list(o.titles),
+                "types": list(o.types),
                 "retained": o.retained,
                 "latency_s": o.latency_s,
                 "twin_deleted_subjects": list(o.twin_deleted_subjects),
@@ -871,6 +898,13 @@ def cells_from_json(text: str, truths: Sequence[GroundTruth]) -> tuple[list[Cell
         if key not in cells:
             cells[key] = Cell(fixture=raw["fixture"], arm=raw["arm"], truth=truth)
         titles = tuple(raw["titles"])
+        # Absent in every file written before #534. Defaulting to all-`None`
+        # keeps those rescoring exactly as they did; dropping them would cost
+        # far more than the field is worth.
+        raw_types = raw.get("types") or []
+        types = tuple(
+            (raw_types[i] if i < len(raw_types) else None) for i in range(len(titles))
+        )
         cells[key].outcomes.append(
             RunOutcome(
                 fixture=raw["fixture"],
@@ -878,6 +912,7 @@ def cells_from_json(text: str, truths: Sequence[GroundTruth]) -> tuple[list[Cell
                 run_index=raw["run_index"],
                 status=raw["status"],
                 titles=titles,
+                types=types,
                 retained=raw["retained"],
                 verdicts=score_run(titles, truth),
                 latency_s=raw["latency_s"],
@@ -1078,6 +1113,7 @@ def run_one(
         run_index=run_index,
         status=_OK if titles else _EMPTY,
         titles=titles,
+        types=_types_of(outcome),
         retained=outcome.report.retained,
         verdicts=score_run(titles, truth),
         latency_s=latency,
@@ -1388,7 +1424,11 @@ def _gt(text: str = _SAMPLE_GT, name: str = "sample") -> GroundTruth:
 
 
 def _run(
-    titles: Sequence[str], retained: int, truth: GroundTruth, index: int = 1
+    titles: Sequence[str],
+    retained: int,
+    truth: GroundTruth,
+    index: int = 1,
+    types: Sequence[str | None] | None = None,
 ) -> RunOutcome:
     """Build a synthetic RunOutcome scored against `truth` (no model call)."""
     return RunOutcome(
@@ -1397,6 +1437,7 @@ def _run(
         run_index=index,
         status=_OK if titles else _EMPTY,
         titles=tuple(titles),
+        types=tuple(types) if types is not None else (None,) * len(titles),
         retained=retained,
         verdicts=score_run(titles, truth),
         latency_s=1.0,
@@ -1631,7 +1672,11 @@ def self_test() -> int:
     # 8. Backend errors drag nothing but are counted and excluded from means.
     erroring = Cell(fixture="sample", arm="synthetic", truth=truth)
     erroring.outcomes = [
-        RunOutcome("sample", "synthetic", 1, _ERROR, (), 0, (), 5.0, (), "boom"),
+        # Keyword-only past `latency_s`: this used to pass the trailing fields
+        # positionally, and adding `types` (#534) silently slid `"boom"` into
+        # `twin_deleted_subjects`. The self-test still passed -- nothing reads
+        # those two here -- and only `mypy` caught it.
+        RunOutcome("sample", "synthetic", 1, _ERROR, (), 0, (), 5.0, error="boom"),
         _run(["Pre-built Skills", "Skill Creator"], 2, truth, 2),
     ]
     check("errors counted", erroring.errors, 1)
@@ -1689,6 +1734,62 @@ def self_test() -> int:
         moved.mean_recall_precap > restored.mean_recall_precap,
         True,
     )
+
+    # 8b. TYPES travel with the titles (#534), aligned by position.
+    #
+    # Unlike verdicts, a type is an OBSERVATION -- what the model said the
+    # object was -- so it cannot go stale against a later adjudication and
+    # belongs in the saved file. Without it no type question is rescorable and
+    # every one costs a fresh sweep, which is what #534 records.
+    # `_types_of` is the only place the live path builds this, so it is proved
+    # here against a synthetic outcome rather than left to a model run.
+    synth = ExtractionOutcome(
+        objects=[
+            ExtractionResult(
+                type="Decision", title="Kept One", description="d", body=""
+            ),
+            ExtractionResult(
+                type="Concept", title="Kept Two", description="d", body=""
+            ),
+        ],
+        report=ExtractionReport(
+            produced=4, retained=2, discarded_titles=("Cut One", "Cut Two")
+        ),
+    )
+    check("types follow reply order", _types_of(synth)[:2], ("Decision", "Concept"))
+    check("cap casualties have no type", _types_of(synth)[2:], (None, None))
+    check("one type per position", len(_types_of(synth)), len(_positions_of(synth)))
+
+    typed = Cell(fixture="sample", arm="typed", truth=truth)
+    typed.outcomes = [
+        _run(
+            ["Pre-built Skills", "Skill Packaging", "Dropped By The Cap"],
+            2,
+            truth,
+            1,
+            types=("Concept", "Concept", None),
+        )
+    ]
+    saved_typed = runs_to_json([typed], model="m", runs=1, stamp="s")
+    check("types are serialized", '"types"' in saved_typed, True)
+    # `_run` stamps `arm="synthetic"` on the OUTCOME, and `cells_from_json`
+    # regroups by the outcome's own arm, not the cell's.
+    back = {(c.fixture, c.arm): c for c in cells_from_json(saved_typed, [truth])[0]}
+    got = back[("sample", "synthetic")].outcomes[0]
+    check("round-trip types", got.types, ("Concept", "Concept", None))
+    check("types align with titles", len(got.types), len(got.titles))
+
+    # A file written BEFORE this field existed must still rescore. The 28
+    # `runs-*.json` already on disk are exactly that, and silently dropping
+    # them would cost more than the field is worth.
+    legacy = json.loads(saved_typed)
+    for raw in legacy["outcomes"]:
+        del raw["types"]
+    old = {
+        (c.fixture, c.arm): c for c in cells_from_json(json.dumps(legacy), [truth])[0]
+    }[("sample", "synthetic")].outcomes[0]
+    check("legacy file still loads", old.titles, got.titles)
+    check("legacy types are all None", old.types, (None, None, None))
 
     # 9. Temperature injection rewrites /api/chat ONLY.
     seen: list[dict[str, Any]] = []
