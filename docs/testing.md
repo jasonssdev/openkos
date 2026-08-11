@@ -23,7 +23,7 @@ yourself to the full surface of the tool.
 > reads stdout misses half the behavior.
 >
 > **Where "what changed on disk" lives.** Every mutating verb (including
-> `query --save`, since #331) **auto-commits** its own writes, so `git status`
+> `query --save`) **auto-commits** its own writes, so `git status`
 > is normally clean and the evidence is in `git log -1 --stat` / `git show`. A
 > *dirty* tree after a mutating verb is itself a finding — it means the
 > auto-commit was skipped (check stderr for a `WARNING`).
@@ -582,7 +582,7 @@ bundle content).
 
 > `forget`/`purge` depend on git. The tree should already be **committed and
 > clean** here, since every earlier verb auto-committed (including
-> `query --save`, since #331) — but verify with `git status` first: `purge`
+> `query --save`) — but verify with `git status` first: `purge`
 > refuses to run on a dirty tree.
 
 ### 8.1 `forget` — recoverable

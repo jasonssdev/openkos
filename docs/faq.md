@@ -59,7 +59,7 @@ No. That is the point of building on OKF. Your knowledge is a bundle of plain ma
 
 ## Can I use it today?
 
-Yes — it runs, though it is **alpha**: the API may still change between releases. The MVP 1 (compile-query-lint) and MVP 2 (typed graph, hybrid retrieval, entity resolution and reversible merge, the forget/purge lifecycle) arcs are complete — 25 CLI verbs in all. OpenKOS is on PyPI — `pip install openkos` — or install from a source checkout to track the latest `main`. Early feedback and contributors are welcome — see [CONTRIBUTING.md](../CONTRIBUTING.md).
+Yes — it runs, though it is **alpha**: the API may still change between releases. The MVP 1 (compile-query-lint) and MVP 2 (typed graph, hybrid retrieval, entity resolution and reversible merge, the forget/purge lifecycle) arcs are complete; `openkos --help` lists every verb. OpenKOS is on PyPI — `pip install openkos` — or install from a source checkout to track the latest `main`. Early feedback and contributors are welcome — see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## What does "the human curates; the engine maintains" mean?
 
