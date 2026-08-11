@@ -87,24 +87,65 @@ both PRs in the same release closes the gap; state it here explicitly.
 
 ### Phase 1: Reindex embed composition
 
-- [ ] 1.1 RED then GREEN: `src/openkos/state/reindex.py` embed text matches `fts.py:220-234`'s title/description/tags/body scheme instead of `raw_bytes.decode("utf-8")` verbatim; verify and close #554 explicitly.
+- [x] 1.1 RED then GREEN: `src/openkos/state/reindex.py` embed text matches `fts.py:220-234`'s title/description/tags/body scheme instead of `raw_bytes.decode("utf-8")` verbatim; verify and close #554 explicitly.
 
 ### Phase 2: Doctor checks A and B
 
-- [ ] 2.1 RED then GREEN: Check A (torn ledger write) — any `*.ledger.okf.pending` with hash mismatch/match reported as `doctor`'s check 12 (mechanically exact truth-table check, read-only).
-- [ ] 2.2 RED then GREEN: Check B (post-merge mutation) — nested-prefix equality: entry k's `survivor_before` embeds entries `0..k-1`; decode and compare to the survivor's current entries `0..k-1`; any inequality flags `[FAIL]`. Doctor check 13, informational only (does not affect exit code), stays read-only.
-- [ ] 2.3 RED then GREEN: doctor scenario tests from `openspec/changes/durable-derived-state/specs/doctor-command/spec.md` — clean ledgers pass; corrupted ledger fails with both remediation paths; check never writes; no-ledger workspace passes trivially.
-- [ ] 2.4 RED then GREEN (gap — no artifact covered this): `doctor`'s corrupted-ledger `[FAIL]` remediation MUST verify a git reset point actually exists (auto-commit history reachable back to `<first-merge>~1`) before printing "reset and replay" as the remedy. If no reset point exists (no git repo, no configured git identity, or history does not reach the first merge), the remediation text MUST say so explicitly and MUST NOT claim reset-and-replay is available.
-- [ ] 2.5 RED (gap — required by orchestrator, no artifact covered this): test covering a workspace with a corrupted ledger AND no configured git identity (`_autocommit` never ran) — assert `doctor` reports "no reset point available" rather than the standard reset-and-replay remediation.
+- [x] 2.1 RED then GREEN: Check A (torn ledger write) — any `*.ledger.okf.pending` with hash mismatch/match reported as `doctor`'s check 12 (mechanically exact truth-table check, read-only).
+- [x] 2.2 RED then GREEN: Check B (post-merge mutation) — nested-prefix equality: entry k's `survivor_before` embeds entries `0..k-1`; decode and compare to the survivor's current entries `0..k-1`; any inequality flags `[FAIL]`. Doctor check 13, informational only (does not affect exit code), stays read-only.
+- [x] 2.3 RED then GREEN: doctor scenario tests from `openspec/changes/durable-derived-state/specs/doctor-command/spec.md` — clean ledgers pass; corrupted ledger fails with both remediation paths; check never writes; no-ledger workspace passes trivially.
+- [x] 2.4 RED then GREEN (gap — no artifact covered this): `doctor`'s corrupted-ledger `[FAIL]` remediation MUST verify a git reset point actually exists (auto-commit history reachable back to `<first-merge>~1`) before printing "reset and replay" as the remedy. If no reset point exists (no git repo, no configured git identity, or history does not reach the first merge), the remediation text MUST say so explicitly and MUST NOT claim reset-and-replay is available.
+- [x] 2.5 RED (gap — required during review, no artifact covered this): test covering a workspace with a corrupted ledger AND no configured git identity (`_autocommit` never ran) — assert `doctor` reports "no reset point available" rather than the standard reset-and-replay remediation.
 
 ### Phase 3: Repair verb
 
-- [ ] 3.1 RED then GREEN: repair verb refuses on Check A (torn `.pending` present) with no override.
-- [ ] 3.2 RED then GREEN: repair verb refuses whenever any survivor in the bundle carries ≥2 entries bundle-wide (cross-survivor pollution gate), regardless of Check B's per-ledger result.
-- [ ] 3.3 RED then GREEN: repair verb on a clean, single-entry-per-survivor bundle extracts entries out of frontmatter into `bundle/.state/ledger/` verbatim.
-- [ ] 3.4 GREEN: repair verb prints the `git reset --hard` inverse and the reset-point-exists caveat (Phase 2.4) before writing.
+- [x] 3.1 RED then GREEN: repair verb refuses on Check A (torn `.pending` present) with no override.
+- [x] 3.2 RED then GREEN: repair verb refuses whenever any survivor in the bundle carries ≥2 entries bundle-wide (cross-survivor pollution gate), regardless of Check B's per-ledger result.
+- [x] 3.3 RED then GREEN: repair verb on a clean, single-entry-per-survivor bundle extracts entries out of frontmatter into `bundle/.state/ledger/` verbatim.
+- [x] 3.4 GREEN: repair verb prints the `git reset --hard` inverse and the reset-point-exists caveat (Phase 2.4) before writing.
 
 ---
+
+## Remediation (`fix/doctor-flagged-refusals`, base: PR #3 branch) — verify-report CRITICAL fix
+
+Verification found `entity-resolution-merge/spec.md`'s ADDED requirement
+"`merge` Refuses On A Doctor-Flagged Ledger, With `--force`" entirely
+unimplemented, untested, and undisclosed. This closes that gap and
+reconciles two stale spec deltas against the already-correct
+implementation.
+
+- [x] R.1 RED then GREEN: `merge()` gains a `--force` option; new
+      `_reject_flagged_ledger_write` (Check B, `scan_nesting_violations`)
+      runs in Phase A before any write, refuses (exit 1, writes nothing)
+      naming both remediation paths (repair verb; `git reset --hard
+      <first-merge>~1` + `openkos reindex`, gated on
+      `vcs_git.has_reset_point`) plus the non-guaranteed-reversibility
+      statement, unless `--force` is passed.
+- [x] R.2 RED then GREEN: `--force` bypasses ONLY the Check B refusal —
+      orthogonal to the existing confirm-gate precedence (`--auto`/
+      `review: false`/TTY prompt), mirroring `forget --force`'s shape.
+- [x] R.3 Mutation-tested both the refusal gate and the `--force` bypass
+      line individually; both caught their targeted mutation, reverted.
+- [x] R.4 Spec correction: `entity-resolution-merge/spec.md`'s "Repair
+      Verb Refuses..." requirement rewritten to describe the SHIPPED
+      bundle-wide ≥2-entries gate (not a per-concept Check-B gate),
+      recording why it is deliberately coarser (Check B's two false
+      negatives: single-entry ledgers, cross-survivor pollution via
+      `merge_core`'s `other_files`). The "no override flag" property is
+      preserved unchanged.
+- [x] R.5 Spec correction: `doctor-command/spec.md` gains the missing
+      "Merge-Ledger Torn-Write Check" (Check A) ADDED requirement,
+      matching the already-implemented, already-tested behavior; both
+      checks remain explicitly informational/read-only.
+
+### Scenario coverage (entity-resolution-merge/spec.md, both ADDED requirements)
+
+| Scenario | Status |
+|---|---|
+| Merge onto a flagged ledger refuses by default | Covered — `test_merge_refuses_on_a_doctor_flagged_ledger_no_force` (new) |
+| `--force` bypasses the refusal, not the confirm gate | Covered — `test_merge_force_bypasses_flagged_ledger_refusal` + `test_merge_force_bypasses_refusal_not_confirm_gate` (new) |
+| Repair verb migrates a clean ledger verbatim | Covered — pre-existing `test_repair_migrates_a_clean_single_entry_ledger_verbatim` (spec text now matches this test's actual gate) |
+| Repair verb refuses the whole run, with no override | Covered — pre-existing `test_repair_refuses_with_no_override_when_any_survivor_has_two_or_more_entries` + `test_repair_refuses_when_a_different_survivor_has_two_or_more_entries` (spec text now matches these tests' actual gate) |
 
 ## Key Learnings
 
@@ -112,3 +153,4 @@ both PRs in the same release closes the gap; state it here explicitly.
 2. The `_autocommit` non-fatal fallback creates a genuine remedy gap for corrupted ledgers with no git identity — doctor must detect and report a missing reset point, not just recommend one blindly.
 3. Two opposite walks (EXCLUDE for reference scans, INCLUDE for privacy sweeps) must stay structurally separate — one shared `iter_ledgers` helper serves only the INCLUDE side.
 4. Feature-branch-chain state alone does not guarantee PR #2 ships with PR #1 in the same release — that constraint had to be written into the tasks file explicitly.
+5. A spec/implementation gap can be entirely undisclosed by a prior apply pass even with all tasks marked `[x]` and every quality gate green — the verification phase's independent requirement-by-requirement read is what caught it.

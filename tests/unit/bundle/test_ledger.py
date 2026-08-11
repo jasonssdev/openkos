@@ -354,3 +354,311 @@ def test_discard_pending_removes_only_the_pending_marker(tmp_path: Path) -> None
 
     assert not ledger.pending_path_for("concepts/survivor", bundle_dir).exists()
     assert not ledger.ledger_path_for("concepts/survivor", bundle_dir).exists()
+
+
+# --- doctor Check A: read-only torn-write preview (task 2.1, PR#3) --------
+
+
+def test_iter_pending_returns_empty_list_when_ledger_root_is_missing(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+
+    assert ledger.iter_pending(bundle_dir) == []
+
+
+def test_iter_pending_finds_only_pending_suffixed_files_sorted(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    root = ledger.ledger_root(bundle_dir)
+    root.mkdir(parents=True)
+    (root / "b.ledger.okf.pending").write_text("x", encoding="utf-8")
+    (root / "a.ledger.okf.pending").write_text("x", encoding="utf-8")
+    # Must be excluded: a committed sidecar is not a pending marker.
+    (root / "c.ledger.okf").write_text("x", encoding="utf-8")
+
+    result = ledger.iter_pending(bundle_dir)
+
+    assert result == [
+        root / "a.ledger.okf.pending",
+        root / "b.ledger.okf.pending",
+    ]
+
+
+def test_scan_torn_writes_reports_roll_forward_without_mutating_anything(
+    tmp_path: Path,
+) -> None:
+    """A read-only preview of what `recover` WOULD do -- the SAME hash-bound
+    truth table, but the pending marker and committed sidecar are left
+    exactly as found (doctor stays read-only; Check A, task 2.1)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    survivor_path = bundle_dir / "concepts" / "survivor.md"
+    survivor_path.parent.mkdir(parents=True)
+    survivor_text = "---\ntype: Concept\n---\nSurvivor body.\n"
+    survivor_path.write_text(survivor_text, encoding="utf-8")
+    entry = _make_entry()
+    pending_path = ledger.write_pending(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[entry],
+        expected_survivor_sha256=ledger.survivor_sha256(survivor_text),
+    )
+
+    result = ledger.scan_torn_writes(bundle_dir)
+
+    assert result == [(pending_path, "roll-forward")]
+    # Read-only: nothing on disk changed.
+    assert pending_path.is_file()
+    assert not ledger.ledger_path_for("concepts/survivor", bundle_dir).is_file()
+
+
+def test_scan_torn_writes_reports_roll_back_without_mutating_anything(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    survivor_path = bundle_dir / "concepts" / "survivor.md"
+    survivor_path.parent.mkdir(parents=True)
+    survivor_path.write_text(
+        "---\ntype: Concept\n---\nUnmerged body.\n", encoding="utf-8"
+    )
+    pending_path = ledger.write_pending(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[_make_entry()],
+        expected_survivor_sha256="0" * 64,
+    )
+
+    result = ledger.scan_torn_writes(bundle_dir)
+
+    assert result == [(pending_path, "roll-back")]
+    assert pending_path.is_file()
+
+
+def test_scan_torn_writes_returns_empty_list_when_no_pending_markers_exist(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+
+    assert ledger.scan_torn_writes(bundle_dir) == []
+
+
+# --- doctor Check B: nested-prefix equality (task 2.2, PR#3) --------------
+
+
+def _write_ledger(
+    bundle_dir: Path, survivor_id: str, entries: list[okf.MergeLedgerEntry]
+) -> None:
+    ledger.write_entries(
+        survivor_id, bundle_dir, survivor_id=survivor_id, entries=entries
+    )
+
+
+def test_scan_nesting_violations_is_blind_to_a_single_entry_ledger(
+    tmp_path: Path,
+) -> None:
+    """Design's documented honest false negative: a single-entry ledger has
+    nothing nested to check against, so it is silently skipped, not
+    flagged."""
+    bundle_dir = tmp_path / "bundle"
+    _write_ledger(bundle_dir, "concepts/survivor", [_make_entry()])
+
+    assert ledger.scan_nesting_violations(bundle_dir) == []
+
+
+def test_scan_nesting_violations_skips_a_post_relocation_entry_with_nothing_embedded(
+    tmp_path: Path,
+) -> None:
+    """Every entry created AFTER the ledger relocation has a
+    `survivor_before` that carries no `merged_from` key at all (it never
+    lived in frontmatter) -- design Decision 5: the corruption class this
+    check exists for is structurally extinct there, so a fresh multi-entry
+    post-relocation ledger must NOT be falsely flagged."""
+    bundle_dir = tmp_path / "bundle"
+    plain_survivor_text = "---\ntype: Concept\ntitle: Survivor\n---\nBody.\n"
+    entry_0 = _make_entry(absorbed_id="concepts/absorbed-0")
+    entry_1 = okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at="2026-07-21T00:00:00Z",
+        absorbed_id="concepts/absorbed-1",
+        absorbed_snapshot="absorbed text 2",
+        survivor_before=plain_survivor_text,  # no merged_from key at all
+        index_before="index text",
+        log_before="log text",
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+    )
+    _write_ledger(bundle_dir, "concepts/survivor", [entry_0, entry_1])
+
+    assert ledger.scan_nesting_violations(bundle_dir) == []
+
+
+def test_scan_nesting_violations_flags_a_mutated_legacy_embedded_snapshot(
+    tmp_path: Path,
+) -> None:
+    """A migration-era entry whose `survivor_before` DOES embed prior
+    entries (pre-relocation, frontmatter-carried `merged_from`) is checked
+    by nested-prefix equality: if the decoded embedded entries no longer
+    match the sidecar's own current entries `0..k-1`, that is exactly
+    #550 consequence 2 -- a later merge rewrote bytes inside an earlier
+    embedded snapshot -- and must be flagged."""
+    bundle_dir = tmp_path / "bundle"
+    entry_0 = _make_entry(absorbed_id="concepts/absorbed-0")
+    tampered_entry_0 = okf.MergeLedgerEntry(
+        schema=entry_0.schema,
+        merged_at=entry_0.merged_at,
+        absorbed_id=entry_0.absorbed_id,
+        absorbed_snapshot="TAMPERED -- this no longer matches the sidecar",
+        survivor_before=entry_0.survivor_before,
+        index_before=entry_0.index_before,
+        log_before=entry_0.log_before,
+        link_rewrites=entry_0.link_rewrites,
+        sensitivity_before=entry_0.sensitivity_before,
+        sensitivity_after=entry_0.sensitivity_after,
+    )
+    embedded_survivor_metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": "Survivor",
+        "merged_from": okf.encode_merged_from([tampered_entry_0]),
+    }
+    entry_1 = okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at="2026-07-21T00:00:00Z",
+        absorbed_id="concepts/absorbed-1",
+        absorbed_snapshot="absorbed text 2",
+        survivor_before=okf.dump_frontmatter(embedded_survivor_metadata),
+        index_before="index text",
+        log_before="log text",
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+    )
+    _write_ledger(bundle_dir, "concepts/survivor", [entry_0, entry_1])
+
+    assert ledger.scan_nesting_violations(bundle_dir) == [("concepts/survivor", 1)]
+
+
+def test_scan_nesting_violations_passes_when_the_embedded_snapshot_matches(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    entry_0 = _make_entry(absorbed_id="concepts/absorbed-0")
+    embedded_survivor_metadata: dict[str, object] = {
+        "type": "Concept",
+        "title": "Survivor",
+        "merged_from": okf.encode_merged_from([entry_0]),
+    }
+    entry_1 = okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        merged_at="2026-07-21T00:00:00Z",
+        absorbed_id="concepts/absorbed-1",
+        absorbed_snapshot="absorbed text 2",
+        survivor_before=okf.dump_frontmatter(embedded_survivor_metadata),
+        index_before="index text",
+        log_before="log text",
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+    )
+    _write_ledger(bundle_dir, "concepts/survivor", [entry_0, entry_1])
+
+    assert ledger.scan_nesting_violations(bundle_dir) == []
+
+
+def test_scan_nesting_violations_returns_empty_list_when_no_ledgers_exist(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+
+    assert ledger.scan_nesting_violations(bundle_dir) == []
+
+
+# --- repair verb primitives (task 3, PR#3) ---------------------------------
+
+
+def test_scan_unmigrated_returns_empty_list_with_no_legacy_ledgers(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / "a.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("---\ntype: Concept\ntitle: A\n---\nBody.\n", encoding="utf-8")
+
+    assert ledger.scan_unmigrated(bundle_dir) == []
+
+
+def test_scan_unmigrated_finds_a_survivor_with_a_frontmatter_embedded_ledger(
+    tmp_path: Path,
+) -> None:
+    """A pre-relocation survivor still carries `merged_from` in its OWN
+    frontmatter -- the repair verb's migration source."""
+    bundle_dir = tmp_path / "bundle"
+    path = bundle_dir / "concepts" / "survivor.md"
+    path.parent.mkdir(parents=True)
+    entry = _make_entry()
+    path.write_text(
+        okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                "title": "Survivor",
+                "merged_from": okf.encode_merged_from([entry]),
+            },
+            "Body.\n",
+        ),
+        encoding="utf-8",
+    )
+
+    result = ledger.scan_unmigrated(bundle_dir)
+
+    assert result == [("concepts/survivor", [entry])]
+
+
+def test_scan_unmigrated_skips_a_committed_sidecar_it_does_not_touch(
+    tmp_path: Path,
+) -> None:
+    """A sidecar under `bundle/.state/ledger/` is not itself an unmigrated
+    survivor concept -- `_iter_docs`'s `rglob("*.md")` walk never sees a
+    non-`.md`-suffixed sidecar anyway (design Decision 2's free EXCLUDE),
+    but this pins the reader-facing behavior explicitly."""
+    bundle_dir = tmp_path / "bundle"
+    _write_ledger(bundle_dir, "concepts/survivor", [_make_entry()])
+
+    assert ledger.scan_unmigrated(bundle_dir) == []
+
+
+def test_bundle_wide_max_entries_counts_unmigrated_and_migrated_together(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    assert ledger.bundle_wide_max_entries(bundle_dir) == 0
+
+    _write_ledger(bundle_dir, "concepts/survivor-a", [_make_entry()])
+    assert ledger.bundle_wide_max_entries(bundle_dir) == 1
+
+    path = bundle_dir / "concepts" / "survivor-b.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        okf.dump_frontmatter(
+            {
+                "type": "Concept",
+                "title": "Survivor B",
+                "merged_from": okf.encode_merged_from(
+                    [
+                        _make_entry("concepts/absorbed-x"),
+                        _make_entry("concepts/absorbed-y"),
+                    ]
+                ),
+            },
+            "Body.\n",
+        ),
+        encoding="utf-8",
+    )
+    assert ledger.bundle_wide_max_entries(bundle_dir) == 2
