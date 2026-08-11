@@ -16,7 +16,7 @@ UX, looping `openkos.model.okf.build_concept` once per validated object.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 from openkos.extraction import judge as judge_mod
@@ -489,6 +489,71 @@ def _drop_source_title_twins(
     return non_twins
 
 
+_ACRONYM_FIRST_RE: Final = re.compile(r"\b([A-Z][A-Z0-9]{1,5})\s*\(([^)]+)\)")
+"""`MCP (Machine Control Protocol)` -- acronym first, expansion
+parenthesized. Identical to the pattern in
+`evals/extraction_cap/measure_expansion_grounding.py` on purpose: the probe
+and the rule must see the same emissions or the measurement stops describing
+the behavior."""
+
+_EXPANSION_FIRST_RE: Final = re.compile(
+    r"\b([A-Z][a-zA-Z]+(?:\s+[A-Za-z]+){1,5})\s*\(([A-Z][A-Z0-9]{1,5})\)"
+)
+"""`Model Context Protocol (MCP)` -- expansion first, acronym parenthesized."""
+
+
+def _strip_ungrounded_expansions(
+    results: list[ExtractionResult], *, source_text: str
+) -> list[ExtractionResult]:
+    """Deterministic anti-fabrication enforcement (#423): a parenthetical
+    acronym expansion the source text never contains was not read off the
+    source, so it never reaches storage -- the title keeps the acronym and
+    loses the invented claim.
+
+    The measured defect: on the Spanish corpus fixture the extractor
+    recovered the MCP subject and INVENTED its expansion -- 17 stored
+    emissions, 7 distinct false expansions (`Machine Control Protocol` x9
+    and six others), against 102 of 102 correct `Model Context Protocol`
+    expansions on the English fixtures. Silently wrong is worse than
+    visibly missing: an object carrying a fabricated fact poisons the
+    knowledge base in a way a missing alias never does.
+
+    Grounding is the same deliberately dumb comparison every title rule in
+    this module uses -- strip, casefold, collapse whitespace, then substring
+    -- never stemming or token overlap. The bias is declared: a legitimate
+    expansion the source writes with a hyphen or an inflected word is
+    stripped too. That trade is taken on the probe's own argument
+    (`measure_expansion_grounding.py`): only the parenthetical expansion of
+    an acronym makes a checkable factual claim about what the source says,
+    and a checkable claim that does not check out is dropped, not shipped.
+    Titles themselves are synthesized, not copied, so nothing else in the
+    title is touched -- and `description`/`body` are out of scope entirely.
+
+    Runs BEFORE `_dedup_merged`/`_merge_union`, so two runs fabricating
+    DIFFERENT expansions collapse into one candidate instead of merging as
+    two distinct objects."""
+    normalized_source = " ".join(source_text.casefold().split())
+
+    def _grounded(phrase: str) -> bool:
+        return " ".join(phrase.casefold().split()) in normalized_source
+
+    def _acronym_first(match: "re.Match[str]") -> str:
+        return match.group(0) if _grounded(match.group(2)) else match.group(1)
+
+    def _expansion_first(match: "re.Match[str]") -> str:
+        return match.group(0) if _grounded(match.group(1)) else match.group(2)
+
+    stripped: list[ExtractionResult] = []
+    for result in results:
+        title = _ACRONYM_FIRST_RE.sub(_acronym_first, result.title)
+        title = _EXPANSION_FIRST_RE.sub(_expansion_first, title)
+        title = " ".join(title.split())
+        if title != result.title:
+            result = replace(result, title=title)
+        stripped.append(result)
+    return stripped
+
+
 def _drop_framing_objects(
     results: list[ExtractionResult], *, source_title: str
 ) -> list[ExtractionResult]:
@@ -804,7 +869,9 @@ def extract_concept(
     `openkos.model.okf.build_concept` once per returned object.
     """
     if len(source_text) <= _CHUNK_THRESHOLD:
-        results = _extract_once(source_text, source_title, llm)
+        results = _strip_ungrounded_expansions(
+            _extract_once(source_text, source_title, llm), source_text=source_text
+        )
         chunk_count = 1
     else:
         # #454: above the threshold the single call collapses to one object
@@ -820,7 +887,12 @@ def extract_concept(
         merged: list[ExtractionResult] = []
         for window in windows:
             merged.extend(_extract_once(window, source_title, llm))
-        results = _dedup_merged(merged)
+        # Grounding checks against the FULL source, not the window that
+        # produced the object -- an expansion stated once in chunk 1 grounds
+        # the acronym a later chunk re-derives.
+        results = _dedup_merged(
+            _strip_ungrounded_expansions(merged, source_text=source_text)
+        )
     results = _drop_framing_objects(results, source_title=source_title)
     results = _drop_source_title_twins(results, source_title=source_title)
     retained = results[:_MAX_OBJECTS_PER_SOURCE]
@@ -954,14 +1026,20 @@ def extract_concept_union(
     if len(source_text) <= _CHUNK_THRESHOLD:
         run1 = _drop_source_title_twins(
             _drop_framing_objects(
-                _extract_once(source_text, source_title, llm),
+                _strip_ungrounded_expansions(
+                    _extract_once(source_text, source_title, llm),
+                    source_text=source_text,
+                ),
                 source_title=source_title,
             ),
             source_title=source_title,
         )
         run2 = _drop_source_title_twins(
             _drop_framing_objects(
-                _extract_once(source_text, source_title, llm),
+                _strip_ungrounded_expansions(
+                    _extract_once(source_text, source_title, llm),
+                    source_text=source_text,
+                ),
                 source_title=source_title,
             ),
             source_title=source_title,
@@ -976,7 +1054,12 @@ def extract_concept_union(
         for window in windows:
             chunked.extend(_extract_once(window, source_title, llm))
         merged = _drop_source_title_twins(
-            _drop_framing_objects(_dedup_merged(chunked), source_title=source_title),
+            _drop_framing_objects(
+                _dedup_merged(
+                    _strip_ungrounded_expansions(chunked, source_text=source_text)
+                ),
+                source_title=source_title,
+            ),
             source_title=source_title,
         )
         run_count = 1
