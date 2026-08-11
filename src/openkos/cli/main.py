@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import unicodedata
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -554,6 +554,61 @@ def _reject_torn_ledger_write(
         err=True,
     )
     raise typer.Exit(code=1)
+
+
+def _sweep_ledger_sidecars_for_ids(
+    bundle_dir: Path, purge_ids: Iterable[str]
+) -> list[Path]:
+    """Privacy sweep of `bundle/.state/ledger/` for `purge_ids` membership
+    (forget-command spec: "Deletion Sweep Includes Ledger Storage";
+    privacy-purge spec: "Whole-History Expunge Covers The Ledger Sidecar
+    Store" -- shared by `forget`'s and `purge`'s own Phase B, so the sweep
+    is written exactly once):
+
+    - Each purge-set member's OWN ledger sidecar (if it is/was itself a
+      merge survivor) is deleted OUTRIGHT -- the member's own merge history
+      is no longer meaningful once the member itself is gone.
+    - Every OTHER live sidecar has any entry whose `absorbed_id` is in
+      `purge_ids` dropped (`ledger.write_entries` with the remaining
+      entries, or removed entirely when none remain) -- so a purge-set
+      member's pre-merge body does not survive merely because it was
+      absorbed into a DIFFERENT survivor that is not itself being
+      forgotten/purged.
+
+    Returns every ledger path touched (deleted, or rewritten), bundle-dir-
+    relative-capable via the caller, so it can be folded into the SAME
+    Phase B write/`_autocommit` the concept-file deletion already uses --
+    never a second, independent write pass.
+
+    A sidecar whose `survivor_id` field is missing or non-string is skipped
+    defensively rather than guessed at -- this sweep only ever REMOVES
+    content, so a malformed sidecar it cannot safely identify is left for
+    `doctor` to flag, not silently rewritten under an invented id."""
+    purge_ids_set = set(purge_ids)
+    touched: list[Path] = []
+    deleted: set[Path] = set()
+    for member in sorted(purge_ids_set):
+        own_path = bundle_ledger.ledger_path_for(member, bundle_dir)
+        if own_path.is_file():
+            fsio.remove_file(own_path)
+            touched.append(own_path)
+            deleted.add(own_path)
+    for ledger_path in bundle_ledger.iter_ledgers(bundle_dir):
+        if ledger_path in deleted:
+            continue
+        metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
+        survivor_id = metadata.get("survivor_id")
+        if not isinstance(survivor_id, str) or not survivor_id:
+            continue
+        entries = okf.decode_merged_from(metadata)
+        remaining = [e for e in entries if e.absorbed_id not in purge_ids_set]
+        if len(remaining) == len(entries):
+            continue
+        bundle_ledger.write_entries(
+            survivor_id, bundle_dir, survivor_id=survivor_id, entries=remaining
+        )
+        touched.append(ledger_path)
+    return touched
 
 
 def _reject_drifted_targets(
@@ -4126,6 +4181,7 @@ def forget(
     )
 
     unlinked_count = 0
+    ledger_touched: list[Path] = []
     try:
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
@@ -4136,6 +4192,12 @@ def forget(
         for member in sorted(purge_ids):
             fsio.remove_file(layout.bundle_dir / f"{member}.md")
             unlinked_count += 1
+        # Merge-ledger sidecar privacy sweep (forget-command spec:
+        # "Deletion Sweep Includes Ledger Storage"), same Phase B write:
+        # a purge-set member's content must not survive `forget` merely
+        # because it was previously absorbed into (or is the survivor of)
+        # a merge.
+        ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
     except (OSError, ValueError) as exc:
         message = f"openkos forget: failed while writing the forget -- {exc}."
         # K-of-N observability on a mid-cascade unlink failure (`--scope
@@ -4173,6 +4235,10 @@ def forget(
             "bundle/index.md",
             "bundle/log.md",
             *(f"bundle/{member}.md" for member in purge_ids),
+            *(
+                f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
+                for p in ledger_touched
+            ),
         ],
         forget_message,
     )
@@ -4538,6 +4604,21 @@ def purge(
                         "(its bundle file is still targeted)"
                     )
             expunge_targets.append(f"bundle/{member}.md")
+        # Whole-History Expunge Covers The Ledger Sidecar Store
+        # (privacy-purge spec, task 3.4): every purge-set member's OWN
+        # `bundle/.state/ledger/` sidecar (i.e. it is/was itself a merge
+        # survivor) is expunged in this SAME `git filter-repo` pass -- no
+        # second invocation. An absorbed-but-not-itself-a-survivor member
+        # has no sidecar of its own; its historical body may still live as
+        # an `absorbed_snapshot` fragment inside a DIFFERENT survivor's
+        # sidecar, which stays a documented gap (see design's threat
+        # matrix note) rather than a whole-file expunge target here.
+        for member in sorted(purge_ids):
+            member_sidecar = bundle_ledger.ledger_path_for(member, layout.bundle_dir)
+            if member_sidecar.is_file():
+                expunge_targets.append(
+                    f"bundle/{member_sidecar.relative_to(layout.bundle_dir).as_posix()}"
+                )
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos purge: failed while preparing the purge -- {exc}.", err=True
@@ -4749,6 +4830,7 @@ def purge(
         )
         _purge_clean_live_index(layout, purge_ids)
         _purge_clean_live_log(layout, purge_ids)
+        _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
         _purge_rebuild_indexes(layout)
         raise typer.Exit(code=1) from exc
     except vcs_git.GitError as exc:
@@ -4760,6 +4842,14 @@ def purge(
 
     _purge_clean_live_index(layout, purge_ids)
     _purge_clean_live_log(layout, purge_ids)
+    # Whole-History Expunge Covers The Ledger Sidecar Store
+    # (privacy-purge spec): each purge-set member's OWN sidecar was already
+    # removed from the working tree by `expunge_paths`' filter-repo checkout
+    # (it was in `expunge_targets` above); this is the LIVE-tree half --
+    # dropping any OTHER survivor's sidecar entry whose `absorbed_id` is a
+    # purge-set member, reusing the exact same primitive `forget`'s Phase B
+    # calls, so the sweep is written exactly once.
+    ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
     _purge_rebuild_indexes(layout)
 
     # Post-rewrite live-tree auto-commit (design: "purge empty-diff guard",
@@ -4772,7 +4862,14 @@ def purge(
     # repo), fall through and attempt `_autocommit` anyway -- its own
     # try/except keeps that non-fatal too, matching this whole step's
     # never-fail-the-already-irreversible-purge contract.
-    commit_paths_rel = ["bundle/index.md", "bundle/log.md"]
+    commit_paths_rel = [
+        "bundle/index.md",
+        "bundle/log.md",
+        *(
+            f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
+            for p in ledger_touched
+        ),
+    ]
     try:
         should_commit = vcs_git.paths_dirty(root, commit_paths_rel)
     except vcs_git.GitError:
@@ -8792,6 +8889,11 @@ def lint() -> None:
     # issue #474: a names-only walk, never the docs list -- collect_docs
     # cannot see a decomposed directory, non-`.md` file, or unreadable doc.
     non_nfc = lint_check.check_non_nfc_names(layout.bundle_dir)
+    # task 3.6: a names-only walk over `bundle/.state/` alone, never the
+    # `docs` list -- `collect_docs`/`_iter_docs` never descends there.
+    state_dir_markdown = lint_check.check_state_dir_contains_no_markdown(
+        layout.bundle_dir
+    )
     notices = window_notices + skip_notices
     report = lint_check.LintReport(
         stale=stale,
@@ -8803,6 +8905,7 @@ def lint() -> None:
         dangling_provenance=dangling_provenance,
         unbacked_provenance=unbacked_provenance,
         non_nfc=non_nfc,
+        state_dir_markdown=state_dir_markdown,
         notices=notices,
     )
 
@@ -8874,6 +8977,13 @@ def lint() -> None:
         # on-disk entry (possibly a directory or non-`.md` file), not a
         # concept object, so the path is the honest spelling.
         for finding in report.non_nfc:
+            typer.echo(f"  {finding.path}: {finding.detail}")
+    typer.echo()
+    typer.echo("State-dir markdown:")
+    if not report.state_dir_markdown:
+        typer.echo("  No `.md` files under bundle/.state/.")
+    else:
+        for finding in report.state_dir_markdown:
             typer.echo(f"  {finding.path}: {finding.detail}")
 
 

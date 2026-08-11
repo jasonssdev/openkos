@@ -17,6 +17,7 @@ import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos.bundle import index as bundle_index
+from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.vcs import git as vcs_git
@@ -30,6 +31,20 @@ runner = CliRunner()
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+
+
+def _write_plain_concept(
+    tmp_path: Path, concept_id: str, *, title: str = "Concept"
+) -> None:
+    """Write a bare concept file, no `index.md` bullet -- used to build a
+    `merge` fixture (a survivor's own inbound/index state does not matter
+    for these tests)."""
+    concept_path = tmp_path / "bundle" / f"{concept_id}.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    concept_path.write_text(
+        f"---\ntype: Concept\ntitle: {title}\n---\n\n# {title}\n\nBody.\n",
+        encoding="utf-8",
+    )
 
 
 def _write_child_concept(
@@ -687,6 +702,48 @@ def test_purge_self_scope_removes_blobs_from_history(
     assert (tmp_git_repo.root / ".openkos" / "fts.db").exists()
     assert (tmp_git_repo.root / ".openkos" / "graph.db").exists()
     assert not (tmp_git_repo.root / ".openkos" / "vectors.db").exists()
+
+
+def test_purging_a_merge_survivor_removes_its_ledger_sidecar_from_history(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """privacy-purge spec: "Whole-History Expunge Covers The Ledger Sidecar
+    Store", scenario "Purging a merge survivor removes its ledger sidecar
+    from history" -- the survivor's `bundle/.state/ledger/` sidecar is gone
+    from `git rev-list --objects --all` and the reflog, in the SAME single
+    `git filter-repo` pass as the concept's own file expunge (task 3.4's
+    threat-matrix row)."""
+    _write_plain_concept(tmp_git_repo.root, "concepts/survivor", title="Survivor")
+    _write_plain_concept(tmp_git_repo.root, "concepts/absorbed", title="Absorbed")
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add survivor + absorbed"], cwd=tmp_git_repo.root)
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.output
+    sidecar_path = bundle_ledger.ledger_path_for(
+        "concepts/survivor", tmp_git_repo.root / "bundle"
+    )
+    assert sidecar_path.is_file(), "fixture setup: merge must create a sidecar"
+    sidecar_rel = sidecar_path.relative_to(tmp_git_repo.root).as_posix()
+    # `merge`'s own `_autocommit` is best-effort and this fixture's identity
+    # is deliberately UNSET (`isolate_git_identity`, no name/email) outside
+    # `_git`'s pinned env, so land the merge in history explicitly -- mirrors
+    # `test_purge_sibling_survives_no_over_delete`'s own manual commit.
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Merge survivor <- absorbed"], cwd=tmp_git_repo.root)
+    assert _blob_history_contains(tmp_git_repo.root, sidecar_rel)
+
+    phrase = "purge concepts/survivor"
+    result = runner.invoke(
+        app, ["purge", "concepts/survivor", "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not _blob_history_contains(tmp_git_repo.root, sidecar_rel)
+    assert _reflog_is_empty(tmp_git_repo.root)
+    assert not sidecar_path.exists()
 
 
 def test_purge_sibling_survives_no_over_delete(tmp_git_repo: TmpGitRepo) -> None:

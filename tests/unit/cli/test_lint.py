@@ -718,3 +718,95 @@ def test_lint_clean_bundle_reports_zero_non_nfc_names(
     assert "Non-NFC names:" in result.stdout
     assert "  No non-NFC on-disk names." in result.stdout
     assert _snapshot(tmp_path) == before
+
+
+def test_lint_flags_markdown_under_state_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `.md` file placed under `bundle/.state/` -- the safety net for the
+    EXCLUDE/INCLUDE separation (design: "Relocate the merge ledger to
+    `bundle/.state/ledger/`", Decision 3, task 3.6) -- is reported under
+    `State-dir markdown:`, read-only (never removed, never renamed by
+    `lint` itself), and `lint` still exits 0 (non-gating, matching every
+    other finding kind)."""
+    _init_workspace(tmp_path, monkeypatch)
+    state_dir = tmp_path / "bundle" / ".state" / "ledger"
+    state_dir.mkdir(parents=True)
+    (state_dir / "stray.md").write_text(
+        "---\ntype: Concept\ntitle: Stray\n---\nBody.\n", encoding="utf-8"
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "State-dir markdown:" in result.stdout
+    section = result.stdout.split("State-dir markdown:", 1)[1]
+    assert "  .state/ledger/stray.md: " in section
+    assert "bundle/.state/" in section
+    assert _snapshot(tmp_path) == before
+
+
+def test_lint_clean_bundle_reports_zero_state_dir_markdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh, empty bundle renders the state-dir-markdown empty state;
+    `lint` still exits 0 and creates no file."""
+    _init_workspace(tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "State-dir markdown:" in result.stdout
+    assert "  No `.md` files under bundle/.state/." in result.stdout
+    assert _snapshot(tmp_path) == before
+
+
+def test_lint_ledger_sidecar_alone_does_not_trigger_state_dir_markdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuine merge-ledger sidecar (`.ledger.okf`, never `.md`) under
+    `bundle/.state/` must NOT be flagged -- this check exists to catch a
+    REGRESSION into `.md`, not to complain about the sidecar store's
+    normal, intended contents."""
+    from openkos.bundle import ledger as bundle_ledger
+    from openkos.model import okf
+
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "concepts").mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "concepts" / "survivor.md").write_text(
+        "---\ntype: Concept\ntitle: Survivor\n---\n\nBody.\n", encoding="utf-8"
+    )
+    bundle_ledger.write_entries(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[
+            okf.MergeLedgerEntry(
+                schema=okf.MERGE_LEDGER_SCHEMA_V3,
+                merged_at="2026-01-01T00:00:00Z",
+                absorbed_id="concepts/absorbed",
+                absorbed_snapshot=okf.dump_frontmatter(
+                    {"type": "Concept", "title": "Absorbed"}, "Body.\n"
+                ),
+                survivor_before=okf.dump_frontmatter(
+                    {"type": "Concept", "title": "Survivor"}, "Body.\n"
+                ),
+                index_before="",
+                log_before="",
+                link_rewrites=[],
+                sensitivity_before="private",
+                sensitivity_after="private",
+                relation_rewrites=[],
+                provenance_rewrites=[],
+            )
+        ],
+    )
+
+    result = runner.invoke(app, ["lint"])
+
+    assert result.exit_code == 0
+    assert "State-dir markdown:" in result.stdout
+    assert "  No `.md` files under bundle/.state/." in result.stdout

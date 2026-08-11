@@ -163,6 +163,64 @@ def test_warn_if_walk_incomplete_silent_on_clean_bundle_under_the_exemption(
     assert captured.err == ""
 
 
+def _make_bundle_with_unlistable_state_subdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Mirrors `_make_locked_bundle`, but the unlistable subdirectory lives
+    under `bundle/.state/` (the merge-ledger sidecar root) instead of a
+    top-level concept directory -- the fixture for the sensitivity-aware-llm
+    delta's "Walk-Incompleteness Observability" MODIFIED requirement (task
+    3.5): detection must cover BOTH `bundle/**.md` and `bundle/.state/`."""
+    (tmp_path / "readable.md").write_text(
+        "---\ntype: concept\n---\nBody.\n", encoding="utf-8"
+    )
+    locked_dir = tmp_path / ".state" / "ledger" / "locked"
+    locked_dir.mkdir(parents=True)
+    walk_error = OSError(13, "Permission denied", str(locked_dir))
+
+    original_walk = os.walk
+
+    def fake_walk(
+        top: str | os.PathLike[str],
+        topdown: bool = True,
+        onerror: Callable[[OSError], object] | None = None,
+        followlinks: bool = False,
+    ) -> Iterator[tuple[str, list[str], list[str]]]:
+        if onerror is not None:
+            onerror(walk_error)
+        yield from original_walk(top, topdown, onerror, followlinks)
+
+    monkeypatch.setattr(os, "walk", fake_walk)
+    return tmp_path
+
+
+def test_warn_if_walk_incomplete_covers_unlistable_state_subdirectory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """sensitivity-aware-llm delta, scenario "Incomplete ledger-sidecar walk
+    also warns": an unlistable subdirectory under `bundle/.state/` triggers
+    BOTH advisories, exactly like one under the concept tree.
+
+    This needs -- and gets -- ZERO production code change: `okf._walk_errors`
+    already walks `bundle_dir` with `os.walk`, which descends into EVERY
+    subdirectory unconditionally (unlike the `rglob("*.md")` EXCLUDE walks,
+    which filter by extension) -- `bundle/.state/` was always inside that
+    walk's reach. This test is a LOCK-IN, mirroring
+    `tests/unit/bundle/test_ledger_walk_exclusion.py`'s EXCLUDE-side guard:
+    it exists so a future edit that narrows `_walk_errors`'s traversal root
+    (or otherwise carves `.state/` out of it) is caught immediately."""
+    bundle_dir = _make_bundle_with_unlistable_state_subdir(tmp_path, monkeypatch)
+
+    observability.warn_if_walk_incomplete(bundle_dir)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "this command's inputs are incomplete" in captured.err
+    assert "confidential-content filter" in captured.err
+
+
 def test_warn_if_walk_incomplete_include_confidential_keeps_the_general_advisory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
