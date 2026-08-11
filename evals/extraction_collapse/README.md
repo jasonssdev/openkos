@@ -65,7 +65,9 @@ own section against `NEGATIVE_CONTROL_OBJECTS` instead of through a verdict.
 
 | situation | what the report says |
 | --- | --- |
-| one object returned | `no false positive` — plus how many runs restated the source title |
+| one object, and it is a **droppable** source-title twin | `no false positive` — the object stood on the floor and the floor held |
+| one object, but a `Procedure` | `NO FLOOR EVIDENCE` — exempt by type, see below |
+| one object, titled something else | `NO FLOOR EVIDENCE` — the rule had no candidate to drop |
 | any run returned `[]` | `FALSE POSITIVE` — outranks every collapse verdict above it |
 | more than one object | `SPLIT` — a different miss, reported separately so the two cannot be traded |
 | every run errored | `NO RESULT` — a connection failure is not a false positive |
@@ -75,6 +77,26 @@ naming one thing, a body about that one thing, whose lone object restates
 the title. That object survives only because of the rule's floor (`len(...)
 <= 1`, and the all-twins case), which is why a change to the twin rule is
 exactly what this control exists to price. `--no-negative-control` skips it.
+
+### A control that cannot fail has not passed
+
+`_is_twin` exempts one type outright (#413):
+
+```python
+result.type != _TWIN_EXEMPT_TYPE and _normalize_title(result.title) == normalized_title
+```
+
+A `Procedure` is therefore **never** a twin, whatever its title — it would
+survive with both floors deleted. The first negative control was a scheduled
+job, came back as a `Procedure` in 5 of 5 live runs, and the probe reported
+"no false positive" beside a number that did not depend on the floor at all.
+
+So the fixture is now a definition rather than a how-to, and the harness no
+longer trusts the type: `title_twin_runs` counts only droppable twins,
+`exempt_twin_runs` counts the exempt ones, and either of the two
+`NO FLOOR EVIDENCE` rows above says plainly that the run proves nothing. The
+mirrored exempt-type constant is parity-checked against `concept.py` in
+`--self-test`, because a stale mirror would quietly restore the false claim.
 
 ## The 1–4 KB band
 
@@ -149,10 +171,10 @@ yielding `1, 1, 5` across runs, so a single run is a sample, not a finding.
 - **Only short sources, only three pairs.** #522 observes collapse from 695 B
   to 40.8 KB. These fixtures sit at the small end, where a run is cheap. A
   pair at transcript scale is worth adding and is not here.
-- **The `lesson` axis and the negative control have never been run.** They
-  ship as an instrument, not as a result: `report.md` predates both, and no
-  number in it describes either. Read them as unmeasured until a run says
-  otherwise.
+- **The `lesson` axis and the negative control carry no result yet.** Their
+  first live run measured earlier versions of both fixtures and is what
+  caused them to be rewritten; the text that ships now has not been run.
+  Read them as unmeasured until a run says otherwise.
 - **One negative control is one document.** A `[]` rate measured on it is
   evidence about that document, not a false-positive rate for the twin rule.
 - **Constructed, not adjudicated.** Same limitation `edge_typing/fixtures.py`

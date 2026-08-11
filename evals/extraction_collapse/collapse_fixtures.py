@@ -112,12 +112,12 @@ rate ABOUT that shape.
 
 ## The negative control, where one object is the right answer
 
-`NEGATIVE_CONTROL` is a genuinely single-subject source: an H1-style title
-naming one thing (a scheduled job) and a body about that one thing. It is
-the `mcp-launch` shape `_drop_source_title_twins` names in its own docstring
-and that `test_source_title_twin_kept_when_it_is_the_only_object` guards --
-the source whose only object restates the source title, kept because
-suppressing it would emit `[]` for genuine content.
+`NEGATIVE_CONTROL` is a genuinely single-subject source: a title naming one
+thing (a term, `Replica Lag`) and a body about that one thing. It is the
+`mcp-launch` class `_drop_source_title_twins` names in its own docstring and
+that `test_source_title_twin_kept_when_it_is_the_only_object` guards -- the
+source whose only object restates the source title, kept because suppressing
+it would emit `[]` for genuine content.
 
 Every pair above reads one object as the DEFECT. Here one object is the
 correct answer, and the failure to watch for is the opposite one: a change
@@ -129,6 +129,45 @@ section against `NEGATIVE_CONTROL_OBJECTS` rather than through a verdict.
 It carries the same CONSTRUCTED limitation as everything else in this file,
 plus one of its own: one source is one shape. A `[]` rate measured on it is
 evidence about this document, not a false-positive rate for the rule.
+
+## A control that cannot fail is not a control that passed
+
+Written down because it already happened here. The first `NEGATIVE_CONTROL`
+was a scheduled job, `Nightly Index Rebuild`, and it read as a clean pass on
+its first live run: one object in 5 of 5, titled exactly like the source.
+The object was a `Procedure` every time, and `_is_twin` exempts `Procedure`
+BY TYPE (#413) -- so it would have survived with both of the rule's floors
+deleted. The control was green on a case that could not go red.
+
+Two things follow, and both are enforced rather than remembered. The fixture
+is now a definition rather than a how-to, so the prompt's own tie-break does
+not route it to the exempt type. And the harness stopped taking the type on
+trust: `title_twin_runs` counts only DROPPABLE twins, `exempt_twin_runs`
+counts the rest, and a run whose lone object is exempt is reported as
+carrying no floor evidence instead of as a pass. The fixture makes the right
+outcome likely; the harness makes the wrong one visible. Only the second is
+a guarantee.
+
+## Three subjects have to be separable, not merely three
+
+The first `lesson` pair collapsed on BOTH arms (5 of 5 each, single-pass
+`qwen3:8b`, seed 7) and the probe correctly reported `NO FLOOR`: the flat arm
+afforded no floor, so the pair said nothing about its axis. The three
+subjects were there -- an environment, a pinning decision, a test layout --
+but each was three sentences of one connected setup narrative, and the
+extractor read the narrative rather than its parts.
+
+What changed is separability, not subject count: each paragraph now leads
+with its own named artifact (`.venv`, the lockfile, the tests tree) and
+carries its own consequence, so a reader dropping into any one of them meets
+a self-contained subject. The arms grew from 1.1 KB to about 1.7 KB to pay
+for that, which is inside `SHORT_SINGLE_TOPIC_BAND` and deliberately nowhere
+near its ceiling.
+
+The band is the fixture's whole point, so it is the last thing to spend. If
+a floor arm cannot afford a floor inside 1-4 KB at a given model, the honest
+report is `NO FLOOR` and a note that this size does not reach the question --
+not a fourth subject, and not a longer document.
 
 ## The name
 
@@ -304,7 +343,8 @@ SOURCES: tuple[PairedSource, ...] = (
     ),
     # The `lesson` pair is the first written to a LENGTH target (1-4 KB) and
     # the first that is not a meeting on either arm. See the band section in
-    # the module docstring for what that buys.
+    # the module docstring for what that buys, and the separability section
+    # for why each paragraph names its own artifact.
     PairedSource(
         pair_id="lesson",
         role=TREATMENT,
@@ -314,26 +354,36 @@ SOURCES: tuple[PairedSource, ...] = (
         text=(
             "In this lesson you set up a project the way the rest of the "
             "course expects it.\n\n"
-            "A virtual environment holds one project's installed packages in "
-            "a directory of its own, separate from the interpreter the "
-            "operating system ships. Two projects that need different "
-            "versions of the same library can then both work, because "
-            "neither installs into the shared location where the other would "
-            "look. Deleting that directory and building it again is the "
-            "fastest way out of a broken install.\n\n"
+            "A virtual environment is a directory holding one project's "
+            "installed packages together with a link to the interpreter that "
+            "made it. Installing into it changes nothing outside it, which is "
+            "what lets two projects on one machine depend on different "
+            "versions of the same library without either noticing the other. "
+            "It is called .venv by convention and kept out of version "
+            "control, so a fresh checkout never carries one. It holds no work "
+            "of its own, only packages that can be fetched again, so deleting "
+            "it and building it back is the shortest way out of an install "
+            "that has gone wrong.\n\n"
             "The course pins exact versions in a lockfile rather than leaving "
-            "them as ranges. The reason is that a lockfile records everything "
-            "the resolver actually chose, including packages nothing asked "
-            "for directly, so it can answer what changed between a build that "
-            "worked and one that did not. A range like >=2.4 cannot answer "
-            "that, because the same range resolves differently on different "
-            "days.\n\n"
-            "Tests live in a tests directory that mirrors the package tree, "
-            "so tests/parsing/test_tokens.py sits opposite "
-            "src/parsing/tokens.py. The mirror is what makes a missing test "
-            "visible: an empty directory on one side is the whole report. "
-            "Nothing enforces it, so it holds only while every new module is "
-            "added to both trees at once.\n"
+            "ranges in the dependency list. A lockfile records what the "
+            "resolver actually chose on the day it ran, including the "
+            "packages nothing asked for directly, and it is committed next to "
+            "the code. The reason is diagnostic: when something that worked "
+            "stops working, the difference between two lockfiles names the "
+            "package that moved, while a range like >=2.4 resolves to "
+            "whatever exists at the moment it is read and leaves nothing "
+            "behind to compare. Two people cloning a month apart get the same "
+            "bytes.\n\n"
+            "The tests tree mirrors the package tree file for file, so "
+            "tests/parsing/test_tokens.py sits opposite "
+            "src/parsing/tokens.py. The mirror is a reporting device more "
+            "than a filing one: a module with nothing opposite it is an empty "
+            "slot anybody can see, and one flat directory named by feature "
+            "hides exactly that. A test file with no module opposite it is "
+            "the same signal reversed, and usually means something was "
+            "deleted without its test. Nothing checks the mirror, so it "
+            "survives only while every new module arrives with its "
+            "counterpart.\n"
         ),
     ),
     PairedSource(
@@ -343,26 +393,36 @@ SOURCES: tuple[PairedSource, ...] = (
         language="EN",
         source_title="Virtual environments, pinned versions, and test layout",
         text=(
-            "A virtual environment holds one project's installed packages in "
-            "a directory of its own, separate from the interpreter the "
-            "operating system ships. Two projects that need different "
-            "versions of the same library can then both work, because "
-            "neither installs into the shared location where the other would "
-            "look. Deleting that directory and building it again is the "
-            "fastest way out of a broken install.\n\n"
+            "A virtual environment is a directory holding one project's "
+            "installed packages together with a link to the interpreter that "
+            "made it. Installing into it changes nothing outside it, which is "
+            "what lets two projects on one machine depend on different "
+            "versions of the same library without either noticing the other. "
+            "It is called .venv by convention and kept out of version "
+            "control, so a fresh checkout never carries one. It holds no work "
+            "of its own, only packages that can be fetched again, so deleting "
+            "it and building it back is the shortest way out of an install "
+            "that has gone wrong.\n\n"
             "Exact versions are pinned in a lockfile rather than left as "
-            "ranges. The reason is that a lockfile records everything the "
-            "resolver actually chose, including packages nothing asked for "
-            "directly, so it can answer what changed between a build that "
-            "worked and one that did not. A range like >=2.4 cannot answer "
-            "that, because the same range resolves differently on different "
-            "days.\n\n"
-            "Tests live in a tests directory that mirrors the package tree, "
-            "so tests/parsing/test_tokens.py sits opposite "
-            "src/parsing/tokens.py. The mirror is what makes a missing test "
-            "visible: an empty directory on one side is the whole report. "
-            "Nothing enforces it, so it holds only while every new module is "
-            "added to both trees at once.\n"
+            "ranges in the dependency list. A lockfile records what the "
+            "resolver actually chose on the day it ran, including the "
+            "packages nothing asked for directly, and it is committed next to "
+            "the code. The reason is diagnostic: when something that worked "
+            "stops working, the difference between two lockfiles names the "
+            "package that moved, while a range like >=2.4 resolves to "
+            "whatever exists at the moment it is read and leaves nothing "
+            "behind to compare. Two people cloning a month apart get the same "
+            "bytes.\n\n"
+            "The tests tree mirrors the package tree file for file, so "
+            "tests/parsing/test_tokens.py sits opposite "
+            "src/parsing/tokens.py. The mirror is a reporting device more "
+            "than a filing one: a module with nothing opposite it is an empty "
+            "slot anybody can see, and one flat directory named by feature "
+            "hides exactly that. A test file with no module opposite it is "
+            "the same signal reversed, and usually means something was "
+            "deleted without its test. Nothing checks the mirror, so it "
+            "survives only while every new module arrives with its "
+            "counterpart.\n"
         ),
     ),
 )
@@ -380,37 +440,38 @@ NEGATIVE_CONTROL = PairedSource(
     role=FLOOR,
     arm="single-subject",
     language="EN",
-    source_title="Nightly Index Rebuild",
+    source_title="Replica Lag",
     # Deliberately NOT in `SOURCES`: `pairs()` would reject a lone arm, and it
     # SHOULD -- an unpaired fixture read through the paired verdict logic is
     # the reading #522 warns is not a finding. The `role` field is inert here
     # for the same reason: nothing reads it, since `pairs()` never sees this
     # source. `FLOOR` is written because holding is this fixture's job.
     text=(
-        "The nightly index rebuild runs at 02:15 in the service's own "
-        "timezone and takes between four and nine minutes on a full corpus. "
-        "It reads every document the store holds, writes a new index into a "
-        "temporary directory, and swaps that directory into place only once "
-        "the build has finished, so a rebuild that fails partway leaves "
-        "yesterday's index serving traffic untouched. The swap itself is a "
-        "directory rename, which means no query ever reads a half-written "
-        "index.\n\n"
-        "It exists because incremental updates drift. Deletions are the "
-        "usual cause: a document removed from the store leaves its terms "
-        "behind in the index until something rewrites the whole thing, and a "
-        "search for one of those terms keeps returning a result nobody can "
-        "open.\n\n"
-        "The job writes one line per run to the service log, carrying the "
-        "document count and the elapsed time, and nothing else. There is no "
-        "dashboard for it. Two consecutive nights with no line is the signal "
-        "that it stopped running, and until somebody reads the log nothing "
-        "else reports that at all. The line is written after the swap, so a "
-        "run that logged is a run whose index is already live.\n"
+        "Replica lag is the delay between a write being acknowledged on the "
+        "primary database and that same write becoming visible on a replica. "
+        "It is counted in seconds of wall clock rather than in rows: a "
+        "replica four seconds behind is serving the state the primary held "
+        "four seconds ago, whatever number of writes happened in between. "
+        "The figure is reported by the replica itself, which makes it a "
+        "claim about the replica's own clock as much as about the data.\n\n"
+        "The lag grows whenever a replica cannot apply changes as quickly as "
+        "the primary produces them. A long transaction on the primary is the "
+        "ordinary cause, because it arrives as a single unit and the replica "
+        "works through it in one thread while everything behind it waits. "
+        "Bulk deletes and index builds show the same shape for the same "
+        "reason, and none of it is a failure state: a healthy system in the "
+        "middle of a heavy import looks exactly like this.\n\n"
+        "For a reader the consequence is that a query issued immediately "
+        "after a write may not see it. The row exists on the primary and "
+        "does not yet exist on the replica, so a page that saves a change "
+        "and then re-reads it from a replica can show the value the person "
+        "just replaced. The gap closes on its own, which is what makes it "
+        "hard to see from a bug report.\n"
     ),
 )
 """A genuinely single-subject source, where ONE object is the right answer.
 
-The `mcp-launch` shape named in `_drop_source_title_twins`: a title naming
+The `mcp-launch` class named in `_drop_source_title_twins`: a title naming
 one thing and a body about that one thing, whose lone object is expected to
 restate the title. That is the twin the rule would drop if its floor
 (`concept.py`, `len(results) <= 1` and the all-twins case) were removed or
@@ -419,7 +480,31 @@ narrowed, and dropping it emits `[]` for genuine content.
 The title travels through `source_title`, not as an H1 inside the text,
 because `source_title` is precisely what the rule compares against -- putting
 it in the body would test the model's reading of a heading instead of the
-rule's input."""
+rule's input.
+
+## Why it is a definition and not a how-to
+
+This fixture was rewritten, and the reason belongs next to it. The first
+version was titled `Nightly Index Rebuild` and described a scheduled job.
+It held at one object in 5 of 5 live runs and the probe reported "no false
+positive" -- but the lone object came back as a `Procedure` every time, and
+`_is_twin` exempts `Procedure` BY TYPE (#413):
+
+    result.type != _TWIN_EXEMPT_TYPE and _normalize_title(...) == ...
+
+A `Procedure` is never a twin, whatever its title, so that object would have
+survived with BOTH of the rule's floors deleted. The control was reporting a
+clean bill of health on a case that could not have failed. It would have
+stayed green through the exact change it exists to catch.
+
+So the single subject here is a THING, not a set of steps: no procedure, no
+numbered list, no imperative verb, nothing the prompt's own tie-break would
+route to `Procedure` ("a page explaining what a tool is and how it works is
+a Concept; a page of steps for installing that tool is a Procedure"). What
+the type has to be is only this: NOT the exempt one. The harness no longer
+takes that on trust -- `title_twin_runs` is type-aware, and a run whose lone
+object is exempt is reported as carrying no floor evidence rather than as a
+pass."""
 
 AXES: dict[str, str] = {
     "producto": "meeting register",
