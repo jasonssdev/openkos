@@ -653,6 +653,59 @@ def test_build_source_concept_emits_each_extraction_status() -> None:
         assert metadata["extraction_status"] == value
 
 
+def test_extraction_notice_vocabulary_constants() -> None:
+    """`EXTRACTION_NOTICE_KEY`, `ExtractionNotice` and its values exist as a
+    SEPARATE key from `extraction_status` (#585).
+
+    Separate on purpose, not a fifth `ExtractionStatus` token: that
+    vocabulary is documented as the reason a run wrote ZERO derived
+    objects, and `lint.check_unextracted` reads it as retryable debt. This
+    key fires on the opposite condition -- an object WAS written -- so
+    folding the two would make "extraction produced nothing" and
+    "extraction produced one thing" share a field that cannot hold both."""
+    assert okf.EXTRACTION_NOTICE_KEY == "extraction_notice"
+    assert okf.EXTRACTION_NOTICE_VALUES == ("sole-object-restates-source",)
+    assert okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES == "sole-object-restates-source"
+
+
+def test_build_source_concept_omits_extraction_notice_by_default() -> None:
+    """`extraction_notice` defaults to `None` and the key is entirely absent
+    -- the same "absence means exactly one thing" convention
+    `extraction_status` set, so a healthy Source's bytes are unchanged by
+    this key existing."""
+    text = _build_call_source()
+
+    assert "extraction_notice" not in text
+
+
+def test_build_source_concept_emits_the_extraction_notice() -> None:
+    """A non-`None` `extraction_notice` stamps the exact token onto the
+    emitted frontmatter."""
+    for value in okf.EXTRACTION_NOTICE_VALUES:
+        text = _build_call_source(extraction_notice=value)
+
+        metadata, _ = okf.load_frontmatter(text)
+
+        assert metadata["extraction_notice"] == value
+
+
+def test_extraction_notice_and_status_are_independent_keys() -> None:
+    """Both can be stamped on one document without either shadowing the
+    other. They never co-occur on a real `ingest` run -- one means zero
+    objects, the other means exactly one -- but the WRITER must not be the
+    thing that enforces it, or a future caller with a new combination
+    silently loses a key instead of failing visibly."""
+    text = _build_call_source(
+        extraction_status="failed",
+        extraction_notice=okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES,
+    )
+
+    metadata, _ = okf.load_frontmatter(text)
+
+    assert metadata["extraction_status"] == "failed"
+    assert metadata["extraction_notice"] == "sole-object-restates-source"
+
+
 def _build_call_concept(**overrides: object) -> str:
     """Build a derived Concept/Entity document with realistic defaults,
     letting tests override individual keyword arguments -- mirrors

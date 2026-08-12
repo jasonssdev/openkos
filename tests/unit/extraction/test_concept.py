@@ -3508,3 +3508,142 @@ def test_exact_restatement_still_triggers_below_the_token_floor() -> None:
 
     assert len(llm.calls) == 2
     assert [r.title for r in outcome.objects] == ["Stoicism", "Apatheia"]
+
+
+# --- The sole-object-restates-source disclosure flag (#585) ---------------
+#
+# #585's chosen criterion is "keep the object, mark the Source". The
+# extraction layer owns only the OBSERVATION -- whether the final list is
+# one object restating its source -- and reports it. Stamping it onto the
+# Source's frontmatter is `cli/main.py`'s job, and the split is deliberate:
+# this module stays config-free and write-free, exactly as `_MAX_OBJECTS_
+# PER_SOURCE`'s cap report already does.
+
+
+def test_sole_object_restating_the_source_is_reported() -> None:
+    """The defect #585 names, measured on the shape it was filed for: the
+    re-ask fires, finds nothing further, and the one object left restates
+    the source. The flag is what makes that visible to the caller."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Dichotomy of Control"]
+    assert outcome.report.sole_object_restates_source is True
+
+
+def test_sole_object_flag_is_false_when_the_reask_added_a_subject() -> None:
+    """The re-ask succeeding is exactly the case that is NOT dishonest
+    output: two objects reach the bundle, and the second one is content the
+    title never named. Reading the flag off the pre-re-ask list would mark
+    this Source anyway, so it is computed on the FINAL list."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Dichotomy of Control", "Apatheia"]
+    assert outcome.report.sole_object_restates_source is False
+
+
+def test_sole_object_flag_is_false_for_a_lone_distinct_subject() -> None:
+    """One object is not the defect. A source yielding a single subject its
+    title does not name is honest output, and marking it would make the
+    notice noise -- the failure mode #566 is open for."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism.", source_title="Notes", llm=llm
+    )
+
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+    assert outcome.report.sole_object_restates_source is False
+
+
+def test_sole_object_flag_is_false_when_two_objects_survive() -> None:
+    """`exactly one` is half the predicate. Two objects -- even when one of
+    them restates the source and rode the twin floor in -- is not a source
+    whose SOLE object is a restatement."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM, _PERSON_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism and Epictetus.", source_title="Notes", llm=llm
+    )
+
+    assert outcome.report.sole_object_restates_source is False
+
+
+def test_sole_object_flag_is_type_blind() -> None:
+    """A lone `Procedure` restating its source title is marked like any
+    other type. `_TWIN_EXEMPT_TYPE` exists to stop a DELETION (#413); this
+    is a disclosure, which adds information and removes none, so the
+    exemption's rationale does not transfer -- the same argument
+    `_restates_source_title` already makes for both additive decisions."""
+    llm = _SequencedLLM([_array(_RESEARCH_AGENT_PROCEDURE_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "A walkthrough of building a research agent.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert [r.type for r in outcome.objects] == ["Procedure"]
+    assert outcome.report.sole_object_restates_source is True
+
+
+def test_sole_object_flag_fires_on_topic_containment() -> None:
+    """The predicate is `_restates_source_topic`, the re-ask trigger's own,
+    not the exact `_restates_source_title`. The `lesson` class #584 measured
+    -- an object titled after the umbrella topic with the framing stripped
+    -- is the commonest shape of this defect, and an exact comparison is
+    blind to it."""
+    stripped = (
+        '{"type": "Concept", "title": "Setting Up a Python Project", '
+        '"description": "The project layout the lesson builds.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(stripped), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "The lesson walks through a project layout.",
+        source_title="Lesson 3: Setting Up a Python Project",
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Setting Up a Python Project"]
+    assert outcome.report.sole_object_restates_source is True
+
+
+def test_sole_object_flag_is_reported_on_the_union_path() -> None:
+    """Both orchestrators report it. `extract_concept_union` is the
+    PRODUCT-ON path (`config.DEFAULT_UNION_JUDGE`), so a flag only the
+    single-run path set would never fire for a real user."""
+    run = _array(_DICHOTOMY_ITEM)
+    llm = _SequencedLLM([run, run, "[]", _keep_reply("Dichotomy of Control")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Dichotomy of Control"]
+    assert outcome.report.sole_object_restates_source is True
+
+
+def test_sole_object_flag_defaults_to_false_on_an_empty_extraction() -> None:
+    """Zero objects is a degrade `extraction_status` already names, not a
+    restatement. The flag must not fire there, or a Source with nothing
+    derived would carry a notice claiming it derived something."""
+    llm = _FakeLLM(reply="[]")
+
+    outcome = concept_mod.extract_concept("Notes.", source_title="Notes", llm=llm)
+
+    assert outcome.objects == []
+    assert outcome.report.sole_object_restates_source is False

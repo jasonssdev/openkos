@@ -1604,3 +1604,89 @@ from disk — it is recomputed from scratch every run.
 - THEN `extraction_status` is computed fresh from this run's outcome only,
   never read from or merged with the on-disk frontmatter, unlike
   `sensitivity`
+
+### Requirement: Extraction Notice Frontmatter Key on a Sole Restating Object
+
+WHEN a single `ingest` run's extraction retains EXACTLY ONE derived object and
+that object restates the topic the Source's own title names, the system MUST
+write an `extraction_notice` frontmatter key on the Source concept with the
+value `sole-object-restates-source`. In every other case `extraction_notice`
+MUST be ABSENT — no `ok`/`none` sentinel, mirroring `extraction_status`.
+Readers MUST ignore any value outside this vocabulary without raising.
+
+The object itself MUST be kept, unchanged. The system MUST NOT degrade to
+zero derived objects on this condition: a genuinely single-subject source
+whose only subject IS what its title names — the measured `mcp-launch` shape
+protected by `_drop_source_title_twins`' floor — is indistinguishable from
+this defect by title alone, so any rule that dropped on the title would emit
+nothing for real content. Marking is strictly information-adding: it cannot
+regress recall, and it does not need to tell the two cases apart.
+
+This key is SEPARATE from `extraction_status` and MUST NOT be folded into
+that vocabulary. `extraction_status` presupposes zero derived objects and
+carries a retryable-debt reading (`lint`'s unextracted-source check matches
+`failed`); `extraction_notice` presupposes exactly one. The two are mutually
+exclusive on any real run and MUST NOT both be written by the same ingest.
+
+The condition MUST be evaluated on the FINAL retained object list — after the
+bounded re-ask, after judge selection, and after the per-source cap — never
+on an intermediate one. The comparison MUST be the same title predicate the
+re-ask trigger uses (exact normalized equality OR token containment in either
+direction, type-blind), so the disclosure and the extra question can never
+disagree about what "restates the source" means.
+
+Like `extraction_status`, the value MUST be stamped onto freshly built Source
+content each run and never merged onto on-disk frontmatter.
+
+#### Scenario: A sole restating object is kept and the Source is marked
+
+- GIVEN extraction retains exactly one derived object whose title restates
+  the Source's title
+- WHEN `openkos ingest <path>` completes
+- THEN the derived object is written to the bundle unchanged, AND the
+  Source's `extraction_notice` is `sole-object-restates-source`
+
+#### Scenario: The notice is type-blind
+
+- GIVEN the sole retained object is a `Procedure` restating the Source's
+  title, which `_drop_source_title_twins` exempts from deletion
+- WHEN `openkos ingest <path>` completes
+- THEN the Source's `extraction_notice` is still
+  `sole-object-restates-source`
+
+#### Scenario: A sole distinct subject writes no key
+
+- GIVEN extraction retains exactly one derived object whose title does NOT
+  restate the Source's title
+- WHEN the Source concept's frontmatter is inspected
+- THEN it contains no `extraction_notice` key
+
+#### Scenario: Two or more objects write no key
+
+- GIVEN extraction retains two or more derived objects, including the case
+  where one of them restates the Source's title
+- WHEN the Source concept's frontmatter is inspected
+- THEN it contains no `extraction_notice` key
+
+#### Scenario: A zero-object degrade writes no notice
+
+- GIVEN extraction produced zero derived objects and the Source therefore
+  carries an `extraction_status` value
+- WHEN the Source concept's frontmatter is inspected
+- THEN it contains no `extraction_notice` key
+
+#### Scenario: A previously marked Source self-clears on later success
+
+- GIVEN a Source whose frontmatter currently has `extraction_notice:
+  sole-object-restates-source`
+- WHEN `openkos ingest raw/<name>` is re-run against the same Source and
+  extraction now retains a second, distinct object
+- THEN the rewritten Source's frontmatter has NO `extraction_notice` key
+
+#### Scenario: The condition is reported on stderr
+
+- GIVEN extraction retains exactly one derived object restating the Source
+- WHEN `openkos ingest <path>` runs
+- THEN stderr carries a non-blocking line naming both halves of the outcome:
+  that the only derived object restates the source, and that it is kept and
+  the Source marked
