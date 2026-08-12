@@ -31,6 +31,21 @@ from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
 runner = CliRunner()
 
+_REAL_FTS_INDEX_PRESENT = next_action.fts_index_present
+"""The unpatched #553 signal, captured at import time so the FTS-tier tests
+below can restore it under the module-wide default fixture."""
+
+
+@pytest.fixture(autouse=True)
+def _fts_index_present_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#553 ranked a missing-FTS-index tier above every content tier. The
+    pre-existing tests in this module exercise LOWER tiers over fixtures
+    that never built an `fts.db`, so by default this signal reports the
+    index present -- the same sanctioned convention those tests already use
+    to get past tier 1 (patching the public `vector_store_is_empty`). The
+    #553 tests restore `_REAL_FTS_INDEX_PRESENT` explicitly."""
+    monkeypatch.setattr("openkos.cli.next_action.fts_index_present", lambda _path: True)
+
 
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1666,3 +1681,74 @@ def test_clean_bundle_without_non_nfc_names_recommends_nothing(
 
     assert result.exit_code == 0
     assert "openkos normalize-names" not in result.stdout
+
+
+# --- #553: a missing FTS index is reported, not silently degraded ----------
+
+
+def test_next_recommends_reindex_when_the_fts_index_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#553's exact evidence shape: vectors present (ingest embedded them),
+    `fts.db` absent -- `next` must name the missing FTS index instead of
+    recommending curation over a silently degraded retrieval channel."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
+    )
+    vectorstore.open_vector_store(tmp_path / ".openkos" / "vectors.db").close()
+    monkeypatch.setattr(
+        "openkos.cli.next_action.vector_store_is_empty", lambda _path: False
+    )
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Alpha")
+
+    result = next_action.next_action(config.WorkspaceLayout(tmp_path))
+
+    assert result.action is not None
+    assert result.action.command == "openkos reindex"
+    assert "FTS index is missing" in result.action.reason
+
+
+def test_next_prefers_the_missing_vector_index_over_the_missing_fts_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both tiers recommend the same command, so only the REASON can differ:
+    with BOTH indexes missing the user is told about the vector index --
+    the channel whose absence also blocks candidate edges."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
+    )
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Alpha")
+
+    result = next_action.next_action(config.WorkspaceLayout(tmp_path))
+
+    assert result.action is not None
+    assert result.action.command == "openkos reindex"
+    assert "vector index" in result.action.reason
+    assert "FTS index is missing" not in result.action.reason
+
+
+def test_next_fts_tier_declines_when_the_fts_index_is_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """With both derived indexes present over a clean bundle, the new tier
+    must not manufacture a reindex recommendation."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.next_action.fts_index_present", _REAL_FTS_INDEX_PRESENT
+    )
+    seed_vectors_db(tmp_path)
+    concepts = tmp_path / "bundle" / "concepts"
+    concepts.mkdir(parents=True, exist_ok=True)
+    (concepts / "alpha.md").write_text(
+        "---\ntype: Concept\ntitle: Alpha\n---\nBody.\n", encoding="utf-8"
+    )
+    fts.write_fts_index(tmp_path / ".openkos" / "fts.db", tmp_path / "bundle")
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "openkos reindex" not in result.stdout

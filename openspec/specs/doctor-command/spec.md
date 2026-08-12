@@ -310,6 +310,40 @@ and a `[FAIL]` line MUST be followed by an indented fix line naming
 - THEN the workspace-vectors check prints `[SKIP]` (not applicable), and
   does not affect the exit code
 
+### Requirement: Workspace FTS Index Presence Check
+
+`doctor` MUST report whether the WORKSPACE `.openkos/fts.db`
+(`layout.fts_db_path`) exists on disk, mirroring the Workspace Vector Index
+Presence Check's exact shape (issue #553: `doctor` passed every check while
+the workspace's first query was about to answer without lexical retrieval,
+because nothing ever looked at `fts.db`). This check MUST be informational
+(its failure alone MUST NOT affect the exit code), MUST run only when a
+workspace is initialized (skipped outside a workspace), MUST be absent-only
+(staleness stays `reindex`'s manifest gate's job and `next`'s stale tier's
+report), and a `[FAIL]` line MUST be followed by an indented fix line
+naming `openkos reindex`.
+
+#### Scenario: Present workspace fts.db passes
+
+- GIVEN an initialized workspace whose `.openkos/fts.db` file exists
+- WHEN `openkos doctor` runs
+- THEN the workspace-FTS check prints `[PASS]`
+
+#### Scenario: Absent workspace fts.db fails with a reindex remediation
+
+- GIVEN an initialized workspace whose `.openkos/fts.db` file is absent
+- WHEN `openkos doctor` runs
+- THEN the workspace-FTS check prints `[FAIL]` followed by an indented fix
+  line naming `openkos reindex`, and the process still exits 0 if every
+  critical check otherwise passes
+
+#### Scenario: FTS presence check is skipped outside a workspace
+
+- GIVEN no initialized workspace
+- WHEN `openkos doctor` runs
+- THEN the workspace-FTS check prints `[SKIP]` (not applicable), and does
+  not affect the exit code
+
 ### Requirement: Doctor Prints A Leading Version Banner
 
 `openkos doctor` MUST print a version banner line — the same

@@ -24,6 +24,16 @@ from openkos.state import derived, findings
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _fts_index_present_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#553 ranked a missing-FTS-index tier above the contradiction tier
+    under test here; these fixtures never build an `fts.db`, so the signal
+    reports present by default -- the same convention `seed_vectors_db`
+    already applies to tier 1 (see `test_next.py`'s fixture of the same
+    name)."""
+    monkeypatch.setattr("openkos.cli.next_action.fts_index_present", lambda _path: True)
+
+
 def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])

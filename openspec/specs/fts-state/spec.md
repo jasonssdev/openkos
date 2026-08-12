@@ -31,10 +31,12 @@ any CLI command or workspace-visible artifact.
 
 The system MUST provide a persistence path that writes the FTS5 projection
 to on-disk SQLite storage under `.openkos/`, invoked ONLY by `reindex`,
-using the SAME document set and row/identity rules as `build_index` (one row
-per non-reserved document, keyed by OKF concept ID, reserved filenames
-excluded, graceful degradation on bad files). A stored bundle-manifest hash
-MUST gate whether the persisted index is rebuilt on a given `reindex` run.
+`purge`'s post-expunge best-effort rebuild, and `ingest`'s end-of-run build
+(issue #553) — never by any read path — using the SAME document set and
+row/identity rules as `build_index` (one row per non-reserved document,
+keyed by OKF concept ID, reserved filenames excluded, graceful degradation
+on bad files). A stored bundle-manifest hash MUST gate whether the
+persisted index is rebuilt on a given run.
 
 #### Scenario: Reindex persists the FTS index to disk
 
@@ -179,14 +181,17 @@ that a query matching a tag value returns that document as a hit.
 ### Requirement: No CLI Surface, No Lifecycle Change
 
 This module MUST NOT introduce a CLI command or any user-invocable entry
-point, and MUST NOT alter `ingest` or `forget` behavior. It is a dormant
-library dependency until a future command calls it.
+point, and MUST NOT alter `forget` behavior. It began as a dormant library
+dependency; the commands that now legitimately call it are `query`
+(add-query-command), `reindex`/`purge` (persistence and rebuild), and
+`ingest`'s end-of-run build (issue #553) — `forget` remains outside its
+reach.
 
-#### Scenario: ingest and forget behavior is unchanged
+#### Scenario: forget behavior is unchanged
 
 - GIVEN this module exists in the codebase
-- WHEN `openkos ingest` or `openkos forget` runs
-- THEN their observable behavior is identical to before this change
+- WHEN `openkos forget` runs
+- THEN its observable behavior is identical to before this change
 
 ### Requirement: Architecture Doc States Layering As Convention
 

@@ -90,6 +90,19 @@ backtick span, because that prose interpolates document-controlled values
 that may carry backticks themselves."""
 
 
+def fts_index_present(path: Path) -> bool:
+    """Whether the on-disk FTS index exists at `path` (#553). Absent-only,
+    mirroring `doctor`'s workspace presence checks -- staleness belongs to
+    `stale_derived_stores`, which deliberately never reports absence.
+
+    A module-level public seam (not an inline `Path.exists()` in the
+    signal property) for the same reason `vector_store_is_empty` is one:
+    this module's tests patch PUBLIC attributes only, never private
+    internals (module docstring), and tests targeting lower tiers need a
+    sanctioned way to hold this tier open."""
+    return path.exists()
+
+
 def _plural(count: int) -> str:
     return "" if count == 1 else "s"
 
@@ -187,6 +200,12 @@ class _BundleSignals:
     def vector_store_empty(self) -> bool:
         """0 walks: a single `vector_meta` row-count check."""
         return vector_store_is_empty(self._layout.vectors_db_path)
+
+    @property
+    def fts_index_present(self) -> bool:
+        """0 walks: one `Path.exists()` check on `.openkos/fts.db` (#553),
+        via the module-level public seam `fts_index_present`."""
+        return fts_index_present(self._layout.fts_db_path)
 
     @property
     def stale_indexes(self) -> tuple[str, ...]:
@@ -487,6 +506,31 @@ def _tier_missing_vector_index(signals: _BundleSignals) -> NextAction | None:
     )
 
 
+def _tier_missing_fts_index(signals: _BundleSignals) -> NextAction | None:
+    """Rank 1b (#553): missing on-disk FTS index. Ranked directly BELOW the
+    missing-vector-index tier (same command, and when BOTH are missing the
+    user is told about the vector index, whose absence also blocks candidate
+    edges) and ABOVE staleness (an absent index blocks the lexical channel
+    outright; a stale one merely degrades it).
+
+    Absence-only, zero walks: one `Path.exists()` check, the same
+    absent-only posture `doctor`'s workspace checks take. Staleness stays
+    `_tier_stale_derived_indexes`' job. This tier exists because
+    `stale_derived_stores` DELIBERATELY does not report absence (a store
+    that was never built is not "stale"), which left #553's exact shape --
+    vectors populated by ingest's embed, `fts.db` never built -- invisible
+    to every tier, so `next` recommended curation over a bundle answering
+    every query dense-only."""
+    if signals.fts_index_present:
+        return None
+    return NextAction(
+        command="openkos reindex",
+        reason=(
+            "Lexical (full-text) retrieval is unavailable -- the FTS index is missing."
+        ),
+    )
+
+
 def _tier_stale_derived_indexes(signals: _BundleSignals) -> NextAction | None:
     """Rank 2: `fts.db`/`graph.db` describing an older bundle than the one on
     disk (#381). Ranked directly BELOW the missing-vector-index tier because
@@ -723,6 +767,7 @@ Tier = Callable[[_BundleSignals], NextAction | None]
 _TIERS: tuple[Tier, ...] = (
     _tier_bootstrap_empty_bundle,
     _tier_missing_vector_index,
+    _tier_missing_fts_index,
     _tier_stale_derived_indexes,
     _tier_unextracted_source,
     _tier_below_source_sensitivity,
@@ -730,13 +775,14 @@ _TIERS: tuple[Tier, ...] = (
     _tier_non_nfc_names,
     _tier_open_contradictions,
 )
-"""D1 order: ingest-first (empty bundle, #386), reindex (missing), reindex
-(stale, #381), ingest, backfill-sensitivity, curate, normalize-names,
-contradictions (durable-pending-work, Decision 6). A higher-ranked tier's
-finding always wins; a lower-ranked tier is never even evaluated once a
-higher one fires (first-hit short-circuit) -- which is also what keeps the
-two reindex tiers from ever both firing: a missing index short-circuits
-before the stale check's bundle walk is ever paid."""
+"""D1 order: ingest-first (empty bundle, #386), reindex (missing vectors),
+reindex (missing FTS, #553), reindex (stale, #381), ingest,
+backfill-sensitivity, curate, normalize-names, contradictions
+(durable-pending-work, Decision 6). A higher-ranked tier's finding always
+wins; a lower-ranked tier is never even evaluated once a higher one fires
+(first-hit short-circuit) -- which is also what keeps the three reindex
+tiers from ever all firing: a missing index short-circuits before the
+stale check's bundle walk is ever paid."""
 
 
 def next_action(layout: config.WorkspaceLayout) -> NextResult:
