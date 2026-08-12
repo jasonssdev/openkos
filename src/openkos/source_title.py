@@ -274,6 +274,35 @@ def _is_title_plausible(text: str, next_line: str | None) -> bool:
     return not text.startswith(_BLOCK_SYNTAX_PREFIXES)
 
 
+_BALANCED_SPAN_RE: Final = re.compile(r"\s*\([^()\[\]]*\)|\s*\[[^()\[\]]*\]")
+"""One INNERMOST balanced parenthetical or bracketed span, with any leading
+whitespace (issue #592). Innermost-only on purpose: `_strip_balanced_spans`
+loops it to a fixed point, so nesting resolves outward one layer at a time
+and an UNBALANCED `(` `)` `[` `]` is never matched -- it survives to
+`_FORBIDDEN_IN_TITLE`, which keeps rejecting it."""
+
+
+def _strip_balanced_spans(text: str) -> str:
+    """Strip every balanced `(...)`/`[...]` span from `text`, innermost
+    first, then re-collapse whitespace (issue #592).
+
+    `# MCP (Model Context Protocol)` used to lose its ENTIRE title to the
+    filename-stem fallback because `_FORBIDDEN_IN_TITLE` rejects the four
+    bracket characters outright -- a correct rejection (they would silently
+    corrupt the `[title](/path.md)` bullet `index.py`/`log.py` render) with
+    a needlessly heavy response, since parenthetical clarification is
+    common in technical writing. Stripping the SPAN keeps the good part of
+    the title while upholding the exact same guarantee: this function
+    removes only balanced spans, and the final `_FORBIDDEN_IN_TITLE` check
+    still rejects any surviving bracket character, so no member of the
+    class can ever reach a bullet."""
+    while True:
+        stripped = _BALANCED_SPAN_RE.sub("", text)
+        if stripped == text:
+            return " ".join(stripped.split())
+        text = stripped
+
+
 def _normalize_and_validate(candidate: str, *, is_heading: bool) -> str | None:
     """Shared normalize-then-validate pipeline, run in this FIXED order
     (the order is load-bearing, see design.md):
@@ -284,10 +313,14 @@ def _normalize_and_validate(candidate: str, *, is_heading: bool) -> str | None:
        source safe: reversing this with the forbidden-character check would
        reject every CRLF source for its `\\r`.
     2. Heading-only: strip a trailing ATX closing `#` sequence.
-    3. Reject if empty (a whitespace-only heading collapses to `""`).
-    4. Reject if longer than `_TITLE_MAX_CHARS`, measured on this final
+    3. Strip balanced parenthetical/bracketed spans (#592) -- BEFORE the
+       empty check, so a title that was nothing but a span rejects as
+       empty, and BEFORE the forbidden-character check, so only an
+       UNBALANCED bracket character remains fatal.
+    4. Reject if empty (a whitespace-only heading collapses to `""`).
+    5. Reject if longer than `_TITLE_MAX_CHARS`, measured on this final
        string.
-    5. Reject if `_FORBIDDEN_IN_TITLE` matches anywhere in this final
+    6. Reject if `_FORBIDDEN_IN_TITLE` matches anywhere in this final
        string.
 
     Returns the normalized string on success, `None` on any rejection.
@@ -295,6 +328,7 @@ def _normalize_and_validate(candidate: str, *, is_heading: bool) -> str | None:
     text = " ".join(candidate.split())
     if is_heading:
         text = _ATX_CLOSING_RE.sub("", text)
+    text = _strip_balanced_spans(text)
     if not text:
         return None
     if len(text) > _TITLE_MAX_CHARS:
