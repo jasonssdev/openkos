@@ -522,21 +522,27 @@ def _restates_source_title(result: ExtractionResult, *, source_title: str) -> bo
     """Does `result`'s title merely restate `source_title`? TITLE ONLY --
     type is not consulted.
 
-    This is the RE-ASK trigger's predicate (#584), and it is deliberately
-    weaker than `_is_droppable_source_title_twin` below. The two differ by
-    exactly one conjunct because they gate opposite operations:
+    This is the RE-ASK's predicate (#584) -- BOTH of the re-ask's decisions,
+    its trigger and its additions filter -- and it is deliberately weaker
+    than `_is_droppable_source_title_twin` below. The two differ by exactly
+    one conjunct, and the seam between them is DIRECTION, not caller:
 
-    - this one gates an ADDITION (ask the model whether the body develops
-      anything further, and keep what comes back);
-    - that one gates a DELETION (remove the object entirely).
+    - this one gates everything ADDITIVE: whether to ask one more question,
+      and whether a candidate that came back is an answer to it;
+    - that one gates the single operation that DELETES.
+
+    So the type exemption lives in exactly one place -- the deletion.
 
     The `Procedure` exemption (#413) was bought by a deletion: dropping a
-    rich tutorial's primary how-to was silent data loss, and the exemption
-    exists to stop it. That rationale does not transfer to an additive
-    trigger, because a re-ask cannot remove the object it fired on -- so a
-    lone `Procedure` restating its source title is exactly as suspicious as
-    a lone `Concept` doing the same, and asking whether the body covers
-    anything further cannot harm either.
+    rich tutorial's PRIMARY how-to -- one the first pass genuinely found --
+    was silent data loss, and the exemption exists to stop it. That
+    rationale does not transfer to either additive decision, because
+    neither can remove an object the source produced. A lone `Procedure`
+    restating its source title is exactly as suspicious as a lone `Concept`
+    doing the same, and asking whether the body covers anything further
+    cannot harm either; an ADDITION restating that title, of any type, is
+    not a primary object at all but the re-ask disobeying the instruction
+    `_REASK_SYSTEM_PROMPT` just gave it.
 
     It is not a theoretical widening. Measured on the `lesson` pair
     (`qwen3:8b`, `--runs 5 --seed 7`, #584): the treatment arm returns ONE
@@ -918,12 +924,27 @@ def _reask_for_further_subjects(
 
     - `_strip_ungrounded_expansions` (#423), because a fabricated acronym
       expansion is no more welcome on the second ask than the first.
-    - The droppable-twin predicate itself. The re-ask asks for subjects
-      BEYOND the one the title names, so a candidate restating that title is
-      not an answer to the question asked -- and admitting it would put a
-      second twin beside the first, under a different type where
-      `_dedup_merged`'s `(type, title)` key cannot see the duplication. An
-      exempt `Procedure` sharing the title is kept, on #413's role argument.
+    - `_restates_source_title` -- TITLE ONLY, with no `Procedure` exemption,
+      exactly like the trigger and for the same reason: both are additive.
+      The re-ask asks for subjects BEYOND the one the title names, so a
+      candidate restating that title is not an answer to the question asked.
+      `_REASK_SYSTEM_PROMPT` already forbids restating the kept subject
+      "under another name or another type", and a `Procedure` titled the
+      source's own IS that "another type" case -- admitting it would
+      contradict the instruction just sent, and `_dedup_merged` cannot catch
+      it, since its `(type, normalized-title)` key sees two different
+      objects.
+
+    #413's exemption deliberately does NOT reach here. What it bought was
+    the right of a PRIMARY `Procedure` -- one the first pass genuinely found
+    in the source -- not to be DELETED. An addition that merely restates the
+    source title is not that object. And the asymmetry makes the choice
+    safe by construction: this filter can only ever remove ADDITIONS, never
+    the object already kept, so filtering MORE here cannot regress anything
+    -- the worst case is that the re-ask adds nothing, which is
+    byte-identical to the behavior before this guard existed. The drop rule
+    has no such floor under it, which is precisely why the exemption lives
+    there and only there.
     """
     try:
         reply = llm.chat(_build_reask_messages(source_text, source_title, kept.title))
@@ -941,7 +962,7 @@ def _reask_for_further_subjects(
     return [
         result
         for result in results
-        if not _is_droppable_source_title_twin(result, source_title=source_title)
+        if not _restates_source_title(result, source_title=source_title)
     ]
 
 
