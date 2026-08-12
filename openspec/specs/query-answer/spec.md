@@ -28,8 +28,8 @@ CLI command; reading/constructing `openkos.config`; context truncation or
 token budget beyond `limit`; weighted/normalized score fusion; distance-to-similarity
 conversion; graph/link ranking in any position — as a third RRF input or as
 an additive reserved-slot channel (see "Answering Reads No Graph"); filing
-the answer back as a concept; citation metadata beyond `concept_id` and
-`title`.
+the answer back as a concept; citation metadata beyond `concept_id`,
+`title`, and the #569 `confidential` disclosure flag.
 
 ## Requirements
 
