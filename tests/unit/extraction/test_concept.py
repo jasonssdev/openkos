@@ -2733,9 +2733,11 @@ def test_union_backstop_passes_through_a_set_of_7_unchanged() -> None:
     assert outcome.report.retained == 7
 
 
-def test_union_backstop_truncates_a_judge_selected_set_above_12() -> None:
-    """A judge-selected set of more than 12 is truncated to exactly 12,
-    applied strictly AFTER re-admission -- not before the judge."""
+def test_union_backstop_passes_through_the_measured_real_source_range() -> None:
+    """Issue #564: 15 and 17 judge-approved objects were measured on
+    genuine sources (a course webinar and a meeting transcript), and the
+    old backstop of 12 truncated both -- by position, so what survived was
+    luck. Sets in the measured real-source range now pass untouched."""
 
     def item(i: int) -> str:
         return (
@@ -2743,16 +2745,41 @@ def test_union_backstop_truncates_a_judge_selected_set_above_12() -> None:
             f'"description": "Distinct subject {i}.", "body": ""}}'
         )
 
-    run1 = _array(*(item(i) for i in range(1, 16)))  # 15 distinct
+    run1 = _array(*(item(i) for i in range(1, 18)))  # 17 distinct
     run2 = _array()
-    judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 16)))
+    judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 18)))
     llm = _SequencedLLM([run1, run2, judge_reply])
 
     outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
 
-    assert len(outcome.objects) == 12
-    assert outcome.report.produced == 15
-    assert outcome.report.retained == 12
+    assert len(outcome.objects) == 17
+    assert outcome.report.produced == 17
+    assert outcome.report.retained == 17
+    assert outcome.report.discarded_titles == ()
+
+
+def test_union_backstop_truncates_a_judge_selected_set_above_the_backstop() -> None:
+    """A judge-selected set above `_UNION_BACKSTOP` (20) is truncated to
+    exactly 20, applied strictly AFTER re-admission -- not before the
+    judge -- and the report names the casualties."""
+
+    def item(i: int) -> str:
+        return (
+            f'{{"type": "Concept", "title": "Subject {i}", '
+            f'"description": "Distinct subject {i}.", "body": ""}}'
+        )
+
+    run1 = _array(*(item(i) for i in range(1, 24)))  # 23 distinct
+    run2 = _array()
+    judge_reply = _keep_reply(*(f"Subject {i}" for i in range(1, 24)))
+    llm = _SequencedLLM([run1, run2, judge_reply])
+
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+    assert len(outcome.objects) == 20
+    assert outcome.report.produced == 23
+    assert outcome.report.retained == 20
+    assert outcome.report.discarded_titles == ("Subject 21", "Subject 22", "Subject 23")
 
 
 def test_union_extraction_run_2_error_propagates_unswallowed() -> None:
