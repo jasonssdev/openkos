@@ -669,7 +669,17 @@ def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
     `duplicates` as the way to review the groups before curating.
 
     Reports only the count of the finding that fired, never a count of
-    findings `next` never walked far enough to see (D5)."""
+    findings `next` never walked far enough to see (D5).
+
+    Recall bound (issue #593): this tier counts the identical-title family
+    ONLY. `resolution/candidates.py` produces two further tiers -- acronym
+    and near-match -- whose pairwise scoring was measured at 5.3s for 400
+    docs / 24.8s for 1000, a cost `next` must not pay (the module ordering
+    already calls this the most expensive check at TWO walks). A
+    near-match-only backlog therefore never fires this tier; that is
+    covered by D4's standing contract (`_NO_ACTION_LINE` means no tier
+    fired, never that the bundle is clean) plus `status`'s #593 disclosure
+    line naming `openkos duplicates` as the full scan."""
     groups = signals.exact_title_groups
     if not groups:
         return None

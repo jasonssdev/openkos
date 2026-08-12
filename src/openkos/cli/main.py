@@ -9330,6 +9330,20 @@ def status() -> None:
     # attention." above.
     if edge_summary is not None and edge_summary[0] == 0:
         typer.echo("  No concept relationships yet.")
+    # #593: the duplicate check above counts identical-title groups ONLY.
+    # Widening it to `duplicates`' full candidate set was measured and
+    # rejected: the pairwise near-match pass costs 5.3s at 400 docs and
+    # 24.8s at 1000, which this read-only command must not pay. Disclosure
+    # is what keeps a near-match-only backlog from reading as an empty one
+    # -- printed as an adjacent informational line (never inside
+    # `needs_attention`, so a healthy workspace keeps its "Nothing needs
+    # attention."), and only when the identical-titles line did NOT fire,
+    # which already names the same verb.
+    if not exact_title_groups:
+        typer.echo(
+            "  Similar-title candidates are not counted here — run "
+            "`openkos duplicates` for the full scan."
+        )
 
 
 @app.command(

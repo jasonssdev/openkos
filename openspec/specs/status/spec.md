@@ -170,6 +170,20 @@ The surfaced line is unchanged; only the entry point is.)
 - WHEN `openkos status` runs
 - THEN no duplicate-groups entry appears under "needs attention", the
   command still prints `Nothing needs attention.`, and it exits 0
+- AND an adjacent informational line discloses that similar-title
+  candidates are not counted here, naming `openkos duplicates` as the full
+  scan (issue #593: without the disclosure, a near-match backlog reads as
+  an empty one; widening the count itself was measured and rejected — the
+  pairwise near-match pass costs seconds at hundreds of documents, which
+  `status` must not pay)
+
+#### Scenario: The scope disclosure is absent when identical-title groups fired
+
+- GIVEN a bundle with at least one exact-title-match candidate group
+- WHEN `openkos status` runs
+- THEN the identical-titles needs-attention line already names
+  `openkos duplicates`, and the similar-title scope disclosure line is not
+  printed a second time
 
 #### Scenario: Deprecated-only duplicate group is excluded by default
 
