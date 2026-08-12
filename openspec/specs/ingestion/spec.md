@@ -538,16 +538,26 @@ The extra call MUST be reported: extraction MUST carry both the fact that a
 re-ask was spent and the titles it contributed, and `ingest` MUST surface
 them, with wording distinct from the cap, judge, and pre-judge notices.
 
-The trigger MUST ignore the `Procedure` exemption that governs the DROP
-rule. That exemption exists to prevent a DELETION — dropping a rich
-tutorial's primary how-to was silent data loss — and a re-ask deletes
-nothing, so its rationale does not transfer. Measured (`qwen3:8b`,
-`--runs 5 --seed 7`): the `lesson` treatment arm returns one object in 5 of
-5 runs and it is a `Procedure` every time, so a type-aware trigger never
-fires on the fixture that reproduces this defect. The DROP rule's exemption
-is UNCHANGED: a `Procedure` restating the source title MUST still never be
-dropped. The two predicates MUST share one title comparison and differ only
-by that type conjunct.
+BOTH of the re-ask's decisions — whether to fire, and whether a returned
+candidate is an answer — MUST ignore the `Procedure` exemption that governs
+the DROP rule, and MUST therefore discard any returned candidate whose
+title restates the source title, of ANY type. That exemption exists to
+prevent a DELETION of a PRIMARY object the first pass found — dropping a
+rich tutorial's primary how-to was silent data loss — and neither additive
+decision can delete anything, so its rationale does not transfer.
+Admitting a same-titled addition would also contradict the re-ask
+instruction itself, which forbids restating the kept subject under another
+name or another type, and would surface two objects sharing one title
+whenever their types differ.
+
+Measured (`qwen3:8b`, `--runs 5 --seed 7`): the `lesson` treatment arm
+returns one object in 5 of 5 runs and it is a `Procedure` every time, so a
+type-aware trigger never fires on the fixture that reproduces this defect.
+
+The DROP rule's exemption is UNCHANGED: a `Procedure` restating the source
+title MUST still never be dropped. The type exemption MUST live in exactly
+one place — the deletion — and the two predicates MUST share one title
+comparison and differ only by that type conjunct.
 
 The re-ask MUST NOT fire on a source whose final list holds more than one
 object, nor when the lone object does not restate the source title. Its own
@@ -576,6 +586,15 @@ produced, exactly as the selector judge's failure degrades.
 - GIVEN the same trigger, and a second ask that returns an empty array
 - WHEN extraction runs
 - THEN the original object is written unchanged and nothing is added
+
+#### Scenario: A returned candidate restating the title is discarded, whatever its type
+
+- GIVEN the same trigger, and a second ask returning both a genuine further
+  subject and a candidate whose title restates the source title under a
+  different type
+- WHEN extraction runs
+- THEN only the genuine subject is added, and no two written objects share
+  one title
 
 #### Scenario: An object that does not restate the title does not trigger a re-ask
 
