@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.bundle import decisions as bundle_decisions
 from openkos.cli import main as contradiction_main
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
@@ -38,9 +39,13 @@ from openkos.resolution.contradiction import (
     Verdict,
     _CandidateSpec,
 )
+from openkos.state import derived, findings
+from openkos.state.vectorstore import content_hash
+from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import disable_local_exemption
 from tests.unit.cli.conftest import snapshot_with_mtime as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
+from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
 
@@ -1644,3 +1649,323 @@ def test_contradictions_pair_verdict_does_not_name_unmerge(
 
     assert result.exit_code == 0
     assert "unmerge" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# PR #3 -- Slice B2: `--decline` / `--reopen` / `--declined` (pending-work
+# design, Decisions 3, 5, 7; tasks B2.1-B2.13)
+# ---------------------------------------------------------------------------
+
+
+def _init_git_workspace(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mirrors `test_main_autocommit.py`'s own `_init_workspace`: a real,
+    git-backed workspace with an isolated, SET git identity, so
+    `--decline`'s `_autocommit` call actually commits (needed by the B2.11/
+    B2.13 scoped-staging tests, which the plain `_init_workspace` above
+    does not set up)."""
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("contradictions-git-identity")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+
+
+def _last_commit_files(root: Path) -> set[str]:
+    result = vcs_git._run(
+        ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"], cwd=root
+    )
+    assert result.returncode == 0, result.stderr
+    return {line for line in result.stdout.splitlines() if line}
+
+
+def _status_porcelain(root: Path) -> str:
+    result = vcs_git._run(["git", "status", "--porcelain"], cwd=root)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_decline_writes_a_decision_and_hides_the_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B2.1 (pending-work spec: "Declining Is A Non-Interactive Verb...";
+    "A declined finding stays out of ordinary output"): `--decline` writes
+    a `state: declined` record under `bundle/.state/decisions/**`, and a
+    subsequent ordinary `contradictions` run no longer shows that finding."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    decline_result = runner.invoke(
+        app, ["contradictions", "--decline", "concepts/a", "concepts/b"]
+    )
+    assert decline_result.exit_code == 0, decline_result.stderr
+
+    decisions_path = (
+        tmp_path / "bundle" / ".state" / "decisions" / "concepts" / "a.decisions.okf"
+    )
+    assert decisions_path.is_file()
+    records = bundle_decisions.read_decisions("concepts/a", tmp_path / "bundle")
+    assert len(records) == 1
+    assert records[0].state == "declined"
+    assert records[0].pair_ids == ("concepts/a", "concepts/b")
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
+            [
+                _verdict(
+                    source="concepts/a",
+                    target="concepts/b",
+                    confidence=0.95,
+                    rationale="should stay hidden",
+                )
+            ],
+            1,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+
+    ordinary_result = runner.invoke(app, ["contradictions"])
+
+    assert ordinary_result.exit_code == 0
+    assert "should stay hidden" not in ordinary_result.stdout
+
+
+def test_decline_with_no_matching_findings_row_still_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B2.3 (design Decision 7 corollary): `--decline` never reads
+    `.openkos/findings.db` as a precondition -- it succeeds even though no
+    finding was ever persisted for this pair (the row may have been
+    purged), and never even creates the store as a side effect."""
+    _init_workspace(tmp_path, monkeypatch)
+    assert not (tmp_path / ".openkos" / "findings.db").exists()
+
+    result = runner.invoke(
+        app, ["contradictions", "--decline", "concepts/x", "concepts/y"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert not (tmp_path / ".openkos" / "findings.db").exists()
+
+
+def test_decline_typed_edge_and_merged_body_over_same_pair_stay_distinct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B2.4 (pending-work spec, Scenario "A typed-edge and a merged-body
+    candidate over the same pair stay distinct"): declining one does not
+    affect the other, and reopening one does not affect the other."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    typed_result = runner.invoke(
+        app, ["contradictions", "--decline", "concepts/a", "concepts/a"]
+    )
+    assert typed_result.exit_code == 0, typed_result.stderr
+
+    merged_result = runner.invoke(
+        app,
+        [
+            "contradictions",
+            "--decline",
+            "concepts/a",
+            "concepts/a",
+            "--merged-absorbed-id",
+            "concepts/absorbed",
+        ],
+    )
+    assert merged_result.exit_code == 0, merged_result.stderr
+
+    records = bundle_decisions.read_decisions("concepts/a", tmp_path / "bundle")
+    assert len(records) == 2
+    states = {(record.merged_absorbed_id, record.state) for record in records}
+    assert states == {(None, "declined"), ("concepts/absorbed", "declined")}
+
+    reopen_result = runner.invoke(
+        app, ["contradictions", "--reopen", "concepts/a", "concepts/a"]
+    )
+    assert reopen_result.exit_code == 0, reopen_result.stderr
+
+    records = bundle_decisions.read_decisions("concepts/a", tmp_path / "bundle")
+    by_merged = {record.merged_absorbed_id: record.state for record in records}
+    assert by_merged[None] == "open"
+    assert by_merged["concepts/absorbed"] == "declined"
+
+
+def test_reopen_reinstates_a_declined_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B2.5 (pending-work spec: "Re-Opening A Declined Finding Requires
+    Explicit Operator Action", Scenario "Explicit re-open reinstates it")."""
+    _init_workspace(tmp_path, monkeypatch)
+    decline_result = runner.invoke(
+        app, ["contradictions", "--decline", "concepts/a", "concepts/b"]
+    )
+    assert decline_result.exit_code == 0, decline_result.stderr
+
+    reopen_result = runner.invoke(
+        app, ["contradictions", "--reopen", "concepts/a", "concepts/b"]
+    )
+    assert reopen_result.exit_code == 0, reopen_result.stderr
+
+    records = bundle_decisions.read_decisions("concepts/a", tmp_path / "bundle")
+    assert len(records) == 1
+    assert records[0].state == "open"
+
+
+def test_content_change_does_not_reopen_a_declined_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B2.7 (pending-work spec, Scenario "Content change does not silently
+    reopen a decline"): a declined finding whose input concept is edited is
+    marked stale on recompute, NOT reopened, and stays hidden from ordinary
+    output."""
+    _init_workspace(tmp_path, monkeypatch)
+    concept_path = tmp_path / "bundle" / "concepts" / "a.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    concept_path.write_text(
+        "---\ntype: Concept\ntitle: A\n---\n\n# A\n\nOriginal body.\n",
+        encoding="utf-8",
+    )
+
+    decline_result = runner.invoke(
+        app, ["contradictions", "--decline", "concepts/a", "concepts/b"]
+    )
+    assert decline_result.exit_code == 0, decline_result.stderr
+
+    conn = derived.open_derived_connection(tmp_path / ".openkos" / "findings.db")
+    try:
+        findings.record_findings(
+            conn,
+            [
+                findings.Finding(
+                    pair_ids=("concepts/a", "concepts/b"),
+                    merged_absorbed_id=None,
+                    verdict="contradicts",
+                    confidence=0.9,
+                    rationale="original rationale",
+                    input_digests=(
+                        findings.InputDigest(
+                            "concepts/a",
+                            content_hash(concept_path.read_bytes()),
+                        ),
+                    ),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+    concept_path.write_text(
+        "---\ntype: Concept\ntitle: A\n---\n\n# A\n\nEdited body.\n",
+        encoding="utf-8",
+    )
+
+    declined_view = runner.invoke(app, ["contradictions", "--declined"])
+    assert declined_view.exit_code == 0, declined_view.stderr
+    assert "concepts/a" in declined_view.stdout
+    assert "stale" in declined_view.stdout.lower()
+
+    records = bundle_decisions.read_decisions("concepts/a", tmp_path / "bundle")
+    assert len(records) == 1
+    assert records[0].state == "declined"  # NOT reopened by the edit
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
+            [
+                _verdict(
+                    source="concepts/a",
+                    target="concepts/b",
+                    confidence=0.95,
+                    rationale="should still stay hidden",
+                )
+            ],
+            1,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+    ordinary_result = runner.invoke(app, ["contradictions"])
+    assert ordinary_result.exit_code == 0
+    assert "should still stay hidden" not in ordinary_result.stdout
+
+
+def test_declined_view_lists_declined_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B2.8 (pending-work spec: "Declined Findings Are Hidden By Default,
+    With An Explicit Listing View", Scenario "The declined-listing view
+    surfaces it")."""
+    _init_workspace(tmp_path, monkeypatch)
+    decline_result = runner.invoke(
+        app, ["contradictions", "--decline", "concepts/a", "concepts/b"]
+    )
+    assert decline_result.exit_code == 0, decline_result.stderr
+
+    result = runner.invoke(app, ["contradictions", "--declined"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "concepts/a" in result.stdout
+    assert "concepts/b" in result.stdout
+    assert "declined" in result.stdout.lower()
+
+
+def test_declined_view_is_empty_when_nothing_declined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["contradictions", "--declined"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "no declined" in result.stdout.lower()
+
+
+def test_decline_stages_only_the_decision_path(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B2.11 (workspace-autocommit spec: "Scoped Staging Only" delta):
+    `--decline`'s auto-commit contains ONLY the written
+    `bundle/.state/decisions/**` path -- `_autocommit`'s scoped `git add --
+    <paths>`, never `-A`."""
+    _init_git_workspace(tmp_path, tmp_path_factory, monkeypatch)
+
+    result = runner.invoke(
+        app, ["contradictions", "--decline", "concepts/a", "concepts/b"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    committed = _last_commit_files(tmp_path)
+    assert committed == {"bundle/.state/decisions/concepts/a.decisions.okf"}
+
+
+def test_decline_leaves_unrelated_dirty_file_untouched(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B2.13 (workspace-autocommit spec, Scenario "Unrelated dirty file is
+    left untouched"): a pre-existing dirty file elsewhere in the workspace
+    is never swept into `--decline`'s auto-commit."""
+    _init_git_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    (tmp_path / "unrelated.txt").write_text(
+        "pre-existing dirty content", encoding="utf-8"
+    )
+
+    result = runner.invoke(
+        app, ["contradictions", "--decline", "concepts/a", "concepts/b"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "unrelated.txt" not in _last_commit_files(tmp_path)
+    assert "unrelated.txt" in _status_porcelain(tmp_path)
+    assert (tmp_path / "unrelated.txt").read_text(encoding="utf-8") == (
+        "pre-existing dirty content"
+    )
