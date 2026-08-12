@@ -38,20 +38,36 @@ shape for chunked sources, not an interim state.
 - THEN each chunk is extracted exactly once, the chunk merge proceeds as
   before, and the judge evaluates that single merged set
 
-### Requirement: Per-Run Twin-Drop and Richer-Body Merge
+### Requirement: Merged-List Twin-Drop and Richer-Body Merge
 
-Each run's own output MUST have source-title twins dropped (respecting the
-existing `Procedure` exemption) before it enters the union. WHEN merging the
-union, a `(type, normalized-title)` collision between candidates from
-different runs MUST be resolved by keeping the candidate with the richer
-body/description, not by first-occurrence order.
+Source-title twins MUST be dropped (respecting the existing `Procedure`
+exemption) from the MERGED union, not from each run's contribution
+separately — the rule's single-object floor reads the whole candidate set,
+so a run evaluated alone can floor back in a twin the union does not
+qualify for. WHEN merging the union, a `(type, normalized-title)` collision
+between candidates from different runs MUST be resolved by keeping the
+candidate with the richer body/description, not by first-occurrence order.
 
-#### Scenario: Twin-drop applies per run before merge
+#### Scenario: Twin-drop applies to the merged list
 
 - GIVEN one run whose output contains a title-twin of the source
-- WHEN that run's candidates are prepared for the union
-- THEN the twin is dropped from that run's contribution before merging,
-  independent of the other run's output
+- WHEN the union is merged and a non-twin exists anywhere across it
+- THEN the twin is dropped from the merged candidate list, independent of
+  which run emitted it
+
+#### Scenario: A twin kept by one run's floor does not survive the union
+
+- GIVEN a run whose ONLY candidate is a title-twin of the source, and
+  another run contributing a genuine non-twin
+- WHEN the union is merged
+- THEN the twin is dropped, because the merged list contains a non-twin
+
+#### Scenario: The floor survives on the union path
+
+- GIVEN every candidate in the merged union is a title-twin of the source
+- WHEN twin-drop runs on that merged list
+- THEN the candidates are kept unchanged, so a genuinely single-subject
+  source never degrades to zero objects
 
 #### Scenario: Richer body wins on collision
 
@@ -64,7 +80,7 @@ body/description, not by first-occurrence order.
 
 - GIVEN a `Procedure`-type candidate that would otherwise be dropped as a
   source-title twin
-- WHEN twin-drop runs per run and the union is merged
+- WHEN twin-drop runs on the merged union
 - THEN the `Procedure` candidate is retained, re-derived by the same
   deterministic rule used for single-run extraction, never by a judge prompt
   clause
