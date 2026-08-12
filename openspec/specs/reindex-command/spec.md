@@ -21,8 +21,9 @@ subcommand wiring (doctor remains read-only and never calls `reindex`).
 `reindex` MUST write, in addition to `vectors.db`, the on-disk FTS and graph
 derived indexes under `.openkos/`, gated by the SAME bundle-manifest-hash
 rebuild-on-change rule the vector store already uses via `content_hash`.
-`query`/`answer()` MUST NEVER write to these on-disk stores; `reindex` is
-their only writer.
+`query`/`answer()` MUST NEVER write to these on-disk stores; the only
+writers are `reindex`, `purge`'s post-expunge best-effort rebuild, and —
+for the FTS index alone — `ingest`'s end-of-run build (issue #553).
 
 #### Scenario: Reindex writes all three derived stores in one run
 

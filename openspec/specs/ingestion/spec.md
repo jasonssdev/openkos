@@ -1857,3 +1857,38 @@ content each run and never merged onto on-disk frontmatter.
 - THEN stderr carries a non-blocking line naming both halves of the outcome:
   that the only derived object restates the source, and that it is kept and
   the Source marked
+
+### Requirement: Ingest Builds The FTS Index Once At The End Of Each Run
+
+`ingest` MUST build the on-disk FTS index (`.openkos/fts.db`) exactly once
+per invocation, at the END of the run — after the single-file pipeline
+returns, or after a batch's per-file loop completes — so the quickstart
+(`init` -> `ingest` -> `query`) gets hybrid retrieval on its first query
+without a manual `openkos reindex` in between (issue #553). A batch of N
+files MUST pay one build, never one per file. The build MUST be fail-open:
+it runs after the ingested Sources and concepts are already written and
+committed, so any build failure degrades to one stderr notice naming
+`openkos reindex` and MUST NOT change the run's exit code or undo the
+ingest. The build MUST NOT require the embedding backend: it is a pure
+FTS5 projection of the bundle, so it succeeds even on runs whose embed
+degraded. The bundle-manifest-hash gate still applies, so a run that wrote
+nothing new costs a hash check, not a rebuild.
+
+#### Scenario: First query after the quickstart uses hybrid retrieval
+
+- GIVEN a freshly initialized workspace
+- WHEN `openkos ingest <path>` completes successfully
+- THEN `.openkos/fts.db` exists and serves the ingested Source's content
+
+#### Scenario: A batch pays exactly one FTS build
+
+- GIVEN a directory of N ingestable files
+- WHEN `openkos ingest <dir> --auto` runs
+- THEN the FTS index is built exactly once, after the last file
+
+#### Scenario: A failed FTS build never costs the ingest
+
+- GIVEN an environment where the FTS build raises (e.g. fts5 unavailable)
+- WHEN `openkos ingest <path> --auto` runs
+- THEN the ingest itself succeeds with an unchanged exit code, and one
+  stderr notice names `openkos reindex`

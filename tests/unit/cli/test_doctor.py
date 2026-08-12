@@ -94,12 +94,13 @@ def test_doctor_all_healthy_exits_zero(
     (twelve total: #240 added the informational backend-locality report,
     and #513 added the informational task-models check) and exits 0
     (Scenario: Healthy workspace prints all applicable checks).
-    `.openkos/vectors.db` is pre-created so the #142
-    workspace-vector-index-present check also passes."""
+    `.openkos/vectors.db` and `.openkos/fts.db` are pre-created so the #142
+    and #553 workspace index presence checks also pass."""
     _init_workspace(tmp_path, monkeypatch)
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
     (openkos_dir / "vectors.db").write_bytes(b"")
+    (openkos_dir / "fts.db").write_bytes(b"")
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(
@@ -115,7 +116,7 @@ def test_doctor_all_healthy_exits_zero(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 14
+    assert result.stdout.count("[PASS]") == 15
     assert "[FAIL]" not in result.stdout
     assert "[SKIP]" not in result.stdout
     assert "[PASS] Workspace initialized" in result.stdout
@@ -424,13 +425,14 @@ def test_doctor_model_installed_honors_latest_normalization(
     only the `:latest`-suffixed form (`qwen3:latest`): the `<name>:latest`
     normalization flows end-to-end through the doctor model-installed check,
     not just the `model_tag_matches` helper. Every critical check passes, so
-    the command exits 0 (S2). `.openkos/vectors.db` is pre-created so the
-    #142 workspace-vector-index-present check does not add an unrelated
-    `[FAIL]` to this test's "no failures" assertion."""
+    the command exits 0 (S2). `.openkos/vectors.db` and `.openkos/fts.db`
+    are pre-created so the #142/#553 workspace index presence checks do not
+    add an unrelated `[FAIL]` to this test's "no failures" assertion."""
     _init_workspace(tmp_path, monkeypatch)
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
     (openkos_dir / "vectors.db").write_bytes(b"")
+    (openkos_dir / "fts.db").write_bytes(b"")
     configured_model = "qwen3"
     (tmp_path / "openkos.yaml").write_text(
         f"model: {configured_model}\n", encoding="utf-8"
@@ -1139,6 +1141,7 @@ def test_doctor_passes_when_every_task_model_is_installed(
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
     (openkos_dir / "vectors.db").write_bytes(b"")
+    (openkos_dir / "fts.db").write_bytes(b"")
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(
@@ -1152,7 +1155,7 @@ def test_doctor_passes_when_every_task_model_is_installed(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.count("[PASS]") == 14
+    assert result.stdout.count("[PASS]") == 15
     assert "[PASS] Task models installed" in result.stdout
     assert "[FAIL]" not in result.stdout
 
@@ -1167,6 +1170,7 @@ def test_opting_out_of_the_packaged_default_makes_the_check_pass(
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
     (openkos_dir / "vectors.db").write_bytes(b"")
+    (openkos_dir / "fts.db").write_bytes(b"")
     cfg_path = tmp_path / "openkos.yaml"
     cfg_path.write_text(
         cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: null\n",
@@ -1437,3 +1441,61 @@ def test_doctor_ledger_checks_never_write_to_the_ledger_directory(
         if path.is_file()
     }
     assert after == before
+
+
+def test_doctor_workspace_fts_present_shows_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A present `.openkos/fts.db` prints `[PASS] Workspace FTS index
+    present` (issue #553; doctor-command spec: Workspace FTS Index Presence
+    Check)."""
+    _init_workspace(tmp_path, monkeypatch)
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(parents=True, exist_ok=True)
+    (openkos_dir / "fts.db").write_bytes(b"")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[PASS] Workspace FTS index present" in result.stdout
+
+
+def test_doctor_workspace_fts_absent_shows_fail_with_reindex_remediation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent `.openkos/fts.db` prints `[FAIL] Workspace FTS index
+    present` with an `openkos reindex` remediation, and stays informational
+    -- exit 0 when every critical check otherwise passes. This is #553's
+    exact evidence shape: doctor passed every check while the first query
+    was about to answer without lexical retrieval."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[FAIL] Workspace FTS index present" in result.stdout
+    assert "openkos reindex" in result.stdout
+
+
+def test_doctor_workspace_fts_check_skipped_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside an initialized workspace, the FTS presence check prints
+    `[SKIP]` and does not affect the exit code -- mirroring the workspace
+    vector index check's workspace-only shape."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "[SKIP] Workspace FTS index present" in result.stdout

@@ -3101,9 +3101,11 @@ def _embed_after_ingest(
     than being mistaken for a degraded embed.
 
     Reuses `state.reindex.reindex` rather than embedding here (design
-    Decision D), and passes NO `fts_db_path`: the FTS index is `reindex`'s
-    job, not ingest's, and rebuilding it here would make every ingest pay
-    for a full-text rebuild it did not ask for.
+    Decision D), and passes NO `fts_db_path`: this helper runs once PER
+    FILE inside a batch, so building FTS here would make an N-file ingest
+    pay N full-text rebuilds. The FTS build ingest DOES perform (issue
+    #553) lives in `_build_fts_after_ingest`, invoked exactly once at the
+    END of each `ingest` run.
 
     `warn_nonlocal_host=False` suppresses ONLY the non-local embedding-host
     advisory: `_ingest_batch` emits that advisory itself, once per batch
@@ -3140,6 +3142,40 @@ def _embed_after_ingest(
             f"openkos ingest: embeddings not updated for {report.embed_failed} "
             f"doc{_plural(report.embed_failed)}; candidate relations may be "
             "incomplete until `openkos reindex` succeeds.",
+            err=True,
+        )
+
+
+def _build_fts_after_ingest(layout: config.WorkspaceLayout) -> None:
+    """Build the on-disk FTS index once, at the end of an `ingest` run, so
+    the README quickstart (`init` -> `ingest` -> `query`) gets hybrid
+    retrieval on its very first query instead of answering dense-only until
+    a manual `openkos reindex` (issue #553).
+
+    ONE build per invocation, at the END -- never per file. A batch of N
+    files pays a single rebuild after the loop, which is the cost decision
+    that kept `_embed_after_ingest` FTS-free in the first place: rebuilding
+    inside the per-file pipeline would multiply that cost by N. The
+    manifest-hash gate inside `_reindex_fts` still applies, so an ingest
+    run that wrote nothing new (every file skipped) costs a hash check,
+    not a rebuild.
+
+    FAIL-OPEN, mirroring `_embed_after_ingest`'s promise and for the same
+    reason: the Source and its concepts are already written and COMMITTED
+    by the time this runs, so losing the FTS build must never cost the user
+    the ingest itself. Every mapped failure degrades to one stderr notice
+    naming `openkos reindex` and leaves the exit code unchanged. Unlike the
+    embed, this path needs no Ollama at all -- it is a pure FTS5 projection
+    of the bundle -- so it succeeds even on runs whose embed degraded.
+
+    Deliberately NOT routed through `_embed_after_ingest`: that helper runs
+    once per file inside a batch, while this must run once per batch."""
+    try:
+        reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=False)
+    except (OSError, sqlite3.Error, FtsUnavailable) as exc:
+        typer.echo(
+            f"openkos ingest: FTS index not updated -- {exc}; lexical "
+            "retrieval degraded until `openkos reindex` succeeds.",
             err=True,
         )
 
@@ -3394,6 +3430,13 @@ def _ingest_batch(
             suffix = " (extraction degraded -- Source only; see stderr)"
         outcome_lines.append(f"  {marker} {path} -- {label}{suffix}")
 
+    # End-of-run FTS build (issue #553): ONCE for the whole batch, after
+    # the loop -- never per file. Runs even when every file was skipped:
+    # the manifest gate makes that a hash check, and a workspace that never
+    # had an fts.db gets one built. Fail-open (stderr only), so it can
+    # never change the exit ladder below.
+    _build_fts_after_ingest(config.WorkspaceLayout(root))
+
     # Per-file outcome lines FIRST, the aggregate summary as the batch's
     # last word -- the order the docstrings and docs/cli.md promise
     # (issue #349).
@@ -3487,6 +3530,10 @@ def ingest(
         raise typer.Exit(code=1) from exc
     if matches is None:
         _ingest_single(src, auto=auto, include_confidential=include_confidential)
+        # End-of-run FTS build (issue #553): AFTER the single-file pipeline
+        # returned -- a refusal raises `typer.Exit` above and skips this,
+        # matching the batch path (nothing new was committed).
+        _build_fts_after_ingest(config.WorkspaceLayout(Path.cwd()))
         return
     _ingest_batch(src, matches, auto=auto, include_confidential=include_confidential)
 
@@ -12245,6 +12292,32 @@ def doctor() -> None:
     else:
         results.append(
             CheckResult("Workspace vector index present", "skip", critical=False)
+        )
+
+    # 7b. workspace-fts-present (informational, workspace-only; SKIP
+    # outside -- mirrors check 7's shape exactly, for the OTHER derived
+    # retrieval store). Issue #553's evidence: `doctor` passed every check
+    # while the workspace's first query was about to run dense-only,
+    # because nothing here ever looked at `.openkos/fts.db`. Absent-only,
+    # like check 7: staleness is `reindex`'s manifest gate's job, and
+    # `next` reports it separately (#381).
+    if in_workspace:
+        if config.WorkspaceLayout(root).fts_db_path.exists():
+            results.append(
+                CheckResult("Workspace FTS index present", "pass", critical=False)
+            )
+        else:
+            results.append(
+                CheckResult(
+                    "Workspace FTS index present",
+                    "fail",
+                    critical=False,
+                    remediation="openkos reindex",
+                )
+            )
+    else:
+        results.append(
+            CheckResult("Workspace FTS index present", "skip", critical=False)
         )
 
     # 8. vector-extension-loadable (informational, always; NO SKIP branch --

@@ -61,14 +61,32 @@ output mode is offered.
 
 ### Requirement: Pinned Tier Order
 
-`openkos next` MUST rank exactly four actionable finding kinds, in this
-fixed order, and MUST recommend the command belonging to the highest-ranked
-kind with at least one finding: (1) missing or empty vector index, command
-`openkos reindex`; (2) unextracted source (`extraction_status: failed`),
-command `openkos ingest <resource>`; (3) below-source-sensitivity
-descendant, command `openkos backfill-sensitivity`; (4) pending exact-title
-duplicate group, command `openkos duplicates`. A lower-ranked tier's finding
-MUST NOT be recommended while a higher-ranked tier has at least one finding.
+`openkos next` MUST rank these actionable finding kinds, in this fixed
+order, and MUST recommend the command belonging to the highest-ranked kind
+with at least one finding: (1) missing or empty vector index, command
+`openkos reindex`; (1b) missing on-disk FTS index (`.openkos/fts.db`
+absent; absence only — staleness stays the stale-derived-indexes tier's
+job), command `openkos reindex` (issue #553); (2) unextracted source
+(`extraction_status: failed`), command `openkos ingest <resource>`; (3)
+below-source-sensitivity descendant, command `openkos backfill-sensitivity`;
+(4) pending exact-title duplicate group, command `openkos duplicates`. A
+lower-ranked tier's finding MUST NOT be recommended while a higher-ranked
+tier has at least one finding.
+
+#### Scenario: A missing FTS index outranks every content tier
+
+- GIVEN a bundle whose vector index is populated but whose `.openkos/fts.db`
+  has never been built, and which also contains a Source with
+  `extraction_status: failed`
+- WHEN `openkos next` runs
+- THEN it recommends `openkos reindex` with a reason naming the missing FTS
+  index, and does not mention `openkos ingest`
+
+#### Scenario: A missing vector index wins the reason over a missing FTS index
+
+- GIVEN a bundle with documents where BOTH derived indexes are missing
+- WHEN `openkos next` runs
+- THEN it recommends `openkos reindex` with the missing-vector-index reason
 
 #### Scenario: Tier 1 outranks tier 2
 

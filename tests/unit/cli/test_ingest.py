@@ -33,6 +33,8 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.model import okf
+from openkos.state import fts as state_fts
+from openkos.state import reindex as state_reindex
 from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import (
     changed_paths,
@@ -6189,3 +6191,81 @@ def test_a_legacy_source_with_differing_bytes_disambiguates(
     assert (raw_dir / "01-bienvenida-2.md").read_text(encoding="utf-8") == (
         "# B\n\nWelcome to B.\n"
     )
+
+
+# --- #553: ingest builds the FTS index once at the end of each run ---------
+
+
+def test_single_ingest_builds_the_fts_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a single-file `ingest --auto`, the on-disk FTS index exists and
+    already serves the ingested Source -- the README quickstart
+    (`init` -> `ingest` -> `query`) gets hybrid retrieval without a manual
+    `openkos reindex` in between (issue #553; ingestion spec: Ingest Builds
+    The FTS Index At The End Of Each Run)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Zorbification quarterly review notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    fts_db = tmp_path / ".openkos" / "fts.db"
+    assert fts_db.is_file()
+    index = state_fts.open_fts_index_readonly(fts_db)
+    assert index is not None
+    hits = index.search("Zorbification")
+    assert any(hit.concept_id == "sources/notes" for hit in hits)
+
+
+def test_batch_ingest_builds_the_fts_index_once_at_the_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory batch pays exactly ONE FTS build for the whole run, at
+    the end -- never one rebuild per ingested file (issue #553 decision:
+    batch-end build, not per-document upsert)."""
+    _init_workspace(tmp_path, monkeypatch)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "a.txt").write_text("Alpha notes.", encoding="utf-8")
+    (inbox / "b.txt").write_text("Beta notes.", encoding="utf-8")
+    (inbox / "c.txt").write_text("Gamma notes.", encoding="utf-8")
+    real_build = state_reindex._reindex_fts
+    calls: list[bool] = []
+
+    def counting(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
+        calls.append(force)
+        real_build(bundle_dir, fts_db_path, force=force)
+
+    monkeypatch.setattr(state_reindex, "_reindex_fts", counting)
+
+    result = runner.invoke(app, ["ingest", "inbox", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert (tmp_path / ".openkos" / "fts.db").is_file()
+
+
+def test_fts_build_failure_degrades_and_never_fails_the_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The end-of-run FTS build is FAIL-OPEN, exactly like the embed: the
+    Source and its concepts are committed by the time it runs, so a build
+    failure costs one stderr notice naming `openkos reindex`, never the
+    exit code and never the ingest itself (issue #553)."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes.", encoding="utf-8")
+
+    def boom(bundle_dir: Path, fts_db_path: Path, *, force: bool) -> None:
+        raise state_fts.FtsUnavailable("fts5 module unavailable")
+
+    monkeypatch.setattr(state_reindex, "_reindex_fts", boom)
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
+    assert "FTS index not updated" in result.stderr
+    assert "openkos reindex" in result.stderr

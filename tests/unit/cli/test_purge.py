@@ -526,6 +526,10 @@ def test_purge_non_git_root_refuses(
     raw_path = workspace / "raw" / source_name
     assert concept_path.is_file()
     assert raw_path.is_file()
+    # `ingest` builds `fts.db` at the end of its run since #553, so the
+    # no-mutation assertion below compares bytes rather than absence.
+    fts_db = workspace / ".openkos" / "fts.db"
+    fts_bytes_before = fts_db.read_bytes()
 
     result = runner.invoke(app, ["purge", "sources/notes"])
 
@@ -535,7 +539,7 @@ def test_purge_non_git_root_refuses(
     # must never attempt to delete/rebuild the derived indexes.
     assert concept_path.is_file()
     assert raw_path.is_file()
-    assert not (workspace / ".openkos" / "fts.db").exists()
+    assert fts_db.read_bytes() == fts_bytes_before
 
 
 # --- Rail 4: dirty working tree ----------------------------------------------
@@ -582,6 +586,10 @@ def test_purge_remote_present_refuses(tmp_git_repo: TmpGitRepo) -> None:
 def test_purge_confirmation_mismatch_no_write(tmp_git_repo: TmpGitRepo) -> None:
     """Wrong `--confirm-phrase` aborts at rail 6, after every other rail
     passed -- proving zero writes/rewrite occurred at the very last gate."""
+    # `ingest` builds `fts.db` since #553: compare bytes, not absence.
+    fts_db = tmp_git_repo.root / ".openkos" / "fts.db"
+    fts_bytes_before = fts_db.read_bytes()
+
     result = runner.invoke(
         app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", "wrong phrase"]
     )
@@ -592,12 +600,16 @@ def test_purge_confirmation_mismatch_no_write(tmp_git_repo: TmpGitRepo) -> None:
         tmp_git_repo.root, f"bundle/{tmp_git_repo.source_id}.md"
     )
     assert (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").is_file()
-    assert not (tmp_git_repo.root / ".openkos" / "fts.db").exists()
+    assert fts_db.read_bytes() == fts_bytes_before
 
 
 def test_purge_non_tty_without_confirm_phrase_refuses(
     tmp_git_repo: TmpGitRepo,
 ) -> None:
+    # `ingest` builds `fts.db` since #553: compare bytes, not absence.
+    fts_db = tmp_git_repo.root / ".openkos" / "fts.db"
+    fts_bytes_before = fts_db.read_bytes()
+
     result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
 
     assert result.exit_code == 1
@@ -609,7 +621,7 @@ def test_purge_non_tty_without_confirm_phrase_refuses(
     )
     assert (tmp_git_repo.root / "bundle" / f"{tmp_git_repo.source_id}.md").is_file()
     assert (tmp_git_repo.root / "raw" / "notes.txt").is_file()
-    assert not (tmp_git_repo.root / ".openkos" / "fts.db").exists()
+    assert fts_db.read_bytes() == fts_bytes_before
 
 
 def test_purge_bare_yes_does_not_satisfy_confirmation(
@@ -976,6 +988,12 @@ def test_purge_phase_a_writes_nothing_before_phase_b(
     monkeypatch.setattr(vcs_git, "expunge_paths", _boom)
 
     before = _committed_snapshot(tmp_git_repo.root)
+    # `ingest` builds `fts.db` at the end of its run since #553, so the
+    # fixture workspace arrives here WITH a derived store on disk. Phase A
+    # must leave its bytes untouched -- the old `not exists()` assertion
+    # proved a weaker thing (that Phase A never CREATED one).
+    fts_db = tmp_git_repo.root / ".openkos" / "fts.db"
+    fts_bytes_before = fts_db.read_bytes()
 
     phrase = f"purge {tmp_git_repo.source_id}"
     result = runner.invoke(
@@ -986,7 +1004,7 @@ def test_purge_phase_a_writes_nothing_before_phase_b(
     assert isinstance(result.exception, AssertionError)
     after = _committed_snapshot(tmp_git_repo.root)
     assert before == after
-    assert not (tmp_git_repo.root / ".openkos" / "fts.db").exists()
+    assert fts_db.read_bytes() == fts_bytes_before
 
 
 # --- Live log.md tombstone cleanup (Slice 2) --------------------------------
