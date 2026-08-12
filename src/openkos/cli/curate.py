@@ -1372,10 +1372,25 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     if truncation is not None:
         typer.echo(f"Contradictions: {truncation}")
 
+    from openkos.cli import main as cli_main
+
     high_confidence: list[ContradictionVerdict] = [
         v for v in verdicts if is_high_confidence_contradiction(v)
     ]
-    for verdict in high_confidence:
+    # pending-work spec ("Declined Findings Are Hidden By Default"): a
+    # verdict whose decision_key already carries a `declined` decision is
+    # dropped from the DISPLAY list only -- it is still judged and still
+    # persisted below, mirroring `main._run_contradictions`'s own `displayed`
+    # filter over `_is_contradiction_declined`, so the two `curate`/
+    # `contradictions` echo paths cannot drift apart on this rule.
+    displayed = [
+        v
+        for v in high_confidence
+        if not cli_main._is_contradiction_declined(
+            ctx.layout, v.pair_ids, v.merged_absorbed_id
+        )
+    ]
+    for verdict in displayed:
         source_id, target_id = verdict.pair_ids
         typer.echo(
             f"[{verdict.verdict.value.upper()}] {source_id} <-> {target_id} "
@@ -1402,13 +1417,18 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             ),
         )
 
-    status: Literal["applied", "empty"] = "applied" if high_confidence else "empty"
+    # The summary line is part of ordinary `curate` output too, so it counts
+    # `displayed`, not `high_confidence`: a run whose sole high-confidence
+    # verdict was already declined must read "no ... found", never disclose
+    # a nonzero count for a finding this stage otherwise shows nothing about
+    # (pending-work spec: "Declined Findings Are Hidden By Default").
+    status: Literal["applied", "empty"] = "applied" if displayed else "empty"
     notice = (
-        f"{len(high_confidence)} high-confidence contradiction(s) found."
-        if high_confidence
+        f"{len(displayed)} high-confidence contradiction(s) found."
+        if displayed
         else "no high-confidence contradictions found."
     )
-    return StageOutcome(status=status, applied=len(high_confidence), notice=notice)
+    return StageOutcome(status=status, applied=len(displayed), notice=notice)
 
 
 _STAGES: tuple[Stage, ...] = (
