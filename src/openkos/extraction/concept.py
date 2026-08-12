@@ -518,26 +518,64 @@ is the alarm if the vocabulary ever renames it, since a typo here would
 silently restore the deletion rather than fail."""
 
 
+def _restates_source_title(result: ExtractionResult, *, source_title: str) -> bool:
+    """Does `result`'s title merely restate `source_title`? TITLE ONLY --
+    type is not consulted.
+
+    This is the RE-ASK trigger's predicate (#584), and it is deliberately
+    weaker than `_is_droppable_source_title_twin` below. The two differ by
+    exactly one conjunct because they gate opposite operations:
+
+    - this one gates an ADDITION (ask the model whether the body develops
+      anything further, and keep what comes back);
+    - that one gates a DELETION (remove the object entirely).
+
+    The `Procedure` exemption (#413) was bought by a deletion: dropping a
+    rich tutorial's primary how-to was silent data loss, and the exemption
+    exists to stop it. That rationale does not transfer to an additive
+    trigger, because a re-ask cannot remove the object it fired on -- so a
+    lone `Procedure` restating its source title is exactly as suspicious as
+    a lone `Concept` doing the same, and asking whether the body covers
+    anything further cannot harm either.
+
+    It is not a theoretical widening. Measured on the `lesson` pair
+    (`qwen3:8b`, `--runs 5 --seed 7`, #584): the treatment arm returns ONE
+    object in 5 of 5 runs and it is a `Procedure` in every one, while the
+    floor arm returns 3 -- so under the two-conjunct predicate the trigger
+    never fires on the only fixture that reproduces the defect it was built
+    for.
+
+    Do NOT collapse these two predicates back into one. They look
+    near-identical on purpose and mean different things; merging them either
+    re-arms the deletion #413 forbids or re-blinds the trigger to the shape
+    #584 measures. Both are built on the ONE `_normalize_title` comparison
+    (`concept.py`), so no third notion of "same title" enters this module."""
+    return _normalize_title(result.title) == _normalize_title(source_title)
+
+
 def _is_droppable_source_title_twin(
     result: ExtractionResult, *, source_title: str
 ) -> bool:
-    """Is `result` a twin `_drop_source_title_twins` is allowed to drop?
+    """Is `result` a twin `_drop_source_title_twins` is allowed to DELETE?
 
     BOTH conjuncts matter, and reading only the first one is how the
     `extraction_collapse` harness first measured a green negative control on
     a case that had no red available (`report.md`: `title_twin_runs` compared
-    titles without consulting the type): the title must match after
-    `_normalize_title`, AND the type must not be `_TWIN_EXEMPT_TYPE`. A
-    `Procedure` restating the source title is not a droppable twin (#413) --
-    on the `lesson` fixture the lone object comes back as exactly that.
+    titles without consulting the type): the title must restate the source's
+    own, AND the type must not be `_TWIN_EXEMPT_TYPE`. A `Procedure`
+    restating the source title is never a droppable twin (#413).
 
-    Lifted out of `_drop_source_title_twins`'s closure (#584) so the re-ask
-    trigger asks the SAME question the drop rule asks. Two rules deciding
-    "droppable twin" differently would let the trigger fire on an object the
-    rule exempts, which is the collision #413 already paid for once."""
-    return result.type != _TWIN_EXEMPT_TYPE and _normalize_title(
-        result.title
-    ) == _normalize_title(source_title)
+    Expressed in terms of `_restates_source_title` rather than repeating its
+    comparison, so the drop rule and the re-ask trigger can never drift
+    apart on what "same title" means -- they differ ONLY by the type
+    exemption, which is the whole of the difference between deleting an
+    object and asking one more question about it.
+
+    Lifted out of `_drop_source_title_twins`'s closure (#584)."""
+    return (
+        _restates_source_title(result, source_title=source_title)
+        and result.type != _TWIN_EXEMPT_TYPE
+    )
 
 
 def _drop_source_title_twins(
@@ -914,7 +952,7 @@ def _add_reask_subjects(
     source_title: str,
     llm: LLMBackend,
 ) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
-    """Bounded re-ask on a sole droppable source-title twin (#584).
+    """Bounded re-ask on a sole object that restates the source title (#584).
 
     Returns `(objects, reask_runs, added_titles)`. When the trigger does not
     fire, `results` is handed straight back with `(0, ())` and NO call is
@@ -922,11 +960,20 @@ def _add_reask_subjects(
     double extraction cost.
 
     The trigger is the collapse #584 measured: the FINAL, filtered list is
-    exactly one object AND that object is a droppable source-title twin. On
+    exactly one object AND that object restates the source's own title. On
     the `lesson` pair, `qwen3:8b`, `--runs 5 --seed 7`, the umbrella-titled
     arm returned 1 object in 5 of 5 runs while the same three facts retitled
     and unframed returned 3 in 5 of 5 (`AXIS IMPLICATED`) -- the subjects are
     findable in that text, so a second ask has something to find.
+
+    It uses `_restates_source_title` (title only), NOT the drop rule's
+    `_is_droppable_source_title_twin` (title AND non-exempt type). The first
+    live run at this trigger's own seed settled which: the `lesson`
+    treatment arm's lone object came back a `Procedure` in 5 of 5 runs, and
+    `_TWIN_EXEMPT_TYPE` is `Procedure` -- so a type-aware trigger measurably
+    never fires on the one fixture that reproduces the defect. The exemption
+    protects against a DELETION (#413) and this operation deletes nothing;
+    see `_restates_source_title` for the full argument.
 
     It ADDS, never replaces, and that is what makes it bounded rather than a
     gamble on the model. The argument is written down in
@@ -951,7 +998,7 @@ def _add_reask_subjects(
     branch (chunked or not) rather than per run or per chunk -- #581's
     precedent, and required by the trigger itself, which reads "the source
     returned exactly one object" and so is meaningless on a slice."""
-    if len(results) != 1 or not _is_droppable_source_title_twin(
+    if len(results) != 1 or not _restates_source_title(
         results[0], source_title=source_title
     ):
         return results, 0, ()

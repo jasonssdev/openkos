@@ -508,10 +508,10 @@ required by this scenario.
 ### Requirement: Bounded Re-Ask When the Only Object Restates the Source Title
 
 When a source's FINAL, filtered object list is exactly ONE object AND that
-object is a DROPPABLE source-title twin — its title equals the source title
-after normalization AND its type is not the exempt `Procedure` — extraction
-MUST ask the model once more and MUST ADD whatever that second ask returns
-to the object already produced. The trigger MUST be evaluated on the final
+object RESTATES the source title — its title equals the source title after
+normalization, WHATEVER its type — extraction MUST ask the model once more
+and MUST ADD whatever that second ask returns to the object already
+produced. The trigger MUST be evaluated on the final
 merged, filtered list of the whole extraction (both the single-run and the
 union+judge path, chunked or not), never per run or per chunk: "the source
 returned exactly one object" is not a statement any slice can make.
@@ -538,19 +538,38 @@ The extra call MUST be reported: extraction MUST carry both the fact that a
 re-ask was spent and the titles it contributed, and `ingest` MUST surface
 them, with wording distinct from the cap, judge, and pre-judge notices.
 
+The trigger MUST ignore the `Procedure` exemption that governs the DROP
+rule. That exemption exists to prevent a DELETION — dropping a rich
+tutorial's primary how-to was silent data loss — and a re-ask deletes
+nothing, so its rationale does not transfer. Measured (`qwen3:8b`,
+`--runs 5 --seed 7`): the `lesson` treatment arm returns one object in 5 of
+5 runs and it is a `Procedure` every time, so a type-aware trigger never
+fires on the fixture that reproduces this defect. The DROP rule's exemption
+is UNCHANGED: a `Procedure` restating the source title MUST still never be
+dropped. The two predicates MUST share one title comparison and differ only
+by that type conjunct.
+
 The re-ask MUST NOT fire on a source whose final list holds more than one
-object, nor when the lone object is not a droppable twin — including a lone
-`Procedure` restating the source title, which the type exemption protects.
-Its own backend failure MUST degrade to "added nothing", keeping the object
-already produced, exactly as the selector judge's failure degrades.
+object, nor when the lone object does not restate the source title. Its own
+backend failure MUST degrade to "added nothing", keeping the object already
+produced, exactly as the selector judge's failure degrades.
 
-#### Scenario: A sole droppable twin triggers one re-ask whose findings are added
+#### Scenario: A sole title-restating object triggers one re-ask whose findings are added
 
-- GIVEN a source whose final object list is exactly one droppable
-  source-title twin, and a second ask that names a further distinct subject
+- GIVEN a source whose final object list is exactly one object restating the
+  source title, and a second ask that names a further distinct subject
 - WHEN extraction runs
 - THEN one extra call is made, and both the original object and the further
   subject are written
+
+#### Scenario: A lone Procedure restating the title re-asks but is never dropped
+
+- GIVEN a source whose only object is a `Procedure` titled the way the
+  source titles itself
+- WHEN extraction runs
+- THEN the re-ask fires on it, and the `Procedure` is written whatever the
+  second ask returns — the type exemption still bars the drop rule from
+  removing it
 
 #### Scenario: A re-ask that finds nothing changes nothing
 
@@ -558,12 +577,11 @@ already produced, exactly as the selector judge's failure degrades.
 - WHEN extraction runs
 - THEN the original object is written unchanged and nothing is added
 
-#### Scenario: A lone exempt Procedure does not trigger a re-ask
+#### Scenario: An object that does not restate the title does not trigger a re-ask
 
-- GIVEN a source whose only object is a `Procedure` restating the source
-  title
+- GIVEN a source whose only object carries a title of its own, of any type
 - WHEN extraction runs
-- THEN no extra call is made and the `Procedure` is written unchanged
+- THEN no extra call is made and that object is written unchanged
 
 #### Scenario: More than one object does not trigger a re-ask
 

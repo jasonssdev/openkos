@@ -885,8 +885,14 @@ def test_procedure_exemption_does_not_rescue_a_non_procedure_twin_alone() -> Non
 def test_exempt_procedure_alone_is_not_a_survivor_that_drops_others() -> None:
     """#413 floor guard: when the ONLY object is the exempt `Procedure`
     twin, nothing is dropped and nothing else must be invented -- the same
-    single-subject floor that already protected the `mcp-launch` shape."""
-    llm = _FakeLLM(reply=_array(_RESEARCH_AGENT_PROCEDURE_ITEM))
+    single-subject floor that already protected the `mcp-launch` shape.
+
+    The `"[]"` second reply answers the #584 re-ask, which this shape now
+    triggers (the trigger is title-only, so the `Procedure` exemption does
+    not hold it back). Spelled out rather than left to a repeating fake:
+    with the re-ask answering nothing, the object surviving is attributable
+    to the floor and to nothing else, which is what this test claims."""
+    llm = _SequencedLLM([_array(_RESEARCH_AGENT_PROCEDURE_ITEM), "[]"])
 
     result = _objects(
         "A walkthrough of building a research agent.",
@@ -894,6 +900,7 @@ def test_exempt_procedure_alone_is_not_a_survivor_that_drops_others() -> None:
         llm=llm,
     )
 
+    assert len(llm.calls) == 2
     assert len(result) == 1
     assert result[0].type == "Procedure"
 
