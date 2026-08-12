@@ -11535,7 +11535,24 @@ def query(
         typer.echo()
         typer.echo("Citations:")
         for citation in result.citations:
-            typer.echo(f"  → {citation.concept_id} ({citation.title})")
+            marker = " [confidential]" if citation.confidential else ""
+            typer.echo(f"  → {citation.concept_id} ({citation.title}){marker}")
+
+    # Read-path disclosure (issue #569), the mirror of `_autocommit`'s
+    # commit NOTICE: the fail-closed gate already decided ADMISSION (the
+    # confidential local exemption or --include-confidential let these
+    # concepts in by design), but a user reading the answer had no way to
+    # know it was confidential material -- and the obvious next action,
+    # pasting it into an email or a ticket, moves it off this machine with
+    # no signal from the tool. stderr, like every other advisory here, so
+    # piped stdout stays answer-only.
+    if any(citation.confidential for citation in result.citations):
+        typer.echo(
+            "openkos: NOTICE -- this answer cites content marked "
+            "'sensitivity: confidential'; sharing it forward moves that "
+            "content off this machine.",
+            err=True,
+        )
 
     if not save:
         return
@@ -11586,7 +11603,18 @@ def query(
         raise typer.Exit(code=1) from exc
 
     typer.echo("openkos query: proposed changes (--save):")
-    typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+    # High-water-mark disclosure (issue #569): `_stage_filed_answer` already
+    # inherited the fold (ADR-0003); what was missing is TELLING the user
+    # before they consent. Named only when the fold RAISED the level above
+    # the workspace default -- printing it unconditionally would bury the
+    # one case that matters.
+    if plan.sensitivity != cfg.default_sensitivity:
+        typer.echo(
+            f"  + bundle/{plan.link_dir}/{plan.slug}.md "
+            f"(sensitivity: {plan.sensitivity}, inherited from citations)"
+        )
+    else:
+        typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
     typer.echo(f"  ~ {save_index_path.name} (new entry)")
     typer.echo(f"  ~ {save_log_path.name} (new dated entry)")
 

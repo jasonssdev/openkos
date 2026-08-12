@@ -1812,3 +1812,74 @@ def test_query_stale_check_never_breaks_the_query(
 
     assert result.exit_code == 0
     assert "An answer." in result.stdout
+
+
+# --- #569: confidential citations are disclosed, not silently rendered ------
+
+
+def test_query_marks_confidential_citations_and_emits_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#569's evidence shape: an answer built from confidential concepts
+    said nothing. The citation lines now carry a `[confidential]` marker
+    and one stderr NOTICE -- equivalent to the commit-path NOTICE -- names
+    what the user is about to paste into an email."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="The participants were A, B and C.",
+        citations=[
+            Citation(
+                concept_id="sources/transcription2",
+                title="Transcription 2",
+                confidential=True,
+            ),
+            Citation(concept_id="concepts/open", title="Open"),
+        ],
+        fts_hit_count=2,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=2,
+        fused_count=2,
+        dense_degraded=False,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "who participated?"])
+
+    assert result.exit_code == 0
+    assert "  → sources/transcription2 (Transcription 2) [confidential]\n" in (
+        result.stdout
+    )
+    assert "  → concepts/open (Open)\n" in result.stdout
+    assert "[confidential]" not in result.stdout.split("concepts/open")[1]
+    assert (
+        "openkos: NOTICE -- this answer cites content marked "
+        "'sensitivity: confidential'" in result.stderr
+    )
+
+
+def test_query_without_confidential_citations_emits_no_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No confidential citation, no NOTICE and no marker -- the disclosure
+    must carry signal, not noise."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = AnswerResult(
+        answer="Answer.",
+        citations=[Citation(concept_id="concepts/open", title="Open")],
+        fts_hit_count=1,
+        llm_invoked=True,
+        no_match_cause="none",
+        skip_notices=[],
+        dense_hit_count=1,
+        fused_count=1,
+        dense_degraded=False,
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "q?"])
+
+    assert result.exit_code == 0
+    assert "[confidential]" not in result.stdout
+    assert "NOTICE" not in result.stderr

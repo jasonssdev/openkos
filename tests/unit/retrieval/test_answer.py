@@ -1706,7 +1706,9 @@ def test_include_confidential_true_restores_the_only_match_and_skips_the_walk(
     assert walk_calls == [{"include_confidential": True, "local_exemption": False}]
     assert result.answer == "restored"
     assert result.citations == [
-        answer_mod.Citation(concept_id="concepts/secret", title="Secret")
+        answer_mod.Citation(
+            concept_id="concepts/secret", title="Secret", confidential=True
+        )
     ]
 
 
@@ -1852,7 +1854,9 @@ def test_assemble_context_include_confidential_skips_the_independent_recheck(
     )
 
     assert citations == [
-        answer_mod.Citation(concept_id="concepts/secret", title="Secret")
+        answer_mod.Citation(
+            concept_id="concepts/secret", title="Secret", confidential=True
+        )
     ]
     assert any("confidential note" in block for block in context_blocks)
 
@@ -2173,7 +2177,9 @@ def test_local_exemption_true_restores_a_confidential_concept_to_the_answer(
     )
 
     assert result.citations == [
-        answer_mod.Citation(concept_id="concepts/secret", title="Secret")
+        answer_mod.Citation(
+            concept_id="concepts/secret", title="Secret", confidential=True
+        )
     ]
     assert any("confidential note" in m["content"] for m in llm.calls[0])
 
@@ -2235,3 +2241,42 @@ def test_assemble_context_local_exemption_skips_the_independent_recheck(
 
     assert any("confidential note" in block for block in context_blocks)
     assert [c.concept_id for c in citations] == ["concepts/secret"]
+
+
+# --- #569: citations carry the confidential-disclosure bit ------------------
+
+
+def test_citation_marks_an_explicitly_confidential_source(tmp_path: Path) -> None:
+    """#569: the write path discloses confidential content, the read path
+    did not. `_assemble_context` re-reads every cited doc's frontmatter
+    anyway, so the `Citation` now carries whether that doc is EXPLICITLY
+    `sensitivity: confidential` -- transparency, not a gate, so it mirrors
+    `_commit_has_confidential`'s explicit-value-only posture: a doc with no
+    `sensitivity` field is NOT marked (a false 'confidential' alarm on an
+    unlabeled doc would train users to ignore the real ones)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "concepts" / "secret.md",
+        title="Secret",
+        sensitivity_value="confidential",
+    )
+    _write_doc(bundle_dir / "concepts" / "open.md", title="Open")
+    recording_index = _RecordingIndex(
+        hits=[
+            fts.FtsHit(concept_id="concepts/secret", score=1.0),
+            fts.FtsHit(concept_id="concepts/open", score=0.9),
+        ]
+    )
+    llm = _FakeLLM(reply="answered")
+
+    result = answer_mod.answer(
+        "q",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=recording_index,
+        include_confidential=True,
+    )
+
+    by_id = {c.concept_id: c for c in result.citations}
+    assert by_id["concepts/secret"].confidential is True
+    assert by_id["concepts/open"].confidential is False

@@ -199,6 +199,14 @@ class Citation:
     """The OKF concept ID (bundle-relative path, `.md` suffix removed)."""
     title: str
     """Frontmatter `title`; falls back to `concept_id` when missing/empty."""
+    confidential: bool = False
+    """Whether this concept's freshly re-read frontmatter EXPLICITLY carries
+    `sensitivity: confidential` (issue #569). Transparency, not a gate --
+    it mirrors `_commit_has_confidential`'s explicit-value-only posture
+    rather than `sensitivity.should_block`'s fail-closed one, because a
+    false 'confidential' marker on an unlabeled doc would train users to
+    ignore the real ones. Defaults `False` so every existing construction
+    site stays valid."""
 
 
 @dataclass(frozen=True)
@@ -330,7 +338,18 @@ def _assemble_context(
             continue
         title = str(metadata.get("title") or "") or concept_id
         context_blocks.append(f"[concept_id: {concept_id} — {title}]\n{body}")
-        citations.append(Citation(concept_id=concept_id, title=title))
+        citations.append(
+            Citation(
+                concept_id=concept_id,
+                title=title,
+                # Explicit top-rank value only (#569) -- disclosure, never
+                # enforcement; the gates above already decided admission.
+                confidential=(
+                    str(metadata.get("sensitivity", "")).strip()
+                    == okf.SENSITIVITY_ORDER[-1]
+                ),
+            )
+        )
     return context_blocks, citations
 
 

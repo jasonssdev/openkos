@@ -234,10 +234,14 @@ fourth injected handle; issue #434 removed the stage that read it.)
 
 ### Requirement: Citations Reflect Only Context-Included Concepts
 
-Every `Citation(concept_id, title)` in `citations` MUST correspond to a
-concept whose body was actually placed in the LLM context for that call.
-Concepts skipped under guarded re-read, or never retrieved, MUST NOT
-appear in `citations`.
+Every `Citation(concept_id, title, confidential)` in `citations` MUST
+correspond to a concept whose body was actually placed in the LLM context
+for that call. Concepts skipped under guarded re-read, or never retrieved,
+MUST NOT appear in `citations`. The `confidential` flag (issue #569) MUST
+be `True` exactly when the concept's freshly re-read frontmatter EXPLICITLY
+carries the top sensitivity rank — transparency for the CLI's disclosure,
+mirroring the commit path's explicit-value-only posture, never the
+fail-closed gate's — and MUST default to `False`.
 
 #### Scenario: Citation set matches context set exactly
 
@@ -245,6 +249,14 @@ appear in `citations`.
 - WHEN `answer(question, bundle_dir=bundle_dir, llm=llm)` is called
 - THEN `citations` contains exactly one `Citation` per concept placed in
   context, with `title` read from that concept's OKF frontmatter
+
+#### Scenario: Only an explicit confidential value sets the flag
+
+- GIVEN one cited concept explicitly marked `sensitivity: confidential`
+  and one with no `sensitivity` field at all
+- WHEN `answer(...)` is called with those concepts admitted to context
+- THEN the first citation's `confidential` is `True` and the second's is
+  `False`
 
 ### Requirement: AnswerResult Carries Retrieval Metadata
 
