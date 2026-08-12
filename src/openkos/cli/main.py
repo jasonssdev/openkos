@@ -25,6 +25,7 @@ from rich.console import Console
 from openkos import config, fsio, source_title
 from openkos import lint as lint_check
 from openkos.bundle import bundle, listing, source_titles
+from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import links as bundle_links
@@ -651,6 +652,120 @@ def _sweep_ledger_sidecars_for_ids(
             survivor_id, bundle_dir, survivor_id=survivor_id, entries=remaining
         )
         touched.append(ledger_path)
+    return touched
+
+
+def _decisions_history_targets(bundle_dir: Path, purge_ids: Iterable[str]) -> list[str]:
+    """Every `bundle/.state/decisions/**` path -- own OR foreign -- that
+    references a purge-set member, for inclusion in `purge`'s
+    `expunge_targets` list IN THE SAME `git filter-repo` pass as the
+    concept's own file expunge (privacy-purge spec: "Whole-History
+    Expunge Covers The Pending-Work Decision Subtree", pending-work design
+    Decision 5).
+
+    A record "references" `purge_ids` when its `pair_ids` (either
+    element) OR its `merged_absorbed_id` names a purge-set member.
+
+    Unlike the merge-ledger sidecar's history coverage (own sidecar ONLY,
+    the `bundle_ledger.ledger_path_for` loop above) -- which leaves a
+    FOREIGN sidecar's historical `absorbed_id` entries as a documented gap
+    -- this covers foreign decisions sidecars too. `expunge_paths`' own
+    `--file-info-callback` content-scrub is wired ONLY for
+    `bundle/index.md`/`bundle/log.md`, not for `bundle/.state/**`, so a
+    whole-file history removal is the only way to guarantee no historical
+    blob of ANY decisions path retains a purged id, which the spec
+    requires. `_sweep_decisions_for_ids` is the LIVE-tree counterpart that
+    reconstructs a foreign file's surviving (unrelated) records afterwards,
+    in the SAME Phase B pass.
+
+    Returned as bundle-relative POSIX strings (`bundle/.state/decisions/
+    **`), matching the shape every other `expunge_targets` entry already
+    uses -- callers append these directly, no further conversion needed."""
+    purge_ids_set = set(purge_ids)
+    targets: list[str] = []
+    for decisions_path in bundle_decisions.iter_decisions(bundle_dir):
+        metadata, _ = okf.load_frontmatter(decisions_path.read_text(encoding="utf-8"))
+        concept_id = metadata.get("concept_id")
+        if not isinstance(concept_id, str) or not concept_id:
+            continue
+        records = bundle_decisions.read_decisions(concept_id, bundle_dir)
+        references_purge_set = any(
+            record.pair_ids[0] in purge_ids_set
+            or record.pair_ids[1] in purge_ids_set
+            or record.merged_absorbed_id in purge_ids_set
+            for record in records
+        )
+        if references_purge_set:
+            targets.append(
+                f"bundle/{decisions_path.relative_to(bundle_dir).as_posix()}"
+            )
+    return targets
+
+
+def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list[Path]:
+    """Privacy sweep of `bundle/.state/decisions/` for `purge_ids`
+    membership (privacy-purge spec: "Whole-History Expunge Covers The
+    Pending-Work Decision Subtree"; forget-command spec: "Forget Sweeps
+    Live Decision Entries Referencing The Purge Set" -- shared by
+    `forget`'s and `purge`'s own Phase B, mirroring
+    `_sweep_ledger_sidecars_for_ids`'s two-branch shape exactly, one
+    primitive written once):
+
+    - Each purge-set member's OWN decisions sidecar
+      (`bundle.decisions.decisions_path_for(member, bundle_dir)`) is
+      deleted OUTRIGHT -- once the concept itself is gone, decisions keyed
+      on it (`pair_ids[0] == member`) are meaningless.
+    - Every OTHER live decisions sidecar has any record whose `pair_ids`
+      or `merged_absorbed_id` names a purge-set member dropped
+      (`bundle.decisions.write_decisions` with the remaining records, or
+      the file removed entirely when none remain) -- so a purge-set
+      member's participation in a contradiction decision does not survive
+      merely because the record lives under a DIFFERENT (live) concept's
+      sidecar.
+
+    Returns every decisions path touched (deleted, or rewritten),
+    bundle-dir-relative-capable via the caller, so it can be folded into
+    the SAME Phase B write/`_autocommit` the concept-file deletion already
+    uses -- never a second, independent write pass.
+
+    For `purge`, `_decisions_history_targets` ALSO puts every one of these
+    same paths into `expunge_targets` before the `git filter-repo` pass
+    (a stronger guarantee than the ledger sweep's own-file-only history
+    coverage, per the privacy-purge spec delta); this function is the
+    LIVE-tree half of that coverage, and it is the ENTIRE sweep for
+    `forget`, which performs no history rewrite at all.
+
+    A sidecar whose `concept_id` field is missing or non-string is skipped
+    defensively rather than guessed at, matching
+    `_sweep_ledger_sidecars_for_ids`'s own defensive posture."""
+    purge_ids_set = set(purge_ids)
+    touched: list[Path] = []
+    deleted: set[Path] = set()
+    for member in sorted(purge_ids_set):
+        own_path = bundle_decisions.decisions_path_for(member, bundle_dir)
+        if own_path.is_file():
+            fsio.remove_file(own_path)
+            touched.append(own_path)
+            deleted.add(own_path)
+    for decisions_path in bundle_decisions.iter_decisions(bundle_dir):
+        if decisions_path in deleted:
+            continue
+        metadata, _ = okf.load_frontmatter(decisions_path.read_text(encoding="utf-8"))
+        concept_id = metadata.get("concept_id")
+        if not isinstance(concept_id, str) or not concept_id:
+            continue
+        records = bundle_decisions.read_decisions(concept_id, bundle_dir)
+        remaining = [
+            record
+            for record in records
+            if record.pair_ids[0] not in purge_ids_set
+            and record.pair_ids[1] not in purge_ids_set
+            and record.merged_absorbed_id not in purge_ids_set
+        ]
+        if len(remaining) == len(records):
+            continue
+        bundle_decisions.write_decisions(concept_id, bundle_dir, records=remaining)
+        touched.append(decisions_path)
     return touched
 
 
@@ -4506,6 +4621,7 @@ def forget(
 
     unlinked_count = 0
     ledger_touched: list[Path] = []
+    decisions_touched: list[Path] = []
     try:
         fsio.write_atomic(index_path, new_index_text)
         fsio.write_atomic(log_path, new_log_text)
@@ -4522,6 +4638,14 @@ def forget(
         # because it was previously absorbed into (or is the survivor of)
         # a merge.
         ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
+        # Pending-work decision sweep (forget-command spec: "Forget Sweeps
+        # Live Decision Entries Referencing The Purge Set"), same Phase B
+        # write: a purge-set member's contradiction decision must not
+        # survive `forget` merely because the record lives under a
+        # different (live) concept's sidecar. `forget` performs no history
+        # rewrite, so this call IS the entire sweep for it (unlike
+        # `purge`, which also puts these paths into `expunge_targets`).
+        decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
     except (OSError, ValueError) as exc:
         message = f"openkos forget: failed while writing the forget -- {exc}."
         # K-of-N observability on a mid-cascade unlink failure (`--scope
@@ -4561,7 +4685,7 @@ def forget(
             *(f"bundle/{member}.md" for member in purge_ids),
             *(
                 f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
-                for p in ledger_touched
+                for p in (*ledger_touched, *decisions_touched)
             ),
         ],
         forget_message,
@@ -4657,13 +4781,17 @@ def _purge_clean_live_log(layout: config.WorkspaceLayout, purge_ids: list[str]) 
 
 def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
     """Phase B's index cleanup (spec: Index Cleanup Is Delete-And-Rebuild, No
-    Tombstone): physically DELETE `.openkos/{fts,vectors,graph}.db` --
-    row-level `DELETE` would leave SQLite freelist-recoverable pages, which
-    defeats the point of an erasure -- then best-effort rebuild FTS + graph
-    ONLY (never the full `state.reindex.reindex`, which hard-depends on a
-    running Ollama embedder `purge` must never require). `vectors.db` is
-    deliberately left deleted for the next `openkos reindex` to lazily
-    re-embed.
+    Tombstone): physically DELETE `.openkos/{fts,vectors,graph,findings}.db`
+    -- row-level `DELETE` would leave SQLite freelist-recoverable pages,
+    which defeats the point of an erasure -- then best-effort rebuild FTS +
+    graph ONLY (never the full `state.reindex.reindex`, which hard-depends
+    on a running Ollama embedder `purge` must never require). `vectors.db`
+    and `findings.db` are BOTH deliberately left deleted, never rebuilt
+    in-line: `vectors.db` for the next `openkos reindex` to lazily
+    re-embed, and `findings.db` because regenerating a contradiction
+    finding costs LLM calls (pending-work design Decision 1's rebuild-
+    posture table -- `findings.db` shares `vectors.db`'s posture, not
+    `fts.db`'s).
 
     A rebuild failure here is reported but MUST NOT fail the (already
     irreversible, already-succeeded) purge -- the DELETE above is the
@@ -4673,6 +4801,7 @@ def _purge_rebuild_indexes(layout: config.WorkspaceLayout) -> None:
         layout.fts_db_path,
         layout.vectors_db_path,
         layout.graph_db_path,
+        layout.findings_db_path,
     ):
         try:
             db_path.unlink(missing_ok=True)
@@ -4943,6 +5072,24 @@ def purge(
                 expunge_targets.append(
                     f"bundle/{member_sidecar.relative_to(layout.bundle_dir).as_posix()}"
                 )
+        # Whole-History Expunge Covers The Pending-Work Decision Subtree
+        # (privacy-purge spec, B1.4): every `bundle/.state/decisions/**`
+        # sidecar -- own OR foreign -- that references a purge-set member
+        # is expunged in this SAME `git filter-repo` pass. Unlike the
+        # ledger sidecar loop above, this covers FOREIGN sidecars too
+        # (`_decisions_history_targets`'s own docstring explains why).
+        expunge_targets.extend(_decisions_history_targets(layout.bundle_dir, purge_ids))
+        # Threat matrix ("Shell / subprocess"): concept ids are user-
+        # controlled, and a decisions path derived from one could contain
+        # `==>` (git-filter-repo's rename delimiter) or another rejected
+        # sequence -- validate the WHOLE `expunge_targets` list here, in
+        # Phase A, so a malformed path refuses cleanly (this except
+        # clause) rather than raising an uncaught `ValueError` from deep
+        # inside `vcs_git.expunge_paths` after the point of no return.
+        # `vcs_git.expunge_paths` re-validates this same list itself
+        # (defense in depth, never trusted to be skipped), so this call
+        # can never desync from what the real rewrite enforces.
+        vcs_git._validate_rel_paths(expunge_targets)
     except (OSError, ValueError) as exc:
         typer.echo(
             f"openkos purge: failed while preparing the purge -- {exc}.", err=True
@@ -5155,6 +5302,7 @@ def purge(
         _purge_clean_live_index(layout, purge_ids)
         _purge_clean_live_log(layout, purge_ids)
         _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
+        _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
         _purge_rebuild_indexes(layout)
         raise typer.Exit(code=1) from exc
     except vcs_git.GitError as exc:
@@ -5174,6 +5322,15 @@ def purge(
     # purge-set member, reusing the exact same primitive `forget`'s Phase B
     # calls, so the sweep is written exactly once.
     ledger_touched = _sweep_ledger_sidecars_for_ids(layout.bundle_dir, purge_ids)
+    # Whole-History Expunge Covers The Pending-Work Decision Subtree
+    # (privacy-purge spec): each purge-set member's OWN decisions sidecar,
+    # and every FOREIGN sidecar referencing it, was already removed from
+    # the working tree by `expunge_paths`' filter-repo checkout (both were
+    # in `expunge_targets` above, via `_decisions_history_targets`); this
+    # is the LIVE-tree half -- reconstructing any foreign sidecar's
+    # surviving (unrelated) records, reusing the exact same primitive
+    # `forget`'s Phase B calls, so the sweep is written exactly once.
+    decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
     _purge_rebuild_indexes(layout)
 
     # Post-rewrite live-tree auto-commit (design: "purge empty-diff guard",
@@ -5191,7 +5348,7 @@ def purge(
         "bundle/log.md",
         *(
             f"bundle/{p.relative_to(layout.bundle_dir).as_posix()}"
-            for p in ledger_touched
+            for p in (*ledger_touched, *decisions_touched)
         ),
     ]
     try:
