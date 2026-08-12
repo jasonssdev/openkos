@@ -103,10 +103,13 @@ The torn-write detector and the post-merge-mutation check are **different checks
 
 **Check B — entries free of post-merge mutation.** Mechanism: **nested-prefix equality**, not either heuristic the exploration offered. Entry *k*'s `survivor_before` embeds a full survivor document that itself carries entries `0..k-1`. Decode it and compare to the survivor's own current entries `0..k-1`. Any inequality is exactly #550 consequence 2 — a later merge rewrote bytes inside an earlier embedded snapshot. Exact, no thresholds.
 
+**The skip rule.** The comparison runs only on an entry whose `survivor_before` **embeds ledger entries of its own**. An entry that embeds nothing is silently skipped, never flagged. This is required for correctness, not an optimization: after the relocation a `survivor_before` snapshot is a survivor document whose frontmatter never carried a `merged_from` key at all — the entries live in the sidecar, not in the document — so *every* post-relocation entry embeds nothing. Without the skip, the check would false-flag every legitimate multi-entry ledger created after this change. `scan_nesting_violations` (`src/openkos/bundle/ledger.py`) implements it as `if not embedded_entries: continue`, and `test_scan_nesting_violations_skips_a_post_relocation_entry_with_nothing_embedded` is its regression alarm.
+
 Honest false negatives:
 
 - A **single-entry** ledger has nothing nested; the check is blind to it.
 - **Cross-survivor pollution** is invisible at any *k*. `merge_core`'s `other_files` (`cli/main.py:6542`) includes every non-reserved `.md`, so a merge of X→Y can rewrite a link inside **Z**'s embedded snapshot. The ledger alone cannot distinguish that from correct bytes.
+- **Every post-relocation entry**, via the skip rule above. This is the widest of the three and the easiest to misread: it means a clean Check B on a workspace created after this change is not evidence that its ledgers were examined — there was nothing in scope to examine. State it wherever the check's result is reported, or a `[PASS]` reads as a stronger claim than it is.
 
 Because those two gaps are real, the migration gate is deliberately coarser than the check: **the repair verb refuses whenever any survivor in the bundle carries ≥2 entries**, bundle-wide — two merges anywhere means cross-survivor pollution is possible. Check B supplies the precise, citable finding; the merge-count gate supplies soundness. Check B is a **migration-era** check: once entries live outside `bundle/**.md`, no link scan can reach them and the corruption class is structurally extinct for post-1a entries.
 
