@@ -224,10 +224,18 @@ candidate or fallback chain.)
 #### Scenario: Already-ingested source is refused, not overwritten
 
 - GIVEN `raw/<name>` or `bundle/sources/<slug>.md` already exists for this
-  source
-- WHEN `openkos ingest <path>` runs
+  source — i.e. the existing raw copy is owned by a Source whose recorded
+  `origin_key` equals this candidate's, or (for a Source predating that
+  key) holds byte-identical content
+- WHEN `openkos ingest <path>` runs, with content differing from the
+  existing copy
 - THEN it refuses in Phase A, exits non-zero with a clear error, and
   writes nothing
+
+> "**for this source**" is decided by ORIGIN, never by basename alone
+> (#552). A raw copy that merely SHARES a basename with this candidate,
+> while belonging to a different file, is not "this source" and MUST NOT
+> trigger this refusal — see the disambiguation requirement below.
 
 #### Scenario: Successful extraction yields a Concept
 
@@ -1604,6 +1612,113 @@ from disk — it is recomputed from scratch every run.
 - THEN `extraction_status` is computed fresh from this run's outcome only,
   never read from or merged with the on-disk frontmatter, unlike
   `sensitivity`
+
+### Requirement: Raw Destination Is Disambiguated By Origin, Not Basename
+
+`raw/` MUST remain a flat namespace of bare basenames derived from
+`Path(src).name` — the path-traversal defence — and every destination this
+requirement produces MUST still be a bare basename directly under `raw/`.
+
+Each Source MUST record an `origin_key` frontmatter key: a digest
+identifying the resolved filesystem path it was ingested from. It MUST be a
+digest, never a path or path fragment — the value's only consumer is
+equality, and a structured path field would place `$HOME` and the machine's
+directory layout into every Source's frontmatter and git history, removable
+only by `purge`. The key MUST be derived from the RESOLVED path, so two
+spellings of one file (`./notes.txt` from inside a folder,
+`folder/notes.txt` from its parent) yield one key. `origin_key` MUST be
+ABSENT on any Source written before this key existed, and absence MUST mean
+exactly one thing: origin not recorded.
+
+`ingest` MUST resolve its raw destination against the whole COLLISION
+FAMILY of the candidate's basename — `<stem><ext>` and every
+`<stem>-N<ext>` for positive integer N — matching the extension exactly, so
+`notes.txt` and `notes.md` remain distinct basenames that never collide.
+Family members MUST be matched NFC-normalized on both sides.
+
+Resolution MUST proceed in family order:
+
+1. a member whose owning Source records an `origin_key` EQUAL to the
+   candidate's is the same file — the destination, subject to the
+   raw-immutability refusal above;
+2. a member whose owning Source records a DIFFERENT `origin_key` is a
+   different file — skip it and continue;
+3. a member whose owning Source records NO `origin_key`, or whose Source
+   cannot be read or parsed, has unknown origin — match it on byte-identical
+   content, which is the pre-#552 predicate, and continue otherwise.
+
+When no member matches, the destination MUST be the first free
+`<stem>-N<ext>` (N ascending from 2), and `ingest` MUST report the
+substitution on stderr, naming both the taken basename and the copy
+actually written. It MUST NOT choose a destination the user did not name
+without saying so.
+
+Raw immutability MUST be scoped to a file the run can IDENTIFY as the same
+one. A member with unknown origin and differing content MUST disambiguate
+rather than refuse: it cannot be proven to be the candidate, and refusing
+turns away real content, which is the harm this requirement exists to end.
+No existing byte in `raw/` may be rewritten under any branch.
+
+A re-ingest matched under rule 3 MUST write the candidate's `origin_key`
+onto the regenerated Source, so a legacy workspace self-migrates with no
+repair verb and no migration step.
+
+#### Scenario: Same basename, different content, both land
+
+- GIVEN `raw/<name>` is owned by a Source whose origin differs from this
+  candidate's
+- WHEN `openkos ingest <path>` runs with content differing from that copy
+- THEN both files exist — the incumbent untouched at `raw/<name>`, the
+  candidate at `raw/<stem>-2<ext>` — each with its own Source
+
+#### Scenario: Same basename, identical content, still two sources
+
+- GIVEN two empty files sharing a basename in two different folders
+- WHEN each is ingested in turn
+- THEN the second lands at `raw/<stem>-2<ext>` with its own Source, rather
+  than being reported as a re-ingest of the first
+
+#### Scenario: Re-ingesting the same file spawns no copy
+
+- GIVEN a source already ingested, whose Source records its `origin_key`
+- WHEN `openkos ingest <path>` runs again against that same file, any
+  number of times
+- THEN exactly one raw copy and one Source exist, with no `-N` member
+
+#### Scenario: A different working directory is still the same file
+
+- GIVEN a source already ingested via a relative path
+- WHEN it is re-ingested via its absolute path
+- THEN it is a re-ingest, not a new source
+
+#### Scenario: Changed bytes of an identified source still refuse
+
+- GIVEN a source already ingested, whose Source records its `origin_key`
+- WHEN the file is edited and re-ingested
+- THEN `ingest` refuses with the raw-immutability message and writes no
+  disambiguated copy
+
+#### Scenario: A legacy Source matches on content and backfills its key
+
+- GIVEN a Source carrying no `origin_key` whose raw copy is byte-identical
+  to the candidate
+- WHEN `openkos ingest <path>` runs
+- THEN it is a re-ingest, no `-N` copy is created, and the regenerated
+  Source carries the candidate's `origin_key`
+
+#### Scenario: A legacy Source with differing content disambiguates
+
+- GIVEN a Source carrying no `origin_key` whose raw copy differs from the
+  candidate
+- WHEN `openkos ingest <path>` runs
+- THEN the candidate lands at `raw/<stem>-2<ext>`, the incumbent raw copy
+  is unchanged, and nothing is refused
+
+#### Scenario: The substitution is reported
+
+- GIVEN a basename already held by a different file
+- WHEN the candidate is disambiguated
+- THEN stderr names both the taken basename and the destination written
 
 ### Requirement: Extraction Notice Frontmatter Key on a Sole Restating Object
 
