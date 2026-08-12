@@ -505,6 +505,79 @@ required by this scenario.
 - WHEN extraction runs
 - THEN zero objects are written and `ingest` degrades to Source-only
 
+### Requirement: Bounded Re-Ask When the Only Object Restates the Source Title
+
+When a source's FINAL, filtered object list is exactly ONE object AND that
+object is a DROPPABLE source-title twin — its title equals the source title
+after normalization AND its type is not the exempt `Procedure` — extraction
+MUST ask the model once more and MUST ADD whatever that second ask returns
+to the object already produced. The trigger MUST be evaluated on the final
+merged, filtered list of the whole extraction (both the single-run and the
+union+judge path, chunked or not), never per run or per chunk: "the source
+returned exactly one object" is not a statement any slice can make.
+
+The re-ask MUST carry an instruction DIFFERENT from the one that produced
+the collapsed list — a second identical ask is measurably useless, since
+the union path already runs two identical passes and the collapse survives
+10 of 10 runs. It MUST use a SEPARATE prompt; the extraction prompt itself
+MUST NOT be modified, because the collapse probe pins its identity and a
+change there destroys the before/after baseline.
+
+The re-ask MUST only ADD. It MUST NOT remove, replace, or rewrite the
+object the first pass produced, whatever it returns: a guard that replaces
+the single object is unbounded on a genuinely single-subject source, while
+one that only adds is bounded whatever its false-positive rate. A re-ask
+that returns nothing MUST leave the extracted objects exactly as they were.
+
+The re-ask prompt MUST make an EMPTY answer explicitly correct and expected
+for a source that genuinely covers one subject. A genuinely single-subject
+source triggers this re-ask too, and an instruction that pressures the
+model to produce more is how such a source acquires an invented subject.
+
+The extra call MUST be reported: extraction MUST carry both the fact that a
+re-ask was spent and the titles it contributed, and `ingest` MUST surface
+them, with wording distinct from the cap, judge, and pre-judge notices.
+
+The re-ask MUST NOT fire on a source whose final list holds more than one
+object, nor when the lone object is not a droppable twin — including a lone
+`Procedure` restating the source title, which the type exemption protects.
+Its own backend failure MUST degrade to "added nothing", keeping the object
+already produced, exactly as the selector judge's failure degrades.
+
+#### Scenario: A sole droppable twin triggers one re-ask whose findings are added
+
+- GIVEN a source whose final object list is exactly one droppable
+  source-title twin, and a second ask that names a further distinct subject
+- WHEN extraction runs
+- THEN one extra call is made, and both the original object and the further
+  subject are written
+
+#### Scenario: A re-ask that finds nothing changes nothing
+
+- GIVEN the same trigger, and a second ask that returns an empty array
+- WHEN extraction runs
+- THEN the original object is written unchanged and nothing is added
+
+#### Scenario: A lone exempt Procedure does not trigger a re-ask
+
+- GIVEN a source whose only object is a `Procedure` restating the source
+  title
+- WHEN extraction runs
+- THEN no extra call is made and the `Procedure` is written unchanged
+
+#### Scenario: More than one object does not trigger a re-ask
+
+- GIVEN a source whose final object list holds two or more objects
+- WHEN extraction runs
+- THEN no extra call is made
+
+#### Scenario: The extra call is reported
+
+- GIVEN a source whose sole droppable twin triggered a re-ask
+- WHEN `openkos ingest` completes
+- THEN the run reports that the re-ask was spent and what it added, in
+  wording distinct from the cap, judge, and pre-judge ceiling notices
+
 ### Requirement: Fail-Closed Validation of Extracted Output
 
 Extraction output MUST be validated before any derived object is written.

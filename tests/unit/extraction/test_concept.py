@@ -596,7 +596,10 @@ def test_blank_body_is_kept_as_empty_string() -> None:
     item = '{"type": "Concept", "title": "T", "description": "D", "body": ""}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = _objects("text", source_title="t", llm=llm)
+    # `source_title` deliberately differs from the object's title: `"t"`
+    # made this validation test a sole source-title twin, which now spends a
+    # re-ask call (#584) it has no business exercising.
+    result = _objects("text", source_title="Notes", llm=llm)
 
     assert len(result) == 1
     assert result[0].body == ""
@@ -2436,11 +2439,17 @@ def test_union_floor_keeps_the_twin_when_the_whole_merge_is_twins() -> None:
     `mcp-launch` shape (a genuinely single-subject source whose only subject
     is what its title names) must not become `[]` on the union path -- and
     it is the failure mode a post-merge twin drop would introduce if the
-    floor were dropped along with the move."""
+    floor were dropped along with the move.
+
+    The `"[]"` third reply answers the sole-twin re-ask (#584), which this
+    merged list now triggers: it finds nothing further, so the floor is what
+    keeps the object here, exactly as before. Without it the judge reply
+    would be consumed by the re-ask and the judge call would degrade."""
     llm = _SequencedLLM(
         [
             _array(_DICHOTOMY_ITEM),
             _array(_DICHOTOMY_ITEM),
+            "[]",
             _keep_reply("Dichotomy of Control"),
         ]
     )
@@ -2842,9 +2851,7 @@ def test_re_ask_returning_nothing_leaves_the_objects_untouched() -> None:
         concept_mod.ExtractionResult(
             type="Concept",
             title="Dichotomy of Control",
-            description=(
-                "The Stoic distinction between what is and is not up to us."
-            ),
+            description=("The Stoic distinction between what is and is not up to us."),
             body="",
         )
     ]
@@ -2860,9 +2867,7 @@ def test_re_ask_cannot_empty_a_genuinely_single_subject_source() -> None:
     control) also triggers the re-ask, and its object survives whatever
     comes back: here the second ask merely echoes the subject already kept,
     which adds nothing and removes nothing."""
-    llm = _SequencedLLM(
-        [_array(_DICHOTOMY_ITEM), _array(_DICHOTOMY_ECHO_ENTITY_ITEM)]
-    )
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(_DICHOTOMY_ECHO_ENTITY_ITEM)])
 
     outcome = concept_mod.extract_concept(
         "Notes on what is up to us.",
@@ -2909,6 +2914,28 @@ def test_no_re_ask_when_more_than_one_object_survives() -> None:
     assert [r.title for r in outcome.objects] == ["Stoicism", "Epictetus"]
 
 
+def test_no_re_ask_when_two_twins_both_survive_the_floor() -> None:
+    """The `exactly one` half of the trigger, on the only shape where it is
+    load-bearing: two candidates that are BOTH source-title twins leave no
+    non-twin for `_drop_source_title_twins` to keep, so its floor returns
+    both. The list is still not the collapse -- it holds two objects -- and
+    no second call goes out."""
+    entity_twin = (
+        '{"type": "Entity", "title": "Dichotomy of Control", '
+        '"description": "A tool named after the idea.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM, entity_twin), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.type for r in outcome.objects] == ["Concept", "Entity"]
+
+
 def test_no_re_ask_when_the_lone_object_is_not_a_title_twin() -> None:
     """One object that does NOT restate the source title is the ordinary
     single-subject reply, not the twin collapse #584 measures."""
@@ -2942,7 +2969,7 @@ def test_re_ask_carries_a_different_instruction_than_the_extraction_prompt() -> 
     assert second_system != first_system
     # The re-ask names what it wants rather than repeating the general
     # extraction request.
-    assert "further distinct subject" in second_system
+    assert "any FURTHER distinct subject in its own right" in second_system
 
 
 def test_re_ask_prompt_makes_an_empty_answer_correct_and_expected() -> None:

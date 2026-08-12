@@ -5637,3 +5637,71 @@ def test_stage_derived_objects_stays_silent_when_the_type_was_clear(
     metadata, _ = okf.load_frontmatter(plans[0].content)
     assert okf.TYPE_ALTERNATIVE_KEY not in metadata
     assert "also weighed" not in capsys.readouterr().err
+
+
+def test_ingest_sole_twin_re_ask_reports_what_it_added_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#584: a source whose whole extraction collapses to one object
+    restating its own title spends ONE extra re-ask call, and that call is
+    reported -- with the titles it contributed, and in wording distinct from
+    the cap, judge, and pre-judge ceiling notices. A silent extra model call
+    is exactly the cost this project surfaces rather than hides."""
+    _init_workspace(tmp_path, monkeypatch)
+    twin = _concept_reply(title="Replica Lag")
+    added = _concept_reply(title="Read-Your-Writes Consistency")
+    keep = '{"keep": ["Replica Lag", "Read-Your-Writes Consistency"]}'
+    _patch_sequenced_llm(monkeypatch, [twin, twin, added, keep])
+    source = tmp_path / "replica-lag.txt"
+    source.write_text(
+        "Replica Lag\n\nA replica trails its primary, and a read routed to "
+        "it can miss a write the client just made.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"])
+
+    assert result.exit_code == 0
+    reask_lines = [line for line in result.stderr.splitlines() if "re-ask call" in line]
+    assert len(reask_lines) == 1
+    assert "one object restating the source title" in reask_lines[0]
+    assert (
+        "1 extra re-ask call added 1 object(s): Read-Your-Writes Consistency"
+        in reask_lines[0]
+    )
+    for other_notice_marker in (
+        "cap reached",
+        "judge dropped",
+        "judge selection",
+        "pre-judge ceiling",
+    ):
+        assert other_notice_marker not in reask_lines[0]
+    concept_dir = tmp_path / "bundle" / "concepts"
+    assert (concept_dir / "replica-lag.md").is_file()
+    assert (concept_dir / "read-your-writes-consistency.md").is_file()
+
+
+def test_ingest_reports_a_re_ask_that_found_nothing_further(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The genuinely single-subject case -- the probe's negative control
+    shape. The re-ask answers `[]`, which its prompt names as correct and
+    expected; the object the first pass produced is written unchanged, and
+    the spent call is still reported."""
+    _init_workspace(tmp_path, monkeypatch)
+    twin = _concept_reply(title="Replica Lag")
+    keep = '{"keep": ["Replica Lag"]}'
+    _patch_sequenced_llm(monkeypatch, [twin, twin, "[]", keep])
+    source = tmp_path / "replica-lag.txt"
+    source.write_text(
+        "Replica Lag\n\nA replica trails its primary, and a read routed to "
+        "it can miss a write the client just made.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "1 extra re-ask call found nothing further" in result.stderr
+    concept_dir = tmp_path / "bundle" / "concepts"
+    assert [p.name for p in sorted(concept_dir.glob("*.md"))] == ["replica-lag.md"]

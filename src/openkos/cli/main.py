@@ -2241,6 +2241,39 @@ def _pre_judge_ceiling_notice(report: ExtractionReport) -> str | None:
     )
 
 
+def _reask_notice(report: ExtractionReport) -> str | None:
+    """Render the bounded sole-twin re-ask notice (#584), or `None` when no
+    re-ask was spent -- which is the common case.
+
+    An extra model call is a cost the user pays, so it is reported rather
+    than hidden, exactly like the pre-judge ceiling reports candidates the
+    judge never saw. Distinct wording from every other notice here: nothing
+    was dropped, judged, or capped -- a call was ADDED, and what it found
+    was added with it.
+
+    Both outcomes are surfaced, including "found nothing further": that is
+    the answer the re-ask prompt names as correct for a genuinely
+    single-subject source, and a spent call that changed nothing is still a
+    spent call."""
+    if report.reask_runs <= 0:
+        return None
+    if not report.reask_added_titles:
+        return (
+            "extraction returned one object restating the source title; "
+            "1 extra re-ask call found nothing further"
+        )
+    shown = report.reask_added_titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(report.reask_added_titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return (
+        "extraction returned one object restating the source title; "
+        f"1 extra re-ask call added {len(report.reask_added_titles)} "
+        f"object(s): {listed}"
+    )
+
+
 def _judge_selection_notice(report: ExtractionReport) -> str | None:
     """Render the union+judge SUCCESSFUL-selection notice (#456), naming
     what the judge dropped, or `None` when the judge kept everything, was
@@ -2499,6 +2532,13 @@ def _stage_derived_objects(
         return [], "failed"
 
     extractions = outcome.objects
+    # #584: the re-ask fires before the judge ever runs (it feeds the merged
+    # candidate list), so its notice renders ahead of every other one --
+    # the notices read in the order the pipeline produced them.
+    reask_notice = _reask_notice(outcome.report)
+    if reask_notice is not None:
+        typer.echo(f"openkos ingest: {reask_notice}", err=True)
+
     # The pre-judge ceiling fires FIRST of all: it cut candidates before
     # the judge ever saw them, so it renders ahead of what the judge did.
     ceiling_notice = _pre_judge_ceiling_notice(outcome.report)
