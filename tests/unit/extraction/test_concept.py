@@ -3173,3 +3173,76 @@ def test_re_ask_backend_failure_keeps_the_original_object() -> None:
     assert [r.title for r in outcome.objects] == ["Dichotomy of Control"]
     assert outcome.report.reask_runs == 1
     assert outcome.report.reask_added_titles == ()
+
+
+def test_re_ask_addition_restating_the_title_is_filtered_whatever_its_type() -> None:
+    """The additions filter is TITLE-ONLY, like the trigger, because both
+    are additive.
+
+    `_REASK_SYSTEM_PROMPT` already tells the model not to restate the kept
+    subject "under another name or another type". A `Procedure` whose title
+    is the source's own is exactly the "another type" case it forbids, so
+    admitting it would contradict the instruction just sent -- and
+    `_dedup_merged` cannot catch it, since its key is
+    `(type, normalized-title)` and the types differ.
+
+    #413's exemption does not apply here. What it bought was the right of a
+    PRIMARY `Procedure` -- one the first pass genuinely found -- not to be
+    DELETED. A re-ask addition restating the source title is not that."""
+    procedure_echo = (
+        '{"type": "Procedure", "title": "Dichotomy of Control", '
+        '"description": "Steps for applying the dichotomy.", '
+        '"body": "Sort what is up to you from what is not."}'
+    )
+    llm = _SequencedLLM(
+        [_array(_DICHOTOMY_ITEM), _array(procedure_echo, _APATHEIA_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    # The genuine addition survives; the same-titled echo does not, so no
+    # two objects share a title under different types.
+    assert [(r.type, r.title) for r in outcome.objects] == [
+        ("Concept", "Dichotomy of Control"),
+        ("Concept", "Apatheia"),
+    ]
+    assert outcome.report.reask_added_titles == ("Apatheia",)
+
+
+def test_filtering_every_addition_leaves_the_kept_object_untouched() -> None:
+    """The bound the additions filter cannot break: it only ever removes
+    ADDITIONS, so a re-ask whose every finding is filtered is
+    indistinguishable from one that returned nothing -- byte-identical to
+    the output before this guard existed."""
+    procedure_echo = (
+        '{"type": "Procedure", "title": "Dichotomy of Control", '
+        '"description": "Steps for applying the dichotomy.", "body": ""}'
+    )
+    entity_echo = (
+        '{"type": "Entity", "title": "dichotomy of CONTROL", '
+        '"description": "The same subject, differently cased.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(procedure_echo, entity_echo)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Dichotomy of Control",
+            description="The Stoic distinction between what is and is not up to us.",
+            body="",
+        )
+    ]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
