@@ -11,16 +11,19 @@ read; the ONLY non-zero path is an absent/unreadable workspace.
 import os
 import sqlite3
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+from openkos import config
 from openkos import lint as lint_check
+from openkos.bundle import decisions as bundle_decisions
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
-from openkos.state import fts
+from openkos.state import derived, findings, fts
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
 from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 
@@ -1265,3 +1268,192 @@ def test_status_unbacked_provenance_reuses_the_single_collect_docs_call(
     assert result.exit_code == 0
     assert calls["n"] == 1
     assert "[unbacked-provenance]" in result.stdout
+
+
+# --- issue #598: persisted contradiction findings ---
+
+
+def _record_finding(
+    tmp_path: Path,
+    *,
+    pair_ids: tuple[str, str],
+    merged_absorbed_id: str | None = None,
+    input_digests: tuple[findings.InputDigest, ...] = (),
+) -> None:
+    """Persist one contradiction finding directly via
+    `state.findings.record_findings` -- the same posture
+    `test_next_action.py` uses: no CLI writer, no LLM call."""
+    layout = config.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        findings.record_findings(
+            conn,
+            [
+                findings.Finding(
+                    pair_ids=pair_ids,
+                    merged_absorbed_id=merged_absorbed_id,
+                    verdict="CONTRADICTS",
+                    confidence=0.91,
+                    rationale="Stub rationale.",
+                    input_digests=input_digests,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+
+def _decline(
+    tmp_path: Path,
+    *,
+    pair_ids: tuple[str, str],
+    merged_absorbed_id: str | None = None,
+) -> None:
+    """Write a `declined` decision record directly via
+    `bundle.decisions.write_decisions` (mirrors `test_next_action.py`)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_decisions.write_decisions(
+        pair_ids[0],
+        bundle_dir,
+        records=[
+            bundle_decisions.DecisionRecord(
+                decision_key=bundle_decisions.decision_key_for(
+                    pair_ids, merged_absorbed_id
+                ),
+                pair_ids=pair_ids,
+                merged_absorbed_id=merged_absorbed_id,
+                state="declined",
+                decided_at=datetime.now(UTC).isoformat(),
+            )
+        ],
+    )
+
+
+def test_status_counts_open_contradiction_findings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """Two open, non-stale, non-declined findings surface as ONE aggregate
+    line naming `openkos contradictions` as the next step, with plural
+    wording (status spec: "Needs-Attention Surfaces Open Contradiction
+    Findings")."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _write_doc(tmp_path / "bundle" / "concepts" / "gamma.md", title="Gamma")
+    _write_doc(tmp_path / "bundle" / "concepts" / "delta.md", title="Delta")
+    _record_finding(tmp_path, pair_ids=("concepts/alpha", "concepts/beta"))
+    _record_finding(tmp_path, pair_ids=("concepts/gamma", "concepts/delta"))
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Needs attention:", 1)[1]
+    assert "2 open contradictions" in section
+    assert "openkos contradictions" in section
+    assert "Nothing needs attention." not in result.stdout
+
+
+def test_status_open_contradiction_line_is_singular_for_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A single open finding uses the singular noun, following the
+    duplicate-groups line's own `_plural` convention."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _record_finding(tmp_path, pair_ids=("concepts/alpha", "concepts/beta"))
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Needs attention:", 1)[1]
+    assert "1 open contradiction " in section
+    assert "1 open contradictions" not in section
+
+
+def test_status_counts_stale_contradiction_findings_on_their_own_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A finding whose stored input digest no longer matches current bundle
+    bytes is counted SEPARATELY and labeled stale -- never folded into the
+    open count and never silently dropped (pending-work spec: "A stale
+    finding remains visible as stale")."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _write_doc(tmp_path / "bundle" / "concepts" / "gamma.md", title="Gamma")
+    _write_doc(tmp_path / "bundle" / "concepts" / "delta.md", title="Delta")
+    _record_finding(tmp_path, pair_ids=("concepts/alpha", "concepts/beta"))
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/gamma", "concepts/delta"),
+        input_digests=(findings.InputDigest("concepts/gamma", "0" * 64),),
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Needs attention:", 1)[1]
+    assert "1 open contradiction " in section
+    assert "1 stale contradiction " in section
+
+
+def test_status_hides_declined_contradiction_findings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A declined finding -- open or stale -- appears in NO `status` line
+    (pending-work spec: "Declined Findings Are Hidden By Default"). With
+    nothing else pending, `status` still prints the all-clear."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _write_doc(tmp_path / "bundle" / "concepts" / "gamma.md", title="Gamma")
+    _write_doc(tmp_path / "bundle" / "concepts" / "delta.md", title="Delta")
+    _record_finding(tmp_path, pair_ids=("concepts/alpha", "concepts/beta"))
+    _decline(tmp_path, pair_ids=("concepts/alpha", "concepts/beta"))
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/gamma", "concepts/delta"),
+        input_digests=(findings.InputDigest("concepts/gamma", "0" * 64),),
+    )
+    _decline(tmp_path, pair_ids=("concepts/gamma", "concepts/delta"))
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "contradiction" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
+
+
+def test_status_without_a_findings_db_says_nothing_about_contradictions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A workspace that has never run `curate` has no `.openkos/findings.db`,
+    and `status` MUST NOT create one by reading it -- the same
+    `path.exists()` guard `vector_store_is_empty` uses (status spec:
+    Read-Only and Human-Readable Only)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    findings_db_path = config.WorkspaceLayout(tmp_path).findings_db_path
+    assert not findings_db_path.exists()
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "contradiction" not in result.stdout
+    assert not findings_db_path.exists()
