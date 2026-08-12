@@ -840,6 +840,37 @@ def contradiction_truncation_notice(plan: CandidatePlan) -> str | None:
     )
 
 
+def vacuous_coverage_notice(plan: CandidatePlan) -> str | None:
+    """The coverage warning a caller echoes to STDERR when this plan judges
+    NO typed-edge pairs at all -- `None` when typed coverage is real, or
+    when nothing of either kind will be judged (issue #557).
+
+    Candidate seeding is typed-edge driven (`_candidate_pairs` reads
+    `store`'s typed edges only), so a graph with no applied relations
+    starves the check down to merged-body candidates alone -- issue #557's
+    evidence run judged 5 pairs, missed a planted date contradiction between
+    two UNRELATED concepts, and then printed the same "No high-confidence
+    contradictions found." a well-covered run prints. A vacuous check must
+    not report as a clean one, so the warning states the emptiness, names
+    what will still run, and names the verbs that create typed edges.
+
+    Mirrors `contradiction_truncation_notice`: the resolution layer owns the
+    wording, the CLI only echoes it. The zero-candidate case
+    (`plan.llm_calls == 0`) deliberately returns `None` -- that run never
+    reaches the all-clear line, and the caller's zero-candidate state
+    message already owns describing the emptiness."""
+    if plan.edge_total > 0 or plan.llm_calls == 0:
+        return None
+    return (
+        "warning -- the graph has no applied relations, so typed-edge "
+        "contradiction coverage is empty; only "
+        f"{plan.merged_judged} merged-body candidate(s) will be judged. "
+        "A clean result here is NOT an all-clear. Apply relations first: "
+        "`openkos suggest-relations` then `openkos relate`, or "
+        "`openkos curate`."
+    )
+
+
 def plan_candidates(
     bundle_dir: Path,
     *,
