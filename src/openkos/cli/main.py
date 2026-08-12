@@ -1789,17 +1789,31 @@ def _format_merge_preview_line(prepared: "PreparedMerge") -> str:
     #409, report half) only when `prepared.stacked_body` is non-`None` --
     a merge that stacks nothing says nothing extra here either."""
     stacked_note = ""
+    guardrail_note = ""
     if prepared.stacked_body is not None:
         stacked_note = (
             f", stacks {prepared.stacked_body.absorbed_chars} unreconciled "
             f"body char(s) ({prepared.stacked_body.share:.0%} of merged body)"
         )
+        # Issue #559: a merge whose result would be dominated by the
+        # absorbed side is the measured signature of merging a document
+        # ABOUT the survivor rather than a second description of it. The
+        # warning rides the shared preview line so every consenting caller
+        # (`adjudicate --apply`, curate's Identity stage, `merge`) shows it
+        # without remembering to.
+        if prepared.stacked_body.exceeds_guardrail:
+            guardrail_note = (
+                f"\n  warning: {prepared.stacked_body.share:.0%} of the "
+                "merged body would be unreconciled absorbed content -- this "
+                "usually means a document ABOUT the survivor, not the same "
+                "object. Verify before accepting."
+            )
     return (
         f"  merge {prepared.absorbed_canonical} into {prepared.survivor_canonical} "
         f"(sensitivity {prepared.sensitivity_before}->"
         f"{prepared.sensitivity_after}, {len(prepared.touched_files)} "
         f"rewrite(s), removes bundle/{prepared.absorbed_canonical}.md"
-        f"{stacked_note})"
+        f"{stacked_note}){guardrail_note}"
     )
 
 
@@ -1980,6 +1994,22 @@ def _run_adjudicate_apply(
         typer.echo(f"  declined: {item}")
 
 
+def _refused_stacked_line(
+    report: "StackedBodyReport", absorbed_canonical: str, survivor_canonical: str
+) -> str:
+    """The `--apply-same` refusal line for one guardrail-crossing merge
+    (issue #559): names the share, the threshold, and the per-item-consent
+    route that can still accept it deliberately. One helper so Pass 1 and
+    Pass 2 can never phrase the same refusal differently. Takes the report
+    itself (never an optional field) so a `None` cannot reach the format."""
+    return (
+        f"  refused (stacked-body {report.share:.0%} >= "
+        f"{_STACKED_SHARE_GUARDRAIL:.0%}): {absorbed_canonical} -> "
+        f"{survivor_canonical} -- the batch gate consents to a "
+        "count, not to this pair; review it via `openkos adjudicate --apply`."
+    )
+
+
 def _run_adjudicate_apply_same(
     root: Path,
     layout: config.WorkspaceLayout,
@@ -2050,6 +2080,7 @@ def _run_adjudicate_apply_same(
             skipped_n_gt2 += 1
 
     previewed_groups: list[CandidateGroup] = []
+    refused_stacked = 0
     for group in eligible_groups:
         survivor_id, absorbed_id = group.member_ids
         try:
@@ -2063,17 +2094,36 @@ def _run_adjudicate_apply_same(
             raise typer.Exit(code=1) from exc
         if prepared is None:
             continue
+        # Issue #559: the typed-count gate consents to a batch, not to any
+        # single pair, so the guardrail is HARD here -- a dominated merge is
+        # excluded from the preview, the count, and Pass 2, and routed to
+        # the per-item-consent path instead.
+        if (
+            prepared.stacked_body is not None
+            and prepared.stacked_body.exceeds_guardrail
+        ):
+            typer.echo(
+                _refused_stacked_line(
+                    prepared.stacked_body,
+                    prepared.absorbed_canonical,
+                    prepared.survivor_canonical,
+                )
+            )
+            refused_stacked += 1
+            continue
         previewed_groups.append(group)
         typer.echo(_format_merge_preview_line(prepared))
     total = len(previewed_groups)
     typer.echo(f"Total: {total}")
 
     if total == 0:
-        skipped_total = skipped_n_gt2
+        skipped_total = skipped_n_gt2 + refused_stacked
         prefix = "nothing to apply -- " if skipped_total == 0 else ""
+        stacked_note = f", stacked-body: {refused_stacked}" if refused_stacked else ""
         typer.echo(
             f"openkos adjudicate --apply-same: {prefix}applied 0, skipped "
-            f"{skipped_total} (N>2: {skipped_n_gt2}, already-merged: 0)"
+            f"{skipped_total} (N>2: {skipped_n_gt2}, already-merged: 0"
+            f"{stacked_note})"
         )
         return
 
@@ -2125,6 +2175,24 @@ def _run_adjudicate_apply_same(
             skipped_already_merged += 1
             continue
 
+        # Issue #559: an earlier merge in THIS batch may have changed the
+        # survivor's body, so the share is re-derived from Pass 2's
+        # re-prepare -- a pair that crossed the guardrail since the preview
+        # is refused here exactly as it would have been in Pass 1.
+        if (
+            prepared.stacked_body is not None
+            and prepared.stacked_body.exceeds_guardrail
+        ):
+            typer.echo(
+                _refused_stacked_line(
+                    prepared.stacked_body,
+                    prepared.absorbed_canonical,
+                    prepared.survivor_canonical,
+                )
+            )
+            refused_stacked += 1
+            continue
+
         # Issue #346: every byte `_commit_one_merge` writes below was
         # captured by this pair's re-prepare above, so re-validate each
         # target now -- after the baseline capture, before the first
@@ -2172,11 +2240,12 @@ def _run_adjudicate_apply_same(
             raise typer.Exit(code=1) from exc
         applied += 1
 
-    skipped_total = skipped_n_gt2 + skipped_already_merged
+    skipped_total = skipped_n_gt2 + skipped_already_merged + refused_stacked
+    stacked_note = f", stacked-body: {refused_stacked}" if refused_stacked else ""
     typer.echo(
         f"openkos adjudicate --apply-same: applied {applied} of {total} "
         f"previewed, skipped {skipped_total} (N>2: {skipped_n_gt2}, "
-        f"already-merged: {skipped_already_merged})"
+        f"already-merged: {skipped_already_merged}{stacked_note})"
     )
 
 
@@ -7160,6 +7229,26 @@ def _expected_post_merge_index_and_log(
     return expected_index, expected_log
 
 
+_STACKED_SHARE_GUARDRAIL = 0.8
+"""Merged-body share at or above which a proposed merge is flagged as a
+likely about-X/is-X confusion (issue #559).
+
+The three semantically wrong merges accepted in the 2026-08-11 e2e run
+stacked 89-92% unreconciled foreign text -- a document ABOUT the survivor
+imported wholesale, not a second description of the same object. A genuine
+merge of two comparable descriptions of one subject stacks roughly half the
+merged body (two similar-length bodies), so 0.8 sits between the two
+populations with margin on both sides: the absorbed side must contribute at
+least four times the survivor's content before the flag fires.
+
+The guardrail is advisory where a human confirms each merge (the shared
+preview line gains a warning; `adjudicate --apply`, `curate`'s Identity
+stage, and `merge` all render it) and HARD where nothing does:
+`adjudicate --apply-same`'s typed-count gate consents to a batch, not to any
+single pair, so a dominated merge is excluded from the batch there and
+routed to the interactive path instead."""
+
+
 @dataclass(frozen=True)
 class StackedBodyReport:
     """Body-stacking signal for one merge (issue #409, report half):
@@ -7195,6 +7284,13 @@ class StackedBodyReport:
         exists (a non-empty absorbed body was appended to the merged
         body), so this never divides by zero."""
         return self.absorbed_chars / self.merged_chars
+
+    @property
+    def exceeds_guardrail(self) -> bool:
+        """`True` when `share` is at or above `_STACKED_SHARE_GUARDRAIL` --
+        the deterministic about-X/is-X signal issue #559 promotes from a
+        printed number to a guardrail."""
+        return self.share >= _STACKED_SHARE_GUARDRAIL
 
 
 @dataclass(frozen=True)
