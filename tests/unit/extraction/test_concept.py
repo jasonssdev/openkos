@@ -2880,13 +2880,101 @@ def test_re_ask_cannot_empty_a_genuinely_single_subject_source() -> None:
     ]
 
 
-def test_lone_exempt_procedure_does_not_re_ask() -> None:
-    """The predicate has TWO conjuncts: normalized title equality AND a type
-    that is not `_TWIN_EXEMPT_TYPE`. A lone `Procedure` restating the source
-    title is not a droppable twin (#413), so no second call goes out -- the
-    `lesson` fixture's lone object is exactly this shape."""
+def test_lone_exempt_procedure_re_asks_because_the_trigger_ignores_type() -> None:
+    """The trigger is TITLE-ONLY, unlike the drop rule's two-conjunct
+    predicate. Measured (#584, `qwen3:8b`, `--runs 5 --seed 7`): the `lesson`
+    treatment arm returns one object in 5 of 5 runs and it is a `Procedure`
+    every time, so a type-blind trigger is the only one that reaches the
+    fixture reproducing the defect.
+
+    The `Procedure` exemption (#413) exists to stop a DELETION -- dropping a
+    rich tutorial's primary how-to was silent data loss. A re-ask deletes
+    nothing, so that rationale does not transfer: a lone `Procedure`
+    restating its source title is exactly as suspicious as a lone `Concept`
+    doing the same, and asking whether the body develops anything further
+    cannot harm either.
+
+    This test asserted the opposite before the live probe came back. What it
+    genuinely guarded -- that the exemption still protects the `Procedure`
+    from the DROP rule -- is guarded by
+    `test_primary_procedure_survives_alongside_the_subjects_it_yields` and
+    `test_lone_exempt_procedure_is_never_dropped_by_the_twin_rule`."""
     llm = _SequencedLLM(
         [_array(_RESEARCH_AGENT_PROCEDURE_ITEM), _array(_APATHEIA_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "A walkthrough of building a research agent, and of apatheia.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == [
+        "Building a Research Agent with the Claude Agent SDK",
+        "Apatheia",
+    ]
+
+
+def test_lone_exempt_procedure_is_never_dropped_by_the_twin_rule() -> None:
+    """The drop rule's exemption is untouched by the widened trigger: a
+    `Procedure` restating the source title survives the twin rule whatever
+    else the source yields (#413). Asserted on `_drop_source_title_twins`
+    directly, so no re-ask call can stand in for the guarantee."""
+    procedure = concept_mod.ExtractionResult(
+        type="Procedure",
+        title="Building a Research Agent with the Claude Agent SDK",
+        description="How to build a research agent on the SDK.",
+        body="Install the SDK, define the subagents, add guardrails.",
+    )
+    genuine = concept_mod.ExtractionResult(
+        type="Concept",
+        title="Claude Agent SDK",
+        description="The toolkit the tutorial builds on.",
+        body="",
+    )
+
+    kept = concept_mod._drop_source_title_twins(
+        [procedure, genuine],
+        source_title="Building a Research Agent with the Claude Agent SDK",
+    )
+
+    assert kept == [procedure, genuine]
+    assert not concept_mod._is_droppable_source_title_twin(
+        procedure, source_title="Building a Research Agent with the Claude Agent SDK"
+    )
+    # ...and the title-only predicate the TRIGGER uses says the opposite,
+    # which is exactly the difference between gating a deletion and gating
+    # an addition.
+    assert concept_mod._restates_source_title(
+        procedure, source_title="Building a Research Agent with the Claude Agent SDK"
+    )
+
+
+def test_no_re_ask_when_a_lone_procedure_does_not_restate_the_title() -> None:
+    """Widening the trigger to ignore TYPE does not widen it to ignore the
+    TITLE. A lone `Procedure` whose title is not the source's own is the
+    ordinary single-subject reply, and no second call goes out."""
+    llm = _SequencedLLM([_array(_PROCEDURE_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A daily reflection practice.", source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Morning Journaling Routine"]
+
+
+def test_no_re_ask_when_a_procedure_twin_keeps_company() -> None:
+    """The `exactly one` half of the trigger is unchanged by the widening: a
+    `Procedure` restating the source title BESIDE a genuine subject is the
+    rich-tutorial shape (#413), which the drop rule deliberately keeps whole
+    -- two objects, so no re-ask."""
+    llm = _SequencedLLM(
+        [
+            _array(_RESEARCH_AGENT_PROCEDURE_ITEM, _AGENT_SDK_ITEM),
+            _array(_APATHEIA_ITEM),
+        ]
     )
 
     outcome = concept_mod.extract_concept(
@@ -2897,8 +2985,36 @@ def test_lone_exempt_procedure_does_not_re_ask() -> None:
 
     assert len(llm.calls) == 1
     assert [r.title for r in outcome.objects] == [
-        "Building a Research Agent with the Claude Agent SDK"
+        "Building a Research Agent with the Claude Agent SDK",
+        "Claude Agent SDK",
     ]
+
+
+def test_re_ask_returning_nothing_leaves_a_lone_procedure_untouched() -> None:
+    """The additive bound survives the widening, on the newly-reachable
+    path: the re-ask fires on a lone `Procedure` twin, finds nothing, and
+    the output is what it was before the trigger existed."""
+    llm = _SequencedLLM([_array(_RESEARCH_AGENT_PROCEDURE_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "A walkthrough of building a research agent.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Procedure",
+            title="Building a Research Agent with the Claude Agent SDK",
+            description="How to build a research agent on the SDK.",
+            body="Install the SDK, define the subagents, add guardrails.",
+        )
+    ]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.discarded_titles == ()
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
 
 
 def test_no_re_ask_when_more_than_one_object_survives() -> None:
