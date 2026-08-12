@@ -653,6 +653,42 @@ def _restates_source_topic(result: ExtractionResult, *, source_title: str) -> bo
     return smaller <= larger
 
 
+def _sole_object_restates_source(
+    results: list[ExtractionResult], *, source_title: str
+) -> bool:
+    """Is `results` exactly one object, and does that object restate the
+    source's own topic?
+
+    THE one spelling of "this source collapsed to a restatement of itself",
+    consulted by the module's two additive consumers and by nothing else:
+
+    - `_add_reask_subjects` reads it as a TRIGGER -- spend one more call
+      (#584);
+    - `ExtractionReport.sole_object_restates_source` reports it as an
+      OBSERVATION, which `cli/main.py` stamps onto the Source (#585).
+
+    Deliberately shared, where `_is_droppable_source_title_twin` is
+    deliberately NOT: both consumers here are additive -- one buys a
+    question, the other adds a sentence -- so they carry the same cost of
+    error and have no reason to disagree. Two spellings of one condition is
+    how the re-ask could start firing on a source the notice never marks,
+    or the notice appear on a source the re-ask never questioned, and
+    neither divergence would be visible from either call site.
+
+    The deletion keeps its own, stricter predicate. That asymmetry is the
+    module's standing rule (see `_restates_source_title`), and this helper
+    does not touch it.
+
+    Type-blind by construction, since `_restates_source_topic` is: a lone
+    `Procedure` restating its source is exactly as worth disclosing as a
+    lone `Concept` doing the same, and `_TWIN_EXEMPT_TYPE` exists to
+    prevent a DELETION (#413), not to suppress information.
+    """
+    return len(results) == 1 and _restates_source_topic(
+        results[0], source_title=source_title
+    )
+
+
 def _is_droppable_source_title_twin(
     result: ExtractionResult, *, source_title: str
 ) -> bool:
@@ -1121,9 +1157,7 @@ def _add_reask_subjects(
     branch (chunked or not) rather than per run or per chunk -- #581's
     precedent, and required by the trigger itself, which reads "the source
     returned exactly one object" and so is meaningless on a slice."""
-    if len(results) != 1 or not _restates_source_topic(
-        results[0], source_title=source_title
-    ):
+    if not _sole_object_restates_source(results, source_title=source_title):
         return results, 0, ()
     added = _reask_for_further_subjects(source_text, source_title, results[0], llm)
     combined = _dedup_merged(results + added)
@@ -1210,6 +1244,25 @@ class ExtractionReport:
     always `()` when the trigger never fired. The object the first pass
     produced is never named here: the guard only adds, so that object is
     unchanged and un-attributable to the re-ask."""
+    sole_object_restates_source: bool = False
+    """Whether the RETAINED objects are exactly one, and that one restates
+    the source's own topic (#585) -- the honest-degrade signal `ingest`
+    stamps onto the Source's `extraction_notice` frontmatter key.
+
+    Read off the RETAINED list, never the pre-cap one: the notice is a
+    statement about what the bundle stores, and an object the cap discarded
+    is not stored. Computed AFTER the re-ask for the same reason -- a
+    re-ask that found a further subject leaves two objects, which is
+    precisely the case that is not dishonest and must not be marked.
+
+    Not derivable from `reask_runs`, even though the two share a predicate.
+    `reask_runs == 1` says the trigger fired on the list as it stood BEFORE
+    the second call; this says the collapse survived it. They differ on
+    exactly the runs where the re-ask did its job.
+
+    Defaulted so every pre-#585 construction site keeps working unchanged,
+    and `False` is the honest default: it means "no such disclosure", which
+    is what an untouched site is entitled to claim."""
 
 
 @dataclass(frozen=True)
@@ -1343,6 +1396,9 @@ def extract_concept(
             chunks=chunk_count,
             reask_runs=reask_runs,
             reask_added_titles=reask_added_titles,
+            sole_object_restates_source=_sole_object_restates_source(
+                retained, source_title=source_title
+            ),
         ),
     )
 
@@ -1605,5 +1661,8 @@ def extract_concept_union(
             pre_judge_dropped=pre_judge_dropped,
             reask_runs=reask_runs,
             reask_added_titles=reask_added_titles,
+            sole_object_restates_source=_sole_object_restates_source(
+                retained, source_title=source_title
+            ),
         ),
     )
