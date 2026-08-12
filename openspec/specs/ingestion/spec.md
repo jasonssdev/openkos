@@ -787,7 +787,7 @@ or redirected candidate never reserves a slug for a later one. Each
 per-candidate drop or disambiguation MUST be reported to stderr and MUST
 affect only that candidate, never the whole batch.
 (Previously: hard cap of 5 in spec text, 6 in code, applied as a blind
-first-N truncation before any selection step; now a backstop of 12 applied
+first-N truncation before any selection step; now a backstop of 20 applied (12 before #564)
 once, after union+judge selection.)
 
 #### Scenario: More than the backstop of validated objects is bounded
@@ -838,7 +838,7 @@ once, after union+judge selection.)
 
 For a source that triggers chunking, staging MUST consume the judge-selected
 (or judge-failure-degraded) candidate set produced from the existing
-per-chunk extraction and merge, subject to the same backstop of 12 and the
+per-chunk extraction and merge, subject to the same backstop of 20 and the
 same per-candidate slug/validation rules as an unchunked source. Chunking
 itself introduces no separate staging path.
 

@@ -1558,13 +1558,30 @@ measured: 2x the backstop, bounding judge prompt growth on a many-chunk
 source without a corpus measurement showing it ever binds (open question,
 design). `report.pre_judge_dropped` names what this ceiling cut."""
 
-_UNION_BACKSTOP = 12
+_UNION_BACKSTOP = 20
 """Fixed cap applied EXACTLY ONCE, LAST -- after judge selection (or the
 failure degrade) and after `Procedure` re-admission (design D8). Never
 user-configurable, unlike the single-run `_MAX_OBJECTS_PER_SOURCE`: this is
 a pathological-output backstop, not the primary selection mechanism (the
-judge is), and measured evidence (design D8) says it does not bind on a
-genuine set -- 7 unchunked, 9 on the TS3005b chunked fixture."""
+judge is).
+
+Raised from 12 by issue #564. The original value rested on design D8's
+claim that the cap "does not bind on a genuine set -- 7 unchunked, 9 on
+the TS3005b chunked fixture". The first real corpus falsified that: it
+bound twice in ~43 sources, both times on legitimately content-rich
+documents (a course webinar at 15 judge-approved objects, a meeting
+transcript at 17), and because truncation keeps the first N in LIST ORDER
+the survivors were chosen by position, not merit -- in one case it
+happened to drop a garbled non-word, in the other it dropped genuine
+course content. 20 clears the measured real-source range with margin
+while staying below `_MAX_JUDGE_CANDIDATES` (24), which already bounds
+what the judge can approve; selection stays the judge's job.
+
+Truncation is still positional when the cap DOES bind. That is acceptable
+only because the bind window is now 21-24 approved objects -- beyond
+anything measured on genuine sources. If this cap is ever observed binding
+again, the escalation is a rank-returning judge reply (cut from the
+bottom of an ordering), not another raise -- see #564's discussion."""
 
 
 def extract_concept_union(
@@ -1626,7 +1643,7 @@ def extract_concept_union(
     `"failed"`, so extraction never returns zero objects while the merged
     union is non-empty.
 
-    `_UNION_BACKSTOP` (12) is applied exactly once, LAST -- after the
+    `_UNION_BACKSTOP` (20, #564) is applied exactly once, LAST -- after the
     judge/failure-degrade AND after `Procedure` re-admission (design D8).
     `report.produced`/`report.retained`/`report.discarded_titles` are tied
     to this FINAL cap only, exactly like `extract_concept` -- never to the

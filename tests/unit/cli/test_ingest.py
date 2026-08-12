@@ -1290,12 +1290,13 @@ def test_ingest_base_extraction_ollama_error_still_source_only(
     assert source_path.is_file()
 
 
-def test_ingest_union_judge_backstop_writes_no_more_than_12_derived_objects(
+def test_ingest_union_judge_backstop_writes_no_more_than_20_derived_objects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Task 3.10: a union+judge selection yielding more than 12 valid
-    objects writes no more than 12 derived files -- the `_UNION_BACKSTOP`
-    cap (12), replacing the old cap of 6."""
+    """A union+judge selection yielding more than 20 valid objects writes
+    no more than 20 derived files -- the `_UNION_BACKSTOP` cap, raised from
+    12 by #564 after it bound twice on genuine content-rich sources (15 and
+    17 judge-approved objects) and truncated them by position."""
     _init_workspace(tmp_path, monkeypatch)
 
     def item(i: int) -> str:
@@ -1304,8 +1305,8 @@ def test_ingest_union_judge_backstop_writes_no_more_than_12_derived_objects(
             f'"description": "Distinct subject {i}.", "body": "Body {i}."}}'
         )
 
-    run_reply = "[" + ", ".join(item(i) for i in range(1, 16)) + "]"  # 15 distinct
-    keep_reply = '{"keep": [' + ", ".join(f'"Subject {i}"' for i in range(1, 16)) + "]}"
+    run_reply = "[" + ", ".join(item(i) for i in range(1, 24)) + "]"  # 23 distinct
+    keep_reply = '{"keep": [' + ", ".join(f'"Subject {i}"' for i in range(1, 24)) + "]}"
     _patch_sequenced_llm(monkeypatch, [run_reply, run_reply, keep_reply])
     source = tmp_path / "notes.txt"
     source.write_text("A long document about many topics.", encoding="utf-8")
@@ -1315,7 +1316,7 @@ def test_ingest_union_judge_backstop_writes_no_more_than_12_derived_objects(
     assert result.exit_code == 0
     concept_dir = tmp_path / "bundle" / "concepts"
     written = list(concept_dir.glob("*.md")) if concept_dir.exists() else []
-    assert len(written) == 12
+    assert len(written) == 20
 
 
 def test_ingest_pre_judge_ceiling_drop_is_reported_on_stderr(
@@ -5538,7 +5539,7 @@ def test_ingest_reports_when_the_object_cap_discarded_candidates(
     The loss is now named, so a reader can tell the difference."""
     _init_workspace(tmp_path, monkeypatch)
     # Pinned to the single-run path (#404's own cap, `_MAX_OBJECTS_PER_SOURCE`)
-    # -- distinct from the union+judge `_UNION_BACKSTOP` of 12 (#456).
+    # -- distinct from the union+judge `_UNION_BACKSTOP` of 20 (#456, #564).
     _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
     _patch_llm(monkeypatch, _many_concepts_reply(20))
     source = tmp_path / "notes.txt"
