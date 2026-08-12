@@ -1402,3 +1402,195 @@ def test_suggest_relations_reports_only_visible_counts_for_a_mixed_drop(
 
     assert result.exit_code == 0
     assert "50 of 55 candidate edge(s) shown (cap reached)" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# `--apply` with per-item consent (issue #560)
+# ---------------------------------------------------------------------------
+
+
+def _init_apply_workspace(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_init_workspace` plus a real, isolated git identity (mirrors
+    `test_adjudicate.py`'s helper): `--apply` auto-commits each accepted
+    relation, so tests exercising the accept path need an actual git
+    identity, never the host machine's real `~/.gitconfig`."""
+    from tests.unit.vcs.conftest import isolate_git_identity
+
+    monkeypatch.chdir(tmp_path)
+    config_dir = tmp_path_factory.mktemp("git-identity-config")
+    isolate_git_identity(
+        monkeypatch, config_dir, name="Isolated Tester", email="tester@example.invalid"
+    )
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+
+
+def test_suggest_relations_apply_accepted_suggestion_is_written(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--apply` walks each valid suggestion with a per-item `[y/N]` prompt
+    (issue #560, mirroring `adjudicate --apply`): an accepted `y` writes the
+    typed relation through the SAME prepare/drift-guard/write path `relate`
+    uses, and the summary counts it."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Beta")
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[_suggestion(suggested_type="references")]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--apply"], input="y\n")
+
+    assert result.exit_code == 0
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "relations:" in source_text
+    assert "target: concepts/b" in source_text
+    assert "type: references" in source_text
+    assert "applied 1" in result.stdout
+    assert "Relate**" in (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+
+
+def test_suggest_relations_apply_declined_suggestion_writes_nothing(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A declined item writes nothing and is listed in the decline report
+    (the #483/#398 revisitable-decline contract), so a typo-free decline
+    set survives the run."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Beta")
+    before = _snapshot(tmp_path)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[_suggestion(suggested_type="references")]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--apply"], input="n\n")
+
+    assert result.exit_code == 0
+    assert _snapshot(tmp_path) == before
+    assert "applied 0" in result.stdout
+    assert "declined: concepts/a -> concepts/b [references]" in result.stdout
+
+
+def test_suggest_relations_apply_degraded_suggestion_is_never_prompted(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A degraded suggestion (`suggested_type=None`) has nothing applicable:
+    no prompt is issued for it, nothing is written, and it counts as
+    skipped -- never silently dropped."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Beta")
+    before = _snapshot(tmp_path)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[_suggestion(suggested_type=None, rationale="malformed reply")]
+        ),
+    )
+
+    # No input at all: a prompt would fail the invocation, which is the point.
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--apply"])
+
+    assert result.exit_code == 0
+    assert _snapshot(tmp_path) == before
+    assert "no valid type suggested" in result.stdout
+    assert "applied 0" in result.stdout
+
+
+def test_suggest_relations_without_apply_names_the_apply_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The read-only run's closing hint names `--apply` alongside `relate`,
+    so the verb is no longer a dead end that bills for suggestions with no
+    path to accept them (issue #560)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(
+            results=[_suggestion(suggested_type="references")]
+        ),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert "--apply" in result.stdout
+    assert "openkos relate" in result.stdout
+
+
+def test_suggest_relations_truncated_run_points_at_the_next_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the candidate cap truncated the set, the run says how to reach
+    the remainder -- typing the shown edges shrinks the untyped pool, so a
+    re-run surfaces the next batch (issue #560's cap dead-end)."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "hub.md").write_text(
+        "---\ntype: Concept\ntitle: Hub\nsensitivity: private\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    pairs = []
+    for index in range(1, 56):
+        leaf_id = f"leaf-{index:03d}"
+        (tmp_path / "bundle" / "concepts" / f"{leaf_id}.md").write_text(
+            f"---\ntype: Concept\ntitle: {leaf_id}\nsensitivity: private\n---\nBody.\n",
+            encoding="utf-8",
+        )
+        pairs.append(
+            ProximityPair(
+                source_id="concepts/hub",
+                target_id=f"concepts/{leaf_id}",
+                distance=index * 0.001,
+            )
+        )
+
+    class _StubSource:
+        def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+            return pairs
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(results=[]),
+    )
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert "cap reached" in result.stdout
+    assert "re-run" in result.stdout

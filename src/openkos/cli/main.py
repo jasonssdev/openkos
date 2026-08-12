@@ -10204,6 +10204,110 @@ def _zero_edge_state_message(
     return none_survived.format(count=count)
 
 
+def _run_suggest_relations_apply(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    results: Sequence[EdgeSuggestion],
+) -> None:
+    """The interactive `suggest-relations --apply` walk (issue #560,
+    mirroring `_run_adjudicate_apply`): per VALID suggestion, render the
+    same `[type] source -> target` + rationale block the read-only report
+    prints, prompt through `curate._confirm` (the one validating per-item
+    write-consent prompt, #398/#483 contract), and on `y` write through the
+    exact `prepare_relate` -> `_reject_drifted_targets` -> `relate_core` ->
+    `_autocommit` sequence curate's Structure stage uses -- reused verbatim
+    so the write paths cannot drift. A degraded suggestion is reported and
+    skipped without a prompt; an already-present relation is reported and
+    skipped without a write; declines are listed after the summary so a
+    typo-free decline set is revisitable. Every byte `relate_core` writes
+    was computed by `prepare_relate` BEFORE the prompt, so each accepted
+    item re-validates its two targets against the prepared baselines
+    strictly after its `y` and strictly before its write (the
+    #306/#313/#319 drift arc); drift refuses with exit 3, prior per-item
+    commits remain intact."""
+    log_path = layout.bundle_dir / "log.md"
+    now = datetime.now(UTC)
+    applied = 0
+    skipped = 0
+    declined: list[str] = []
+
+    for result in results:
+        edge = result.edge
+        if result.suggested_type is None:
+            typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
+            typer.echo("  note: no valid type suggested")
+            skipped += 1
+            continue
+
+        typer.echo(f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}")
+        typer.echo(f"  rationale: {result.rationale}")
+        if not curate_module._confirm(
+            f"Relate {edge.source_id} -> {edge.target_id} "
+            f"[{result.suggested_type}]? [y/N]"
+        ):
+            skipped += 1
+            declined.append(
+                f"{edge.source_id} -> {edge.target_id} [{result.suggested_type}]"
+            )
+            continue
+
+        source_path = okf.concept_path_for(edge.source_id, layout.bundle_dir)
+        try:
+            prepared = prepare_relate(
+                source_path,
+                log_path,
+                edge.source_id,
+                edge.target_id,
+                result.suggested_type,
+                root,
+                now=now,
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos suggest-relations --apply: failed while relating "
+                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        if prepared.already_present:
+            typer.echo("  note: already present -- nothing to write")
+            skipped += 1
+            continue
+
+        _reject_drifted_targets(
+            layout,
+            {source_path: prepared.source_bytes, log_path: prepared.log_bytes},
+            "suggest-relations --apply",
+        )
+
+        try:
+            relate_core(source_path, log_path, prepared)
+        except (OSError, ValueError) as exc:
+            typer.echo(
+                "openkos suggest-relations --apply: failed while relating "
+                f"{edge.source_id} -> {edge.target_id} -- {exc}.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        _autocommit(
+            root,
+            [f"bundle/{edge.source_id}.md", "bundle/log.md"],
+            f"openkos: relate {edge.source_id} -> {edge.target_id} "
+            f"({result.suggested_type})",
+        )
+        applied += 1
+
+    prefix = "nothing to apply -- " if applied == 0 and skipped == 0 else ""
+    typer.echo(
+        f"openkos suggest-relations --apply: {prefix}applied {applied}, "
+        f"skipped {skipped} (declined: {len(declined)})"
+    )
+    for item in declined:
+        typer.echo(f"  declined: {item}")
+
+
 @app.command(
     "suggest-relations",
     help=(
@@ -10217,6 +10321,13 @@ def suggest_relations_cmd(
         False,
         "--auto",
         help="Skip the confirmation gate and type every untyped edge.",
+    ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Walk the generated suggestions with a per-item [y/N] consent "
+        "prompt and write each accepted relation -- the same write path "
+        "`relate` uses.",
     ),
     include_confidential: bool = typer.Option(
         False,
@@ -10253,12 +10364,26 @@ def suggest_relations_cmd(
     skips the prompt. A per-edge progress line is written to stderr as the
     run proceeds. Declining the prompt exits 0 with nothing generated.
 
-    `suggest-relations` never writes, merges, or decides -- it only prints a
-    suggested `type` + rationale per untyped edge for human review, plus a
-    closing hint pointing at the existing `relate` verb, the ONLY write path
-    for an accepted suggestion (spec: Human-In-The-Loop Write Path
-    Unchanged). The confirmation gate is read-only (it generates suggestions,
-    never writes); there is no `--json` or other structured mode.
+    Without `--apply`, `suggest-relations` never writes, merges, or decides
+    -- it only prints a suggested `type` + rationale per untyped edge for
+    human review, plus a closing hint naming `--apply` and the existing
+    `relate` verb (spec: Human-In-The-Loop Write Path Unchanged). The
+    confirmation gate is read-only (it generates suggestions, never
+    writes); there is no `--json` or other structured mode.
+
+    `--apply` (issue #560, mirroring `adjudicate --apply` and reusing
+    curate's Structure-stage walk verbatim): each VALID suggestion is
+    rendered, then gated behind `curate._confirm`'s validating per-item
+    `[y/N]` prompt (#398 contract); an accepted `y` writes through the SAME
+    `prepare_relate` -> `_reject_drifted_targets` -> `relate_core` ->
+    `_autocommit` path the `relate` verb and curate's Structure stage use,
+    so the three write paths cannot drift apart. A degraded suggestion has
+    nothing applicable and is never prompted; an already-present relation
+    is reported and skipped without a write; declines are listed at the end
+    (the #483 revisitable-decline contract). Before #560 the standalone
+    verb spent one LLM call per candidate edge and then offered no way to
+    accept the result except typing one `relate` command per edge by hand
+    -- a dead end that billed the user for nothing.
 
     A degraded suggestion (`suggested_type=None` -- a malformed LLM reply,
     or a suggested type that failed `validate_relation_type`) renders as
@@ -10443,19 +10568,35 @@ def suggest_relations_cmd(
         typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
-    for result in batch.results:
-        edge = result.edge
-        if result.suggested_type is None:
-            typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
-            typer.echo("  note: no valid type suggested")
-        else:
-            typer.echo(
-                f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}"
-            )
-            typer.echo(f"  rationale: {result.rationale}")
-        typer.echo()
+    if apply:
+        _run_suggest_relations_apply(root, layout, batch.results)
+    else:
+        for result in batch.results:
+            edge = result.edge
+            if result.suggested_type is None:
+                typer.echo(f"[?] {edge.source_id} -> {edge.target_id}")
+                typer.echo("  note: no valid type suggested")
+            else:
+                typer.echo(
+                    f"[{result.suggested_type}] {edge.source_id} -> {edge.target_id}"
+                )
+                typer.echo(f"  rationale: {result.rationale}")
+            typer.echo()
 
-    typer.echo("Next: openkos relate <source> <type> <target>")
+        typer.echo(
+            "Next: openkos suggest-relations --apply (per-item consent), or "
+            "openkos relate <source> <type> <target>"
+        )
+
+    if notice is not None:
+        # Issue #560: the cap is not a dead end -- an applied/related pair
+        # becomes a typed edge and leaves the candidate set, so the next
+        # run's cap budget reaches the candidates dropped this time.
+        typer.echo(
+            "Candidates beyond the cap are not lost: type the edges shown "
+            "(--apply or relate), then re-run suggest-relations to surface "
+            "the next batch."
+        )
 
     if batch.failure is not None:
         # Partial batch (#441): the report above already rendered the
