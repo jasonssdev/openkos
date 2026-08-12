@@ -107,16 +107,16 @@ PR body against the actual `pytest` run, unpiped.
 
 ### Phase 1: `.openkos/findings.db`
 
-- [ ] A1.1 RED: `tests/unit/state/test_findings.py` — `record_findings`
+- [x] A1.1 RED: `tests/unit/state/test_findings.py` — `record_findings`
       writes a row; `open_findings` reads back verdict, confidence,
       rationale, and per-input digest rows, using
       `state.derived.open_derived_connection` (`state/derived.py:137`).
-- [ ] A1.2 GREEN: create `src/openkos/state/findings.py` — schema, `record_findings`,
+- [x] A1.2 GREEN: create `src/openkos/state/findings.py` — schema, `record_findings`,
       `open_findings`. Does not participate in `derived.MANIFEST_HASH_KEY`
       gating (design Decision 1: staleness is per-row, not whole-store).
-- [ ] A1.3 RED: staleness unit test — mutate one of two input digests, assert
+- [x] A1.3 RED: staleness unit test — mutate one of two input digests, assert
       only that finding's row is marked stale, the other is not.
-- [ ] A1.4 GREEN: per-input staleness evaluation in `findings.py`, using
+- [x] A1.4 GREEN: per-input staleness evaluation in `findings.py`, using
       `state.vectorstore.content_hash` (`state/vectorstore.py:226`) over raw
       bytes, per Decision 2's input table (typed-edge: both concept files'
       bytes + `relation_type` label string; merged-body: `survivor_before`
@@ -124,59 +124,62 @@ PR body against the actual `pytest` run, unpiped.
 
 ### Phase 2: `decision_key` and `bundle/decisions.py` (unwired — see slicing rationale)
 
-- [ ] A2.1 RED: `tests/unit/bundle/test_decisions.py` — `decision_key_for`
+- [x] A2.1 RED: `tests/unit/bundle/test_decisions.py` — `decision_key_for`
       produces a stable 32-hex-char key (mirrors `_ORIGIN_KEY_HEX_CHARS`,
       `model/okf.py:147`) from `("contradiction/v1", pair_ids[0],
       pair_ids[1], merged_absorbed_id or "")`; a different `merged_absorbed_id`
       with identical `pair_ids` produces a different key (Decision 3).
-- [ ] A2.2 GREEN: `decision_key_for` in `src/openkos/bundle/decisions.py`.
-- [ ] A2.3 RED: path-mapping test mirroring `concept_path_for`'s own suite
+- [x] A2.2 GREEN: `decision_key_for` in `src/openkos/bundle/decisions.py`.
+- [x] A2.3 RED: path-mapping test mirroring `concept_path_for`'s own suite
       (NFC/NFD on a byte-exact filesystem) for
       `bundle/.state/decisions/<pair_ids[0]>.decisions.okf`.
-- [ ] A2.4 GREEN: `decisions_root`, `decisions_path_for` (using
+- [x] A2.4 GREEN: `decisions_root`, `decisions_path_for` (using
       `okf.concept_path_for(concept_id, decisions_root, suffix=".decisions.okf")`,
       `model/okf.py:1296`), `read_decisions`, `write_decisions` (via
       `okf.dump_frontmatter({...}, body="")`, ADR-0002 invariant 3),
       `iter_decisions`. Leaf module — MUST NOT import `openkos.graph`
       (AGENTS.md:41). **Not called from any CLI verb in this PR.**
-- [ ] A2.5 RED: layering test — `bundle/decisions.py` imports nothing from
+- [x] A2.5 RED: layering test — `bundle/decisions.py` imports nothing from
       `openkos.graph` (mirrors `tests/unit/resolution/test_layering.py`'s
       shape for the resolution layer).
 
 ### Phase 3: Curate stage persistence
 
-- [ ] A3.1 RED: `tests/unit/cli/test_curate.py` (or equivalent) — the
+- [x] A3.1 RED: `tests/unit/cli/test_curate.py` (or equivalent) — the
       Contradictions stage (`cli/curate.py:1272-1323`) calls
       `findings.record_findings` once per verdict in `batch.results`, after
       the existing echo loop, before returning `StageOutcome`.
-- [ ] A3.2 GREEN: wire the persist call into
+- [x] A3.2 GREEN: wire the persist call into
       `cli/curate.py`'s Contradictions stage handler.
-- [ ] A3.3 RED: byte-compare test — `bundle/` is byte-identical before and
+- [x] A3.3 RED: byte-compare test — `bundle/` is byte-identical before and
       after a Contradictions stage run that persists findings (curate-command
       spec: "Contradictions Stage Is Report-Only And Last").
-- [ ] A3.4 RED: `curate` resumability test — two consecutive `curate`
+- [x] A3.4 RED: `curate` resumability test — two consecutive `curate`
       invocations re-derive the Contradictions candidate queue from current
       bundle state regardless of whether a finding for a pair is already
       persisted (curate-command spec: "Resumability By Construction" delta).
 
 ### Phase 4: Documentation and spec deltas
 
-- [ ] A4.1 Create `docs/adr/0014-durable-pending-work-stores.md` from
+- [x] A4.1 Create `docs/adr/0014-durable-pending-work-stores.md` from
       `docs/adr/template.md`, status `Proposed`, citing ADR-0013; states (a)
       decisions extend ADR-0013 by exactly one kind, (b) findings live in
       `.openkos/` under `vectors.db`'s delete-without-rebuild posture, (c) the
       read-time `decision_key` join is why no two-phase write is needed here
       (Decision 7).
-- [ ] A4.2 Add ADR-0014's row to `docs/adr/README.md` index.
-- [ ] A4.3 Land `openspec/specs/curate-command/spec.md` deltas exactly as
+- [x] A4.2 Add ADR-0014's row to `docs/adr/README.md` index.
+- [x] A4.3 Land `openspec/specs/curate-command/spec.md` deltas exactly as
       drafted in `specs/curate-command/spec.md` of this change (D1, D5) —
       apply per this project's OpenSpec archive convention.
 
 ### PR #1 quality gates
 
-- [ ] Focused: `uv run pytest tests/unit/state/test_findings.py tests/unit/bundle/test_decisions.py tests/unit/cli/test_curate.py -v`
-- [ ] Full suite, ruff check, ruff format --check, mypy . — all green
-- [ ] Rollback: `git revert` PR #1; `.openkos/findings.db` and
+- [x] Focused: `uv run pytest tests/unit/state/test_findings.py tests/unit/bundle/test_decisions.py tests/unit/cli/test_curate.py -v`
+      — 144 passed
+- [x] Full suite, ruff check, ruff format --check, mypy . — all green
+      (4314 passed, 1 skipped; baseline was 4287 passed, 1 skipped — +27 new
+      tests, no regressions)
+- [x] Rollback: `git revert` PR #1; `.openkos/findings.db` and
       `bundle/decisions.py` are both new, unreferenced by any other shipped
       code path, so revert loses nothing durable (findings are recomputable;
       no decision was ever written)
