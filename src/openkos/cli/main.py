@@ -9000,6 +9000,28 @@ def status() -> None:
             f"{exact_title_groups} candidate group{_plural(exact_title_groups)} with "
             "identical titles — run `openkos duplicates` to review."
         )
+    # #598: the persisted contradiction verdicts `curate` already paid an
+    # LLM to compute. A SQLite read of `.openkos/findings.db`, NOT a sixth
+    # bundle walk -- the `docs` list above is untouched, and a workspace
+    # that never ran `curate` has no database to open (`_persisted_
+    # findings`' own `path.exists()` guard keeps this read from creating
+    # one). Aggregated the way the duplicate-groups line above is: one
+    # counted line naming the verb, never one line per pair. Open and
+    # stale are separate lines because they need different verbs --
+    # `contradictions` reviews an open one, only a recompute clears a
+    # stale one -- and because `next` ranks the open ones and excludes the
+    # stale ones, which would leave stale work reported by nothing at all.
+    open_contradictions, stale_contradictions = _contradiction_finding_counts(layout)
+    if open_contradictions:
+        needs_attention.append(
+            f"{open_contradictions} open contradiction{_plural(open_contradictions)} "
+            "— run `openkos contradictions` to review."
+        )
+    if stale_contradictions:
+        needs_attention.append(
+            f"{stale_contradictions} stale contradiction"
+            f"{_plural(stale_contradictions)} — run `openkos curate` to recompute."
+        )
     # issue #183 (Slice 0): a missing/empty `vectors.db` is genuinely
     # ACTIONABLE (spec: "Needs-Attention Surfaces Missing Vector Index"), so
     # it belongs in `needs_attention` itself -- unlike the empty-graph line
@@ -10432,27 +10454,70 @@ def _current_finding_digest(bundle_dir: Path) -> Callable[[str], str | None]:
     return _digest
 
 
+def _persisted_findings(
+    layout: config.WorkspaceLayout,
+) -> tuple[findings.PersistedFinding, ...]:
+    """Every persisted finding, with `stale` resolved against current
+    bundle bytes -- the single read of `.openkos/findings.db` this module
+    owns, shared by the `--declined` view and `status` (#598) so the
+    open/stale/declined predicate is never reimplemented per caller.
+
+    `path.exists()` is checked BEFORE `derived.open_derived_connection`,
+    which would otherwise lazily create an empty file and break
+    `config.WorkspaceLayout.findings_db_path`'s own pure-derivation
+    contract ("this property never creates anything on disk by itself") --
+    the same guard `vector_store_is_empty` uses for `vectors_db_path`, and
+    the one `next_action.open_contradictions` already applies. A workspace
+    where the Contradictions stage has never persisted anything answers
+    `()` rather than raising, and stays free of a stray `findings.db`."""
+    if not layout.findings_db_path.exists():
+        return ()
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        return findings.open_findings(
+            conn, current_digest=_current_finding_digest(layout.bundle_dir)
+        )
+    finally:
+        conn.close()
+
+
 def _open_findings_by_decision_key(
     layout: config.WorkspaceLayout,
 ) -> dict[str, findings.PersistedFinding]:
     """Every persisted finding, keyed by the SAME `decision_key_for`
     identity a decision record is keyed on (design Decision 7's read-time
-    join) -- used ONLY by the `--declined` view's stale-label lookup.
-    Opens `.openkos/findings.db` lazily, mirroring `vectors.db`/`fts.db`'s
-    own lazy-cache posture (Decision 1); a workspace where the
-    Contradictions stage has never persisted anything returns `{}` rather
-    than raising."""
-    conn = derived.open_derived_connection(layout.findings_db_path)
-    try:
-        persisted = findings.open_findings(
-            conn, current_digest=_current_finding_digest(layout.bundle_dir)
-        )
-    finally:
-        conn.close()
+    join) -- used ONLY by the `--declined` view's stale-label lookup."""
     return {
         bundle_decisions.decision_key_for(pf.pair_ids, pf.merged_absorbed_id): pf
-        for pf in persisted
+        for pf in _persisted_findings(layout)
     }
+
+
+def _contradiction_finding_counts(layout: config.WorkspaceLayout) -> tuple[int, int]:
+    """`(open, stale)` counts over the persisted, NON-declined findings --
+    the two numbers `status` reports (#598).
+
+    Declined findings are dropped outright, not counted into either total
+    (pending-work spec: "Declined Findings Are Hidden By Default", which
+    names `status`); `contradictions --declined` is the one view that shows
+    them. The open count uses the SAME open ∧ not stale ∧ not declined
+    predicate `next_action.open_contradictions` ranks on, so the two
+    commands can never disagree about what is outstanding. Stale is split
+    off rather than folded in or dropped: `next` excludes it by design, so
+    `status` staying silent would erase it from the operator's view
+    entirely ("A stale finding remains visible as stale")."""
+    open_count = 0
+    stale_count = 0
+    for finding in _persisted_findings(layout):
+        if _is_contradiction_declined(
+            layout, finding.pair_ids, finding.merged_absorbed_id
+        ):
+            continue
+        if finding.stale:
+            stale_count += 1
+        else:
+            open_count += 1
+    return open_count, stale_count
 
 
 def _echo_declined_finding(

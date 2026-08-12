@@ -362,3 +362,59 @@ exit, and `status` MUST NOT repair the offending relation.
 - WHEN the unbacked-provenance check also runs
 - THEN it reuses that same in-memory `docs` list and `status` performs no
   more bundle walks than before this change
+
+### Requirement: Needs-Attention Surfaces Persisted Contradiction Findings
+
+`openkos status` MUST read the persisted contradiction findings under
+`.openkos/` and fold them into "needs attention" as counted aggregate lines —
+never one line per candidate pair. Two counts MUST be reported separately:
+findings that are open (not stale, not declined), and findings that are stale.
+The open-findings line MUST name `openkos contradictions` as the next step;
+the stale-findings line MUST label the count stale and MUST name the verb that
+recomputes it. Both MUST use correct singular/plural wording. A finding an
+operator has declined MUST NOT be counted in either line and MUST NOT appear
+anywhere in `status` output (pending-work: "Declined Findings Are Hidden By
+Default"). The open count MUST use the same open ∧ not stale ∧ not declined
+predicate `next`'s contradiction tier ranks on, so the two commands cannot
+disagree about what is outstanding.
+
+Reading the findings store MUST NOT create it: `status` MUST check that
+`layout.findings_db_path` exists on disk before opening a connection, since
+opening one lazily creates an empty database file and `status` writes nothing
+(see "Read-Only and Human-Readable Only"). This read is a SQLite query, not a
+document scan: it MUST NOT introduce a `collect_docs()` call or any new bundle
+walk. The check MUST NOT call any model backend, MUST NOT recompute a verdict,
+and MUST remain informational — its presence MUST NOT cause a non-zero exit.
+
+#### Scenario: Open contradiction findings are counted and the verb is named
+
+- GIVEN a workspace whose persisted findings include two open, non-stale,
+  non-declined contradictions
+- WHEN `openkos status` runs
+- THEN a single "needs attention" line reports the count of 2 with plural
+  wording and names `openkos contradictions` as the next step, and the
+  command exits 0 without printing `Nothing needs attention.`
+
+#### Scenario: Stale findings are counted separately and labeled stale
+
+- GIVEN a workspace with one open finding and one finding whose stored input
+  digest no longer matches current bundle content
+- WHEN `openkos status` runs
+- THEN the open finding is reported on its own line as open, and the stale
+  finding is reported on a separate line labeled stale rather than folded
+  into the open count or silently omitted
+
+#### Scenario: Declined findings are absent from status
+
+- GIVEN every persisted contradiction finding has been declined by the
+  operator, and nothing else is pending
+- WHEN `openkos status` runs
+- THEN no contradiction line appears under "needs attention", `status`
+  prints `Nothing needs attention.`, and it exits 0
+
+#### Scenario: A workspace that never ran curate produces no contradiction line
+
+- GIVEN a workspace whose `.openkos/findings.db` is absent from disk
+- WHEN `openkos status` runs
+- THEN no contradiction line appears under "needs attention", `findings.db`
+  is still absent afterwards, and the command exits 0

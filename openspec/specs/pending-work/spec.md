@@ -42,7 +42,7 @@ computed from.
 
 ### Requirement: Persisted Findings Are Rankable, And The Honesty Guard Is Preserved
 
-`next` MUST be able to read the persisted finding set. A `next`
+`next` and `status` MUST be able to read the persisted finding set. A `next`
 tier reading persisted findings MUST rank an open, non-stale, non-declined
 contradiction as a candidate action. `next`'s `None`-action result MUST
 continue to mean only "no ranked tier fired" and MUST NOT be read, stated,
@@ -142,5 +142,5 @@ current and MUST NOT be silently dropped.
 #### Scenario: A stale finding remains visible as stale
 
 - GIVEN a finding marked stale
-- WHEN the declined-listing view runs
+- WHEN `status` or the declined-listing view runs
 - THEN the stale finding is shown labeled stale, not silently omitted
