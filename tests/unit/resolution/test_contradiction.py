@@ -2696,3 +2696,41 @@ def test_truncation_notice_reports_both_kinds_and_the_shared_total() -> None:
         "200 of 240 candidate(s) shown (cap reached); "
         "dropped: 30 typed-edge, 10 merged-body"
     )
+
+
+# ---------------------------------------------------------------------------
+# Vacuous-coverage notice (issue #557)
+# ---------------------------------------------------------------------------
+
+
+def test_vacuous_notice_fires_when_no_typed_pairs_but_merged_judged() -> None:
+    """A graph with zero applied relations still judges merged-body
+    candidates (issue #557's evidence run: 5 pairs, all merged-body). The
+    check runs, but its typed-edge half is vacuous -- the notice must say
+    so and name the prerequisite verbs."""
+    plan = _plan(edge_total=0, merged_total=5, judged_edges=0, judged_merged=5)
+
+    notice = contradiction_mod.vacuous_coverage_notice(plan)
+
+    assert notice is not None
+    assert "no applied relations" in notice
+    assert "suggest-relations" in notice
+    assert "curate" in notice
+    assert "NOT an all-clear" in notice
+
+
+def test_vacuous_notice_is_none_when_typed_pairs_exist() -> None:
+    """Any judgeable typed-edge pair means coverage is real -- no notice,
+    even if the cap or filtering dropped most of them."""
+    plan = _plan(edge_total=1, merged_total=0, judged_edges=1, judged_merged=0)
+
+    assert contradiction_mod.vacuous_coverage_notice(plan) is None
+
+
+def test_vacuous_notice_is_none_when_nothing_will_be_judged() -> None:
+    """Zero candidates of either kind never reaches the all-clear line --
+    the zero-candidate state message owns that path, so a second warning
+    here would double-report the same emptiness."""
+    plan = _plan(edge_total=0, merged_total=0, judged_edges=0, judged_merged=0)
+
+    assert contradiction_mod.vacuous_coverage_notice(plan) is None

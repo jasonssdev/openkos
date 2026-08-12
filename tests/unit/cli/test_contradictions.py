@@ -162,6 +162,45 @@ def _truncated_plan() -> CandidatePlan:
     )
 
 
+def _vacuous_plan(merged: int = 2) -> CandidatePlan:
+    """A plan with ZERO typed-edge pairs and only merged-body candidates --
+    issue #557's evidence shape: a graph with no applied relations still
+    judges the merge ledger, and the typed-edge half of the check is
+    vacuous. Specs carry real `MergeLedgerEntry`s so the plan's per-kind
+    accounting (`merged_judged`) stays coherent for the truncation notice."""
+    from openkos.model import okf
+
+    def _entry(absorbed_id: str) -> okf.MergeLedgerEntry:
+        return okf.MergeLedgerEntry(
+            schema=okf.MERGE_LEDGER_SCHEMA_V3,
+            merged_at="2026-01-01T00:00:00Z",
+            absorbed_id=absorbed_id,
+            absorbed_snapshot=okf.dump_frontmatter(
+                {"type": "Concept", "title": "Absorbed"}, "Absorbed body."
+            ),
+            survivor_before=okf.dump_frontmatter(
+                {"type": "Concept", "title": "Survivor"}, "Survivor before."
+            ),
+            index_before="",
+            log_before="",
+            link_rewrites=[],
+            sensitivity_before="private",
+            sensitivity_after="private",
+            relation_rewrites=[],
+            provenance_rewrites=[],
+        )
+
+    specs = tuple(
+        _CandidateSpec(
+            pair_ids=(f"concepts/survivor{i}", f"concepts/survivor{i}"),
+            relation_type=None,
+            merge_entry=_entry(f"concepts/absorbed{i}"),
+        )
+        for i in range(merged)
+    )
+    return CandidatePlan(specs=specs, edge_total=0, merged_total=merged)
+
+
 def _verdict(
     *,
     source: str = "concepts/a",
@@ -602,6 +641,144 @@ def test_contradictions_no_cap_reached_line_when_under_cap(
 
     assert result.exit_code == 0
     assert "cap reached" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Vacuous coverage guard (issue #557)
+# ---------------------------------------------------------------------------
+
+
+def test_contradictions_vacuous_run_warns_and_qualifies_the_all_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run over a graph with no applied relations (only merged-body
+    candidates) warns on STDERR before judging -- naming
+    `suggest-relations`/`curate` as the prerequisite -- and the clean-run
+    line is qualified so it can never read as an all-clear (issue #557)."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
+            [
+                _verdict(
+                    source="concepts/survivor0",
+                    target="concepts/survivor0",
+                    verdict=Verdict.CONSISTENT,
+                    confidence=0.9,
+                    conflicting_claims=(),
+                    merged_absorbed_id="concepts/absorbed0",
+                )
+            ],
+            2,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+    monkeypatch.setattr(
+        "openkos.cli.main.plan_candidates", lambda *a, **k: _vacuous_plan(2)
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "no applied relations" in result.stderr
+    assert "suggest-relations" in result.stderr
+    assert "curate" in result.stderr
+    assert "No high-confidence contradictions found" in result.stdout
+    assert "NOT an all-clear" in result.stdout
+
+
+def test_contradictions_vacuous_run_with_findings_still_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stderr warning is about coverage, not about the outcome: it fires
+    even when the merged-body half DOES find a contradiction, and the
+    finding itself renders untouched."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return _found(
+            [
+                _verdict(
+                    source="concepts/survivor0",
+                    target="concepts/survivor0",
+                    verdict=Verdict.CONTRADICTS,
+                    confidence=0.95,
+                    rationale="dates disagree",
+                    merged_absorbed_id="concepts/absorbed0",
+                )
+            ],
+            2,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+    monkeypatch.setattr(
+        "openkos.cli.main.plan_candidates", lambda *a, **k: _vacuous_plan(2)
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "no applied relations" in result.stderr
+    assert "dates disagree" in result.stdout
+    assert "No high-confidence contradictions found" not in result.stdout
+
+
+def test_contradictions_typed_coverage_produces_no_vacuous_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any judged typed-edge pair means coverage is real: the plain
+    all-clear line stays, and no coverage warning reaches stderr."""
+    _init_workspace(tmp_path, monkeypatch)
+
+    def _fake_find(
+        bundle_dir: Path, **kwargs: object
+    ) -> tuple[ContradictionBatch, int]:
+        return _found([_verdict(verdict=Verdict.CONSISTENT, confidence=0.9)], 1)
+
+    monkeypatch.setattr("openkos.cli.main.find_contradictions", _fake_find)
+    monkeypatch.setattr(
+        "openkos.cli.main.plan_candidates",
+        lambda *a, **k: CandidatePlan(
+            specs=(
+                _CandidateSpec(
+                    pair_ids=("concepts/a", "concepts/b"),
+                    relation_type="related_to",
+                ),
+            ),
+            edge_total=1,
+            merged_total=0,
+        ),
+    )
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "no applied relations" not in result.stderr
+    assert "No high-confidence contradictions found." in result.stdout
+    assert "NOT an all-clear" not in result.stdout
+
+
+def test_contradictions_fresh_bundle_names_the_prerequisite_verbs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The zero-candidate state message names the verbs that create typed
+    edges, so the empty case points forward instead of dead-ending
+    (issue #557: name `suggest-relations`/`curate` as the prerequisite)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "The graph has no typed edges yet." in result.stdout
+    assert "suggest-relations" in result.stdout
+    assert "curate" in result.stdout
 
 
 # ---------------------------------------------------------------------------

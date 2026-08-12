@@ -82,6 +82,7 @@ from openkos.resolution.contradiction import (
     find_contradictions,
     is_high_confidence_contradiction,
     plan_candidates,
+    vacuous_coverage_notice,
 )
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
@@ -10093,7 +10094,13 @@ def _zero_edge_state_message(
     count = typed if use_typed_count else total
     if count == 0:
         if use_typed_count:
-            return "The graph has no typed edges yet."
+            # #557: point forward instead of dead-ending -- these are the
+            # verbs that create the typed edges this check consumes.
+            return (
+                "The graph has no typed edges yet. Apply relations first: "
+                "`openkos suggest-relations` then `openkos relate`, or "
+                "`openkos curate`."
+            )
         return "No concept relationships in the graph yet."
     untyped = total - typed
     if all_excluded is not None and untyped > 0:
@@ -10958,6 +10965,13 @@ def contradictions(
             include_confidential=include_confidential,
             local_exemption=local_exemption,
         )
+        # Vacuous-coverage guard (#557): warn BEFORE the judging loop, not
+        # after -- the run costs one LLM call per candidate, and an operator
+        # who only needed typed-edge coverage can abort instead of paying
+        # for a check that cannot answer their question.
+        vacuous = vacuous_coverage_notice(plan)
+        if vacuous is not None:
+            typer.echo(f"openkos contradictions: {vacuous}", err=True)
         try:
             batch, _total_pairs = find_contradictions(
                 layout.bundle_dir,
@@ -11066,7 +11080,18 @@ def contradictions(
     if not displayed:
         # No early return (#441): the partial-batch failure epilogue below
         # must run after every display path, exactly as in `adjudicate`.
-        typer.echo("No high-confidence contradictions found.")
+        # Vacuous-coverage guard (#557): a clean line over a run that judged
+        # zero typed-edge pairs must not read as an all-clear -- stderr may
+        # be discarded (piped runs), so the qualification rides the stdout
+        # line itself.
+        if vacuous is not None:
+            typer.echo(
+                "No high-confidence contradictions found -- NOT an "
+                "all-clear: zero typed-edge pairs were judged (the graph "
+                "has no applied relations)."
+            )
+        else:
+            typer.echo("No high-confidence contradictions found.")
 
     for result in displayed:
         # surface-merged-body-contradictions (#409): `merged_absorbed_id` is
