@@ -506,7 +506,7 @@ records its measured numbers.
 | pending-work: Declining Is A Non-Interactive Verb | A2.1-A2.4 (identity), B2.1-B2.4 |
 | pending-work: Declined Findings Hidden By Default, Explicit Listing View | B2.8-B2.10 |
 | pending-work: Re-Opening Requires Explicit Operator Action | B2.5-B2.7 |
-| pending-work: A Finding Is Invalidated Honestly When Its Inputs Change | A1.3-A1.4, B2.7, C2.10 |
+| pending-work: A Finding Is Invalidated Honestly When Its Inputs Change | A1.3-A1.4, B2.7, C2.1 |
 | curate-command: Contradictions Stage Is Report-Only And Last (delta) | A3.1-A3.3 |
 | curate-command: Resumability By Construction (delta) | A3.4 |
 | workspace-autocommit: Scoped Staging Only (delta) | B2.11-B2.13 |
