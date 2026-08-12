@@ -294,81 +294,97 @@ PR body against the actual `pytest` run, unpiped.
 
 ### Phase 1: `contradictions --decline`
 
-- [ ] B2.1 RED:
+- [x] B2.1 RED:
       `tests/unit/cli/test_contradictions.py::test_decline_writes_a_decision_and_hides_the_finding`
       — `openkos contradictions --decline <pair-identity>` writes a
       `bundle/.state/decisions/**` record with `state: declined`, and a
       subsequent `contradictions` run (or `--declined` view, Phase 3) no
       longer shows it in ordinary output (pending-work spec: "Declining Is A
       Non-Interactive Verb...").
-- [ ] B2.2 GREEN: `contradictions` gains `--decline`, addressing a finding
+- [x] B2.2 GREEN: `contradictions` gains `--decline`, addressing a finding
       by its `decision_key`-derived identity (sorted `pair_ids` +
       `merged_absorbed_id`), short-circuiting before the graph build and LLM
       client (design File changes table), calling
-      `bundle.decisions.write_decisions`.
-- [ ] B2.3 RED: `--decline` with no matching findings row still succeeds
+      `bundle.decisions.write_decisions`. (Identity is supplied as two
+      `--decline PAIR_A PAIR_B` positional-like option values, sorted by
+      the CLI via `_sorted_decision_pair` before use, plus an optional
+      `--merged-absorbed-id` for the merged-body discriminator.)
+- [x] B2.3 RED: `--decline` with no matching findings row still succeeds
       (Decision 7 corollary — decline never reads the findings store as a
-      precondition; the row may have been purged).
-- [ ] B2.4 RED: a typed-edge and a merged-body candidate sharing the same
+      precondition; the row may have been purged). Confirmed via the
+      prescribed mutation: temporarily added a
+      `derived.open_derived_connection(layout.findings_db_path).close()`
+      call to the decline branch, re-ran the test (RED — `findings.db` now
+      existed), reverted, purged `__pycache__`, re-ran (GREEN).
+- [x] B2.4 RED: a typed-edge and a merged-body candidate sharing the same
       `pair_ids` stay distinct — declining one does not affect the other
       (pending-work spec, Scenario "stay distinct").
 
 ### Phase 2: `contradictions --reopen`
 
-- [ ] B2.5 RED:
+- [x] B2.5 RED:
       `tests/unit/cli/test_contradictions.py::test_reopen_reinstates_a_declined_finding`
       — explicit `--reopen <identity>` flips a declined decision back to
       open; ranking eligibility is restored (pending-work spec: "Re-Opening
       A Declined Finding Requires Explicit Operator Action").
-- [ ] B2.6 GREEN: `--reopen` handler, same short-circuit shape as
+- [x] B2.6 GREEN: `--reopen` handler, same short-circuit shape as
       `--decline`.
-- [ ] B2.7 RED: content-change-does-not-reopen test — a declined finding
+- [x] B2.7 RED: content-change-does-not-reopen test — a declined finding
       whose concept is edited is marked stale on recompute (Slice A's
       staleness), NOT reopened, and stays hidden (pending-work spec,
       Scenario "Content change does not silently reopen a decline").
 
 ### Phase 3: `contradictions --declined` listing view (D3)
 
-- [ ] B2.8 RED:
+- [x] B2.8 RED:
       `tests/unit/cli/test_contradictions.py::test_declined_view_lists_declined_findings`
       — `openkos contradictions --declined` shows a declined finding,
       identified and marked declined; ordinary `contradictions`/`status`/
       `next` output does not show it (pending-work spec: "Declined Findings
       Are Hidden By Default...").
-- [ ] B2.9 GREEN: `--declined` flag/view.
-- [ ] B2.10 RED: stale-but-declined-or-open findings remain visible as
+- [x] B2.9 GREEN: `--declined` flag/view (`_contradictions_declined_view`).
+- [x] B2.10 RED: stale-but-declined-or-open findings remain visible as
       `stale` in the declined-listing view or `status`, never silently
       omitted (pending-work spec, Scenario "A stale finding remains visible
-      as stale").
+      as stale"). Covered by
+      `test_content_change_does_not_reopen_a_declined_finding`'s `[stale]`
+      assertion in the `--declined` view.
 
 ### Phase 4: `_autocommit` scoped-staging hazard
 
-- [ ] B2.11 RED:
+- [x] B2.11 RED:
       `tests/unit/cli/test_contradictions.py::test_decline_stages_only_the_decision_path`
       — run `--decline`, assert the `bundle/.state/decisions/**` path is in
       `_autocommit`'s committed set (`cli/main.py:929`, `git add -- <paths>`,
       never `-A`); mutate the decline command to drop that path from the
       caller's list passed to `_autocommit` and confirm the test goes red;
       revert the mutation and purge `__pycache__` before re-confirming green
-      (workspace-autocommit spec: "Scoped Staging Only" delta).
-- [ ] B2.12 GREEN: decline/reopen handlers return their written decision
+      (workspace-autocommit spec: "Scoped Staging Only" delta). Mutation
+      confirmed: changed `_autocommit(root, [rel_path], ...)` to
+      `_autocommit(root, [], ...)`, re-ran (RED — committed set was empty),
+      reverted, purged `__pycache__`, re-ran (GREEN).
+- [x] B2.12 GREEN: decline/reopen handlers return their written decision
       path; the command passes it into `_autocommit`'s `paths` argument,
       mirroring `MergeResult.ledger_sidecar_path`'s existing pattern
       (`cli/main.py:6934-6948`).
-- [ ] B2.13 RED: unrelated pre-existing dirty file in the workspace is left
+- [x] B2.13 RED: unrelated pre-existing dirty file in the workspace is left
       untouched by a `--decline` run's `_autocommit` call (workspace-
       autocommit spec, Scenario "Unrelated dirty file is left untouched").
 
 ### PR #3 quality gates
 
-- [ ] Focused: `uv run pytest tests/unit/cli/test_contradictions.py -v`
-- [ ] Full suite, ruff check, ruff format --check, mypy . — all green
-- [ ] Rollback: `git revert` PR #3; the sweep from PR #2 remains an ancestor
+- [x] Focused: `uv run pytest tests/unit/cli/test_contradictions.py -v`
+      — 55 passed
+- [x] Full suite, ruff check, ruff format --check, mypy . — all green
+      (4331 passed, 1 skipped; baseline was 4322 passed, 1 skipped — +9 new
+      tests, no regressions)
+- [x] Rollback: `git revert` PR #3; the sweep from PR #2 remains an ancestor
       commit on the branch, so no decision-writing capability survives the
       revert either (the CLI verb that wrote it is gone)
-- [ ] Before requesting review: re-validate the pre-pr gate against B1+B2
+- [x] Before requesting review: re-validate the pre-pr gate against B1+B2
       combined if any commit was folded across the two, per the `#550`
-      revalidate-after-every-fold trap
+      revalidate-after-every-fold trap (N/A this batch — nothing was
+      committed; left in the working tree per delivery constraints)
 
 ---
 
