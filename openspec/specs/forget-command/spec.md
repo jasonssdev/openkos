@@ -243,6 +243,66 @@ external-reference refusal.
 - THEN only the bundle-file reference is surfaced and counted; the ledger
   mention is excluded
 
+### Requirement: Deletion Sweep Includes Ledger Storage
+
+`forget`'s Phase B deletion/redaction sweep MUST cover
+`bundle/.state/ledger/`: any ledger sidecar entry whose snapshot fields
+(`absorbed_snapshot`, `survivor_before`, `index_before`, `log_before`, or
+any `relation_rewrites`/`provenance_rewrites` snapshot) contain a
+purge-set member's body MUST be redacted or removed as part of the same
+Phase B write that deletes the purge-set member's own file, so that a
+concept's content does not survive `forget` merely because it was
+previously absorbed into (or is the survivor of) a merge.
+
+Dropping the member's own `absorbed_id` entry alone is NOT sufficient
+(issue #602): `build_merged_document` APPENDS, so entry *k*'s
+`survivor_before` already embeds the *k-1* bodies absorbed before it, and
+a member's whole file can sit in a THIRD survivor's entry as a
+`relation_rewrites`/`provenance_rewrites` snapshot under an unrelated
+`absorbed_id`. The sweep MUST therefore also redact every SURVIVING
+entry: excise the member's delimited `## Merged content (<id>)` section
+from snapshot strings, and remove any rewrite element whose `file` is the
+member's own. Redaction is structural (the delimited section, the
+rewrite's `file` identity), never a substring match on body text — a
+generic body contained coincidentally in an unrelated snapshot must not
+destroy that entry's restore data. Privacy wins over reversibility: a
+later `unmerge` over a redacted entry either restores content without the
+forgotten body or refuses on its drift check; it never resurrects the
+forgotten body.
+
+#### Scenario: Forgetting an absorbed concept's historical snapshot is swept
+- GIVEN a purge-set member was absorbed by a prior merge and its
+  pre-merge body is preserved in the survivor's ledger sidecar as
+  `absorbed_snapshot`
+- WHEN `openkos forget <concept-id>` completes
+- THEN that snapshot no longer contains the forgotten concept's body under
+  `bundle/.state/ledger/`
+
+#### Scenario: Forgetting a survivor sweeps its own ledger entries
+- GIVEN the purge-set member is a merge survivor with its own ledger
+  sidecar under `bundle/.state/ledger/`
+- WHEN `openkos forget <concept-id>` completes
+- THEN that sidecar is swept as part of the same Phase B write, not left
+  behind
+
+#### Scenario: A two-entry ledger keeps no accumulated copy of the forgotten body
+- GIVEN a survivor with two ledger entries, where entry 2's
+  `survivor_before` embeds the body absorbed by entry 1 (the append
+  accumulation), and the purge-set member is entry 1's absorbed concept
+- WHEN the sweep completes
+- THEN entry 1 is dropped AND entry 2's `survivor_before` no longer
+  contains the forgotten body, while entry 2's own restore data (the
+  survivor's own pre-merge content, entry 2's absorbed snapshot) is
+  untouched
+
+#### Scenario: A third-party rewrite snapshot of the member is removed
+- GIVEN a member's whole file was snapshotted into a DIFFERENT survivor's
+  entry as a `provenance_rewrites` (or `relation_rewrites`) element,
+  under an `absorbed_id` that is not the member
+- WHEN `openkos forget <member>` completes
+- THEN that rewrite element is gone from the surviving entry, and the
+  entry itself (about a concept that still exists) remains
+
 ### Requirement: Unverifiable Referrer Detection (Fail-Closed)
 
 `openkos forget` MUST run an independent fail-closed check across the purge

@@ -1,5 +1,6 @@
 """Typer application object exposed as the `openkos` console script."""
 
+import dataclasses
 import glob
 import json
 import os
@@ -601,6 +602,93 @@ def _reject_flagged_ledger_write(
     raise typer.Exit(code=1)
 
 
+def _excise_merged_sections(snapshot: str, purge_ids: set[str]) -> str:
+    """Remove every purge-set member's delimited `## Merged content (<id>)`
+    section from a ledger snapshot string (issue #602, leak 1).
+
+    `build_merged_document` APPENDS `{MERGED_CONTENT_HEADING_PREFIX}{id})`
+    plus the absorbed body, so entry *k*'s `survivor_before` (and the
+    `absorbed_snapshot` of any merge that later absorbed that survivor)
+    embeds every earlier absorbed body under a deterministic, delimited
+    heading. Excision runs from that exact heading to the NEXT merged-
+    content heading (or EOF) -- a nested section belonging to a DIFFERENT,
+    non-forgotten concept is therefore never removed, only the purge
+    member's own segment. Structural, never a substring match on body
+    text: a generic body (`Body.`) contained coincidentally in an
+    unrelated snapshot must not vaporize that entry's restore data."""
+    for purge_id in purge_ids:
+        separator = f"{okf.MERGED_CONTENT_HEADING_PREFIX}{purge_id})\n\n"
+        while True:
+            start = snapshot.find(separator)
+            if start == -1:
+                break
+            next_heading = snapshot.find(
+                okf.MERGED_CONTENT_HEADING_PREFIX, start + len(separator)
+            )
+            end = len(snapshot) if next_heading == -1 else next_heading
+            snapshot = snapshot[:start] + snapshot[end:]
+    return snapshot
+
+
+def _scrub_entry_snapshots(
+    entry: okf.MergeLedgerEntry, purge_ids: set[str]
+) -> okf.MergeLedgerEntry:
+    """Scrub one SURVIVING ledger entry's snapshot fields of every purge-set
+    member's content (issue #602; forget-command spec: "Deletion Sweep
+    Includes Ledger Storage" enumerates all six fields).
+
+    Two structural scrubs, matching the only two mechanisms by which a
+    member's body ever ENTERS another entry's snapshots:
+
+    - the delimited `## Merged content (<id>)` section that
+      `build_merged_document`'s append accumulates into later
+      `survivor_before`/`absorbed_snapshot` strings (`_excise_merged_sections`;
+      applied to all four whole-file string fields for uniformity --
+      `index_before`/`log_before` are catalog files that never carry one,
+      so there the excision is a provable no-op);
+    - a `relation_rewrites`/`provenance_rewrites` element whose `file` IS
+      the member's own file (the member was snapshotted whole as a third
+      party whose `relations:`/`provenance:` targeted the absorbed id) --
+      dropped outright; a KEPT rewrite's snapshot is still excised, since a
+      third party that was itself a survivor embeds merged sections too.
+
+    Returns the entry unchanged (same object) when nothing matched, so the
+    caller's no-op detection stays cheap and a byte-identical rewrite is
+    never performed."""
+
+    def _keeps(file: str) -> bool:
+        return unicodedata.normalize("NFC", file.removesuffix(".md")) not in purge_ids
+
+    survivor_before = _excise_merged_sections(entry.survivor_before, purge_ids)
+    absorbed_snapshot = _excise_merged_sections(entry.absorbed_snapshot, purge_ids)
+    index_before = _excise_merged_sections(entry.index_before, purge_ids)
+    log_before = _excise_merged_sections(entry.log_before, purge_ids)
+    relation_rewrites = [
+        dataclasses.replace(
+            rewrite, snapshot=_excise_merged_sections(rewrite.snapshot, purge_ids)
+        )
+        for rewrite in entry.relation_rewrites
+        if _keeps(rewrite.file)
+    ]
+    provenance_rewrites = [
+        dataclasses.replace(
+            rewrite, snapshot=_excise_merged_sections(rewrite.snapshot, purge_ids)
+        )
+        for rewrite in entry.provenance_rewrites
+        if _keeps(rewrite.file)
+    ]
+    scrubbed = dataclasses.replace(
+        entry,
+        survivor_before=survivor_before,
+        absorbed_snapshot=absorbed_snapshot,
+        index_before=index_before,
+        log_before=log_before,
+        relation_rewrites=relation_rewrites,
+        provenance_rewrites=provenance_rewrites,
+    )
+    return entry if scrubbed == entry else scrubbed
+
+
 def _sweep_ledger_sidecars_for_ids(
     bundle_dir: Path, purge_ids: Iterable[str]
 ) -> list[Path]:
@@ -619,6 +707,16 @@ def _sweep_ledger_sidecars_for_ids(
       member's pre-merge body does not survive merely because it was
       absorbed into a DIFFERENT survivor that is not itself being
       forgotten/purged.
+    - Every SURVIVING entry is additionally scrubbed via
+      `_scrub_entry_snapshots` (issue #602): dropping entry *k* alone is
+      not enough, because `build_merged_document` APPENDS -- entry *k+1*'s
+      `survivor_before` already embeds the *k* bodies absorbed before it,
+      and a member's whole file can sit in a THIRD survivor's entry as a
+      `relation_rewrites`/`provenance_rewrites` snapshot under an
+      unrelated `absorbed_id`. Privacy over reversibility, by design: a
+      later `unmerge` over a scrubbed entry either restores content
+      WITHOUT the forgotten body or refuses on its drift check -- both
+      acceptable; resurrecting the forgotten body is not.
 
     Returns every ledger path touched (deleted, or rewritten), bundle-dir-
     relative-capable via the caller, so it can be folded into the SAME
@@ -646,8 +744,12 @@ def _sweep_ledger_sidecars_for_ids(
         if not isinstance(survivor_id, str) or not survivor_id:
             continue
         entries = okf.decode_merged_from(metadata)
-        remaining = [e for e in entries if e.absorbed_id not in purge_ids_set]
-        if len(remaining) == len(entries):
+        remaining = [
+            _scrub_entry_snapshots(e, purge_ids_set)
+            for e in entries
+            if e.absorbed_id not in purge_ids_set
+        ]
+        if remaining == entries:
             continue
         bundle_ledger.write_entries(
             survivor_id, bundle_dir, survivor_id=survivor_id, entries=remaining

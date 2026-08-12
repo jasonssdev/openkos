@@ -1925,3 +1925,132 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
         Path("bundle/index.md")
     }
+
+
+# --- #602: the sweep scrubs bodies from ALL snapshot fields -----------------
+
+
+def test_sweep_excises_an_absorbed_body_from_a_later_entrys_survivor_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#602 leak 1, on the REQUIRED two-entry ledger (a one-entry fixture
+    cannot fail): `build_merged_document` APPENDS, so entry 2's
+    `survivor_before` already embeds the body absorbed by entry 1.
+    Dropping entry 1 alone left that body behind. The sweep must excise
+    the forgotten concept's `## Merged content (<id>)` section from every
+    remaining entry's snapshots -- while entry 2's own restore data (the
+    survivor's OWN pre-merge content, and the entry-2 absorbed snapshot)
+    survives untouched."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="SURVIVOR-OWN-BODY.\n"
+    )
+    _write_plain_concept(
+        tmp_path, "concepts/first", title="First", body="FIRST-SECRET-BODY.\n"
+    )
+    _write_plain_concept(
+        tmp_path, "concepts/second", title="Second", body="SECOND-BODY.\n"
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/first", "--auto"]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/second", "--auto"]
+        ).exit_code
+        == 0
+    )
+    bundle_dir = tmp_path / "bundle"
+    sidecar = bundle_ledger.ledger_path_for("concepts/survivor", bundle_dir)
+    assert "FIRST-SECRET-BODY" in sidecar.read_text(encoding="utf-8")
+
+    touched = main._sweep_ledger_sidecars_for_ids(bundle_dir, ["concepts/first"])
+
+    assert sidecar in touched
+    sidecar_text = sidecar.read_text(encoding="utf-8")
+    assert "FIRST-SECRET-BODY" not in sidecar_text
+    metadata, _ = okf.load_frontmatter(sidecar_text)
+    remaining = okf.decode_merged_from(metadata)
+    assert [entry.absorbed_id for entry in remaining] == ["concepts/second"]
+    assert "SURVIVOR-OWN-BODY" in remaining[0].survivor_before
+    assert "SECOND-BODY" in remaining[0].absorbed_snapshot
+
+
+def test_sweep_excises_a_nested_section_from_a_later_absorbed_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same accumulation reaches `absorbed_snapshot` when a survivor is
+    itself later absorbed: T's entry for S carries S's whole file,
+    INCLUDING the `## Merged content (X)` section from S's earlier merge.
+    Sweeping X must excise that nested section too."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/s", title="S", body="S-OWN.\n")
+    _write_plain_concept(tmp_path, "concepts/x", title="X", body="X-SECRET-BODY.\n")
+    _write_plain_concept(tmp_path, "concepts/t", title="T", body="T-OWN.\n")
+    assert (
+        runner.invoke(app, ["merge", "concepts/s", "concepts/x", "--auto"]).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(app, ["merge", "concepts/t", "concepts/s", "--auto"]).exit_code
+        == 0
+    )
+    bundle_dir = tmp_path / "bundle"
+    t_sidecar = bundle_ledger.ledger_path_for("concepts/t", bundle_dir)
+    assert "X-SECRET-BODY" in t_sidecar.read_text(encoding="utf-8")
+
+    touched = main._sweep_ledger_sidecars_for_ids(bundle_dir, ["concepts/x"])
+
+    assert t_sidecar in touched
+    t_text = t_sidecar.read_text(encoding="utf-8")
+    assert "X-SECRET-BODY" not in t_text
+    metadata, _ = okf.load_frontmatter(t_text)
+    remaining = okf.decode_merged_from(metadata)
+    assert [entry.absorbed_id for entry in remaining] == ["concepts/s"]
+    assert "S-OWN" in remaining[0].absorbed_snapshot
+
+
+def test_forget_drops_a_third_party_provenance_snapshot_of_the_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#602 leak 2, end to end through the CLI: a member's whole-file body
+    can sit in a DIFFERENT survivor's entry as a `provenance_rewrites`
+    snapshot, stored under an unrelated `absorbed_id` -- the member's file
+    was snapshotted as a third party when its `provenance:` targeted the
+    absorbed concept. `forget <member>` must remove that snapshot from the
+    surviving entry while keeping the entry itself (its other restore data
+    is about concepts that still exist)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_plain_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    member_path = tmp_path / "bundle" / "concepts" / "member.md"
+    member_path.parent.mkdir(parents=True, exist_ok=True)
+    member_path.write_text(
+        "---\ntype: Concept\ntitle: Member\nprovenance:\n"
+        "  - concepts/absorbed\n---\n\nMEMBER-SECRET-BODY.\n",
+        encoding="utf-8",
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+        ).exit_code
+        == 0
+    )
+    bundle_dir = tmp_path / "bundle"
+    sidecar = bundle_ledger.ledger_path_for("concepts/survivor", bundle_dir)
+    assert "MEMBER-SECRET-BODY" in sidecar.read_text(encoding="utf-8"), (
+        "fixture setup: the merge must have snapshotted the member's file "
+        "into provenance_rewrites"
+    )
+
+    result = runner.invoke(app, ["forget", "concepts/member", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    sidecar_text = sidecar.read_text(encoding="utf-8")
+    assert "MEMBER-SECRET-BODY" not in sidecar_text
+    metadata, _ = okf.load_frontmatter(sidecar_text)
+    remaining = okf.decode_merged_from(metadata)
+    assert [entry.absorbed_id for entry in remaining] == ["concepts/absorbed"]
