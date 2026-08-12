@@ -2750,3 +2750,276 @@ def test_extract_concept_regression_suite_still_green_and_prompt_untouched() -> 
 
     assert len(llm.calls) == 1
     assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+# --- Bounded re-ask on a sole source-title twin (#584) -----------------------
+#
+# When the FINAL, filtered object list is exactly one object and that object
+# is a *droppable* source-title twin, the extractor asks once more with a
+# DIFFERENT instruction and keeps whatever the second ask adds.
+#
+# Three properties define the design and are each fenced below:
+#
+# - It ADDS, never replaces (`measure_single_object_rate.py:49-57`): the
+#   original object survives whatever the re-ask returns, so the guard stays
+#   bounded on a genuinely single-subject source.
+# - The second ask carries a DIFFERENT prompt: `extract_concept_union`
+#   already asks twice with identical messages and the collapse survives 10
+#   of 10 runs, so a second identical ask is measurably useless.
+# - It fires on the twin predicate's BOTH conjuncts -- a lone `Procedure`
+#   restating the source title is exempt (#413) and must not re-ask.
+
+_DICHOTOMY_TWIN_TITLE = "Dichotomy of Control"
+
+_DICHOTOMY_ECHO_ENTITY_ITEM = (
+    '{"type": "Entity", "title": "Dichotomy of Control", '
+    '"description": "The same subject the first pass already kept.", '
+    '"body": ""}'
+)
+
+
+def test_sole_droppable_twin_re_asks_and_keeps_what_the_second_ask_adds() -> None:
+    """#584: the reported harm -- a short source under an umbrella-topic
+    title yields one object where its body holds more. When the sole
+    surviving object is a droppable source-title twin, a second ask goes out
+    and its findings are ADDED beside the original."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == [
+        "Dichotomy of Control",
+        "Apatheia",
+    ]
+
+
+def test_union_sole_droppable_twin_re_asks_before_the_judge() -> None:
+    """The trigger is applied SYMMETRICALLY on both paths (#581's
+    precedent), at the point where the merged list is final and filtered --
+    so the re-ask's findings reach the judge as ordinary candidates."""
+    llm = _SequencedLLM(
+        [
+            _array(_DICHOTOMY_ITEM),
+            _array(_DICHOTOMY_ITEM),
+            _array(_APATHEIA_ITEM),
+            _keep_reply("Dichotomy of Control", "Apatheia"),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    # 2 extraction runs + 1 re-ask + 1 judge call.
+    assert len(llm.calls) == 4
+    assert [r.title for r in outcome.objects] == [
+        "Dichotomy of Control",
+        "Apatheia",
+    ]
+    assert "Apatheia" in llm.calls[3][1]["content"]
+
+
+def test_re_ask_returning_nothing_leaves_the_objects_untouched() -> None:
+    """The bound: a re-ask that finds nothing leaves the output exactly as
+    it was before this change -- same object, same cap accounting. Only the
+    report's disclosure of the spent call differs."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Dichotomy of Control",
+            description=(
+                "The Stoic distinction between what is and is not up to us."
+            ),
+            body="",
+        )
+    ]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.discarded_titles == ()
+
+
+def test_re_ask_cannot_empty_a_genuinely_single_subject_source() -> None:
+    """The floor is not weakened -- `test_source_title_twin_kept_when_it_is
+    _the_only_object`'s contract on the new path. A genuinely single-subject
+    source (the `mcp-launch` shape, and the probe's `Replica Lag` negative
+    control) also triggers the re-ask, and its object survives whatever
+    comes back: here the second ask merely echoes the subject already kept,
+    which adds nothing and removes nothing."""
+    llm = _SequencedLLM(
+        [_array(_DICHOTOMY_ITEM), _array(_DICHOTOMY_ECHO_ENTITY_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert [(r.type, r.title) for r in outcome.objects] == [
+        ("Concept", "Dichotomy of Control")
+    ]
+
+
+def test_lone_exempt_procedure_does_not_re_ask() -> None:
+    """The predicate has TWO conjuncts: normalized title equality AND a type
+    that is not `_TWIN_EXEMPT_TYPE`. A lone `Procedure` restating the source
+    title is not a droppable twin (#413), so no second call goes out -- the
+    `lesson` fixture's lone object is exactly this shape."""
+    llm = _SequencedLLM(
+        [_array(_RESEARCH_AGENT_PROCEDURE_ITEM), _array(_APATHEIA_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "A walkthrough of building a research agent.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == [
+        "Building a Research Agent with the Claude Agent SDK"
+    ]
+
+
+def test_no_re_ask_when_more_than_one_object_survives() -> None:
+    """The re-ask must not fire on every source -- that would silently
+    double extraction cost. Two surviving objects is not the collapse."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM, _PERSON_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism and Epictetus.", source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism", "Epictetus"]
+
+
+def test_no_re_ask_when_the_lone_object_is_not_a_title_twin() -> None:
+    """One object that does NOT restate the source title is the ordinary
+    single-subject reply, not the twin collapse #584 measures."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism.", source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+def test_re_ask_carries_a_different_instruction_than_the_extraction_prompt() -> None:
+    """`extract_concept_union` already asks twice with IDENTICAL messages and
+    the collapse survives 10 of 10 runs, so the second ask must differ. The
+    extraction prompt itself is untouched -- the re-ask uses a separate
+    constant (the probe's `CONTROL_PROMPT_SHA` pins the extraction one)."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), "[]"])
+
+    concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    first_system = llm.calls[0][0]["content"]
+    second_system = llm.calls[1][0]["content"]
+    assert first_system == concept_mod._SYSTEM_PROMPT
+    assert second_system == concept_mod._REASK_SYSTEM_PROMPT
+    assert second_system != first_system
+    # The re-ask names what it wants rather than repeating the general
+    # extraction request.
+    assert "further distinct subject" in second_system
+
+
+def test_re_ask_prompt_makes_an_empty_answer_correct_and_expected() -> None:
+    """The negative control's risk: a genuinely single-subject source also
+    triggers the re-ask, and an instruction that pressures the model to
+    produce more will make it invent subjects. "Nothing further" is written
+    into the prompt as a first-class answer, not left implicit."""
+    system = concept_mod._REASK_SYSTEM_PROMPT
+
+    assert "An empty array [] is a CORRECT and EXPECTED answer here." in system
+    assert (
+        "Many sources genuinely cover exactly one subject, and for those "
+        "the first pass was right: answer [] and nothing else." in system
+    )
+    assert "Do not invent a subject" in system
+
+
+def test_re_ask_user_turn_names_the_object_already_kept() -> None:
+    """The second ask asks for what the body covers BEYOND the subject the
+    title already names, so it must say which object is already kept --
+    otherwise "do not repeat it" has no referent."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), "[]"])
+
+    concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    user_content = llm.calls[1][1]["content"]
+    assert "ALREADY KEPT" in user_content
+    assert "Dichotomy of Control" in user_content
+    assert "Notes on what is up to us." in user_content
+
+
+def test_report_names_the_re_ask_call_and_what_it_added() -> None:
+    """A silent extra model call is exactly the cost this project reports
+    rather than hides: the report carries the spent call AND the titles it
+    contributed."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ("Apatheia",)
+
+
+def test_report_defaults_to_no_re_ask_when_the_trigger_never_fires() -> None:
+    """An untriggered source reports zero spent re-ask calls and no added
+    titles -- the fields are readable as "this never happened"."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism.", source_title="Notes", llm=llm
+    )
+
+    assert outcome.report.reask_runs == 0
+    assert outcome.report.reask_added_titles == ()
+
+
+def test_re_ask_backend_failure_keeps_the_original_object() -> None:
+    """The re-ask is an OPTIONAL extra call on top of an already-complete
+    result, exactly like `judge.select` -- so its failure degrades to
+    "added nothing" (design D7's argument) instead of destroying validated
+    extraction work. The spent call is still reported."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), OllamaUnavailable("boom")])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Dichotomy of Control"]
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
