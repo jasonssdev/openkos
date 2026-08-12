@@ -60,13 +60,16 @@ exactly once.
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from openkos import config
 from openkos import lint as lint_check
+from openkos.bundle import decisions as bundle_decisions
 from openkos.model import okf
 from openkos.resolution import CandidateGroup, find_exact_title_groups
+from openkos.state import derived, findings
 from openkos.state.derived import stale_derived_stores
-from openkos.state.vectorstore import vector_store_is_empty
+from openkos.state.vectorstore import content_hash, vector_store_is_empty
 
 _STATUS_POINTER = "For everything else, run `openkos status`."
 """The honesty guard (D4): appended after every branch of `render_lines`,
@@ -163,6 +166,7 @@ class _BundleSignals:
         self._stale_indexes: tuple[str, ...] | None = None
         self._walk_incomplete: bool | None = None
         self._non_nfc_entries: list[lint_check.NonNfcEntry] | None = None
+        self._open_contradictions: tuple[findings.PersistedFinding, ...] | None = None
 
     def record_declination(self, notice: str) -> None:
         """Note a real finding this run deliberately refused to turn into a
@@ -296,6 +300,87 @@ class _BundleSignals:
                 lint_check.scan_non_nfc_entries(self._layout.bundle_dir)
             )
         return self._non_nfc_entries
+
+    @property
+    def open_contradictions(self) -> tuple[findings.PersistedFinding, ...]:
+        """Every persisted contradiction finding that is **open** (no
+        `declined` decision) **and** not stale (design Decision 6), read
+        only by the LAST tier -- mirrors `non_nfc_entries`'s own
+        reached-only-when-everything-above-is-clean placement.
+
+        `.openkos/findings.db`'s pure-derivation contract (`config.
+        WorkspaceLayout.findings_db_path`'s own docstring: "this property
+        never creates anything on disk by itself") is honoured here by
+        checking `path.exists()` BEFORE `derived.open_derived_connection`,
+        which would otherwise lazily create an empty file on a workspace
+        that has never run `curate`'s Contradictions stage -- the same
+        guard `vector_store_is_empty` uses for `vectors_db_path`.
+
+        The `declined` join happens per finding, by recomputing
+        `bundle_decisions.decision_key_for` from the finding's own
+        `pair_ids`/`merged_absorbed_id` (design Decision 7's read-time
+        join -- no stored cross-pointer either store owns)."""
+        if self._open_contradictions is None:
+            findings_db_path = self._layout.findings_db_path
+            if not findings_db_path.exists():
+                self._open_contradictions = ()
+                return self._open_contradictions
+            conn = derived.open_derived_connection(findings_db_path)
+            try:
+                persisted = findings.open_findings(
+                    conn,
+                    current_digest=_current_finding_digest(self._layout.bundle_dir),
+                )
+            finally:
+                conn.close()
+            self._open_contradictions = tuple(
+                finding
+                for finding in persisted
+                if not finding.stale
+                and not _is_contradiction_declined(self._layout, finding)
+            )
+        return self._open_contradictions
+
+
+def _current_finding_digest(bundle_dir: Path) -> Callable[[str], str | None]:
+    """A `state.findings.open_findings`-compatible `current_digest`
+    callback: reads `input_ref` as a concept id and content-hashes its
+    CURRENT bytes (design Decision 2). Local to this module rather than
+    imported from `cli.main`'s own `_current_finding_digest`: `cli.main`
+    imports `next_action` (it calls `next_action.next_action`), so the
+    reverse import would be circular. An unreadable or non-file
+    `input_ref` -- a merged-body candidate's synthetic ledger-snapshot
+    label, or a concept removed since the finding was recorded -- answers
+    `None`, "cannot currently determine", never evidence of drift
+    (`state.findings._is_stale`'s own contract)."""
+
+    def _digest(input_ref: str) -> str | None:
+        try:
+            raw = okf.concept_path_for(input_ref, bundle_dir).read_bytes()
+        except OSError:
+            return None
+        return content_hash(raw)
+
+    return _digest
+
+
+def _is_contradiction_declined(
+    layout: config.WorkspaceLayout, finding: "findings.PersistedFinding"
+) -> bool:
+    """`True` iff a decision record for `finding`'s own
+    `pair_ids`/`merged_absorbed_id` exists and its `state` is `declined`
+    (pending-work spec: "Declined Findings Are Hidden By Default"). Local
+    to this module for the same circular-import reason as
+    `_current_finding_digest`."""
+    key = bundle_decisions.decision_key_for(
+        finding.pair_ids, finding.merged_absorbed_id
+    )
+    for record in bundle_decisions.read_decisions(
+        finding.pair_ids[0], layout.bundle_dir
+    ):
+        if record.decision_key == key:
+            return record.state == "declined"
+    return False
 
 
 _SAFE_ARGUMENT = re.compile(r"\A(?!-)[\w./-]+\Z")
@@ -594,6 +679,45 @@ def _tier_non_nfc_names(signals: _BundleSignals) -> NextAction | None:
     )
 
 
+def _tier_open_contradictions(signals: _BundleSignals) -> NextAction | None:
+    """Rank 6, LAST (pending-work design, Decision 6): a persisted
+    contradiction finding that is open, non-stale, and non-declined.
+
+    Ranked after everything else for the same reason `_tier_non_nfc_names`
+    is: acting on a contradiction judges what is already present and
+    correctly labelled, so it cannot outrank a tier that reports content
+    missing, unsafe, or merely ambiguous -- and it is reached only once
+    every tier above it has declined, so `open_contradictions`'s own walk
+    (an `.openkos/findings.db` read plus one decision-sidecar read per
+    finding) is never paid on a bundle with real work pending higher up.
+
+    THE HONESTY GUARD IS THE POINT OF THIS TIER, NOT A SIDE CONDITION
+    (design Decision 6): `open_contradictions` already filters to open ∧
+    not stale ∧ not declined, so a finding that is stale or declined simply
+    never appears in the tuple this reads -- there is no separate check to
+    get wrong here, and this docstring exists so a future edit widening
+    that filter is recognised as breaking the guarantee it protects rather
+    than as a harmless tweak. When every persisted finding is stale or
+    declined, this tier returns `None` exactly like every other tier that
+    finds nothing to recommend -- the module's `None`-action contract
+    (`next_action`'s own docstring, `:616-621`) and `_NO_ACTION_LINE`
+    (`:77-80`) are untouched, and `_STATUS_POINTER` (`:71-75`) is still
+    appended by `render_lines` on every path. A `None` action here means
+    only "no ranked tier fired", never "no contradictions exist"."""
+    findings_ = signals.open_contradictions
+    if not findings_:
+        return None
+    finding = findings_[0]
+    source_id, target_id = finding.pair_ids
+    return NextAction(
+        command="openkos contradictions",
+        reason=(
+            f"{source_id} <-> {target_id}: an open {finding.verdict} finding "
+            f"is pending review (confidence: {finding.confidence:.2f})."
+        ),
+    )
+
+
 Tier = Callable[[_BundleSignals], NextAction | None]
 
 _TIERS: tuple[Tier, ...] = (
@@ -604,9 +728,11 @@ _TIERS: tuple[Tier, ...] = (
     _tier_below_source_sensitivity,
     _tier_duplicate_groups,
     _tier_non_nfc_names,
+    _tier_open_contradictions,
 )
 """D1 order: ingest-first (empty bundle, #386), reindex (missing), reindex
-(stale, #381), ingest, backfill-sensitivity, curate. A higher-ranked tier's
+(stale, #381), ingest, backfill-sensitivity, curate, normalize-names,
+contradictions (durable-pending-work, Decision 6). A higher-ranked tier's
 finding always wins; a lower-ranked tier is never even evaluated once a
 higher one fires (first-hit short-circuit) -- which is also what keeps the
 two reindex tiers from ever both firing: a missing index short-circuits

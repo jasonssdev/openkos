@@ -392,38 +392,104 @@ PR body against the actual `pytest` run, unpiped.
 
 ### Phase 1: New tier
 
-- [ ] C1.1 RED:
+- [x] C1.1 RED:
       `tests/unit/cli/test_next_action.py::test_open_contradiction_is_ranked`
       — one open, non-stale, non-declined persisted finding, no higher tier
       fires, `next` returns that finding as its action (pending-work spec,
-      Scenario "An open contradiction is ranked").
-- [ ] C1.2 GREEN: `_BundleSignals.open_contradictions` + new
-      `_tier_open_contradictions`, appended LAST in `_TIERS`
-      (`next_action.py:599-607`), recommending `openkos contradictions`
-      (`cli/main.py:10196`).
+      Scenario "An open contradiction is ranked"). Confirmed RED before
+      GREEN: failed with `AssertionError: assert 'openkos contradictions'
+      in 'No ranked action found in this bundle....'` (tier did not exist).
+- [x] C1.2 GREEN: `_BundleSignals.open_contradictions` (added at
+      `next_action.py:305`, not the design's cited `:599-607` — B1/B2
+      appended enough new code above that site to shift it) + new
+      `_tier_open_contradictions` (`next_action.py:682`), appended LAST in
+      `_TIERS` (`next_action.py:723`), recommending `openkos contradictions`
+      (the shipped B2 verb, now at `cli/main.py:10526`, not the design's
+      cited `:10196` — moved by B2's own additions).
+      `open_contradictions` reads `.openkos/findings.db` directly (guarded
+      by `findings_db_path.exists()` first, mirroring
+      `vector_store_is_empty`'s own "never create on disk by itself"
+      contract) and joins against `bundle/.state/decisions/**` at read time
+      via `bundle_decisions.decision_key_for` (design Decision 7). Local
+      `_current_finding_digest`/`_is_contradiction_declined` helpers were
+      added to `next_action.py` rather than imported from `cli.main`'s own
+      B2 helpers of the same shape/name, because `cli.main` imports
+      `next_action` (to call `next_action.next_action`) — importing back
+      would be circular.
 
 ### Phase 2: Honesty guard regression
 
-- [ ] C2.1 RED:
+- [x] C2.1 RED (see C2.3 for the meaningful RED confirmation):
       `tests/unit/cli/test_next_action.py::test_stale_or_declined_only_yields_none_action`
       — a bundle whose only findings are stale or declined yields
       `action is None`; the rendered output still carries `_STATUS_POINTER`
       (`next_action.py:71-75`) and does not assert the bundle is clean
       (pending-work spec, Scenario "An unranked finding does not become a
-      false all-clear"; design Decision 6).
-- [ ] C2.2 GREEN: confirm `_tier_open_contradictions`'s guard clause (open ∧
-      not stale ∧ not declined) already satisfies C2.1 without touching
+      false all-clear"; design Decision 6). This test PASSED before the
+      tier existed (trivially — no tier meant no action either way), so its
+      real RED evidence is the C2.3 mutation below, not this test's first
+      run.
+- [x] C2.2 GREEN: confirmed `_tier_open_contradictions`'s guard clause
+      (`not finding.stale and not _is_contradiction_declined(...)`, in
+      `open_contradictions`) satisfies C2.1 without touching
       `next_action.py:616-621`'s `None`-action contract or `_NO_ACTION_LINE`
-      (`:77-80`).
-- [ ] C2.3 RED then GREEN: mutation-test the tier's guard — temporarily
-      widen it to fire on a stale finding, confirm C2.1 goes red, revert,
-      purge `__pycache__`, confirm green again.
+      (`:77-80`) — neither was edited.
+- [x] C2.3 RED then GREEN: mutation-test the tier's guard — temporarily
+      widened `open_contradictions`'s filter from `if not finding.stale and
+      not _is_contradiction_declined(self._layout, finding)` to `if not
+      _is_contradiction_declined(self._layout, finding)` (dropped the
+      staleness check), re-ran
+      `test_stale_or_declined_only_yields_none_action`, confirmed RED
+      (`AssertionError: assert NextAction(command='openkos contradictions',
+      ...) is None` — the stale finding now fired); reverted the mutation,
+      purged `__pycache__`, re-ran, confirmed GREEN (2 passed).
+
+### Phase 3: Land the pending-work capability spec
+
+- [x] C3.1 Create `openspec/specs/pending-work/spec.md` (did not exist —
+      Slices A/B1/B2 landed their deltas into `curate-command`,
+      `privacy-purge`, `forget-command`, `workspace-autocommit`, none of
+      them the new `pending-work` capability itself). Landed the complete
+      requirement set from
+      `openspec/changes/durable-pending-work/specs/pending-work/spec.md`
+      verbatim, following `curate-command`/`next-action-pointer`'s
+      structure. Two requirement/shipped-behaviour mismatches found and
+      NOT silently reworded (reported to the orchestrator instead):
+      (1) "Declining Is A Non-Interactive Verb..." names "verdict kind" as
+      part of the decision identity, but the shipped `decision_key_for`
+      (Slice A) takes only `pair_ids` and `merged_absorbed_id` — already on
+      record from B2's own apply-progress; (2) "Declined Findings Are
+      Hidden By Default..." requires a declined finding stay out of
+      ordinary `curate` output, but `cli/curate.py`'s `_contradictions_run`
+      persists and prints every freshly-recomputed verdict with no
+      declined-state filter (B2's task scope was the `contradictions` CLI
+      verb only, per the requirement-traceability table; `curate.py` was
+      never touched by B1/B2/C). `status` was also never wired to read
+      `findings.db` at all, so the "declined finding stays out of `status`"
+      half of the same requirement is likewise unimplemented, not merely
+      unfiltered.
+
+- [x] C3.2 Close the `curate` half of "Declined Findings Are Hidden By
+      Default" (gap recorded in C3.1): `_contradictions_run`'s echo loop in
+      `src/openkos/cli/curate.py` now filters `high_confidence` through
+      `cli_main._is_contradiction_declined` before display, mirroring the
+      `contradictions` verb's own `displayed` filter — a declined verdict is
+      still judged and still persisted to `findings.db` (never skips the
+      candidate queue or `_persist_findings`), only hidden from output.
+      RED/GREEN/mutation confirmed in `tests/unit/cli/test_curate.py`
+      (`test_contradictions_stage_hides_a_declined_verdict_from_its_echo_loop`,
+      `test_contradictions_stage_still_shows_a_non_declined_verdict_in_the_same_batch`).
 
 ### PR #4 quality gates
 
-- [ ] Focused: `uv run pytest tests/unit/cli/test_next_action.py -v`
-- [ ] Full suite, ruff check, ruff format --check, mypy . — all green
-- [ ] Rollback: `git revert` PR #4; `next` loses the new tier only, all
+- [x] Focused: `uv run pytest tests/unit/cli/test_next_action.py -v`
+      — 2 passed. Also `tests/unit/cli/test_next.py` (67 total together) to
+      confirm the tier-ordering test that hardcoded "non-NFC is last" was
+      updated for the new last tier, not merely unbroken by luck.
+- [x] Full suite, ruff check, ruff format --check, mypy . — all green
+      (4333 passed, 1 skipped; baseline was 4331 passed, 1 skipped — +2 new
+      tests, no regressions; branch-coverage gate re-confirmed at 90%+)
+- [x] Rollback: `git revert` PR #4; `next` loses the new tier only, all
       other tiers and the honesty guard are untouched
 
 ---
