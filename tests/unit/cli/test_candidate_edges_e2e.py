@@ -133,10 +133,21 @@ def fake_ollama(monkeypatch: pytest.MonkeyPatch) -> _FakeOllama:
 
 def _ingest_three_sources(tmp_path: Path) -> None:
     """Ingest three sources, yielding three concepts: two topically close,
-    one unrelated."""
+    one unrelated.
+
+    The H1 deliberately does NOT restate the concept title the fake is about
+    to extract from that source. `_drop_source_title_twins` drops an object
+    whose title exactly restates its source title once the union holds a
+    non-twin (#581), so a `# Stoicism` heading made the `Stoicism` concept a
+    twin of its own source and it never reached the bundle -- costing this
+    test the `concepts/stoicism` half of its close pair for a reason that
+    has nothing to do with #183. The body still names the concept, so the
+    fake embedder keys on the same `_VECTORS` entry as before."""
     for index, title in enumerate((_STOICISM, _STOIC_ETHICS, _CROP_ROTATION)):
         src = tmp_path / f"source-{index}.md"
-        src.write_text(f"# {title}\n\nRaw source material about {title}.\n", "utf-8")
+        src.write_text(
+            f"# Study Notes {index}\n\nRaw source material about {title}.\n", "utf-8"
+        )
         result = runner.invoke(app, ["ingest", str(src), "--auto"])
         assert result.exit_code == 0, result.stdout
 

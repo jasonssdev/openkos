@@ -2381,22 +2381,77 @@ def test_union_runs_extraction_twice_below_the_chunk_threshold() -> None:
     assert {r.title for r in outcome.objects} == {"Stoicism", "Epictetus"}
 
 
-def test_union_twin_drop_applies_per_run_before_merge() -> None:
-    """A source-title twin from ONE run is dropped from THAT run's
-    contribution before the union is built, independent of run order."""
-    twin = (
-        '{"type": "Event", "title": "Team Meeting", '
-        '"description": "The meeting itself.", "body": ""}'
-    )
-    run1 = _array(_DECISION_ITEM, twin)
-    run2 = _array(_DECISION_ITEM)
-    llm = _SequencedLLM([run1, run2, _keep_reply("Frame the Essay Around Control")])
+def test_union_twin_drop_applies_to_the_merged_list() -> None:
+    """A source-title twin emitted by ONE run is dropped from the union when
+    a non-twin exists anywhere across the merge -- the rule sees the merged
+    list, exactly like the chunked path
+    (`test_chunked_twin_drop_applies_to_the_merged_list`).
+
+    The source title here is deliberately NOT meeting-shaped: with a
+    meeting-shaped one (this test's previous form used `Team Meeting`),
+    `_drop_framing_objects` removes the twin first and the assertion passes
+    without the twin rule running at all."""
+    run1 = _array(_PERSON_ITEM, _DICHOTOMY_ITEM)
+    run2 = _array(_PERSON_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Epictetus")])
 
     outcome = concept_mod.extract_concept_union(
-        "Meeting notes.", source_title="Team Meeting", llm=llm
+        "Notes on what is up to us.",
+        source_title="Dichotomy of Control",
+        llm=llm,
     )
 
-    assert "Team Meeting" not in {r.title for r in outcome.objects}
+    assert [r.title for r in outcome.objects] == ["Epictetus"]
+
+
+def test_union_twin_kept_by_one_runs_floor_is_dropped_from_the_merged_union() -> None:
+    """#581: run 1 emits ONLY the twin, so its own single-object floor keeps
+    it; run 2 emits the twin beside a genuine subject, so run 2 drops it.
+    Applying the rule to the merged list -- rather than to each run -- is
+    what stops the floor-kept copy from leaking back in beside that genuine
+    subject, which is precisely the case `_drop_source_title_twins`'s
+    docstring promises to drop.
+
+    The judge is told to keep BOTH titles, so nothing downstream of the twin
+    rule can remove the twin for it."""
+    run1 = _array(_DICHOTOMY_ITEM)
+    run2 = _array(_DICHOTOMY_ITEM, _PERSON_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Dichotomy of Control", "Epictetus")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes on what is up to us.",
+        source_title="Dichotomy of Control",
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Epictetus"]
+    # The twin never reaches the judge either: the drop still runs before
+    # the `_MAX_JUDGE_CANDIDATES` ceiling, not after it.
+    assert "Dichotomy of Control" not in llm.calls[2][1]["content"]
+
+
+def test_union_floor_keeps_the_twin_when_the_whole_merge_is_twins() -> None:
+    """The 5b floor survives the move: both runs emit only the twin, so the
+    MERGED union is all-twin and the object is kept. The
+    `mcp-launch` shape (a genuinely single-subject source whose only subject
+    is what its title names) must not become `[]` on the union path -- and
+    it is the failure mode a post-merge twin drop would introduce if the
+    floor were dropped along with the move."""
+    llm = _SequencedLLM(
+        [
+            _array(_DICHOTOMY_ITEM),
+            _array(_DICHOTOMY_ITEM),
+            _keep_reply("Dichotomy of Control"),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes on what is up to us.",
+        source_title="Dichotomy of Control",
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Dichotomy of Control"]
 
 
 def test_union_merge_keeps_the_richer_body_on_collision() -> None:

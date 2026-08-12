@@ -470,7 +470,18 @@ def _drop_source_title_twins(
 
     When the exemption and the drop conflict, the object is preserved. A
     spurious near-duplicate is cosmetic -- a human can merge it later -- and
-    a deleted primary subject is silent data loss."""
+    a deleted primary subject is silent data loss.
+
+    Every caller applies this ONCE, to the FINAL merged list -- both
+    `extract_concept` branches and both `extract_concept_union` branches
+    (#581). The floor reads "results" as the whole set the source produced,
+    so a rule that sees only a slice of it decides on a set no source ever
+    emitted: run 1 answering `[twin]` alone floors the twin back in, and the
+    union then carries it beside a genuine subject run 2 found -- exactly
+    the drop this docstring promises, made conditional on which run the
+    non-twin landed in. `_drop_framing_objects` has no such constraint (no
+    floor, per-object predicate), so where it runs is free; this rule's
+    placement is part of its contract."""
     if len(results) <= 1:
         return results
 
@@ -992,16 +1003,31 @@ def extract_concept_union(
     harnesses) keeps calling it directly.
 
     Below `_CHUNK_THRESHOLD`: runs `_extract_once` TWICE with the identical
-    prompt/messages, twin-drops EACH run's own output independently
-    (`_drop_source_title_twins`, before merge), then merges the two runs
-    with `_merge_union` (richer body/description wins a collision, design
-    D6). `report.runs == 2`.
+    prompt/messages, then merges the two runs with `_merge_union` (richer
+    body/description wins a collision, design D6). `report.runs == 2`.
 
     Above `_CHUNK_THRESHOLD`: judge-only, no second pass per chunk -- the
-    existing `_chunk_lines`/`_dedup_merged`/twin-drop pipeline from
-    `extract_concept` runs unchanged, and the judge evaluates that single
-    merged set (spec: "Chunked Sources Are Judge-Only, No Second Pass" --
-    this is the PERMANENT shape for chunked sources). `report.runs == 1`.
+    existing `_chunk_lines`/`_dedup_merged` pipeline from `extract_concept`
+    runs unchanged, and the judge evaluates that single merged set (spec:
+    "Chunked Sources Are Judge-Only, No Second Pass" -- this is the
+    PERMANENT shape for chunked sources). `report.runs == 1`.
+
+    The two branches differ ONLY in fan-out shape and merge function
+    (`_merge_union` keeps the richer candidate across two independent
+    opinions; `_dedup_merged` keeps the first across chunks of one). The
+    deterministic filters are placed identically on both (#581), and each
+    is placed where its own contract requires:
+
+    - `_strip_ungrounded_expansions` runs PER RUN/CHUNK, before either
+      merge, so two runs inventing DIFFERENT expansions collapse into one
+      candidate instead of merging as two objects.
+    - `_drop_framing_objects` is a per-object predicate with no floor, so
+      it commutes with the merge; it runs per run/chunk to keep a framing
+      object out of a collision it could win on body length.
+    - `_drop_source_title_twins` runs ONCE, on the MERGED list. It has a
+      floor that reads the whole set, so applying it per run let run 1's
+      floor keep a twin that the union then carried beside run 2's genuine
+      subject (#581).
 
     The merged candidate list is then capped at `_MAX_JUDGE_CANDIDATES`
     (design D8) -- candidates beyond the ceiling never reach the judge at
@@ -1039,27 +1065,23 @@ def extract_concept_union(
     failures.
     """
     if len(source_text) <= _CHUNK_THRESHOLD:
-        run1 = _drop_source_title_twins(
-            _drop_framing_objects(
-                _strip_ungrounded_expansions(
-                    _extract_once(source_text, source_title, llm),
-                    source_text=source_text,
-                ),
-                source_title=source_title,
+        run1 = _drop_framing_objects(
+            _strip_ungrounded_expansions(
+                _extract_once(source_text, source_title, llm),
+                source_text=source_text,
             ),
             source_title=source_title,
         )
-        run2 = _drop_source_title_twins(
-            _drop_framing_objects(
-                _strip_ungrounded_expansions(
-                    _extract_once(source_text, source_title, llm),
-                    source_text=source_text,
-                ),
-                source_title=source_title,
+        run2 = _drop_framing_objects(
+            _strip_ungrounded_expansions(
+                _extract_once(source_text, source_title, llm),
+                source_text=source_text,
             ),
             source_title=source_title,
         )
-        merged = _merge_union(run1 + run2)
+        merged = _drop_source_title_twins(
+            _merge_union(run1 + run2), source_title=source_title
+        )
         chunk_count = 1
         run_count = 2
     else:
