@@ -20,6 +20,7 @@ import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.bundle import provenance as bundle_provenance
@@ -330,6 +331,109 @@ def test_sweep_ledger_sidecars_drops_matching_entries_from_other_survivors(
         "the target survivor's sidecar held only the swept entry, so it "
         "must be removed entirely rather than left as an empty container"
     )
+
+
+# --- Pending-work decision subtree sweep (forget-command spec: "Forget
+# Sweeps Live Decision Entries Referencing The Purge Set") ------------------
+
+
+def _write_decision(
+    bundle_dir: Path,
+    concept_id: str,
+    *,
+    pair_ids: tuple[str, str],
+    merged_absorbed_id: str | None = None,
+    state: bundle_decisions.DecisionState = "declined",
+) -> Path:
+    """Construct one `bundle/.state/decisions/<concept_id>.decisions.okf`
+    sidecar holding a single record, via `bundle.decisions.write_decisions`
+    directly -- no CLI writer verb exists yet in this slice (D6 slicing
+    rationale)."""
+    decision_key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
+    record = bundle_decisions.DecisionRecord(
+        decision_key=decision_key,
+        pair_ids=pair_ids,
+        merged_absorbed_id=merged_absorbed_id,
+        state=state,
+        decided_at="2026-08-12T00:00:00Z",
+    )
+    return bundle_decisions.write_decisions(concept_id, bundle_dir, records=[record])
+
+
+def test_forgetting_a_concept_removes_its_live_decision_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """forget-command spec: "Forget Sweeps Live Decision Entries
+    Referencing The Purge Set", scenario "Forgetting a concept removes its
+    live decision entry" -- `forget`'s Phase B removes the live decision
+    entry referencing the forgotten concept from every
+    `bundle/.state/decisions/**` file (own file, when the forgotten
+    concept is `pair_ids[0]`)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+    _write_plain_concept(tmp_path, "concepts/other", title="Other")
+    bundle_dir = tmp_path / "bundle"
+    decision_path = _write_decision(
+        bundle_dir,
+        "concepts/target",
+        pair_ids=("concepts/target", "concepts/other"),
+    )
+    assert decision_path.is_file()
+
+    result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert not decision_path.exists()
+
+
+def test_forgetting_a_concept_removes_a_foreign_decision_entry_referencing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same requirement's foreign-file half: a decision sidecar OWNED
+    by a concept that is NOT itself forgotten, but whose record's
+    `pair_ids` names the forgotten concept, has that entry dropped from
+    the live tree -- the file itself survives (rewritten), since it is not
+    the forgotten concept's own sidecar."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+    _write_plain_concept(tmp_path, "concepts/owner", title="Owner")
+    bundle_dir = tmp_path / "bundle"
+    decision_path = _write_decision(
+        bundle_dir,
+        "concepts/owner",
+        pair_ids=("concepts/owner", "concepts/target"),
+    )
+    assert decision_path.is_file()
+
+    result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert bundle_decisions.read_decisions("concepts/owner", bundle_dir) == []
+
+
+def test_forgetting_a_concept_leaves_unrelated_decision_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """forget-command spec, scenario "An unrelated decision entry is
+    preserved" -- a decision file referencing a concept unrelated to the
+    forgotten concept-id is left unchanged."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+    _write_plain_concept(tmp_path, "concepts/unrelated-a", title="A")
+    _write_plain_concept(tmp_path, "concepts/unrelated-b", title="B")
+    bundle_dir = tmp_path / "bundle"
+    decision_path = _write_decision(
+        bundle_dir,
+        "concepts/unrelated-a",
+        pair_ids=("concepts/unrelated-a", "concepts/unrelated-b"),
+    )
+    before_bytes = decision_path.read_bytes()
+
+    result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert decision_path.is_file()
+    assert decision_path.read_bytes() == before_bytes
 
 
 @pytest.mark.parametrize(

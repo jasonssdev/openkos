@@ -315,6 +315,19 @@ class WorkspaceLayout:
         never creates anything on disk by itself."""
         return self.openkos_dir / "graph.db"
 
+    @property
+    def findings_db_path(self) -> Path:
+        """`.openkos/findings.db`: the persisted contradiction-finding
+        store (durable-pending-work, design Decision 1).
+
+        Mirrors `vectors_db_path`'s pure-derivation contract: written ONLY
+        by `state.findings.record_findings`, lazily -- this property never
+        creates anything on disk by itself. Shares `vectors_db_path`'s
+        rebuild posture, not `fts_db_path`'s: `purge` deletes it and never
+        rebuilds it in-line (a findings row is recomputable at LLM cost,
+        never free)."""
+        return self.openkos_dir / "findings.db"
+
 
 class RefusalCondition(NamedTuple):
     """One reason `init` might refuse to write, with its workspace classification."""

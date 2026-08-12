@@ -16,6 +16,7 @@ import pytest
 import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
+from openkos.bundle import decisions as bundle_decisions
 from openkos.bundle import index as bundle_index
 from openkos.bundle import ledger as bundle_ledger
 from openkos.cli import main
@@ -1472,3 +1473,190 @@ def test_a_member_with_a_baseline_returns_it_unchanged() -> None:
     )
 
     assert baseline == b"snapshot\n"
+
+
+# --- Pending-work decision subtree sweep (privacy-purge spec: "Whole-
+# History Expunge Covers The Pending-Work Decision Subtree") ----------------
+
+
+def _write_decision(
+    bundle_dir: Path,
+    concept_id: str,
+    *,
+    pair_ids: tuple[str, str],
+    merged_absorbed_id: str | None = None,
+    state: bundle_decisions.DecisionState = "declined",
+) -> Path:
+    """Construct one `bundle/.state/decisions/<concept_id>.decisions.okf`
+    sidecar holding a single record, via `bundle.decisions.write_decisions`
+    directly -- no CLI writer verb exists yet in this slice (D6 slicing
+    rationale), so every fixture in this section builds decision files this
+    way, exactly as the tasks file specifies."""
+    decision_key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
+    record = bundle_decisions.DecisionRecord(
+        decision_key=decision_key,
+        pair_ids=pair_ids,
+        merged_absorbed_id=merged_absorbed_id,
+        state=state,
+        decided_at="2026-08-12T00:00:00Z",
+    )
+    return bundle_decisions.write_decisions(concept_id, bundle_dir, records=[record])
+
+
+def test_purging_a_concept_removes_its_decision_from_history(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """privacy-purge spec: "Whole-History Expunge Covers The Pending-Work
+    Decision Subtree", scenario "Purging a concept removes its decision
+    from history" -- the purge target's OWN decisions sidecar
+    (`pair_ids[0] == <purged concept>`) is gone from `git rev-list
+    --objects --all` and the reflog, in the SAME single `git filter-repo`
+    pass as the concept's own file expunge."""
+    _write_plain_concept(tmp_git_repo.root, "concepts/purge-target", title="Target")
+    _write_plain_concept(tmp_git_repo.root, "concepts/other", title="Other")
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add purge-target + other"], cwd=tmp_git_repo.root)
+
+    bundle_dir = tmp_git_repo.root / "bundle"
+    decision_path = _write_decision(
+        bundle_dir,
+        "concepts/purge-target",
+        pair_ids=("concepts/purge-target", "concepts/other"),
+    )
+    assert decision_path.is_file(), "fixture setup: write_decisions must create a file"
+    decision_rel = decision_path.relative_to(tmp_git_repo.root).as_posix()
+    _git(["add", "-f", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add decision"], cwd=tmp_git_repo.root)
+    assert _blob_history_contains(tmp_git_repo.root, decision_rel)
+
+    phrase = "purge concepts/purge-target"
+    result = runner.invoke(
+        app, ["purge", "concepts/purge-target", "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not _blob_history_contains(tmp_git_repo.root, decision_rel)
+    assert _reflog_is_empty(tmp_git_repo.root)
+    assert not decision_path.exists()
+
+
+def test_purging_a_concept_named_as_the_foreign_partner_removes_the_decision_from_history(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The stronger half of the same requirement: a decisions sidecar OWNED
+    by a concept that is NOT itself purged, but whose record's `pair_ids`
+    names the purge target, is ALSO gone from history -- not merely
+    rewritten live. This is what distinguishes the decisions sweep from the
+    merge-ledger sidecar's own-file-only history coverage (design Decision
+    5's threat-matrix row)."""
+    _write_plain_concept(tmp_git_repo.root, "concepts/purge-target", title="Target")
+    _write_plain_concept(tmp_git_repo.root, "concepts/owner", title="Owner")
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add purge-target + owner"], cwd=tmp_git_repo.root)
+
+    bundle_dir = tmp_git_repo.root / "bundle"
+    decision_path = _write_decision(
+        bundle_dir,
+        "concepts/owner",
+        pair_ids=("concepts/owner", "concepts/purge-target"),
+    )
+    decision_rel = decision_path.relative_to(tmp_git_repo.root).as_posix()
+    _git(["add", "-f", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add decision"], cwd=tmp_git_repo.root)
+    assert _blob_history_contains(tmp_git_repo.root, decision_rel)
+
+    phrase = "purge concepts/purge-target"
+    result = runner.invoke(
+        app, ["purge", "concepts/purge-target", "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not _blob_history_contains(tmp_git_repo.root, decision_rel)
+    assert _reflog_is_empty(tmp_git_repo.root)
+
+
+def test_purging_an_unrelated_concept_leaves_decision_untouched(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """privacy-purge spec, scenario "An unrelated decision entry is
+    untouched" -- a decision file referencing a concept OUTSIDE the purge
+    set stays byte-identical in every historical commit."""
+    _write_plain_concept(tmp_git_repo.root, "concepts/unrelated-a", title="A")
+    _write_plain_concept(tmp_git_repo.root, "concepts/unrelated-b", title="B")
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add unrelated pair"], cwd=tmp_git_repo.root)
+
+    bundle_dir = tmp_git_repo.root / "bundle"
+    decision_path = _write_decision(
+        bundle_dir,
+        "concepts/unrelated-a",
+        pair_ids=("concepts/unrelated-a", "concepts/unrelated-b"),
+    )
+    decision_rel = decision_path.relative_to(tmp_git_repo.root).as_posix()
+    _git(["add", "-f", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add unrelated decision"], cwd=tmp_git_repo.root)
+    before_bytes = decision_path.read_bytes()
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert decision_path.is_file()
+    assert decision_path.read_bytes() == before_bytes
+    assert _blob_history_contains(tmp_git_repo.root, decision_rel)
+
+
+def test_purging_a_concept_containing_rename_delimiter_in_decision_path_refuses(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """Threat matrix ("Shell / subprocess"): a decisions path derived from
+    a `==>`-containing concept id is rejected by `_validate_rel_paths`
+    BEFORE it reaches `expunge_targets`'s `git filter-repo` call, exactly
+    as `vcs/git.py:515-551`'s own docstring warns -- the purge preparation
+    step refuses (exit 1, nothing written), rather than silently
+    mis-parsing the rename directive."""
+    _write_plain_concept(tmp_git_repo.root, "concepts/purge-target", title="Target")
+    weird_id = "concepts/weird==>id"
+    _write_plain_concept(tmp_git_repo.root, weird_id, title="Weird")
+    _git(["add", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add purge-target + weird owner"], cwd=tmp_git_repo.root)
+
+    bundle_dir = tmp_git_repo.root / "bundle"
+    _write_decision(
+        bundle_dir,
+        weird_id,
+        pair_ids=(weird_id, "concepts/purge-target"),
+    )
+    _git(["add", "-f", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add weird decision"], cwd=tmp_git_repo.root)
+
+    phrase = "purge concepts/purge-target"
+    result = runner.invoke(
+        app, ["purge", "concepts/purge-target", "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "==>" in result.output
+
+
+def test_purge_deletes_findings_db_without_rebuild(tmp_git_repo: TmpGitRepo) -> None:
+    """pending-work design Decision 1's rebuild-posture table: `purge`
+    physically deletes `.openkos/findings.db` and does NOT rebuild it
+    in-line (it shares `vectors.db`'s posture, not `fts.db`'s -- rebuilding
+    a finding costs LLM calls)."""
+    (tmp_git_repo.root / ".openkos").mkdir(exist_ok=True)
+    (tmp_git_repo.root / ".openkos" / "findings.db").write_bytes(b"stale")
+    _git(["add", "-f", "-A"], cwd=tmp_git_repo.root)
+    _git(["commit", "-m", "Add stale findings.db"], cwd=tmp_git_repo.root)
+
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_git_repo.root / ".openkos" / "findings.db").exists()
+    assert (tmp_git_repo.root / ".openkos" / "fts.db").exists()
+    assert (tmp_git_repo.root / ".openkos" / "graph.db").exists()

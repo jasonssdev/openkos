@@ -4,6 +4,14 @@ name: CI
 # green CI + review"); the push trigger keeps main's own history green after a
 # merge or a direct push.
 #
+# Pull requests into a tracker/** branch are gated too. A large change is
+# delivered as a chain of review-sized slices that stack onto a tracker branch,
+# and only the tracker opens a pull request against main. Gating main alone would
+# leave every slice unvalidated until the whole chain was already assembled --
+# and the local loop cannot stand in for CI here, because the test matrix also
+# runs 3.14 and the build job smoke-tests an isolated wheel. A slice that breaks
+# either would stay hidden until the last pull request in the chain.
+#
 # There are deliberately no path filters. Docs-only changes touch nothing these
 # jobs validate, but a job skipped by a path filter reports no status at all, and
 # a required check that never reports blocks a pull request indefinitely. Running
@@ -13,7 +21,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, 'tracker/**']
 
 # Least privilege. This is a public repository; no job here reads or writes
 # repository state beyond checking the code out.

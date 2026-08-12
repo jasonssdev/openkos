@@ -19,11 +19,13 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import config
+from openkos.bundle import decisions as bundle_decisions
 from openkos.cli import curate, observability
 from openkos.cli.main import app
 from openkos.graph import sqlite_graph
 from openkos.llm.base import EMBED_DIM
 from openkos.llm.ollama import OllamaError, OllamaModelNotFound, OllamaUnavailable
+from openkos.model import okf
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
     AdjudicationBatch,
@@ -2467,13 +2469,18 @@ def test_contradictions_runs_last_and_never_writes(
     )
     _simulate_tty(monkeypatch)
 
-    before = _snapshot(tmp_path)
+    # Scoped to `bundle/`, not the whole workspace (durable-pending-work
+    # A3.3): the stage now persists each finding to `.openkos/findings.db`,
+    # which is NOT a bundle write -- the curate-command spec delta states
+    # that distinction explicitly (spec: "Persisting a finding is not a
+    # bundle write").
+    before = _snapshot(tmp_path / "bundle")
     result = runner.invoke(app, ["curate", "--auto"])
 
     assert result.exit_code == 0
     assert order == ["Contradictions"]
     assert "CONTRADICTS" in result.stdout
-    assert changed_paths(before, _snapshot(tmp_path)) == set()
+    assert changed_paths(before, _snapshot(tmp_path / "bundle")) == set()
 
 
 # ---------------------------------------------------------------------------
@@ -2538,7 +2545,8 @@ def test_contradictions_partial_batch_reports_completed_then_fails_with_counts(
     _reindexed_workspace(tmp_path, monkeypatch)
     _partial_contradictions_batch(monkeypatch, OllamaError("boom"))
 
-    before = _snapshot(tmp_path)
+    # Scoped to `bundle/` -- see `test_contradictions_runs_last_and_never_writes`.
+    before = _snapshot(tmp_path / "bundle")
     result = runner.invoke(app, ["curate", "--auto"])
 
     assert result.exit_code == 0
@@ -2547,7 +2555,7 @@ def test_contradictions_partial_batch_reports_completed_then_fails_with_counts(
     assert "Contradictions: failed -- boom (judged 1 of 2 candidate(s))." in _lines(
         result.stdout
     )
-    assert changed_paths(before, _snapshot(tmp_path)) == set()
+    assert changed_paths(before, _snapshot(tmp_path / "bundle")) == set()
 
 
 def test_contradictions_partial_batch_unavailable_still_reports_completed(
@@ -2567,7 +2575,8 @@ def test_contradictions_partial_batch_unavailable_still_reports_completed(
     _reindexed_workspace(tmp_path, monkeypatch)
     _partial_contradictions_batch(monkeypatch, OllamaUnavailable("connection refused"))
 
-    before = _snapshot(tmp_path)
+    # Scoped to `bundle/` -- see `test_contradictions_runs_last_and_never_writes`.
+    before = _snapshot(tmp_path / "bundle")
     result = runner.invoke(app, ["curate", "--auto"])
 
     assert result.exit_code == 0
@@ -2575,7 +2584,404 @@ def test_contradictions_partial_batch_unavailable_still_reports_completed(
     assert _unavailable_line("Contradictions", "connection refused") in _lines(
         result.stdout
     )
-    assert changed_paths(before, _snapshot(tmp_path)) == set()
+    assert changed_paths(before, _snapshot(tmp_path / "bundle")) == set()
+
+
+# ---------------------------------------------------------------------------
+# durable-pending-work, tasks A3.1-A3.4: the Contradictions stage persists
+# each verdict to `.openkos/findings.db` after its report loop, and neither
+# writes to `bundle/` nor changes how its own candidate queue is derived.
+# ---------------------------------------------------------------------------
+
+
+def test_contradictions_stage_persists_every_verdict_to_findings_db(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A3.1/A3.2: `findings.record_findings` is called once per verdict in
+    `batch.results`, after the existing echo loop, before `_contradictions_run`
+    returns its `StageOutcome` -- a later, unrelated process can read the same
+    verdict, confidence, and rationale back without a new LLM call (pending-work
+    spec: "A finding survives the process")."""
+    from openkos.resolution.contradiction import (
+        ContradictionBatch,
+        ContradictionVerdict,
+    )
+    from openkos.resolution.contradiction import Verdict as CVerdict
+    from openkos.state import derived, findings
+
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan",
+        lambda *a, **k: _edge_plan(("concepts/a", "concepts/b")),
+    )
+
+    verdict = ContradictionVerdict(
+        pair_ids=("concepts/a", "concepts/b"),
+        verdict=CVerdict.CONTRADICTS,
+        confidence=0.9,
+        rationale="stated conflicting claims",
+        conflicting_claims=("claim one",),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions",
+        lambda *a, **k: (ContradictionBatch(results=[verdict]), 1),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto"])
+    assert result.exit_code == 0
+
+    layout = config.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        (row,) = findings.open_findings(conn)
+    finally:
+        conn.close()
+
+    assert row.pair_ids == ("concepts/a", "concepts/b")
+    assert row.verdict == "contradicts"
+    assert row.confidence == pytest.approx(0.9)
+    assert row.rationale == "stated conflicting claims"
+    assert row.merged_absorbed_id is None
+
+
+def test_contradictions_stage_persists_a_merged_body_verdict_with_ledger_digests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A merged-body verdict's persisted input digests are computed over the
+    ledger entry's OWN `survivor_before`/`absorbed_snapshot` strings, never a
+    second file read (design Decision 2's merged-body input row)."""
+    from openkos.resolution.contradiction import (
+        ContradictionBatch,
+        ContradictionVerdict,
+        _CandidateSpec,
+    )
+    from openkos.resolution.contradiction import Verdict as CVerdict
+    from openkos.state import derived, findings
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_survivor_with_merges(
+        tmp_path / "bundle" / "concepts" / "survivor.md",
+        title="Survivor",
+        absorbed=["concepts/absorbed"],
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    entries = _read_ledger_entries_for_test(tmp_path / "bundle", "concepts/survivor")
+    plan = CandidatePlan(
+        specs=(
+            _CandidateSpec(
+                pair_ids=("concepts/survivor", "concepts/survivor"),
+                relation_type=None,
+                merge_entry=entries[0],
+            ),
+        ),
+        edge_total=0,
+        merged_total=1,
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._contradiction_plan", lambda *a, **k: plan)
+
+    verdict = ContradictionVerdict(
+        pair_ids=("concepts/survivor", "concepts/survivor"),
+        verdict=CVerdict.CONSISTENT,
+        confidence=0.2,
+        rationale="stub",
+        conflicting_claims=(),
+        merged_absorbed_id="concepts/absorbed",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions",
+        lambda *a, **k: (ContradictionBatch(results=[verdict]), 1),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto"])
+    assert result.exit_code == 0
+
+    layout = config.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        (row,) = findings.open_findings(conn)
+    finally:
+        conn.close()
+
+    assert row.merged_absorbed_id == "concepts/absorbed"
+    refs = {digest.input_ref for digest in row.input_digests}
+    assert any("survivor_before" in ref for ref in refs)
+    assert any("absorbed_snapshot" in ref for ref in refs)
+
+
+# ---------------------------------------------------------------------------
+# pending-work spec, "Declined Findings Are Hidden By Default": a declined
+# contradiction pair is re-derived and re-persisted every run (design D4's
+# no-memoization rule + `_persist_findings`), but the Contradictions stage's
+# own echo loop must not surface it again.
+# ---------------------------------------------------------------------------
+
+
+def _write_decision(
+    bundle_dir: Path,
+    concept_id: str,
+    *,
+    pair_ids: tuple[str, str],
+    merged_absorbed_id: str | None = None,
+    state: bundle_decisions.DecisionState = "declined",
+) -> Path:
+    """Construct one `bundle/.state/decisions/<concept_id>.decisions.okf`
+    sidecar holding a single record, via `bundle.decisions.write_decisions`
+    directly -- mirrors `tests/unit/cli/test_purge.py::_write_decision`,
+    since no CLI writer verb exists yet for this store (D6 slicing
+    rationale)."""
+    decision_key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
+    record = bundle_decisions.DecisionRecord(
+        decision_key=decision_key,
+        pair_ids=pair_ids,
+        merged_absorbed_id=merged_absorbed_id,
+        state=state,
+        decided_at="2026-08-12T00:00:00Z",
+    )
+    return bundle_decisions.write_decisions(concept_id, bundle_dir, records=[record])
+
+
+def test_contradictions_stage_hides_a_declined_verdict_from_its_echo_loop(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pending-work spec: "Declined Findings Are Hidden By Default, With An
+    Explicit Listing View", scenario "A declined finding stays out of
+    ordinary output" -- a contradiction pair the operator already declined
+    via a `bundle.decisions` record must not appear in `curate`'s own
+    Contradictions echo loop when the stage recomputes that verdict, even
+    though the verdict is still judged and still persisted to
+    `findings.db` (the filter is on the DISPLAYED list only, mirroring
+    `cli.main._is_contradiction_declined`'s use in the `contradictions`
+    verb)."""
+    from openkos.resolution.contradiction import (
+        ContradictionBatch,
+        ContradictionVerdict,
+    )
+    from openkos.resolution.contradiction import Verdict as CVerdict
+    from openkos.state import derived, findings
+
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    _write_decision(
+        tmp_path / "bundle",
+        "concepts/a",
+        pair_ids=("concepts/a", "concepts/b"),
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan",
+        lambda *a, **k: _edge_plan(("concepts/a", "concepts/b")),
+    )
+
+    verdict = ContradictionVerdict(
+        pair_ids=("concepts/a", "concepts/b"),
+        verdict=CVerdict.CONTRADICTS,
+        confidence=0.9,
+        rationale="stub",
+        conflicting_claims=("claim one",),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions",
+        lambda *a, **k: (ContradictionBatch(results=[verdict]), 1),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0
+    assert "CONTRADICTS" not in result.stdout
+    assert "claim one" not in result.stdout
+    assert "Contradictions: no high-confidence contradictions found." in _lines(
+        result.stdout
+    )
+
+    # Still persisted -- a declined finding is still a real finding
+    # (design constraint: "Keep persisting").
+    layout = config.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        (row,) = findings.open_findings(conn)
+    finally:
+        conn.close()
+    assert row.pair_ids == ("concepts/a", "concepts/b")
+
+
+def test_contradictions_stage_still_shows_a_non_declined_verdict_in_the_same_batch(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Companion to the hides-a-declined-verdict test above: a declined pair
+    and a NOT-declined pair judged in the same batch must not degenerate
+    into hiding everything -- only the declined pair drops from the
+    display."""
+    from openkos.resolution.contradiction import (
+        ContradictionBatch,
+        ContradictionVerdict,
+    )
+    from openkos.resolution.contradiction import Verdict as CVerdict
+
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _write_doc(tmp_path / "bundle" / "concepts" / "d.md", title="Concept D")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    _write_decision(
+        tmp_path / "bundle",
+        "concepts/a",
+        pair_ids=("concepts/a", "concepts/b"),
+    )
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan",
+        lambda *a, **k: _edge_plan(
+            ("concepts/a", "concepts/b"), ("concepts/c", "concepts/d")
+        ),
+    )
+
+    declined_verdict = ContradictionVerdict(
+        pair_ids=("concepts/a", "concepts/b"),
+        verdict=CVerdict.CONTRADICTS,
+        confidence=0.9,
+        rationale="declined pair",
+        conflicting_claims=("claim one",),
+    )
+    kept_verdict = ContradictionVerdict(
+        pair_ids=("concepts/c", "concepts/d"),
+        verdict=CVerdict.CONTRADICTS,
+        confidence=0.9,
+        rationale="kept pair",
+        conflicting_claims=("claim two",),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions",
+        lambda *a, **k: (
+            ContradictionBatch(results=[declined_verdict, kept_verdict]),
+            2,
+        ),
+    )
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto"])
+
+    assert result.exit_code == 0
+    assert "concepts/a <-> concepts/b" not in result.stdout
+    assert "declined pair" not in result.stdout
+    assert "concepts/c <-> concepts/d" in result.stdout
+    assert "kept pair" in result.stdout
+    assert "Contradictions: 1 high-confidence contradiction(s) found." in _lines(
+        result.stdout
+    )
+
+
+def _read_ledger_entries_for_test(
+    bundle_dir: Path, survivor_id: str
+) -> list[okf.MergeLedgerEntry]:
+    from openkos.bundle import ledger as bundle_ledger
+
+    return bundle_ledger.read_entries(survivor_id, bundle_dir)
+
+
+def test_curate_resumability_ignores_whether_a_finding_is_already_persisted(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A3.4: two consecutive `curate` invocations re-derive the Contradictions
+    candidate queue from current bundle state regardless of whether a finding
+    for a pair is already persisted (curate-command spec: "A persisted finding
+    is not a resume checkpoint")."""
+    from openkos.resolution.contradiction import (
+        ContradictionBatch,
+        ContradictionVerdict,
+    )
+    from openkos.resolution.contradiction import Verdict as CVerdict
+    from openkos.state import derived, findings
+
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr("openkos.cli.curate.candidate_edges", lambda *a, **k: [])
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan",
+        lambda *a, **k: _edge_plan(("concepts/a", "concepts/b")),
+    )
+    verdict = ContradictionVerdict(
+        pair_ids=("concepts/a", "concepts/b"),
+        verdict=CVerdict.CONTRADICTS,
+        confidence=0.9,
+        rationale="stub",
+        conflicting_claims=("claim",),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_contradictions",
+        lambda *a, **k: (ContradictionBatch(results=[verdict]), 1),
+    )
+    _simulate_tty(monkeypatch)
+
+    first = runner.invoke(app, ["curate", "--auto"])
+    assert first.exit_code == 0
+    second = runner.invoke(app, ["curate", "--auto"])
+    assert second.exit_code == 0
+
+    # The same candidate pair was re-derived and re-judged both times --
+    # a persisted finding did not short-circuit or skip it -- so the store
+    # now holds TWO rows for the same pair, not one.
+    layout = config.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        rows = findings.open_findings(conn)
+    finally:
+        conn.close()
+
+    assert len(rows) == 2
+    assert all(row.pair_ids == ("concepts/a", "concepts/b") for row in rows)
 
 
 # ---------------------------------------------------------------------------
