@@ -89,28 +89,36 @@ Unrecognized/malformed → fail-closed to `confidential`.
 
 ### Requirement: Reversibility Ledger (`merged_from`)
 
-The survivor MUST gain a `merged_from` key holding, per absorbed object:
-`absorbed_snapshot`, `survivor_before`, `index_before`/`log_before`,
-`link_rewrites`, `relation_rewrites` (v2, whole-file snapshots for
-third-party `relations:` retargets/drops/dedupes), `provenance_rewrites`
-(v3, NEW — whole-file snapshots for every third-party file whose
-`provenance:` was retargeted or deduped), and
-`sensitivity_before`/`sensitivity_after`.
-
+Every merge MUST append an entry to a per-survivor sidecar file under
+`bundle/.state/ledger/`, written and read only via `okf.dump_frontmatter`/
+`load_frontmatter`. The survivor's own concept frontmatter MUST NOT gain a
+`merged_from` key or any other ledger content. Each entry holds, per
+absorbed object: `absorbed_snapshot`, `survivor_before`,
+`index_before`/`log_before`, `link_rewrites`, `relation_rewrites` (v2),
+`provenance_rewrites` (v3), and `sensitivity_before`/`sensitivity_after`.
 `unmerge` MUST restore EVERY touched file — survivor, absorbed, and every
 file in `relation_rewrites` and `provenance_rewrites` — byte-exact. The
 ledger schema is `MERGE_LEDGER_SCHEMA_V3`. An entry with no
 `provenance_rewrites` key (v1 or v2) MUST still decode and unmerge exactly
 as before, and one with no `relation_rewrites` key (v1) MUST likewise still
-decode; the reader MUST accept v1, v2, and v3 entries.
-(Previously: v2 schema, no `provenance_rewrites` field — a provenance
-retarget would have had no recorded snapshot to reverse from.)
+decode; the reader MUST accept v1, v2, and v3 entries regardless of storage
+location.
+(Previously: entries were embedded directly in the survivor's own
+`merged_from` frontmatter key, growing that file geometrically across
+merges; the schema and round-trip contract are unchanged, only the
+storage location moved to a sidecar under `bundle/.state/ledger/`.)
 
-#### Scenario: Ledger embeds the full snapshot set plus relation rewrites
+#### Scenario: No `merged_from` key remains in survivor frontmatter
+- GIVEN a merge that appends a new ledger entry
+- WHEN the survivor's own concept frontmatter is inspected afterward
+- THEN it contains no `merged_from` key, and the new entry instead exists
+  under `bundle/.state/ledger/`
+
+#### Scenario: Ledger sidecar embeds the full snapshot set plus relation rewrites
 - GIVEN a merge that rewrote one inbound link and retargeted one
   third-party relation
-- WHEN survivor frontmatter is inspected
-- THEN `merged_from` has `absorbed_snapshot`, `survivor_before`,
+- WHEN the survivor's ledger sidecar is inspected
+- THEN its entry has `absorbed_snapshot`, `survivor_before`,
   `index_before`, `log_before`, `link_rewrites`, `relation_rewrites`
   (with that file's snapshot), and `sensitivity_before`/`sensitivity_after`
 
@@ -128,7 +136,7 @@ retarget would have had no recorded snapshot to reverse from.)
 - THEN the file is restored to its exact byte state at each step
 
 #### Scenario: Pre-slice-2a v1 ledger entry still unmerges exactly
-- GIVEN a `merged_from` entry with no `relation_rewrites` key (v1)
+- GIVEN a sidecar entry with no `relation_rewrites` key (v1)
 - WHEN `unmerge` runs against it
 - THEN it decodes successfully and restores survivor/absorbed/catalog
   exactly as before slice 2a
@@ -137,7 +145,7 @@ retarget would have had no recorded snapshot to reverse from.)
 - GIVEN one entry with neither `relation_rewrites` nor
   `provenance_rewrites` (v1), and one with `relation_rewrites` but no
   `provenance_rewrites` (v2)
-- WHEN a v3-aware reader decodes each
+- WHEN a v3-aware reader decodes each from the sidecar
 - THEN both decode; missing fields default to empty on each
 
 ### Requirement: Inbound-Link Rewrite
@@ -175,33 +183,80 @@ removing the absorbed file.
 - WHEN `merge` runs
 - THEN it refuses to write and exits non-zero
 
+### Requirement: `merge` Refuses On A Doctor-Flagged Ledger, With `--force`
+
+`openkos merge` MUST run the doctor merge-ledger-integrity check against
+the survivor's sidecar before Phase A completes, and MUST refuse (exit
+non-zero, write nothing) when that check reports the ledger as
+post-merge-mutated, UNLESS `--force` is passed. The refusal message MUST
+ALWAYS name the repair verb (for a clean, unmigrated ledger) and MUST
+ALWAYS state that reversibility of merges made before this fix is not
+guaranteed. The reset-and-replay remedy is conditional on the workspace
+actually having one, exactly as the doctor check's own remediation is:
+when the workspace is a git repository with a reachable reset point, the
+message MUST name `git reset --hard <first-merge>~1` followed by `openkos
+reindex` (for a corrupted ledger); when it is not — no repository, no
+configured git identity, or no commit history — it MUST say so explicitly
+and MUST NOT claim reset-and-replay is available. `--force` MUST be
+orthogonal to the confirm-gate precedence, mirroring `forget`'s existing
+refuse-plus-`--force` shape.
+
+#### Scenario: Merge onto a flagged ledger refuses by default
+- GIVEN the survivor's ledger sidecar is flagged by the doctor
+  merge-ledger-integrity check, in a git repository with a reachable reset
+  point
+- WHEN `openkos merge <survivor> <absorbed>` runs without `--force`
+- THEN it refuses in Phase A, exits non-zero, writes nothing, and prints
+  both the repair-verb and reset-and-replay remediation paths plus the
+  non-guaranteed-reversibility statement
+
+#### Scenario: The refusal names no reset-and-replay path without a reset point
+- GIVEN the same flagged ledger in a workspace with no reachable git reset
+  point (no repository, no configured git identity, or no commit history)
+- WHEN `openkos merge <survivor> <absorbed>` runs without `--force`
+- THEN it still refuses, still names the repair verb, and still states
+  reversibility is not guaranteed, but reports that no git reset point is
+  available rather than naming the `git reset --hard`+`openkos reindex`
+  path
+
+#### Scenario: `--force` bypasses the refusal, not the confirm gate
+- GIVEN the same flagged ledger
+- WHEN `openkos merge <survivor> <absorbed> --force` runs on an interactive
+  TTY without `--auto`
+- THEN the ledger-integrity refusal is bypassed but the existing
+  confirm-gate precedence still governs the write
+
 ### Requirement: Unmerge Achieves Round-Trip Parity
 
-`unmerge <survivor-id> <absorbed-id>` reverses ONLY the LIFO-tail
-`merged_from` entry; a non-tail `absorbed-id` refuses cleanly with no
-write. It MUST restore the survivor from `survivor_before`, the absorbed
-object from `absorbed_snapshot`, REVERSE every recorded link, relation, and
-provenance rewrite, remove the entry, and restore `index.md`/`log.md` then
-append an audit line. For a file touched by more than one rewrite kind,
-precedence is `provenance > relations > links`: a `provenance_rewrites`
-snapshot restores exclusively (skipping relation/link reversal); failing
-that, a `relation_rewrites` snapshot skips link reversal; a file in neither
-reverses via link rewrites. Given the full snapshot set, `merge` then
-`unmerge` leaves every bundle file byte-identical to before. Unmerge does
-NOT restore third-party derived objects' `sensitivity` — merge never wrote
-it (propagation is `set-sensitivity`'s exclusive concern) and lowering is a
+`unmerge <survivor-id> <absorbed-id>` reverses ONLY the LIFO-tail entry in
+the survivor's ledger sidecar; a non-tail `absorbed-id` refuses cleanly
+with no write. It MUST restore the survivor from `survivor_before`, the
+absorbed object from `absorbed_snapshot`, REVERSE every recorded link,
+relation, and provenance rewrite, remove the entry from the sidecar, and
+restore `index.md`/`log.md` then append an audit line. For a file touched
+by more than one rewrite kind, precedence is `provenance > relations >
+links`: a `provenance_rewrites` snapshot restores exclusively (skipping
+relation/link reversal); failing that, a `relation_rewrites` snapshot skips
+link reversal; a file in neither reverses via link rewrites. Given the full
+snapshot set, `merge` then `unmerge` MUST leave every bundle file —
+including the survivor and the absorbed file — BYTE FOR BYTE identical to
+their pre-merge state, and the sidecar entry MUST be gone. Unmerge does NOT
+restore third-party derived objects' `sensitivity` — merge never wrote it
+(propagation is `set-sensitivity`'s exclusive concern) and lowering is a
 separate gated one-way operation (ADR-0008, ADR-0010); an explicit
 non-requirement, not an oversight.
-(Previously: reversed only link and relation rewrites, relation taking
-precedence over link on a shared file; no provenance rewrite to reverse.)
+(Previously: reversed the entry embedded in the survivor's own
+frontmatter; the parity and precedence contract is unchanged, only the
+entry's storage location and removal target moved to the sidecar.)
 
-#### Scenario: Merge then unmerge restores the pre-merge bundle
+#### Scenario: Merge then unmerge restores the pre-merge bundle byte-for-byte
 - GIVEN a merge including a rewritten inbound link
 - WHEN `unmerge <survivor> <absorbed>` is confirmed
 - THEN the survivor's pre-merge frontmatter/body is restored from
-  `survivor_before`, the absorbed file from `absorbed_snapshot`, every
-  rewritten link is reversed, and `index.md`/`log.md` are restored from
-  their snapshots (then a single unmerge audit line is appended to `log.md`)
+  `survivor_before` byte-for-byte, the absorbed file from
+  `absorbed_snapshot` byte-for-byte, every rewritten link is reversed,
+  `index.md`/`log.md` are restored from their snapshots, and the sidecar
+  entry is removed
 
 #### Scenario: Unmerge restores the pre-merge provenance exactly
 - GIVEN a merge that retargeted a third-party object's provenance
@@ -216,12 +271,12 @@ precedence over link on a shared file; no provenance rewrite to reverse.)
   snapshot, byte-identical to its pre-merge state
 
 #### Scenario: Absorbed-id is not the LIFO tail
-- GIVEN a survivor whose latest `merged_from` entry absorbed a different id
+- GIVEN a survivor whose latest sidecar entry absorbed a different id
 - WHEN `unmerge <survivor> <absorbed>` names a non-tail absorbed-id
 - THEN it exits non-zero with a clean error and writes nothing
 
 #### Scenario: Unmerge of a non-merged pair
-- GIVEN no `merged_from` entry for that absorbed-id
+- GIVEN no sidecar entry for that absorbed-id
 - WHEN `unmerge` runs
 - THEN it exits non-zero and writes nothing
 

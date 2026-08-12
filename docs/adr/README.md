@@ -48,5 +48,5 @@ An **Architecture Decision Record (ADR)** captures a single significant decision
 | [0010](0010-reingest-raise-only-sensitivity.md) | Re-ingest resolves sensitivity as a raise-only high-water mark | Accepted | 2026-07-28 |
 | [0011](0011-provenance-retarget-on-merge.md) | Third-party provenance retargets on merge; v3 reversibility ledger | Accepted | 2026-07-29 |
 | [0012](0012-sensitivity-backfill-per-source-sweep.md) | Sensitivity backfill as an explicit per-Source sweep, not a silent migration | Proposed | 2026-07-29 |
-| [0013](0013-relocate-merge-ledger-to-bundle-state.md) | Relocate the merge ledger to `bundle/.state/ledger/` | Proposed | 2026-08-11 |
+| [0013](0013-relocate-merge-ledger-to-bundle-state.md) | Relocate the merge ledger to `bundle/.state/ledger/` | Accepted | 2026-08-11 |
 | [0014](0014-durable-pending-work-stores.md) | Durable pending-work stores -- findings in `.openkos/`, decisions in `bundle/.state/` | Accepted | 2026-08-12 |
