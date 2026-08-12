@@ -190,21 +190,27 @@ PR body against the actual `pytest` run, unpiped.
 
 ### Phase 1: `vcs/git.py` path validation (threat matrix row)
 
-- [ ] B1.1 RED: a decision path containing `==>` is rejected by
+- [x] B1.1 RED: a decision path containing `==>` is rejected by
       `_validate_rel_paths` (`vcs/git.py:515-551`) before it reaches
       `expunge_targets` — construct a concept id containing `==>`, assert the
       purge preparation step refuses rather than silently mis-parsing the
       rename directive `_validate_rel_paths`'s own docstring warns about
       (`vcs/git.py:535-544`).
-- [ ] B1.2 GREEN: the decision-path construction in `expunge_targets` (see
+- [x] B1.2 GREEN: the decision-path construction in `expunge_targets` (see
       B2 below) always routes through the existing validated `literal:`
       path builder — no new validation logic needed if the existing call
       site already validates every appended member; confirm and, if not,
-      add the guard before appending.
+      add the guard before appending. (Confirmed insufficient on its own —
+      `vcs_git.expunge_paths`'s own validation runs too late, past the
+      point of no return, to refuse cleanly. Added an explicit
+      `vcs_git._validate_rel_paths(expunge_targets)` call in Phase A,
+      inside the existing `except (OSError, ValueError)` clause, so a
+      malformed decision path refuses with a clean CLI message rather than
+      an uncaught traceback mid-rewrite.)
 
 ### Phase 2: `purge` sweep — the D6 hazard
 
-- [ ] B1.3 RED:
+- [x] B1.3 RED:
       `tests/unit/cli/test_purge.py::test_purging_a_concept_removes_its_decision_from_history`
       — construct a `bundle/.state/decisions/<id>.decisions.okf` file via
       `bundle.decisions.write_decisions` (Slice A, no CLI writer needed),
@@ -213,60 +219,71 @@ PR body against the actual `pytest` run, unpiped.
       cat-file` that no historical blob of the decision path contains
       `purged_id`, and that the rewrite ran in the SAME `git filter-repo`
       pass as the concept's own file expunge (privacy-purge spec, Scenario
-      1). This test MUST fail before B1.4/B1.5 exist.
-- [ ] B1.4 GREEN: extend `expunge_targets` (`cli/main.py:4905-4945`) — for
+      1). This test MUST fail before B1.4/B1.5 exist. (Confirmed RED by
+      temporarily stashing the `cli/main.py` implementation and
+      re-running; also added a second RED/GREEN test for the FOREIGN-file
+      case — a decision file owned by a live concept whose record names
+      the purge target — since B1.4's scope is broader than the ledger
+      sidecar's own-file-only precedent.)
+- [x] B1.4 GREEN: extend `expunge_targets` (`cli/main.py:4905-4945`) — for
       each purge-set member, append its OWN
       `bundle/.state/decisions/<member>.decisions.okf` path (when
       `pair_ids[0] == member`) AND every OTHER live decisions file whose
       `pair_ids` contains `member`, mirroring the existing ledger-sidecar
       append at `cli/main.py:4940-4945`. No second `git filter-repo`
-      invocation.
-- [ ] B1.5 GREEN: extend `_sweep_ledger_sidecars_for_ids`'s pattern
+      invocation. (New helper `_decisions_history_targets`.)
+- [x] B1.5 GREEN: extend `_sweep_ledger_sidecars_for_ids`'s pattern
       (`cli/main.py:602-654`) with a decisions-subtree counterpart — a
       purge-set member's OWN decisions file is deleted outright; any OTHER
       live decisions file whose `pair_ids` names the member has that record
       dropped/rewritten (or the file removed if no records remain). Reuses
       `bundle.decisions.iter_decisions` (Slice A) as the INCLUDE-walk
-      primitive.
-- [ ] B1.6 RED:
+      primitive. (New shared primitive `_sweep_decisions_for_ids`, used by
+      both `purge` and `forget`.)
+- [x] B1.6 RED:
       `tests/unit/cli/test_purge.py::test_purging_an_unrelated_concept_leaves_decision_untouched`
       — a decision file referencing a concept outside the purge set stays
       byte-identical in every historical commit (privacy-purge spec,
       Scenario 2).
-- [ ] B1.7 RED/GREEN: wire B1.5's sweep result's touched paths into the
+- [x] B1.7 RED/GREEN: wire B1.5's sweep result's touched paths into the
       post-rewrite auto-commit's `commit_paths_rel`, mirroring the ledger
       sidecar precedent.
 
 ### Phase 3: `forget` sweep
 
-- [ ] B1.8 RED:
+- [x] B1.8 RED:
       `tests/unit/cli/test_forget.py::test_forgetting_a_concept_removes_its_live_decision_entry`
       — `openkos forget <id>` Phase B removes the live decision entry
       referencing `<id>` from every `bundle/.state/decisions/**` file, live
       tree only, no history rewrite (forget-command spec, Scenario 1).
-- [ ] B1.9 GREEN: wire B1.5's shared decisions-sweep primitive into
+      (Plus a second test for the FOREIGN-file case, mirroring B1.3's own
+      split.)
+- [x] B1.9 GREEN: wire B1.5's shared decisions-sweep primitive into
       `forget`'s Phase B write and `_autocommit` path list, same pattern as
       the ledger sidecar sweep already wired there.
-- [ ] B1.10 RED:
+- [x] B1.10 RED:
       `tests/unit/cli/test_forget.py::test_forgetting_a_concept_leaves_unrelated_decision_entry`
       — a decision entry for an unrelated concept is left unchanged
       (forget-command spec, Scenario 2).
 
 ### Phase 4: `_purge_rebuild_indexes` — findings.db
 
-- [ ] B1.11 RED: `_purge_rebuild_indexes` (`cli/main.py:4658-4684`) test —
+- [x] B1.11 RED: `_purge_rebuild_indexes` (`cli/main.py:4658-4684`) test —
       after `purge`, `.openkos/findings.db` no longer exists on disk and is
       NOT rebuilt in-line (mirrors `vectors.db`'s posture, design Decision
       1's rebuild-posture table).
-- [ ] B1.12 GREEN: add `layout.findings_db_path` (or equivalent) to the
+- [x] B1.12 GREEN: add `layout.findings_db_path` (or equivalent) to the
       delete tuple at `cli/main.py:4672-4676`; do not add it to the
       fts/graph rebuild calls below that tuple.
 
 ### PR #2 quality gates
 
-- [ ] Focused: `uv run pytest tests/unit/cli/test_purge.py tests/unit/cli/test_forget.py -v`
-- [ ] Full suite, ruff check, ruff format --check, mypy . — all green
-- [ ] Rollback: `git revert` PR #2; sweep code becomes dead again (no writer
+- [x] Focused: `uv run pytest tests/unit/cli/test_purge.py tests/unit/cli/test_forget.py -v`
+      — 127 passed
+- [x] Full suite, ruff check, ruff format --check, mypy . — all green
+      (4322 passed, 1 skipped; baseline was 4314 passed, 1 skipped — +8 new
+      tests, no regressions; coverage 97.00% against a 90% branch gate)
+- [x] Rollback: `git revert` PR #2; sweep code becomes dead again (no writer
       exists until PR #3), so revert re-opens no privacy gap that did not
       already exist before this PR (still no decision-writing verb on any
       branch)
