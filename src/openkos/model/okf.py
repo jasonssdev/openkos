@@ -118,6 +118,42 @@ via `ExtractionStatus`/mypy-strict, and readers match a single literal
 (`== EXTRACTION_STATUS_FAILED`) rather than membership-testing this tuple,
 so an unrecognized on-disk value is structurally ignored."""
 
+EXTRACTION_NOTICE_KEY: Final = "extraction_notice"
+"""The optional frontmatter key a Source concept carries when its
+extraction succeeded but produced output worth disclosing (#585); ABSENT
+otherwise, following `EXTRACTION_STATUS_KEY`'s convention exactly -- no
+`ok`/`none` sentinel, stamped onto freshly built content only, never merged
+onto on-disk frontmatter, never read back by a writer.
+
+A SEPARATE key rather than a fifth `ExtractionStatus` token, and the split
+is semantic, not cosmetic. `extraction_status` answers "why did this run
+write zero derived objects"; every one of its values presupposes an empty
+result, and `lint.check_unextracted` reads `failed` as retryable debt.
+This key fires on the opposite precondition -- an object WAS written -- so
+one field cannot honestly hold both, and a reader matching `failed` must
+never have to skip past a value that means "extraction worked"."""
+
+ExtractionNotice = Literal["sole-object-restates-source"]
+"""The closed vocabulary for `EXTRACTION_NOTICE_KEY`.
+
+One token today (#585): the source's SOLE derived object restates the
+source's own topic, so the bundle stores an object that adds nothing the
+Source did not already say. The object is kept -- see #585 for why a
+degrade to `[]` was rejected -- and this key is the disclosure that keeps
+the output honest about it."""
+
+EXTRACTION_NOTICE_VALUES: Final[tuple[ExtractionNotice, ...]] = get_args(
+    ExtractionNotice
+)
+"""For specs and tests, mirroring `EXTRACTION_STATUS_VALUES` -- not a
+runtime validation gate."""
+
+EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES: Final[ExtractionNotice] = (
+    "sole-object-restates-source"
+)
+"""#585's one notice token, named so both the writer (`cli/main.py`) and
+any future reader spell it from the same constant."""
+
 EXTRACTION_STATUS_FAILED: Final[ExtractionStatus] = "failed"
 """The one `EXTRACTION_STATUS_VALUES` member that represents retryable
 debt (an LLM backend error) -- the only value `lint`'s `check_unextracted`
@@ -184,6 +220,7 @@ def build_source_concept(
     provenance: list[str],
     raw_content: str | None = None,
     extraction_status: ExtractionStatus | None = None,
+    extraction_notice: ExtractionNotice | None = None,
 ) -> str:
     """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
 
@@ -242,6 +279,14 @@ def build_source_concept(
     stamp this onto freshly built content -- never merge it onto an
     already-built document's frontmatter (that would make a stale marker
     sticky forever).
+
+    `extraction_notice` (issue #585) is emitted as `EXTRACTION_NOTICE_KEY`
+    under exactly the same rules, and is an INDEPENDENT parameter: this
+    function does not enforce that the two never co-occur. They cannot
+    today -- one presupposes zero derived objects and the other exactly one
+    -- but that is `ingest`'s invariant to hold, and a writer that silently
+    dropped one of them would hide a future caller's mistake instead of
+    letting it surface on disk.
     """
     metadata: dict[str, object] = {
         "type": "Source",
@@ -258,6 +303,8 @@ def build_source_concept(
     }
     if extraction_status is not None:
         metadata[EXTRACTION_STATUS_KEY] = extraction_status
+    if extraction_notice is not None:
+        metadata[EXTRACTION_NOTICE_KEY] = extraction_notice
     if raw_content is None:
         section = (
             "_Source content could not be embedded as text "
