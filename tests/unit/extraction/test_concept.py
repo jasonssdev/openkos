@@ -870,8 +870,16 @@ def test_non_procedure_twin_still_dropped_beside_an_exempt_procedure() -> None:
 def test_procedure_exemption_does_not_rescue_a_non_procedure_twin_alone() -> None:
     """#413 regression alarm for the case the twin rule was built on: the
     measured `call-with-maria` shape has no `Procedure` in it at all, so the
-    exemption must not change its outcome."""
-    llm = _FakeLLM(reply=_array(_MARIA_ITEM, _CALL_WITH_MARIA_TWIN_ITEM))
+    exemption must not change its outcome.
+
+    The `"[]"` second reply answers the #584 re-ask. Once the twin is
+    dropped the list is one object titled `Maria Salazar`, whose tokens are
+    contained in the source title's, so the containment trigger fires here
+    -- correctly: this source genuinely carries three subjects (the spec's
+    `call-with-maria` scenario), and one surviving object IS the collapse.
+    Spelled out so this test asserts the twin drop rather than a repeating
+    fake's reply being deduplicated away."""
+    llm = _SequencedLLM([_array(_MARIA_ITEM, _CALL_WITH_MARIA_TWIN_ITEM), "[]"])
 
     result = _objects(
         "Maria and I talked about her move.",
@@ -879,6 +887,7 @@ def test_procedure_exemption_does_not_rescue_a_non_procedure_twin_alone() -> Non
         llm=llm,
     )
 
+    assert len(llm.calls) == 2
     assert [r.title for r in result] == ["Maria Salazar"]
 
 
@@ -3433,3 +3442,69 @@ def test_re_ask_addition_contained_in_the_title_is_still_kept() -> None:
         "Setting Up a Python Project",
         "Python Project",
     ]
+
+
+def test_no_trigger_on_partial_overlap_that_is_not_containment() -> None:
+    """Containment means the smaller token set is a SUBSET, not that the two
+    titles share a token. This is a measured shape, not a hypothetical: the
+    `producto` flat arm collapsed 5 of 5 to a `Procedure` titled `Onboarding
+    Process` under the source title `Onboarding, Slack y trabajo pendiente`
+    -- one token in common, and the rest genuinely different. Firing there
+    would spend a call on an object that named its own subject."""
+    onboarding = (
+        '{"type": "Procedure", "title": "Onboarding Process", '
+        '"description": "How a new hire is brought on.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(onboarding), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Cómo se incorpora a alguien nuevo.",
+        source_title="Onboarding, Slack y trabajo pendiente",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Onboarding Process"]
+
+
+def test_no_trigger_when_containment_rests_only_on_tiny_tokens() -> None:
+    """Tokens below `_MIN_TOPIC_TOKEN_LENGTH` are dropped BEFORE the
+    two-token floor is counted, so a pair of two-letter generic tokens
+    cannot satisfy it. This is #555's `ai-agent` family: short generic
+    tokens are exactly the ones that match everything, and counting them as
+    topic evidence would re-import the failure that predicate suffered."""
+    ai_ml = (
+        '{"type": "Concept", "title": "AI ML", '
+        '"description": "Two field abbreviations.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(ai_ml), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note on the two fields.",
+        source_title="AI ML Systems in Practice",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["AI ML"]
+
+
+def test_exact_restatement_still_triggers_below_the_token_floor() -> None:
+    """Containment WIDENS the trigger; it must never narrow it. A one-word
+    source title exactly restated keeps only one meaningful token, which is
+    under `_MIN_TOPIC_TOKENS` -- so the exact-restatement shortcut is what
+    preserves the behaviour the trigger had before containment existed."""
+    stoicism_twin = (
+        '{"type": "Concept", "title": "Stoicism", '
+        '"description": "A school of Hellenistic philosophy.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(stoicism_twin), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note on the school and on freedom from destructive emotion.",
+        source_title="Stoicism",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == ["Stoicism", "Apatheia"]

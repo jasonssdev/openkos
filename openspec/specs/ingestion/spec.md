@@ -508,8 +508,9 @@ required by this scenario.
 ### Requirement: Bounded Re-Ask When the Only Object Restates the Source Title
 
 When a source's FINAL, filtered object list is exactly ONE object AND that
-object RESTATES the source title — its title equals the source title after
-normalization, WHATEVER its type — extraction MUST ask the model once more
+object restates the TOPIC the source title names — its normalized title
+equals the source title, or one title's meaningful tokens are contained in
+the other's, WHATEVER its type — extraction MUST ask the model once more
 and MUST ADD whatever that second ask returns to the object already
 produced. The trigger MUST be evaluated on the final
 merged, filtered list of the whole extraction (both the single-run and the
@@ -553,6 +554,19 @@ whenever their types differ.
 Measured (`qwen3:8b`, `--runs 5 --seed 7`): the `lesson` treatment arm
 returns one object in 5 of 5 runs and it is a `Procedure` every time, so a
 type-aware trigger never fires on the fixture that reproduces this defect.
+
+Containment MUST be token-level, never raw substring: `Rust` is not
+contained in `Trust Boundaries`, and only token equality gets that right.
+Tokens too short to carry topic signal MUST be dropped first, and the
+contained title MUST retain at least two of them — a single generic token
+contained in anything is the failure `resolution/similarity.py` records
+(#555), where one manufactured single-token title landed in eleven
+duplicate groups. Partial overlap is NOT containment: a title sharing one
+token with the source title while naming its own subject MUST NOT fire.
+
+The title comparison shared with chunk-merge dedup MUST stay exact.
+Containment belongs to the trigger alone; folding it into that comparison
+would merge distinct subjects across chunks.
 
 The DROP rule's exemption is UNCHANGED: a `Procedure` restating the source
 title MUST still never be dropped. The type exemption MUST live in exactly
@@ -601,6 +615,20 @@ produced, exactly as the selector judge's failure degrades.
 - GIVEN a source whose only object carries a title of its own, of any type
 - WHEN extraction runs
 - THEN no extra call is made and that object is written unchanged
+
+#### Scenario: A lone object titled after the source's topic triggers a re-ask
+
+- GIVEN a source titled `Lesson 3: Setting Up a Python Project` whose only
+  object is titled `Setting Up a Python Project`
+- WHEN extraction runs
+- THEN the re-ask fires, even though the two titles are not equal
+
+#### Scenario: Sharing one token with the source title does not trigger a re-ask
+
+- GIVEN a source whose only object shares a single token with the source
+  title while naming its own distinct subject
+- WHEN extraction runs
+- THEN no extra call is made
 
 #### Scenario: More than one object does not trigger a re-ask
 

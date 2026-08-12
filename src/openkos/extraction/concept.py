@@ -559,6 +559,100 @@ def _restates_source_title(result: ExtractionResult, *, source_title: str) -> bo
     return _normalize_title(result.title) == _normalize_title(source_title)
 
 
+_TITLE_TOKEN_RE: Final = re.compile(r"\w+", re.UNICODE)
+"""Word tokens of a normalized title, for topic containment ONLY.
+
+`\\w+` rather than an ASCII class on purpose: half this project's measured
+corpus is Spanish, and `[a-z0-9]+` would cut `reunión` into `reuni` + `n`.
+Splitting on non-word characters also does the punctuation work the exact
+comparison never needed -- `3:` and `project.` tokenize to `3` and
+`project`."""
+
+_MIN_TOPIC_TOKEN_LENGTH: Final = 3
+"""Tokens shorter than this are dropped before containment.
+
+Same threshold and same reason as `resolution.similarity.MIN_TOKEN_LENGTH`:
+a one- or two-character token carries no reliable topic signal (`up`, `a`,
+`el`, `3`). Re-derived here rather than imported -- `extraction` does not
+depend on `resolution`, and this module's own comparison rules are
+deliberately self-contained."""
+
+_MIN_TOPIC_TOKENS: Final = 2
+"""How many meaningful tokens the CONTAINED title must keep for containment
+to count. This is the whole defense against the failure #555 paid for.
+
+`resolution/similarity.py` drops short tokens and then applies subset
+containment, which MANUFACTURES single-token titles: `ai-agent` becomes
+`{agent}`, one generic token contained in anything, and that title alone
+landed in eleven duplicate groups at a score of 1.000. A trigger that fires
+on nearly every source is not a narrower option than "fire whenever the
+list is one object" -- it is that option plus a predicate to maintain.
+
+Requiring two tokens is what keeps `Agents` ⊂ `AI Agents in Practice` from
+firing while `Setting Up a Python Project` ⊂ `Lesson 3: Setting Up a Python
+Project` (3 meaningful tokens: `setting`, `python`, `project`) does. It
+also makes a shared stopword pair insufficient, since those tokens are gone
+before the count."""
+
+
+def _title_tokens(value: str) -> frozenset[str]:
+    """Meaningful word tokens of `value`, normalized then split.
+
+    Feeds ONLY `_restates_source_topic`. `_normalize_title` is left exactly
+    as it was and is not part of the containment logic beyond producing this
+    function's input: it is shared with `_dedup_merged`/`_merge_union`, and
+    folding containment into it would start merging distinct subjects across
+    chunks -- two different objects whose titles happen to nest would become
+    one."""
+    normalized = _normalize_title(value)
+    return frozenset(
+        token
+        for token in _TITLE_TOKEN_RE.findall(normalized)
+        if len(token) >= _MIN_TOPIC_TOKEN_LENGTH
+    )
+
+
+def _restates_source_topic(result: ExtractionResult, *, source_title: str) -> bool:
+    """Does `result` restate the TOPIC the source title names -- exactly, or
+    by containment in either direction?
+
+    The RE-ASK TRIGGER's predicate, and ONLY the trigger's (#584). Measured:
+    the `lesson` treatment arm returns one `Procedure` titled `Setting Up a
+    Python Project` under a source titled `Lesson 3: Setting Up a Python
+    Project`. The model strips the framing and titles the object after the
+    umbrella topic, so exact comparison answers "not a twin" -- correctly,
+    since literally it is not one -- and the trigger could not see the class
+    the defect actually takes.
+
+    Containment is TOKEN-level, never raw substring: `Rust` must not be
+    found inside `Trust Boundaries`, and a substring test says it is. Token
+    equality gets word boundaries right for free. Direction is either way --
+    the object may name a slice of the title's topic or a superset of it --
+    and `_MIN_TOPIC_TOKENS` is what stops that generosity from degenerating
+    (see its note on #555).
+
+    The ADDITIONS FILTER deliberately does NOT use this. It stays on the
+    exact `_restates_source_title`, and the asymmetry is the point: this
+    predicate decides whether to SPEND A CALL, where being wrong costs one
+    call and nothing else; that one decides whether to DISCARD A FOUND
+    SUBJECT, where being wrong loses real content. Different cost of error,
+    different threshold. Do not "unify" them."""
+    if _restates_source_title(result, source_title=source_title):
+        return True
+    object_tokens = _title_tokens(result.title)
+    source_tokens = _title_tokens(source_title)
+    if not object_tokens or not source_tokens:
+        return False
+    smaller, larger = (
+        (object_tokens, source_tokens)
+        if len(object_tokens) <= len(source_tokens)
+        else (source_tokens, object_tokens)
+    )
+    if len(smaller) < _MIN_TOPIC_TOKENS:
+        return False
+    return smaller <= larger
+
+
 def _is_droppable_source_title_twin(
     result: ExtractionResult, *, source_title: str
 ) -> bool:
@@ -987,14 +1081,22 @@ def _add_reask_subjects(
     and unframed returned 3 in 5 of 5 (`AXIS IMPLICATED`) -- the subjects are
     findable in that text, so a second ask has something to find.
 
-    It uses `_restates_source_title` (title only), NOT the drop rule's
-    `_is_droppable_source_title_twin` (title AND non-exempt type). The first
-    live run at this trigger's own seed settled which: the `lesson`
-    treatment arm's lone object came back a `Procedure` in 5 of 5 runs, and
-    `_TWIN_EXEMPT_TYPE` is `Procedure` -- so a type-aware trigger measurably
-    never fires on the one fixture that reproduces the defect. The exemption
-    protects against a DELETION (#413) and this operation deletes nothing;
-    see `_restates_source_title` for the full argument.
+    It uses `_restates_source_topic` -- title only, type-blind, and matching
+    by TOKEN CONTAINMENT as well as exact equality. Two live runs at this
+    trigger's own seed settled both widenings, each after the narrower
+    predicate measurably failed to reach the defect:
+
+    - type-blind, because the `lesson` treatment arm's lone object came back
+      a `Procedure` in 5 of 5 runs and `_TWIN_EXEMPT_TYPE` is `Procedure`;
+    - containment, because that object is titled `Setting Up a Python
+      Project` under a source titled `Lesson 3: Setting Up a Python
+      Project`, so exact comparison reported `restates? False` and
+      `reask_runs 0` -- the harm is the object restating the TOPIC the title
+      names, not the title itself.
+
+    Neither widening reaches the DROP rule or the additions filter; see
+    `_restates_source_topic` and `_reask_for_further_subjects` for why each
+    keeps its own threshold.
 
     It ADDS, never replaces, and that is what makes it bounded rather than a
     gamble on the model. The argument is written down in
@@ -1019,7 +1121,7 @@ def _add_reask_subjects(
     branch (chunked or not) rather than per run or per chunk -- #581's
     precedent, and required by the trigger itself, which reads "the source
     returned exactly one object" and so is meaningless on a slice."""
-    if len(results) != 1 or not _restates_source_title(
+    if len(results) != 1 or not _restates_source_topic(
         results[0], source_title=source_title
     ):
         return results, 0, ()
