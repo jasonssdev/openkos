@@ -238,7 +238,9 @@ def test_duplicates_prints_legend_once_before_the_group_loop(
     legend = (
         "Legend: [tier] type -- trigger. The tier is the MATCH METHOD, "
         "not a strength ranking: HIGH = exact normalized key, "
-        "ACRONYM = one title's token is the initials of a word run in the other, LOW = near-match similarity score."
+        "ACRONYM = one title's token is the initials of a word run in the "
+        "other, LOW = weakest per-token match of the smaller title "
+        "(1.000 = every token matched, NOT identical titles)."
     )
     assert result.stdout.count(legend) == 1
     lines = result.stdout.splitlines()

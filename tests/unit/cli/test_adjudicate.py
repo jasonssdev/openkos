@@ -488,7 +488,9 @@ def test_adjudicate_prints_legend_once_before_the_results_loop(
     legend = (
         "Legend: [tier] type -- trigger, then verdict and rationale. "
         "The tier is the MATCH METHOD, not a strength ranking: "
-        "HIGH = exact normalized key, LOW = near-match similarity score."
+        "HIGH = exact normalized key, LOW = weakest per-token match "
+        "of the smaller title (1.000 = every token matched, NOT "
+        "identical titles)."
     )
     assert result.stdout.count(legend) == 1
     lines = result.stdout.splitlines()
