@@ -993,6 +993,49 @@ def test_status_near_match_only_duplicates_still_all_clear(
     assert "Nothing needs attention." in result.stdout
 
 
+def test_status_near_match_only_duplicates_disclose_the_unscanned_tiers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """Issue #593: a bundle whose duplicate backlog is all near-matches used
+    to read as CLEAN -- `status` counts identical-title groups only, and
+    said nothing about the tiers it does not scan. The count stays
+    identical-titles-only (the pairwise near-match pass was measured at
+    5.3s for 400 docs / 24.8s for 1000, which `status` must not pay); the
+    fix is disclosure: an informational line names `openkos duplicates` as
+    the full scan, so a clean report can no longer be read as an empty
+    backlog."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Stoic Philosophy")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "Nothing needs attention." in result.stdout
+    assert "Similar-title candidates are not counted here" in result.stdout
+    assert "openkos duplicates" in result.stdout
+
+
+def test_status_exact_duplicates_present_suppress_the_scope_disclosure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When identical-title groups fired, that line already names
+    `openkos duplicates` -- the scope disclosure must not print a second
+    pointer at the same verb."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Stoicism")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="STOICISM")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "1 candidate group" in result.stdout
+    assert "Similar-title candidates are not counted here" not in result.stdout
+
+
 def test_status_no_duplicate_groups_no_new_entry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
