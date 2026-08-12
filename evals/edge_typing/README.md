@@ -172,3 +172,46 @@ So: use this number to compare **models against each other**, which is what
 the harness is for. Do not publish it as how long a real run takes without
 saying what document size it was measured on — that mistake put an
 optimistic figure in `docs/cli.md` (corrected since).
+
+## Direction is not scored by the forward fixture — and the default model fails it completely (#561)
+
+Every pre-#561 fixture edge presented the child/part/member/dependent as
+SOURCE, so the eval scored *which type* while the *direction* was always
+served correct. A model that ignores direction entirely could still score
+0.81. Six reversed probes (collection → member, author → artifact, cause →
+outcome) now reuse the same documents with the edge flipped;
+`LabelledEdge.trap_type` records the asymmetric type that is only correct
+the other way, and the runner reports **direction-trap hits** over the
+reversed probes separately from accuracy.
+
+Measured (3 runs per arm, 23-edge fixture):
+
+| model / arm | forward-17 acc | trap hits (of 18) | reversed-6 acc |
+| --- | --- | --- | --- |
+| `gemma2:27b` baseline | 0.82 | **17 (0.94)** | 0.00 |
+| `gemma2:27b` + direction-guard prompt | 0.75 | **17 (0.94)** | 0.00 |
+| `qwen3:8b` baseline | 0.41 | 3 (0.17) | 0.17 |
+| `qwen3:8b` + direction-guard prompt | 0.41 | 3 (0.17) | 0.17 |
+
+Three findings:
+
+**The production default is directionally blind.** `gemma2:27b` — packaged
+for this task on #516's 0.81 — emits `member_of`, `produced_by`, and
+`caused_by` backwards on essentially every reversed edge, at stability
+1.00. Its 0.81/0.82 is real for type and silent about direction, and
+direction is the property that determines whether the graph means anything
+(a reversed `caused_by` asserts the migration was caused by the outage).
+
+**The honest model and the accurate model are different models.**
+`qwen3:8b` mostly answers `related_to` on reversed edges (3 trap hits) but
+is far worse on type (0.41). Neither axis subsumes the other, and #516's
+model sweep never saw the direction axis.
+
+**A prompt guard does not carry the rule.** An explicit "Direction check"
+paragraph (your type must be TRUE read as SOURCE → TARGET; if the claim
+runs backwards, answer references/related_to) changed NOTHING on either
+model's trap rate and cost `gemma2:27b` 0.07 forward accuracy — a strict
+loss, rejected. This is the same tier-limitation the anti-twin rule hit
+(`edge_typing.py`'s #380 comment): prose forbidding a shape does not
+prevent it. The mitigation has to be deterministic — see the follow-up
+issue filed from these numbers.

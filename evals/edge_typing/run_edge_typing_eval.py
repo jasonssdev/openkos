@@ -168,6 +168,23 @@ def main() -> None:
     mean_stability = statistics.fmean(stabilities) if stabilities else 0.0
     emissions = sum(distribution.values())
 
+    # Issue #561: over the reversed-orientation probes alone, how often did
+    # the model emit the asymmetric type that would only be correct with
+    # the edge flipped? This is the direction-inversion rate the forward
+    # fixture could not see -- accuracy on those probes measures honesty,
+    # trap hits measure inversion, and the two are reported separately
+    # because an honest-but-wrong `references`/`related_to` mixup is a
+    # different (and much cheaper) failure than a backwards assertion.
+    trap_total = 0
+    trap_hits = 0
+    for position, labelled in enumerate(EDGES):
+        if labelled.trap_type is None:
+            continue
+        for answer, _ in per_edge[position]:
+            trap_total += 1
+            if answer == labelled.trap_type:
+                trap_hits += 1
+
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results_dir = pathlib.Path(__file__).resolve().parent / "results"
     results_dir.mkdir(exist_ok=True)
@@ -207,6 +224,15 @@ def main() -> None:
         f"{statistics.fmean(right_confidences) if right_confidences else 0.0:.2f} |",
         f"| mean stated confidence, WRONG answers | "
         f"{statistics.fmean(wrong_confidences) if wrong_confidences else 0.0:.2f} |",
+        *(
+            [
+                f"| **direction-trap hits (reversed probes)** | "
+                f"**{trap_hits} of {trap_total} "
+                f"({trap_hits / trap_total:.2f})** |"
+            ]
+            if trap_total
+            else []
+        ),
         "",
         "A threshold policy is only meaningful if the second number is"
         " clearly below the first. Equal values mean stated confidence"
