@@ -572,9 +572,25 @@ contained in anything is the failure `resolution/similarity.py` records
 duplicate groups. Partial overlap is NOT containment: a title sharing one
 token with the source title while naming its own subject MUST NOT fire.
 
+The predicate MUST also recognise ACRONYM/EXPANSION as the same topic
+(#586): one title's token being the initials of a contiguous run of words
+in the other, in EITHER direction, so `Model Context Protocol` under a
+source titled `MCP` is recognised despite sharing no token with it. The
+initialism MUST carry at least three letters — two-letter initialisms are
+far too common to carry identity — and MUST abbreviate at least two words,
+or every title sharing a first letter would match.
+
+This recognition MUST live in the ADDITIVE predicate only. It MUST NOT
+reach the drop rule: an object named after its source's expansion is the
+model writing the fuller name, and deleting it for that is the #413
+mistake. It also MUST NOT be presented as settling entity IDENTITY, which
+`resolution/similarity.py`'s acronym tier (#397) already decides and routes
+through `adjudicate`/`merge`.
+
 The title comparison shared with chunk-merge dedup MUST stay exact.
-Containment belongs to the trigger alone; folding it into that comparison
-would merge distinct subjects across chunks.
+Containment and acronym matching belong to the additive predicate alone;
+folding either into that comparison would merge distinct subjects across
+chunks — `MCP` and `Model Context Protocol` becoming one object.
 
 The DROP rule's exemption is UNCHANGED: a `Procedure` restating the source
 title MUST still never be dropped. The type exemption MUST live in exactly
@@ -585,6 +601,42 @@ The re-ask MUST NOT fire on a source whose final list holds more than one
 object, nor when the lone object does not restate the source title. Its own
 backend failure MUST degrade to "added nothing", keeping the object already
 produced, exactly as the selector judge's failure degrades.
+
+#### Scenario: An expansion object under an acronym source restates it
+
+- GIVEN a source titled with an acronym whose sole object is titled with
+  that acronym's expansion, sharing no token with it
+- WHEN extraction runs
+- THEN the object is recognised as restating the source: one re-ask is
+  spent, and if it finds nothing further the Source is marked
+
+#### Scenario: Acronym recognition is symmetric
+
+- GIVEN a source titled with the expansion whose sole object is titled with
+  the acronym
+- WHEN extraction runs
+- THEN it is recognised the same way
+
+#### Scenario: An expansion object beside a genuine subject is never dropped
+
+- GIVEN a source titled with an acronym yielding both an object titled with
+  its expansion and a second, distinct subject
+- WHEN extraction runs
+- THEN both objects are written, and no re-ask is spent
+
+#### Scenario: Acronym and expansion stay distinct across chunk-merge dedup
+
+- GIVEN one extraction reply holding both an acronym-titled object and an
+  expansion-titled object, under a source titled as neither
+- WHEN extraction runs
+- THEN both objects survive as distinct objects
+
+#### Scenario: A two-letter initialism does not match
+
+- GIVEN a source titled `AI` whose sole object is titled `Artificial
+  Intelligence`
+- WHEN extraction runs
+- THEN no re-ask is spent and the Source is not marked
 
 #### Scenario: A sole title-restating object triggers one re-ask whose findings are added
 
