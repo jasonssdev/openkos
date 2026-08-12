@@ -75,6 +75,7 @@ from openkos.resolution.candidates import CandidateGroup
 from openkos.resolution.contradiction import (
     CandidatePlan,
     ContradictionVerdict,
+    _CandidateSpec,
     contradiction_truncation_notice,
     find_contradictions,
     is_high_confidence_contradiction,
@@ -88,6 +89,8 @@ from openkos.resolution.edge_typing import (
     suggest_edge_types,
 )
 from openkos.resolution.volatility_typing import TierSuggestion, suggest_volatility
+from openkos.state import derived, findings
+from openkos.state.vectorstore import content_hash
 
 _DOCTOR_HINT = " Or run `openkos doctor` to diagnose the environment."
 """Byte-identical to `cli/main.py`'s own `_DOCTOR_HINT` (mirrors, not
@@ -1235,6 +1238,89 @@ def _contradictions_probe(ctx: CurateContext) -> StageProbe:
     )
 
 
+def _finding_input_digests(
+    bundle_dir: Path, spec: _CandidateSpec
+) -> tuple[findings.InputDigest, ...]:
+    """Per-input `(input_ref, sha256)` rows for one judged candidate
+    (durable-pending-work design, Decision 2's input table):
+
+    - **typed-edge** (`spec.merge_entry is None`): both concept files' raw
+      bytes, plus the `relation_type` label string -- it is in the prompt
+      (`resolution.contradiction._build_messages`), so re-labelling an edge
+      must invalidate the verdict too. An unreadable concept file (a race
+      with a later mutation) simply contributes no row for that input,
+      mirroring `_load_doc`'s own degrade-not-crash posture -- this is a
+      digest computation, not a re-judgment, and must never raise.
+    - **merged-body** (`spec.merge_entry is not None`): the ledger entry's
+      OWN `survivor_before`/`absorbed_snapshot` strings, digested in
+      memory -- never a second file read, since those strings are the
+      exact bytes the verdict was computed from."""
+    if spec.merge_entry is not None:
+        survivor_id, _ = spec.pair_ids
+        entry = spec.merge_entry
+        return (
+            findings.InputDigest(
+                f"{survivor_id}:survivor_before",
+                content_hash(entry.survivor_before.encode("utf-8")),
+            ),
+            findings.InputDigest(
+                f"{entry.absorbed_id}:absorbed_snapshot",
+                content_hash(entry.absorbed_snapshot.encode("utf-8")),
+            ),
+        )
+
+    digests: list[findings.InputDigest] = []
+    for concept_id in spec.pair_ids:
+        try:
+            raw_bytes = okf.concept_path_for(concept_id, bundle_dir).read_bytes()
+        except OSError:
+            continue
+        digests.append(findings.InputDigest(concept_id, content_hash(raw_bytes)))
+    if spec.relation_type is not None:
+        digests.append(
+            findings.InputDigest(
+                "relation_type", content_hash(spec.relation_type.encode("utf-8"))
+            )
+        )
+    return tuple(digests)
+
+
+def _persist_findings(
+    ctx: CurateContext,
+    plan: CandidatePlan,
+    verdicts: Sequence[ContradictionVerdict],
+) -> None:
+    """Record every judged verdict to `.openkos/findings.db` (pending-work
+    spec: "Contradiction Findings Are Persisted With Provenance"; curate-
+    command spec delta: "Persisting a finding is not a bundle write" -- this
+    writes ONLY under `.openkos/`, never `bundle/`).
+
+    `plan.specs`/`verdicts` share the SAME deterministic order
+    (`find_contradictions`'s own contract), so `zip` pairs each verdict with
+    the candidate it was judged from without re-deriving anything; a
+    partial batch (#441) yields fewer `verdicts` than `specs`, and `zip`
+    stops there -- exactly the already-judged prefix, never a mismatch.
+    An empty `verdicts` list opens no connection at all."""
+    batch = [
+        findings.Finding(
+            pair_ids=verdict.pair_ids,
+            merged_absorbed_id=verdict.merged_absorbed_id,
+            verdict=verdict.verdict.value,
+            confidence=verdict.confidence,
+            rationale=verdict.rationale,
+            input_digests=_finding_input_digests(ctx.layout.bundle_dir, spec),
+        )
+        for spec, verdict in zip(plan.specs, verdicts, strict=False)
+    ]
+    if not batch:
+        return
+    conn = derived.open_derived_connection(ctx.layout.findings_db_path)
+    try:
+        findings.record_findings(conn, batch)
+    finally:
+        conn.close()
+
+
 def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     """`find_contradictions` with `on_progress` (design D4): report-only
     and terminal -- never proposes or performs a write (spec: Contradictions
@@ -1298,6 +1384,8 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
         for claim in verdict.conflicting_claims:
             typer.echo(f"  - {claim}")
         typer.echo(f"  rationale: {verdict.rationale}")
+
+    _persist_findings(ctx, plan, verdicts)
 
     if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
