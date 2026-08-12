@@ -315,10 +315,20 @@ candidate or fallback chain.)
 #### Scenario: A candidate carrying a forbidden character falls back
 
 - GIVEN a candidate title (from an H1 or a title-plausible line) that,
-  after normalization, contains `[`, `]`, a backtick, or another forbidden
-  character
+  after normalization and balanced-span stripping, contains an unbalanced
+  `[`, `]`, `(`, `)`, a backtick, or another forbidden character
 - WHEN `openkos ingest <path>` completes
 - THEN the title falls back to `_titleize(src.stem)`
+
+#### Scenario: A balanced parenthetical span is stripped, not fatal (#592)
+
+- GIVEN a candidate title whose only forbidden characters form balanced
+  `(...)` or `[...]` spans (e.g. `MCP (Model Context Protocol)`)
+- WHEN `openkos ingest <path>` completes
+- THEN the title is the candidate with those spans removed and whitespace
+  re-collapsed (`MCP`), never the filename fallback
+- AND a candidate that is NOTHING BUT a span strips to empty and falls
+  back exactly like an empty heading
 
 #### Scenario: A candidate over 120 characters falls back
 

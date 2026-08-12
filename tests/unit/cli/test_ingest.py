@@ -4250,11 +4250,12 @@ def test_forbidden_character_candidate_falls_back_to_slug_title(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A candidate that, after normalization, carries a forbidden character
-    (here `[` and `]`) falls back to the slug title (spec: "A candidate
-    carrying a forbidden character falls back")."""
+    falls back to the slug title (spec: "A candidate carrying a forbidden
+    character falls back"). An UNBALANCED bracket (#592): a balanced
+    `[Draft]` span now strips to a valid title instead of falling back."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
-    source.write_text("# [Draft] Notes\n\nBody text.\n", encoding="utf-8")
+    source.write_text("# Draft ] Notes\n\nBody text.\n", encoding="utf-8")
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 

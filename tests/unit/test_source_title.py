@@ -432,7 +432,10 @@ class TestCrlfAndCascadeAndEdgeCases:
         assert source_title.derive_source_title(raw) == "Call with Maria Salazar"
 
     def test_rejected_h1_returns_none_without_cascading_to_plain_line(self) -> None:
-        raw = "# [Draft] Notes\n\nA plausible plain line\n\nbody"
+        # `|` stays fatal (no balanced-span strip applies to it, #592) --
+        # the pre-#592 fixture used `[Draft]`, which now strips to a VALID
+        # title instead of rejecting, so it no longer exercised no-cascade.
+        raw = "# Draft | Notes\n\nA plausible plain line\n\nbody"
 
         assert source_title.derive_source_title(raw) is None
 
@@ -446,3 +449,60 @@ class TestCrlfAndCascadeAndEdgeCases:
         raw = "- a bullet\n> a quote\n"
 
         assert source_title.derive_source_title(raw) is None
+
+
+# --- Balanced parenthetical/bracket spans are stripped, not fatal (#592) ----
+
+
+class TestParentheticalSpans:
+    """`( ) [ ]` are forbidden in the FINAL title because they would break
+    the `[title](/path.md)` bullet -- but rejecting the whole candidate
+    traded a good title for a filename stem. A BALANCED span is now
+    stripped and the remainder kept; the bullet-corruption guarantee is
+    untouched because the final validation still rejects any surviving
+    member of the class (issue #592)."""
+
+    def test_h1_with_trailing_parenthetical_keeps_the_leading_title(self) -> None:
+        assert (
+            source_title.derive_source_title("# MCP (Model Context Protocol)") == "MCP"
+        )
+
+    def test_h1_with_acronym_parenthetical_keeps_the_expansion(self) -> None:
+        assert (
+            source_title.derive_source_title("# Retrieval-Augmented Generation (RAG)")
+            == "Retrieval-Augmented Generation"
+        )
+
+    def test_interior_span_is_stripped_and_spacing_collapsed(self) -> None:
+        assert (
+            source_title.derive_source_title("# Notas (borrador) del curso (v2)")
+            == "Notas del curso"
+        )
+
+    def test_bracketed_span_is_stripped_like_a_parenthetical(self) -> None:
+        assert source_title.derive_source_title("# Guía [draft] de ingesta") == (
+            "Guía de ingesta"
+        )
+
+    def test_nested_spans_strip_completely(self) -> None:
+        assert (
+            source_title.derive_source_title("# Motor (ver (nota) interna) listo")
+            == "Motor listo"
+        )
+
+    def test_entirely_parenthetical_h1_still_falls_back(self) -> None:
+        """A title that is NOTHING BUT a span strips to empty -- `None`, so
+        the caller's filename fallback still applies."""
+        assert source_title.derive_source_title("# (notas sueltas)") is None
+
+    def test_unbalanced_paren_is_still_fatal(self) -> None:
+        """The guarantee: no `(` `)` `[` `]` ever reaches a bullet. An
+        unbalanced character has no span to strip and stays fatal."""
+        assert source_title.derive_source_title("# Broken (paren") is None
+        assert source_title.derive_source_title("# Broken ] bracket") is None
+
+    def test_plain_line_candidate_gets_the_same_stripping(self) -> None:
+        """Rule 2's plain-line path validates through the same pipeline."""
+        raw = "Curso de criptografía (edición 2026)\n\nbody"
+
+        assert source_title.derive_source_title(raw) == "Curso de criptografía"
