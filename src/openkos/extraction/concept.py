@@ -310,7 +310,174 @@ both ways -- an unmeasured addition to the common path is exactly the shape
 of change that regressed `large-03` from 0.75 to 0.57."""
 
 
-def _build_messages(source_text: str, source_title: str) -> list[Message]:
+_ES_STOPWORDS: Final = frozenset(
+    [
+        "el",
+        "la",
+        "los",
+        "las",
+        "un",
+        "una",
+        "unos",
+        "unas",
+        "de",
+        "del",
+        "al",
+        "y",
+        "o",
+        "pero",
+        "porque",
+        "como",
+        "cuando",
+        "donde",
+        "que",
+        "qué",
+        "este",
+        "esta",
+        "estos",
+        "estas",
+        "ese",
+        "esa",
+        "para",
+        "por",
+        "con",
+        "sin",
+        "sobre",
+        "entre",
+        "desde",
+        "hasta",
+        "muy",
+        "más",
+        "menos",
+        "también",
+        "ya",
+        "no",
+        "sí",
+        "les",
+        "nos",
+        "su",
+        "sus",
+        "lo",
+        "hay",
+        "fue",
+        "son",
+        "está",
+        "están",
+        "tiene",
+        "tienen",
+        "hacer",
+        "todo",
+        "todos",
+        "esto",
+        "eso",
+    ]
+)
+"""Spanish function words for `_dominant_language` -- function words only,
+never domain vocabulary, so a Spanish document quoting English technical
+terms still counts as Spanish (the code-switched register #563 is about)."""
+
+_EN_STOPWORDS: Final = frozenset(
+    [
+        "the",
+        "a",
+        "an",
+        "of",
+        "and",
+        "or",
+        "but",
+        "because",
+        "as",
+        "when",
+        "where",
+        "that",
+        "this",
+        "these",
+        "those",
+        "for",
+        "by",
+        "with",
+        "without",
+        "on",
+        "in",
+        "at",
+        "from",
+        "to",
+        "into",
+        "very",
+        "more",
+        "less",
+        "also",
+        "not",
+        "yes",
+        "it",
+        "its",
+        "is",
+        "are",
+        "was",
+        "were",
+        "has",
+        "have",
+        "had",
+        "do",
+        "does",
+        "all",
+        "every",
+        "there",
+    ]
+)
+"""English function words for `_dominant_language`, same discipline as
+`_ES_STOPWORDS`."""
+
+_LANGUAGE_SAMPLE_CHARS: Final = 40_000
+"""How much of the document `_dominant_language` reads. Bounds the token
+scan on very large sources; 40 KB spans ~10 chunk windows, far more than a
+majority vote needs."""
+
+
+def _dominant_language(text: str) -> str | None:
+    """The document's dominant language as an English name (`"Spanish"` /
+    `"English"`), or `None` when the function-word vote is not decisive
+    (issue #563).
+
+    Deterministic and dependency-free: counts occurrences of each
+    language's FUNCTION words over the first `_LANGUAGE_SAMPLE_CHARS`.
+    Function words, never domain vocabulary, because the failure this
+    feeds is exactly a Spanish document quoting English technical terms --
+    content words are the contaminant, so they must carry no vote. The
+    verdict requires a 2x majority AND at least 25 hits, so short or
+    genuinely mixed documents return `None` and the caller keeps the
+    text-relative anchor wording unchanged. Only Spanish and English are
+    scored: they are the project's measured languages
+    ([[monolingual-before-multilingual]] scope), and an unscored language
+    safely degrades to `None`."""
+    tokens = text[:_LANGUAGE_SAMPLE_CHARS].lower().split()
+    es_hits = sum(1 for token in tokens if token.strip(".,;:¿?¡!()") in _ES_STOPWORDS)
+    en_hits = sum(1 for token in tokens if token.strip(".,;:!?()") in _EN_STOPWORDS)
+    if es_hits >= 25 and es_hits >= 2 * en_hits:
+        return "Spanish"
+    if en_hits >= 25 and en_hits >= 2 * es_hits:
+        return "English"
+    return None
+
+
+def _named_language_anchor(language: str) -> str:
+    """The per-chunk anchor naming the DOCUMENT's dominant language (#563),
+    replacing `_LANGUAGE_ANCHOR`'s text-relative wording on chunked
+    windows: a ~4 KB window of a code-switched transcript can be dominated
+    by quoted foreign terminology, and "the same language as the SOURCE
+    TEXT below" then re-binds to the quotes. Naming the language pins the
+    anchor to a fact about the whole document that no single window can
+    overturn."""
+    return (
+        f'Write every "title", "description" and "body" in {language} -- '
+        "the dominant language of the document this text is part of, even "
+        "where the text quotes terms in another language."
+    )
+
+
+def _build_messages(
+    source_text: str, source_title: str, *, anchor_language: str | None = None
+) -> list[Message]:
     """Assemble the 2-message prompt: system classification rules + the raw
     source text as the user turn, prefixed with its title labeled as
     non-authoritative metadata (design DD1) -- the title is still handed
@@ -329,11 +496,34 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
     derived upstream (`derive_source_title`) and is not affected. It lives
     here and not in `derive_source_title` for exactly that reason: the
     title is genuinely descriptive FOR HUMANS, it is only the model's
-    generation that it primes into a single-Event summary."""
+    generation that it primes into a single-Event summary.
+
+    `anchor_language` (issue #563) is set ONLY by the chunked fan-out
+    paths, and only when `_dominant_language` reached a decisive verdict:
+    the named anchor then replaces (meeting-shaped path) or precedes
+    (titled path) the window text, so every window of one document anchors
+    to the SAME language regardless of what that window quotes. `None` --
+    every single-pass call, and chunked documents whose language vote is
+    not decisive -- keeps the historical prompt bytes exactly: the titled
+    single-pass path stays anchor-free on purpose (an unmeasured addition
+    to the common path is the shape of change that regressed `large-03`,
+    see `_LANGUAGE_ANCHOR`), and the probe that measured this fix
+    (`evals/language_leak/`) measured the CHUNKED path only."""
     if _MEETING_SHAPED_TITLE_RE.search(source_title):
-        user_content = f"{_LANGUAGE_ANCHOR}\n\nSOURCE TEXT:\n{source_text}"
+        anchor = (
+            _named_language_anchor(anchor_language)
+            if anchor_language is not None
+            else _LANGUAGE_ANCHOR
+        )
+        user_content = f"{anchor}\n\nSOURCE TEXT:\n{source_text}"
     else:
+        anchor_prefix = (
+            f"{_named_language_anchor(anchor_language)}\n\n"
+            if anchor_language is not None
+            else ""
+        )
         user_content = (
+            f"{anchor_prefix}"
             f"SOURCE TITLE (metadata only, not authoritative -- treat as "
             f"context, not the pre-computed topic): {source_title}\n\n"
             f"SOURCE TEXT:\n{source_text}"
@@ -1107,12 +1297,20 @@ def _chunk_lines(text: str, target: int = _CHUNK_TARGET) -> list[str]:
 
 
 def _extract_once(
-    source_text: str, source_title: str, llm: LLMBackend
+    source_text: str,
+    source_title: str,
+    llm: LLMBackend,
+    *,
+    anchor_language: str | None = None,
 ) -> list[ExtractionResult]:
     """One chat call's validated results, in reply order -- the pre-#454
     whole-document pipeline up to (not including) twin-drop and the cap,
-    shared verbatim by the single-call and per-chunk paths."""
-    reply = llm.chat(_build_messages(source_text, source_title))
+    shared verbatim by the single-call and per-chunk paths.
+    `anchor_language` (#563) is threaded to `_build_messages` untouched;
+    only the chunked fan-out paths ever set it."""
+    reply = llm.chat(
+        _build_messages(source_text, source_title, anchor_language=anchor_language)
+    )
     items = parsing.extract_json_items(reply)
     results: list[ExtractionResult] = []
     for item in items:
@@ -1474,9 +1672,18 @@ def extract_concept(
         # with it (the caller's degrade seam is all-or-nothing).
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
+        # #563: the language anchor is computed ONCE from the whole
+        # document and named per window -- a code-switched window must not
+        # re-bind "the same language as the SOURCE TEXT below" to its own
+        # quoted terminology.
+        anchor_language = _dominant_language(source_text)
         merged: list[ExtractionResult] = []
         for window in windows:
-            merged.extend(_extract_once(window, source_title, llm))
+            merged.extend(
+                _extract_once(
+                    window, source_title, llm, anchor_language=anchor_language
+                )
+            )
         # Grounding checks against the FULL source, not the window that
         # produced the object -- an expansion stated once in chunk 1 grounds
         # the acronym a later chunk re-derives.
@@ -1679,9 +1886,16 @@ def extract_concept_union(
     else:
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
+        # #563: same once-per-document language anchor as `extract_concept`'s
+        # chunked branch -- the two fan-outs must not disagree on language.
+        anchor_language = _dominant_language(source_text)
         chunked: list[ExtractionResult] = []
         for window in windows:
-            chunked.extend(_extract_once(window, source_title, llm))
+            chunked.extend(
+                _extract_once(
+                    window, source_title, llm, anchor_language=anchor_language
+                )
+            )
         merged = _drop_source_title_twins(
             _drop_framing_objects(
                 _dedup_merged(
