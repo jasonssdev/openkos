@@ -2670,6 +2670,166 @@ def test_adjudicate_apply_same_n_gt2_skip_prints_pairwise_merge_commands_in_orde
     assert "applied 0, skipped 1 (N>2: 1, already-merged: 0)" in result.stdout
 
 
+def _write_bodied_doc(path: Path, *, title: str, body: str) -> None:
+    """`_write_doc` with a caller-controlled body -- the stacked-body
+    guardrail (#559) needs real body sizes, which the plain helper's
+    heading-only documents cannot produce."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Concept\ntitle: {title}\n---\n# {title}\n\n{body}\n",
+        encoding="utf-8",
+    )
+
+
+def test_adjudicate_apply_same_refuses_a_stacked_share_dominated_merge(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--apply-same` is the one accept path with NO per-item consent, so a
+    merge whose result would be dominated by unreconciled absorbed content
+    is refused outright there (issue #559): excluded from the preview and
+    the typed count, reported with an explicit line that names the
+    interactive route, and both files stay on disk."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "adk.md", title="ADK", body="Stub."
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "adk-callbacks.md",
+        title="ADK Callbacks",
+        body="A long document about callbacks, guardrails and tuning. " * 40,
+    )
+    group = _two_member_group(("concepts/adk", "concepts/adk-callbacks"))
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(group,), produced=1, retained=1)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(results=[_adjudicated(group, verdict=Verdict.SAME)])
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same"])
+
+    assert result.exit_code == 0
+    assert "refused (stacked-body" in result.stdout
+    assert "adjudicate --apply" in result.stdout
+    assert "Total: 0" in result.stdout
+    assert (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").exists()
+    assert "stacked-body: 1" in result.stdout
+
+
+def test_adjudicate_apply_same_applies_clean_merges_while_refusing_dominated_ones(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guardrail refuses per merge, not per batch: a clean pair in the
+    same run is previewed, counted, and applied normally."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "adk.md", title="ADK", body="Stub."
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "adk-callbacks.md",
+        title="ADK Callbacks",
+        body="A long document about callbacks, guardrails and tuning. " * 40,
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "http-client.md",
+        title="HTTP Client",
+        body="A real description of the client with detail. " * 5,
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "http-client-2.md",
+        title="HTTP Client (duplicate)",
+        body="Another description of the same client. " * 5,
+    )
+    dominated = _two_member_group(("concepts/adk", "concepts/adk-callbacks"))
+    clean = _two_member_group(("concepts/http-client", "concepts/http-client-2"))
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(dominated, clean), produced=2, retained=2)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(
+            results=[
+                _adjudicated(dominated, verdict=Verdict.SAME),
+                _adjudicated(clean, verdict=Verdict.SAME),
+            ]
+        )
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+
+    assert result.exit_code == 0
+    assert "refused (stacked-body" in result.stdout
+    assert "Total: 1" in result.stdout
+    assert "applied 1" in result.stdout
+    # The dominated pair's files are untouched; the clean duplicate merged.
+    assert (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").exists()
+    assert not (tmp_path / "bundle" / "concepts" / "http-client-2.md").exists()
+
+
+def test_adjudicate_apply_interactive_still_prompts_on_a_dominated_merge(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The interactive walk keeps per-item consent as the gate (issue #559
+    chose warn-not-refuse where a human decides): the preview carries the
+    warning, the prompt still runs, and an accepted `y` still merges."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "adk.md", title="ADK", body="Stub."
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "adk-callbacks.md",
+        title="ADK Callbacks",
+        body="A long document about callbacks, guardrails and tuning. " * 40,
+    )
+    group = _two_member_group(("concepts/adk", "concepts/adk-callbacks"))
+
+    def _fake_find_candidates(
+        bundle_dir: object, **kwargs: object
+    ) -> CandidateGroupReport:
+        return CandidateGroupReport(groups=(group,), produced=1, retained=1)
+
+    def _fake_adjudicate(
+        candidates: list[CandidateGroup], **kwargs: object
+    ) -> AdjudicationBatch:
+        return AdjudicationBatch(results=[_adjudicated(group, verdict=Verdict.SAME)])
+
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report", _fake_find_candidates
+    )
+    monkeypatch.setattr("openkos.cli.main.adjudicate_candidates", _fake_adjudicate)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "warning:" in result.stdout
+    assert "ABOUT" in result.stdout
+    assert "applied 1" in result.stdout
+    assert not (tmp_path / "bundle" / "concepts" / "adk-callbacks.md").exists()
+
+
 def test_adjudicate_apply_same_aggregate_preview_precedes_gate_and_writes(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,

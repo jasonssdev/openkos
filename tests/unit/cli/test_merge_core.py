@@ -821,6 +821,94 @@ def test_format_merge_preview_line_omits_stacked_body_note_when_absorbed_body_em
     assert "unreconciled" not in line
 
 
+def test_format_merge_preview_line_warns_when_stacked_share_dominates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A proposed merge whose result would be dominated by unreconciled
+    absorbed content carries an explicit warning in the shared preview line
+    (issue #559): three of ten accepted merges in a real run stacked 89-92%
+    foreign text, and every one was an about-X/is-X confusion. The signal is
+    deterministic and already computed -- the guardrail just states it."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="ADK", body="Stub.")
+    _write_concept(
+        tmp_path,
+        "concepts/absorbed",
+        title="ADK Callbacks",
+        body="A long document about the survivor's topic. " * 40,
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    assert prepared.stacked_body is not None
+    assert prepared.stacked_body.share >= 0.8
+    line = _format_merge_preview_line(prepared)
+    assert "warning:" in line
+    assert "ABOUT" in line
+
+
+def test_format_merge_preview_line_no_warning_below_the_guardrail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two comparable descriptions of the same subject stack roughly half
+    the merged body -- an ordinary genuine merge -- and get no warning."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        body="A real description of the subject with some detail. " * 5,
+    )
+    _write_concept(
+        tmp_path,
+        "concepts/absorbed",
+        title="Absorbed",
+        body="Another real description of the same subject. " * 5,
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    index_path = bundle_dir / "index.md"
+    log_path = bundle_dir / "log.md"
+    survivor_path, survivor_canonical, absorbed_path, absorbed_canonical = _resolve(
+        bundle_dir, "concepts/survivor", "concepts/absorbed"
+    )
+
+    prepared = prepare_merge(
+        bundle_dir,
+        index_path,
+        log_path,
+        survivor_path,
+        absorbed_path,
+        survivor_canonical,
+        absorbed_canonical,
+        tmp_path,
+        now=datetime.now(UTC),
+    )
+
+    assert prepared.stacked_body is not None
+    assert prepared.stacked_body.share < 0.8
+    line = _format_merge_preview_line(prepared)
+    assert "warning:" not in line
+    assert "ABOUT" not in line
+
+
 def test_stacked_body_report_does_not_change_merged_document_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
