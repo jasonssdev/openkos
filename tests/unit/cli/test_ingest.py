@@ -487,9 +487,9 @@ def test_differing_source_reingest_refuses(
     distinguishes "differs" from the byte-identical case (scenario:
     differing re-ingest still refused)."""
     _init_workspace(tmp_path, monkeypatch)
-    (tmp_path / "raw" / "notes.txt").write_text("original", encoding="utf-8")
     source = tmp_path / "notes.txt"
     source.write_text("new content", encoding="utf-8")
+    _stage_ingested_raw(tmp_path, "notes.txt", "original", source)
     before = _snapshot(tmp_path)
 
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
@@ -4887,6 +4887,38 @@ def test_ingest_stage_notice_is_silent_without_a_tty(
 # --- Issue #267: batch ingest -- a directory or glob in one invocation ------
 
 
+def _stage_ingested_raw(tmp_path: Path, name: str, content: str, origin: Path) -> None:
+    """Stage `raw/<name>` together with the Source that OWNS it, recording
+    `origin` as that Source's `origin_key`.
+
+    Writing `raw/<name>` alone models a half-built workspace, not an
+    already-ingested source. Since #552 the two are meaningfully different:
+    a raw copy whose owning Source records no origin cannot be proven to be
+    the file now being ingested, so it disambiguates rather than refuses.
+    Tests that want the "same source, changed bytes" refusal must say which
+    source, and this helper is how they say it."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir(exist_ok=True)
+    (raw_dir / name).write_text(content, encoding="utf-8")
+    slug = Path(name).stem
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / f"{slug}.md").write_text(
+        okf.build_source_concept(
+            title=slug,
+            description=f"Raw source imported from '{origin}' as raw/{name}.",
+            resource=f"raw/{name}",
+            tags=[],
+            timestamp="2026-08-12T00:00:00Z",
+            sensitivity="private",
+            provenance=[f"raw/{name}"],
+            raw_content=content,
+            origin_key=okf.origin_key_for(origin),
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_notes(tmp_path: Path, files: dict[str, str], subdir: str = "notes") -> Path:
     """Create `<tmp_path>/<subdir>/` and populate it with `files` (relative
     name -> content; nested names like `archive/setup.md` create their own
@@ -5148,8 +5180,9 @@ def test_batch_partial_failure_skips_that_file_and_continues(
         tmp_path,
         {"a.txt": "Alpha notes.", "b.txt": "Beta notes.", "c.txt": "Gamma notes."},
     )
-    (tmp_path / "raw").mkdir(exist_ok=True)
-    (tmp_path / "raw" / "b.txt").write_text("conflicting bytes", encoding="utf-8")
+    _stage_ingested_raw(
+        tmp_path, "b.txt", "conflicting bytes", tmp_path / "notes" / "b.txt"
+    )
 
     result = runner.invoke(app, ["ingest", "notes", "--auto"])
 
@@ -5349,9 +5382,11 @@ def test_batch_mixed_drift_and_hard_refusal_exits_1(
     (issue #349)."""
     _init_workspace(tmp_path, monkeypatch)
     _write_notes(tmp_path, {"a.txt": "Alpha notes.", "b.txt": "Beta notes."})
-    # b hard-refuses: an existing raw copy with DIFFERING bytes (exit 1).
-    (tmp_path / "raw").mkdir(exist_ok=True)
-    (tmp_path / "raw" / "b.txt").write_text("conflicting bytes", encoding="utf-8")
+    # b hard-refuses: the SAME source's raw copy with DIFFERING bytes
+    # (exit 1) -- staged with its owning Source so the origin is known.
+    _stage_ingested_raw(
+        tmp_path, "b.txt", "conflicting bytes", tmp_path / "notes" / "b.txt"
+    )
     # a drift-refuses: an index.md edit lands inside a's preview window
     # (exit 3); the hook fires ONCE, on a's preview -- a sorts before b.
     index_path = tmp_path / "bundle" / "index.md"
@@ -5387,8 +5422,9 @@ def test_batch_hard_refusal_only_exits_1(
     causes must not read alike)."""
     _init_workspace(tmp_path, monkeypatch)
     _write_notes(tmp_path, {"b.txt": "Beta notes."})
-    (tmp_path / "raw").mkdir(exist_ok=True)
-    (tmp_path / "raw" / "b.txt").write_text("conflicting bytes", encoding="utf-8")
+    _stage_ingested_raw(
+        tmp_path, "b.txt", "conflicting bytes", tmp_path / "notes" / "b.txt"
+    )
 
     result = runner.invoke(app, ["ingest", "notes", "--auto"])
 
@@ -5877,3 +5913,279 @@ def test_reingest_clears_a_previous_extraction_notice(
 
     assert result.exit_code == 0
     assert "extraction_notice" not in concept_path.read_text(encoding="utf-8")
+
+
+# --- Basename collision across folders (issue #552) -----------------------
+#
+# `raw/` is a FLAT namespace derived from `Path(src).name` -- the
+# path-traversal defence, which is correct and stays. What was missing is
+# disambiguation when the basename is already taken by a DIFFERENT file.
+# One shape refused a legitimate file; the other silently absorbed a second
+# source into the first one's Source, and provenance is a core promise of
+# this product.
+#
+# Identity comes from `origin_key` (the resolved origin path's digest), not
+# from the bytes: two empty `__init__.py` files are two sources.
+
+
+def _folder_source(tmp_path: Path, folder: str, name: str, text: str) -> Path:
+    """A source file under its own folder, so two can share a basename."""
+    directory = tmp_path / folder
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_same_basename_different_content_no_longer_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#552's headline evidence: two unrelated courses each holding an
+    `01-bienvenida.md`. The second was REFUSED and its content never
+    entered the bundle. Both must now land, under distinct raw copies."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    _folder_source(tmp_path, "course-a", "01-bienvenida.md", "# A\n\nWelcome to A.\n")
+    _folder_source(tmp_path, "course-b", "01-bienvenida.md", "# B\n\nWelcome to B.\n")
+
+    first = runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"])
+    second = runner.invoke(app, ["ingest", "course-b/01-bienvenida.md", "--auto"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    raw_dir = tmp_path / "raw"
+    assert (raw_dir / "01-bienvenida.md").read_text(encoding="utf-8") == (
+        "# A\n\nWelcome to A.\n"
+    )
+    assert (raw_dir / "01-bienvenida-2.md").read_text(encoding="utf-8") == (
+        "# B\n\nWelcome to B.\n"
+    )
+    sources = tmp_path / "bundle" / "sources"
+    assert (sources / "01-bienvenida.md").is_file()
+    assert (sources / "01-bienvenida-2.md").is_file()
+
+
+def test_same_basename_identical_bytes_is_still_a_distinct_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The silent merge #552 calls worse, and the decision taken for it:
+    two empty `__init__.py` files from different packages are two sources.
+
+    The byte check passed, so this used to report a re-ingest and reuse the
+    first copy -- leaving the Source misrepresenting its own provenance with
+    no warning. Identity is the ORIGIN, never the content."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    _folder_source(tmp_path, "pkg-a", "__init__.py", "")
+    _folder_source(tmp_path, "pkg-b", "__init__.py", "")
+
+    assert runner.invoke(app, ["ingest", "pkg-a/__init__.py", "--auto"]).exit_code == 0
+    result = runner.invoke(app, ["ingest", "pkg-b/__init__.py", "--auto"])
+
+    assert result.exit_code == 0
+    raw_dir = tmp_path / "raw"
+    assert (raw_dir / "__init__.py").is_file()
+    assert (raw_dir / "__init__-2.py").is_file()
+
+
+def test_disambiguated_sources_carry_distinct_origin_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each Source records WHICH file it came from. Without this the second
+    run has nothing to compare against and every re-ingest disambiguates
+    again -- an unbounded suffix chain."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    _folder_source(tmp_path, "course-a", "01-bienvenida.md", "# A\n\nWelcome to A.\n")
+    _folder_source(tmp_path, "course-b", "01-bienvenida.md", "# B\n\nWelcome to B.\n")
+
+    runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"])
+    runner.invoke(app, ["ingest", "course-b/01-bienvenida.md", "--auto"])
+
+    sources = tmp_path / "bundle" / "sources"
+    first, _ = okf.load_frontmatter(
+        (sources / "01-bienvenida.md").read_text(encoding="utf-8")
+    )
+    second, _ = okf.load_frontmatter(
+        (sources / "01-bienvenida-2.md").read_text(encoding="utf-8")
+    )
+
+    assert first["origin_key"] == okf.origin_key_for(
+        tmp_path / "course-a" / "01-bienvenida.md"
+    )
+    assert second["origin_key"] == okf.origin_key_for(
+        tmp_path / "course-b" / "01-bienvenida.md"
+    )
+    assert first["origin_key"] != second["origin_key"]
+    assert second["resource"] == "raw/01-bienvenida-2.md"
+
+
+def test_reingesting_the_same_file_spawns_no_disambiguated_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression this whole mechanism has to avoid. A plain re-ingest
+    matches on `origin_key` and stays idempotent -- one raw copy, one
+    Source, no `-2`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    _folder_source(tmp_path, "course-a", "01-bienvenida.md", "# A\n\nWelcome to A.\n")
+
+    for _ in range(3):
+        result = runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"])
+        assert result.exit_code == 0
+
+    raw_files = sorted(p.name for p in (tmp_path / "raw").glob("*"))
+    assert raw_files == ["01-bienvenida.md"]
+    sources = sorted(p.name for p in (tmp_path / "bundle" / "sources").glob("*.md"))
+    assert sources == ["01-bienvenida.md"]
+
+
+def test_reingesting_from_a_different_cwd_is_still_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`origin_key` is keyed on the RESOLVED path, so the same file reached
+    by two different spellings is one source. Keying on the string as typed
+    would spawn a copy per spelling."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    _folder_source(tmp_path, "course-a", "01-bienvenida.md", "# A\n\nWelcome to A.\n")
+
+    assert (
+        runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"]).exit_code
+        == 0
+    )
+    result = runner.invoke(
+        app, ["ingest", str(tmp_path / "course-a" / "01-bienvenida.md"), "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert sorted(p.name for p in (tmp_path / "raw").glob("*")) == ["01-bienvenida.md"]
+
+
+def test_modified_bytes_for_the_same_origin_still_refuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raw immutability survives #552 intact. Editing an already-ingested
+    file and re-ingesting it is still a refusal, not a silent new copy --
+    disambiguation is for a DIFFERENT file, never for changed bytes of the
+    same one."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    source = _folder_source(tmp_path, "course-a", "01-bienvenida.md", "# A\n\nOne.\n")
+    assert (
+        runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"]).exit_code
+        == 0
+    )
+    source.write_text("# A\n\nEdited.\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"])
+
+    assert result.exit_code == 1
+    assert "raw sources are immutable" in result.stderr
+    assert not (tmp_path / "raw" / "01-bienvenida-2.md").exists()
+
+
+def test_a_legacy_source_without_an_origin_key_matches_on_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The migration path. A Source written before #552 carries no
+    `origin_key`; matching it on identical bytes preserves today's exact
+    behaviour, and the re-ingest backfills the key -- so the workspace
+    self-migrates with no verb and no repair step."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    _folder_source(tmp_path, "course-a", "01-bienvenida.md", "# A\n\nWelcome to A.\n")
+    assert (
+        runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"]).exit_code
+        == 0
+    )
+    concept_path = tmp_path / "bundle" / "sources" / "01-bienvenida.md"
+    text = concept_path.read_text(encoding="utf-8")
+    metadata, body = okf.load_frontmatter(text)
+    del metadata["origin_key"]
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"])
+
+    assert result.exit_code == 0
+    assert sorted(p.name for p in (tmp_path / "raw").glob("*")) == ["01-bienvenida.md"]
+    refreshed, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert refreshed["origin_key"] == okf.origin_key_for(
+        tmp_path / "course-a" / "01-bienvenida.md"
+    )
+
+
+def test_disambiguation_is_reported_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A destination the user did not name is never chosen silently: the
+    line states the basename that was taken and the copy actually written."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    _folder_source(tmp_path, "course-a", "01-bienvenida.md", "# A\n\nWelcome to A.\n")
+    _folder_source(tmp_path, "course-b", "01-bienvenida.md", "# B\n\nWelcome to B.\n")
+    runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"])
+
+    result = runner.invoke(app, ["ingest", "course-b/01-bienvenida.md", "--auto"])
+
+    assert result.exit_code == 0
+    assert "01-bienvenida.md" in result.stderr
+    assert "raw/01-bienvenida-2.md" in result.stderr
+
+
+def test_a_third_collision_takes_the_next_free_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scan is ascending and skips what is taken, matching the
+    derived-object convention (#131) rather than inventing a second one."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    for folder in ("a", "b", "c"):
+        _folder_source(tmp_path, folder, "notes.txt", f"content {folder}")
+        assert (
+            runner.invoke(app, ["ingest", f"{folder}/notes.txt", "--auto"]).exit_code
+            == 0
+        )
+
+    assert sorted(p.name for p in (tmp_path / "raw").glob("*")) == [
+        "notes-2.txt",
+        "notes-3.txt",
+        "notes.txt",
+    ]
+
+
+def test_a_legacy_source_with_differing_bytes_disambiguates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule that resolves #552 stated at its hardest point:
+    immutability is scoped to a file we KNOW is the same one.
+
+    A legacy Source records no origin, so a differing-bytes candidate under
+    its basename cannot be proven to be the same file. #552's own text asks
+    for disambiguation "when the basename exists with different content",
+    and refusing here is exactly the harm it was filed for -- real content
+    turned away. The candidate lands under its own copy; nothing existing is
+    rewritten, so immutability holds for every byte already on disk."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch)
+    _folder_source(tmp_path, "course-a", "01-bienvenida.md", "# A\n\nWelcome to A.\n")
+    assert (
+        runner.invoke(app, ["ingest", "course-a/01-bienvenida.md", "--auto"]).exit_code
+        == 0
+    )
+    concept_path = tmp_path / "bundle" / "sources" / "01-bienvenida.md"
+    metadata, body = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    del metadata["origin_key"]
+    concept_path.write_text(okf.dump_frontmatter(metadata, body), encoding="utf-8")
+    _folder_source(tmp_path, "course-b", "01-bienvenida.md", "# B\n\nWelcome to B.\n")
+
+    result = runner.invoke(app, ["ingest", "course-b/01-bienvenida.md", "--auto"])
+
+    assert result.exit_code == 0
+    raw_dir = tmp_path / "raw"
+    assert (raw_dir / "01-bienvenida.md").read_text(encoding="utf-8") == (
+        "# A\n\nWelcome to A.\n"
+    )
+    assert (raw_dir / "01-bienvenida-2.md").read_text(encoding="utf-8") == (
+        "# B\n\nWelcome to B.\n"
+    )

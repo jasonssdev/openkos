@@ -2664,3 +2664,105 @@ def test_concept_path_for_skips_the_scan_for_an_ascii_id(
     okf.concept_path_for("concepts/dangling-ascii-id", bundle_dir)
 
     assert scanned == [], "an ASCII id must not pay a directory scan"
+
+
+# --- `origin_key`: the ingest-origin identity key (issue #552) ------------
+#
+# #552's silent failure was a flat `raw/` namespace: two different files
+# from two different folders sharing a basename were treated as the same
+# source. Telling them apart needs an identity for "which file on disk did
+# this Source come from", and `resource` cannot carry it -- `resource` names
+# the copy INSIDE the workspace, which is exactly the thing that collides.
+#
+# A DIGEST, never the path itself: the value's only job is equality, and a
+# structured absolute-path field would put `$HOME` and the machine's layout
+# into every Source's frontmatter, in git history, removable only by
+# `purge`. The human-readable origin already lives in `description`.
+
+
+def test_origin_key_is_stable_for_the_same_file(tmp_path: Path) -> None:
+    """The same file yields the same key across calls -- the property the
+    whole re-ingest idempotency rests on."""
+    path = tmp_path / "a" / "notes.txt"
+
+    assert okf.origin_key_for(path) == okf.origin_key_for(path)
+
+
+def test_origin_key_differs_between_folders_sharing_a_basename(
+    tmp_path: Path,
+) -> None:
+    """#552's exact shape: same basename, different folders, different key.
+    This is the comparison that makes the two files distinguishable at all."""
+    first = tmp_path / "course-a" / "01-bienvenida.md"
+    second = tmp_path / "course-b" / "01-bienvenida.md"
+
+    assert okf.origin_key_for(first) != okf.origin_key_for(second)
+
+
+def test_origin_key_is_identical_for_two_spellings_of_one_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keyed on the RESOLVED path, so `./notes.txt` from inside the folder
+    and `folder/notes.txt` from its parent are one file, not two.
+
+    Without resolution, re-ingesting the same file from a different working
+    directory would look like a new source and spawn a disambiguated copy on
+    every run -- the unbounded-suffix bug `_family_owns_source` exists to
+    prevent one layer down."""
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    target = folder / "notes.txt"
+    target.write_text("x", encoding="utf-8")
+
+    from_parent = okf.origin_key_for(tmp_path / "folder" / "notes.txt")
+    monkeypatch.chdir(folder)
+    from_inside = okf.origin_key_for(Path("notes.txt"))
+
+    assert from_inside == from_parent
+
+
+def test_origin_key_discloses_no_path_material(tmp_path: Path) -> None:
+    """The key is a digest, not an encoding: no path segment survives in it.
+
+    This is the whole reason the field is a hash. A structured absolute-path
+    field would extend to one more consumer the interpolation surface #274
+    and #285 had to harden, and would land `$HOME` in git history where
+    `purge` is the only removal path."""
+    key = okf.origin_key_for(tmp_path / "someone" / "secret-project" / "notes.txt")
+
+    assert "someone" not in key
+    assert "secret-project" not in key
+    assert "notes" not in key
+    assert set(key) <= set("0123456789abcdef")
+
+
+def test_origin_key_length_stays_short_enough_to_never_fold(tmp_path: Path) -> None:
+    """128 bits: unambiguous for any realistic workspace, and short enough
+    that `origin_key: <value>` clears the YAML emitter's ~80-column fold
+    width with room to spare -- a folded scalar would turn one frontmatter
+    line into two."""
+    key = okf.origin_key_for(tmp_path / "notes.txt")
+
+    assert len(key) == 32
+    assert len(f"{okf.ORIGIN_KEY_KEY}: {key}") < 80
+
+
+def test_build_source_concept_omits_origin_key_by_default() -> None:
+    """Absent unless passed, like every other optional Source key -- so a
+    pre-#552 document's bytes are unchanged by this key existing, and
+    absence has exactly one meaning: ingested before origins were recorded."""
+    text = _build_call_source()
+
+    assert "origin_key" not in text
+
+
+def test_build_source_concept_emits_the_origin_key(tmp_path: Path) -> None:
+    """A non-`None` `origin_key` round-trips through the frontmatter
+    verbatim, on ONE line."""
+    key = okf.origin_key_for(tmp_path / "notes.txt")
+
+    text = _build_call_source(origin_key=key)
+
+    metadata, _ = okf.load_frontmatter(text)
+    assert metadata["origin_key"] == key
+    assert f"origin_key: {key}\n" in text
