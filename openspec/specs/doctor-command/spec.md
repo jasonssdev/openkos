@@ -463,6 +463,139 @@ MUST run independently of workspace state and Ollama reachability, since
 - THEN the git-filter-repo check still runs and reports its own
   `[PASS]`/`[FAIL]` result, unaffected by workspace or Ollama state
 
+### Requirement: Merge-Ledger Torn-Write Check
+
+`doctor` MUST add one new check, `merge ledger torn writes`, that scans
+`bundle/.state/ledger/` for any `*.ledger.okf.pending` two-phase-write
+marker — the trace a `merge`/`unmerge` leaves behind when it crashes
+mid-commit. This check is mechanically exact (a marker either exists or it
+does not, and its recorded hash either matches the survivor's current
+content or it does not), so it has zero false positives and zero false
+negatives, unlike the post-merge-mutation check below. It MUST be
+informational (its failure alone MUST NOT affect the exit code) and MUST
+follow the existing `[PASS]`/`[FAIL]`/`[SKIP]` +
+`-> <remediation>` shape. A `[FAIL]` line's remediation MUST name the
+repair verb. This check MUST NOT write, modify, or delete any file —
+`doctor` stays read-only; it detects and advises, it never repairs.
+
+#### Scenario: A workspace with no pending markers passes
+
+- GIVEN a workspace where no `merge`/`unmerge` has ever crashed mid-commit
+- WHEN `openkos doctor` runs
+- THEN the merge-ledger torn-writes check prints `[PASS]`
+
+#### Scenario: A torn write fails with the repair remediation
+
+- GIVEN a `*.ledger.okf.pending` marker under `bundle/.state/ledger/`
+- WHEN `openkos doctor` runs
+- THEN the check prints `[FAIL]` followed by remediation naming the
+  repair verb
+
+#### Scenario: The check never writes
+
+- GIVEN any combination of pending and non-pending ledger sidecars
+- WHEN `openkos doctor` runs
+- THEN no file under `bundle/.state/ledger/` (or anywhere else) is
+  created, modified, or deleted by this check
+
+### Requirement: Merge-Ledger Integrity Check
+
+`doctor` MUST add one new check, `merge ledger entries free of post-merge
+mutation`, that inspects every sidecar under `bundle/.state/ledger/` and
+flags an entry whose recorded snapshot(s) no longer match what a
+byte-exact `unmerge` would require — i.e. the ledger was mutated by
+something other than the merge/unmerge machinery after being written. This
+check MUST be informational (its failure alone MUST NOT affect the exit
+code) and MUST follow the existing `[PASS]`/`[FAIL]`/`[SKIP]` +
+`-> <remediation>` shape used by every other check. This check MUST NOT
+write, modify, or delete any file — `doctor` stays read-only; it detects
+and advises, it never repairs.
+
+A `[FAIL]` line's remediation MUST ALWAYS name the repair verb (for a
+ledger that is merely unmigrated, not corrupted) and MUST ALWAYS state
+that reversibility of merges made before this fix is not guaranteed. The
+second remedy is conditional on the workspace actually having one, because
+the auto-commit that would create it is best-effort and silently no-ops
+with no repository, no configured git identity, or any git error:
+
+- WHEN the workspace is a git repository with a reachable reset point, the
+  remediation MUST name `git reset --hard <first-merge>~1` followed by
+  `openkos reindex` (for a ledger the check judges corrupted).
+- WHEN it is not — no repository, no configured git identity, or no commit
+  history — the remediation MUST say so explicitly and MUST NOT claim
+  reset-and-replay is available, stating instead that no remedy restores
+  reversibility for the affected merge(s).
+
+The check MUST skip, never flag, any entry whose recorded `survivor_before`
+snapshot embeds no ledger entries of its own. This skip is required for
+correctness: after the ledger relocation a `survivor_before` snapshot is a
+survivor document whose frontmatter carries no `merged_from` key, so every
+post-relocation entry embeds nothing, and a check without the skip would
+flag every legitimate multi-entry ledger created after the relocation.
+
+The check therefore has THREE documented false negatives, and a `[PASS]`
+MUST NOT be read as evidence that any ledger content was compared:
+
+1. a single-entry ledger — nothing is nested;
+2. cross-survivor pollution — `merge_core`'s `other_files` can rewrite a
+   link inside a third survivor's embedded snapshot, which the ledger
+   alone cannot distinguish from correct bytes;
+3. every post-relocation entry — via the skip rule above. This is the
+   widest of the three: on a workspace created after the relocation the
+   check has nothing in scope at all.
+
+#### Scenario: Clean ledgers pass
+
+- GIVEN a workspace whose every `bundle/.state/ledger/` sidecar matches
+  its expected byte-exact-restore state
+- WHEN `openkos doctor` runs
+- THEN the merge-ledger-integrity check prints `[PASS]`
+
+#### Scenario: A corrupted ledger with a reset point fails with both remediation paths
+
+- GIVEN a `bundle/.state/ledger/` sidecar whose recorded snapshots no
+  longer round-trip byte-exact, in a git repository with a reachable reset
+  point
+- WHEN `openkos doctor` runs
+- THEN the check prints `[FAIL]` followed by remediation naming both the
+  repair verb and the `git reset --hard`+`openkos reindex` path, and
+  stating pre-fix reversibility is not guaranteed
+
+#### Scenario: A corrupted ledger with no reset point names no reset-and-replay path
+
+- GIVEN the same flagged sidecar in a workspace with no reachable git
+  reset point (no repository, no configured git identity, or no commit
+  history)
+- WHEN `openkos doctor` runs
+- THEN the check prints `[FAIL]` followed by remediation that still names
+  the repair verb and still states pre-fix reversibility is not
+  guaranteed, but reports that no git reset point is available and that no
+  remedy restores reversibility for the affected merge(s), rather than
+  naming the `git reset --hard`+`openkos reindex` path
+
+#### Scenario: The check never writes
+
+- GIVEN any combination of clean and corrupted ledgers
+- WHEN `openkos doctor` runs
+- THEN no file under `bundle/.state/ledger/` (or anywhere else) is
+  created, modified, or deleted by this check
+
+#### Scenario: A workspace with no ledger sidecars passes trivially
+
+- GIVEN a workspace where no merge has ever occurred
+- WHEN `openkos doctor` runs
+- THEN the merge-ledger-integrity check prints `[PASS]`, having found no
+  sidecar to flag
+
+#### Scenario: A post-relocation multi-entry ledger is skipped, not flagged
+
+- GIVEN a `bundle/.state/ledger/` sidecar with two or more entries, every
+  one of them created after the ledger relocation and therefore embedding
+  a `survivor_before` snapshot with no `merged_from` key
+- WHEN `openkos doctor` runs
+- THEN the merge-ledger-integrity check prints `[PASS]`, having skipped
+  every entry rather than comparing and flagging it
+
 ### Requirement: Doctor Is Read-Only
 
 `doctor` MUST NOT create, modify, or delete any file, and MUST NOT execute
