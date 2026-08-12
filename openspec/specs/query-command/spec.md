@@ -290,7 +290,9 @@ cited, and printed; this requirement deliberately discards them.)
 
 The rendered citations MUST be exactly `AnswerResult.citations` — same
 members, same order (hit-rank) — with each line showing that citation's
-`concept_id` and `title`, and no other content.
+`concept_id` and `title`, plus a trailing `[confidential]` marker on
+exactly the citations whose `confidential` flag is set (issue #569), and
+no other content.
 
 #### Scenario: Citation order matches the answer
 
@@ -298,6 +300,35 @@ members, same order (hit-rank) — with each line showing that citation's
 - WHEN `openkos query "<question>"` renders its output
 - THEN the citation lines appear in the order `C1` then `C2`, each showing
   its `concept_id` and `title`
+
+### Requirement: Confidential Citations Are Disclosed
+
+The read path MUST disclose what the write path already discloses (issue
+#569): when any rendered citation carries the `confidential` flag, each
+such citation line MUST end with a `[confidential]` marker, and `query`
+MUST print ONE stderr NOTICE — equivalent to the commit-path confidential
+NOTICE — stating the answer cites content marked
+`sensitivity: confidential` and that sharing it forward moves that content
+off this machine. This is transparency, never enforcement: admission was
+already decided by the fail-closed gate (the confidential local exemption
+or `--include-confidential` let those concepts in by design). WHEN no
+rendered citation is confidential, NO marker and NO notice may appear —
+the disclosure must carry signal, not noise.
+
+#### Scenario: Confidential citation carries the marker and the notice
+
+- GIVEN the confidential local exemption is active and the answer cites a
+  concept explicitly marked `sensitivity: confidential`
+- WHEN `openkos query "<question>"` renders its output
+- THEN that citation line ends with `[confidential]`, unmarked citations do
+  not, and stderr carries one `openkos: NOTICE` line naming
+  `'sensitivity: confidential'`
+
+#### Scenario: No confidential citation, no disclosure noise
+
+- GIVEN an answer whose citations are all non-confidential
+- WHEN `openkos query "<question>"` renders its output
+- THEN no `[confidential]` marker and no NOTICE appears
 
 ### Requirement: Stderr Retrieval Summary On Every Run
 
@@ -460,6 +491,21 @@ unchanged -- `build_concept` requires non-empty provenance, and a sourceless
 - GIVEN zero readable citations
 - WHEN `openkos query "<question>" --save` is run
 - THEN `query` refuses, exits non-zero, and the bundle is unchanged
+
+#### Scenario: A raised high-water mark is disclosed in the preview
+
+- GIVEN the fold raises the filed concept's sensitivity above
+  `cfg.default_sensitivity`
+- WHEN the `--save` proposed-changes preview is printed
+- THEN the concept line names the inherited level (e.g.
+  `(sensitivity: confidential, inherited from citations)`), so the user
+  consents knowing what will be written (issue #569)
+
+#### Scenario: A fold landing on the default stays undisclosed
+
+- GIVEN the fold lands exactly on `cfg.default_sensitivity`
+- WHEN the `--save` proposed-changes preview is printed
+- THEN the concept line carries no sensitivity annotation
 
 ### Requirement: Preview, Confirm, And Non-TTY Gate For `--save`
 

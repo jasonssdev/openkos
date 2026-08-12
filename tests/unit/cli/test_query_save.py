@@ -1196,3 +1196,57 @@ def _last_commit_subject(root: Path) -> str:
 def _last_commit_files(root: Path) -> set[str]:
     result = vcs_git._run(["git", "show", "--name-only", "--format=", "-1"], cwd=root)
     return {line for line in result.stdout.splitlines() if line}
+
+
+# --- #569: --save discloses the inherited high-water mark -------------------
+
+
+def test_query_save_preview_discloses_a_raised_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filed answer already inherited the high-water mark (ADR-0003);
+    #569's gap was that the user was never TOLD. When the fold raises the
+    sensitivity above the workspace default, the proposed-changes preview
+    now names the inherited level on the concept line."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path / "bundle",
+        "concepts",
+        "secret",
+        title="Secret",
+        sensitivity="confidential",
+    )
+    citation = Citation(concept_id="concepts/secret", title="Secret", confidential=True)
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is secret?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "  + bundle/concepts/what-is-secret.md (sensitivity: confidential, "
+        "inherited from citations)" in result.stdout
+    )
+    content = (tmp_path / "bundle" / "concepts" / "what-is-secret.md").read_text(
+        encoding="utf-8"
+    )
+    assert "sensitivity: confidential" in content
+
+
+def test_query_save_preview_stays_silent_at_the_default_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the fold lands exactly on the workspace default, the concept
+    line stays as before -- the disclosure exists for a RAISED mark, and
+    printing it unconditionally would bury the one case that matters."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "  + bundle/concepts/what-is-stoicism.md\n" in result.stdout
+    assert "inherited from citations" not in result.stdout
