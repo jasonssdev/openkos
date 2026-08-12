@@ -182,6 +182,38 @@ the threshold MUST NOT form a candidate on this basis.
 - WHEN `find_candidates` runs
 - THEN no candidate is returned for that pair
 
+### Requirement: Short-Token Dropping Never Manufactures A Single-Token Title
+
+The near-match tokenizer MUST NOT let its short-token drop rule reduce a
+multi-word title to fewer than two tokens (issue #555: `ai agent` ->
+`("agent",)` subset-matched everything sharing that one generic token at a
+displayed `1.000`, flooding the LOW tier). When dropping would do so, the
+original words — short ones included — MUST be retained for the
+comparison, so the short token must find an equivalent instead of being
+silently excused. A genuinely single-word title is NOT affected: it was
+never reduced, and its accepted single-token tradeoff (documented on the
+scoring function) stands unchanged.
+
+#### Scenario: A manufactured single-token title no longer matches everything
+
+- GIVEN same-type objects titled "AI Agent" and "Agent Observability"
+- WHEN `find_candidates` runs
+- THEN no LOW candidate is returned for that pair, because "ai" finds no
+  equivalent token in the other title
+
+#### Scenario: A short distinguishing token still catches a genuine near-duplicate
+
+- GIVEN same-type objects titled "AI Agent" and "AI Agents"
+- WHEN `find_candidates` runs
+- THEN a LOW candidate is returned: every retained token, including the
+  short "ai", finds an equivalent
+
+#### Scenario: A genuinely single-token title keeps its subset containment
+
+- GIVEN same-type objects titled "Stoicism" and "Stoic Philosophy"
+- WHEN `find_candidates` runs
+- THEN a LOW candidate is still returned, exactly as before the guard
+
 ### Requirement: Exact-Title-Only Entry Point
 
 `resolution.find_exact_title_groups(bundle_dir)` MUST return exactly the
@@ -340,6 +372,10 @@ When at least one candidate group is printed, `duplicates` MUST print
 exactly one legend line explaining the `[tier] type -- trigger` columns
 (trigger = normalized key for HIGH, similarity ratio for LOW), placed after
 the tally and BEFORE the group loop. The legend MUST NOT repeat per group.
+The LOW description MUST state what the ratio actually is — the weakest
+per-token best match of the smaller title — and that `1.000` means every
+token matched, NOT that the titles are identical (issue #555's secondary
+finding: the bare `1.000` read as "identical").
 
 #### Scenario: Legend appears once regardless of group count
 

@@ -32,11 +32,42 @@ def tokenize(key: str) -> tuple[str, ...]:
     return tuple(token for token in key.split() if len(token) >= MIN_TOKEN_LENGTH)
 
 
+def _match_tokens(key: str) -> tuple[str, ...]:
+    """`tokenize`, guarded so short-token dropping never MANUFACTURES a
+    single-token title out of a multi-word one (issue #555).
+
+    `tokenize`'s drop rule exists for stray single letters on titles that
+    still keep two or more substantial tokens. Applied to a SHORT
+    multi-word title it does something its rationale never anticipated:
+    'ai agent' -> `("agent",)` -- and the discarded token was the one that
+    DISTINGUISHED the title, so the subset-containment rule then matched
+    it against everything sharing that one generic token, at a displayed
+    1.000 ('ai-agent' alone appeared in eleven LOW groups on a
+    117-document bundle).
+
+    The guard RETAINS the original words (short ones included) whenever
+    dropping would leave a multi-word key with fewer than two tokens --
+    retention, not rejection, so a genuine near-duplicate whose
+    distinguishing token is short ('ai agent' / 'ai agents') is still
+    caught: the short token must now FIND an equivalent instead of being
+    silently excused from the comparison. A single-word key is never
+    guarded (it was not REDUCED to one token; genuinely single-token
+    titles are the accepted tradeoff `near_match_score` documents), so
+    'stoicism' ⊂ 'stoic philosophy' behaves exactly as before."""
+    dropped = tokenize(key)
+    words = tuple(key.split())
+    if len(words) >= 2 and len(dropped) < 2:
+        return words
+    return dropped
+
+
 def near_match_score(key_a: str, key_b: str) -> float | None:
     """The near-match score for `key_a`/`key_b`, or `None` if they do not
     qualify as a LOW-confidence near-match.
 
-    Tokenizes both keys, then checks SUBSET containment: every token of
+    Tokenizes both keys (via `_match_tokens`, whose guard keeps
+    short-token dropping from reducing a multi-word title to a single
+    token, #555), then checks SUBSET containment: every token of
     the SMALLER token set must have an equivalent token (per-token
     `SequenceMatcher.ratio()` >= `SIMILARITY_THRESHOLD`) in the larger
     set's tokens. The returned score is the WEAKEST per-token best-match
@@ -60,8 +91,8 @@ def near_match_score(key_a: str, key_b: str) -> float | None:
     queue (never auto-merged); precision here is deliberately deferred to
     LLM adjudication in a later slice.
     """
-    tokens_a = tokenize(key_a)
-    tokens_b = tokenize(key_b)
+    tokens_a = _match_tokens(key_a)
+    tokens_b = _match_tokens(key_b)
     if not tokens_a or not tokens_b:
         return None
     smaller, larger = (

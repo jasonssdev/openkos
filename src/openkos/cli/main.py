@@ -1487,7 +1487,9 @@ def _render_adjudicate_report(
     typer.echo(
         "Legend: [tier] type -- trigger, then verdict and rationale. "
         "The tier is the MATCH METHOD, not a strength ranking: "
-        "HIGH = exact normalized key, LOW = near-match similarity score."
+        "HIGH = exact normalized key, LOW = weakest per-token match "
+        "of the smaller title (1.000 = every token matched, NOT "
+        "identical titles)."
     )
     for result in displayed:
         group = result.candidate
@@ -9633,7 +9635,8 @@ def duplicates(
         "Legend: [tier] type -- trigger. The tier is the MATCH METHOD, "
         "not a strength ranking: HIGH = exact normalized key, "
         "ACRONYM = one title's token is the initials of a word run in the "
-        "other, LOW = near-match similarity score."
+        "other, LOW = weakest per-token match of the smaller title "
+        "(1.000 = every token matched, NOT identical titles)."
     )
     for group in groups:
         tier_label = group.tier.name

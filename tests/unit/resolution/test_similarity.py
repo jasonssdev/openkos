@@ -233,3 +233,54 @@ def test_empty_and_single_token_keys_never_match() -> None:
     nothing yields no candidate rather than raising."""
     assert similarity.acronym_expansion_match("", "agent development kit") is None
     assert similarity.acronym_expansion_match("adk", "") is None
+
+
+# --- #555: short-token dropping must not manufacture single-token titles ----
+
+
+def test_dropping_short_tokens_never_reduces_a_multi_word_title_to_one_token() -> None:
+    """'ai agent' -> ("agent",) was the bug (#555): the discarded token was
+    the one that DISTINGUISHED the title, and the manufactured single-token
+    set then subset-matched anything sharing that one generic token at a
+    displayed 1.000. With the guard, 'ai' must also find an equivalent --
+    and it has none in 'agent observability'."""
+    assert near_match_score("ai agent", "agent observability") is None
+
+
+def test_claude_md_does_not_match_claude_code() -> None:
+    """#555's second evidence pair: 'claude md' -> ("claude",) contained in
+    ("claude", "code") at 1.000. 'md' must also find an equivalent."""
+    assert near_match_score("claude md", "claude code") is None
+
+
+def test_retained_short_tokens_still_catch_a_genuine_near_duplicate() -> None:
+    """The guard RETAINS short tokens instead of rejecting the pair
+    outright, so a genuine near-duplicate whose distinguishing token is
+    short is still caught: 'ai agent' vs 'ai agents' matches on both
+    tokens ('ai' identically, 'agent'/'agents' above threshold)."""
+    score = near_match_score("ai agent", "ai agents")
+    assert score is not None
+    assert score >= similarity.SIMILARITY_THRESHOLD
+
+
+def test_all_short_multi_word_titles_can_still_match_each_other() -> None:
+    """A multi-word title made ENTIRELY of short tokens ('ai ml') used to
+    tokenize to `()` and never match anything; retained, it can match a
+    qualifying counterpart."""
+    assert near_match_score("ai ml", "ai and ml") is not None
+
+
+def test_single_short_word_title_still_never_matches() -> None:
+    """The guard applies only to MULTI-word titles: a single short word
+    still tokenizes to nothing and never matches (unchanged behavior --
+    stray single letters carry no reliable signal)."""
+    assert is_near_match("ai", "ai observability") is False
+
+
+def test_genuine_single_token_subset_containment_is_unchanged() -> None:
+    """The motivating case survives the guard untouched: a genuinely
+    single-token title ('stoicism') was never REDUCED to one token, so it
+    still subset-matches 'stoic philosophy'."""
+    assert near_match_score("stoicism", "stoic philosophy") == pytest.approx(
+        0.769, abs=0.01
+    )
