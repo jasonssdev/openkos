@@ -91,12 +91,15 @@ PR body against the actual `pytest` run, unpiped.
 
 ## Per-slice quality-gate checklist (every PR)
 
-- [ ] `uv run pytest <focused path> -v` — unpiped, not through `tail`
-- [ ] `uv run pytest` (full suite) — unpiped, confirms no regression elsewhere
-- [ ] `uv run ruff check .`
-- [ ] `uv run ruff format --check .`
-- [ ] `uv run mypy .` (whole repo, not `src/` only)
-- [ ] For every RED-test task below: confirm the test fails before the GREEN
+Satisfied on all four PRs (#594, #595, #596, #597); each PR's own gate section
+records its measured numbers.
+
+- [x] `uv run pytest <focused path> -v` — unpiped, not through `tail`
+- [x] `uv run pytest` (full suite) — unpiped, confirms no regression elsewhere
+- [x] `uv run ruff check .`
+- [x] `uv run ruff format --check .`
+- [x] `uv run mypy .` (whole repo, not `src/` only)
+- [x] For every RED-test task below: confirm the test fails before the GREEN
       commit, then purge `__pycache__` before the GREEN re-run (a same-byte-
       length revert can otherwise execute stale bytecode and report a false
       pass)
