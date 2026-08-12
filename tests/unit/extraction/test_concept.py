@@ -3647,3 +3647,153 @@ def test_sole_object_flag_defaults_to_false_on_an_empty_extraction() -> None:
 
     assert outcome.objects == []
     assert outcome.report.sole_object_restates_source is False
+
+
+# --- Acronym/expansion in the ADDITIVE predicate (issue #586) -------------
+#
+# `MCP` and `Model Context Protocol` are the same subject, and the twin
+# comparison is exact-normalized, so it cannot see that. #586 asks where
+# that awareness belongs.
+#
+# IDENTITY is already answered downstream: `resolution.similarity.
+# acronym_expansion_match` (#397) pairs them and feeds
+# duplicates -> adjudicate -> merge, measured on a real 19-document bundle
+# where it fired on exactly two pairs, this one among them.
+#
+# What was blind is EXTRACTION's ADDITIVE pair -- the #584 re-ask trigger
+# and the #585 disclosure. Neither removes anything: one spends a call, one
+# adds a sentence. So they learn it, and the DROP rule does not: dropping an
+# object for writing the fuller name is #413's mistake exactly.
+
+_MCP_ACRONYM_ITEM = (
+    '{"type": "Concept", "title": "MCP", '
+    '"description": "A protocol for tool-augmented models.", "body": ""}'
+)
+
+_MCP_EXPANSION_ITEM = (
+    '{"type": "Concept", "title": "Model Context Protocol", '
+    '"description": "A protocol for tool-augmented models.", "body": ""}'
+)
+
+
+def test_expansion_object_under_an_acronym_source_triggers_the_reask() -> None:
+    """#586's own case, stated as the issue narrows it: H1 `# MCP`, object
+    `Model Context Protocol`.
+
+    Exact comparison answers "not a twin" -- literally it is not -- so the
+    source collapsed to one object and nothing asked whether its body
+    covered anything further. The second call is what that costs."""
+    llm = _SequencedLLM([_array(_MCP_EXPANSION_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "MCP lets a model call tools, and it also covers freedom from "
+        "destructive emotion.",
+        source_title="MCP",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == ["Model Context Protocol", "Apatheia"]
+
+
+def test_sole_expansion_object_under_an_acronym_source_is_disclosed() -> None:
+    """The #585 half: when the re-ask finds nothing further, the Source is
+    marked. Before this, an acronym-titled source storing one object named
+    after its expansion looked like ordinary derived output."""
+    llm = _SequencedLLM([_array(_MCP_EXPANSION_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "MCP lets a model call tools.", source_title="MCP", llm=llm
+    )
+
+    assert [r.title for r in outcome.objects] == ["Model Context Protocol"]
+    assert outcome.report.sole_object_restates_source is True
+
+
+def test_acronym_object_under_an_expansion_source_also_matches() -> None:
+    """Symmetric, like the resolution-layer matcher it mirrors: which side
+    carries the acronym must not change the verdict."""
+    llm = _SequencedLLM([_array(_MCP_ACRONYM_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "This protocol lets a model call tools.",
+        source_title="Model Context Protocol",
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["MCP"]
+    assert outcome.report.sole_object_restates_source is True
+
+
+def test_acronym_matching_never_reaches_the_drop_rule() -> None:
+    """THE #413 GUARD, and the reason this landed in the additive predicate
+    alone.
+
+    An object named after the source's expansion, sitting beside a genuine
+    second subject, is exactly the shape `_drop_source_title_twins` deletes
+    when it considers something a twin. It must survive: punishing the model
+    for writing the fuller name is the mistake #413 was filed for, and this
+    rule is the one operation in the module that destroys content."""
+    llm = _SequencedLLM(
+        [_array(_MCP_EXPANSION_ITEM, _APATHEIA_ITEM), _array(_CONCEPT_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "MCP lets a model call tools, and Apatheia is freedom from emotion.",
+        source_title="MCP",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Model Context Protocol", "Apatheia"]
+
+
+def test_acronym_matching_leaves_chunk_merge_dedup_untouched() -> None:
+    """THE ISSUE'S EXPLICIT CONSTRAINT, pinned as behaviour.
+
+    `_normalize_title` is shared with `_dedup_merged`/`_merge_union`
+    precisely so two rules deciding "same title" differently cannot let an
+    object dodge one by matching the other. Folding acronym matching into it
+    would start merging `MCP` with `Model Context Protocol` across chunks --
+    two distinct objects becoming one, which is silent data loss.
+
+    The source title is neither, so no twin or re-ask logic is in play: this
+    asks only whether the dedup key still tells the two apart."""
+    llm = _SequencedLLM([_array(_MCP_ACRONYM_ITEM, _MCP_EXPANSION_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on the protocol.", source_title="Notes", llm=llm
+    )
+
+    assert [r.title for r in outcome.objects] == ["MCP", "Model Context Protocol"]
+
+
+def test_a_two_letter_acronym_does_not_match() -> None:
+    """Bounded by the same three-letter floor the resolution-layer matcher
+    uses, and for its reason: two-letter initialisms are far too common to
+    carry identity, and on a corpus about agents most titles would qualify."""
+    ai_item = (
+        '{"type": "Concept", "title": "Artificial Intelligence", '
+        '"description": "The field.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(ai_item), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept("AI notes.", source_title="AI", llm=llm)
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Artificial Intelligence"]
+    assert outcome.report.sole_object_restates_source is False
+
+
+def test_a_shared_initial_is_not_an_acronym_match() -> None:
+    """An initialism abbreviates SEVERAL words. Runs of one word are
+    excluded by construction, or every title sharing a first letter would
+    match -- the floodgate #555 paid for in the containment arm."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note on the school.", source_title="Sto", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert outcome.report.sole_object_restates_source is False

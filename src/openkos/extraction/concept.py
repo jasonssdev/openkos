@@ -595,41 +595,134 @@ also makes a shared stopword pair insufficient, since those tokens are gone
 before the count."""
 
 
-def _title_tokens(value: str) -> frozenset[str]:
-    """Meaningful word tokens of `value`, normalized then split.
+def _title_words(value: str) -> list[str]:
+    """Ordered word tokens of `value`, normalized then split.
 
-    Feeds ONLY `_restates_source_topic`. `_normalize_title` is left exactly
-    as it was and is not part of the containment logic beyond producing this
-    function's input: it is shared with `_dedup_merged`/`_merge_union`, and
-    folding containment into it would start merging distinct subjects across
-    chunks -- two different objects whose titles happen to nest would become
-    one."""
-    normalized = _normalize_title(value)
+    ORDER matters here and nowhere else in this module: `_initialisms`
+    reads contiguous runs, so a set would destroy the only structure it
+    needs. `_title_tokens` discards the order right back.
+
+    `_normalize_title` is left exactly as it was and is not part of any
+    comparison beyond producing this function's input: it is shared with
+    `_dedup_merged`/`_merge_union`, and folding either containment (#584) or
+    acronym matching (#586) into it would start merging distinct subjects
+    across chunks -- `MCP` and `Model Context Protocol` becoming one object,
+    which is silent data loss."""
+    return _TITLE_TOKEN_RE.findall(_normalize_title(value))
+
+
+def _title_tokens(value: str) -> frozenset[str]:
+    """Meaningful word tokens of `value` -- `_title_words` with the short
+    ones dropped and the order discarded. Feeds the CONTAINMENT arm of
+    `_restates_source_topic` only."""
     return frozenset(
-        token
-        for token in _TITLE_TOKEN_RE.findall(normalized)
-        if len(token) >= _MIN_TOPIC_TOKEN_LENGTH
+        token for token in _title_words(value) if len(token) >= _MIN_TOPIC_TOKEN_LENGTH
+    )
+
+
+_MIN_ACRONYM_LENGTH: Final = 3
+"""How many letters an initialism must carry to count as an acronym.
+
+Re-derived from `resolution.similarity.MIN_ACRONYM_LENGTH`, same value and
+same reason: two-letter initialisms are far too common to carry identity --
+on a corpus about agents most titles would qualify -- and both real measured
+cases (`adk`, `mcp`) are three letters.
+
+Re-derived rather than imported, following this module's standing rule (see
+`_MIN_TOPIC_TOKEN_LENGTH`): `extraction` does not depend on `resolution`.
+The duplication is deliberate and documented on both sides, the same way
+`_ACRONYM_FIRST_RE` is deliberately identical to the probe's pattern."""
+
+
+def _initialisms(words: list[str]) -> frozenset[str]:
+    """Every contiguous run of two or more `words`, as its initials.
+
+    Mirrors `resolution.similarity._initialisms`, including the two choices
+    that make it work on real titles:
+
+    - runs may START ANYWHERE, because an expansion routinely sits inside a
+      longer title (`ADK (Agent Development Kit)`), so anchoring to the
+      first word would miss every measured instance;
+    - runs of ONE word are excluded -- an acronym abbreviates several
+      words, and matching a single initial would make every title sharing a
+      first letter a match. That is the same floodgate `_MIN_TOPIC_TOKENS`
+      closes on the containment arm.
+
+    **`start + 2` and the `_MIN_ACRONYM_LENGTH` floor are ONE mechanism
+    with two spellings, and the range bound is the redundant one.** A run of
+    N words yields exactly N initials, so `len(initials) >= 3` already
+    excludes every run of one or two words on its own; mutating `start + 2`
+    to `start + 1` leaves the whole suite green. Verified, and recorded here
+    because the trap is concrete and this project has already paid for it
+    once (`_drop_source_title_twins`' two guards): edit one, observe no
+    behaviour change, conclude the guard is inert, remove both -- and every
+    title sharing a first letter becomes a match. Reason about the PAIR.
+    `resolution.similarity._initialisms` carries the identical pair and the
+    identical redundancy.
+    """
+    found: set[str] = set()
+    for start in range(len(words)):
+        for end in range(start + 2, len(words) + 1):
+            initials = "".join(word[0] for word in words[start:end])
+            if len(initials) >= _MIN_ACRONYM_LENGTH:
+                found.add(initials)
+    return frozenset(found)
+
+
+def _restates_source_acronym(title: str, source_title: str) -> bool:
+    """Is one of these titles the ACRONYM of a word run in the other (#586)?
+
+    `MCP` against `Model Context Protocol`. Symmetric, like the
+    resolution-layer matcher it mirrors: which side carries the acronym must
+    never change the verdict.
+
+    Consulted ONLY by `_restates_source_topic`, which feeds the two ADDITIVE
+    decisions -- the #584 re-ask trigger and the #585 disclosure. It must
+    never reach `_is_droppable_source_title_twin`. An object named after its
+    source's expansion is the model writing the fuller name, and deleting it
+    for that is precisely the #413 mistake; this rule is the one operation
+    in the module that destroys content, and it keeps its own predicate.
+
+    Nor does this claim to settle IDENTITY. That question is already
+    answered downstream by `resolution.similarity.acronym_expansion_match`
+    (#397), which pairs these titles into a MEDIUM duplicate candidate and
+    routes them through `adjudicate`/`merge` -- measured on a real
+    19-document bundle, where it fired on exactly two pairs and this was
+    one. What was blind is extraction's additive pair, and that is all this
+    fixes.
+    """
+    object_words = _title_words(title)
+    source_words = _title_words(source_title)
+    object_tokens = {word for word in object_words if len(word) >= _MIN_ACRONYM_LENGTH}
+    source_tokens = {word for word in source_words if len(word) >= _MIN_ACRONYM_LENGTH}
+    return bool(
+        (object_tokens & _initialisms(source_words))
+        or (source_tokens & _initialisms(object_words))
     )
 
 
 def _restates_source_topic(result: ExtractionResult, *, source_title: str) -> bool:
-    """Does `result` restate the TOPIC the source title names -- exactly, or
-    by containment in either direction?
+    """Does `result` restate the TOPIC the source title names?
 
-    The RE-ASK TRIGGER's predicate, and ONLY the trigger's (#584). Measured:
-    the `lesson` treatment arm returns one `Procedure` titled `Setting Up a
-    Python Project` under a source titled `Lesson 3: Setting Up a Python
-    Project`. The model strips the framing and titles the object after the
-    umbrella topic, so exact comparison answers "not a twin" -- correctly,
-    since literally it is not one -- and the trigger could not see the class
-    the defect actually takes.
+    THREE arms, each added because the narrower predicate before it was
+    measurably blind to a real shape, and each delegating so this function
+    stays a readable statement of what "same topic" means:
 
-    Containment is TOKEN-level, never raw substring: `Rust` must not be
-    found inside `Trust Boundaries`, and a substring test says it is. Token
-    equality gets word boundaries right for free. Direction is either way --
-    the object may name a slice of the title's topic or a superset of it --
-    and `_MIN_TOPIC_TOKENS` is what stops that generosity from degenerating
-    (see its note on #555).
+    1. exact, via `_restates_source_title`;
+    2. token CONTAINMENT either way, via `_contains_source_topic` (#584) --
+       the `lesson` treatment arm returns one `Procedure` titled `Setting Up
+       a Python Project` under a source titled `Lesson 3: Setting Up a
+       Python Project`, so the model strips the framing and titles the
+       object after the umbrella topic;
+    3. ACRONYM/expansion, via `_restates_source_acronym` (#586) -- `Model
+       Context Protocol` under a source titled `MCP`, which shares no token
+       with it at all, so arms 1 and 2 both answer "no".
+
+    The predicate of the ADDITIVE decisions, and only theirs: the #584
+    re-ask trigger and the #585 disclosure. Every widening here is bounded
+    by that -- being wrong costs one call and one sentence, never content --
+    which is exactly why each arm was allowed to land here and none of them
+    reaches the deletion.
 
     The ADDITIONS FILTER deliberately does NOT use this. It stays on the
     exact `_restates_source_title`, and the asymmetry is the point: this
@@ -639,7 +732,21 @@ def _restates_source_topic(result: ExtractionResult, *, source_title: str) -> bo
     different threshold. Do not "unify" them."""
     if _restates_source_title(result, source_title=source_title):
         return True
-    object_tokens = _title_tokens(result.title)
+    if _contains_source_topic(result.title, source_title):
+        return True
+    return _restates_source_acronym(result.title, source_title)
+
+
+def _contains_source_topic(title: str, source_title: str) -> bool:
+    """The CONTAINMENT arm of `_restates_source_topic`, unchanged from #584
+    and lifted into its own function when the acronym arm (#586) joined it.
+
+    Token-level, never raw substring: `Rust` must not be found inside
+    `Trust Boundaries`, and a substring test says it is. Direction is either
+    way -- the object may name a slice of the title's topic or a superset of
+    it -- and `_MIN_TOPIC_TOKENS` is what stops that generosity from
+    degenerating (see its note on #555)."""
+    object_tokens = _title_tokens(title)
     source_tokens = _title_tokens(source_title)
     if not object_tokens or not source_tokens:
         return False
