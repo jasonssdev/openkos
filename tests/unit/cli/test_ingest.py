@@ -1082,7 +1082,7 @@ def test_stage_derived_objects_returns_no_extractable_text_reason(
     `raw_content` is blank -- the tuple return shape carries the skip
     reason alongside the (empty) plan list (design: `_stage_derived_objects`
     return shape; spec: no-extractable-text is written)."""
-    plans, skip_reason = main._stage_derived_objects(
+    plans, skip_reason, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, raw_content="   ")  # type: ignore[arg-type]
     )
 
@@ -1096,7 +1096,7 @@ def test_stage_derived_objects_returns_blocked_by_sensitivity_reason(
     """`_stage_derived_objects` returns `([], "blocked-by-sensitivity")` when
     the workspace floor blocks the LLM send (spec: blocked-by-sensitivity is
     written)."""
-    plans, skip_reason = main._stage_derived_objects(
+    plans, skip_reason, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, workspace_floor="confidential")  # type: ignore[arg-type]
     )
 
@@ -1107,7 +1107,7 @@ def test_stage_derived_objects_returns_blocked_by_sensitivity_reason(
 def test_stage_derived_objects_returns_failed_reason(tmp_path: Path) -> None:
     """`_stage_derived_objects` returns `([], "failed")` when `llm.chat`
     raises `OllamaError` (spec: failed is written)."""
-    plans, skip_reason = main._stage_derived_objects(
+    plans, skip_reason, _notice = main._stage_derived_objects(
         **_stage_kwargs(  # type: ignore[arg-type]
             tmp_path, llm=_FakeLLM(raises=OllamaUnavailable("boom"))
         )
@@ -1123,7 +1123,7 @@ def test_stage_derived_objects_returns_no_concepts_found_reason(
     """`_stage_derived_objects` returns `([], "no-concepts-found")` when
     extraction succeeds with zero candidates (spec: no-concepts-found is
     written)."""
-    plans, skip_reason = main._stage_derived_objects(
+    plans, skip_reason, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM('{"extract": false}'))  # type: ignore[arg-type]
     )
 
@@ -1137,7 +1137,7 @@ def test_stage_derived_objects_returns_none_reason_on_success(
     """`_stage_derived_objects` returns `(plans, None)` when at least one
     candidate is staged -- `skip_reason` is `None` on the healthy path
     (design: sequence diagram, terminal `return plans, None`)."""
-    plans, skip_reason = main._stage_derived_objects(
+    plans, skip_reason, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM(_concept_reply()))  # type: ignore[arg-type]
     )
 
@@ -1177,7 +1177,7 @@ def test_stage_derived_objects_union_judge_false_calls_extract_concept_once(
     (design D9: 39 existing test call sites keep exercising this)."""
     llm = _FakeLLM(_concept_reply())
 
-    plans, skip_reason = main._stage_derived_objects(
+    plans, skip_reason, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=llm, union_judge=False)  # type: ignore[arg-type]
     )
 
@@ -1195,7 +1195,7 @@ def test_stage_derived_objects_union_judge_true_calls_extract_concept_union(
         [_concept_reply(), _concept_reply(), '{"keep": ["Stoic Dichotomy Of Control"]}']
     )
 
-    plans, skip_reason = main._stage_derived_objects(
+    plans, skip_reason, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=llm, union_judge=True)  # type: ignore[arg-type]
     )
 
@@ -5585,7 +5585,7 @@ def test_stage_derived_objects_records_the_alternative_in_frontmatter(
     The stderr line scrolls away; the frontmatter is what a human reading
     the bundle later, or `lint`, can still act on.
     """
-    plans, reason = main._stage_derived_objects(
+    plans, reason, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM(_NEAR_BOUNDARY_REPLY))  # type: ignore[arg-type]
     )
 
@@ -5630,7 +5630,7 @@ def test_stage_derived_objects_stays_silent_when_the_type_was_clear(
         '"description": "A Stoic concept.", "body": ""}]'
     )
 
-    plans, _ = main._stage_derived_objects(
+    plans, _, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM(reply))  # type: ignore[arg-type]
     )
 
@@ -5736,3 +5736,144 @@ def test_ingest_reask_notice_bounds_how_many_added_titles_it_echoes(
     assert f"1 extra re-ask call added {added} object(s)" in result.stderr
     assert f"(+{unnamed} more)" in result.stderr
     assert "Added 4" not in result.stderr
+
+
+# --- `extraction_notice` frontmatter stamping (issue #585) ----------------
+#
+# #585's chosen criterion: keep the object, mark the Source. A degrade to
+# `[]` was rejected because it destroys the `mcp-launch` shape -- a
+# genuinely single-subject source whose only subject IS what its title
+# names -- which by title alone is indistinguishable from the defect.
+# Marking is strictly information-adding: it cannot regress recall, and it
+# never has to tell the two cases apart.
+
+
+def test_sole_object_restating_the_source_stamps_the_extraction_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole of #585, end to end: a source whose only derived object
+    restates it keeps that object AND carries the disclosure.
+
+    The derived-file assertion is not decoration -- it is the half of the
+    criterion that says this is not a degrade. Any implementation that
+    started dropping the twin to "fix" the dishonesty fails here."""
+    _init_workspace(tmp_path, monkeypatch)
+    twin = _concept_reply(title="Replica Lag")
+    keep = '{"keep": ["Replica Lag"]}'
+    _patch_sequenced_llm(monkeypatch, [twin, twin, "[]", keep])
+    source = tmp_path / "replica-lag.txt"
+    source.write_text(
+        "Replica Lag\n\nA replica trails its primary, and a read routed to "
+        "it can miss a write the client just made.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "bundle" / "concepts" / "replica-lag.md").is_file()
+    concept_path = tmp_path / "bundle" / "sources" / "replica-lag.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_notice"] == "sole-object-restates-source"
+    assert "extraction_status" not in metadata
+
+
+def test_sole_object_restating_the_source_is_reported_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The disclosure reaches the operator at the moment it is decided, not
+    only the reader who later opens the Source -- the same reason every
+    other extraction drop and cost in this verb prints a stderr line."""
+    _init_workspace(tmp_path, monkeypatch)
+    twin = _concept_reply(title="Replica Lag")
+    keep = '{"keep": ["Replica Lag"]}'
+    _patch_sequenced_llm(monkeypatch, [twin, twin, "[]", keep])
+    source = tmp_path / "replica-lag.txt"
+    source.write_text(
+        "Replica Lag\n\nA replica trails its primary, and a read routed to "
+        "it can miss a write the client just made.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "only derived object restates this source" in result.stderr
+
+
+def test_successful_extraction_writes_no_extraction_notice_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source yielding a subject its own title does not name leaves the
+    key entirely absent. This is the guard against the failure #566 is open
+    for: a notice that fires on nearly every object carries no signal."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    assert "extraction_notice" not in concept_path.read_text(encoding="utf-8")
+
+
+def test_degraded_extraction_writes_no_extraction_notice_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zero derived objects is `extraction_status`' territory, never this
+    key's. A Source that derived NOTHING must not be marked as having
+    derived one thing that restates it -- the two keys would then contradict
+    each other on the same document."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, '{"extract": false}')
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "notes.md"
+    text = concept_path.read_text(encoding="utf-8")
+    metadata, _ = okf.load_frontmatter(text)
+    assert metadata["extraction_status"] == "no-concepts-found"
+    assert "extraction_notice" not in text
+
+
+def test_reingest_clears_a_previous_extraction_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The anti-merge guard, mirroring `extraction_status`' self-clearing
+    test: the key is recomputed fresh for THIS run alone.
+
+    A re-ingest whose extraction now finds a second subject must end with
+    the key ABSENT. Any implementation that read the on-disk value and
+    merged it forward leaves a stale marker asserting a collapse that no
+    longer happens, and the Source lies in the opposite direction from the
+    one #585 set out to fix."""
+    _init_workspace(tmp_path, monkeypatch)
+    twin = _concept_reply(title="Replica Lag")
+    keep_one = '{"keep": ["Replica Lag"]}'
+    _patch_sequenced_llm(monkeypatch, [twin, twin, "[]", keep_one])
+    source = tmp_path / "replica-lag.txt"
+    source.write_text(
+        "Replica Lag\n\nA replica trails its primary, and a read routed to "
+        "it can miss a write the client just made.\n",
+        encoding="utf-8",
+    )
+
+    assert runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"]).exit_code == 0
+    concept_path = tmp_path / "bundle" / "sources" / "replica-lag.md"
+    metadata, _ = okf.load_frontmatter(concept_path.read_text(encoding="utf-8"))
+    assert metadata["extraction_notice"] == "sole-object-restates-source"
+
+    second = _concept_reply(title="Read-Your-Writes Consistency")
+    both = f"[{twin[1:-1]}, {second[1:-1]}]"
+    keep_two = '{"keep": ["Replica Lag", "Read-Your-Writes Consistency"]}'
+    _patch_sequenced_llm(monkeypatch, [both, both, keep_two])
+
+    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "extraction_notice" not in concept_path.read_text(encoding="utf-8")

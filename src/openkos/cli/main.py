@@ -2274,6 +2274,35 @@ def _reask_notice(report: ExtractionReport) -> str | None:
     )
 
 
+def _sole_object_notice(report: ExtractionReport) -> str | None:
+    """Render the honest-degrade notice for a source whose SOLE derived
+    object restates it (#585), or `None` -- the common case.
+
+    Distinct from `_reask_notice`, and the two deliberately co-occur on the
+    run that matters. That one reports a COST (an extra call was spent);
+    this one reports an OUTCOME (what the bundle ended up storing). A
+    re-ask that found nothing prints both, and neither is redundant: the
+    user paid for a second question, and the answer was that there is
+    genuinely nothing else here.
+
+    It also fires without any re-ask at all -- on the union path where the
+    judge reduced the set, or wherever `sole_object_restates_source`
+    survived -- so it must not be folded into the re-ask notice's branch.
+
+    Wording states BOTH halves of #585's chosen criterion, because a line
+    that named only the problem would read as a warning about something the
+    tool failed to do. Keeping the object is the decision, not a fallback:
+    a genuinely single-subject source is indistinguishable from this defect
+    by title alone, so dropping would emit `[]` for real content."""
+    if not report.sole_object_restates_source:
+        return None
+    return (
+        "the only derived object restates this source; keeping it and "
+        "marking the Source (extraction_notice: "
+        f"{okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES})"
+    )
+
+
 def _judge_selection_notice(report: ExtractionReport) -> str | None:
     """Render the union+judge SUCCESSFUL-selection notice (#456), naming
     what the judge dropped, or `None` when the judge kept everything, was
@@ -2402,7 +2431,9 @@ def _stage_derived_objects(
     llm: LLMBackend,
     include_confidential: bool = False,
     union_judge: bool = False,
-) -> tuple[list[_DerivedPlan], okf.ExtractionStatus | None]:
+) -> tuple[
+    list[_DerivedPlan], okf.ExtractionStatus | None, okf.ExtractionNotice | None
+]:
     """Attempt LLM extraction of zero or more distinct derived objects from
     the source's decoded text, and stage each validated candidate for Phase
     B (`ingest` owns slug/path derivation and per-candidate drop wording;
@@ -2415,11 +2446,27 @@ def _stage_derived_objects(
     dedup left there (design D5 pinned ordering), so a failure partway
     through Phase B never leaves a partially-reconciled state.
 
-    Returns a `(plans, skip_reason)` tuple (issue #187, design:
-    `_stage_derived_objects` return shape). `skip_reason` carries WHY this
-    batch produced zero derived objects, for the caller to stamp onto the
-    Source's `extraction_status` frontmatter key -- `None` on the healthy
-    path (`plans` non-empty). Returns `([], "no-extractable-text")` -- always
+    Returns a `(plans, skip_reason, notice)` triple (issue #187, design:
+    `_stage_derived_objects` return shape; extended by #585). `skip_reason`
+    carries WHY this batch produced zero derived objects, for the caller to
+    stamp onto the Source's `extraction_status` frontmatter key -- `None` on
+    the healthy path (`plans` non-empty).
+
+    `notice` (issue #585) is the mirror-image disclosure: `skip_reason`
+    fires when extraction produced NOTHING, `notice` when it produced
+    exactly one object that restates the source and so adds nothing the
+    Source did not already say. The two are mutually exclusive by
+    construction -- zero objects and exactly one object -- and travel as
+    separate values rather than one field precisely because they answer
+    different questions and are read by different consumers
+    (`lint.check_unextracted` reads only the first).
+
+    `notice` is derived from `ExtractionReport.sole_object_restates_source`,
+    which describes what EXTRACTION produced, not what THIS run wrote. It is
+    therefore returned even when the sole object is then dropped below as
+    already-on-disk: on a re-ingest the object IS in the bundle, put there
+    by the earlier run, and the Source's disclosure must not blink off
+    merely because this run had nothing new to write. Returns `([], "no-extractable-text")` -- always
     a Source-only degrade for this batch, never a raised error -- when
     `raw_content` is `None` or blank (a binary/undecodable or empty source
     has no text to extract from, so the LLM is never called); returns
@@ -2506,7 +2553,7 @@ def _stage_derived_objects(
             "openkos ingest: source has no extractable text; keeping the Source only.",
             err=True,
         )
-        return [], "no-extractable-text"
+        return [], "no-extractable-text", None
 
     if not include_confidential and blocks_llm_send(workspace_floor):
         typer.echo(
@@ -2517,7 +2564,7 @@ def _stage_derived_objects(
             "`llm.chat`, not embeddings.",
             err=True,
         )
-        return [], "blocked-by-sensitivity"
+        return [], "blocked-by-sensitivity", None
 
     extractor = extract_concept_union if union_judge else extract_concept
     try:
@@ -2529,7 +2576,7 @@ def _stage_derived_objects(
             "keeping the Source only.",
             err=True,
         )
-        return [], "failed"
+        return [], "failed", None
 
     extractions = outcome.objects
     # #584: the re-ask fires before the judge ever runs (it feeds the merged
@@ -2563,13 +2610,28 @@ def _stage_derived_objects(
     if cap_notice is not None:
         typer.echo(f"openkos ingest: {cap_notice}", err=True)
 
+    # #585 renders LAST of the extraction notices: every other one reports
+    # a step of the pipeline, and this one reports what the pipeline ended
+    # up with. Read off the report rather than re-derived from `extractions`
+    # here -- the predicate lives in `extraction/concept.py` beside the
+    # re-ask trigger it shares, and a second spelling in this layer is
+    # exactly the drift that helper exists to prevent.
+    extraction_notice: okf.ExtractionNotice | None = (
+        okf.EXTRACTION_NOTICE_SOLE_OBJECT_RESTATES
+        if outcome.report.sole_object_restates_source
+        else None
+    )
+    sole_object_notice = _sole_object_notice(outcome.report)
+    if sole_object_notice is not None:
+        typer.echo(f"openkos ingest: {sole_object_notice}", err=True)
+
     if not extractions:
         typer.echo(
             "openkos ingest: no concept extracted from this source; "
             "keeping the Source only.",
             err=True,
         )
-        return [], "no-concepts-found"
+        return [], "no-concepts-found", None
 
     plans: list[_DerivedPlan] = []
     seen_slugs: set[str] = set()
@@ -2681,7 +2743,7 @@ def _stage_derived_objects(
             )
         )
 
-    return plans, None
+    return plans, None, extraction_notice
 
 
 def _resolve_local_exemption(client: OllamaClient, cfg: config.Config) -> bool:
@@ -3463,16 +3525,23 @@ def _ingest_single(
 
         def _build_source_document(
             extraction_status: okf.ExtractionStatus | None,
+            extraction_notice: okf.ExtractionNotice | None = None,
         ) -> str:
             """Bound immediately before the first build (design: "The
             ordering conflict"). Builds the Source document from-scratch
             from this run's local inputs -- called once with `None`
             before staging (`:1717` today), and, ONLY when staging produces
-            a `skip_reason`, called a SECOND time with that reason so the
-            key is stamped onto freshly built content, never merged onto
+            a `skip_reason` or a `notice`, called a SECOND time with it so
+            the key is stamped onto freshly built content, never merged onto
             on-disk frontmatter. The healthy path calls this exactly once,
-            so its output stays byte-identical to before this parameter
-            existed."""
+            so its output stays byte-identical to before these parameters
+            existed.
+
+            Both markers are rebuilt from scratch for THIS run alone, which
+            is what makes them self-clearing (#187's anti-merge rule,
+            inherited unchanged by #585): a re-ingest whose extraction now
+            finds a second subject rebuilds without the notice, so a stale
+            marker can never outlive the condition it described."""
             return okf.build_source_concept(
                 title=title,
                 description=description,
@@ -3483,6 +3552,7 @@ def _ingest_single(
                 provenance=[resource],
                 raw_content=raw_content,
                 extraction_status=extraction_status,
+                extraction_notice=extraction_notice,
             )
 
         concept_content = _build_source_document(None)
@@ -3503,7 +3573,7 @@ def _ingest_single(
         observability.stage_notice(
             "ingest", "extracting derived objects (waiting on the LLM)..."
         )
-        derived_plans, skip_reason = _stage_derived_objects(
+        derived_plans, skip_reason, extraction_notice = _stage_derived_objects(
             raw_content=raw_content,
             source_title=title,
             source_slug=slug,
@@ -3515,13 +3585,19 @@ def _ingest_single(
             include_confidential=include_confidential,
             union_judge=cfg.union_judge,
         )
-        if skip_reason is not None:
-            # Re-render from scratch with the discovered reason stamped in
-            # (design: "The ordering conflict", conditional re-render) --
-            # never patch the already-built bytes, and never read
-            # `extraction_status` off disk (unlike `sensitivity` above):
-            # this key is always recomputed fresh for THIS run alone.
-            concept_content = _build_source_document(skip_reason)
+        if skip_reason is not None or extraction_notice is not None:
+            # Re-render from scratch with whichever marker was discovered
+            # stamped in (design: "The ordering conflict", conditional
+            # re-render) -- never patch the already-built bytes, and never
+            # read either key off disk (unlike `sensitivity` above): both
+            # are always recomputed fresh for THIS run alone.
+            #
+            # `skip_reason` and `extraction_notice` are mutually exclusive
+            # by construction (zero objects vs exactly one), so this passes
+            # both rather than branching: a hypothetical future pairing
+            # would then reach disk and be visible, instead of one marker
+            # silently winning here.
+            concept_content = _build_source_document(skip_reason, extraction_notice)
         # One `_snapshot_read` observation per target: the decoded text
         # feeds the parsers below, the raw bytes feed
         # `_reject_drifted_targets` (issues #306, #313, #318).
