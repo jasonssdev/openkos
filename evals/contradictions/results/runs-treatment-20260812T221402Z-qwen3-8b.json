@@ -1,0 +1,380 @@
+{
+  "arm": "treatment",
+  "model": "qwen3:8b",
+  "runs": 5,
+  "generated_at": "20260812T221402Z",
+  "outcomes": [
+    {
+      "source_id": "concepts/okp-standard-history",
+      "target_id": "concepts/okp-standard-overview",
+      "probe": "factual-contradiction",
+      "expected": "contradicts",
+      "modal": "contradicts",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/free-tier-limits",
+      "target_id": "concepts/free-tier-billing",
+      "probe": "factual-contradiction",
+      "expected": "contradicts",
+      "modal": "contradicts",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.9
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/legacy-exporter-status",
+      "target_id": "concepts/exporter-migration",
+      "probe": "factual-contradiction",
+      "expected": "contradicts",
+      "modal": "contradicts",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_id": "events/march-outage-cause",
+      "target_id": "events/march-outage-review",
+      "probe": "factual-contradiction",
+      "expected": "contradicts",
+      "modal": "contradicts",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          0.95
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/personalized-recommendation",
+      "target_id": "concepts/non-personalized-recommendation",
+      "probe": "antonym",
+      "expected": "consistent",
+      "modal": "consistent",
+      "stability": 0.6,
+      "accuracy": 0.6,
+      "outcomes": [
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/synchronous-replication",
+      "target_id": "concepts/asynchronous-replication",
+      "probe": "antonym",
+      "expected": "consistent",
+      "modal": "consistent",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/allowlist-filtering",
+      "target_id": "concepts/denylist-filtering",
+      "probe": "antonym",
+      "expected": "consistent",
+      "modal": "contradicts",
+      "stability": 1.0,
+      "accuracy": 0.0,
+      "outcomes": [
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "contradicts",
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/optimistic-locking",
+      "target_id": "concepts/pessimistic-locking",
+      "probe": "antonym",
+      "expected": "consistent",
+      "modal": "consistent",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/supervised-learning",
+      "target_id": "concepts/unsupervised-learning",
+      "probe": "antonym",
+      "expected": "consistent",
+      "modal": "consistent",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/retry-budget",
+      "target_id": "concepts/request-scheduler",
+      "probe": "plain-consistent",
+      "expected": "consistent",
+      "modal": "consistent",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/bundle-format",
+      "target_id": "concepts/concept-document",
+      "probe": "plain-consistent",
+      "expected": "consistent",
+      "modal": "consistent",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ],
+        [
+          "consistent",
+          1.0
+        ]
+      ]
+    },
+    {
+      "source_id": "concepts/client-default-timeout",
+      "target_id": "concepts/client-timeout-behavior",
+      "probe": "definitional-contradiction",
+      "expected": "contradicts",
+      "modal": "contradicts",
+      "stability": 1.0,
+      "accuracy": 1.0,
+      "outcomes": [
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "contradicts",
+          0.95
+        ],
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "contradicts",
+          1.0
+        ],
+        [
+          "contradicts",
+          1.0
+        ]
+      ]
+    }
+  ]
+}
