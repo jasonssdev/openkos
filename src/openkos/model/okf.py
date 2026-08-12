@@ -10,6 +10,7 @@ All three §9 rules are implemented here: rules 1-2 walk every non-reserved
 (`index.md`/`log.md`) to check their fixed structure per §6/§7/§11.
 """
 
+import hashlib
 import os
 import re
 import unicodedata
@@ -118,6 +119,64 @@ via `ExtractionStatus`/mypy-strict, and readers match a single literal
 (`== EXTRACTION_STATUS_FAILED`) rather than membership-testing this tuple,
 so an unrecognized on-disk value is structurally ignored."""
 
+ORIGIN_KEY_KEY: Final = "origin_key"
+"""The optional frontmatter key recording WHICH FILE ON DISK a Source was
+ingested from (#552), as a digest -- never a path.
+
+`resource` cannot answer this. It names the copy INSIDE the workspace
+(`raw/<name>`), and that flat namespace is exactly what collided: two
+different files from two different folders sharing a basename resolved to
+one `resource`, so one was refused and the other silently absorbed into the
+first one's Source. Telling them apart needs an identity for the ORIGIN,
+which nothing on the document carried.
+
+ABSENT on any Source written before this key existed, and absence has
+exactly one meaning: ingested before origins were recorded. `ingest` treats
+such a Source as a legacy match on identical bytes -- today's behaviour,
+preserved -- and backfills the key on the next re-ingest, so the migration
+costs nothing and needs no verb.
+
+A DIGEST rather than the path itself, deliberately. The value's only job is
+EQUALITY; nothing reads it for location. A structured absolute-path field
+would put `$HOME` and the machine's directory layout into every Source's
+frontmatter, in git history, removable only by `purge`, and would extend to
+one more consumer the interpolation surface #274/#285 had to harden. The
+human-readable origin already lives in `description`, as free text, where it
+has always been."""
+
+_ORIGIN_KEY_HEX_CHARS: Final = 32
+"""128 bits of the digest -- unambiguous for any realistic workspace, and
+short enough that `origin_key: <value>` clears the YAML emitter's ~80-column
+fold width with room to spare. A folded scalar would turn one frontmatter
+line into two, the same hazard `_TITLE_DUMP_WIDTH` exists for."""
+
+
+def origin_key_for(path: Path) -> str:
+    """The `ORIGIN_KEY_KEY` value for the file at `path` (#552).
+
+    Keyed on the RESOLVED path, so `./notes.txt` from inside a folder and
+    `folder/notes.txt` from its parent are ONE file. Without resolution,
+    re-ingesting the same file from a different working directory would look
+    like a new source and spawn a disambiguated copy on every run -- the
+    unbounded-suffix bug `_family_owns_source` exists to prevent one layer
+    down, reintroduced at the raw layer.
+
+    `strict=False`: this is called on a path already validated as a readable
+    file, and a resolution that cannot stat is not this function's failure to
+    report. Identity of a MISSING file is still well-defined -- the resolved
+    string -- and refusing here would turn a benign race into a crash.
+
+    Not stable across machines, and deliberately not: a bundle cloned
+    elsewhere carries keys naming paths that do not exist there, so
+    re-ingesting the same logical file on a second machine writes a new
+    Source. That is correct -- it IS a different file on that machine -- and
+    harmless, since `raw/` already holds the bytes.
+    """
+    resolved = str(path.resolve(strict=False))
+    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()
+    return digest[:_ORIGIN_KEY_HEX_CHARS]
+
+
 EXTRACTION_NOTICE_KEY: Final = "extraction_notice"
 """The optional frontmatter key a Source concept carries when its
 extraction succeeded but produced output worth disclosing (#585); ABSENT
@@ -221,6 +280,7 @@ def build_source_concept(
     raw_content: str | None = None,
     extraction_status: ExtractionStatus | None = None,
     extraction_notice: ExtractionNotice | None = None,
+    origin_key: str | None = None,
 ) -> str:
     """Build a conformant OKF Source concept document (D4/ingest-source-body D1).
 
@@ -305,6 +365,8 @@ def build_source_concept(
         metadata[EXTRACTION_STATUS_KEY] = extraction_status
     if extraction_notice is not None:
         metadata[EXTRACTION_NOTICE_KEY] = extraction_notice
+    if origin_key is not None:
+        metadata[ORIGIN_KEY_KEY] = origin_key
     if raw_content is None:
         section = (
             "_Source content could not be embedded as text "
