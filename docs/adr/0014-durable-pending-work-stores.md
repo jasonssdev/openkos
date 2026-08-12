@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0014: Durable pending-work stores -- findings in .openkos/, decisions in bundle/.state/"
 description: Contradiction findings persist in .openkos/findings.db (recomputable, delete-without-rebuild); operator decisions extend bundle/.state/ by exactly one kind; no two-phase write is needed because the join is computed at read time.
-status: Proposed
+status: Accepted
 date: 2026-08-12
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0014: Durable pending-work stores -- findings in `.openkos/`, decisions in `bundle/.state/`
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-12
 
 ## Context
