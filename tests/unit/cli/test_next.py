@@ -1549,19 +1549,26 @@ def _spy_non_nfc(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
 
 
 def test_non_nfc_tier_is_ranked_last() -> None:
-    """The non-NFC tier sits AFTER the duplicate-groups tier.
+    """The non-NFC tier sits AFTER the duplicate-groups tier, and BEFORE the
+    open-contradictions tier (durable-pending-work, design Decision 6 --
+    appended last of all, after this test was first written).
 
     Placement is the whole cost argument (#491). Its walk is only reached
     on a run where every ranked tier above it found nothing -- exactly the
     justification `walk_incomplete` already uses for its own extra
-    traversal ("no other tier's budget moves"). Ranked last also matches
-    the module's ordering principle: a decomposed filename blocks nothing,
-    is not missing, and is not unsafe -- it is hygiene, which outranks
-    nothing."""
-    assert next_action._TIERS[-1] is next_action._tier_non_nfc_names
+    traversal ("no other tier's budget moves"). Ranked directly above the
+    contradictions tier also matches the module's ordering principle: a
+    decomposed filename blocks nothing, is not missing, and is not unsafe
+    -- it is hygiene, which outranks nothing except the contradictions
+    tier's own judgment-over-present-content recommendation."""
+    assert next_action._TIERS[-1] is next_action._tier_open_contradictions
+    assert (
+        next_action._TIERS.index(next_action._tier_non_nfc_names)
+        == len(next_action._TIERS) - 2
+    )
     assert (
         next_action._TIERS.index(next_action._tier_duplicate_groups)
-        == len(next_action._TIERS) - 2
+        == len(next_action._TIERS) - 3
     )
 
 
