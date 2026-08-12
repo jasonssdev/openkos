@@ -127,9 +127,16 @@ _SYSTEM_PROMPT = (
     "You are a contradiction-detection adjudicator in a local-first "
     "knowledge engine. Given two RELATED concepts and the relation linking "
     "them, decide whether their content CONTRADICTS, is CONSISTENT, or the "
-    "answer is UNCERTAIN. Assert contradicts ONLY when you can cite "
-    "specific conflicting claims from both concepts; otherwise use "
-    "consistent or uncertain.\n\n"
+    "answer is UNCERTAIN. A contradiction is two INCOMPATIBLE assertions "
+    "about the same subject and the same property (a date, a number, a "
+    "status, a cause). Two concepts defined in OPPOSITION to each other -- "
+    "complementary or opposite types in one taxonomy -- are NOT a "
+    "contradiction: their definitions differ by design and assert nothing "
+    "incompatible about any shared fact, so judge them consistent. Assert "
+    "contradicts ONLY when you can cite specific conflicting claims from "
+    "both concepts; otherwise use consistent or uncertain. Set confidence "
+    "to how sure you are of the verdict, and reserve values above 0.9 for "
+    "conflicts you can quote directly from both bodies.\n\n"
     "Return ONLY a JSON object, with NO prose, NO markdown, and NO code "
     "fences around it, matching exactly this shape:\n"
     '{"verdict": "contradicts"|"consistent"|"uncertain", '
@@ -141,7 +148,21 @@ _SYSTEM_PROMPT = (
 3-value verdict vocabulary, the citation requirement for `contradicts`, and
 the JSON-only instruction baked into system text; the `user` message
 carries both concept `[id — title]` headers, both full bodies, and the
-`relation_type` linking them (design's LLM Prompt Contract)."""
+`relation_type` linking them (design's LLM Prompt Contract).
+
+The same-subject/same-property definition and the antonymy carve-out are
+issue #558's measured fix: on `evals/contradictions/`' 12-pair fixture the
+original prompt judged 2 of 5 antonym pairs `contradicts` at confidence
+1.00, stably (antonym FP rate 0.40, `qwen3:8b`, 5 runs); this wording cuts
+that to 0.24 with true-positive retention unchanged at 1.00. A longer
+variant that also asked "do the two documents describe the SAME thing?"
+measured WORSE (0.28), so the carve-out stays surgical -- do not extend it
+without re-running both arms of the harness. Known residual: a pair whose
+opposing DEFAULTS are phrased as parallel claims (allowlist/denylist) still
+reads as a conflict at full confidence, and the stated confidence carries
+no correctness signal at this model size (0.98 on correct verdicts, 1.00 on
+wrong ones) -- the display gate cannot rescue a wrong verdict, which is why
+the fix targets emission, not thresholding."""
 
 
 class Verdict(Enum):
