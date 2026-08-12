@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import unicodedata
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -95,13 +95,14 @@ from openkos.resolution.volatility_typing import (
 )
 from openkos.retrieval.answer import NO_MATCH, Citation, NoMatchCause, answer
 from openkos.sensitivity import blocks_llm_send
-from openkos.state import derived, fts
+from openkos.state import derived, findings, fts
 from openkos.state import reindex as reindex_module
 from openkos.state.derived import stale_derived_stores
 from openkos.state.fts import FtsUnavailable
 from openkos.state.vectorstore import (
     VectorStoreDB,
     VecUnavailable,
+    content_hash,
     open_vector_store,
     probe_vec_loadable,
     vector_store_is_empty,
@@ -10343,6 +10344,178 @@ def suggest_volatility_cmd(
         raise typer.Exit(code=1) from batch.failure
 
 
+def _sorted_decision_pair(pair: tuple[str, str]) -> tuple[str, str]:
+    """Canonicalize an operator-supplied `--decline`/`--reopen` pair into
+    `decision_key_for`'s expected order (design Decision 3: "sorted
+    pair_ids"). The CLI accepts either order, but the identity -- and the
+    decisions sidecar it is stored under (`pair_ids[0]`'s own file) -- must
+    be stable regardless of which order the operator typed the two ids
+    in."""
+    pair_a, pair_b = sorted(pair)
+    return pair_a, pair_b
+
+
+def _apply_contradiction_decision(
+    layout: config.WorkspaceLayout,
+    pair: tuple[str, str],
+    merged_absorbed_id: str | None,
+    *,
+    target_state: bundle_decisions.DecisionState,
+) -> str:
+    """Write (or update in place) the single decision record identified by
+    `pair`/`merged_absorbed_id` to `target_state`, returning the
+    workspace-relative decision path for the caller's `_autocommit` list
+    (design Decision 5, mirrors `MergeResult.ledger_sidecar_path`).
+
+    Never opens `.openkos/findings.db`: decline/reopen never read the
+    findings store as a precondition (design Decision 7 corollary) -- a
+    matching findings row is not required either way. Any existing record
+    for the SAME `decision_key` is replaced in place (idempotent re-
+    decline/re-reopen); every OTHER record already in the owning sidecar is
+    preserved, mirroring `write_decisions`'s full-replace contract."""
+    pair_ids = _sorted_decision_pair(pair)
+    key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
+    owner_id = pair_ids[0]
+    existing = bundle_decisions.read_decisions(owner_id, layout.bundle_dir)
+    records = [record for record in existing if record.decision_key != key]
+    records.append(
+        bundle_decisions.DecisionRecord(
+            decision_key=key,
+            pair_ids=pair_ids,
+            merged_absorbed_id=merged_absorbed_id,
+            state=target_state,
+            decided_at=datetime.now(UTC).isoformat(),
+        )
+    )
+    path = bundle_decisions.write_decisions(
+        owner_id, layout.bundle_dir, records=records
+    )
+    return f"bundle/{path.relative_to(layout.bundle_dir).as_posix()}"
+
+
+def _is_contradiction_declined(
+    layout: config.WorkspaceLayout,
+    pair_ids: tuple[str, str],
+    merged_absorbed_id: str | None,
+) -> bool:
+    """`True` iff a decision record for `pair_ids`/`merged_absorbed_id`
+    exists and its `state` is `declined` (pending-work spec: "Declined
+    Findings Are Hidden By Default"). `pair_ids` here comes from a live
+    `ContradictionVerdict`, already sorted by `find_contradictions`'s own
+    contract (`resolution.contradiction._candidate_pairs`'s
+    `tuple(sorted(pair))` dedup key) -- unlike the operator-supplied
+    `--decline`/`--reopen` pair, it needs no re-sorting."""
+    key = bundle_decisions.decision_key_for(pair_ids, merged_absorbed_id)
+    for record in bundle_decisions.read_decisions(pair_ids[0], layout.bundle_dir):
+        if record.decision_key == key:
+            return record.state == "declined"
+    return False
+
+
+def _current_finding_digest(bundle_dir: Path) -> Callable[[str], str | None]:
+    """A `state.findings.open_findings`-compatible `current_digest`
+    callback: reads `input_ref` as a concept id and content-hashes its
+    CURRENT bytes (design Decision 2), mirroring `cli.curate.
+    _finding_input_digests`'s own read. An unreadable or non-file
+    `input_ref` (a merged-body candidate's synthetic ledger-snapshot
+    label, or a concept removed since the finding was recorded) answers
+    `None` -- "cannot currently determine", never evidence of drift
+    (`state.findings._is_stale`'s own contract)."""
+
+    def _digest(input_ref: str) -> str | None:
+        try:
+            raw = okf.concept_path_for(input_ref, bundle_dir).read_bytes()
+        except OSError:
+            return None
+        return content_hash(raw)
+
+    return _digest
+
+
+def _open_findings_by_decision_key(
+    layout: config.WorkspaceLayout,
+) -> dict[str, findings.PersistedFinding]:
+    """Every persisted finding, keyed by the SAME `decision_key_for`
+    identity a decision record is keyed on (design Decision 7's read-time
+    join) -- used ONLY by the `--declined` view's stale-label lookup.
+    Opens `.openkos/findings.db` lazily, mirroring `vectors.db`/`fts.db`'s
+    own lazy-cache posture (Decision 1); a workspace where the
+    Contradictions stage has never persisted anything returns `{}` rather
+    than raising."""
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        persisted = findings.open_findings(
+            conn, current_digest=_current_finding_digest(layout.bundle_dir)
+        )
+    finally:
+        conn.close()
+    return {
+        bundle_decisions.decision_key_for(pf.pair_ids, pf.merged_absorbed_id): pf
+        for pf in persisted
+    }
+
+
+def _echo_declined_finding(
+    record: bundle_decisions.DecisionRecord,
+    finding: "findings.PersistedFinding | None",
+) -> None:
+    """One `--declined` listing entry (pending-work spec: "The declined-
+    listing view surfaces it"; Scenario "A stale finding remains visible as
+    stale" -- `[stale]` is appended whenever a matching persisted finding
+    is stale, never silently omitted)."""
+    stale_suffix = " [stale]" if finding is not None and finding.stale else ""
+    if record.merged_absorbed_id is not None:
+        survivor_id, _ = record.pair_ids
+        typer.echo(
+            f"[DECLINED] {survivor_id} (merged content, absorbed "
+            f"{record.merged_absorbed_id}){stale_suffix}"
+        )
+    else:
+        source_id, target_id = record.pair_ids
+        typer.echo(f"[DECLINED] {source_id} <-> {target_id}{stale_suffix}")
+    if finding is not None:
+        typer.echo(
+            f"  verdict: {finding.verdict} (confidence: {finding.confidence:.2f})"
+        )
+        typer.echo(f"  rationale: {finding.rationale}")
+    else:
+        typer.echo(
+            "  (no persisted finding on record -- it may have been purged "
+            "or never recomputed)"
+        )
+    typer.echo()
+
+
+def _contradictions_declined_view(root: Path, layout: config.WorkspaceLayout) -> None:
+    """`contradictions --declined` (pending-work spec: "The declined-
+    listing view surfaces it", design Decision 3's "explicit listing
+    view"). Short-circuits before the graph build and LLM client (design
+    File changes table): every declined record comes from
+    `bundle.decisions.iter_decisions`'s INCLUDE walk, never from a fresh
+    LLM judgment."""
+    typer.echo(f"openkos contradictions --declined: workspace at {root}")
+    typer.echo()
+
+    declined_records: list[bundle_decisions.DecisionRecord] = []
+    for decisions_path in bundle_decisions.iter_decisions(layout.bundle_dir):
+        metadata, _ = okf.load_frontmatter(decisions_path.read_text(encoding="utf-8"))
+        concept_id = metadata.get("concept_id")
+        if not isinstance(concept_id, str):
+            continue
+        for record in bundle_decisions.read_decisions(concept_id, layout.bundle_dir):
+            if record.state == "declined":
+                declined_records.append(record)
+
+    if not declined_records:
+        typer.echo("No declined findings.")
+        return
+
+    findings_by_key = _open_findings_by_decision_key(layout)
+    declined_records.sort(key=lambda record: record.decision_key)
+    for record in declined_records:
+        _echo_declined_finding(record, findings_by_key.get(record.decision_key))
+
+
 @app.command(
     help=(
         "Report concepts whose content disagrees, using the model to judge "
@@ -10366,6 +10539,36 @@ def contradictions(
         False,
         "--include-confidential",
         help="Include confidential concepts (excluded by default).",
+    ),
+    decline: tuple[str, str] | None = typer.Option(
+        None,
+        "--decline",
+        metavar="PAIR_ID_A PAIR_ID_B",
+        help="Decline the contradiction finding for this concept pair "
+        "(sorted internally), hiding it from ordinary output. Succeeds "
+        "even with no matching findings row. Combine with "
+        "--merged-absorbed-id for a merged-body candidate.",
+    ),
+    reopen: tuple[str, str] | None = typer.Option(
+        None,
+        "--reopen",
+        metavar="PAIR_ID_A PAIR_ID_B",
+        help="Reopen a previously declined finding for this concept pair, "
+        "restoring its ranking eligibility. Combine with "
+        "--merged-absorbed-id for a merged-body candidate.",
+    ),
+    merged_absorbed_id: str | None = typer.Option(
+        None,
+        "--merged-absorbed-id",
+        help="With --decline/--reopen: the absorbed concept id that "
+        "distinguishes a merged-body candidate from a typed-edge candidate "
+        "over the same pair.",
+    ),
+    declined: bool = typer.Option(
+        False,
+        "--declined",
+        help="List every declined finding instead of running LLM "
+        "contradiction detection.",
     ),
 ) -> None:
     """LLM-detect contradictions between already-related concepts: read-only,
@@ -10430,6 +10633,18 @@ def contradictions(
 
     No file under the workspace is ever created, modified, or deleted
     (spec: Read-Only `contradictions` CLI Verb).
+
+    `--decline`/`--reopen`/`--declined` (pending-work design, PR #3/Slice
+    B2) are the three write/list verbs this command additionally exposes,
+    each short-circuiting BEFORE the graph build and the `OllamaClient`
+    (design File changes table): they write or read
+    `bundle/.state/decisions/**` only, never build a graph projection, and
+    never call `llm.chat`. An ordinary judged run additionally hides any
+    verdict whose `decision_key` (sorted `pair_ids` + `merged_absorbed_id`,
+    Decision 3) already carries a `declined` decision -- the SAME identity
+    `--decline`/`--reopen` key on -- from the `--all`/high-confidence
+    display filter (pending-work spec: "Declined Findings Are Hidden By
+    Default").
     """
     root = Path.cwd()
     reason = config.require_workspace(root)
@@ -10438,6 +10653,53 @@ def contradictions(
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
+
+    if decline is not None:
+        rel_path = _apply_contradiction_decision(
+            layout, decline, merged_absorbed_id, target_state="declined"
+        )
+        pair_a, pair_b = _sorted_decision_pair(decline)
+        typer.echo(
+            f"openkos contradictions: declined {pair_a} <-> {pair_b}"
+            + (
+                f" (merged content, absorbed {merged_absorbed_id})"
+                if merged_absorbed_id is not None
+                else ""
+            )
+            + "."
+        )
+        _autocommit(
+            root,
+            [rel_path],
+            f"openkos: decline contradiction {pair_a}/{pair_b}",
+        )
+        return
+
+    if reopen is not None:
+        rel_path = _apply_contradiction_decision(
+            layout, reopen, merged_absorbed_id, target_state="open"
+        )
+        pair_a, pair_b = _sorted_decision_pair(reopen)
+        typer.echo(
+            f"openkos contradictions: reopened {pair_a} <-> {pair_b}"
+            + (
+                f" (merged content, absorbed {merged_absorbed_id})"
+                if merged_absorbed_id is not None
+                else ""
+            )
+            + "."
+        )
+        _autocommit(
+            root,
+            [rel_path],
+            f"openkos: reopen contradiction {pair_a}/{pair_b}",
+        )
+        return
+
+    if declined:
+        _contradictions_declined_view(root, layout)
+        return
+
     try:
         cfg = config.read_config(root)
     except (OSError, ValueError) as exc:
@@ -10574,6 +10836,16 @@ def contradictions(
         if show_all
         else [v for v in verdicts if is_high_confidence_contradiction(v)]
     )
+    # pending-work spec ("Declined Findings Are Hidden By Default"): a
+    # verdict whose decision_key already carries a `declined` decision is
+    # dropped from the DISPLAY list only -- it still counts in `verdicts`
+    # for the zero-edge/truncation/partial-failure reporting above, which
+    # describe what was JUDGED, not what was declined.
+    displayed = [
+        v
+        for v in displayed
+        if not _is_contradiction_declined(layout, v.pair_ids, v.merged_absorbed_id)
+    ]
     if not displayed:
         # No early return (#441): the partial-batch failure epilogue below
         # must run after every display path, exactly as in `adjudicate`.
