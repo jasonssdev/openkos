@@ -54,6 +54,24 @@ state that reversibility of merges made before this fix is not guaranteed.
 This check MUST NOT write, modify, or delete any file — `doctor` stays
 read-only; it detects and advises, it never repairs.
 
+The check MUST skip, never flag, any entry whose recorded `survivor_before`
+snapshot embeds no ledger entries of its own. This skip is required for
+correctness: after the ledger relocation a `survivor_before` snapshot is a
+survivor document whose frontmatter carries no `merged_from` key, so every
+post-relocation entry embeds nothing, and a check without the skip would
+flag every legitimate multi-entry ledger created after the relocation.
+
+The check therefore has THREE documented false negatives, and a `[PASS]`
+MUST NOT be read as evidence that any ledger content was compared:
+
+1. a single-entry ledger — nothing is nested;
+2. cross-survivor pollution — `merge_core`'s `other_files` can rewrite a
+   link inside a third survivor's embedded snapshot, which the ledger
+   alone cannot distinguish from correct bytes;
+3. every post-relocation entry — via the skip rule above. This is the
+   widest of the three: on a workspace created after the relocation the
+   check has nothing in scope at all.
+
 #### Scenario: Clean ledgers pass
 - GIVEN a workspace whose every `bundle/.state/ledger/` sidecar matches
   its expected byte-exact-restore state
@@ -79,3 +97,11 @@ read-only; it detects and advises, it never repairs.
 - WHEN `openkos doctor` runs
 - THEN the merge-ledger-integrity check prints `[PASS]`, having found no
   sidecar to flag
+
+#### Scenario: A post-relocation multi-entry ledger is skipped, not flagged
+- GIVEN a `bundle/.state/ledger/` sidecar with two or more entries, every
+  one of them created after the ledger relocation and therefore embedding
+  a `survivor_before` snapshot with no `merged_from` key
+- WHEN `openkos doctor` runs
+- THEN the merge-ledger-integrity check prints `[PASS]`, having skipped
+  every entry rather than comparing and flagging it
