@@ -3246,3 +3246,190 @@ def test_filtering_every_addition_leaves_the_kept_object_untouched() -> None:
     assert outcome.report.retained == 1
     assert outcome.report.reask_runs == 1
     assert outcome.report.reask_added_titles == ()
+
+
+# --- Topic containment: the trigger only (#584) ------------------------------
+#
+# The live probe found the trigger never firing on the fixture that
+# reproduces the defect:
+#
+#     source_title : 'Lesson 3: Setting Up a Python Project'
+#     object       : Procedure: 'Setting Up a Python Project'
+#     restates?    : False    <- exact comparison is correct; it IS not equal
+#
+# The model strips the framing and titles the object after the umbrella
+# TOPIC. So the harm is "the object restates the topic the title names", and
+# an exact-match trigger cannot see that class by construction.
+#
+# The trigger widens to token containment. The ADDITIONS FILTER does NOT --
+# see `test_re_ask_addition_contained_in_the_title_is_still_kept`.
+
+_LESSON_SOURCE_TITLE = "Lesson 3: Setting Up a Python Project"
+
+_LESSON_PROCEDURE_ITEM = (
+    '{"type": "Procedure", "title": "Setting Up a Python Project", '
+    '"description": "How to lay out a new Python project.", '
+    '"body": "Create the venv, pin the lockfile, add the tests tree."}'
+)
+
+_LOCKFILE_ITEM = (
+    '{"type": "Concept", "title": "Dependency Lockfile", '
+    '"description": "A pinned record of resolved dependency versions.", '
+    '"body": ""}'
+)
+
+
+def test_lone_object_restating_the_titles_topic_triggers_a_re_ask() -> None:
+    """The measured shape (#584, `qwen3:8b`, `--runs 5 --seed 7`): the
+    `lesson` treatment arm returns ONE `Procedure` whose title is the source
+    title minus its framing. Exact comparison says "not a twin" -- correctly,
+    since literally it is not -- so the trigger has to read topic
+    containment or it cannot reach this class at all."""
+    llm = _SequencedLLM([_array(_LESSON_PROCEDURE_ITEM), _array(_LOCKFILE_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Create the venv, pin the lockfile, add the tests tree.",
+        source_title=_LESSON_SOURCE_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == [
+        "Setting Up a Python Project",
+        "Dependency Lockfile",
+    ]
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ("Dependency Lockfile",)
+
+
+def test_containment_trigger_respects_word_boundaries() -> None:
+    """`"Rust"` must not be found inside `"Trust Boundaries"`. Containment is
+    token-level, never raw substring -- the substring reading is how a
+    predicate starts matching anything that happens to share letters."""
+    rust = (
+        '{"type": "Concept", "title": "Rust", '
+        '"description": "A systems programming language.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(rust), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note about the language.", source_title="Trust Boundaries", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Rust"]
+
+
+def test_no_trigger_when_one_generic_token_is_all_that_is_shared() -> None:
+    """#555's failure mode, fenced. `resolution/similarity.py` drops short
+    tokens, which manufactures single-token titles, and containment then
+    matches anything sharing one generic token -- `ai-agent` alone landed in
+    eleven duplicate groups. A trigger that fires on nearly every source is
+    not a narrower option than "sole object alone"; it is that option plus a
+    predicate to maintain. So containment requires the contained side to keep
+    at least `_MIN_TOPIC_TOKENS` meaningful tokens."""
+    agents = (
+        '{"type": "Concept", "title": "Agents", '
+        '"description": "Software that acts on your behalf.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(agents), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note about agents.", source_title="AI Agents in Practice", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Agents"]
+
+
+def test_no_trigger_when_the_lone_title_shares_no_meaningful_tokens() -> None:
+    """An ordinary single-subject reply, whose object carries a title of its
+    own, still does not spend a call."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism.",
+        source_title="Setting Up a Python Project",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+def test_no_containment_trigger_when_a_second_object_survives() -> None:
+    """The `exactly one` half of the trigger is untouched by the widening: a
+    topic-restating object BESIDE a genuine subject is not the collapse."""
+    llm = _SequencedLLM(
+        [_array(_LESSON_PROCEDURE_ITEM, _LOCKFILE_ITEM), _array(_APATHEIA_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "Create the venv, pin the lockfile, add the tests tree.",
+        source_title=_LESSON_SOURCE_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == [
+        "Setting Up a Python Project",
+        "Dependency Lockfile",
+    ]
+
+
+def test_containment_re_ask_returning_nothing_leaves_the_object_untouched() -> None:
+    """The additive bound on the newly reachable path: the containment
+    trigger fires, the second ask finds nothing, and the output is what it
+    was before the trigger existed."""
+    llm = _SequencedLLM([_array(_LESSON_PROCEDURE_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "Create the venv, pin the lockfile, add the tests tree.",
+        source_title=_LESSON_SOURCE_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Procedure",
+            title="Setting Up a Python Project",
+            description="How to lay out a new Python project.",
+            body="Create the venv, pin the lockfile, add the tests tree.",
+        )
+    ]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
+
+
+def test_re_ask_addition_contained_in_the_title_is_still_kept() -> None:
+    """The asymmetry, pinned: the TRIGGER reads containment, the ADDITIONS
+    FILTER stays on exact restatement.
+
+    Different cost of error. The trigger decides whether to SPEND A CALL --
+    being wrong costs one call. The filter decides whether to DISCARD A
+    FOUND SUBJECT -- being wrong loses real content. So the filter keeps the
+    tighter threshold, and an addition whose title is merely contained in
+    the source title survives."""
+    llm = _SequencedLLM(
+        [
+            _array(_LESSON_PROCEDURE_ITEM),
+            _array(
+                '{"type": "Concept", '
+                '"title": "Python Project", "description": "The unit of work a '
+                'lesson sets up.", "body": ""}'
+            ),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "Create the venv, pin the lockfile, add the tests tree.",
+        source_title=_LESSON_SOURCE_TITLE,
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == [
+        "Setting Up a Python Project",
+        "Python Project",
+    ]
