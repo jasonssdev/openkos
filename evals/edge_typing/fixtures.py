@@ -42,6 +42,14 @@ class LabelledEdge:
     expected_type: str
     confusion: str
     """The rubric confusion this pair exists to probe, for the report."""
+    trap_type: str | None = None
+    """Issue #561: for a REVERSED-orientation probe, the asymmetric type
+    that would be correct if the edge ran the other way -- the answer a
+    directionally-confused model emits. `None` for the original
+    forward-oriented edges. Every pre-#561 edge presented the child/part/
+    member/dependent as SOURCE, so a model that ignores direction entirely
+    could still score perfectly; these probes are the edges that catch it,
+    and the runner reports `trap hits` over them separately from accuracy."""
 
 
 DOCS: tuple[ConceptDoc, ...] = (
@@ -375,5 +383,56 @@ EDGES: tuple[LabelledEdge, ...] = (
         "concepts/oncall-rotation",
         "related_to",
         "the honest abstention",
+    ),
+    # Reversed-orientation probes (issue #561): the same documents, the
+    # edge flipped so the COLLECTION/AUTHOR/CAUSE is SOURCE. No seeded type
+    # reads correctly in this direction, so the defensible answer is the
+    # honest one -- `references` where the source body explicitly names the
+    # target, `related_to` where it does not -- and the trap is the
+    # asymmetric type that was correct for the forward edge. A field run
+    # emitted every one of these traps (`[member_of] organization ->
+    # person`, `[part_of] claude-code -> tools`), which is what these six
+    # exist to reproduce.
+    LabelledEdge(
+        "concepts/scheduled-maintenance-jobs",
+        "concepts/nightly-backup-job",
+        "related_to",
+        "direction: collection -> member",
+        trap_type="member_of",
+    ),
+    LabelledEdge(
+        "concepts/read-replicas",
+        "concepts/eu-west-replica",
+        "related_to",
+        "direction: collection -> member",
+        trap_type="member_of",
+    ),
+    LabelledEdge(
+        "concepts/voice-parts",
+        "concepts/soprano-line",
+        "related_to",
+        "direction: collection -> member (held out from the examples)",
+        trap_type="member_of",
+    ),
+    LabelledEdge(
+        "concepts/risk-committee",
+        "concepts/quarterly-risk-report",
+        "references",
+        "direction: author -> artifact",
+        trap_type="produced_by",
+    ),
+    LabelledEdge(
+        "concepts/platform-team",
+        "concepts/architecture-decision-record",
+        "references",
+        "direction: author -> artifact",
+        trap_type="produced_by",
+    ),
+    LabelledEdge(
+        "concepts/payment-gateway-migration",
+        "concepts/checkout-outage",
+        "references",
+        "direction: cause -> outcome",
+        trap_type="caused_by",
     ),
 )
