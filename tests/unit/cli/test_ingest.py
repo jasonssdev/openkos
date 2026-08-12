@@ -5705,3 +5705,34 @@ def test_ingest_reports_a_re_ask_that_found_nothing_further(
     assert "1 extra re-ask call found nothing further" in result.stderr
     concept_dir = tmp_path / "bundle" / "concepts"
     assert [p.name for p in sorted(concept_dir.glob("*.md"))] == ["replica-lag.md"]
+
+
+def test_ingest_reask_notice_bounds_how_many_added_titles_it_echoes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-ask notice names enough added titles to judge the call, then
+    counts the rest -- the same bound `_CAP_NOTICE_TITLE_LIMIT` puts on the
+    cap notice, for the same reason."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    added = 5
+    reask_reply = (
+        "[" + ", ".join(_concept_reply(f"Added {i}") for i in range(added)) + "]"
+    )
+    _patch_sequenced_llm(
+        monkeypatch, [_concept_reply(title="Replica Lag"), reask_reply]
+    )
+    source = tmp_path / "replica-lag.txt"
+    source.write_text(
+        "Replica Lag\n\nA replica trails its primary, and a read routed to "
+        "it can miss a write the client just made.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["ingest", "replica-lag.txt", "--auto"])
+
+    assert result.exit_code == 0
+    unnamed = added - main._CAP_NOTICE_TITLE_LIMIT
+    assert f"1 extra re-ask call added {added} object(s)" in result.stderr
+    assert f"(+{unnamed} more)" in result.stderr
+    assert "Added 4" not in result.stderr
