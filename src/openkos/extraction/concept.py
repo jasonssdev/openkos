@@ -411,6 +411,101 @@ def _normalize_title(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
 
+_REASK_SYSTEM_PROMPT = (
+    "A first extraction pass over the SOURCE below returned exactly ONE "
+    "object, and that object only restates the source's own title. This is "
+    "a narrow follow-up question, NOT a request to extract the source "
+    "again: the object already kept is kept whatever you answer here.\n\n"
+    "Question: beyond the subject its title already names, does the BODY of "
+    "this source develop any FURTHER distinct subject in its own right -- a "
+    "specific idea, artifact, decision, procedure, person, organization, "
+    "place, event, or project that the text says something substantive "
+    "about?\n\n"
+    "Answer with ONLY those further subjects. Do NOT repeat the subject the "
+    "title already names, and do NOT restate it under another name or "
+    "another type: it is already kept, and returning it again adds "
+    "nothing.\n\n"
+    "An empty array [] is a CORRECT and EXPECTED answer here. Many sources "
+    "genuinely cover exactly one subject, and for those the first pass was "
+    "right: answer [] and nothing else. Do not invent a subject, and do not "
+    "promote a section heading, a passing mention, a supporting detail, or "
+    "a step of something already kept in order to fill this answer. If you "
+    "are unsure whether something is a separate subject or part of the one "
+    "already kept, it is part of the one already kept -- answer [].\n\n"
+    'Vocabulary: each object\'s "type" MUST be one of exactly nine values: '
+    '"Person", "Organization", "Place", "Event", "Procedure", "Decision", '
+    '"Project", "Concept", or "Entity".\n\n'
+    "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
+    "fences around it. Each element matches exactly this shape:\n"
+    '[{"type": "Person"|"Organization"|"Place"|"Event"|"Procedure"'
+    '|"Decision"|"Project"|"Concept"|"Entity", "title": "...", '
+    '"description": "...", "body": "..."}, ...]\n'
+    "Do NOT wrap the array in an outer object."
+)
+"""System half of the BOUNDED RE-ASK prompt (#584) -- a SEPARATE constant,
+never an edit to `_SYSTEM_PROMPT`.
+
+Separate for two independent reasons:
+
+- `evals/extraction_collapse/run_collapse_probe.py` pins `CONTROL_PROMPT_SHA`
+  over both extraction channels. Editing the extraction prompt invalidates
+  the positive control's premise and destroys the before/after baseline
+  measured at the same seed, which is the whole instrument #584 is judged
+  by.
+- A second IDENTICAL ask is measurably useless: `extract_concept_union`
+  already runs two passes with the same messages and the collapse survives
+  10 of 10 runs (`evals/extraction_collapse/report.md`). The re-ask can only
+  pay for itself by asking a DIFFERENT question, so this prompt names what
+  it wants -- the distinct sub-subjects the body develops beyond what the
+  title already says -- instead of repeating the general extraction request.
+
+"Nothing further" is deliberately first-class here, stated before any
+instruction to produce. The re-ask fires on the trigger alone, so a
+genuinely single-subject source (the `mcp-launch` shape in
+`_drop_source_title_twins`, `Replica Lag` in the probe's negative control)
+reaches this prompt too -- and an instruction that pressures the model to
+produce more is exactly how that source acquires an invented subject. Hence
+the explicit "[] is CORRECT and EXPECTED", the named list of things that do
+NOT count (a heading, a passing mention, a supporting detail, a step), and
+the tie-break that resolves uncertainty toward [] rather than toward an
+extra object. The bound does not depend on this wording -- the guard only
+ADDS, so the original object survives regardless -- but the wording is what
+keeps a false trigger cheap instead of harmful."""
+
+
+def _build_reask_messages(
+    source_text: str, source_title: str, kept_title: str
+) -> list[Message]:
+    """Assemble the re-ask's 2-message prompt.
+
+    The source title is labeled plainly here rather than as "metadata only,
+    not authoritative" (design DD1's framing for the extraction turn): this
+    ask is precisely about going BEYOND what that title names, so the title
+    is the reference point, not a pre-computed answer to suppress. The
+    already-kept object is named for the same reason -- "do not repeat it"
+    needs a referent.
+
+    No `_LANGUAGE_ANCHOR` (#522): the anchor exists for the meeting-shaped
+    path, which omits the title and with it the only source-language text in
+    the user turn. This turn always carries both the title and the source
+    text, exactly like the titled extraction path that anchor is deliberately
+    kept off. The trigger cannot fire on a meeting-shaped source anyway --
+    `_drop_framing_objects` removes a meeting-shaped-titled object first, and
+    a lone `Procedure` is not a droppable twin -- so this path never sees
+    one."""
+    return [
+        {"role": "system", "content": _REASK_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"SOURCE TITLE: {source_title}\n\n"
+                f"ALREADY KEPT (do not repeat): {kept_title}\n\n"
+                f"SOURCE TEXT:\n{source_text}"
+            ),
+        },
+    ]
+
+
 _TWIN_EXEMPT_TYPE = "Procedure"
 """The one object type `_drop_source_title_twins` never treats as a twin
 (#413).
@@ -421,6 +516,166 @@ on an instructional source, and the rule that used to delete it. A member of
 `_VALID_TYPES` by construction; `test_twin_exempt_type_is_in_the_vocabulary`
 is the alarm if the vocabulary ever renames it, since a typo here would
 silently restore the deletion rather than fail."""
+
+
+def _restates_source_title(result: ExtractionResult, *, source_title: str) -> bool:
+    """Does `result`'s title merely restate `source_title`? TITLE ONLY --
+    type is not consulted.
+
+    This is the RE-ASK's predicate (#584) -- BOTH of the re-ask's decisions,
+    its trigger and its additions filter -- and it is deliberately weaker
+    than `_is_droppable_source_title_twin` below. The two differ by exactly
+    one conjunct, and the seam between them is DIRECTION, not caller:
+
+    - this one gates everything ADDITIVE: whether to ask one more question,
+      and whether a candidate that came back is an answer to it;
+    - that one gates the single operation that DELETES.
+
+    So the type exemption lives in exactly one place -- the deletion.
+
+    The `Procedure` exemption (#413) was bought by a deletion: dropping a
+    rich tutorial's PRIMARY how-to -- one the first pass genuinely found --
+    was silent data loss, and the exemption exists to stop it. That
+    rationale does not transfer to either additive decision, because
+    neither can remove an object the source produced. A lone `Procedure`
+    restating its source title is exactly as suspicious as a lone `Concept`
+    doing the same, and asking whether the body covers anything further
+    cannot harm either; an ADDITION restating that title, of any type, is
+    not a primary object at all but the re-ask disobeying the instruction
+    `_REASK_SYSTEM_PROMPT` just gave it.
+
+    It is not a theoretical widening. Measured on the `lesson` pair
+    (`qwen3:8b`, `--runs 5 --seed 7`, #584): the treatment arm returns ONE
+    object in 5 of 5 runs and it is a `Procedure` in every one, while the
+    floor arm returns 3 -- so under the two-conjunct predicate the trigger
+    never fires on the only fixture that reproduces the defect it was built
+    for.
+
+    Do NOT collapse these two predicates back into one. They look
+    near-identical on purpose and mean different things; merging them either
+    re-arms the deletion #413 forbids or re-blinds the trigger to the shape
+    #584 measures. Both are built on the ONE `_normalize_title` comparison
+    (`concept.py`), so no third notion of "same title" enters this module."""
+    return _normalize_title(result.title) == _normalize_title(source_title)
+
+
+_TITLE_TOKEN_RE: Final = re.compile(r"\w+", re.UNICODE)
+"""Word tokens of a normalized title, for topic containment ONLY.
+
+`\\w+` rather than an ASCII class on purpose: half this project's measured
+corpus is Spanish, and `[a-z0-9]+` would cut `reunión` into `reuni` + `n`.
+Splitting on non-word characters also does the punctuation work the exact
+comparison never needed -- `3:` and `project.` tokenize to `3` and
+`project`."""
+
+_MIN_TOPIC_TOKEN_LENGTH: Final = 3
+"""Tokens shorter than this are dropped before containment.
+
+Same threshold and same reason as `resolution.similarity.MIN_TOKEN_LENGTH`:
+a one- or two-character token carries no reliable topic signal (`up`, `a`,
+`el`, `3`). Re-derived here rather than imported -- `extraction` does not
+depend on `resolution`, and this module's own comparison rules are
+deliberately self-contained."""
+
+_MIN_TOPIC_TOKENS: Final = 2
+"""How many meaningful tokens the CONTAINED title must keep for containment
+to count. This is the whole defense against the failure #555 paid for.
+
+`resolution/similarity.py` drops short tokens and then applies subset
+containment, which MANUFACTURES single-token titles: `ai-agent` becomes
+`{agent}`, one generic token contained in anything, and that title alone
+landed in eleven duplicate groups at a score of 1.000. A trigger that fires
+on nearly every source is not a narrower option than "fire whenever the
+list is one object" -- it is that option plus a predicate to maintain.
+
+Requiring two tokens is what keeps `Agents` ⊂ `AI Agents in Practice` from
+firing while `Setting Up a Python Project` ⊂ `Lesson 3: Setting Up a Python
+Project` (3 meaningful tokens: `setting`, `python`, `project`) does. It
+also makes a shared stopword pair insufficient, since those tokens are gone
+before the count."""
+
+
+def _title_tokens(value: str) -> frozenset[str]:
+    """Meaningful word tokens of `value`, normalized then split.
+
+    Feeds ONLY `_restates_source_topic`. `_normalize_title` is left exactly
+    as it was and is not part of the containment logic beyond producing this
+    function's input: it is shared with `_dedup_merged`/`_merge_union`, and
+    folding containment into it would start merging distinct subjects across
+    chunks -- two different objects whose titles happen to nest would become
+    one."""
+    normalized = _normalize_title(value)
+    return frozenset(
+        token
+        for token in _TITLE_TOKEN_RE.findall(normalized)
+        if len(token) >= _MIN_TOPIC_TOKEN_LENGTH
+    )
+
+
+def _restates_source_topic(result: ExtractionResult, *, source_title: str) -> bool:
+    """Does `result` restate the TOPIC the source title names -- exactly, or
+    by containment in either direction?
+
+    The RE-ASK TRIGGER's predicate, and ONLY the trigger's (#584). Measured:
+    the `lesson` treatment arm returns one `Procedure` titled `Setting Up a
+    Python Project` under a source titled `Lesson 3: Setting Up a Python
+    Project`. The model strips the framing and titles the object after the
+    umbrella topic, so exact comparison answers "not a twin" -- correctly,
+    since literally it is not one -- and the trigger could not see the class
+    the defect actually takes.
+
+    Containment is TOKEN-level, never raw substring: `Rust` must not be
+    found inside `Trust Boundaries`, and a substring test says it is. Token
+    equality gets word boundaries right for free. Direction is either way --
+    the object may name a slice of the title's topic or a superset of it --
+    and `_MIN_TOPIC_TOKENS` is what stops that generosity from degenerating
+    (see its note on #555).
+
+    The ADDITIONS FILTER deliberately does NOT use this. It stays on the
+    exact `_restates_source_title`, and the asymmetry is the point: this
+    predicate decides whether to SPEND A CALL, where being wrong costs one
+    call and nothing else; that one decides whether to DISCARD A FOUND
+    SUBJECT, where being wrong loses real content. Different cost of error,
+    different threshold. Do not "unify" them."""
+    if _restates_source_title(result, source_title=source_title):
+        return True
+    object_tokens = _title_tokens(result.title)
+    source_tokens = _title_tokens(source_title)
+    if not object_tokens or not source_tokens:
+        return False
+    smaller, larger = (
+        (object_tokens, source_tokens)
+        if len(object_tokens) <= len(source_tokens)
+        else (source_tokens, object_tokens)
+    )
+    if len(smaller) < _MIN_TOPIC_TOKENS:
+        return False
+    return smaller <= larger
+
+
+def _is_droppable_source_title_twin(
+    result: ExtractionResult, *, source_title: str
+) -> bool:
+    """Is `result` a twin `_drop_source_title_twins` is allowed to DELETE?
+
+    BOTH conjuncts matter, and reading only the first one is how the
+    `extraction_collapse` harness first measured a green negative control on
+    a case that had no red available (`report.md`: `title_twin_runs` compared
+    titles without consulting the type): the title must restate the source's
+    own, AND the type must not be `_TWIN_EXEMPT_TYPE`. A `Procedure`
+    restating the source title is never a droppable twin (#413).
+
+    Expressed in terms of `_restates_source_title` rather than repeating its
+    comparison, so the drop rule and the re-ask trigger can never drift
+    apart on what "same title" means -- they differ ONLY by the type
+    exemption, which is the whole of the difference between deleting an
+    object and asking one more question about it.
+
+    Lifted out of `_drop_source_title_twins`'s closure (#584)."""
+    return (
+        _restates_source_title(result, source_title=source_title)
+        and result.type != _TWIN_EXEMPT_TYPE
+    )
 
 
 def _drop_source_title_twins(
@@ -485,15 +740,11 @@ def _drop_source_title_twins(
     if len(results) <= 1:
         return results
 
-    normalized_title = _normalize_title(source_title)
-
-    def _is_twin(result: ExtractionResult) -> bool:
-        return (
-            result.type != _TWIN_EXEMPT_TYPE
-            and _normalize_title(result.title) == normalized_title
-        )
-
-    non_twins = [r for r in results if not _is_twin(r)]
+    non_twins = [
+        r
+        for r in results
+        if not _is_droppable_source_title_twin(r, source_title=source_title)
+    ]
 
     if not non_twins or len(non_twins) == len(results):
         return results
@@ -747,6 +998,138 @@ def _dedup_merged(results: list[ExtractionResult]) -> list[ExtractionResult]:
     return out
 
 
+def _reask_for_further_subjects(
+    source_text: str, source_title: str, kept: ExtractionResult, llm: LLMBackend
+) -> list[ExtractionResult]:
+    """One re-ask call's validated ADDITIONS (#584), or `[]`.
+
+    Never raises. The re-ask is an OPTIONAL extra call sitting on top of an
+    already-complete result, which is `judge.select`'s situation exactly
+    (design D7), so it takes the same answer: a backend failure degrades to
+    "found nothing", never to losing the object the first pass produced. The
+    module's propagate-unswallowed contract governs the extraction calls
+    that PRODUCE the result; letting a bonus call destroy one would break the
+    bound this whole guard is built on -- a re-ask that only adds cannot
+    empty the `mcp-launch` shape, and an exception that reached the caller
+    would empty it via the CLI's Source-only degrade.
+
+    Two filters run on what comes back, both of which can only REMOVE
+    additions, never the object already kept:
+
+    - `_strip_ungrounded_expansions` (#423), because a fabricated acronym
+      expansion is no more welcome on the second ask than the first.
+    - `_restates_source_title` -- TITLE ONLY, with no `Procedure` exemption,
+      exactly like the trigger and for the same reason: both are additive.
+      The re-ask asks for subjects BEYOND the one the title names, so a
+      candidate restating that title is not an answer to the question asked.
+      `_REASK_SYSTEM_PROMPT` already forbids restating the kept subject
+      "under another name or another type", and a `Procedure` titled the
+      source's own IS that "another type" case -- admitting it would
+      contradict the instruction just sent, and `_dedup_merged` cannot catch
+      it, since its `(type, normalized-title)` key sees two different
+      objects.
+
+    #413's exemption deliberately does NOT reach here. What it bought was
+    the right of a PRIMARY `Procedure` -- one the first pass genuinely found
+    in the source -- not to be DELETED. An addition that merely restates the
+    source title is not that object. And the asymmetry makes the choice
+    safe by construction: this filter can only ever remove ADDITIONS, never
+    the object already kept, so filtering MORE here cannot regress anything
+    -- the worst case is that the re-ask adds nothing, which is
+    byte-identical to the behavior before this guard existed. The drop rule
+    has no such floor under it, which is precisely why the exemption lives
+    there and only there.
+    """
+    try:
+        reply = llm.chat(_build_reask_messages(source_text, source_title, kept.title))
+    except Exception:  # broad, and for the same reason `judge.select` is:
+        # the re-ask's own failure must never destroy already-validated
+        # extraction work. Whatever `llm.chat` raises -- the `OllamaError`
+        # family or anything else -- means only "this ask added nothing".
+        return []
+    results = [
+        result
+        for result in (_validate(item) for item in parsing.extract_json_items(reply))
+        if result is not None
+    ]
+    results = _strip_ungrounded_expansions(results, source_text=source_text)
+    return [
+        result
+        for result in results
+        if not _restates_source_title(result, source_title=source_title)
+    ]
+
+
+def _add_reask_subjects(
+    results: list[ExtractionResult],
+    *,
+    source_text: str,
+    source_title: str,
+    llm: LLMBackend,
+) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
+    """Bounded re-ask on a sole object that restates the source title (#584).
+
+    Returns `(objects, reask_runs, added_titles)`. When the trigger does not
+    fire, `results` is handed straight back with `(0, ())` and NO call is
+    made -- the re-ask must not fire on every source, which would silently
+    double extraction cost.
+
+    The trigger is the collapse #584 measured: the FINAL, filtered list is
+    exactly one object AND that object restates the source's own title. On
+    the `lesson` pair, `qwen3:8b`, `--runs 5 --seed 7`, the umbrella-titled
+    arm returned 1 object in 5 of 5 runs while the same three facts retitled
+    and unframed returned 3 in 5 of 5 (`AXIS IMPLICATED`) -- the subjects are
+    findable in that text, so a second ask has something to find.
+
+    It uses `_restates_source_topic` -- title only, type-blind, and matching
+    by TOKEN CONTAINMENT as well as exact equality. Two live runs at this
+    trigger's own seed settled both widenings, each after the narrower
+    predicate measurably failed to reach the defect:
+
+    - type-blind, because the `lesson` treatment arm's lone object came back
+      a `Procedure` in 5 of 5 runs and `_TWIN_EXEMPT_TYPE` is `Procedure`;
+    - containment, because that object is titled `Setting Up a Python
+      Project` under a source titled `Lesson 3: Setting Up a Python
+      Project`, so exact comparison reported `restates? False` and
+      `reask_runs 0` -- the harm is the object restating the TOPIC the title
+      names, not the title itself.
+
+    Neither widening reaches the DROP rule or the additions filter; see
+    `_restates_source_topic` and `_reask_for_further_subjects` for why each
+    keeps its own threshold.
+
+    It ADDS, never replaces, and that is what makes it bounded rather than a
+    gamble on the model. The argument is written down in
+    `evals/extraction_collapse/measure_single_object_rate.py:49-57`: the case
+    that matters most -- a source that GENUINELY has one subject -- is
+    unmeasured, a guard that REPLACES its object would be unbounded there,
+    and one that only ADDS is bounded whatever the false-positive rate turns
+    out to be. So:
+
+    - the original object is `combined[0]` by construction (`_dedup_merged`
+      keeps the FIRST occurrence of a `(type, normalized-title)` key), and a
+      re-ask returning nothing leaves the output exactly as it was before
+      this guard existed;
+    - `_drop_source_title_twins` is deliberately NOT re-run over the combined
+      list. It would drop the original the moment the re-ask succeeded,
+      turning the addition into a replacement -- the unbounded shape this
+      design rejects. The kept twin beside a genuine subject is the known,
+      accepted cost of the bound: cosmetic, and mergeable by a human.
+
+    Applied by BOTH `extract_concept` and `extract_concept_union` at the
+    point where their object list is final and filtered, after the whole
+    branch (chunked or not) rather than per run or per chunk -- #581's
+    precedent, and required by the trigger itself, which reads "the source
+    returned exactly one object" and so is meaningless on a slice."""
+    if len(results) != 1 or not _restates_source_topic(
+        results[0], source_title=source_title
+    ):
+        return results, 0, ()
+    added = _reask_for_further_subjects(source_text, source_title, results[0], llm)
+    combined = _dedup_merged(results + added)
+    return combined, 1, tuple(result.title for result in combined[1:])
+
+
 @dataclass(frozen=True)
 class ExtractionReport:
     """What the `_MAX_OBJECTS_PER_SOURCE` cap discarded on one call (#404).
@@ -806,6 +1189,27 @@ class ExtractionReport:
     """Merged candidates cut by `_MAX_JUDGE_CANDIDATES` BEFORE the judge
     ever saw them -- distinct from `discarded_titles`, which is the FINAL
     backstop cap's casualty list. `0` on every non-union path."""
+    reask_runs: int = 0
+    """EXTRA chat calls spent on the bounded sole-twin re-ask (#584): `1`
+    when the trigger fired, `0` -- the common case -- when it did not.
+
+    Counted separately from `runs`, which names the full extraction passes
+    the path is built from (2 on the unchunked union path, 1 elsewhere). A
+    re-ask is not one of those: it asks a different question, with a
+    different prompt, and only on a source that collapsed. Reported at all
+    because it is a real model call the user pays for, and a silent extra
+    call is the kind of cost this project surfaces rather than hides.
+
+    `1` with an empty `reask_added_titles` covers both "the second ask
+    honestly found nothing further" -- the answer the re-ask prompt names as
+    correct and expected -- and a re-ask whose backend call failed. The two
+    are deliberately not distinguished here: neither changed the objects,
+    and both spent the call."""
+    reask_added_titles: tuple[str, ...] = ()
+    """Titles the sole-twin re-ask CONTRIBUTED, in re-ask reply order --
+    always `()` when the trigger never fired. The object the first pass
+    produced is never named here: the guard only adds, so that object is
+    unchanged and un-attributable to the re-ask."""
 
 
 @dataclass(frozen=True)
@@ -921,6 +1325,12 @@ def extract_concept(
         )
     results = _drop_framing_objects(results, source_title=source_title)
     results = _drop_source_title_twins(results, source_title=source_title)
+    # #584: the list is final and filtered here, which is the only place the
+    # trigger's "the source returned exactly one object" is a true statement
+    # about the source. Additions then take the same cap as everything else.
+    results, reask_runs, reask_added_titles = _add_reask_subjects(
+        results, source_text=source_text, source_title=source_title, llm=llm
+    )
     retained = results[:_MAX_OBJECTS_PER_SOURCE]
     return ExtractionOutcome(
         objects=retained,
@@ -931,6 +1341,8 @@ def extract_concept(
                 result.title for result in results[_MAX_OBJECTS_PER_SOURCE:]
             ),
             chunks=chunk_count,
+            reask_runs=reask_runs,
+            reask_added_titles=reask_added_titles,
         ),
     )
 
@@ -1101,6 +1513,17 @@ def extract_concept_union(
         )
         run_count = 1
 
+    # #584, symmetrically with `extract_concept`: the merged list is final
+    # and filtered here, so this is where "the source returned exactly one
+    # object" can be asked. Additions join the merged candidates BEFORE the
+    # judge, taking this path's own selection mechanism exactly as the
+    # single-run path's additions take its cap -- a re-ask finding the judge
+    # never saw could not be selected against, and would leave two
+    # inconsistent notions of what the candidate set was.
+    merged, reask_runs, reask_added_titles = _add_reask_subjects(
+        merged, source_text=source_text, source_title=source_title, llm=llm
+    )
+
     pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
     judge_input = merged[:_MAX_JUDGE_CANDIDATES]
 
@@ -1117,6 +1540,8 @@ def extract_concept_union(
                 retained=0,
                 chunks=chunk_count,
                 runs=run_count,
+                reask_runs=reask_runs,
+                reask_added_titles=reask_added_titles,
             ),
         )
 
@@ -1178,5 +1603,7 @@ def extract_concept_union(
             judge_status=judge_status,
             judged_out_titles=judged_out_titles,
             pre_judge_dropped=pre_judge_dropped,
+            reask_runs=reask_runs,
+            reask_added_titles=reask_added_titles,
         ),
     )

@@ -596,7 +596,10 @@ def test_blank_body_is_kept_as_empty_string() -> None:
     item = '{"type": "Concept", "title": "T", "description": "D", "body": ""}'
     llm = _FakeLLM(reply=_array(item))
 
-    result = _objects("text", source_title="t", llm=llm)
+    # `source_title` deliberately differs from the object's title: `"t"`
+    # made this validation test a sole source-title twin, which now spends a
+    # re-ask call (#584) it has no business exercising.
+    result = _objects("text", source_title="Notes", llm=llm)
 
     assert len(result) == 1
     assert result[0].body == ""
@@ -867,8 +870,16 @@ def test_non_procedure_twin_still_dropped_beside_an_exempt_procedure() -> None:
 def test_procedure_exemption_does_not_rescue_a_non_procedure_twin_alone() -> None:
     """#413 regression alarm for the case the twin rule was built on: the
     measured `call-with-maria` shape has no `Procedure` in it at all, so the
-    exemption must not change its outcome."""
-    llm = _FakeLLM(reply=_array(_MARIA_ITEM, _CALL_WITH_MARIA_TWIN_ITEM))
+    exemption must not change its outcome.
+
+    The `"[]"` second reply answers the #584 re-ask. Once the twin is
+    dropped the list is one object titled `Maria Salazar`, whose tokens are
+    contained in the source title's, so the containment trigger fires here
+    -- correctly: this source genuinely carries three subjects (the spec's
+    `call-with-maria` scenario), and one surviving object IS the collapse.
+    Spelled out so this test asserts the twin drop rather than a repeating
+    fake's reply being deduplicated away."""
+    llm = _SequencedLLM([_array(_MARIA_ITEM, _CALL_WITH_MARIA_TWIN_ITEM), "[]"])
 
     result = _objects(
         "Maria and I talked about her move.",
@@ -876,14 +887,21 @@ def test_procedure_exemption_does_not_rescue_a_non_procedure_twin_alone() -> Non
         llm=llm,
     )
 
+    assert len(llm.calls) == 2
     assert [r.title for r in result] == ["Maria Salazar"]
 
 
 def test_exempt_procedure_alone_is_not_a_survivor_that_drops_others() -> None:
     """#413 floor guard: when the ONLY object is the exempt `Procedure`
     twin, nothing is dropped and nothing else must be invented -- the same
-    single-subject floor that already protected the `mcp-launch` shape."""
-    llm = _FakeLLM(reply=_array(_RESEARCH_AGENT_PROCEDURE_ITEM))
+    single-subject floor that already protected the `mcp-launch` shape.
+
+    The `"[]"` second reply answers the #584 re-ask, which this shape now
+    triggers (the trigger is title-only, so the `Procedure` exemption does
+    not hold it back). Spelled out rather than left to a repeating fake:
+    with the re-ask answering nothing, the object surviving is attributable
+    to the floor and to nothing else, which is what this test claims."""
+    llm = _SequencedLLM([_array(_RESEARCH_AGENT_PROCEDURE_ITEM), "[]"])
 
     result = _objects(
         "A walkthrough of building a research agent.",
@@ -891,6 +909,7 @@ def test_exempt_procedure_alone_is_not_a_survivor_that_drops_others() -> None:
         llm=llm,
     )
 
+    assert len(llm.calls) == 2
     assert len(result) == 1
     assert result[0].type == "Procedure"
 
@@ -2436,11 +2455,17 @@ def test_union_floor_keeps_the_twin_when_the_whole_merge_is_twins() -> None:
     `mcp-launch` shape (a genuinely single-subject source whose only subject
     is what its title names) must not become `[]` on the union path -- and
     it is the failure mode a post-merge twin drop would introduce if the
-    floor were dropped along with the move."""
+    floor were dropped along with the move.
+
+    The `"[]"` third reply answers the sole-twin re-ask (#584), which this
+    merged list now triggers: it finds nothing further, so the floor is what
+    keeps the object here, exactly as before. Without it the judge reply
+    would be consumed by the re-ask and the judge call would degrade."""
     llm = _SequencedLLM(
         [
             _array(_DICHOTOMY_ITEM),
             _array(_DICHOTOMY_ITEM),
+            "[]",
             _keep_reply("Dichotomy of Control"),
         ]
     )
@@ -2750,3 +2775,736 @@ def test_extract_concept_regression_suite_still_green_and_prompt_untouched() -> 
 
     assert len(llm.calls) == 1
     assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+# --- Bounded re-ask on a sole source-title twin (#584) -----------------------
+#
+# When the FINAL, filtered object list is exactly one object and that object
+# is a *droppable* source-title twin, the extractor asks once more with a
+# DIFFERENT instruction and keeps whatever the second ask adds.
+#
+# Three properties define the design and are each fenced below:
+#
+# - It ADDS, never replaces (`measure_single_object_rate.py:49-57`): the
+#   original object survives whatever the re-ask returns, so the guard stays
+#   bounded on a genuinely single-subject source.
+# - The second ask carries a DIFFERENT prompt: `extract_concept_union`
+#   already asks twice with identical messages and the collapse survives 10
+#   of 10 runs, so a second identical ask is measurably useless.
+# - It fires on the twin predicate's BOTH conjuncts -- a lone `Procedure`
+#   restating the source title is exempt (#413) and must not re-ask.
+
+_DICHOTOMY_TWIN_TITLE = "Dichotomy of Control"
+
+_DICHOTOMY_ECHO_ENTITY_ITEM = (
+    '{"type": "Entity", "title": "Dichotomy of Control", '
+    '"description": "The same subject the first pass already kept.", '
+    '"body": ""}'
+)
+
+
+def test_sole_droppable_twin_re_asks_and_keeps_what_the_second_ask_adds() -> None:
+    """#584: the reported harm -- a short source under an umbrella-topic
+    title yields one object where its body holds more. When the sole
+    surviving object is a droppable source-title twin, a second ask goes out
+    and its findings are ADDED beside the original."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == [
+        "Dichotomy of Control",
+        "Apatheia",
+    ]
+
+
+def test_union_sole_droppable_twin_re_asks_before_the_judge() -> None:
+    """The trigger is applied SYMMETRICALLY on both paths (#581's
+    precedent), at the point where the merged list is final and filtered --
+    so the re-ask's findings reach the judge as ordinary candidates."""
+    llm = _SequencedLLM(
+        [
+            _array(_DICHOTOMY_ITEM),
+            _array(_DICHOTOMY_ITEM),
+            _array(_APATHEIA_ITEM),
+            _keep_reply("Dichotomy of Control", "Apatheia"),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    # 2 extraction runs + 1 re-ask + 1 judge call.
+    assert len(llm.calls) == 4
+    assert [r.title for r in outcome.objects] == [
+        "Dichotomy of Control",
+        "Apatheia",
+    ]
+    assert "Apatheia" in llm.calls[3][1]["content"]
+
+
+def test_re_ask_returning_nothing_leaves_the_objects_untouched() -> None:
+    """The bound: a re-ask that finds nothing leaves the output exactly as
+    it was before this change -- same object, same cap accounting. Only the
+    report's disclosure of the spent call differs."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Dichotomy of Control",
+            description=("The Stoic distinction between what is and is not up to us."),
+            body="",
+        )
+    ]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.discarded_titles == ()
+
+
+def test_re_ask_cannot_empty_a_genuinely_single_subject_source() -> None:
+    """The floor is not weakened -- `test_source_title_twin_kept_when_it_is
+    _the_only_object`'s contract on the new path. A genuinely single-subject
+    source (the `mcp-launch` shape, and the probe's `Replica Lag` negative
+    control) also triggers the re-ask, and its object survives whatever
+    comes back: here the second ask merely echoes the subject already kept,
+    which adds nothing and removes nothing."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(_DICHOTOMY_ECHO_ENTITY_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert [(r.type, r.title) for r in outcome.objects] == [
+        ("Concept", "Dichotomy of Control")
+    ]
+
+
+def test_lone_exempt_procedure_re_asks_because_the_trigger_ignores_type() -> None:
+    """The trigger is TITLE-ONLY, unlike the drop rule's two-conjunct
+    predicate. Measured (#584, `qwen3:8b`, `--runs 5 --seed 7`): the `lesson`
+    treatment arm returns one object in 5 of 5 runs and it is a `Procedure`
+    every time, so a type-blind trigger is the only one that reaches the
+    fixture reproducing the defect.
+
+    The `Procedure` exemption (#413) exists to stop a DELETION -- dropping a
+    rich tutorial's primary how-to was silent data loss. A re-ask deletes
+    nothing, so that rationale does not transfer: a lone `Procedure`
+    restating its source title is exactly as suspicious as a lone `Concept`
+    doing the same, and asking whether the body develops anything further
+    cannot harm either.
+
+    This test asserted the opposite before the live probe came back. What it
+    genuinely guarded -- that the exemption still protects the `Procedure`
+    from the DROP rule -- is guarded by
+    `test_primary_procedure_survives_alongside_the_subjects_it_yields` and
+    `test_lone_exempt_procedure_is_never_dropped_by_the_twin_rule`."""
+    llm = _SequencedLLM(
+        [_array(_RESEARCH_AGENT_PROCEDURE_ITEM), _array(_APATHEIA_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "A walkthrough of building a research agent, and of apatheia.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == [
+        "Building a Research Agent with the Claude Agent SDK",
+        "Apatheia",
+    ]
+
+
+def test_lone_exempt_procedure_is_never_dropped_by_the_twin_rule() -> None:
+    """The drop rule's exemption is untouched by the widened trigger: a
+    `Procedure` restating the source title survives the twin rule whatever
+    else the source yields (#413). Asserted on `_drop_source_title_twins`
+    directly, so no re-ask call can stand in for the guarantee."""
+    procedure = concept_mod.ExtractionResult(
+        type="Procedure",
+        title="Building a Research Agent with the Claude Agent SDK",
+        description="How to build a research agent on the SDK.",
+        body="Install the SDK, define the subagents, add guardrails.",
+    )
+    genuine = concept_mod.ExtractionResult(
+        type="Concept",
+        title="Claude Agent SDK",
+        description="The toolkit the tutorial builds on.",
+        body="",
+    )
+
+    kept = concept_mod._drop_source_title_twins(
+        [procedure, genuine],
+        source_title="Building a Research Agent with the Claude Agent SDK",
+    )
+
+    assert kept == [procedure, genuine]
+    assert not concept_mod._is_droppable_source_title_twin(
+        procedure, source_title="Building a Research Agent with the Claude Agent SDK"
+    )
+    # ...and the title-only predicate the TRIGGER uses says the opposite,
+    # which is exactly the difference between gating a deletion and gating
+    # an addition.
+    assert concept_mod._restates_source_title(
+        procedure, source_title="Building a Research Agent with the Claude Agent SDK"
+    )
+
+
+def test_no_re_ask_when_a_lone_procedure_does_not_restate_the_title() -> None:
+    """Widening the trigger to ignore TYPE does not widen it to ignore the
+    TITLE. A lone `Procedure` whose title is not the source's own is the
+    ordinary single-subject reply, and no second call goes out."""
+    llm = _SequencedLLM([_array(_PROCEDURE_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A daily reflection practice.", source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Morning Journaling Routine"]
+
+
+def test_no_re_ask_when_a_procedure_twin_keeps_company() -> None:
+    """The `exactly one` half of the trigger is unchanged by the widening: a
+    `Procedure` restating the source title BESIDE a genuine subject is the
+    rich-tutorial shape (#413), which the drop rule deliberately keeps whole
+    -- two objects, so no re-ask."""
+    llm = _SequencedLLM(
+        [
+            _array(_RESEARCH_AGENT_PROCEDURE_ITEM, _AGENT_SDK_ITEM),
+            _array(_APATHEIA_ITEM),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "A walkthrough of building a research agent.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == [
+        "Building a Research Agent with the Claude Agent SDK",
+        "Claude Agent SDK",
+    ]
+
+
+def test_re_ask_returning_nothing_leaves_a_lone_procedure_untouched() -> None:
+    """The additive bound survives the widening, on the newly-reachable
+    path: the re-ask fires on a lone `Procedure` twin, finds nothing, and
+    the output is what it was before the trigger existed."""
+    llm = _SequencedLLM([_array(_RESEARCH_AGENT_PROCEDURE_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "A walkthrough of building a research agent.",
+        source_title="Building a Research Agent with the Claude Agent SDK",
+        llm=llm,
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Procedure",
+            title="Building a Research Agent with the Claude Agent SDK",
+            description="How to build a research agent on the SDK.",
+            body="Install the SDK, define the subagents, add guardrails.",
+        )
+    ]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.discarded_titles == ()
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
+
+
+def test_no_re_ask_when_more_than_one_object_survives() -> None:
+    """The re-ask must not fire on every source -- that would silently
+    double extraction cost. Two surviving objects is not the collapse."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM, _PERSON_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism and Epictetus.", source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism", "Epictetus"]
+
+
+def test_no_re_ask_when_two_twins_both_survive_the_floor() -> None:
+    """The `exactly one` half of the trigger, on the only shape where it is
+    load-bearing: two candidates that are BOTH source-title twins leave no
+    non-twin for `_drop_source_title_twins` to keep, so its floor returns
+    both. The list is still not the collapse -- it holds two objects -- and
+    no second call goes out."""
+    entity_twin = (
+        '{"type": "Entity", "title": "Dichotomy of Control", '
+        '"description": "A tool named after the idea.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM, entity_twin), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.type for r in outcome.objects] == ["Concept", "Entity"]
+
+
+def test_no_re_ask_when_the_lone_object_is_not_a_title_twin() -> None:
+    """One object that does NOT restate the source title is the ordinary
+    single-subject reply, not the twin collapse #584 measures."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism.", source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+def test_re_ask_carries_a_different_instruction_than_the_extraction_prompt() -> None:
+    """`extract_concept_union` already asks twice with IDENTICAL messages and
+    the collapse survives 10 of 10 runs, so the second ask must differ. The
+    extraction prompt itself is untouched -- the re-ask uses a separate
+    constant (the probe's `CONTROL_PROMPT_SHA` pins the extraction one)."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), "[]"])
+
+    concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    first_system = llm.calls[0][0]["content"]
+    second_system = llm.calls[1][0]["content"]
+    assert first_system == concept_mod._SYSTEM_PROMPT
+    assert second_system == concept_mod._REASK_SYSTEM_PROMPT
+    assert second_system != first_system
+    # The re-ask names what it wants rather than repeating the general
+    # extraction request.
+    assert "any FURTHER distinct subject in its own right" in second_system
+
+
+def test_re_ask_prompt_makes_an_empty_answer_correct_and_expected() -> None:
+    """The negative control's risk: a genuinely single-subject source also
+    triggers the re-ask, and an instruction that pressures the model to
+    produce more will make it invent subjects. "Nothing further" is written
+    into the prompt as a first-class answer, not left implicit."""
+    system = concept_mod._REASK_SYSTEM_PROMPT
+
+    assert "An empty array [] is a CORRECT and EXPECTED answer here." in system
+    assert (
+        "Many sources genuinely cover exactly one subject, and for those "
+        "the first pass was right: answer [] and nothing else." in system
+    )
+    assert "Do not invent a subject" in system
+
+
+def test_re_ask_user_turn_names_the_object_already_kept() -> None:
+    """The second ask asks for what the body covers BEYOND the subject the
+    title already names, so it must say which object is already kept --
+    otherwise "do not repeat it" has no referent."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), "[]"])
+
+    concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    user_content = llm.calls[1][1]["content"]
+    assert "ALREADY KEPT" in user_content
+    assert "Dichotomy of Control" in user_content
+    assert "Notes on what is up to us." in user_content
+
+
+def test_report_names_the_re_ask_call_and_what_it_added() -> None:
+    """A silent extra model call is exactly the cost this project reports
+    rather than hides: the report carries the spent call AND the titles it
+    contributed."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ("Apatheia",)
+
+
+def test_report_defaults_to_no_re_ask_when_the_trigger_never_fires() -> None:
+    """An untriggered source reports zero spent re-ask calls and no added
+    titles -- the fields are readable as "this never happened"."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism.", source_title="Notes", llm=llm
+    )
+
+    assert outcome.report.reask_runs == 0
+    assert outcome.report.reask_added_titles == ()
+
+
+def test_re_ask_backend_failure_keeps_the_original_object() -> None:
+    """The re-ask is an OPTIONAL extra call on top of an already-complete
+    result, exactly like `judge.select` -- so its failure degrades to
+    "added nothing" (design D7's argument) instead of destroying validated
+    extraction work. The spent call is still reported."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), OllamaUnavailable("boom")])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == ["Dichotomy of Control"]
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
+
+
+def test_re_ask_addition_restating_the_title_is_filtered_whatever_its_type() -> None:
+    """The additions filter is TITLE-ONLY, like the trigger, because both
+    are additive.
+
+    `_REASK_SYSTEM_PROMPT` already tells the model not to restate the kept
+    subject "under another name or another type". A `Procedure` whose title
+    is the source's own is exactly the "another type" case it forbids, so
+    admitting it would contradict the instruction just sent -- and
+    `_dedup_merged` cannot catch it, since its key is
+    `(type, normalized-title)` and the types differ.
+
+    #413's exemption does not apply here. What it bought was the right of a
+    PRIMARY `Procedure` -- one the first pass genuinely found -- not to be
+    DELETED. A re-ask addition restating the source title is not that."""
+    procedure_echo = (
+        '{"type": "Procedure", "title": "Dichotomy of Control", '
+        '"description": "Steps for applying the dichotomy.", '
+        '"body": "Sort what is up to you from what is not."}'
+    )
+    llm = _SequencedLLM(
+        [_array(_DICHOTOMY_ITEM), _array(procedure_echo, _APATHEIA_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us, and on freedom from destructive emotion.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    # The genuine addition survives; the same-titled echo does not, so no
+    # two objects share a title under different types.
+    assert [(r.type, r.title) for r in outcome.objects] == [
+        ("Concept", "Dichotomy of Control"),
+        ("Concept", "Apatheia"),
+    ]
+    assert outcome.report.reask_added_titles == ("Apatheia",)
+
+
+def test_filtering_every_addition_leaves_the_kept_object_untouched() -> None:
+    """The bound the additions filter cannot break: it only ever removes
+    ADDITIONS, so a re-ask whose every finding is filtered is
+    indistinguishable from one that returned nothing -- byte-identical to
+    the output before this guard existed."""
+    procedure_echo = (
+        '{"type": "Procedure", "title": "Dichotomy of Control", '
+        '"description": "Steps for applying the dichotomy.", "body": ""}'
+    )
+    entity_echo = (
+        '{"type": "Entity", "title": "dichotomy of CONTROL", '
+        '"description": "The same subject, differently cased.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(procedure_echo, entity_echo)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Dichotomy of Control",
+            description="The Stoic distinction between what is and is not up to us.",
+            body="",
+        )
+    ]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
+
+
+# --- Topic containment: the trigger only (#584) ------------------------------
+#
+# The live probe found the trigger never firing on the fixture that
+# reproduces the defect:
+#
+#     source_title : 'Lesson 3: Setting Up a Python Project'
+#     object       : Procedure: 'Setting Up a Python Project'
+#     restates?    : False    <- exact comparison is correct; it IS not equal
+#
+# The model strips the framing and titles the object after the umbrella
+# TOPIC. So the harm is "the object restates the topic the title names", and
+# an exact-match trigger cannot see that class by construction.
+#
+# The trigger widens to token containment. The ADDITIONS FILTER does NOT --
+# see `test_re_ask_addition_contained_in_the_title_is_still_kept`.
+
+_LESSON_SOURCE_TITLE = "Lesson 3: Setting Up a Python Project"
+
+_LESSON_PROCEDURE_ITEM = (
+    '{"type": "Procedure", "title": "Setting Up a Python Project", '
+    '"description": "How to lay out a new Python project.", '
+    '"body": "Create the venv, pin the lockfile, add the tests tree."}'
+)
+
+_LOCKFILE_ITEM = (
+    '{"type": "Concept", "title": "Dependency Lockfile", '
+    '"description": "A pinned record of resolved dependency versions.", '
+    '"body": ""}'
+)
+
+
+def test_lone_object_restating_the_titles_topic_triggers_a_re_ask() -> None:
+    """The measured shape (#584, `qwen3:8b`, `--runs 5 --seed 7`): the
+    `lesson` treatment arm returns ONE `Procedure` whose title is the source
+    title minus its framing. Exact comparison says "not a twin" -- correctly,
+    since literally it is not -- so the trigger has to read topic
+    containment or it cannot reach this class at all."""
+    llm = _SequencedLLM([_array(_LESSON_PROCEDURE_ITEM), _array(_LOCKFILE_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Create the venv, pin the lockfile, add the tests tree.",
+        source_title=_LESSON_SOURCE_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == [
+        "Setting Up a Python Project",
+        "Dependency Lockfile",
+    ]
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ("Dependency Lockfile",)
+
+
+def test_containment_trigger_respects_word_boundaries() -> None:
+    """`"Rust"` must not be found inside `"Trust Boundaries"`. Containment is
+    token-level, never raw substring -- the substring reading is how a
+    predicate starts matching anything that happens to share letters."""
+    rust = (
+        '{"type": "Concept", "title": "Rust", '
+        '"description": "A systems programming language.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(rust), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note about the language.", source_title="Trust Boundaries", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Rust"]
+
+
+def test_no_trigger_when_one_generic_token_is_all_that_is_shared() -> None:
+    """#555's failure mode, fenced. `resolution/similarity.py` drops short
+    tokens, which manufactures single-token titles, and containment then
+    matches anything sharing one generic token -- `ai-agent` alone landed in
+    eleven duplicate groups. A trigger that fires on nearly every source is
+    not a narrower option than "sole object alone"; it is that option plus a
+    predicate to maintain. So containment requires the contained side to keep
+    at least `_MIN_TOPIC_TOKENS` meaningful tokens."""
+    agents = (
+        '{"type": "Concept", "title": "Agents", '
+        '"description": "Software that acts on your behalf.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(agents), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note about agents.", source_title="AI Agents in Practice", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Agents"]
+
+
+def test_no_trigger_when_the_lone_title_shares_no_meaningful_tokens() -> None:
+    """An ordinary single-subject reply, whose object carries a title of its
+    own, still does not spend a call."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on Stoicism.",
+        source_title="Setting Up a Python Project",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+
+
+def test_no_containment_trigger_when_a_second_object_survives() -> None:
+    """The `exactly one` half of the trigger is untouched by the widening: a
+    topic-restating object BESIDE a genuine subject is not the collapse."""
+    llm = _SequencedLLM(
+        [_array(_LESSON_PROCEDURE_ITEM, _LOCKFILE_ITEM), _array(_APATHEIA_ITEM)]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "Create the venv, pin the lockfile, add the tests tree.",
+        source_title=_LESSON_SOURCE_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == [
+        "Setting Up a Python Project",
+        "Dependency Lockfile",
+    ]
+
+
+def test_containment_re_ask_returning_nothing_leaves_the_object_untouched() -> None:
+    """The additive bound on the newly reachable path: the containment
+    trigger fires, the second ask finds nothing, and the output is what it
+    was before the trigger existed."""
+    llm = _SequencedLLM([_array(_LESSON_PROCEDURE_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        "Create the venv, pin the lockfile, add the tests tree.",
+        source_title=_LESSON_SOURCE_TITLE,
+        llm=llm,
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Procedure",
+            title="Setting Up a Python Project",
+            description="How to lay out a new Python project.",
+            body="Create the venv, pin the lockfile, add the tests tree.",
+        )
+    ]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
+
+
+def test_re_ask_addition_contained_in_the_title_is_still_kept() -> None:
+    """The asymmetry, pinned: the TRIGGER reads containment, the ADDITIONS
+    FILTER stays on exact restatement.
+
+    Different cost of error. The trigger decides whether to SPEND A CALL --
+    being wrong costs one call. The filter decides whether to DISCARD A
+    FOUND SUBJECT -- being wrong loses real content. So the filter keeps the
+    tighter threshold, and an addition whose title is merely contained in
+    the source title survives."""
+    llm = _SequencedLLM(
+        [
+            _array(_LESSON_PROCEDURE_ITEM),
+            _array(
+                '{"type": "Concept", '
+                '"title": "Python Project", "description": "The unit of work a '
+                'lesson sets up.", "body": ""}'
+            ),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept(
+        "Create the venv, pin the lockfile, add the tests tree.",
+        source_title=_LESSON_SOURCE_TITLE,
+        llm=llm,
+    )
+
+    assert [r.title for r in outcome.objects] == [
+        "Setting Up a Python Project",
+        "Python Project",
+    ]
+
+
+def test_no_trigger_on_partial_overlap_that_is_not_containment() -> None:
+    """Containment means the smaller token set is a SUBSET, not that the two
+    titles share a token. This is a measured shape, not a hypothetical: the
+    `producto` flat arm collapsed 5 of 5 to a `Procedure` titled `Onboarding
+    Process` under the source title `Onboarding, Slack y trabajo pendiente`
+    -- one token in common, and the rest genuinely different. Firing there
+    would spend a call on an object that named its own subject."""
+    onboarding = (
+        '{"type": "Procedure", "title": "Onboarding Process", '
+        '"description": "How a new hire is brought on.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(onboarding), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Cómo se incorpora a alguien nuevo.",
+        source_title="Onboarding, Slack y trabajo pendiente",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Onboarding Process"]
+
+
+def test_no_trigger_when_containment_rests_only_on_tiny_tokens() -> None:
+    """Tokens below `_MIN_TOPIC_TOKEN_LENGTH` are dropped BEFORE the
+    two-token floor is counted, so a pair of two-letter generic tokens
+    cannot satisfy it. This is #555's `ai-agent` family: short generic
+    tokens are exactly the ones that match everything, and counting them as
+    topic evidence would re-import the failure that predicate suffered."""
+    ai_ml = (
+        '{"type": "Concept", "title": "AI ML", '
+        '"description": "Two field abbreviations.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(ai_ml), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note on the two fields.",
+        source_title="AI ML Systems in Practice",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["AI ML"]
+
+
+def test_exact_restatement_still_triggers_below_the_token_floor() -> None:
+    """Containment WIDENS the trigger; it must never narrow it. A one-word
+    source title exactly restated keeps only one meaningful token, which is
+    under `_MIN_TOPIC_TOKENS` -- so the exact-restatement shortcut is what
+    preserves the behaviour the trigger had before containment existed."""
+    stoicism_twin = (
+        '{"type": "Concept", "title": "Stoicism", '
+        '"description": "A school of Hellenistic philosophy.", "body": ""}'
+    )
+    llm = _SequencedLLM([_array(stoicism_twin), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "A note on the school and on freedom from destructive emotion.",
+        source_title="Stoicism",
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == ["Stoicism", "Apatheia"]

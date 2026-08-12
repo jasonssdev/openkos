@@ -505,6 +505,144 @@ required by this scenario.
 - WHEN extraction runs
 - THEN zero objects are written and `ingest` degrades to Source-only
 
+### Requirement: Bounded Re-Ask When the Only Object Restates the Source Title
+
+When a source's FINAL, filtered object list is exactly ONE object AND that
+object restates the TOPIC the source title names — its normalized title
+equals the source title, or one title's meaningful tokens are contained in
+the other's, WHATEVER its type — extraction MUST ask the model once more
+and MUST ADD whatever that second ask returns to the object already
+produced. The trigger MUST be evaluated on the final
+merged, filtered list of the whole extraction (both the single-run and the
+union+judge path, chunked or not), never per run or per chunk: "the source
+returned exactly one object" is not a statement any slice can make.
+
+The re-ask MUST carry an instruction DIFFERENT from the one that produced
+the collapsed list — a second identical ask is measurably useless, since
+the union path already runs two identical passes and the collapse survives
+10 of 10 runs. It MUST use a SEPARATE prompt; the extraction prompt itself
+MUST NOT be modified, because the collapse probe pins its identity and a
+change there destroys the before/after baseline.
+
+The re-ask MUST only ADD. It MUST NOT remove, replace, or rewrite the
+object the first pass produced, whatever it returns: a guard that replaces
+the single object is unbounded on a genuinely single-subject source, while
+one that only adds is bounded whatever its false-positive rate. A re-ask
+that returns nothing MUST leave the extracted objects exactly as they were.
+
+The re-ask prompt MUST make an EMPTY answer explicitly correct and expected
+for a source that genuinely covers one subject. A genuinely single-subject
+source triggers this re-ask too, and an instruction that pressures the
+model to produce more is how such a source acquires an invented subject.
+
+The extra call MUST be reported: extraction MUST carry both the fact that a
+re-ask was spent and the titles it contributed, and `ingest` MUST surface
+them, with wording distinct from the cap, judge, and pre-judge notices.
+
+BOTH of the re-ask's decisions — whether to fire, and whether a returned
+candidate is an answer — MUST ignore the `Procedure` exemption that governs
+the DROP rule, and MUST therefore discard any returned candidate whose
+title restates the source title, of ANY type. That exemption exists to
+prevent a DELETION of a PRIMARY object the first pass found — dropping a
+rich tutorial's primary how-to was silent data loss — and neither additive
+decision can delete anything, so its rationale does not transfer.
+Admitting a same-titled addition would also contradict the re-ask
+instruction itself, which forbids restating the kept subject under another
+name or another type, and would surface two objects sharing one title
+whenever their types differ.
+
+Measured (`qwen3:8b`, `--runs 5 --seed 7`): the `lesson` treatment arm
+returns one object in 5 of 5 runs and it is a `Procedure` every time, so a
+type-aware trigger never fires on the fixture that reproduces this defect.
+
+Containment MUST be token-level, never raw substring: `Rust` is not
+contained in `Trust Boundaries`, and only token equality gets that right.
+Tokens too short to carry topic signal MUST be dropped first, and the
+contained title MUST retain at least two of them — a single generic token
+contained in anything is the failure `resolution/similarity.py` records
+(#555), where one manufactured single-token title landed in eleven
+duplicate groups. Partial overlap is NOT containment: a title sharing one
+token with the source title while naming its own subject MUST NOT fire.
+
+The title comparison shared with chunk-merge dedup MUST stay exact.
+Containment belongs to the trigger alone; folding it into that comparison
+would merge distinct subjects across chunks.
+
+The DROP rule's exemption is UNCHANGED: a `Procedure` restating the source
+title MUST still never be dropped. The type exemption MUST live in exactly
+one place — the deletion — and the two predicates MUST share one title
+comparison and differ only by that type conjunct.
+
+The re-ask MUST NOT fire on a source whose final list holds more than one
+object, nor when the lone object does not restate the source title. Its own
+backend failure MUST degrade to "added nothing", keeping the object already
+produced, exactly as the selector judge's failure degrades.
+
+#### Scenario: A sole title-restating object triggers one re-ask whose findings are added
+
+- GIVEN a source whose final object list is exactly one object restating the
+  source title, and a second ask that names a further distinct subject
+- WHEN extraction runs
+- THEN one extra call is made, and both the original object and the further
+  subject are written
+
+#### Scenario: A lone Procedure restating the title re-asks but is never dropped
+
+- GIVEN a source whose only object is a `Procedure` titled the way the
+  source titles itself
+- WHEN extraction runs
+- THEN the re-ask fires on it, and the `Procedure` is written whatever the
+  second ask returns — the type exemption still bars the drop rule from
+  removing it
+
+#### Scenario: A re-ask that finds nothing changes nothing
+
+- GIVEN the same trigger, and a second ask that returns an empty array
+- WHEN extraction runs
+- THEN the original object is written unchanged and nothing is added
+
+#### Scenario: A returned candidate restating the title is discarded, whatever its type
+
+- GIVEN the same trigger, and a second ask returning both a genuine further
+  subject and a candidate whose title restates the source title under a
+  different type
+- WHEN extraction runs
+- THEN only the genuine subject is added, and no two written objects share
+  one title
+
+#### Scenario: An object that does not restate the title does not trigger a re-ask
+
+- GIVEN a source whose only object carries a title of its own, of any type
+- WHEN extraction runs
+- THEN no extra call is made and that object is written unchanged
+
+#### Scenario: A lone object titled after the source's topic triggers a re-ask
+
+- GIVEN a source titled `Lesson 3: Setting Up a Python Project` whose only
+  object is titled `Setting Up a Python Project`
+- WHEN extraction runs
+- THEN the re-ask fires, even though the two titles are not equal
+
+#### Scenario: Sharing one token with the source title does not trigger a re-ask
+
+- GIVEN a source whose only object shares a single token with the source
+  title while naming its own distinct subject
+- WHEN extraction runs
+- THEN no extra call is made
+
+#### Scenario: More than one object does not trigger a re-ask
+
+- GIVEN a source whose final object list holds two or more objects
+- WHEN extraction runs
+- THEN no extra call is made
+
+#### Scenario: The extra call is reported
+
+- GIVEN a source whose sole droppable twin triggered a re-ask
+- WHEN `openkos ingest` completes
+- THEN the run reports that the re-ask was spent and what it added, in
+  wording distinct from the cap, judge, and pre-judge ceiling notices
+
 ### Requirement: Fail-Closed Validation of Extracted Output
 
 Extraction output MUST be validated before any derived object is written.

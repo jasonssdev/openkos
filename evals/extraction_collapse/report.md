@@ -231,6 +231,47 @@ points the same way as the rest of the evidence here: the collapse is a
 weak object into zero, never one into three. The floor arm proves the three
 objects were available to be found.
 
+## The re-ask measured: the `lesson` collapse breaks, and the additions are the right ones
+
+`qwen3:8b`, `--runs 5 --seed 7`, single-pass — the same model, seed and flags as
+every run above, so these are directly comparable.
+
+| arm | before the re-ask | after |
+| --- | --- | --- |
+| `lesson` treatment | 1 object, 5 of 5 | **4 objects, 5 of 5** |
+| `lesson` floor (`untitled`) | 3 objects | 3 objects (unchanged) |
+| negative control | 1 object, droppable twin 5/5 | 1 object, droppable twin 5/5 |
+| pair verdict | `AXIS IMPLICATED` | `NOT REPRODUCED` |
+
+`NOT REPRODUCED` here is the *success* reading, not a failure: the verdict
+vocabulary exists to detect a collapse, and after the change neither arm
+collapses. The pair can no longer implicate its axis because the axis no longer
+bites.
+
+### The additions are the floor arm's own subjects
+
+The object count alone would read as 1 -> 4 whether the additions were the
+missing subjects or invented filler, so the titles were compared directly:
+
+| floor arm found | re-ask added |
+| --- | --- |
+| `Virtual Environment` | `Creating a Virtual Environment` |
+| `Lockfile` | `Using a Lockfile for Dependencies` |
+| `Test Layout` | `Organizing Tests and Source Code` |
+
+One to one. The phrasing differs — the treatment arm is lesson-framed, so its
+objects come back as `Procedure` verb phrases where the unframed arm produced
+`Concept` nouns — but they are the same three subjects. The original umbrella
+object survives untouched, which is the additive bound holding.
+
+### What this does not fix
+
+The positive control stays unreachable. Its collapse produces
+`Remote Product Development` from a source titled `TS3005b.summary`, sharing no
+token with it: that collapse *reconstructs* a title rather than echoing one, so
+no title-comparison trigger of any width can see it. Two different collapses
+wear the same symptom, and only the echoing one is addressed here.
+
 ## Next
 
 The constraint in #522 stands: a prompt change must be A/B'd through
