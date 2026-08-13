@@ -26,7 +26,7 @@ ollama pull qwen3:8b   # chat model — extraction and answers (~5 GB)
 ollama pull bge-m3     # embedding model — semantic search (~1.2 GB)
 ```
 
-> There is a third, **optional** model for naming relations during curation (`ollama pull gemma2:27b`, **15.6 GB**). Skip it for now — if a command wants it, the error message tells you exactly what to pull.
+> These two are all curation needs out of the box. For naming relations during curation there is an **optional measured upgrade** (`ollama pull gemma2:27b`, **15.6 GB**) that nearly doubles relation-type accuracy — opt in later with `models: {edge_typing: gemma2:27b}` in `openkos.yaml`; `openkos doctor` and `curate` both point at it.
 
 **3 · Install the engine** (needs Python 3.12+ and [git](https://git-scm.com)):
 

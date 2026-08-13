@@ -341,6 +341,37 @@ def model_notice(ctx: CurateContext, stage: Stage) -> str | None:
     return f"openkos curate: {stage.name}: this stage runs on '{model}'."
 
 
+def upgrade_notice(ctx: CurateContext, stage: Stage) -> str | None:
+    """The gate's optional-upgrade line (#650), or `None` when there is
+    nothing to recommend.
+
+    Returns a line ONLY when the stage's task has a
+    `config.RECOMMENDED_TASK_MODELS` entry AND the workspace never keyed
+    that task in `models:`. Keying it -- to any value, including an
+    explicit null -- is the operator's decision, and a gate that nags past
+    a decision teaches people to stop reading gates. With the #650 default
+    inversion this is the surface where the old packaged default used to
+    be disclosed, so the recommendation lives exactly where the operator
+    is consenting to the spend it would change."""
+    task = stage.task
+    if task is None:
+        return None
+    recommended = config.RECOMMENDED_TASK_MODELS.get(task)
+    if recommended is None:
+        return None
+    if task in ctx.cfg.models:
+        return None
+    model = stage_model(ctx, stage)
+    if model == recommended:
+        return None
+    return (
+        f"openkos curate: {stage.name}: runs on '{model}'; the measured "
+        f"optional upgrade is '{recommended}' -- set "
+        f"`models: {{{task}: {recommended}}}` in openkos.yaml "
+        "(a 15.6 GB pull; see docs/cli.md)."
+    )
+
+
 def parse_accepted_stages(accept: str | None) -> frozenset[str] | None:
     """Validate the raw `--accept` value and return the named stage set, or
     `None` when the flag was not passed at all (issue #385).
@@ -515,6 +546,9 @@ def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
     notice = model_notice(ctx, stage)
     if notice is not None:
         typer.echo(notice, err=True)
+    upgrade = upgrade_notice(ctx, stage)
+    if upgrade is not None:
+        typer.echo(upgrade, err=True)
     if ctx.auto:
         return True
     if sys.stdin.isatty():

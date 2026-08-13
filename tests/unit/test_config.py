@@ -1945,40 +1945,59 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
     )
 
     # A non-mapping `models` cannot express an opt-out, so an unreachable
-    # map degrades to the ordinary precedence: packaged default for
-    # `edge_typing` (#513), global `model:` for a task without one. What
-    # this pins is that neither path RAISES.
-    assert config.resolve_task_model(cfg, "edge_typing") == "gemma2:27b"
+    # map degrades to the ordinary precedence -- which since #650 is the
+    # global `model:` for every task. What this pins is that neither path
+    # RAISES.
+    assert config.resolve_task_model(cfg, "edge_typing") == "qwen3:8b"
     assert config.resolve_task_model(cfg, "extraction") == "qwen3:8b"
 
 
-# --- #513: `edge_typing` ships a packaged per-task default -------------------
+# --- #513/#650: `edge_typing` recommendation, no longer a packaged default ---
 
 
-def test_default_task_models_packages_only_the_measured_task() -> None:
-    """`DEFAULT_TASK_MODELS` ships a per-task default for `edge_typing` alone.
+def test_default_task_models_packages_no_model() -> None:
+    """`DEFAULT_TASK_MODELS` no longer ships a value for any task (#650).
 
-    #516's sweep measured `gemma2:27b` at 0.81 relation-type accuracy against
-    the global default's 0.44 — the fix #513 asked for. The other four tasks
-    stay unlisted: `extraction` was tuned on `qwen3:8b` and `gemma2` collapses
-    it (0.24 subject recall on the long English fixture, 0.00 on the Spanish
-    one), and the remaining three have no harness at all, so #508's rule
-    forbids picking a value for them."""
-    assert config.DEFAULT_TASK_MODELS == {"edge_typing": "gemma2:27b"}
+    #513 packaged `gemma2:27b` for `edge_typing` on #516's type-accuracy
+    sweep; #650 inverts the onboarding default: the 15.6 GB pull is the
+    barrier to entry, direction (where the observed errors live) was never
+    measured, and asymmetric suggestions sit behind per-item consent since
+    #624 anyway. The key stays listed so the opt-in surface is visible; its
+    `None` value means `resolve_task_model` follows the global `model:`."""
+    assert config.DEFAULT_TASK_MODELS == {"edge_typing": None}
     assert set(config.DEFAULT_TASK_MODELS) <= config.TASK_MODEL_KEYS
 
 
-def test_edge_typing_resolves_to_the_packaged_default_without_config(
+def test_recommended_task_models_names_the_measured_upgrade() -> None:
+    """`gemma2:27b` remains the documented recommendation for `edge_typing`
+    (#650): #516's measurement is not disputed, only the default inverted."""
+    assert config.RECOMMENDED_TASK_MODELS == {"edge_typing": "gemma2:27b"}
+    assert set(config.RECOMMENDED_TASK_MODELS) <= config.TASK_MODEL_KEYS
+
+
+def test_edge_typing_resolves_to_the_global_model_without_config(
     tmp_path: Path,
 ) -> None:
-    """A workspace that says nothing gets the measured model for edge typing.
-
-    This is the behavior change #513 bought: the packaged default no longer
-    answers two thirds of rubric-decidable pairs against its own rubric."""
+    """A workspace that says nothing runs edge typing on the global
+    `model:` (#650) -- works on install, better if you opt in."""
     (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
     cfg = config.read_config(tmp_path)
 
+    assert config.resolve_task_model(cfg, "edge_typing") == "qwen3:8b"
+
+
+def test_edge_typing_opt_in_resolves_to_the_configured_model(
+    tmp_path: Path,
+) -> None:
+    """The recommendation is one `models:` line away -- opting in still
+    moves edge typing and nothing else."""
+    (tmp_path / "openkos.yaml").write_text(
+        "model: qwen3:8b\nmodels:\n  edge_typing: gemma2:27b\n", encoding="utf-8"
+    )
+    cfg = config.read_config(tmp_path)
+
     assert config.resolve_task_model(cfg, "edge_typing") == "gemma2:27b"
+    assert config.resolve_task_model(cfg, "extraction") == "qwen3:8b"
 
 
 def test_the_packaged_default_covers_only_edge_typing(tmp_path: Path) -> None:

@@ -13642,12 +13642,29 @@ def doctor() -> None:
     extra_models = {task: tag for task, tag in task_models.items() if tag != model}
     task_label = "Task models installed"
     if not extra_models:
+        # #650: nothing is packaged anymore, so a stock workspace lands
+        # here -- the pass detail is where the recommendation stays
+        # discoverable, naming the un-adopted measured upgrade(s) for any
+        # task the workspace never keyed in `models:`.
+        recommendations = {
+            task: tag
+            for task, tag in sorted(config.RECOMMENDED_TASK_MODELS.items())
+            if cfg is not None
+            and task not in cfg.models
+            and config.resolve_task_model(cfg, task) != tag
+        }
+        detail = "none configured beyond the global model"
+        if recommendations:
+            named = ", ".join(
+                f"{task} -> {tag}" for task, tag in recommendations.items()
+            )
+            detail += f"; optional measured upgrade: {named} (see docs/cli.md)"
         results.append(
             CheckResult(
                 task_label,
                 "pass",
                 critical=False,
-                detail="none configured beyond the global model",
+                detail=detail,
             )
         )
     elif not reachable:

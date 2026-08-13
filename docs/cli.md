@@ -568,7 +568,7 @@ max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call m
 # type_tiers:             # per-concept-type volatility tier overrides (overrides
 #   Person: volatile      # the built-in registry default; see docs/adr/0007)
 # models:                 # per-task model overrides; unlisted tasks keep `model:`
-#   edge_typing: gemma2:27b   # measure before adding a key — see below
+#   edge_typing: gemma2:27b   # the measured optional upgrade — see below
 
 # Layout — where the engine keeps things, relative to this file.
 raw: raw/                 # immutable sources; any extension, never rewritten
@@ -609,21 +609,23 @@ When the ceiling is reached before the model finishes, the client raises `Ollama
 
 `model:` is the model most LLM-calling verbs use. `models:` overrides it for one task at a time.
 
-**`edge_typing` ships a packaged default of `gemma2:27b`**, which requires `ollama pull gemma2:27b` — **15.6 GB**. Every other task keeps `model:`.
+**No task ships a packaged model anymore** ([#650](https://github.com/jasonssdev/openkos/issues/650)): out of the box every task, including `edge_typing`, follows `model:`, so curation works without any extra download. `gemma2:27b` is the **documented recommendation** for `edge_typing` — the measured upgrade, not the default:
 
 ```yaml
-model: qwen3:8b        # used by every task except edge_typing
+model: qwen3:8b        # used by every task not keyed below
 models:
-  edge_typing: null    # decline the packaged default; use `model:` instead
+  edge_typing: gemma2:27b   # opt into the measured upgrade (15.6 GB pull)
 ```
 
-Resolution order, highest first: an explicit `models:` entry → the packaged default → `model:`. Your stated choice always wins over the shipped one.
+Resolution order, highest first: an explicit `models:` entry → the packaged per-task default (empty since #650) → `model:`. Your stated choice always wins over a shipped one.
 
-**To decline the 15.6 GB download**, set `edge_typing: null`. That is the only opt-out — writing the global tag again would work today but silently go stale the moment you change `model:`. `openkos doctor` reports whether every per-task model is installed, so you find out before `curate` fails mid-session; that check is informational and never changes the exit code, because a missing per-task model fails only the stage that named it.
+`openkos doctor` reports whether every configured per-task model is installed — and, when you have not decided, names the un-adopted recommendation in its pass detail — so you find out before `curate` fails mid-session. That check is informational and never changes the exit code, because a missing per-task model fails only the stage that named it. `curate`'s Structure cost gate prints the same pointer while you are consenting to the spend it would change.
+
+Why the default was inverted (#650): the 15.6 GB pull made the out-of-the-box curation path the broken one; the 0.81 figure below measures relation **type** only — **direction was never measured**, and direction is where the observed errors live; and since [#624](https://github.com/jasonssdev/openkos/issues/624) every asymmetric suggestion sits behind per-item consent marked `direction model-suggested, unverified`, so the accuracy gap buys fewer operator rejections rather than unattended graph quality.
 
 Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing`, `contradiction`. They are keyed by **task**, not by command — `edge_typing` covers both `curate`'s Structure stage and standalone `suggest-relations`, so the two cannot drift onto different models. An unknown key, a non-string non-null value, or a blank value is refused when the config is read, rather than silently falling back: a typo that quietly resolved to the global default would keep writing relation types from a model you did not choose.
 
-**Only `edge_typing` has evidence behind it, which is why only it is packaged.** The sweep in [#516](https://github.com/jasonssdev/openkos/issues/516) measured eight models on the same 17-edge fixture through `evals/edge_typing/`:
+**Only `edge_typing` has evidence behind it, which is why only it carries a recommendation.** The sweep in [#516](https://github.com/jasonssdev/openkos/issues/516) measured eight models on the same 17-edge fixture through `evals/edge_typing/`:
 
 | model | relation-type accuracy | s/edge *(on ~145-char fixtures)* |
 |---|---|---|
@@ -633,7 +635,7 @@ Valid task keys: `extraction`, `adjudication`, `edge_typing`, `volatility_typing
 | `qwen3:8b` *(default)* | 0.44 | 1.3 |
 | `mistral:7b` | 0.27 | 1.3 |
 
-That is why the default is **per task and not global**: `gemma2:27b` nearly doubles relation-type accuracy **and** collapses extraction on the same corpus (0.24 subject recall on the long English fixture, 0.00 on the Spanish one, against `qwen3:8b`'s 0.81 and 0.76). No model measured is a safe global replacement.
+That is why the recommendation is **per task and not global**: `gemma2:27b` nearly doubles relation-type accuracy **and** collapses extraction on the same corpus (0.24 subject recall on the long English fixture, 0.00 on the Spanish one, against `qwen3:8b`'s 0.81 and 0.76). No model measured is a safe global replacement.
 
 #### How long edge typing actually takes
 
@@ -656,7 +658,7 @@ An 8.4× larger input costs 1.70× the time — sublinear, but real. Budget from
 
 For comparison, the same 74 edges on `qwen3:8b` are roughly 1.6 minutes. That gap is why `curate`'s cost gate names the model whenever a stage resolves one other than `model:` — the same edge count means a materially different wait.
 
-**The other four keys are accepted, not packaged and not recommended.** `extraction` was tuned on `qwen3:8b` through `evals/extraction_cap/`, and `adjudication`, `volatility_typing`, and `contradiction` have no harness at all — there is no fixture on which to justify a value, so setting one is a guess. If you want to move one, build the harness first and measure every candidate on the same fixture ([#508](https://github.com/jasonssdev/openkos/issues/508)'s rule).
+**The other four keys are accepted, not recommended.** `extraction` was tuned on `qwen3:8b` through `evals/extraction_cap/`, and `adjudication`, `volatility_typing`, and `contradiction` have no harness at all — there is no fixture on which to justify a value, so setting one is a guess. If you want to move one, build the harness first and measure every candidate on the same fixture ([#508](https://github.com/jasonssdev/openkos/issues/508)'s rule).
 
 A named model that is not installed fails **only the stage or verb that named it**, with the usual `ollama pull <model>` remediation. It never falls back to `model:` — a visible failure is better than silently getting a model you did not ask for.
 
