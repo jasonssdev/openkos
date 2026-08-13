@@ -74,3 +74,26 @@ jobs:
       # does not exist.
       - name: Publish to PyPI
         run: uv publish --trusted-publishing always
+
+      # An upload that PyPI accepted but never surfaced -- or a release that
+      # silently went missing between tag and index -- is invisible to users:
+      # `uv tool install openkos` keeps resolving an old build and nothing in
+      # this repository notices (#638). Fail the job unless the index actually
+      # resolves the just-published version as latest. The retry loop absorbs
+      # PyPI's propagation lag between upload and index visibility.
+      - name: Verify PyPI resolves this release as latest
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          latest=""
+          for attempt in $(seq 1 30); do
+            latest="$(curl -fsSL --max-time 30 https://pypi.org/pypi/openkos/json \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])')" || latest=""
+            if [ "$latest" = "$tag" ]; then
+              echo "PyPI resolves openkos $latest as latest."
+              exit 0
+            fi
+            echo "PyPI still resolves '${latest:-unreachable}'; waiting (attempt $attempt/30)..."
+            sleep 10
+          done
+          echo "::error::PyPI never resolved openkos $tag as latest (last seen: ${latest:-unreachable})" >&2
+          exit 1
