@@ -16,6 +16,204 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 _Nothing yet._
 
+## [0.2.4] - 2026-08-13
+
+### Added
+
+- **`unmerge` gets LIFO-unwind ergonomics**: `find_absorber` now names which
+  survivor actually absorbed a missing member instead of a bare "not found";
+  a non-tail unmerge attempt lists the full unwind sequence needed to reach
+  it in order; and `unmerge --to <id>` walks that whole sequence in one
+  command instead of forcing the operator to type each intermediate
+  unmerge by hand (#562).
+
+- **The merge ledger moves out of survivor frontmatter into a sidecar
+  under `bundle/.state/ledger/`**: `plan_merge`/`plan_unmerge` become pure
+  functions over caller-supplied ledger entries, and every merge/unmerge
+  now writes through a two-phase protocol (`write_pending` → commit the
+  survivor → `commit_pending` → remove the absorbed file) so a crash
+  mid-merge leaves a mechanically detectable, recoverable artifact instead
+  of a torn ledger. New `openkos repair` migrates a legacy
+  frontmatter-embedded ledger into the sidecar (refusing on a torn write or
+  bundle-wide cross-contamination, with no `--force` override). `doctor`
+  gains two new checks — torn pending writes, and post-merge mutation of a
+  ledger snapshot — and `merge`/`unmerge` now refuse to write onto a
+  doctor-flagged ledger, overridable only with `--force`. `forget`, `purge`,
+  and every privacy sweep now walk the sidecar the same way they walk
+  concepts, since relocating it out of `bundle/**.md` had silently dropped
+  it from those scans (#550). A follow-on fix corrects `reindex`'s embed
+  text, which had been re-embedding a survivor's raw frontmatter+body bytes
+  verbatim and letting the (now-relocated) merge history dominate the
+  embedding window (#554).
+
+- **Contradiction and curate verdicts are now durable**: `curate`'s
+  Contradictions stage persists every verdict it pays LLM calls for to a
+  new `.openkos/findings.db`, keyed with a per-input staleness digest so a
+  changed input invalidates only the findings that read it (#556). The
+  operator can now **act** on a finding instead of re-litigating it every
+  run: `contradictions --decline`/`--reopen`/`--declined` records and
+  reverses a "not a conflict" judgement under
+  `bundle/.state/decisions/`; `next` ranks an open, non-stale,
+  non-declined contradiction as a real actionable tier; `status` surfaces
+  open and stale-finding counts under "needs attention" (#598); `curate`
+  itself stops re-echoing a contradiction the operator already declined;
+  and `purge`/`forget` now reach `bundle/.state/decisions/**` so a purged
+  concept id can't survive inside a decision record (#572).
+
+- **`query --save` now files an answer as an `Insight`**, a new registry
+  type distinct from extracted `Concept`s: volatile-tier, not
+  model-classifiable, with a declarative title derived from the answer's
+  first sentence. A filed synthesis depends on the mutable bundle it was
+  built from — any later ingest, merge, or correction can invalidate it —
+  so it's now marked and tracked as such instead of quietly compounding
+  alongside immutable extracted knowledge (#570).
+
+- **`suggest-relations --apply`** applies the typed edges the verb already
+  computes, one `[y/N]` per candidate through the same validating prompt
+  `curate`'s Structure stage uses — previously a run produced typed
+  suggestions with no way to write them without retyping each `relate` by
+  hand (#560).
+
+- **`curate --accept structure` no longer bulk-applies asymmetric relation
+  types** (`caused_by`, `depends_on`, `member_of`, `part_of`,
+  `produced_by`). Measurement showed both evaluated models answer the same
+  asymmetric type with source/target swapped on nearly every edge, so a
+  suggested direction carries no evidence; each asymmetric suggestion now
+  routes through per-item consent instead (#624).
+
+- **`list --sources <id>`** walks an object's provenance upward to its
+  Source ancestors — transitive, cycle-safe, dangling entries included —
+  answering "which Sources still need raising to protect this" in one
+  command (#628).
+
+- **CLI output ergonomics batch**: `forget`'s inbound-reference preview
+  aggregates repeated `(member, referrer, kind, type)` lines into one
+  counted line instead of printing each occurrence; `suggest-relations
+  --edge-offset` pages the candidate-edge cap so a capped run's follow-up
+  batch is reachable; and `reconcile --from-findings` batch-walks
+  persisted high-confidence contradiction findings through the same
+  transactional write path a single `reconcile` uses (#567).
+
+- **`query` discloses when an answer cites confidential material**: each
+  `Citation` gains a `confidential` flag and a `[confidential]` marker, a
+  stderr `NOTICE` fires once per answer that cites any, and `--save`'s
+  preview now names the sensitivity level explicitly when inheriting it
+  raises the saved Insight above the workspace default — closing a
+  read-path disclosure gap the write path already had (#569).
+
+- **`ingest` now builds the FTS index at the end of every run**, fail-open
+  like embedding, so a fresh `init → ingest → query` quickstart doesn't
+  silently answer dense-only. `doctor` and `next` both gain awareness of a
+  missing FTS index (#553).
+
+- **Entity resolution's `ACRONYM` tier now reaches extraction**: a title
+  whose token is the initials of a contiguous word run in another title
+  (`MCP` / `Model Context Protocol`) is recognized as the same topic by
+  extraction's additive re-ask and disclosure logic, not just by the
+  duplicate-detection pass that already handled it (#586).
+
+- **A Source now records which file on disk it was ingested from**, as a
+  content-independent digest (`origin_key`), so `raw/`'s flat basename
+  namespace can tell two different files with the same basename apart by
+  origin rather than by content bytes — closing a bug where one was
+  silently absorbed into the other's Source (#552).
+
+- **A Source that yields exactly one derived object restating its own
+  title is now flagged, not silently accepted as-is**: a new
+  `extraction_notice: sole-object-restates-source` frontmatter key marks
+  the Source, and extraction reports the condition on both orchestrator
+  paths (#585). A companion re-ask fires once when the final object list
+  collapses to that shape, triggered on topic *containment* rather than
+  exact title match — the model routinely titles the object after the
+  source's umbrella topic rather than restating the exact title, which
+  meant the original exact-match trigger never fired on the fixture it was
+  built for (#584).
+
+- **A deterministic wrong-language title gate** drops a chunked-extraction
+  title that is purely in the wrong language relative to the document's
+  dominant language and not quoted verbatim from the prose — replacing a
+  prompt-anchoring approach that measurement rejected (#618). A follow-on
+  **orthographic-exempt bigram-adjacency gate** catches the residual class
+  the function-word gate is blind to (bare English noun phrases with no
+  function words), while exempting Spanish-orthography matches like
+  `Snapshot Derivado` that the first measurement showed as a false
+  positive (#630).
+
+- **`adjudicate`, `curate`, and `merge` warn on a stacked-body merge**: a
+  proposal where the unreconciled-body share exceeds 0.8 (roughly double a
+  genuine two-description merge's typical share) now shows an explicit
+  warning before consent, and `adjudicate --apply-same` — the one path
+  with no per-item consent — refuses these outright (#559).
+
+- Added `docs/ideas.md` as a holding file for unshaped ideas, linked from
+  the README.
+
+### Fixed
+
+- **`set-sensitivity`** on a derived object now names the Source(s) its
+  content was extracted from and the exact `raise` command needed — raising
+  a derived object alone leaves the sibling Source, its actual containment
+  lever under ADR-0009, unprotected (#571).
+
+- **`ingest`** now filters directory/glob expansion to known text-source
+  extensions, disclosing what it skipped, while an explicit single-file
+  path still ingests anything; and **`doctor`** reports an empty bundle as
+  `[SKIP]` rather than `[FAIL]` on the reindex check, since right after
+  `init` there is nothing to index yet (#568).
+
+- **`ingest`** aggregates the per-candidate `type_alternative` disclosure
+  into one summary line per run instead of one line per object — the
+  per-candidate version fired on nearly every extracted object and drowned
+  the signal it existed to carry (#566).
+
+- **Contradiction detection** now distinguishes antonymy from factual
+  contradiction in the judge prompt; measurement showed the judge
+  previously scored antonym pairs (concepts defined in opposition) at the
+  same 1.00 confidence as genuine factual collisions (#558).
+
+- **`contradictions`** no longer reports a run with zero typed-edge
+  candidates as a clean "all clear" — a graph with no applied relations
+  starves the standalone verb down to a vacuous candidate set that
+  previously printed the same message a well-covered run does (#557).
+
+- **`forget`** now structurally excises the forgotten concept's body from
+  every surviving ledger snapshot it appears inside — including bodies
+  embedded in a *third* survivor's rewrite snapshot — instead of filtering
+  ledger entries on the forgotten id alone, which left two classes of leak
+  (#602).
+
+- **Duplicate detection** no longer lets short-token dropping collapse a
+  short title to a single, overly generic token (e.g. `"ai agent"` →
+  `("agent",)`), which had been manufacturing dozens of false LOW-tier
+  duplicate groups on real bundles; `duplicates`/`adjudicate` legends now
+  also state what the LOW score actually measures (#555).
+
+- **`status`** now discloses that its duplicate count covers identical
+  titles only, not near-matches, rather than reading as clean while
+  `duplicates` shows a real backlog — full near-match counting was
+  measured too expensive (O(n²)) for a read-only command to pay (#593).
+
+- **`derive_source_title`** now strips balanced `()`/`[]` spans instead of
+  rejecting the whole title candidate when one is present, fixing titles
+  like `# MCP (Model Context Protocol)` falling all the way back to the
+  filename stem (#592).
+
+- **Extraction's union backstop cap raised from 12 to 20** — the original
+  cap's empirical justification was falsified by the first real corpus,
+  where it bound twice on legitimately content-rich, judge-approved
+  documents and truncated survivors by position rather than merit (#564).
+
+- **The union twin-drop rule now applies to the merged list**, not per-run
+  before merging, on the unchunked extraction path — matching the chunked
+  branch and closing a case where a run that found only the droppable twin
+  got it floored back in and merged beside a genuine object from the other
+  run (#581).
+
+- **`ingest`** disambiguates a `raw/` basename collision against the whole
+  collision family by matching origin (via `origin_key`) rather than
+  content bytes alone, so two same-named files from different source
+  folders no longer risk one silently absorbing the other (#552).
+
 ## [0.2.3] - 2026-08-11
 
 ### Added
