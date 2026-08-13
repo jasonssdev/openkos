@@ -212,7 +212,28 @@ def write_entries(
     `entries` list removes the sidecar file entirely (a survivor with no
     remaining merges keeps no empty ledger on disk); removing an
     already-absent sidecar is a no-op, not an error."""
-    path = ledger_path_for(concept_id, bundle_dir)
+    return rewrite_entries_at(
+        ledger_path_for(concept_id, bundle_dir),
+        survivor_id=survivor_id,
+        entries=entries,
+    )
+
+
+def rewrite_entries_at(
+    path: Path, *, survivor_id: str, entries: list[okf.MergeLedgerEntry]
+) -> Path:
+    """(Re)write the sidecar AT `path` to hold EXACTLY `entries`, using
+    `survivor_id` only as container CONTENT -- never to derive the path.
+
+    The privacy sweep walks real sidecar paths and MUST write each rewrite
+    back to the path it WALKED, not to a path rebuilt from the (possibly
+    drifted or hostile) `survivor_id` frontmatter field. Rebuilding it both
+    lets a traversal id escape the bundle (arbitrary-file create/delete with
+    the `.ledger.okf` suffix) AND silently writes a legit NFC/NFD-drifted
+    sidecar to the wrong place while reporting the walked one as cleaned --
+    for a privacy sweep, a silent scrub miss. `write_entries` is the
+    id-addressed wrapper for callers that legitimately own the id. An empty
+    `entries` list removes the file; removing an absent file is a no-op."""
     if not entries:
         if path.is_file():
             path.unlink()

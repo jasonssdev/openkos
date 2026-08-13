@@ -23,6 +23,8 @@ import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
+from openkos.bundle import index as bundle_index
+from openkos.bundle import log as bundle_log
 from openkos.cli import main
 from openkos.cli.main import app
 from openkos.extraction import concept as concept_mod
@@ -1626,6 +1628,50 @@ def test_successful_decision_extraction_writes_decisions_dir(
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
     assert "decisions/frame-the-essay-around-control.md" in index_text
     assert "# Decisions" in index_text
+
+
+def test_extracted_title_with_link_delimiter_is_neutralized_not_forged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An LLM-extracted title carrying a markdown link delimiter (`]`) would
+    forge/break the catalog bullet's first link in `index.md`/`log.md`,
+    making the real entry unremovable and letting a forged id delete another
+    entry. The delimiter is NEUTRALIZED (`[`/`]` -> `(`/`)`), not dropped: the
+    concept is still extracted, no forged `/concepts/other.md` link reaches
+    the catalog or the log, and the entry stays removable by its real id."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(
+        monkeypatch,
+        _concept_reply(title="Payment Policy](/concepts/other.md) x"),
+    )
+    source = tmp_path / "notes.txt"
+    source.write_text("Some notes about a payment policy.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    # The candidate IS kept, under a neutralized (bracket-free) title.
+    concept_files = list((tmp_path / "bundle" / "concepts").glob("*.md"))
+    assert len(concept_files) == 1, "the candidate is preserved, not dropped"
+    metadata, _ = okf.load_frontmatter(concept_files[0].read_text(encoding="utf-8"))
+    stored_title = str(metadata["title"])
+    assert "]" not in stored_title
+    assert "[" not in stored_title
+    # Security property is FUNCTIONAL: the forged target string may survive as
+    # inert label text, but it must not be a real link. The real entry is
+    # removable by its own id, and the forged `concepts/other` id resolves to
+    # nothing -- so the injection can neither hide the real bullet nor forge a
+    # deletion of a different one, in either the catalog or the log.
+    concept_id = f"concepts/{concept_files[0].stem}"
+    _, removed_real = bundle_index.remove_index_entry(index_text, concept_id)
+    assert removed_real == 1, "the neutralized entry remains removable by its id"
+    _, forged_index = bundle_index.remove_index_entry(index_text, "concepts/other")
+    assert forged_index == 0, "the forged target is not a functional catalog link"
+    _, forged_log = bundle_log.remove_log_entry(log_text, "concepts/other")
+    assert forged_log == 0, "the forged target is not a functional log link"
+    assert okf.check_conformance(tmp_path / "bundle") == []
 
 
 def test_successful_project_extraction_writes_projects_dir(

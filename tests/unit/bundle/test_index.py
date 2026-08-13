@@ -8,6 +8,7 @@ from openkos.bundle.index import (
     relabel_index_entry,
     remove_index_entry,
     render_index,
+    sanitize_link_label,
 )
 from openkos.model import okf
 
@@ -788,6 +789,99 @@ def test_insert_index_entry_rejects_newline_in_interpolated_field(
         insert_index_entry(
             render_index(), section="Concepts", link_dir="concepts", **kwargs
         )
+
+
+@pytest.mark.parametrize("delimiter", ["[", "]"])
+def test_insert_index_entry_rejects_link_label_delimiters_in_title(
+    delimiter: str,
+) -> None:
+    """A `[` or `]` in the LABEL span of the bullet forges a second link or
+    breaks the real one, so `_LINK_RE`/`_LABELLED_LINK_RE` then match the
+    FORGED link, not the real one -- leaving the entry invisible to
+    `remove_index_entry`/`relabel_index_entry` (the exact class already
+    guarded on the operator-supplied relabel path). An LLM-extracted title
+    reaches `insert_index_entry`, so the INSERT path must reject these too."""
+    with pytest.raises(ValueError, match="delimiter"):
+        insert_index_entry(
+            render_index(),
+            section="Concepts",
+            link_dir="concepts",
+            title=f"Payment{delimiter}Policy](/concepts/other.md) x",
+            slug="payment-policy",
+            description="A policy.",
+        )
+
+
+@pytest.mark.parametrize("delimiter", ["(", ")"])
+def test_insert_index_entry_rejects_link_target_delimiters_in_slug(
+    delimiter: str,
+) -> None:
+    """A `(` or `)` in the SLUG lands inside the link TARGET `(...)` and
+    closes it early or forges it, changing the resolved identity of the real
+    bullet. Real slugs from `_slugify` can never contain these, so this is
+    defense-in-depth for the generic public inserter."""
+    with pytest.raises(ValueError, match="delimiter"):
+        insert_index_entry(
+            render_index(),
+            section="Concepts",
+            link_dir="concepts",
+            title="Payment Policy",
+            slug=f"payment{delimiter}policy",
+            description="A policy.",
+        )
+
+
+def test_insert_index_entry_allows_parentheses_and_backticks_in_title() -> None:
+    """Parentheses and backticks in the LABEL span are SAFE: they sit inside
+    `[^\\]]*` before the closing `]`, so they never hijack the bullet's first
+    link. Titles like ``map() function`` or ``` `useState` ``` are common, so
+    rejecting them would be a false positive with no security benefit -- the
+    insert guard must accept them and keep the entry removable by its id."""
+    result = insert_index_entry(
+        render_index(),
+        section="Concepts",
+        link_dir="concepts",
+        title="The map() function `useState`",
+        slug="map-function",
+        description="A note (with parens).",
+    )
+
+    _, removed = remove_index_entry(result, "concepts/map-function")
+    assert removed == 1, "a parenthesized/backticked title must stay removable"
+
+
+def test_sanitize_link_label_neutralizes_brackets_and_keeps_entry_removable() -> None:
+    """`sanitize_link_label` replaces label delimiters (`[`/`]`) with round
+    parens, so a title that would forge a second link (`Payment Policy](/
+    concepts/other.md) x`) becomes inert: inserted, the bullet's FIRST link
+    still resolves to the real slug and stays removable, and the forged
+    `concepts/other` id resolves to nothing."""
+    hostile = "Payment Policy](/concepts/other.md) x"
+    safe = sanitize_link_label(hostile)
+    assert "[" not in safe
+    assert "]" not in safe
+
+    result = insert_index_entry(
+        render_index(),
+        section="Concepts",
+        link_dir="concepts",
+        title=safe,
+        slug="payment-policy",
+        description="A policy.",
+    )
+
+    _, removed_real = remove_index_entry(result, "concepts/payment-policy")
+    assert removed_real == 1, "the real entry stays removable"
+    _, forged = remove_index_entry(result, "concepts/other")
+    assert forged == 0, "the forged target is not a functional link"
+
+
+def test_sanitize_link_label_leaves_ordinary_titles_untouched() -> None:
+    """A title with no label delimiters -- including one with parentheses or
+    backticks, which are safe inside the label -- round-trips byte-identical,
+    so the substitution is a no-op on the common case."""
+    for title in ["Stoicism", "The map() function", "`useState` hook"]:
+        assert sanitize_link_label(title) == title
 
 
 def test_insert_index_entry_rejects_unknown_section() -> None:

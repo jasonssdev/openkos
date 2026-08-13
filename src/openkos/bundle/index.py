@@ -52,6 +52,70 @@ def _reject_newline(field: str, value: str) -> None:
         raise ValueError(f"index.md: {field!r} must not contain a newline")
 
 
+_TITLE_LABEL_DELIMITERS_RE = re.compile(r"[\[\]]")
+_SLUG_TARGET_DELIMITERS_RE = re.compile(r"[()]")
+
+
+def reject_title_link_delimiters(field: str, value: str) -> None:
+    r"""Raise `ValueError` if `value` contains `[` or `]` (RISK-1, insert path).
+
+    A `title` is interpolated verbatim into the LABEL span of the bullet
+    (`* [{title}](...)`). A `[`/`]` there forges a second link or closes the
+    label early, so `_LINK_RE`/`_LABELLED_LINK_RE` then match the FORGED link
+    instead of the real one -- the entry becomes invisible to
+    `remove_index_entry`/`relabel_index_entry`, and a forged id can delete a
+    DIFFERENT entry. This is the untrusted, LLM-derived counterpart of
+    `_reject_markdown_link_delimiters` (which guards the operator-supplied
+    relabel path): the STRICT insert-time backstop that fails closed for any
+    caller. Callers that want to PRESERVE a title carrying brackets (a benign
+    filename like `notes[1].txt`, as well as a hostile one) sanitize it first
+    with `sanitize_link_label`, which neutralizes the delimiters instead of
+    rejecting the whole value.
+
+    Parentheses and backticks are deliberately NOT rejected here: inside the
+    label they sit within `[^\]]*` and never reach the target, so a common
+    title like ``map() function`` or ``` `useState` `` stays valid --
+    rejecting them would be a false positive with no security benefit.
+    """
+    if _TITLE_LABEL_DELIMITERS_RE.search(value):
+        raise ValueError(
+            f"index.md: {field!r} must not contain a markdown link label "
+            "delimiter ('[' or ']')"
+        )
+
+
+def _reject_slug_link_delimiters(field: str, value: str) -> None:
+    """Raise `ValueError` if `value` contains `(` or `)` (RISK-1, insert path).
+
+    A `slug` is interpolated into the link TARGET span
+    (`](/{link_dir}/{slug}.md)`). A `(`/`)` there closes or forges the
+    target, changing the bullet's resolved identity. Slugs produced by
+    `_slugify` can never contain these, so this is defense-in-depth for the
+    generic public inserter.
+    """
+    if _SLUG_TARGET_DELIMITERS_RE.search(value):
+        raise ValueError(
+            f"index.md: {field!r} must not contain a markdown link target "
+            "delimiter ('(' or ')')"
+        )
+
+
+def sanitize_link_label(title: str) -> str:
+    r"""Return `title` with markdown link LABEL delimiters (`[`, `]`) replaced
+    by their round-paren equivalents, so the value is safe to interpolate
+    into a bullet's `[label](...)` span in `index.md`/`log.md`.
+
+    Brackets close or forge the label for the regex-based `_LINK_RE`/
+    `_LABELLED_LINK_RE` matchers -- maliciously, via an injected LLM-extracted
+    title, or benignly, via a filename like `notes[1].txt`. Parentheses sit
+    inside `[^\]]*` and are inert there, so the substitution keeps the entry
+    matchable/removable by its id while preserving the visual grouping. This
+    is DISPLAY text only: identity is the slug, which `_slugify` derives
+    independently, so the substitution never changes which object exists.
+    """
+    return title.replace("[", "(").replace("]", ")")
+
+
 # `_CANONICAL_SECTION_ORDER` is now derived from
 # `openkos.model.types.REGISTRY` -- see that module for the single source of
 # truth.
@@ -83,10 +147,14 @@ def insert_index_entry(
     eight currently exist -- preserving the historical Sources-last behavior
     byte-identically.
     `title`/`slug`/`description` are each rejected (`ValueError`) if they
-    contain a newline (RISK-1) -- see `_reject_newline`. This guard applies
-    to every section, including untrusted, LLM-derived object fields.
-    `section` MUST be one of the canonical sections, else `ValueError` --
-    there is no defined rank for an unknown section.
+    contain a newline (RISK-1) -- see `_reject_newline`. `title` is
+    additionally rejected if it carries a markdown link LABEL delimiter
+    (`[`/`]`) and `slug` if it carries a link TARGET delimiter (`(`/`)`) --
+    see `reject_title_link_delimiters`/`_reject_slug_link_delimiters` -- so an
+    untrusted, LLM-derived title can never forge or break the bullet's first
+    link. This guard applies to every section, including untrusted object
+    fields. `section` MUST be one of the canonical sections, else
+    `ValueError` -- there is no defined rank for an unknown section.
     """
     if section not in _CANONICAL_SECTION_ORDER:
         raise ValueError(
@@ -95,6 +163,8 @@ def insert_index_entry(
     _reject_newline("title", title)
     _reject_newline("slug", slug)
     _reject_newline("description", description)
+    reject_title_link_delimiters("title", title)
+    _reject_slug_link_delimiters("slug", slug)
     frontmatter_block, body = _split_frontmatter_verbatim(index_text)
     chunks = _SECTION_SPLIT_RE.split(body)
     preamble, section_chunks = chunks[0], chunks[1:]
