@@ -143,16 +143,81 @@ def _initialisms(key: str) -> set[str]:
     return found
 
 
-def acronym_expansion_match(key_a: str, key_b: str) -> str | None:
-    """Return the acronym linking `key_a` and `key_b`, or `None` (#397).
+_HEAD_BOUNDARY_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        # English prepositions/connectives.
+        "in",
+        "of",
+        "for",
+        "on",
+        "with",
+        "to",
+        "from",
+        "vs",
+        "versus",
+        "and",
+        # Spanish connectives -- the corpus is bilingual (see e.g. #423's
+        # ordering note), and `servidor de mcp` is the same modifier shape
+        # as `skill in mcp`.
+        "en",
+        "de",
+        "del",
+        "para",
+        "con",
+        "sobre",
+        "y",
+    }
+)
+"""Words that end a title's head phrase. Anything after the first of these
+is a modifier phrase (`skill IN mcp`, `servidor DE mcp`), never the
+title's subject -- see `_head_token` and #641."""
 
-    Two normalized titles match when a token of one IS the initials of a
-    contiguous word run in the other -- `google adk` against `adk agent
-    development kit`, or `mcp workflows` against `model context protocol`.
-    Symmetric: the pair is unordered, so which key arrives first never
-    changes the verdict. When several acronyms qualify, the
-    lexicographically smallest is returned, so the reported trigger is
-    deterministic.
+
+def _head_token(key: str) -> str | None:
+    """The HEAD of a normalized title, approximated (#641), or `None` for
+    an empty key or one that starts with a boundary word.
+
+    Two-step approximation on the normalized token list:
+
+    1. Truncate at the first word in `_HEAD_BOUNDARY_WORDS` and keep the
+       left part -- a token after that boundary sits inside a prepositional
+       modifier phrase (`skill in mcp` -> `skill`), not the head.
+    2. The head is the LAST token of that left part, because English
+       compounds are head-final: `google adk` -> `adk`, `mcp server` ->
+       `server`. A single-token title is trivially its own head.
+
+    KNOWN LIMIT, stated honestly: Spanish noun compounds are head-INITIAL
+    (`servidor mcp` would put the head first), and this function does not
+    detect language or reverse direction. Spanish titles are handled only
+    because their modifier is idiomatically attached with a connective
+    (`servidor de mcp`), which step 1 truncates. A connectiveless Spanish
+    compound would be mis-headed -- accepted until measured evidence shows
+    one; every #641-recorded pair is classified correctly by this
+    approximation.
+    """
+    words = key.split()
+    head: list[str] = []
+    for word in words:
+        if word in _HEAD_BOUNDARY_WORDS:
+            break
+        head.append(word)
+    return head[-1] if head else None
+
+
+def acronym_expansion_match(key_a: str, key_b: str) -> str | None:
+    """Return the acronym linking `key_a` and `key_b`, or `None` (#397, #641).
+
+    Two normalized titles match when the HEAD token of one (see
+    `_head_token`) IS the initials of a contiguous word run in the other --
+    `google adk` against `adk agent development kit`, or the bare `mcp`
+    against `model context protocol`. Symmetric: the pair is unordered, so
+    which key arrives first never changes the verdict. The head test is
+    evaluated PER DIRECTION and any qualifying direction keeps the pair:
+    `google adk` qualifies via its own `adk` head against the expansion's
+    initials, and the expansion-side title never needs to pass the head
+    test for the other side's token. When both directions qualify, the
+    lexicographically smallest acronym is returned, so the reported
+    trigger is deterministic.
 
     This exists because subset containment (`near_match_score`) structurally
     cannot see this shape. Every token of the smaller title must find a
@@ -160,27 +225,44 @@ def acronym_expansion_match(key_a: str, key_b: str) -> str | None:
     pair never reaches the adjudicator at all -- a recall failure in the
     gate, not a judgment failure downstream.
 
+    The HEAD restriction is #641. As first shipped, ANY token >=
+    `MIN_ACRONYM_LENGTH` could be the acronym, so titles ABOUT a thing
+    were proposed as duplicates OF the thing: measured e2e, 4 of 6 ACRONYM
+    groups were false -- `mcp server`, `scoping mcp servers`, and `skill in
+    mcp` each paired with `model context protocol`. In every false pair
+    the acronym was a MODIFIER (of `server`, `servers`, `skill`); in both
+    true pairs (`google adk` <-> `adk agent development kit`, `mcp` <->
+    `model context protocol`) it was the title's subject. Requiring the
+    acronym to be the head classifies all five recorded pairs correctly.
+    It also, deliberately, stops matching `mcp workflows` -- this
+    docstring's own former example -- because a title about MCP workflows
+    is not a duplicate of the protocol either.
+
     Case is irrelevant here even though the acronym is usually written in
     caps: the comparison is a token's LETTERS against a word run's
     initials, which survives `normalize.normalize_key`'s casefold intact.
     Working on normalized keys is what lets this tier reuse the existing
     shared prelude rather than threading raw titles through it.
 
-    Deliberately narrow. Measured over one real 19-document bundle against
-    the 18 same-type pairs an embedding-proximity tier would have added,
-    this rule fired on exactly two -- the genuine duplicate #397 reports and
-    the `MCP`/`Model Context Protocol` expansion twin recorded as a known
-    residue elsewhere -- and on nothing else. That precision is the whole
-    point: the proximity alternative surfaced the same true positive but
-    cost 18 adjudication calls to deliver it, because embedding distance
-    measures topical relatedness rather than identity.
+    Deliberately narrow, now narrower. The original measurement (one real
+    19-document bundle, where the any-token rule fired on exactly two of
+    the 18 pairs an embedding-proximity tier would have added) predates
+    the head rule; #641's e2e evidence showed the any-token rule at 2 true
+    / 4 false on a larger corpus. Both measured true positives carry the
+    acronym as head, so the head rule keeps the original recall while
+    removing every recorded false positive. Precision remains the whole
+    point: each false group costs one adjudication call (#382).
 
     Returns `None` for identical keys: an exact match is the HIGH tier's
     business, and reporting it here would put one pair in two tiers.
     """
     if key_a == key_b:
         return None
-    tokens_a = {token for token in key_a.split() if len(token) >= MIN_ACRONYM_LENGTH}
-    tokens_b = {token for token in key_b.split() if len(token) >= MIN_ACRONYM_LENGTH}
-    matches = (tokens_a & _initialisms(key_b)) | (tokens_b & _initialisms(key_a))
+    matches: set[str] = set()
+    for token_key, run_key in ((key_a, key_b), (key_b, key_a)):
+        head = _head_token(token_key)
+        if head is None or len(head) < MIN_ACRONYM_LENGTH:
+            continue
+        if head in _initialisms(run_key):
+            matches.add(head)
     return min(matches) if matches else None

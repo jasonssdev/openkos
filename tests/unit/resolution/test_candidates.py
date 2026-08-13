@@ -895,11 +895,16 @@ def test_acronym_expansion_pair_becomes_its_own_tier(tmp_path: Path) -> None:
 def test_acronym_tier_sorts_between_high_and_low(tmp_path: Path) -> None:
     """An acronym match is exact and deterministic -- stronger evidence than
     a fuzzy near-match, weaker than an identical normalized key -- so it
-    ranks between them in the review queue."""
+    ranks between them in the review queue.
+
+    Fixture changed by #641: the acronym pair here used `MCP Workflows` <->
+    `Model Context Protocol`, which the head rule now correctly rejects (a
+    title about MCP workflows is not a duplicate of the protocol). The bare
+    `MCP` title is its own head and remains the known expansion twin."""
     bundle = tmp_path / "bundle"
     _write_doc(bundle / "concepts" / "a.md", title="Stoicism")
     _write_doc(bundle / "concepts" / "b.md", title="Stoicism")
-    _write_doc(bundle / "concepts" / "c.md", title="MCP Workflows")
+    _write_doc(bundle / "concepts" / "c.md", title="MCP")
     _write_doc(bundle / "concepts" / "d.md", title="Model Context Protocol")
     _write_doc(bundle / "concepts" / "e.md", title="Stoic Philosophy")
 

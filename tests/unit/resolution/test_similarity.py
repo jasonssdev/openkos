@@ -163,14 +163,20 @@ def test_acronym_matches_the_initials_of_a_word_run() -> None:
 
 def test_acronym_match_is_symmetric() -> None:
     """Candidate detection compares unordered pairs, so which title is passed
-    first must never change the verdict."""
+    first must never change the verdict.
+
+    Fixture changed by #641: this test used `mcp workflows` <-> `model
+    context protocol`, which the head rule now correctly rejects (a title
+    about MCP workflows is not a duplicate of the protocol) -- see
+    `test_acronym_as_modifier_of_a_head_noun_is_not_a_duplicate`. Symmetry
+    itself is unchanged and re-pinned on the surviving #397 pair."""
     forward = similarity.acronym_expansion_match(
-        "mcp workflows", "model context protocol"
+        "google adk", "adk agent development kit"
     )
     backward = similarity.acronym_expansion_match(
-        "model context protocol", "mcp workflows"
+        "adk agent development kit", "google adk"
     )
-    assert forward == backward == "mcp"
+    assert forward == backward == "adk"
 
 
 def test_acronym_run_may_start_anywhere_in_the_title() -> None:
@@ -233,6 +239,94 @@ def test_empty_and_single_token_keys_never_match() -> None:
     nothing yields no candidate rather than raising."""
     assert similarity.acronym_expansion_match("", "agent development kit") is None
     assert similarity.acronym_expansion_match("adk", "") is None
+
+
+# --- #641: the acronym must be the HEAD of its title, not a modifier --------
+
+
+def test_acronym_as_modifier_of_a_head_noun_is_not_a_duplicate() -> None:
+    """#641's first e2e false positive: `mcp server` is a title ABOUT a
+    server (head noun `server`), not about the protocol itself. The `mcp`
+    token modifies the head, so the pair must not be proposed as a
+    duplicate of `model context protocol`."""
+    assert (
+        similarity.acronym_expansion_match("mcp server", "model context protocol")
+        is None
+    )
+
+
+def test_acronym_modifying_a_plural_head_is_not_a_duplicate() -> None:
+    """#641's second e2e false positive: `scoping mcp servers` is about
+    scoping servers (head `servers`); `mcp` sits mid-title as a modifier."""
+    assert (
+        similarity.acronym_expansion_match(
+            "scoping mcp servers", "model context protocol"
+        )
+        is None
+    )
+
+
+def test_acronym_after_a_preposition_is_inside_a_modifier_phrase() -> None:
+    """#641's third e2e false positive, and a DISTINCT rejection path from
+    the last-token rule: in `skill in mcp` the acronym IS the last token,
+    but it follows the preposition `in`, so it belongs to a prepositional
+    modifier phrase -- the title's head is `skill`. Without the boundary
+    truncation, the last-token rule alone would wrongly accept this pair."""
+    assert (
+        similarity.acronym_expansion_match("skill in mcp", "model context protocol")
+        is None
+    )
+
+
+def test_spanish_connective_also_bounds_the_head() -> None:
+    """Same shape in Spanish: `servidor de mcp` is a title about a server
+    (head `servidor`); `mcp` follows the connective `de`. Spanish
+    head-initial compounds are handled by this boundary, not by reversing
+    head direction."""
+    assert (
+        similarity.acronym_expansion_match("servidor de mcp", "model context protocol")
+        is None
+    )
+
+
+def test_head_position_acronym_still_matches() -> None:
+    """#641 must not lose #397's original true positive: in `google adk`
+    the acronym is the compound's HEAD (English compounds are head-final),
+    so the pair with its expansion still matches."""
+    assert (
+        similarity.acronym_expansion_match("google adk", "adk agent development kit")
+        == "adk"
+    )
+
+
+def test_single_token_title_is_trivially_its_own_head() -> None:
+    """#641 must not lose the known expansion twin: a bare `mcp` title has
+    nothing but the acronym, which is therefore its head."""
+    assert similarity.acronym_expansion_match("mcp", "model context protocol") == "mcp"
+
+
+def test_one_qualifying_direction_is_enough() -> None:
+    """The head test is evaluated PER DIRECTION and any qualifying
+    direction keeps the pair. `google adk` qualifies via its own `adk`
+    head against the expansion's initials; the expansion-side title
+    (head `kit`, with `adk` merely its first token) never needs to pass
+    the head test for the other side's token."""
+    assert (
+        similarity.acronym_expansion_match("adk agent development kit", "google adk")
+        == "adk"
+    )
+
+
+def test_multiple_qualifying_acronyms_return_the_smallest() -> None:
+    """Determinism is unchanged by the head rule: when BOTH directions
+    qualify (each title's head is the initials of a run in the other),
+    the lexicographically smallest acronym is reported."""
+    assert (
+        similarity.acronym_expansion_match(
+            "model context protocol adk", "agent development kit mcp"
+        )
+        == "adk"
+    )
 
 
 # --- #555: short-token dropping must not manufacture single-token titles ----
