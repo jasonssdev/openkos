@@ -12,10 +12,14 @@ the sequence. The slug is the Concept ID, so a wrong-language title is a
 permanent identity.
 
 This probe reproduces the failure shape deterministically: one synthetic
-Spanish meeting transcript (~30 KB, so it chunks) whose discussion names
+Spanish meeting transcript (~22 KB, so it chunks) whose discussion names
 English technical terms heavily -- the code-switched register of the real
-transcripts that leaked. It runs the REAL `extract_concept_union` path N
-times and scores every retained title:
+transcripts that leaked. It runs the PER-WINDOW extraction calls N times
+(the same `_extract_once`-per-`_chunk_lines`-window fan-out both chunked
+paths share; no judge, no re-ask -- the judge only SELECTS among titles the
+windows already emitted, and its whole-source prompt is where qwen3's
+thinking ran away unboundedly, killing four full-pipeline measurement
+attempts) and scores every candidate title:
 
 - `es`: contains Spanish marker words and no English ones
 - `en`: contains English marker words and no Spanish ones  (the leak)
@@ -50,7 +54,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from openkos.extraction import concept as concept_mod  # noqa: E402
-from openkos.llm.ollama import OllamaClient  # noqa: E402
+from openkos.llm.ollama import OllamaClient, OllamaError  # noqa: E402
 
 DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_RUNS = 5
@@ -115,10 +119,10 @@ markers below to pass `_CHUNK_THRESHOLD` without being pure duplication."""
 
 
 def build_transcript() -> str:
-    """Deterministic ~30 KB Spanish transcript that chunks into ~8 windows."""
+    """Deterministic ~22 KB Spanish transcript that chunks into ~6 windows."""
     blocks: list[str] = ["# Reunión de coordinación del proyecto AFG", ""]
     section = 0
-    while sum(len(b) + 1 for b in blocks) < 30_000:
+    while sum(len(b) + 1 for b in blocks) < 22_000:
         section += 1
         blocks.append(f"## Bloque {section} de la reunión")
         for turn in _TURNS:
@@ -246,12 +250,20 @@ def main() -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     args = parser.parse_args()
 
-    if args.arm == "baseline":
-        # With `_dominant_language` forced indecisive, `anchor_language` is
-        # `None` on every window and `_build_messages` emits the exact
-        # pre-#563 prompt bytes -- the baseline arm measures the shipped
-        # historical behavior even after the treatment landed in the module.
-        concept_mod._dominant_language = lambda text: None
+    if args.arm == "treatment":
+        # The REJECTED #563 candidate, kept reproducible as a monkeypatch:
+        # replace the meeting-path language anchor with one that NAMES the
+        # document's dominant language instead of pointing at the (possibly
+        # code-switched) window text. `SOURCE_TITLE` is meeting-shaped, so
+        # every window call takes the anchored path and this swap is the
+        # complete treatment for this fixture. Measured 2026-08-13: leak
+        # 0.63 vs baseline 0.69 (not material), +83% run latency, more
+        # capped runaways -- not adopted; see the README.
+        concept_mod._LANGUAGE_ANCHOR = (  # type: ignore[misc]
+            'Write every "title", "description" and "body" in Spanish -- '
+            "the dominant language of the document this text is part of, "
+            "even where the text quotes terms in another language."
+        )
 
     text = build_transcript()
     windows = concept_mod._chunk_lines(text)
@@ -259,29 +271,56 @@ def main() -> None:
         raise SystemExit("fixture must chunk -- below _CHUNK_THRESHOLD")
     print(f"fixture: {len(text)} chars, {len(windows)} windows")
 
-    client = OllamaClient(model=args.model)
+    # 1800s read timeout plus the PRODUCTION generation rail (#422,
+    # `config.DEFAULT_MAX_GENERATION_TOKENS` = 8192): a bare `OllamaClient`
+    # has no `num_predict` bound, and qwen3's thinking ran away unboundedly
+    # on this fixture -- one uncapped call exceeded THIRTY minutes before
+    # the transport deadline killed the whole arm. Production never runs
+    # uncapped; neither may a probe measuring production-shaped behavior.
+    client = OllamaClient(model=args.model, timeout=1800.0, max_generation_tokens=8192)
     per_run_titles: list[list[tuple[str, str]]] = []
     per_run_leaked: list[list[str]] = []
+    per_run_errors: list[int] = []
     latencies: list[float] = []
 
+    # PER-WINDOW extraction calls ONLY -- no judge, no re-ask. The leak
+    # mechanism under test lives in the per-window prompt (#563: the anchor
+    # re-binding to a window's quoted terminology); the judge only SELECTS
+    # among titles the windows already emitted, so window-level language is
+    # what decides the outcome -- and the judge call (whole source + all
+    # candidates in one prompt) is precisely where qwen3's thinking ran
+    # away, killing four consecutive measurement attempts. A window whose
+    # call fails (`OllamaError`, including a capped runaway) is COUNTED and
+    # skipped, never fatal: a language probe needs many titles, not
+    # all-or-nothing runs.
     for index in range(args.runs):
         started = time.monotonic()
-        outcome = concept_mod.extract_concept_union(
-            text, source_title=SOURCE_TITLE, llm=client
-        )
+        results: list[tuple[str, str]] = []
+        errors = 0
+        for window in windows:
+            try:
+                extracted = concept_mod._extract_once(window, SOURCE_TITLE, client)
+            except OllamaError:
+                errors += 1
+                continue
+            results.extend((r.title, classify_title(r.title)) for r in extracted)
         latencies.append(time.monotonic() - started)
-        titles = [(r.title, classify_title(r.title)) for r in outcome.objects]
+        titles = results
         leaked = [t for t, c in titles if c in ("en", "mixed")]
         per_run_titles.append(titles)
         per_run_leaked.append(leaked)
+        per_run_errors.append(errors)
         print(
-            f"  run {index + 1}/{args.runs}: {len(titles)} object(s), "
-            f"{len(leaked)} leaked ({latencies[-1]:.1f}s)"
+            f"  run {index + 1}/{args.runs}: {len(titles)} title(s), "
+            f"{len(leaked)} leaked, {errors} window error(s) "
+            f"({latencies[-1]:.1f}s)"
         )
 
     run_rows = [
-        {"objects": len(titles), "titles": titles, "leaked": leaked}
-        for titles, leaked in zip(per_run_titles, per_run_leaked, strict=True)
+        {"objects": len(titles), "titles": titles, "leaked": leaked, "errors": errs}
+        for titles, leaked, errs in zip(
+            per_run_titles, per_run_leaked, per_run_errors, strict=True
+        )
     ]
     total_objects = sum(len(titles) for titles in per_run_titles)
     total_leaked = sum(len(leaked) for leaked in per_run_leaked)
@@ -322,6 +361,7 @@ def main() -> None:
         f"| mean objects per run | "
         f"{total_objects / args.runs if args.runs else 0:.1f} |",
         f"| mean run latency | {statistics.fmean(latencies):.1f}s |",
+        f"| window errors across runs | {sum(per_run_errors)} |",
         "",
         "## Leaked titles per run",
         "",
