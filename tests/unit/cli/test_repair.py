@@ -125,7 +125,9 @@ def test_repair_refuses_with_no_override_when_any_survivor_has_two_or_more_entri
 ) -> None:
     """Task 3.2: repair refuses whenever ANY survivor bundle-wide carries
     2+ entries -- regardless of Check B's per-ledger result, and this
-    survivor's own ledger is left completely untouched."""
+    survivor's own ledger is left completely untouched. The refusal states
+    the reset-and-replay path and the reversibility caveat (spec: Repair
+    Verb Refuses On Any Sign Of Cross-Survivor Pollution Risk, #603)."""
     _init_workspace(tmp_path, monkeypatch)
     bundle_dir = tmp_path / "bundle"
     entries = [_make_entry("concepts/absorbed-0"), _make_entry("concepts/absorbed-1")]
@@ -138,6 +140,9 @@ def test_repair_refuses_with_no_override_when_any_survivor_has_two_or_more_entri
 
     assert result.exit_code == 1
     assert "refusing" in result.output.lower()
+    assert "git reset --hard <first-merge>~1" in result.output
+    assert "openkos reindex" in result.output
+    assert "not guaranteed" in result.output
     assert survivor_path.read_bytes() == before
     assert not bundle_ledger.ledger_path_for("concepts/survivor", bundle_dir).exists()
 

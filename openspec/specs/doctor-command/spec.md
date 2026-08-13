@@ -508,8 +508,13 @@ content or it does not), so it has zero false positives and zero false
 negatives, unlike the post-merge-mutation check below. It MUST be
 informational (its failure alone MUST NOT affect the exit code) and MUST
 follow the existing `[PASS]`/`[FAIL]`/`[SKIP]` +
-`-> <remediation>` shape. A `[FAIL]` line's remediation MUST name the
-repair verb. This check MUST NOT write, modify, or delete any file —
+`-> <remediation>` shape. A `[FAIL]` line's remediation MUST name
+`openkos merge`/`openkos unmerge` on the affected survivor — the
+operations whose recovery pass (`bundle_ledger.recover`) actually
+resolves a pending marker — and MUST NOT name the repair verb, whose own
+torn-write gate refuses outright while any marker is pending (#603: the
+pre-fix remediation named `openkos repair` and sent the operator in a
+circle). This check MUST NOT write, modify, or delete any file —
 `doctor` stays read-only; it detects and advises, it never repairs.
 
 #### Scenario: A workspace with no pending markers passes
@@ -518,12 +523,13 @@ repair verb. This check MUST NOT write, modify, or delete any file —
 - WHEN `openkos doctor` runs
 - THEN the merge-ledger torn-writes check prints `[PASS]`
 
-#### Scenario: A torn write fails with the repair remediation
+#### Scenario: A torn write fails with the merge/unmerge remediation
 
 - GIVEN a `*.ledger.okf.pending` marker under `bundle/.state/ledger/`
 - WHEN `openkos doctor` runs
-- THEN the check prints `[FAIL]` followed by remediation naming the
-  repair verb
+- THEN the check prints `[FAIL]` followed by remediation naming
+  `openkos merge`/`openkos unmerge` on the affected survivor, and the
+  remediation does not name the repair verb
 
 #### Scenario: The check never writes
 

@@ -12922,8 +12922,11 @@ def doctor() -> None:
     # outside -- Check A, design Decision 5: mechanically exact, zero false
     # positives/negatives). A `.pending` marker means a two-phase write was
     # interrupted mid-flight; `doctor` PREVIEWS what `recover` would decide
-    # (`bundle_ledger.scan_torn_writes`, read-only) but never repairs --
-    # only the repair verb (1b) writes.
+    # (`bundle_ledger.scan_torn_writes`, read-only) but never repairs. The
+    # remediation names `merge`/`unmerge` -- whose `bundle_ledger.recover`
+    # pass is what actually resolves a pending marker -- NOT `openkos
+    # repair`, whose Gate 1 refuses outright while any marker is pending
+    # (#603: the old text sent the operator in a circle).
     if in_workspace:
         torn = bundle_ledger.scan_torn_writes(config.WorkspaceLayout(root).bundle_dir)
         if torn:
@@ -12933,7 +12936,12 @@ def doctor() -> None:
                     "fail",
                     critical=False,
                     detail=f"{len(torn)} pending marker(s)",
-                    remediation="openkos repair",
+                    remediation=(
+                        "run `openkos merge` or `openkos unmerge` on the "
+                        "affected survivor -- its recovery pass resolves "
+                        "the pending marker; the repair verb refuses while "
+                        "one is pending"
+                    ),
                 )
             )
         else:
@@ -13084,9 +13092,10 @@ def repair() -> None:
             "this bundle carries 2 or more merge-ledger entries. Migrating "
             "a possibly-corrupted ledger verbatim would convert a "
             "git-revertible bug into a permanent durable fact, so this "
-            "refusal has NO override. Run `openkos doctor` to inspect; if "
-            "it reports a corrupted ledger, its own remediation is the way "
-            "forward, not this verb.",
+            "refusal has NO override. The only path forward is `git reset "
+            "--hard <first-merge>~1` followed by `openkos reindex`; "
+            "reversibility of merges made before this fix is not "
+            "guaranteed. Run `openkos doctor` to inspect.",
             err=True,
         )
         raise typer.Exit(code=1)
