@@ -60,7 +60,11 @@ This is what lets sequential pairwise merges reverse losslessly in LIFO order.
 reverses ONLY the most-recent unreversed entry (the tail), and the supplied
 `absorbed-id` MUST equal that tail entry's `absorbed_id`, else the command
 refuses with a clean error and no write (reversing a non-tail entry is unsafe
-due to nested snapshots / overlapping rewrites). It writes every snapshot back
+due to nested snapshots / overlapping rewrites). (Since #562,
+`unmerge <survivor-id> --to <absorbed-id>` additionally unwinds the ledger
+tail-first as a sequence of these same single-step LIFO reversals, down to
+and including the target entry — sugar over the LIFO rule, never an
+exception to it.) It writes every snapshot back
 verbatim (restoring `log.md` from `log_before` and THEN appending one unmerge
 audit line), and reverses each recorded link rewrite by exact fence-masked
 substitution bounded to the recorded occurrences — failing closed if a target

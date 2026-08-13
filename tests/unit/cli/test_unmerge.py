@@ -13,6 +13,7 @@ collision, link drift, confirm gate, path safety).
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
 from openkos import fsio
@@ -1539,3 +1540,419 @@ def test_removing_the_colliding_file_and_rerunning_completes_the_unmerge(
     assert "merged_from" not in survivor_path.read_text(encoding="utf-8")
     assert (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8") == pre_index
     assert "**Unmerge**" in (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+
+
+# -- #562: unwind ergonomics -- absorber lookup, unwind sequence, --to ------
+
+
+def test_unmerge_missing_survivor_that_was_absorbed_names_the_absorber(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#562 Part 1a: after a chained merge (`b` absorbed `c`, then `a`
+    absorbed `b`), `unmerge b c` hits a survivor that no longer exists on
+    disk -- but `b`'s own ledger sidecar SURVIVED its absorption, so the
+    refusal must name who absorbed it and the exact command to run first,
+    instead of the dead-end plain "does not exist"."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/a", title="A")
+    _write_concept(tmp_path, "concepts/b", title="B")
+    _write_concept(tmp_path, "concepts/c", title="C")
+
+    assert (
+        runner.invoke(app, ["merge", "concepts/b", "concepts/c", "--auto"]).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(app, ["merge", "concepts/a", "concepts/b", "--auto"]).exit_code
+        == 0
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["unmerge", "concepts/b", "concepts/c", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "refusing to unmerge" in result.stderr
+    assert "concept 'concepts/b' does not exist" in result.stderr
+    assert "absorbed into 'concepts/a'" in result.stderr
+    assert "openkos unmerge concepts/a concepts/b" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+    # The suggested recovery actually works: restore `b`, then the original
+    # command succeeds -- the exact issue-#562 narrative, end to end.
+    assert (
+        runner.invoke(app, ["unmerge", "concepts/a", "concepts/b", "--auto"]).exit_code
+        == 0
+    )
+    retry = runner.invoke(app, ["unmerge", "concepts/b", "concepts/c", "--auto"])
+    assert retry.exit_code == 0, retry.stderr
+    assert (tmp_path / "bundle" / "concepts" / "c.md").is_file()
+
+
+def test_unmerge_missing_survivor_never_absorbed_keeps_the_plain_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing survivor NOBODY absorbed keeps the plain "does not exist"
+    refusal -- no invented absorber, even while other ledgers exist."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/a", title="A")
+    _write_concept(tmp_path, "concepts/b", title="B")
+    assert (
+        runner.invoke(app, ["merge", "concepts/a", "concepts/b", "--auto"]).exit_code
+        == 0
+    )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["unmerge", "concepts/ghost", "concepts/x", "--auto"])
+
+    assert result.exit_code == 1
+    assert "concept 'concepts/ghost' does not exist" in result.stderr
+    assert "absorbed into" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_non_tail_error_lists_the_unwind_sequence_and_to_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#562 Part 1b, surfaced through the CLI: naming a buried (non-tail)
+    absorbed id refuses with the full LIFO unwind sequence in order and
+    the `--to` one-command alternative -- no more dead end."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    _write_concept(tmp_path, "concepts/absorbed-a", title="AbsorbedA")
+    _write_concept(tmp_path, "concepts/absorbed-b", title="AbsorbedB")
+    for absorbed in ("concepts/absorbed-a", "concepts/absorbed-b"):
+        assert (
+            runner.invoke(
+                app, ["merge", "concepts/survivor", absorbed, "--auto"]
+            ).exit_code
+            == 0
+        )
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/absorbed-a", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "LIFO tail" in result.stderr
+    assert "'concepts/absorbed-b', 'concepts/absorbed-a'" in result.stderr
+    assert "openkos unmerge concepts/survivor --to concepts/absorbed-a" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_with_both_absorbed_id_and_to_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The positional absorbed-id and `--to` are mutually exclusive."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "unmerge",
+            "concepts/survivor",
+            "concepts/absorbed",
+            "--to",
+            "concepts/other",
+            "--auto",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "not both" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_with_neither_absorbed_id_nor_to_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Supplying neither an absorbed-id argument nor `--to` is a clean
+    refusal (exit 1), not a traceback."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["unmerge", "concepts/survivor", "--auto"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--to" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def _survivor_with_chained_merges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *absorbed_slugs: str
+) -> dict[str, str]:
+    """One survivor that absorbed each `concepts/<slug>` in order, capturing
+    every file's pre-merge text first. A third file (`concepts/other`) links
+    to the FIRST absorbed id so at least one step's plan carries an
+    inbound-link rewrite. Returns the captured pre-merge texts keyed by
+    bundle-relative path."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    for slug in absorbed_slugs:
+        _write_concept(tmp_path, f"concepts/{slug}", title=slug.capitalize())
+    _write_concept(
+        tmp_path,
+        "concepts/other",
+        title="Other",
+        body=f"See [First](/concepts/{absorbed_slugs[0]}.md).",
+    )
+
+    pre: dict[str, str] = {}
+    for rel in (
+        "index.md",
+        "log.md",
+        "concepts/survivor.md",
+        "concepts/other.md",
+        *(f"concepts/{slug}.md" for slug in absorbed_slugs),
+    ):
+        pre[rel] = (tmp_path / "bundle" / rel).read_text(encoding="utf-8")
+
+    for slug in absorbed_slugs:
+        merge_result = runner.invoke(
+            app, ["merge", "concepts/survivor", f"concepts/{slug}", "--auto"]
+        )
+        assert merge_result.exit_code == 0, merge_result.stderr
+    return pre
+
+
+def test_unmerge_to_unwinds_the_whole_chain_back_to_pre_merge_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#562 Part 2: `unmerge <survivor> --to <first-absorbed>` unwinds the
+    survivor's ledger tail-first down to AND INCLUDING the target,
+    restoring every file to its pre-merge bytes (log.md net-gains the final
+    step's `**Unmerge**` audit line) and emptying the ledger."""
+    pre = _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha", "beta")
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    for rel in (
+        "index.md",
+        "concepts/survivor.md",
+        "concepts/other.md",
+        "concepts/alpha.md",
+        "concepts/beta.md",
+    ):
+        assert (tmp_path / "bundle" / rel).read_text(encoding="utf-8") == pre[rel], rel
+    log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert "**Unmerge**" in log_text
+    assert bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle") == []
+
+
+def test_unmerge_to_partial_unwind_stops_at_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--to <mid-id>` unwinds only tail..target: the earlier merge below
+    the target stays absorbed, its ledger entry intact."""
+    _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha", "beta", "gamma")
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/beta", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert (tmp_path / "bundle" / "concepts" / "gamma.md").is_file()
+    assert (tmp_path / "bundle" / "concepts" / "beta.md").is_file()
+    assert not (tmp_path / "bundle" / "concepts" / "alpha.md").exists()
+    remaining = bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle")
+    assert [entry.absorbed_id for entry in remaining] == ["concepts/alpha"]
+
+
+def test_unmerge_to_the_tail_id_matches_the_two_arg_form(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--to <tail-id>` on a single-entry ledger behaves exactly like the
+    classic two-arg form: same restores, same audit line, ledger emptied."""
+    pre = _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha")
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    for rel in ("index.md", "concepts/survivor.md", "concepts/alpha.md"):
+        assert (tmp_path / "bundle" / rel).read_text(encoding="utf-8") == pre[rel], rel
+    assert "**Unmerge**" in (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle") == []
+
+
+def test_unmerge_to_previews_every_step_and_prompts_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole unwind plan prints BEFORE one single confirm gate: one
+    block per step in execution order (step number, restored id, touched
+    files -- including the inbound-link rewrite file), and `typer.confirm`
+    fires exactly once for the whole plan, never per step."""
+    _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha", "beta")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha"], input="y\n"
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "step 1: restore 'concepts/beta'" in result.stdout
+    assert "step 2: restore 'concepts/alpha'" in result.stdout
+    # Execution order is tail-first: step 1 is the NEWEST merge.
+    assert result.stdout.index("step 1: restore 'concepts/beta'") < result.stdout.index(
+        "step 2: restore 'concepts/alpha'"
+    )
+    assert "  + bundle/concepts/beta.md (restore)" in result.stdout
+    assert "  + bundle/concepts/alpha.md (restore)" in result.stdout
+    # The step restoring 'alpha' reverses the recorded inbound-link rewrite.
+    assert (
+        "  ~ bundle/concepts/other.md (reverse inbound link rewrite)" in result.stdout
+    )
+    assert result.stdout.count("Proceed with these changes?") == 1
+
+
+def test_unmerge_to_decline_at_prompt_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining the single `--to` confirm gate aborts (exit 1) with every
+    bundle file byte- and mtime-identical."""
+    _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha", "beta")
+    _simulate_tty(monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha"], input="n\n"
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_to_non_tty_without_auto_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`review: true`, non-TTY stdin, no `--auto` refuses the whole `--to`
+    plan (exit 1) and writes nothing -- same precedence as the two-arg
+    form's gate."""
+    _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha", "beta")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "--auto" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_to_unknown_target_refuses_no_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--to` an id present nowhere in the survivor's ledger refuses
+    cleanly (exit 1, no writes)."""
+    _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/never-merged", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_to_with_no_ledger_refuses_no_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--to` on a survivor that never merged refuses cleanly (exit 1, no
+    writes)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor")
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmerge_to_midchain_failure_stops_and_reports_completed_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A step-2 Phase-B failure stops the chain immediately: the report
+    names the failed step and that step 1 completed (git-recoverable,
+    NOT rolled back), exit 1. Step 2's own ledger entry survives (the pop
+    is last), so the remaining chain stays recoverable."""
+    _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha", "beta")
+
+    original_write_exclusive = fsio.write_exclusive
+
+    def raising_write_exclusive(path: Path, content: str) -> None:
+        if path.name == "alpha.md":
+            raise OSError("simulated step-2 restore failure")
+        original_write_exclusive(path, content)
+
+    monkeypatch.setattr(fsio, "write_exclusive", raising_write_exclusive)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha", "--auto"]
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    assert "step 2" in result.stderr
+    assert "steps 1..1 completed" in result.stderr
+    assert "git-recoverable" in result.stderr
+    # Step 1 (restore beta) completed and is NOT rolled back.
+    assert (tmp_path / "bundle" / "concepts" / "beta.md").is_file()
+    # Step 2's restore never landed; its ledger entry is intact.
+    assert not (tmp_path / "bundle" / "concepts" / "alpha.md").exists()
+    remaining = bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle")
+    assert [entry.absorbed_id for entry in remaining] == ["concepts/alpha"]
+
+
+def test_unmerge_to_midchain_drift_refusal_propagates_exit_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A step-2 post-confirm drift refusal keeps its documented exit `3`
+    through the `--to` chain -- the one exit a script may safely retry --
+    instead of collapsing to the generic exit 1 (review finding, issue
+    #562). The chain-level accounting still prints."""
+    _survivor_with_chained_merges(tmp_path, monkeypatch, "alpha", "beta")
+
+    original_guard = main._reject_drifted_targets
+    calls = {"count": 0}
+
+    def drifting_guard(*args: object, **kwargs: object) -> None:
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise typer.Exit(code=3)
+        original_guard(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(main, "_reject_drifted_targets", drifting_guard)
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "--to", "concepts/alpha", "--auto"]
+    )
+
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+    assert "step 2" in result.stderr
+    assert "steps 1..1 completed" in result.stderr

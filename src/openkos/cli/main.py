@@ -8280,8 +8280,8 @@ def merge(
 
 @app.command(
     help=(
-        "Reverse the most recent merge on a concept, restoring both "
-        "documents to their pre-merge state."
+        "Reverse the most recent merge on a concept (or unwind a chain of "
+        "merges with --to), restoring documents to their pre-merge state."
     ),
     rich_help_panel="Curate",
 )
@@ -8290,11 +8290,21 @@ def unmerge(
         ...,
         help="Bundle-relative concept id (path minus '.md') that survived a prior merge.",
     ),
-    absorbed_id: str = typer.Argument(
-        ...,
+    absorbed_id: str | None = typer.Argument(
+        None,
         help=(
             "Concept id expected to be the LIFO-tail absorbed_id of "
-            "survivor's merged_from ledger."
+            "survivor's merged_from ledger. Mutually exclusive with --to."
+        ),
+    ),
+    to: str | None = typer.Option(
+        None,
+        "--to",
+        help=(
+            "Unwind the survivor's merge ledger tail-first, one unmerge per "
+            "entry, down to and including the entry that absorbed this id -- "
+            "one confirm gate for the whole plan. Mutually exclusive with "
+            "the positional absorbed-id."
         ),
     ),
     auto: bool = typer.Option(
@@ -8306,30 +8316,298 @@ def unmerge(
     """Reverse the most recent `merge` on `survivor_id`, restoring both
     concept files to byte parity with their pre-merge state (spec: Unmerge
     Achieves Round-Trip Parity) -- the reversal `merged_from` (ADR-0002)
-    exists to make possible.
+    exists to make possible. Two mutually exclusive forms (issue #562):
+    supplying BOTH the positional `absorbed_id` and `--to`, or NEITHER, is
+    a clean exit-1 refusal before any other gate.
 
-    `unmerge <survivor-id> <absorbed-id>` is two-arg and LIFO-ENFORCED: it
-    targets ONLY the most-recent unreversed `merged_from` entry (the LIFO
-    tail). `absorbed_id` MUST equal that tail entry's `absorbed_id`, else
-    this refuses with a clean error and no write -- reversing a non-tail
-    entry is unsafe, since a later merge's snapshots/rewrites may nest on
-    top of an earlier one's (spec scenario: Absorbed-id is not the LIFO
-    tail).
+    `unmerge <survivor-id> <absorbed-id>` is the classic two-arg,
+    LIFO-ENFORCED form: it targets ONLY the most-recent unreversed
+    `merged_from` entry (the LIFO tail). `absorbed_id` MUST equal that tail
+    entry's `absorbed_id`, else this refuses with a clean error and no
+    write -- reversing a non-tail entry IN PLACE is unsafe, since a later
+    merge's snapshots/rewrites may nest on top of an earlier one's (spec
+    scenario: Absorbed-id is not the LIFO tail). That refusal is no longer
+    a dead end: when the requested id IS buried deeper in the ledger, the
+    error lists the full LIFO unwind sequence (tail down to and including
+    the request, in execution order) and names `--to` as the one-command
+    alternative (`bundle.merge.plan_unmerge`, issue #562).
 
-    Phase A (pure, no writes) mirrors `merge`'s gate shape: the current
-    directory must already be a workspace (the same `config.require_workspace`
-    gate every other verb shares), or this refuses; `survivor_id` is
-    resolved via `_resolve_concept_path` (rejecting an absolute id, any
-    `..` segment, a reserved basename, or a nonexistent concept file);
-    `absorbed_id` is canonicalized via `_canonicalize_concept_id` ONLY --
-    the SAME path-safety checks minus the existence check, since the
-    absorbed file is EXPECTED to be absent (removed by the merge being
-    reversed) until Phase B recreates it. `bundle.merge.plan_unmerge` (U2)
-    then reads the survivor's `merged_from` ledger and computes the entire
-    restoration in memory: the restored survivor (`survivor_before`,
-    stripping this entry while retaining any earlier ones), the restored
-    absorbed document (`absorbed_snapshot`), and the restored `index.md`/
-    `log.md` (`index_before`/`log_before`). If a file already exists at the
+    `unmerge <survivor-id> --to <absorbed-id>` unwinds the survivor's
+    ledger tail-first, one FULL single-step unmerge per entry, down to AND
+    INCLUDING the entry whose `absorbed_id` matches `--to`
+    (`bundle.merge.plan_unwind_sequence`). The whole plan -- one block per
+    step in execution order, each listing every file that step touches,
+    derived from the ledger entries alone -- is previewed BEFORE one
+    single confirm gate with the same precedence as the two-arg form:
+    `--auto` skips the prompt; otherwise config `review: false` skips it;
+    otherwise a TTY prompts ONCE for the whole plan via `typer.confirm`
+    and aborts (exit 1) on decline; otherwise (non-TTY, no `--auto`) this
+    refuses to write. Execution is a sequential loop over
+    `_execute_single_unmerge`: each step re-runs the COMPLETE single-step
+    machinery -- Phase A recomputed from CURRENT disk state, every
+    fail-closed drift/collision check included, then Phase B's writes in
+    their documented order, the per-step `**Unmerge**` audit line and the
+    sidecar tail pop included -- with `confirmed=True`, so no per-step
+    prompt fires. Deliberately NOT a whole-chain in-memory composition:
+    every intermediate state after a completed step is a consistent
+    bundle, so `plan_unmerge`'s LIFO-tail safety argument holds unchanged
+    at each step. If step N fails (Phase A or Phase B), the chain stops
+    immediately (exit 1), reporting which step failed and that steps
+    1..N-1 completed and left a consistent, git-recoverable bundle --
+    completed steps are NOT rolled back. `--to` naming the tail itself
+    degenerates to exactly the classic two-arg behavior; `--to` an id
+    present nowhere in the ledger, or a survivor with no ledger at all,
+    refuses cleanly with no write.
+
+    A `survivor_id` whose concept file does not exist gets a
+    reverse-provenance lookup across every ledger sidecar
+    (`bundle.ledger.find_absorber`, issue #562): if some other survivor's
+    ledger records absorbing it, the "does not exist" refusal names that
+    absorber and the exact `openkos unmerge <absorber> <survivor>` command
+    to run first -- a chained merge leaves the absorbed ex-survivor's OWN
+    sidecar intact on disk, so the nested chain is recoverable and the
+    error now says how. Path-safety rejections (an absolute id, a `..`
+    segment, a reserved basename) are unchanged and never trigger the
+    lookup.
+
+    The single-step machinery itself -- Phase A's gates and fail-closed
+    checks, the preview, the confirm gate, the post-confirm drift guard,
+    and Phase B's write order -- is documented on
+    `_execute_single_unmerge`, which both forms share.
+    """
+    root = Path.cwd()
+    layout = config.WorkspaceLayout(root)
+
+    target_input = absorbed_id if absorbed_id is not None else to
+    if target_input is None:
+        typer.echo(
+            "openkos unmerge: refusing to unmerge -- supply an <absorbed-id> "
+            "argument, or --to <absorbed-id> to unwind a chain.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if absorbed_id is not None and to is not None:
+        typer.echo(
+            "openkos unmerge: refusing to unmerge -- supply either an "
+            "<absorbed-id> argument or --to <absorbed-id>, not both.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        workspace_reason = config.require_workspace(root)
+        if workspace_reason is not None:
+            typer.echo(
+                f"openkos unmerge: refusing to unmerge -- {workspace_reason}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        # `_resolve_concept_path`, split open (issue #562): the path-safety
+        # canonicalization still runs FIRST and unchanged, but existence is
+        # decided here so the "does not exist" refusal -- and ONLY that
+        # refusal, never a path-safety rejection -- can be extended with
+        # `find_absorber`'s reverse lookup across the ledger sidecars.
+        survivor_canonical = _canonicalize_concept_id(survivor_id)
+        survivor_path = okf.concept_path_for(survivor_canonical, layout.bundle_dir)
+        if not survivor_path.is_file():
+            message = f"concept '{survivor_id}' does not exist"
+            absorber = bundle_ledger.find_absorber(
+                survivor_canonical, layout.bundle_dir
+            )
+            if absorber is not None:
+                message += (
+                    f". It was absorbed into '{absorber}'; run "
+                    f"`openkos unmerge {absorber} {survivor_canonical}` first "
+                    "to restore it"
+                )
+            raise ValueError(message)
+        target_canonical = _canonicalize_concept_id(target_input)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos unmerge: refusing to unmerge -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "unmerge")
+
+    now = datetime.now(UTC)
+
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    if to is None:
+        # Classic two-arg path: one single-step unmerge, its own preview
+        # and confirm gate included -- byte-identical behavior to the
+        # pre-#562 command.
+        _execute_single_unmerge(
+            root,
+            layout,
+            survivor_path,
+            survivor_canonical,
+            target_canonical,
+            now=now,
+            cfg=cfg,
+            auto=auto,
+            confirmed=False,
+        )
+        return
+
+    try:
+        entries = bundle_ledger.read_entries(survivor_canonical, layout.bundle_dir)
+        sequence = bundle_merge.plan_unwind_sequence(
+            survivor_id=survivor_canonical,
+            to_absorbed_id=target_canonical,
+            entries=entries,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos unmerge: failed while preparing the unmerge -- {exc}.", err=True
+        )
+        raise typer.Exit(code=1) from exc
+
+    total = len(sequence)
+    typer.echo(
+        f"openkos unmerge: unwind plan for '{survivor_canonical}' -- "
+        f"{total} step{'s' if total != 1 else ''}, newest merge first:"
+    )
+    for step_number, entry in enumerate(sequence, start=1):
+        typer.echo(f"step {step_number}: restore '{entry.absorbed_id}'")
+        for line in _unwind_step_preview_lines(entry, survivor_canonical):
+            typer.echo(line)
+
+    if not auto and cfg.review:
+        if sys.stdin.isatty():
+            typer.confirm("Proceed with these changes?", abort=True)
+        else:
+            typer.echo(
+                "openkos unmerge: refusing to write without confirmation -- "
+                "stdin is not a TTY; re-run with --auto.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    for step_number, entry in enumerate(sequence, start=1):
+        typer.echo(
+            f"openkos unmerge: step {step_number} of {total} -- restoring "
+            f"'{entry.absorbed_id}'"
+        )
+        try:
+            _execute_single_unmerge(
+                root,
+                layout,
+                survivor_path,
+                survivor_canonical,
+                entry.absorbed_id,
+                now=now,
+                cfg=cfg,
+                auto=auto,
+                confirmed=True,
+            )
+        except (typer.Exit, typer.Abort) as exc:
+            # The step already reported its own failure on stderr (the
+            # single-step machinery never lets a raw traceback out); this
+            # adds the chain-level accounting the operator needs next.
+            completed = step_number - 1
+            if completed:
+                progress = (
+                    f"steps 1..{completed} completed and left a consistent "
+                    "bundle (git-recoverable); completed steps are not "
+                    "rolled back"
+                )
+            else:
+                progress = "no earlier steps had completed"
+            typer.echo(
+                f"openkos unmerge: --to unwind stopped at step {step_number} "
+                f"of {total} (restore '{entry.absorbed_id}') -- {progress}.",
+                err=True,
+            )
+            # The step's own exit code survives the chain wrapper: exit 3
+            # (the post-confirm drift refusal) is the ONE documented exit
+            # a script may safely retry, and collapsing it to 1 here would
+            # silently revoke that contract mid-chain (review finding,
+            # issue #562). `typer.Abort` has no code and stays the
+            # conventional 1.
+            exit_code = exc.exit_code if isinstance(exc, typer.Exit) else 1
+            raise typer.Exit(code=exit_code) from exc
+
+
+def _unwind_step_preview_lines(
+    entry: okf.MergeLedgerEntry, survivor_canonical: str
+) -> list[str]:
+    """One `--to` plan step's preview block body (issue #562): every file
+    that step will touch, derived from the ledger entry ALONE (no disk
+    reads) -- the same three-way partition `_execute_single_unmerge`'s own
+    pre-gate preview uses (provenance > relations > links, design D5
+    generalized) and the same `  ~ `/`  + ` line style, so the whole-plan
+    preview and the per-step execution preview name the same files the
+    same way. The DEFINITIVE per-step preview is still re-printed by each
+    step's own Phase A recompute at execution time."""
+    provenance_files = sorted({rewrite.file for rewrite in entry.provenance_rewrites})
+    relation_files = sorted(
+        {rewrite.file for rewrite in entry.relation_rewrites} - set(provenance_files)
+    )
+    link_files = sorted(
+        {rewrite.file for rewrite in entry.link_rewrites}
+        - set(provenance_files)
+        - set(relation_files)
+    )
+    return [
+        *(f"  ~ bundle/{rel} (reverse inbound link rewrite)" for rel in link_files),
+        *(
+            f"  ~ bundle/{rel} (restore pre-merge relations snapshot)"
+            for rel in relation_files
+        ),
+        *(
+            f"  ~ bundle/{rel} (restore pre-merge provenance snapshot)"
+            for rel in provenance_files
+        ),
+        "  ~ index.md (restore pre-merge contents)",
+        "  ~ log.md (restore pre-merge contents, append unmerge entry)",
+        f"  ~ bundle/{survivor_canonical}.md (restore pre-merge contents)",
+        f"  + bundle/{entry.absorbed_id}.md (restore)",
+    ]
+
+
+def _execute_single_unmerge(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    survivor_path: Path,
+    survivor_canonical: str,
+    absorbed_canonical: str,
+    *,
+    now: datetime,
+    cfg: config.Config,
+    auto: bool,
+    confirmed: bool,
+) -> None:
+    """ONE complete single-step unmerge -- the full Phase A / preview /
+    confirm-gate / drift-guard / Phase B machinery both `unmerge` forms
+    share (issue #562). The classic two-arg path calls this once with
+    `confirmed=False`; the `--to` unwind loop calls it once per ledger
+    entry with `confirmed=True`, because the WHOLE plan was already
+    confirmed at its single gate -- `confirmed` short-circuits the prompt
+    exactly like `--auto` does, and everything AFTER the gate (the
+    post-confirm drift guard included) runs identically on every path.
+    Any failure is reported on stderr and raised as `typer.Exit`, never a
+    raw traceback; the caller owns any chain-level accounting on top.
+
+    Phase A (pure, no writes) mirrors `merge`'s gate shape: the caller has
+    already resolved `survivor_path`/`survivor_canonical` via the
+    path-safety gates (`_canonicalize_concept_id` plus the existence
+    check) and canonicalized `absorbed_canonical` via
+    `_canonicalize_concept_id` ONLY -- the SAME path-safety checks minus
+    the existence check, since the absorbed file is EXPECTED to be absent
+    (removed by the merge being reversed) until Phase B recreates it.
+    `bundle.merge.plan_unmerge` (U2) then reads the survivor's
+    `merged_from` ledger and computes the entire restoration in memory:
+    the restored survivor (`survivor_before`, stripping this entry while
+    retaining any earlier ones), the restored absorbed document
+    (`absorbed_snapshot`), and the restored `index.md`/`log.md`
+    (`index_before`/`log_before`). If a file already exists at the
     absorbed concept's path (drift since the merge), this refuses before
     any write (threat matrix: Unmerge restore collision). Every recorded
     inbound-link rewrite is then read from disk and reversed in memory via
@@ -8361,27 +8639,29 @@ def unmerge(
     each restored relation snapshot, the catalog/log restoration, the
     restored survivor, and the recreated absorbed file.
 
-    Confirm gate, identical precedence and mechanism to `merge`/`forget`:
-    `--auto` skips the prompt outright; otherwise config `review: false`
-    skips it the same way; otherwise, on a TTY, `typer.confirm` asks and
-    aborts (exit 1) on decline; otherwise (non-TTY, no `--auto`) this
-    refuses to write (exit 1), telling the user to re-run with `--auto`.
-    Declining or refusing leaves the bundle completely untouched -- Phase A
-    never writes anything.
+    Confirm gate, identical precedence and mechanism to `merge`/`forget`
+    (plus the `confirmed` short-circuit above): `--auto` skips the prompt
+    outright; otherwise config `review: false` skips it the same way;
+    otherwise, on a TTY, `typer.confirm` asks and aborts (exit 1) on
+    decline; otherwise (non-TTY, no `--auto`) this refuses to write (exit
+    1), telling the user to re-run with `--auto`. Declining or refusing
+    leaves the bundle completely untouched -- Phase A never writes
+    anything.
 
-    Past that gate -- and on the runs that skip it, since `--auto` and
-    `review: false` skip the prompt but not the window it stood in --
-    `_reject_drifted_targets` re-reads `index.md`, `log.md`, the survivor
-    and every rewritten third-party file, and refuses the WHOLE run (exit 3,
-    nothing written) if any changed or vanished since Phase A read it
-    (issues #306, #313, #319). The refusal carries a CUSTOM remedy (#328)
-    because `unmerge` is the one guarded verb whose re-run is not a safe
-    recovery: nothing is recomputed from the current state, so a re-run
-    restores the pre-merge snapshots over `index.md`/`log.md`/the survivor
-    -- overwriting the protected edit -- and keeps refusing on an edited
-    rewrite file until the edit is reverted. The message therefore tells
-    the operator to copy the edit somewhere safe first, and never advises
-    the plain re-run that would discard it.
+    Past that gate -- and on the runs that skip it, since `--auto`,
+    `review: false`, and `confirmed` skip the prompt but not the window it
+    stood in -- `_reject_drifted_targets` re-reads `index.md`, `log.md`,
+    the survivor and every rewritten third-party file, and refuses the
+    WHOLE run (exit 3, nothing written) if any changed or vanished since
+    Phase A read it (issues #306, #313, #319). The refusal carries a
+    CUSTOM remedy (#328) because `unmerge` is the one guarded verb whose
+    re-run is not a safe recovery: nothing is recomputed from the current
+    state, so a re-run restores the pre-merge snapshots over
+    `index.md`/`log.md`/the survivor -- overwriting the protected edit --
+    and keeps refusing on an edited rewrite file until the edit is
+    reverted. The message therefore tells the operator to copy the edit
+    somewhere safe first, and never advises the plain re-run that would
+    discard it.
 
     What that adds differs per target, and only one group was already
     protected. The link/relation/provenance rewrite files DO have a
@@ -8431,36 +8711,16 @@ def unmerge(
     `forget`, or an unrelated `merge`) touched the catalog/log after this
     merge, that content is discarded when `unmerge` runs -- Phase A detects
     this drift and prints a warning in the preview before the confirm gate,
-    but does not refuse; round-trip parity assumes a prompt unmerge.
+    but does not refuse; round-trip parity assumes a prompt unmerge. In a
+    `--to` unwind, later steps legitimately trip this same notice: each
+    completed step's own `**Unmerge**` audit line IS a post-merge log
+    change from the next step's point of view, so the warning is expected
+    chain-noise there, not a defect.
     """
-    root = Path.cwd()
-    layout = config.WorkspaceLayout(root)
     index_path = layout.bundle_dir / "index.md"
     log_path = layout.bundle_dir / "log.md"
 
     try:
-        workspace_reason = config.require_workspace(root)
-        if workspace_reason is not None:
-            typer.echo(
-                f"openkos unmerge: refusing to unmerge -- {workspace_reason}.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        survivor_path, survivor_canonical = _resolve_concept_path(
-            layout.bundle_dir, survivor_id
-        )
-        absorbed_canonical = _canonicalize_concept_id(absorbed_id)
-    except (OSError, ValueError) as exc:
-        typer.echo(f"openkos unmerge: refusing to unmerge -- {exc}.", err=True)
-        raise typer.Exit(code=1) from exc
-
-    _reject_torn_ledger_write(layout.bundle_dir, survivor_canonical, "unmerge")
-
-    now = datetime.now(UTC)
-
-    try:
-        cfg = config.read_config(root)
         # One `_snapshot_read` observation (issues #306, #313, #318): the
         # raw bytes are the drift guard's baseline for the survivor.
         # Durable-derived-state slice 1a: `plan_unmerge` no longer needs the
@@ -8608,7 +8868,7 @@ def unmerge(
             "restores the pre-merge snapshot and will discard those changes."
         )
 
-    if not auto and cfg.review:
+    if not confirmed and not auto and cfg.review:
         if sys.stdin.isatty():
             typer.confirm("Proceed with these changes?", abort=True)
         else:
