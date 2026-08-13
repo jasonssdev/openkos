@@ -32,9 +32,17 @@ ollama pull bge-m3     # embedding model — semantic search (~1.2 GB)
 
 ```bash
 uv tool install openkos   # or: pipx install openkos — or: pip install openkos
+openkos --version         # check what you actually got
 ```
 
-To track the latest unreleased `main` instead: `uv tool install git+https://github.com/jasonssdev/openkos`.
+**Check that version.** If it does not match the badge at the top of this page, your package index is serving an older release. Install from the repository instead — same engine, current code:
+
+```bash
+uv tool install --force git+https://github.com/jasonssdev/openkos
+openkos --version
+```
+
+That command is also how you track unreleased `main` at any time.
 
 **4 · Check the setup before anything can fail:**
 
@@ -42,7 +50,7 @@ To track the latest unreleased `main` instead: `uv tool install git+https://gith
 openkos doctor
 ```
 
-Every line should read `[PASS]` except *Workspace initialized* — you haven't created one yet. `doctor` is also the first thing to run whenever something misbehaves later.
+Every check should pass except *Workspace initialized* — you haven't created one yet. Anything that fails prints the command that fixes it. `doctor` is also the first thing to run whenever something misbehaves later.
 
 **5 · Create a knowledge base and run the loop:**
 

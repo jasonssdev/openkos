@@ -7,13 +7,19 @@
 # End-to-End Testing Guide
 
 This is a hands-on walkthrough for testing OpenKOS the way a real user would:
-from an empty machine to a curated knowledge base, exercising the core command
-surface (the coverage checklist at the end lists exactly what is walked; the
-newer verbs `list`, `next`, `curate`, `set-sensitivity`, `backfill-sensitivity`,
-and `backfill-source-titles` are not yet scripted here — see
-[`cli.md`](cli.md) for their reference behavior).
-It complements [`user-journey.md`](user-journey.md) — that document explains the
-*philosophy*; this one is the *procedure*.
+from an empty machine to a curated knowledge base. It walks the core loop in
+order; `openkos --help` is the authority on the full command surface, and
+[`cli.md`](cli.md) is the per-verb reference. It complements
+[`user-journey.md`](user-journey.md) — that document explains the *philosophy*;
+this one is the *procedure*.
+
+> **Bring your own content.** Test against text you actually know — your own
+> notes, meeting transcripts, course material. You cannot judge whether an
+> extracted object is right, or whether an answer is grounded, on a corpus you
+> have not read. Two contrasting shapes are worth having: **structured
+> documents** with clear titles and headings, and **unstructured transcripts**
+> of people talking. They exercise the extractor very differently, and the
+> difference between them is itself informative.
 
 Use it to validate a release candidate, to reproduce a bug, or to onboard
 yourself to the full surface of the tool.
@@ -152,6 +158,21 @@ Follow **only** the subsection matching your §0.1 decision.
 
 ```bash
 uv tool install openkos     # or: pipx install openkos / pip install openkos
+openkos --version           # STOP and read this
+```
+
+**Verify the version before going any further.** A package index can serve an
+older release than the one you meant to test, and nothing downstream will tell
+you: every command will run, and you will spend the session filing findings
+against code that was superseded weeks ago. Compare `openkos --version` against
+the version you intended to test.
+
+If it does not match, install from the repository instead — same engine,
+current code:
+
+```bash
+uv tool install --force git+https://github.com/jasonssdev/openkos
+openkos --version
 ```
 
 For a throwaway run of a specific release without installing anything
@@ -183,13 +204,17 @@ clean, separate workspace directory (Phase 2).
 
 ### 0.6 Warm the model
 
-The first LLM call after idle pays a cold-start cost (loading ~10 GB into memory)
-that can exceed the request timeout and surface as `Ollama … timed out`. Warm it
-before a batch of ingests:
+The first LLM call after idle pays a cold-start cost (loading several GB into
+memory) that can exceed the request timeout. It surfaces either as
+`Ollama … timed out` or, more quietly, as a degraded first result — so warm the
+model before every batch, not just the first:
 
 ```bash
 ollama run qwen3:8b "ok" >/dev/null    # or any command that hits the model
 ```
+
+Do this even if you intend to test the cold path, so that when you *do* see a
+first-file anomaly you know it was not self-inflicted.
 
 ---
 
@@ -203,28 +228,23 @@ openkos doctor ; echo "exit: $?"
 ```
 
 Expect an `openkos <version>` banner, then the `openkos doctor: checking
-environment at <path>` header, a blank line, and then eleven
-`[PASS]`/`[FAIL]`/`[SKIP]` lines — the banner and the header are not checks.
-The eleven checks and their criticality (exit code is `1` only if a **critical**
-check fails; a `[SKIP]` never causes exit 1):
+environment at <path>` header, a blank line, and then one
+`[PASS]`/`[FAIL]`/`[SKIP]` line per check — the banner and the header are not
+checks. **`doctor` itself is the authority on which checks exist**; the set
+grows as the engine does, so this guide deliberately does not list them.
 
-| # | Check | Critical |
-|---|---|---|
-| 1 | Workspace initialized | no |
-| 2 | Config valid | **yes** |
-| 3 | Ollama reachable | **yes** |
-| 4 | Chat model installed | **yes** |
-| 5 | Embedding model installed | no |
-| 6 | Bundle readable | no |
-| 7 | Workspace vector index present | no |
-| 8 | Vector extension loadable | no |
-| 9 | `git` available | no |
-| 10 | `git-filter-repo` available | no |
-| 11 | Backend host locality | no |
+What to verify instead:
+
+- Outside a workspace, *Workspace initialized* is the only check expected to
+  fail or skip.
+- Every failing line prints a remediation — the command that fixes it. A `[FAIL]`
+  with no actionable next step is a finding.
+- The exit code is `1` only if a **critical** check fails; a `[SKIP]` never
+  causes exit 1.
 
 **Adversarial sub-test.** Stop Ollama (`Ctrl-C` in its terminal), re-run
-`openkos doctor`, confirm check 3 fails with an actionable remediation line and
-the exit code is 1. Then restart Ollama.
+`openkos doctor`, confirm the reachability check fails with an actionable
+remediation line and the exit code is 1. Then restart Ollama.
 
 ---
 
@@ -321,7 +341,12 @@ writing anything.
   or a quoted glob (recursion via `**`), driving every matched file through the
   same per-file pipeline with one up-front cost gate — see `cli.md` for the
   batch exit ladder (all-drift → 3, any hard skip → 1).
-- **Max 5 derived objects per source.**
+- **The number of derived objects per source is not fixed.** A short, tightly
+  scoped document may yield one; a long transcript may yield a dozen or more.
+  There is a backstop against pathological replies, and the run announces it
+  when it binds (`N of M extracted object(s) kept (cap reached)`). Judge the
+  count against the document, not against a target — and treat a long,
+  content-rich source that yields a single object as a finding worth recording.
 - **`raw/` is immutable.** A byte-identical re-ingest is idempotent and **re-runs
   extraction** (useful to recover from a transient LLM failure). A *different*
   file under the same basename is refused.
@@ -398,30 +423,42 @@ git log --oneline        # one auto-commit per successful ingest
 ### 3.4 Adversarial ingest sub-tests
 
 ```bash
-openkos ingest /path/to/a/directory/     # expect refusal
+openkos ingest /path/to/an/empty/dir/    # expect refusal — nothing matched
 openkos ingest /nonexistent.md           # expect refusal
 openkos ingest /path/to/some.pdf         # expect exit 0, copied, no extraction
 openkos ingest /path/to/first.md         # identical re-ingest: idempotent, re-runs extraction
 ```
 
+A directory with readable text files is **not** a refusal — it is the batch
+path (§3.1). Point `ingest` at a folder that also contains non-prose files
+(`.DS_Store`, `__init__.py`, a lockfile) and check what the cost gate counts:
+what it announces is what it is about to compile into your bundle.
+
 ---
 
 ## Phase 4 — Build the derived stores, then query
 
-`reindex` is the **sole writer** of the three derived stores, and `query` never
-builds them or checks whether they are stale.
+`ingest` maintains the retrieval indexes for what it just wrote, so a query
+right after an ingest is not degraded. Every **other** mutating verb leaves at
+least one derived store behind, and `reindex` is what catches them up.
 
 ```bash
 openkos reindex ; echo "exit: $?"
-ls -la .openkos/          # vectors.db, fts.db, graph.db now exist
+ls -la .openkos/          # vectors.db, fts.db, graph.db
 ```
 
-> **The rule for the rest of the run: re-run `reindex` after every write.**
-> `ingest` refreshes only the dense vector store for what it just wrote (so
-> `suggest-relations` works in the same run); merge, forget, relate, reconcile
-> update no index at all, and nothing but `reindex` ever rebuilds the FTS and
-> graph stores. Edits stay invisible to `query`'s lexical and graph channels
-> until the next `reindex`.
+> **The rule for the rest of the run: watch for the staleness signal, and
+> reindex when you see it.** After a write that invalidates an index,
+> `openkos status` lists it under *Needs attention*, `openkos next` recommends
+> `reindex`, and `query` prints a `warning: derived indexes are stale (...)`
+> line before answering. Those three are the behaviour under test — if you
+> write, then query, and get **no** warning while an index is genuinely stale,
+> that is a finding. So is the reverse: being told to reindex when nothing
+> changed.
+>
+> Note the asymmetry while testing: the graph projection is rebuilt only by
+> `reindex`, so relation-dependent behaviour (`contradictions` candidate
+> seeding, in particular) is only as current as your last one.
 
 ```bash
 openkos query "a question your corpus can answer"
@@ -440,15 +477,30 @@ openkos reindex
 openkos query "the same question"                       # all three channels now see it
 ```
 
-**`query --save`** is the only writing form of query. Since #331 it
-auto-commits its three writes (answer document, `index.md`, `log.md`) like
-every other mutating verb, so no manual commit step remains:
+**`query --save`** is the only writing form of query. It auto-commits its three
+writes (answer document, `index.md`, `log.md`) like every other mutating verb,
+so no manual commit step remains:
 
 ```bash
-openkos query "a synthesis question" --save --title "My Synthesis" --type Concept
+openkos query "a synthesis question" --save
 git status                                    # expect clean — auto-committed
+head -15 bundle/insights/*.md                 # inspect what was filed
 openkos reindex
 ```
+
+A filed answer is **not** an extracted concept and is stored apart from one.
+Three things to verify, because each is a distinct guarantee:
+
+1. It records **provenance** to the objects it was built from — that is what
+   lets it be flagged when they change.
+2. It **inherits sensitivity** from what it cites. Ask a question whose answer
+   must cite a confidential concept and confirm the filed document comes out
+   confidential too. A synthesis that is less sensitive than its inputs is a
+   serious finding.
+3. Later queries can **cite it back**, marked as a synthesis. Save two related
+   answers and check whether the second cites the first — a knowledge base that
+   compounds on its own output rather than on your sources is a direction worth
+   catching early.
 
 ---
 
@@ -527,10 +579,17 @@ git diff "$BEFORE" HEAD              # expect EMPTY — byte-parity restored
 git log --oneline "$BEFORE"..HEAD    # expect two commits: the merge and the unmerge
 ```
 
-Constraints: `unmerge` is **LIFO-only** (reverses only the most recent merge on
-that survivor) and restores `index.md`/`log.md` from a pre-merge snapshot,
+Constraints: `unmerge` reverses merges **in reverse order** — reversing an
+earlier merge means unwinding the ones that followed it, and the refusal names
+the sequence required. `--to <id>` unwinds the chain in one step after showing
+the plan. It restores `index.md`/`log.md` from a pre-merge snapshot,
 **discarding any intervening writes** — do not run other writes between a merge
 and its unmerge during this test.
+
+Worth measuring while you are here: compare the survivor's size before and
+after a merge (`wc -l`). Absorbing one document should cost roughly the size of
+that document. A survivor that grows by orders of magnitude is a serious
+finding.
 
 `adjudicate` can drive this same merge path in bulk. If your corpus still has
 SAME pairs, test both modes:
@@ -638,54 +697,56 @@ grep -r "<distinctive string from that file>" .    # expect nothing
 
 ## Coverage checklist
 
-Twenty rows for the 19 commands this walkthrough exercises — `query` appears
-twice, once for its read-only default and once for its writing `--save` form.
-Six shipped verbs are not yet scripted here and have no row: `list`, `next`,
-`curate`, `set-sensitivity`, `backfill-sensitivity`, and
-`backfill-source-titles` (see [`cli.md`](cli.md)).
+**`openkos --help` is the authority on what exists**, grouped by what each group
+is for. Print it and tick off the list it gives you rather than one copied here,
+which would fall behind the engine:
 
-| # | Command | Writes? | LLM | ✓ |
-|---|---|---|---|---|
-| 1 | `doctor` | no | probes | ☐ |
-| 2 | `init` | yes | optional | ☐ |
-| 3 | `ingest` | yes | yes (degrades) | ☐ |
-| 4 | `status` | no | no | ☐ |
-| 5 | `lint` | no | no | ☐ |
-| 6 | `duplicates` | no | no | ☐ |
-| 7 | `reindex` | yes (derived) | embeddings | ☐ |
-| 8 | `query` | no | both models | ☐ |
-| 9 | `query --save` | yes | yes | ☐ |
-| 10 | `adjudicate` | only with `--apply`/`--apply-same` | yes | ☐ |
-| 11 | `suggest-relations` | no | yes | ☐ |
-| 12 | `suggest-volatility` | no | yes | ☐ |
-| 13 | `set-volatility` | yes (config) | no | ☐ |
-| 14 | `contradictions` | no | yes | ☐ |
-| 15 | `relate` | yes | no | ☐ |
-| 16 | `merge` | yes | no | ☐ |
-| 17 | `unmerge` | yes | no | ☐ |
-| 18 | `reconcile` | yes | no | ☐ |
-| 19 | `forget` | yes | no | ☐ |
-| 20 | `purge` | yes | no | ☐ |
+```bash
+openkos --help
+```
+
+The phases above walk the core loop end to end. Verbs the walkthrough does not
+script are still worth a pass of their own — read their `--help`, run them, and
+judge whether the output tells you what to do next. That judgement is the point
+of this document; a command that runs correctly and leaves you unsure what it
+meant is a finding.
+
+One shortcut worth knowing: **`openkos curate` exercises most of the curation
+surface in one dependency-ordered session** — identity, structure, metadata and
+contradictions, each with its own cost gate you can decline independently.
+Running it once tells you more about the product's real ergonomics than
+invoking the underlying verbs separately, because it is the path a user
+actually takes.
 
 ---
 
 ## Known issues — expect these, don't re-file them
 
-When prior end-to-end testing has left issues open, they are listed here so you
-add evidence to the existing issue rather than opening a new one.
+**Check the open issues before filing.** Listing them here would rot within a
+week, so the authority is the tracker itself:
 
-**There are no open known issues right now.** Anything you hit in this round is
-new: open an issue for it.
+```bash
+gh issue list --repo jasonssdev/openkos --label P0 --label P1
+gh issue list --repo jasonssdev/openkos --search "<a phrase from what you hit>"
+```
 
-**Everything the previous rounds found is now fixed** — the `init` model prompt
-(#128), same-slug source collisions (#131), `status` per-type counts (#133),
-`suggest-relations` vocabulary noise and per-edge latency (#134) and its
-provenance duplication (#135), missing `ingest` extraction feedback (#136),
-`adjudicate` part-whole verdicts (#138), `purge --force` dangling references
-(#141), `purge` deleting `vectors.db` (#142), `init` not setting up git
-(#143), and the missing `--version` flag (#181). If any of them reappears,
-that is a **regression** and deserves a new
-issue, not a comment on the closed one.
+If what you hit is already there, add your evidence to that issue — a second
+independent reproduction, on different content, is more valuable than a
+duplicate report. If it is not there, open one.
+
+Two things worth knowing before you start, because both look like bugs and are
+not:
+
+- **Some proposals are deliberately marked uncertain.** Relation directions in
+  particular are presented as `(direction model-suggested, unverified)`. That
+  wording is the engine telling you it cannot vouch for the direction, not a
+  defect. Rejecting those proposals is the intended use.
+- **Merged documents are appended, not rewritten.** The plan says so before you
+  confirm (`bodies were appended, not reconciled`, with a percentage). The
+  stapled result is a known limitation, disclosed on purpose.
+
+A finding that reappears after being closed is a **regression** and deserves a
+new issue, not a comment on the closed one.
 
 ---
 
