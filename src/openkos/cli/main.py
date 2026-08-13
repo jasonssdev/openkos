@@ -4842,20 +4842,42 @@ def forget(
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
     for member in purge_ids:
         typer.echo(f"  - bundle/{member}.md")
+    # #567: aggregate per (member, referrer, kind, relation type) -- a
+    # referrer linking the target 24 times is ONE line with a count, not 24
+    # identical lines. Insertion order preserves the first-seen order the
+    # per-reference loop printed in, and a count of 1 keeps the exact
+    # singular wording this preview always had.
+    aggregated_refs: dict[tuple[str, str, str, str | None], int] = {}
     for member, ref in all_refs:
-        if ref.kind == "link":
-            line = f"  ! bundle/{ref.referrer_id}.md (inbound link)"
-        elif ref.kind == "relation":
-            line = (
-                f"  ! bundle/{ref.referrer_id}.md "
-                f"(inbound relation: {ref.relation_type})"
+        key = (
+            member,
+            ref.referrer_id,
+            ref.kind,
+            ref.relation_type if ref.kind == "relation" else None,
+        )
+        aggregated_refs[key] = aggregated_refs.get(key, 0) + 1
+    for (member, referrer_id, kind, relation_type), count in aggregated_refs.items():
+        if kind == "link":
+            detail = "inbound link" if count == 1 else f"{count} inbound links"
+            line = f"  ! bundle/{referrer_id}.md ({detail})"
+        elif kind == "relation":
+            detail = (
+                f"inbound relation: {relation_type}"
+                if count == 1
+                else f"{count} inbound relations: {relation_type}"
             )
+            line = f"  ! bundle/{referrer_id}.md ({detail})"
         else:
-            line = (
-                f"  ? bundle/{ref.referrer_id}.md "
-                f"(unverifiable: could not parse; may reference {member})"
+            detail = (
+                "unverifiable"
+                if count == 1
+                else f"{count} unverifiable references"
             )
-        if scope == "source" and ref.kind != "unverifiable":
+            line = (
+                f"  ? bundle/{referrer_id}.md "
+                f"({detail}: could not parse; may reference {member})"
+            )
+        if scope == "source" and kind != "unverifiable":
             line += f" -> {member}"
         typer.echo(line)
     for member, target in resurrection_pairs:

@@ -2054,3 +2054,76 @@ def test_forget_drops_a_third_party_provenance_snapshot_of_the_member(
     metadata, _ = okf.load_frontmatter(sidecar_text)
     remaining = okf.decode_merged_from(metadata)
     assert [entry.absorbed_id for entry in remaining] == ["concepts/absorbed"]
+
+
+# -- #567: aggregated inbound-reference preview ------------------------------
+
+
+def test_preview_aggregates_repeated_inbound_links_per_referrer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A referrer linking the target N times renders ONE preview line with
+    the count, not N identical lines (#567: 66 lines where 9 would do)."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(
+        tmp_path,
+        "concepts/referrer",
+        body=(
+            f"See [Target](/{target_id}.md) and again [here](/{target_id}.md) "
+            f"and once more [there](/{target_id}.md).\n"
+        ),
+    )
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert (
+        result.output.count("  ! bundle/concepts/referrer.md (3 inbound links)") == 1
+    )
+    assert "(inbound link)" not in result.output
+    assert "3 inbound reference(s)" in result.stderr
+
+
+def test_preview_keeps_the_singular_line_for_a_single_inbound_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single inbound link keeps today's singular wording -- aggregation
+    only changes the repeated case (#567)."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(
+        tmp_path, "concepts/referrer", body=f"See [Target](/{target_id}.md).\n"
+    )
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert "  ! bundle/concepts/referrer.md (inbound link)" in result.output
+
+
+def test_preview_aggregates_repeated_inbound_relations_by_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated inbound relations aggregate per (referrer, type): distinct
+    types stay distinct lines, a repeated type carries a count (#567)."""
+    _init_workspace(tmp_path, monkeypatch)
+    target_id = _ingest_source(tmp_path)
+    _write_plain_concept(tmp_path, "concepts/referrer")
+    for rel in ("depends_on", "references"):
+        relate_result = runner.invoke(
+            app, ["relate", "concepts/referrer", rel, target_id, "--auto"]
+        )
+        assert relate_result.exit_code == 0
+
+    result = runner.invoke(app, ["forget", target_id, "--auto"])
+
+    assert result.exit_code == 1
+    assert (
+        "  ! bundle/concepts/referrer.md (inbound relation: depends_on)"
+        in result.output
+    )
+    assert (
+        "  ! bundle/concepts/referrer.md (inbound relation: references)"
+        in result.output
+    )
