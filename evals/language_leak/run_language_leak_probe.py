@@ -43,6 +43,7 @@ Never compare arms measured on different fixture text.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import pathlib
 import re
@@ -244,6 +245,53 @@ def classify_title(title: str) -> str:
     return "neutral"
 
 
+_ADJACENCY_WORD_RE = re.compile(r"[a-z0-9áéíóúüñ]+")
+"""Word runs for the bigram-adjacency check (#622): casefolded letters,
+digits included (`Phase Two`, `fase dos`), punctuation dissolved to
+spaces. Deliberately the same alphabet family as the gate's
+`_LANGUAGE_TOKEN_RE` plus digits."""
+
+
+def _adjacency_normalize(value: str) -> str:
+    return " ".join(_ADJACENCY_WORD_RE.findall(value.casefold()))
+
+
+def bigram_adjacent(title: str, source_text: str) -> bool:
+    """#622's candidate mechanism: whether every consecutive word pair of
+    `title` appears adjacent (in order) somewhere in the prose. A title
+    assembled from non-adjacent quoted fragments (`knowledge recovery` +
+    `project` + `phase two`) is a recombination, not a quote, and fails; a
+    verbatim quote passes by construction. Balanced `(...)` spans are
+    stripped from the TITLE first (#592's precedent), and a single-word or
+    empty title passes -- an acronym has no bigrams to test.
+
+    Prose punctuation dissolves to spaces, so a pair spanning a sentence
+    boundary still counts as adjacent -- deliberately the LENIENT reading:
+    it can only reduce drops, and the shipping bar is zero false
+    positives, not maximum catch."""
+    stripped = re.sub(r"\([^()]*\)", " ", title)
+    words = _adjacency_normalize(stripped).split()
+    if len(words) < 2:
+        return True
+    prose = f" {_adjacency_normalize(source_text)} "
+    return all(f" {a} {b} " in prose for a, b in itertools.pairwise(words))
+
+
+def gate_neutral(title: str) -> bool:
+    """Whether the PRODUCTION gate's voter (#618) sees no function words at
+    all in `title` -- the class the #622 residuals live in. Deliberately
+    distinct from the gate's `None` vote, which also covers MIXED titles
+    (both sides present): a mixed title is a dominant-language title
+    quoting a term, may legitimately be composed rather than quoted, and
+    must never reach the adjacency check."""
+    tokens = concept_mod._LANGUAGE_TOKEN_RE.findall(title.lower())
+    return not any(
+        token in concept_mod._ES_FUNCTION_WORDS
+        or token in concept_mod._EN_FUNCTION_WORDS
+        for token in tokens
+    )
+
+
 def quoted_verbatim(title: str, source_text: str) -> bool:
     """Whether `title` appears verbatim in the fixture prose (casefolded,
     whitespace-collapsed substring) -- the #618 class split. A leaked title
@@ -263,12 +311,137 @@ def quoted_verbatim(title: str, source_text: str) -> bool:
     return normalize(stripped) in normalize(source_text)
 
 
+def score_extension(kept_titles: list[str], text: str) -> dict[str, list[str]]:
+    """Apply #622's candidate extension to the titles the PRODUCTION gate
+    kept: a gate-neutral (no function words at all), non-verbatim,
+    non-bigram-adjacent multi-word title drops. Split the drops by this
+    probe's ground-truth classes: a drop is a TRUE positive only when the
+    probe classes it `en` (the harmful residual); every other dropped class
+    (`es`, `mixed`, `neutral`) counts AGAINST shipping -- `neutral` drops
+    are unlabelled, and the shipping bar is zero false positives, so
+    uncertainty counts as failure."""
+    drops = [
+        title
+        for title in kept_titles
+        if gate_neutral(title)
+        and not quoted_verbatim(title, text)
+        and not bigram_adjacent(title, text)
+    ]
+    true_positives = [title for title in drops if classify_title(title) == "en"]
+    false_positives = [title for title in drops if classify_title(title) != "en"]
+    return {
+        "drops": drops,
+        "true_positives": true_positives,
+        "false_positives": false_positives,
+    }
+
+
+def apply_gate_to_titles(titles: list[str], text: str) -> tuple[list[str], list[str]]:
+    """Replicate `_drop_wrong_language_titles` (#618) over bare title
+    strings -- the stored 2026-08-13 `runs-*.json` predate the gate columns,
+    so the analysis recomputes the gate exactly as production applies it:
+    same voter, same verbatim exemption, same all-drop floor."""
+    dominant = concept_mod._dominant_language(text)
+    if dominant is None:
+        return titles, []
+    kept: list[str] = []
+    dropped: list[str] = []
+    for title in titles:
+        language = concept_mod._title_language(title)
+        if (
+            language is not None
+            and language != dominant
+            and not concept_mod._quoted_verbatim(title, text)
+        ):
+            dropped.append(title)
+            continue
+        kept.append(title)
+    if not kept:
+        return titles, []
+    return kept, dropped
+
+
+def analyze_stored(paths: list[str]) -> None:
+    """Offline #622 measurement over stored `runs-*.json` emissions: no
+    model calls, pure re-scoring. Recomputes the #618 gate over each run's
+    raw titles (the stored files predate the gate columns), then reports,
+    per file and in total, how many of the residual harmful titles the
+    bigram-adjacency extension catches and every false positive it would
+    cost."""
+    text = build_transcript()
+    total_kept = 0
+    total_residual = 0
+    total_caught = 0
+    all_false_positives: list[str] = []
+    for raw_path in paths:
+        data = json.loads(pathlib.Path(raw_path).read_text(encoding="utf-8"))
+        if data["fixture_chars"] != len(text):
+            print(f"SKIP {raw_path}: fixture {data['fixture_chars']} != {len(text)}")
+            continue
+        file_kept = 0
+        file_residual: list[str] = []
+        file_caught: list[str] = []
+        file_fp: list[str] = []
+        file_tp: list[str] = []
+        for row in data["rows"]:
+            titles = [entry[0] for entry in row["titles"]]
+            kept, _gate_dropped = apply_gate_to_titles(titles, text)
+            file_kept += len(kept)
+            scored = score_extension(kept, text)
+            residual = [
+                title
+                for title in kept
+                if classify_title(title) == "en" and not quoted_verbatim(title, text)
+            ]
+            file_residual.extend(residual)
+            file_caught.extend(t for t in residual if t in scored["drops"])
+            file_tp.extend(scored["true_positives"])
+            file_fp.extend(scored["false_positives"])
+        print(f"\n== {raw_path} ({data['arm']}, {data['runs']} runs) ==")
+        print(f"  kept titles (post-gate):        {file_kept}")
+        print(f"  residual harmful (post-gate):   {len(file_residual)}")
+        print(f"  caught by bigram extension:     {len(file_caught)}")
+        print(f"  extension true positives:       {len(file_tp)}")
+        print(f"  extension FALSE POSITIVES:      {len(file_fp)}")
+        for title in file_residual:
+            mark = "caught" if title in file_caught else "MISSED"
+            print(f"    residual [{mark}]: {title}")
+        for title in file_fp:
+            print(f"    FP [{classify_title(title)}]: {title}")
+        total_kept += file_kept
+        total_residual += len(file_residual)
+        total_caught += len(file_caught)
+        all_false_positives.extend(file_fp)
+    print("\n== TOTAL ==")
+    print(f"  kept titles:      {total_kept}")
+    print(f"  residual harmful: {total_residual}")
+    print(f"  caught:           {total_caught}")
+    print(f"  false positives:  {len(all_false_positives)}")
+    for title in all_false_positives:
+        print(f"    FP [{classify_title(title)}]: {title}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", choices=["baseline", "treatment"], required=True)
+    parser.add_argument("--arm", choices=["baseline", "treatment"])
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--analyze",
+        nargs="+",
+        metavar="RUNS_JSON",
+        help=(
+            "Offline #622 re-scoring of stored runs-*.json emissions "
+            "(no model calls); --arm is not required."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.analyze:
+        analyze_stored(args.analyze)
+        return
+    if args.arm is None:
+        parser.error("--arm is required unless --analyze is given")
 
     if args.arm == "treatment":
         # The REJECTED #563 candidate, kept reproducible as a monkeypatch:
@@ -304,6 +477,8 @@ def main() -> None:
     per_run_gate_dropped: list[list[str]] = []
     per_run_harmful_after_gate: list[list[str]] = []
     per_run_objects_after_gate: list[int] = []
+    per_run_extension: list[dict[str, list[str]]] = []
+    per_run_harmful_after_ext: list[list[str]] = []
     per_run_errors: list[int] = []
     latencies: list[float] = []
 
@@ -356,17 +531,28 @@ def main() -> None:
             for r in gated
             if classify_title(r.title) == "en" and not quoted_verbatim(r.title, text)
         ]
+        # #622: the bigram-adjacency extension, applied to what the
+        # production gate KEPT -- exactly where it would run in production.
+        extension = score_extension([r.title for r in gated], text)
+        harmful_after_ext = [
+            t for t in harmful_after_gate if t not in extension["drops"]
+        ]
         per_run_titles.append(titles)
         per_run_leaked.append(leaked)
         per_run_harmful.append(harmful)
         per_run_gate_dropped.append(list(gate_dropped))
         per_run_harmful_after_gate.append(harmful_after_gate)
         per_run_objects_after_gate.append(len(gated))
+        per_run_extension.append(extension)
+        per_run_harmful_after_ext.append(harmful_after_ext)
         per_run_errors.append(errors)
         print(
             f"  run {index + 1}/{args.runs}: {len(titles)} title(s), "
             f"{len(leaked)} leaked ({len(harmful)} harmful), gate dropped "
             f"{len(gate_dropped)} -> {len(harmful_after_gate)} harmful left, "
+            f"ext dropped {len(extension['drops'])} "
+            f"({len(extension['false_positives'])} FP) -> "
+            f"{len(harmful_after_ext)} harmful left, "
             f"{errors} window error(s) ({latencies[-1]:.1f}s)"
         )
 
@@ -379,15 +565,20 @@ def main() -> None:
             "gate_dropped": gate_dropped,
             "harmful_after_gate": harmful_after,
             "objects_after_gate": objects_after,
+            "extension_drops": extension["drops"],
+            "extension_false_positives": extension["false_positives"],
+            "harmful_after_extension": harmful_after_ext,
             "errors": errs,
         }
-        for titles, leaked, harmful, gate_dropped, harmful_after, objects_after, errs in zip(
+        for titles, leaked, harmful, gate_dropped, harmful_after, objects_after, extension, harmful_after_ext, errs in zip(
             per_run_titles,
             per_run_leaked,
             per_run_harmful,
             per_run_gate_dropped,
             per_run_harmful_after_gate,
             per_run_objects_after_gate,
+            per_run_extension,
+            per_run_harmful_after_ext,
             per_run_errors,
             strict=True,
         )
@@ -438,6 +629,12 @@ def main() -> None:
         f"**{harmful_rate:.2f}** |",
         f"| **harmful-class rate AFTER the #618 gate** | "
         f"**{harmful_rate_after_gate:.2f}** |",
+        f"| **harmful left after the #622 bigram extension** | "
+        f"**{sum(len(h) for h in per_run_harmful_after_ext)}** |",
+        f"| extension drops across runs | "
+        f"{sum(len(e['drops']) for e in per_run_extension)} |",
+        f"| extension FALSE POSITIVES across runs | "
+        f"{sum(len(e['false_positives']) for e in per_run_extension)} |",
         f"| total objects across runs | {total_objects} |",
         f"| objects after gate across runs | {total_objects_after} |",
         f"| leaked titles across runs | {total_leaked} |",
@@ -463,6 +660,14 @@ def main() -> None:
     lines += ["", "## Gate-dropped titles per run", ""]
     for index, dropped in enumerate(per_run_gate_dropped, start=1):
         rendered = "; ".join(dropped) if dropped else "(none)"
+        lines.append(f"- run {index}: {rendered}")
+    lines += ["", "## Extension drops per run (#622; false positives marked `FP!`)", ""]
+    for index, extension in enumerate(per_run_extension, start=1):
+        marked = [
+            f"{'FP!' if t in extension['false_positives'] else ''}{t}"
+            for t in extension["drops"]
+        ]
+        rendered = "; ".join(marked) if marked else "(none)"
         lines.append(f"- run {index}: {rendered}")
 
     report = "\n".join(lines) + "\n"

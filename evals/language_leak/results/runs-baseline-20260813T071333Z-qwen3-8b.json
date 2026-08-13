@@ -1,0 +1,735 @@
+{
+  "arm": "baseline",
+  "model": "qwen3:8b",
+  "runs": 3,
+  "generated_at": "20260813T071333Z",
+  "fixture_chars": 24650,
+  "fixture_windows": 7,
+  "rows": [
+    {
+      "objects": 46,
+      "titles": [
+        [
+          "Reuni\u00f3n de trabajo sobre el knowledge object model",
+          "mixed",
+          false
+        ],
+        [
+          "Decisi\u00f3n sobre la fuente can\u00f3nica y el storage centralizado",
+          "mixed",
+          false
+        ],
+        [
+          "Proyecto de recuperaci\u00f3n de conocimiento",
+          "es",
+          true
+        ],
+        [
+          "Procedimiento de onboarding para el equipo nuevo",
+          "mixed",
+          false
+        ],
+        [
+          "Modelo de objetos de conocimiento",
+          "es",
+          false
+        ],
+        [
+          "Evaluation pipeline",
+          "en",
+          true
+        ],
+        [
+          "Model Context Protocol (MCP)",
+          "en",
+          true
+        ],
+        [
+          "Knowledge source project",
+          "en",
+          true
+        ],
+        [
+          "Harness",
+          "en",
+          true
+        ],
+        [
+          "Storage layer",
+          "en",
+          true
+        ],
+        [
+          "Reuni\u00f3n de Bloque 4",
+          "es",
+          false
+        ],
+        [
+          "Reuni\u00f3n de Bloque 6",
+          "es",
+          false
+        ],
+        [
+          "Reuni\u00f3n de Bloque 7",
+          "es",
+          false
+        ],
+        [
+          "Reuni\u00f3n de Bloque 8",
+          "es",
+          false
+        ],
+        [
+          "Evaluation Pipeline",
+          "en",
+          true
+        ],
+        [
+          "Proyecto de Recuperaci\u00f3n de Conocimiento",
+          "es",
+          true
+        ],
+        [
+          "Procedimiento de Onboarding",
+          "mixed",
+          true
+        ],
+        [
+          "Decisi\u00f3n sobre la Documentaci\u00f3n del Engine Setup",
+          "mixed",
+          false
+        ],
+        [
+          "Decisi\u00f3n sobre el Storage Centralizado",
+          "mixed",
+          false
+        ],
+        [
+          "Knowledge Object Model",
+          "en",
+          true
+        ],
+        [
+          "Model Context Protocol",
+          "en",
+          true
+        ],
+        [
+          "Mantenimiento de la documentaci\u00f3n biling\u00fce del setup del knowledge engine",
+          "mixed",
+          false
+        ],
+        [
+          "Estructura del bundle como fuente can\u00f3nica",
+          "es",
+          false
+        ],
+        [
+          "Validaci\u00f3n de los t\u00edtulos en el idioma del documento original",
+          "es",
+          false
+        ],
+        [
+          "Integraci\u00f3n del sistema de citas en la fase dos del proyecto",
+          "es",
+          false
+        ],
+        [
+          "Re-ranking del retrieval con el judge ensemble",
+          "mixed",
+          true
+        ],
+        [
+          "Capacitaci\u00f3n del equipo nuevo con un procedimiento de onboarding",
+          "mixed",
+          false
+        ],
+        [
+          "Acuerdos concretos sobre el storage layer",
+          "mixed",
+          true
+        ],
+        [
+          "Migraci\u00f3n del knowledge recovery system al nuevo formato de bundle",
+          "mixed",
+          true
+        ],
+        [
+          "Conexi\u00f3n del evaluation harness para medir la calidad del retrieval",
+          "mixed",
+          false
+        ],
+        [
+          "Model Context Protocol (MCP)",
+          "en",
+          true
+        ],
+        [
+          "Knowledge Object Model",
+          "en",
+          true
+        ],
+        [
+          "Evaluation Pipeline",
+          "en",
+          true
+        ],
+        [
+          "Knowledge Recovery System",
+          "en",
+          true
+        ],
+        [
+          "Centralized Knowledge Storage",
+          "en",
+          true
+        ],
+        [
+          "Knowledge Source Project",
+          "en",
+          true
+        ],
+        [
+          "Evaluation Harness",
+          "en",
+          true
+        ],
+        [
+          "Judge Ensemble",
+          "en",
+          true
+        ],
+        [
+          "Knowledge Base",
+          "en",
+          false
+        ],
+        [
+          "Bundle",
+          "neutral",
+          true
+        ],
+        [
+          "Decision on Knowledge Source Bundle and Centralized Storage",
+          "en",
+          false
+        ],
+        [
+          "Knowledge Source Project",
+          "en",
+          true
+        ],
+        [
+          "Evaluation Pipeline Project",
+          "en",
+          false
+        ],
+        [
+          "Knowledge Recovery Project",
+          "en",
+          false
+        ],
+        [
+          "Retrieval Re-ranking Project",
+          "en",
+          false
+        ],
+        [
+          "Onboarding Procedure for New Team Members",
+          "en",
+          false
+        ]
+      ],
+      "leaked": [
+        "Reuni\u00f3n de trabajo sobre el knowledge object model",
+        "Decisi\u00f3n sobre la fuente can\u00f3nica y el storage centralizado",
+        "Procedimiento de onboarding para el equipo nuevo",
+        "Evaluation pipeline",
+        "Model Context Protocol (MCP)",
+        "Knowledge source project",
+        "Harness",
+        "Storage layer",
+        "Evaluation Pipeline",
+        "Procedimiento de Onboarding",
+        "Decisi\u00f3n sobre la Documentaci\u00f3n del Engine Setup",
+        "Decisi\u00f3n sobre el Storage Centralizado",
+        "Knowledge Object Model",
+        "Model Context Protocol",
+        "Mantenimiento de la documentaci\u00f3n biling\u00fce del setup del knowledge engine",
+        "Re-ranking del retrieval con el judge ensemble",
+        "Capacitaci\u00f3n del equipo nuevo con un procedimiento de onboarding",
+        "Acuerdos concretos sobre el storage layer",
+        "Migraci\u00f3n del knowledge recovery system al nuevo formato de bundle",
+        "Conexi\u00f3n del evaluation harness para medir la calidad del retrieval",
+        "Model Context Protocol (MCP)",
+        "Knowledge Object Model",
+        "Evaluation Pipeline",
+        "Knowledge Recovery System",
+        "Centralized Knowledge Storage",
+        "Knowledge Source Project",
+        "Evaluation Harness",
+        "Judge Ensemble",
+        "Knowledge Base",
+        "Decision on Knowledge Source Bundle and Centralized Storage",
+        "Knowledge Source Project",
+        "Evaluation Pipeline Project",
+        "Knowledge Recovery Project",
+        "Retrieval Re-ranking Project",
+        "Onboarding Procedure for New Team Members"
+      ],
+      "harmful": [
+        "Knowledge Base",
+        "Decision on Knowledge Source Bundle and Centralized Storage",
+        "Evaluation Pipeline Project",
+        "Knowledge Recovery Project",
+        "Retrieval Re-ranking Project",
+        "Onboarding Procedure for New Team Members"
+      ],
+      "gate_dropped": [
+        "Decision on Knowledge Source Bundle and Centralized Storage",
+        "Onboarding Procedure for New Team Members"
+      ],
+      "harmful_after_gate": [
+        "Knowledge Base",
+        "Evaluation Pipeline Project",
+        "Knowledge Recovery Project",
+        "Retrieval Re-ranking Project"
+      ],
+      "objects_after_gate": 44,
+      "extension_drops": [
+        "Knowledge Base",
+        "Evaluation Pipeline Project",
+        "Knowledge Recovery Project",
+        "Retrieval Re-ranking Project"
+      ],
+      "extension_false_positives": [],
+      "harmful_after_extension": [],
+      "errors": 1
+    },
+    {
+      "objects": 29,
+      "titles": [
+        [
+          "Decisi\u00f3n sobre la fuente can\u00f3nica y el almacenamiento centralizado",
+          "es",
+          false
+        ],
+        [
+          "Proyecto de recuperaci\u00f3n de conocimiento",
+          "es",
+          true
+        ],
+        [
+          "Procedimiento de onboarding para el equipo nuevo",
+          "mixed",
+          false
+        ],
+        [
+          "Modelo de objeto de conocimiento",
+          "es",
+          false
+        ],
+        [
+          "Protocolo de contexto del modelo",
+          "es",
+          false
+        ],
+        [
+          "Evaluation harness",
+          "en",
+          true
+        ],
+        [
+          "Mantenimiento de la documentaci\u00f3n del engine setup en dos idiomas",
+          "mixed",
+          false
+        ],
+        [
+          "Definici\u00f3n de la fuente can\u00f3nica y el storage centralizado",
+          "mixed",
+          false
+        ],
+        [
+          "Proyecto de recuperaci\u00f3n de conocimiento",
+          "es",
+          true
+        ],
+        [
+          "Procedimiento de onboarding para el equipo nuevo",
+          "mixed",
+          false
+        ],
+        [
+          "Model Context Protocol (MCP)",
+          "en",
+          true
+        ],
+        [
+          "Mantenimiento de la documentaci\u00f3n biling\u00fce del engine setup",
+          "mixed",
+          false
+        ],
+        [
+          "Uso del bundle como fuente can\u00f3nica y el storage centralizado como consumidor de snapshots",
+          "mixed",
+          false
+        ],
+        [
+          "Proyecto de recuperaci\u00f3n de conocimiento",
+          "es",
+          true
+        ],
+        [
+          "Procedimiento de onboarding para el equipo nuevo",
+          "mixed",
+          false
+        ],
+        [
+          "Reuni\u00f3n de bloque 8 y 9",
+          "es",
+          false
+        ],
+        [
+          "Knowledge recovery system",
+          "en",
+          true
+        ],
+        [
+          "Model Context Protocol (MCP)",
+          "en",
+          true
+        ],
+        [
+          "Evaluation harness",
+          "en",
+          true
+        ],
+        [
+          "Centralized knowledge storage",
+          "en",
+          true
+        ],
+        [
+          "Knowledge source project",
+          "en",
+          true
+        ],
+        [
+          "Re-ranking del retrieval",
+          "mixed",
+          true
+        ],
+        [
+          "Knowledge object model",
+          "en",
+          true
+        ],
+        [
+          "Pipeline de evaluation",
+          "mixed",
+          true
+        ],
+        [
+          "Decision on Knowledge Source Bundle",
+          "en",
+          false
+        ],
+        [
+          "Knowledge Source Project",
+          "en",
+          true
+        ],
+        [
+          "Evaluation Pipeline and Language Leakage Measurement",
+          "en",
+          false
+        ],
+        [
+          "Knowledge Recovery Project Phase Two",
+          "en",
+          false
+        ],
+        [
+          "Onboarding Procedure for New Team Members",
+          "en",
+          false
+        ]
+      ],
+      "leaked": [
+        "Procedimiento de onboarding para el equipo nuevo",
+        "Evaluation harness",
+        "Mantenimiento de la documentaci\u00f3n del engine setup en dos idiomas",
+        "Definici\u00f3n de la fuente can\u00f3nica y el storage centralizado",
+        "Procedimiento de onboarding para el equipo nuevo",
+        "Model Context Protocol (MCP)",
+        "Mantenimiento de la documentaci\u00f3n biling\u00fce del engine setup",
+        "Uso del bundle como fuente can\u00f3nica y el storage centralizado como consumidor de snapshots",
+        "Procedimiento de onboarding para el equipo nuevo",
+        "Knowledge recovery system",
+        "Model Context Protocol (MCP)",
+        "Evaluation harness",
+        "Centralized knowledge storage",
+        "Knowledge source project",
+        "Re-ranking del retrieval",
+        "Knowledge object model",
+        "Pipeline de evaluation",
+        "Decision on Knowledge Source Bundle",
+        "Knowledge Source Project",
+        "Evaluation Pipeline and Language Leakage Measurement",
+        "Knowledge Recovery Project Phase Two",
+        "Onboarding Procedure for New Team Members"
+      ],
+      "harmful": [
+        "Decision on Knowledge Source Bundle",
+        "Evaluation Pipeline and Language Leakage Measurement",
+        "Knowledge Recovery Project Phase Two",
+        "Onboarding Procedure for New Team Members"
+      ],
+      "gate_dropped": [
+        "Decision on Knowledge Source Bundle",
+        "Evaluation Pipeline and Language Leakage Measurement",
+        "Onboarding Procedure for New Team Members"
+      ],
+      "harmful_after_gate": [
+        "Knowledge Recovery Project Phase Two"
+      ],
+      "objects_after_gate": 26,
+      "extension_drops": [
+        "Knowledge Recovery Project Phase Two"
+      ],
+      "extension_false_positives": [],
+      "harmful_after_extension": [],
+      "errors": 1
+    },
+    {
+      "objects": 32,
+      "titles": [
+        [
+          "Decision on Centralized Knowledge Storage",
+          "en",
+          false
+        ],
+        [
+          "Knowledge Source Project",
+          "en",
+          true
+        ],
+        [
+          "Onboarding Procedure for New Team Members",
+          "en",
+          false
+        ],
+        [
+          "Decision on Bilingual Documentation",
+          "neutral",
+          false
+        ],
+        [
+          "Knowledge Object Model and Evaluation Pipeline",
+          "en",
+          false
+        ],
+        [
+          "Decision on Model Context Protocol Integration",
+          "en",
+          false
+        ],
+        [
+          "Knowledge Recovery System Integration",
+          "en",
+          false
+        ],
+        [
+          "Decision on Evaluation Harness for Retrieval",
+          "en",
+          false
+        ],
+        [
+          "Mantenimiento de la documentaci\u00f3n del engine setup en dos idiomas",
+          "mixed",
+          false
+        ],
+        [
+          "Uso del bundle como fuente can\u00f3nica",
+          "es",
+          false
+        ],
+        [
+          "Proyecto de recuperaci\u00f3n de conocimiento",
+          "es",
+          true
+        ],
+        [
+          "Procedimiento de onboarding para el equipo nuevo",
+          "mixed",
+          false
+        ],
+        [
+          "Reuni\u00f3n de bloque 5 y bloque 6",
+          "es",
+          false
+        ],
+        [
+          "Model Context Protocol (MCP)",
+          "en",
+          true
+        ],
+        [
+          "Evaluation harness",
+          "en",
+          true
+        ],
+        [
+          "Knowledge source project",
+          "en",
+          true
+        ],
+        [
+          "Knowledge object model",
+          "en",
+          true
+        ],
+        [
+          "Storage layer",
+          "en",
+          true
+        ],
+        [
+          "Reuni\u00f3n de Bloque 6",
+          "es",
+          false
+        ],
+        [
+          "Reuni\u00f3n de Bloque 7",
+          "es",
+          false
+        ],
+        [
+          "Reuni\u00f3n de Bloque 8",
+          "es",
+          false
+        ],
+        [
+          "Mantenimiento de la documentaci\u00f3n biling\u00fce del engine setup",
+          "mixed",
+          false
+        ],
+        [
+          "Fuente can\u00f3nica del bundle y uso de snapshots derivados",
+          "mixed",
+          false
+        ],
+        [
+          "Proyecto de recuperaci\u00f3n de conocimiento",
+          "es",
+          true
+        ],
+        [
+          "Procedimiento de onboarding para el equipo nuevo",
+          "mixed",
+          false
+        ],
+        [
+          "Reuni\u00f3n de bloque 8 y 9",
+          "es",
+          false
+        ],
+        [
+          "Decision on Knowledge Source Bundle and Storage",
+          "en",
+          false
+        ],
+        [
+          "Knowledge Source Project",
+          "en",
+          true
+        ],
+        [
+          "Evaluation Pipeline Project",
+          "en",
+          false
+        ],
+        [
+          "Knowledge Recovery Project Phase Two",
+          "en",
+          false
+        ],
+        [
+          "Retrieval Re-ranking Project",
+          "en",
+          false
+        ],
+        [
+          "New Team Onboarding Procedure",
+          "en",
+          false
+        ]
+      ],
+      "leaked": [
+        "Decision on Centralized Knowledge Storage",
+        "Knowledge Source Project",
+        "Onboarding Procedure for New Team Members",
+        "Knowledge Object Model and Evaluation Pipeline",
+        "Decision on Model Context Protocol Integration",
+        "Knowledge Recovery System Integration",
+        "Decision on Evaluation Harness for Retrieval",
+        "Mantenimiento de la documentaci\u00f3n del engine setup en dos idiomas",
+        "Procedimiento de onboarding para el equipo nuevo",
+        "Model Context Protocol (MCP)",
+        "Evaluation harness",
+        "Knowledge source project",
+        "Knowledge object model",
+        "Storage layer",
+        "Mantenimiento de la documentaci\u00f3n biling\u00fce del engine setup",
+        "Fuente can\u00f3nica del bundle y uso de snapshots derivados",
+        "Procedimiento de onboarding para el equipo nuevo",
+        "Decision on Knowledge Source Bundle and Storage",
+        "Knowledge Source Project",
+        "Evaluation Pipeline Project",
+        "Knowledge Recovery Project Phase Two",
+        "Retrieval Re-ranking Project",
+        "New Team Onboarding Procedure"
+      ],
+      "harmful": [
+        "Decision on Centralized Knowledge Storage",
+        "Onboarding Procedure for New Team Members",
+        "Knowledge Object Model and Evaluation Pipeline",
+        "Decision on Model Context Protocol Integration",
+        "Knowledge Recovery System Integration",
+        "Decision on Evaluation Harness for Retrieval",
+        "Decision on Knowledge Source Bundle and Storage",
+        "Evaluation Pipeline Project",
+        "Knowledge Recovery Project Phase Two",
+        "Retrieval Re-ranking Project",
+        "New Team Onboarding Procedure"
+      ],
+      "gate_dropped": [
+        "Decision on Centralized Knowledge Storage",
+        "Onboarding Procedure for New Team Members",
+        "Decision on Bilingual Documentation",
+        "Knowledge Object Model and Evaluation Pipeline",
+        "Decision on Model Context Protocol Integration",
+        "Decision on Evaluation Harness for Retrieval",
+        "Decision on Knowledge Source Bundle and Storage"
+      ],
+      "harmful_after_gate": [
+        "Knowledge Recovery System Integration",
+        "Evaluation Pipeline Project",
+        "Knowledge Recovery Project Phase Two",
+        "Retrieval Re-ranking Project",
+        "New Team Onboarding Procedure"
+      ],
+      "objects_after_gate": 25,
+      "extension_drops": [
+        "Knowledge Recovery System Integration",
+        "Evaluation Pipeline Project",
+        "Knowledge Recovery Project Phase Two",
+        "Retrieval Re-ranking Project",
+        "New Team Onboarding Procedure"
+      ],
+      "extension_false_positives": [],
+      "harmful_after_extension": [],
+      "errors": 1
+    }
+  ]
+}
