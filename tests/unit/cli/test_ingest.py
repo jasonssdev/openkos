@@ -5636,25 +5636,98 @@ def test_stage_derived_objects_records_the_alternative_in_frontmatter(
     assert metadata[okf.TYPE_ALTERNATIVE_KEY] == "Project"
 
 
-def test_stage_derived_objects_reports_a_near_boundary_call(
+def test_stage_derived_objects_carries_the_alternative_on_the_plan_silently(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A near-boundary classification is named on stderr, per candidate.
+    """Staging records the runner-up on the plan and says nothing per
+    candidate (#566).
 
-    Every other consequential choice this function makes -- empty slug,
-    in-batch collision, existing file, disambiguation, failed build, the
-    #404 cap -- is reported per candidate. Picking one of two plausible
-    types silently is the same class of omission: the type decides the
-    directory, the catalog section, and the volatility tier.
+    The per-candidate line fired on roughly 100% of extracted objects in a
+    real session -- 12 of 13, 11 of 11 -- so it carried no discriminating
+    signal and doubled the terminal output of a directory ingest. The pair
+    now rides `_DerivedPlan.type_alternative` so the CALLER can aggregate
+    it into one summary line per run; the frontmatter record (the durable
+    signal) is untouched.
     """
-    main._stage_derived_objects(
+    plans, _, _notice = main._stage_derived_objects(
         **_stage_kwargs(tmp_path, llm=_FakeLLM(_NEAR_BOUNDARY_REPLY))  # type: ignore[arg-type]
     )
 
+    assert len(plans) == 1
+    assert plans[0].type_alternative == "Project"
     err = capsys.readouterr().err
-    assert "Hellenistic Ethics Seminar" in err
-    assert "Event" in err
-    assert "Project" in err
+    assert "also weighed" not in err
+    assert "Hellenistic Ethics Seminar" not in err
+
+
+_TORN_PAIR_REPLY = json.dumps(
+    [
+        {
+            "type": "Event",
+            "title": "Hellenistic Ethics Seminar",
+            "description": "A seminar taught this term.",
+            "body": "",
+            "type_alternative": "Project",
+        },
+        {
+            "type": "Concept",
+            "title": "Apatheia",
+            "description": "A Stoic concept.",
+            "body": "",
+            "type_alternative": "Procedure",
+        },
+        {
+            "type": "Concept",
+            "title": "Eudaimonia",
+            "description": "A Greek concept of flourishing.",
+            "body": "",
+        },
+    ]
+)
+"""Three staged objects: two torn (Event/Project, Concept/Procedure), one
+clear -- the aggregate line must read `2 of 3` and name the most common
+pair without repeating per-object noise."""
+
+
+def test_ingest_prints_one_aggregate_type_alternative_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single-file ingest closes with ONE aggregate line naming how many
+    objects recorded an alternative type, not one line per object (#566)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    _patch_llm(monkeypatch, _TORN_PAIR_REPLY)
+    source = tmp_path / "notes.txt"
+    source.write_text("Notes about Hellenistic ethics.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "also weighed" not in result.stderr
+    assert result.stderr.count("recorded a type_alternative") == 1
+    assert "2 of 3 derived object(s) recorded a type_alternative" in result.stderr
+
+
+def test_ingest_batch_aggregates_type_alternative_across_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory ingest emits the aggregate ONCE for the whole batch --
+    never per file (#566): the per-file wording that motivated the issue
+    printed 12 lines for 13 objects in one real batch."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    _patch_llm(monkeypatch, _NEAR_BOUNDARY_REPLY)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.txt").write_text("Seminar notes, first half.", encoding="utf-8")
+    (docs / "b.txt").write_text("Seminar notes, second half.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "docs", "--auto"])
+
+    assert result.exit_code == 0
+    assert "also weighed" not in result.stderr
+    assert result.stderr.count("recorded a type_alternative") == 1
+    assert "2 of 2 derived object(s) recorded a type_alternative" in result.stderr
 
 
 def test_stage_derived_objects_stays_silent_when_the_type_was_clear(
@@ -5676,7 +5749,10 @@ def test_stage_derived_objects_stays_silent_when_the_type_was_clear(
 
     metadata, _ = okf.load_frontmatter(plans[0].content)
     assert okf.TYPE_ALTERNATIVE_KEY not in metadata
-    assert "also weighed" not in capsys.readouterr().err
+    assert plans[0].type_alternative is None
+    err = capsys.readouterr().err
+    assert "also weighed" not in err
+    assert "recorded a type_alternative" not in err
 
 
 def test_ingest_sole_twin_re_ask_reports_what_it_added_on_stderr(
