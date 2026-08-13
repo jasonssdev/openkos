@@ -10614,6 +10614,19 @@ def suggest_relations_cmd(
         typer.echo(f"openkos suggest-relations: failed -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    # #613: the flip-question consistency check spends one extra chat call
+    # per asymmetric suggestion -- a real cost the user pays, reported
+    # rather than hidden (ingest's re-ask notice, same posture). Silent
+    # when zero were spent: an advisory never fires with nothing to advise.
+    if batch.flip_checks:
+        degraded_count = sum(1 for s in batch.results if s.degraded_from is not None)
+        typer.echo(
+            f"openkos suggest-relations: {batch.flip_checks} extra "
+            "direction-check call(s) spent on asymmetric suggestion(s); "
+            f"{degraded_count} degraded to related_to",
+            err=True,
+        )
+
     if apply:
         _run_suggest_relations_apply(root, layout, batch.results)
     else:

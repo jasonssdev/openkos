@@ -1594,3 +1594,68 @@ def test_suggest_relations_truncated_run_points_at_the_next_batch(
     assert result.exit_code == 0
     assert "cap reached" in result.stdout
     assert "re-run" in result.stdout
+
+
+# --- Flip-check cost disclosure (#613) ---------------------------------------
+
+
+def test_suggest_relations_discloses_flip_check_calls_and_degrades(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An extra model call is a cost the user pays, so the batch's flip
+    checks are reported rather than hidden (same posture as ingest's
+    re-ask notice), together with how many suggestions they degraded."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        return EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(
+                    edge=Edge(source_id="concepts/a", target_id="concepts/b"),
+                    suggested_type="related_to",
+                    rationale=(
+                        "degraded from 'member_of': asked again with SOURCE "
+                        "and TARGET swapped, the model suggested 'member_of' "
+                        "in that direction too -- a direction "
+                        "self-contradiction, so only the undirected "
+                        "connection is kept (#613)"
+                    ),
+                    degraded_from="member_of",
+                )
+            ],
+            flip_checks=1,
+        )
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "1 extra direction-check call(s) spent on asymmetric suggestion(s); "
+        "1 degraded to related_to" in result.stderr
+    )
+
+
+def test_suggest_relations_prints_no_flip_disclosure_when_none_were_spent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No flip call, no line -- an advisory never fires with nothing to
+    advise (the cap-notice convention)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_candidate_edges(
+        monkeypatch, [Edge(source_id="concepts/a", target_id="concepts/b")]
+    )
+
+    def _fake_suggest(edges: object, **kwargs: object) -> EdgeSuggestionBatch:
+        return EdgeSuggestionBatch(results=[_suggestion()])
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _fake_suggest)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert "direction-check" not in result.stderr

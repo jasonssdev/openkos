@@ -179,6 +179,9 @@ def test_suggest_edge_types_returns_one_suggestion_per_input_edge_same_order(
         replies=[
             _valid_reply("references", "a refs b"),
             _valid_reply("depends_on", "b depends on c"),
+            # #613: `depends_on` is asymmetric, so a flip check follows; a
+            # direction-honest answer keeps the original suggestion.
+            _valid_reply("related_to", "c does not depend on b"),
         ]
     )
 
@@ -192,7 +195,7 @@ def test_suggest_edge_types_returns_one_suggestion_per_input_edge_same_order(
     assert result[0].rationale == "a refs b"
     assert result[1].suggested_type == "depends_on"
     assert result[1].rationale == "b depends on c"
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 3
 
 
 def test_suggest_edge_types_malformed_reply_degrades_only_that_edge(
@@ -215,8 +218,12 @@ def test_suggest_edge_types_malformed_reply_degrades_only_that_edge(
             _valid_reply("references"),
             "not json at all -- garbage reply",
             _valid_reply("depends_on"),
+            # #613: flip check for the asymmetric `depends_on` above.
+            _valid_reply("related_to", "not the other way"),
             _valid_reply("related_to"),
             _valid_reply("part_of"),
+            # #613: flip check for the asymmetric `part_of` above.
+            _valid_reply("related_to", "not the other way"),
         ]
     )
 
@@ -857,7 +864,14 @@ def test_complete_run_reports_no_failure(tmp_path: Path) -> None:
     _write_doc(tmp_path / "b.md", title="B")
     _write_doc(tmp_path / "c.md", title="C")
     edges = [Edge(source_id="a", target_id="b"), Edge(source_id="b", target_id="c")]
-    llm = _FakeLLM(replies=[_valid_reply("references"), _valid_reply("depends_on")])
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply("references"),
+            _valid_reply("depends_on"),
+            # #613: flip check for the asymmetric `depends_on` above.
+            _valid_reply("related_to", "not the other way"),
+        ]
+    )
 
     batch = edge_typing_mod.suggest_edge_types(edges, bundle_dir=tmp_path, llm=llm)
 
@@ -1491,3 +1505,206 @@ def test_candidate_truncation_notice_suppressed_when_confidentiality_removes_a_r
     # (only keep1 survives from the retained prefix). 2 > 1, so the notice
     # still fires, with the reduced counts.
     assert notice == "1 of 2 candidate edge(s) shown (cap reached)"
+
+
+# ---------------------------------------------------------------------------
+# Flip-question direction consistency check (#613)
+# ---------------------------------------------------------------------------
+#
+# Measured mechanism (#561, evals/edge_typing): the default model emits the
+# inverse-reading asymmetric type on 17 of 18 reversed probes at stability
+# 1.00, and an explicit direction rubric changed NOTHING (a strict loss,
+# rejected). The mitigation is deterministic: re-ask the same edge with
+# SOURCE and TARGET swapped; a model that answers the SAME asymmetric type
+# in both directions has contradicted itself, and the suggestion degrades
+# to `related_to` -- an honest connection claim instead of a coin-flip
+# direction claim the whole graph would believe.
+
+
+def _two_doc_bundle(tmp_path: Path) -> Path:
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "alpha.md", title="Alpha", body="About beta.")
+    _write_doc(bundle_dir / "concepts" / "beta.md", title="Beta", body="About alpha.")
+    return bundle_dir
+
+
+def test_asymmetric_type_repeated_on_the_flip_degrades_to_related_to(
+    tmp_path: Path,
+) -> None:
+    """The self-contradiction exactly: `member_of` in both directions cannot
+    be true, so the suggestion degrades deterministically, names what it
+    degraded from, and the rationale says why."""
+    bundle_dir = _two_doc_bundle(tmp_path)
+    edge = Edge(source_id="concepts/alpha", target_id="concepts/beta")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply("member_of", "alpha is one of beta's members"),
+            _valid_reply("member_of", "beta is one of alpha's members"),
+        ]
+    )
+
+    batch = edge_typing_mod.suggest_edge_types([edge], bundle_dir=bundle_dir, llm=llm)
+
+    assert len(llm.calls) == 2
+    suggestion = batch.results[0]
+    assert suggestion.suggested_type == "related_to"
+    assert suggestion.degraded_from == "member_of"
+    assert "member_of" in suggestion.rationale
+    assert "direction" in suggestion.rationale.lower()
+    assert batch.flip_checks == 1
+
+
+def test_the_flip_call_swaps_source_and_target(tmp_path: Path) -> None:
+    """The second call's user turn presents the SAME two documents with the
+    roles reversed -- that reversal is the entire mechanism."""
+    bundle_dir = _two_doc_bundle(tmp_path)
+    edge = Edge(source_id="concepts/alpha", target_id="concepts/beta")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply("part_of", "alpha is a component"),
+            _valid_reply("related_to", "no direction the other way"),
+        ]
+    )
+
+    edge_typing_mod.suggest_edge_types([edge], bundle_dir=bundle_dir, llm=llm)
+
+    forward_user = llm.calls[0][1]["content"]
+    flip_user = llm.calls[1][1]["content"]
+    assert forward_user.startswith("SOURCE: [concepts/alpha — Alpha]")
+    assert "TARGET: [concepts/beta — Beta]" in forward_user
+    assert flip_user.startswith("SOURCE: [concepts/beta — Beta]")
+    assert "TARGET: [concepts/alpha — Alpha]" in flip_user
+
+
+def test_a_direction_honest_flip_keeps_the_original_type(tmp_path: Path) -> None:
+    """A model that answers differently with the roles reversed has NOT
+    contradicted itself -- the original suggestion stands untouched."""
+    bundle_dir = _two_doc_bundle(tmp_path)
+    edge = Edge(source_id="concepts/alpha", target_id="concepts/beta")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply("depends_on", "alpha requires beta"),
+            _valid_reply("related_to", "beta does not require alpha"),
+        ]
+    )
+
+    batch = edge_typing_mod.suggest_edge_types([edge], bundle_dir=bundle_dir, llm=llm)
+
+    suggestion = batch.results[0]
+    assert suggestion.suggested_type == "depends_on"
+    assert suggestion.degraded_from is None
+    assert suggestion.rationale == "alpha requires beta"
+    assert batch.flip_checks == 1
+
+
+def test_symmetric_suggestions_never_spend_a_flip_call(tmp_path: Path) -> None:
+    """`related_to` and `references` assert no strong direction, so there is
+    nothing to contradict -- one call per edge, exactly as before #613. The
+    check costs one extra call per ASYMMETRIC suggestion only."""
+    bundle_dir = _two_doc_bundle(tmp_path)
+    edges = [
+        Edge(source_id="concepts/alpha", target_id="concepts/beta"),
+        Edge(source_id="concepts/beta", target_id="concepts/alpha"),
+    ]
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply("related_to", "connected"),
+            _valid_reply("references", "names it"),
+        ]
+    )
+
+    batch = edge_typing_mod.suggest_edge_types(edges, bundle_dir=bundle_dir, llm=llm)
+
+    assert len(llm.calls) == 2
+    assert [s.suggested_type for s in batch.results] == ["related_to", "references"]
+    assert all(s.degraded_from is None for s in batch.results)
+    assert batch.flip_checks == 0
+
+
+def test_a_malformed_flip_reply_keeps_the_original_suggestion(
+    tmp_path: Path,
+) -> None:
+    """The check exists to catch one specific self-contradiction; a flip
+    reply that cannot be parsed is not that contradiction, so the paid-for
+    original suggestion survives (fail-open on the CHECK, mirroring the
+    re-ask's degrade posture in extraction)."""
+    bundle_dir = _two_doc_bundle(tmp_path)
+    edge = Edge(source_id="concepts/alpha", target_id="concepts/beta")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply("produced_by", "beta authored alpha"),
+            "not json at all",
+        ]
+    )
+
+    batch = edge_typing_mod.suggest_edge_types([edge], bundle_dir=bundle_dir, llm=llm)
+
+    suggestion = batch.results[0]
+    assert suggestion.suggested_type == "produced_by"
+    assert suggestion.degraded_from is None
+    assert batch.flip_checks == 1
+
+
+def test_a_flip_call_transport_failure_keeps_the_441_batch_contract(
+    tmp_path: Path,
+) -> None:
+    """An `OllamaError` on the FLIP call stops the loop exactly like one on
+    the forward call (#441): completed suggestions ride the return, the
+    edge whose check raised produces no suggestion, and no later edge is
+    prompted -- an unverified asymmetric claim must not slip through as
+    verified just because the transport died mid-check."""
+    bundle_dir = _two_doc_bundle(tmp_path)
+    edges = [
+        Edge(source_id="concepts/alpha", target_id="concepts/beta"),
+        Edge(source_id="concepts/beta", target_id="concepts/alpha"),
+    ]
+    llm = _FakeLLM(
+        replies=[_valid_reply("caused_by", "beta brought alpha about")],
+        error=OllamaUnavailable("boom"),
+        error_at=2,
+    )
+
+    batch = edge_typing_mod.suggest_edge_types(edges, bundle_dir=bundle_dir, llm=llm)
+
+    assert batch.results == []
+    assert isinstance(batch.failure, OllamaUnavailable)
+    assert batch.failed_index == 1
+    assert len(llm.calls) == 2
+
+
+def test_edge_suggestion_degraded_from_defaults_to_none() -> None:
+    """Additive field: every pre-#613 construction site keeps working, and
+    `None` honestly means "this suggestion was never degraded"."""
+    suggestion = edge_typing_mod.EdgeSuggestion(
+        edge=Edge(source_id="a", target_id="b"),
+        suggested_type="references",
+        rationale="names it",
+    )
+
+    assert suggestion.degraded_from is None
+
+
+def test_on_progress_fires_once_per_edge_with_the_degraded_suggestion(
+    tmp_path: Path,
+) -> None:
+    """The progress callback sees the FINAL suggestion (post-check), once
+    per completed edge -- the flip call is invisible to it except through
+    the degraded content."""
+    bundle_dir = _two_doc_bundle(tmp_path)
+    edge = Edge(source_id="concepts/alpha", target_id="concepts/beta")
+    llm = _FakeLLM(
+        replies=[
+            _valid_reply("member_of", "one of them"),
+            _valid_reply("member_of", "one of them, reversed"),
+        ]
+    )
+    seen: list[tuple[int, int, str | None]] = []
+
+    edge_typing_mod.suggest_edge_types(
+        [edge],
+        bundle_dir=bundle_dir,
+        llm=llm,
+        on_progress=lambda i, t, s: seen.append((i, t, s.suggested_type)),
+    )
+
+    assert seen == [(1, 1, "related_to")]

@@ -169,6 +169,36 @@ still routes this one to the operator: it is the cheapest place to spend a
 human glance, and at a measured 67% of accepted edges it is also where the
 volume is."""
 
+_ASYMMETRIC_RELATION_TYPES: frozenset[str] = frozenset(
+    ["caused_by", "depends_on", "member_of", "part_of", "produced_by"]
+)
+"""The suggestable types whose rubric reading asserts a DIRECTION -- the
+flip-question consistency check (#613) fires on exactly these. `related_to`
+asserts none, and `references` is excluded deliberately: it is the weakest
+directional claim, it is the honest answer on several reversed-orientation
+shapes (author -> artifact, where the source body names the target), and
+checking it would double its call cost for a claim whose being wrong adds
+almost nothing false to the graph.
+
+Why a deterministic check at all: #561 measured the packaged default model
+emitting the inverse-reading asymmetric type on 17 of 18 reversed probes at
+stability 1.00, and an explicit "Direction check" rubric paragraph changed
+NOTHING on either measured model while costing 0.07 forward accuracy -- a
+strict loss, rejected. Prose forbidding a shape does not prevent it at this
+tier (#380's anti-twin clause, #563's language anchor); a self-contradiction
+the engine can detect without trusting prose compliance does."""
+
+_DIRECTION_CONTRADICTION_RATIONALE = (
+    "degraded from '{original}': asked again with SOURCE and TARGET "
+    "swapped, the model suggested '{original}' in that direction too -- a "
+    "direction self-contradiction, so only the undirected connection is "
+    "kept (#613)"
+)
+"""Deterministic rationale for a flip-check degrade: names the original
+type and why it could not be trusted, because the operator deciding on the
+suggestion needs the story, not just a quieter type."""
+
+
 _RUBRIC_LINES = "\n".join(
     f"- {name}: {_RELATION_RUBRIC[name]}."
     for name in sorted(SUGGESTABLE_RELATION_TYPES)
@@ -253,6 +283,13 @@ class EdgeSuggestion:
     rationale: str
     """Free-text explanation; may be blank on a well-formed reply that
     omitted one, but is never blank on the fail-closed degrade paths."""
+    degraded_from: str | None = None
+    """The asymmetric type the flip-question consistency check (#613)
+    degraded this suggestion FROM, or `None` -- the common case -- when no
+    degrade happened. Set only when the model answered the SAME asymmetric
+    type with SOURCE and TARGET swapped, contradicting itself on direction;
+    `suggested_type` is then `LEAST_SPECIFIC_RELATION_TYPE`. Defaulted so
+    every pre-#613 construction site keeps working unchanged."""
 
 
 @dataclass(frozen=True)
@@ -278,7 +315,16 @@ class EdgeSuggestionBatch:
     failed_index: int | None = None
     """1-based index of the edge whose `llm.chat` raised `failure`; `None`
     when the run completed. The failed edge produced no suggestion and no
-    `on_progress` call, and no later edge was ever prompted."""
+    `on_progress` call, and no later edge was ever prompted. The raise may
+    have come from the edge's FORWARD call or its flip check (#613) -- both
+    leave the edge without a completed, verified suggestion."""
+    flip_checks: int = 0
+    """How many EXTRA `llm.chat` calls the flip-question consistency check
+    (#613) spent -- one per asymmetric forward suggestion, zero for
+    `related_to`/`references`. A real model call the user pays for, so it
+    is counted rather than hidden (the same disclosure posture as
+    `ExtractionReport.reask_runs`). Defaulted so every pre-#613
+    construction site keeps working unchanged."""
 
 
 def untyped_edges(store: GraphStore) -> list[Edge]:
@@ -491,6 +537,7 @@ def suggest_edge_types(
     it raises propagates to the caller (it is the caller's own callback)."""
     results: list[EdgeSuggestion] = []
     total = len(edges)
+    flip_checks = 0
     for index, edge in enumerate(edges, start=1):
         src_doc = _load_doc(
             bundle_dir,
@@ -505,21 +552,64 @@ def suggest_edge_types(
             local_exemption=local_exemption,
         )
         messages = _build_messages(edge, src_doc, tgt_doc)
-        # Guard ONLY the chat call (#441): a transport/model failure must
+        # Guard ONLY the chat calls (#441): a transport/model failure must
         # not discard the completed suggestions, while parse/validate/
         # progress failures keep their own existing contracts untouched.
         try:
             reply = llm.chat(messages)
         except OllamaError as exc:
-            return EdgeSuggestionBatch(results=results, failure=exc, failed_index=index)
+            return EdgeSuggestionBatch(
+                results=results,
+                failure=exc,
+                failed_index=index,
+                flip_checks=flip_checks,
+            )
         suggested_type, rationale = _parse_reply(reply)
+        degraded_from: str | None = None
+        if suggested_type in _ASYMMETRIC_RELATION_TYPES:
+            # Flip-question consistency check (#613): re-ask the SAME two
+            # documents with the roles reversed. Reuses the docs already
+            # loaded (and already sensitivity-checked) above -- the flip is
+            # the same content, so no second `_load_doc` pass. A transport
+            # failure here takes the SAME #441 exit as the forward call:
+            # the edge has no completed, VERIFIED suggestion, and an
+            # unverified asymmetric claim must not ride the batch as if it
+            # had passed the check.
+            flipped_edge = Edge(source_id=edge.target_id, target_id=edge.source_id)
+            flip_messages = _build_messages(flipped_edge, tgt_doc, src_doc)
+            flip_checks += 1
+            try:
+                flip_reply = llm.chat(flip_messages)
+            except OllamaError as exc:
+                return EdgeSuggestionBatch(
+                    results=results,
+                    failure=exc,
+                    failed_index=index,
+                    flip_checks=flip_checks,
+                )
+            flip_type, _flip_rationale = _parse_reply(flip_reply)
+            if flip_type == suggested_type:
+                # Same asymmetric type in both directions is a direction
+                # self-contradiction -- the exact stable-confident-inversion
+                # failure #561 measured. Degrade deterministically; any
+                # OTHER flip answer (a different type, related_to, or a
+                # malformed reply) is not that contradiction, and the
+                # paid-for original stands (fail-open on the CHECK).
+                degraded_from = suggested_type
+                suggested_type = LEAST_SPECIFIC_RELATION_TYPE
+                rationale = _DIRECTION_CONTRADICTION_RATIONALE.format(
+                    original=degraded_from
+                )
         suggestion = EdgeSuggestion(
-            edge=edge, suggested_type=suggested_type, rationale=rationale
+            edge=edge,
+            suggested_type=suggested_type,
+            rationale=rationale,
+            degraded_from=degraded_from,
         )
         results.append(suggestion)
         if on_progress is not None:
             on_progress(index, total, suggestion)
-    return EdgeSuggestionBatch(results=results)
+    return EdgeSuggestionBatch(results=results, flip_checks=flip_checks)
 
 
 def _edges_from(store: GraphStore) -> list[Edge]:
