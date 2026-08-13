@@ -215,3 +215,43 @@ loss, rejected. This is the same tier-limitation the anti-twin rule hit
 (`edge_typing.py`'s #380 comment): prose forbidding a shape does not
 prevent it. The mitigation has to be deterministic — see the follow-up
 issue filed from these numbers.
+
+## The flip-question check was measured and REJECTED too (#613)
+
+#613's lead candidate: for each asymmetric suggestion, re-ask the same
+two documents with SOURCE and TARGET swapped; a model that answers the
+SAME asymmetric type in both directions has contradicted itself, and the
+suggestion degrades deterministically to `related_to`. Implemented in
+production form (flip call inside `suggest_edge_types`, #441 failure
+contract, `EdgeSuggestion.degraded_from`, CLI cost disclosure) and
+measured on the 23-edge fixture, 3 runs/arm — the code is preserved on
+the annotated tag `experiment/613-flip-question-check`, unmerged:
+
+| model / arm | forward-17 acc | trap hits (of 18) | reversed-6 acc |
+| --- | --- | --- | --- |
+| `gemma2:27b` baseline | 0.82 | **17 (0.94)** | 0.00 |
+| `gemma2:27b` + flip check | **0.29** | **1 (0.06)** | 0.50 |
+| `qwen3:8b` baseline | 0.41 | 3 (0.17) | 0.17 |
+| `qwen3:8b` + flip check | **0.24** | **0 (0.00)** | 0.33 |
+
+**The check works exactly as designed, and that is why it fails the
+acceptance.** The trap rate collapses (0.94 → 0.06) because the check
+catches every stable inversion — but BOTH models answer the same
+asymmetric type with the roles swapped on nearly every edge, right or
+wrong, so it also degrades correct forward suggestions wholesale:
+`gemma2:27b` forward accuracy 0.82 → 0.29 against the −0.07 that
+rejected the prompt guard. Not shipped.
+
+**What the numbers actually establish is worse than a failed treatment:
+the models carry no direction evidence at all.** A model that answers
+identically under role reversal never used direction to answer; the
+0.82 "forward accuracy" was fixture-orientation luck, and a field
+bundle's untyped edges arrive in either orientation (the field run that
+motivated #561 emitted `[member_of] organization -> person`). Option 2
+(a direction field in the reply schema) asks the same evidence-free
+model to express a direction it does not possess. The mitigation that
+prices this in without pretending to fix emission is #613's option 3 —
+never bulk-apply asymmetric types; route them through per-item consent,
+zero LLM cost — filed as the follow-up from these numbers, where the
+flip check remains a candidate ANNOTATION (mark unverified, human
+decides) rather than an auto-degrade.
