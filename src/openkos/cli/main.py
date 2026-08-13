@@ -5392,7 +5392,8 @@ def purge(
     write: (1) reference-aware refusal (unless `--force`) -- reused from
     `forget`'s own gate; (2) `git`/`git-filter-repo` availability; (3) the
     workspace root must BE a git repository root (`vcs.repo_root`); (4) the
-    working tree must be clean (`vcs.is_clean`); (5) the local repo must
+    working tree must be clean (`vcs.dirty_paths`, the refusal naming the
+    offending paths); (5) the local repo must
     have NO commits already published on any remote (`vcs.has_published_commits`
     -- history rewriting cannot retroactively change what a remote already
     has); (6) a TYPED CONFIRMATION PHRASE, printed alongside the preview,
@@ -5676,16 +5677,23 @@ def purge(
         )
         raise typer.Exit(code=1)
 
-    # Rail 4: the working tree must be clean.
+    # Rail 4: the working tree must be clean. The engine owns this repo and
+    # commits on the user's behalf, so the refusal names WHAT is dirty
+    # (#647) instead of sending the user to `git status` to interpret an
+    # engine message. Capped at 10 paths so a large drift never floods
+    # stderr.
     try:
-        clean = vcs_git.is_clean(root)
+        dirty = vcs_git.dirty_paths(root)
     except vcs_git.GitError as exc:
         typer.echo(f"openkos purge: refusing to purge -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
-    if not clean:
+    if dirty:
+        shown = ", ".join(dirty[:10])
+        overflow = f" (and {len(dirty) - 10} more)" if len(dirty) > 10 else ""
         typer.echo(
             "openkos purge: refusing to purge -- the working tree has "
-            "uncommitted changes; commit or stash them, then try again.",
+            f"uncommitted changes: {shown}{overflow}; commit or stash "
+            "them, then try again.",
             err=True,
         )
         raise typer.Exit(code=1)

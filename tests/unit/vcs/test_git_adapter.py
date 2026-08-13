@@ -356,6 +356,86 @@ def test_gitignore_template_ignores_venv() -> None:
     assert ".venv" in git._GITIGNORE_TEMPLATE.splitlines()
 
 
+def test_gitignore_template_ignores_obsidian_vault_dir() -> None:
+    """#647: the README recommends opening the bundle in Obsidian, so the
+    vault directory it creates is foreseeable and must never dirty the
+    workspace repo (an untracked `.obsidian/` blocks `purge`)."""
+    assert ".obsidian/" in git._GITIGNORE_TEMPLATE.splitlines()
+
+
+def test_gitignore_template_ignores_vscode_dir() -> None:
+    """#647: VS Code is recommended by name too; same reasoning."""
+    assert ".vscode/" in git._GITIGNORE_TEMPLATE.splitlines()
+
+
+# --- dirty_paths (#647: purge names the offending paths) --------------------
+
+
+def test_dirty_paths_empty_on_clean_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+
+    assert git.dirty_paths(repo) == []
+
+
+def test_dirty_paths_names_a_modified_tracked_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+    (repo / "openkos.yaml").write_text("name: y\n", encoding="utf-8")
+
+    assert git.dirty_paths(repo) == ["openkos.yaml"]
+
+
+def test_dirty_paths_names_an_untracked_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The #647 shape exactly: an editor vault directory nothing tracks."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+    vault = repo / ".obsidian"
+    vault.mkdir()
+    (vault / "workspace.json").write_text("{}", encoding="utf-8")
+
+    assert git.dirty_paths(repo) == [".obsidian/"]
+
+
+def test_dirty_paths_names_the_rename_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A staged rename's porcelain line is `R  old -> new`; the path the
+    user must act on is the NEW one."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo_with_identity(repo, monkeypatch, tmp_path)
+    (repo / "openkos.yaml").write_text("name: x\n", encoding="utf-8")
+    git.commit_paths(repo, ["openkos.yaml"], "chore: initialize")
+    move_result = git._run(["git", "mv", "openkos.yaml", "renamed.yaml"], cwd=repo)
+    assert move_result.returncode == 0, move_result.stderr
+
+    assert git.dirty_paths(repo) == ["renamed.yaml"]
+
+
+def test_dirty_paths_raises_git_error_on_non_git_dir(tmp_path: Path) -> None:
+    non_repo = tmp_path / "not-a-repo"
+    non_repo.mkdir()
+
+    with pytest.raises(git.GitError):
+        git.dirty_paths(non_repo)
+
+
 # --- availability probes ----------------------------------------------------
 
 
