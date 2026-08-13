@@ -227,6 +227,17 @@ _EN_MARKERS = frozenset(
         "onboarding",
         "bundle-format",
         "meeting",
+        # 2026-08-13 adjudication (#630's fresh run): `Language Leakage
+        # Measurement` -- the model TRANSLATED the transcript's own
+        # subject (`la fuga de idioma`) into an English title none of
+        # whose words appear anywhere in the prose. Unambiguously English
+        # vocabulary the original hand-built list simply had not
+        # anticipated; without these three the scorer labels a genuine
+        # harmful leak `neutral` and counts a correct drop as a false
+        # positive.
+        "language",
+        "leakage",
+        "measurement",
     ]
 )
 
@@ -277,6 +288,49 @@ def bigram_adjacent(title: str, source_text: str) -> bool:
     return all(f" {a} {b} " in prose for a, b in itertools.pairwise(words))
 
 
+_ES_ORTHOGRAPHIC_ACCENTS = frozenset("áéíóúüñ")
+"""Characters that only Spanish orthography produces in this fixture's
+es/en universe -- one anywhere in a title word exempts the title (#630)."""
+
+_ES_ORTHOGRAPHIC_SUFFIXES: tuple[str, ...] = (
+    "ción",
+    "sión",
+    "miento",
+    "ería",
+    "encia",
+    "ancia",
+    "dad",
+    "ado",
+    "ada",
+)
+"""Spanish derivational suffixes (#630, option (a) of #622): a word ending
+in one -- STRICTLY longer than the suffix itself, so English `dad` never
+matches -- marks the title dominant-language and exempts it from the
+adjacency test. The es/en scope matches the #618 gate's own (#563).
+Known fail-open residue: rare English words ending in `-ado` (`tornado`,
+`avocado`) would exempt a leaked title containing them -- a missed catch,
+never a false positive, which is the side the zero-FP bar protects."""
+
+
+def spanish_orthography(title: str) -> bool:
+    """#630's exemption: whether any word of `title` carries a Spanish
+    orthographic marker -- an accented character, or a derivational suffix
+    from `_ES_ORTHOGRAPHIC_SUFFIXES`. `Snapshot Derivado` (Spanish
+    morphology composing an English loanword's singular from the prose's
+    plural) is exactly the demonstrated false-positive class this exempts
+    BEFORE the adjacency test runs; every measured pure-English residual
+    carries neither marker."""
+    for word in _ADJACENCY_WORD_RE.findall(title.casefold()):
+        if any(char in _ES_ORTHOGRAPHIC_ACCENTS for char in word):
+            return True
+        if any(
+            word.endswith(suffix) and len(word) > len(suffix)
+            for suffix in _ES_ORTHOGRAPHIC_SUFFIXES
+        ):
+            return True
+    return False
+
+
 def gate_neutral(title: str) -> bool:
     """Whether the PRODUCTION gate's voter (#618) sees no function words at
     all in `title` -- the class the #622 residuals live in. Deliberately
@@ -324,6 +378,7 @@ def score_extension(kept_titles: list[str], text: str) -> dict[str, list[str]]:
         title
         for title in kept_titles
         if gate_neutral(title)
+        and not spanish_orthography(title)
         and not quoted_verbatim(title, text)
         and not bigram_adjacent(title, text)
     ]
