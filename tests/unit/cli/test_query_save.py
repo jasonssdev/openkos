@@ -125,9 +125,10 @@ def test_stage_filed_answer_title_description_default_to_question(
     tmp_path: Path,
 ) -> None:
     """Without `--title`/`--description`: the description defaults to the
-    question, and the title FALLS BACK to the question when the answer's
-    first sentence is unusable (here: 11 chars, below the declarative
-    minimum) -- the pre-#570 default, kept as the safety net."""
+    question, and when the answer's first sentence is unusable (here: 11
+    chars, below the declarative minimum) the title falls to the QUESTION
+    SUBJECT (#646) -- `what is stoicism?` names `stoicism`, so the filed
+    identity is the subject, never the interrogative sentence."""
     bundle_dir = tmp_path / "bundle"
     _write_concept(bundle_dir, "concepts", "stoicism")
     citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
@@ -141,7 +142,7 @@ def test_stage_filed_answer_title_description_default_to_question(
         timestamp="2026-07-23T00:00:00Z",
     )
 
-    assert plan.title == "what is stoicism?"
+    assert plan.title == "Stoicism"
     assert plan.description == "what is stoicism?"
 
 
@@ -250,7 +251,9 @@ def test_stage_filed_answer_collision_raises(tmp_path: Path) -> None:
     collision handling (mirror ingest)")."""
     bundle_dir = tmp_path / "bundle"
     _write_concept(bundle_dir, "concepts", "stoicism")
-    _write_concept(bundle_dir, "insights", "what-is-stoicism", title="Existing")
+    # `what is stoicism?` + an unusable first sentence titles the filing
+    # `Stoicism` (#646's subject rung), so THAT is the colliding slug.
+    _write_concept(bundle_dir, "insights", "stoicism", title="Existing")
     citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
 
     with pytest.raises(ValueError, match="already exists"):
@@ -1367,6 +1370,64 @@ def test_declarative_answer_title_refuses_fragments_questions_and_prose() -> Non
     assert main._declarative_answer_title("word " * 40 + ".") is None
 
 
+def test_question_subject_strips_definitional_scaffolding() -> None:
+    """#646: the deterministic subject rung -- a definitional question's
+    interrogative scaffolding strips away, the leading article strips, a
+    trailing chained interrogative clause strips, and the first letter is
+    capitalized so the subject reads as a title."""
+    assert (
+        main._question_subject("¿qué es el Model Context Protocol?")
+        == "Model Context Protocol"
+    )
+    assert main._question_subject("¿qué es MCP y para qué sirve?") == "MCP"
+    assert main._question_subject("what is the context window?") == "Context window"
+    assert main._question_subject("¿para qué sirve el índice FTS?") == "Índice FTS"
+    assert main._question_subject("¿cómo funciona la ingesta?") == "Ingesta"
+    assert main._question_subject("what are embeddings?") == "Embeddings"
+
+
+def test_question_subject_refuses_non_definitional_questions() -> None:
+    """A question whose shape the rung does not recognize returns `None`
+    so the ladder falls through to the question verbatim -- guessing a
+    subject out of an open question would title the filing wrong."""
+    assert main._question_subject("¿qué decidimos sobre el almacenamiento?") is None
+    assert main._question_subject("summarize the meeting") is None
+    assert main._question_subject("¿qué es?") is None
+    assert main._question_subject("what is   ?") is None
+
+
+def test_stage_filed_answer_uses_the_subject_when_the_sentence_is_unusable(
+    tmp_path: Path,
+) -> None:
+    """#646's production shape exactly: a long Spanish answer whose first
+    sentence exceeds the declarative ceiling used to fall back to the
+    QUESTION VERBATIM (`¿qué es el Model Context Protocol?` became the
+    permanent Concept ID). The subject rung now files it under the
+    subject."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "mcp")
+    citations = [Citation(concept_id="concepts/mcp", title="MCP")]
+    long_first_sentence = (
+        "El Model Context Protocol es un protocolo abierto que permite a "
+        "los modelos de lenguaje conectarse con herramientas externas y "
+        "estandariza la integración entre clientes y servidores. Más "
+        "detalle después."
+    )
+
+    plan = _stage_filed_answer(
+        question="¿qué es el Model Context Protocol?",
+        answer_text=long_first_sentence,
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+    )
+
+    assert plan.title == "Model Context Protocol"
+    assert plan.description == "¿qué es el Model Context Protocol?"
+    assert plan.slug == "model-context-protocol"
+
+
 def test_stage_filed_answer_defaults_to_insight_with_declarative_title(
     tmp_path: Path,
 ) -> None:
@@ -1398,13 +1459,16 @@ def test_stage_filed_answer_classifiable_type_override_still_accepted(
     tmp_path: Path,
 ) -> None:
     """`--type Concept` remains valid -- Insight is the default, not a
-    restriction on the buildable vocabulary."""
+    restriction on the buildable vocabulary. The question here is one the
+    #646 subject rung does NOT recognize: with `--type Concept` the filing
+    targets `concepts/`, where a subject-titled `Stoicism` would collide
+    with the cited fixture concept itself."""
     bundle_dir = tmp_path / "bundle"
     _write_concept(bundle_dir, "concepts", "stoicism")
     citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
 
     plan = _stage_filed_answer(
-        question="what is stoicism?",
+        question="summarize stoicism",
         answer_text="answer text",
         citations=citations,
         bundle_dir=bundle_dir,

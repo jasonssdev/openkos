@@ -12473,6 +12473,84 @@ def _declarative_answer_title(answer_text: str) -> str | None:
     return candidate
 
 
+_QUESTION_SUBJECT_PREFIXES: Final = (
+    "qué es ",
+    "qué son ",
+    "cuál es ",
+    "cuáles son ",
+    "qué significa ",
+    "para qué sirve ",
+    "para qué sirven ",
+    "cómo funciona ",
+    "cómo funcionan ",
+    "what is ",
+    "what are ",
+)
+"""Definitional interrogative scaffolds `_question_subject` strips (#646).
+Deliberately narrow: only shapes where the remainder IS the subject. An
+open question (`¿qué decidimos ...?`) has no extractable subject and must
+fall through to the question-verbatim safety net, never be guessed at."""
+
+_QUESTION_SUBJECT_TRAILING_RE: Final = re.compile(
+    r"\s+(?:y|e|and)\s+(?:para qué|cómo|cuál|qué|what|how|why)\b.*$",
+    re.IGNORECASE,
+)
+"""A chained second interrogative clause (`... y para qué sirve`) is
+scaffolding, not subject; a plain conjunction between nouns (`entrada y
+salida`) never matches because the next word is not an interrogative."""
+
+_QUESTION_SUBJECT_ARTICLES: Final = (
+    "el ",
+    "la ",
+    "los ",
+    "las ",
+    "un ",
+    "una ",
+    "the ",
+    "a ",
+    "an ",
+)
+
+
+def _question_subject(question: str) -> str | None:
+    """Extract the SUBJECT of a definitional question, or `None` (#646).
+
+    `¿qué es el Model Context Protocol?` names `Model Context Protocol`;
+    filing the question verbatim makes the slug -- the permanent Concept ID
+    -- an interrogative sentence, and makes two insights about the same
+    subject look unrelated whenever the questions were phrased differently.
+    This is the middle rung of the title ladder: it runs only when
+    `_declarative_answer_title` refused (the answer's first sentence was
+    unusable -- in production, long Spanish openings routinely exceed the
+    declarative ceiling), and falls through to the question verbatim when
+    the question's shape is not recognizably definitional.
+
+    Deterministic: normalize whitespace, strip interrogative punctuation,
+    match a known scaffold prefix case-insensitively, cut a chained
+    interrogative clause, strip one leading article, and capitalize the
+    first letter. Refuses a residue shorter than 2 characters, longer than
+    `_DECLARATIVE_TITLE_MAX_CHARS`, or with no letters at all."""
+    text = " ".join(question.split()).strip("¿?¡!. ")
+    lowered = text.lower()
+    for prefix in _QUESTION_SUBJECT_PREFIXES:
+        if lowered.startswith(prefix):
+            subject = text[len(prefix) :]
+            break
+    else:
+        return None
+    subject = _QUESTION_SUBJECT_TRAILING_RE.sub("", subject).strip()
+    lowered_subject = subject.lower()
+    for article in _QUESTION_SUBJECT_ARTICLES:
+        if lowered_subject.startswith(article):
+            subject = subject[len(article) :].strip()
+            break
+    if not (2 <= len(subject) <= _DECLARATIVE_TITLE_MAX_CHARS):
+        return None
+    if not any(char.isalpha() for char in subject):
+        return None
+    return subject[0].upper() + subject[1:]
+
+
 def _stage_filed_answer(
     *,
     question: str,
@@ -12527,11 +12605,19 @@ def _stage_filed_answer(
     # Issue #570: the default title is DECLARATIVE, derived from the
     # answer's first sentence -- the slug is the permanent Concept ID, and
     # an interrogative sentence is not an identity. The question keeps its
-    # place as the default description; a first sentence too short, too
-    # long, or itself a question falls back to the question, the pre-#570
-    # default.
+    # place as the default description. #646 added the middle rung: when
+    # the first sentence is unusable (long Spanish openings routinely
+    # exceed the declarative ceiling in production), a definitional
+    # question's SUBJECT titles the filing; only an unrecognizable
+    # question still falls back to the question verbatim.
     resolved_title = (
-        (_declarative_answer_title(answer_text) or question) if title is None else title
+        (
+            _declarative_answer_title(answer_text)
+            or _question_subject(question)
+            or question
+        )
+        if title is None
+        else title
     )
     # Neutralize markdown link LABEL delimiters before the title reaches the
     # `index.md`/`log.md` bullets (the answer's first sentence or a `--title`
