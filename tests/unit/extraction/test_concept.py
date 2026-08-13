@@ -1066,10 +1066,14 @@ def test_procedure_exempt_from_framing_drop() -> None:
 def test_union_framing_drop_applies_per_run_before_merge() -> None:
     """#533: a framing object must never reach the judge -- it consumes a
     candidate slot and (measured) always wins the prefix. Dropped from each
-    run's contribution before the union is built, like the twin rule."""
+    run's contribution before the union is built, like the twin rule. Two
+    genuine candidates, because a single-candidate union skips the judge
+    call this test inspects (#644)."""
     run1 = _array(_MEETING_DISCUSSION_FRAMING_ITEM, _DECISION_ITEM)
-    run2 = _array(_DECISION_ITEM)
-    llm = _SequencedLLM([run1, run2, _keep_reply("Frame the Essay Around Control")])
+    run2 = _array(_DECISION_ITEM, _CONCEPT_ITEM)
+    llm = _SequencedLLM(
+        [run1, run2, _keep_reply("Frame the Essay Around Control", "Stoicism")]
+    )
 
     outcome = concept_mod.extract_concept_union(
         "Meeting notes.", source_title="Team Meeting", llm=llm
@@ -2431,11 +2435,19 @@ def test_union_twin_kept_by_one_runs_floor_is_dropped_from_the_merged_union() ->
     subject, which is precisely the case `_drop_source_title_twins`'s
     docstring promises to drop.
 
-    The judge is told to keep BOTH titles, so nothing downstream of the twin
-    rule can remove the twin for it."""
+    The judge is told to keep ALL titles, so nothing downstream of the twin
+    rule can remove the twin for it. Run 2 carries a second genuine subject
+    beside the twin, because a merged union of one candidate skips the
+    judge call this test inspects (#644)."""
     run1 = _array(_DICHOTOMY_ITEM)
-    run2 = _array(_DICHOTOMY_ITEM, _PERSON_ITEM)
-    llm = _SequencedLLM([run1, run2, _keep_reply("Dichotomy of Control", "Epictetus")])
+    run2 = _array(_DICHOTOMY_ITEM, _PERSON_ITEM, _CONCEPT_ITEM)
+    llm = _SequencedLLM(
+        [
+            run1,
+            run2,
+            _keep_reply("Dichotomy of Control", "Epictetus", "Stoicism"),
+        ]
+    )
 
     outcome = concept_mod.extract_concept_union(
         "Notes on what is up to us.",
@@ -2443,7 +2455,7 @@ def test_union_twin_kept_by_one_runs_floor_is_dropped_from_the_merged_union() ->
         llm=llm,
     )
 
-    assert [r.title for r in outcome.objects] == ["Epictetus"]
+    assert [r.title for r in outcome.objects] == ["Epictetus", "Stoicism"]
     # The twin never reaches the judge either: the drop still runs before
     # the `_MAX_JUDGE_CANDIDATES` ceiling, not after it.
     assert "Dichotomy of Control" not in llm.calls[2][1]["content"]
@@ -2539,8 +2551,10 @@ def test_union_chunked_source_makes_exactly_chunks_plus_one_calls() -> None:
     text = _long_text()
     windows = concept_mod._chunk_lines(text)
     replies: list[str | Exception] = ["[]"] * len(windows)
-    replies[0] = _array(_DECISION_ITEM)
-    replies.append(_keep_reply("Frame the Essay Around Control"))
+    # Two distinct candidates: a single-candidate union skips the judge
+    # entirely (#644), which would make this exactly-chunks+1 count wrong.
+    replies[0] = _array(_DECISION_ITEM, _CONCEPT_ITEM)
+    replies.append(_keep_reply("Frame the Essay Around Control", "Stoicism"))
     llm = _SequencedLLM(replies)
 
     outcome = concept_mod.extract_concept_union(text, source_title="Meeting", llm=llm)
@@ -2710,6 +2724,48 @@ def test_union_empty_merged_union_skips_the_judge_entirely() -> None:
     assert len(llm.calls) == 2
     assert outcome.report.judge_status == "skipped"
     assert outcome.objects == []
+
+
+def test_union_single_candidate_skips_the_judge_call() -> None:
+    """#644: a merged union of exactly ONE candidate makes NO judge call --
+    the call is a provable no-op (every outcome keeps that candidate: a kept
+    title keeps it, `None`/failed keeps the full set, an empty admitted set
+    degrades to the full set), so spending it can only add noise. It was
+    exactly that noise -- a full-line echo on the first, cold-start file of
+    a batch -- that produced #644's degrade notice. `judge_status` is
+    `"skipped"` ("judge not run"), sharing the empty-union skip's value."""
+    llm = _SequencedLLM(
+        [_array(_CONCEPT_ITEM), _array(_CONCEPT_ITEM), _keep_reply("Stoicism")]
+    )
+
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+    assert len(llm.calls) == 2  # 2 extraction calls, NO judge call
+    assert outcome.report.judge_status == "skipped"
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+    assert outcome.report.produced == 1
+    assert outcome.report.retained == 1
+    assert outcome.report.judged_out_titles == ()
+
+
+def test_union_full_line_echo_reply_is_salvaged_end_to_end() -> None:
+    """#644, the multi-candidate variant: a judge reply echoing a WHOLE
+    candidate line instead of the bare title is salvaged by `judge.select`
+    back to the candidate title, so the union selects normally
+    (`judge_status == "ok"`) instead of degrading to the full unfiltered
+    set with `judge_status == "empty"`."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_ITEM)
+    echo = (
+        "{\"keep\": [\"1. type='Concept' title='Stoicism' "
+        "description='A school of Hellenistic philosophy.'\"]}"
+    )
+    llm = _SequencedLLM([run1, _array(), echo])
+
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+    assert outcome.report.judge_status == "ok"
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+    assert outcome.report.judged_out_titles == ("Epictetus",)
 
 
 def test_union_backstop_passes_through_a_set_of_7_unchanged() -> None:

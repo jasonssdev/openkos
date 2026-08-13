@@ -992,9 +992,10 @@ def test_private_default_sensitivity_floor_calls_llm_chat_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`default_sensitivity: private` (the packaged default) proceeds to
-    call `llm.chat` (spec: Private floor proceeds unchanged) -- 3 calls
-    under the union+judge product default (#456: 2 extraction runs + 1
-    judge call), not blocked by the sensitivity gate."""
+    call `llm.chat` (spec: Private floor proceeds unchanged) -- 2 calls
+    under the union+judge product default (#456: 2 extraction runs; the
+    fixed reply merges to ONE candidate, so the judge call is skipped,
+    #644), not blocked by the sensitivity gate."""
     _init_workspace(tmp_path, monkeypatch)
     fake = _patch_llm(monkeypatch, _concept_reply())
     source = tmp_path / "notes.txt"
@@ -1003,7 +1004,7 @@ def test_private_default_sensitivity_floor_calls_llm_chat_unchanged(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert len(fake.calls) == 3
+    assert len(fake.calls) == 2
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     assert concept_path.is_file()
 
@@ -1041,7 +1042,9 @@ def test_include_confidential_bypasses_the_confidential_floor_gate(
     """`--include-confidential` bypasses the `default_sensitivity:
     confidential` floor gate: `llm.chat` IS called, and the derived object
     is written, even at a confidential floor (spec: `--include-confidential`
-    Escape Flag) -- 3 calls under the union+judge product default (#456)."""
+    Escape Flag) -- 2 calls under the union+judge product default (#456:
+    2 extraction runs; the fixed reply merges to ONE candidate, so the
+    judge call is skipped, #644)."""
     _init_workspace(tmp_path, monkeypatch)
     _set_config_field(
         tmp_path, "default_sensitivity: private", "default_sensitivity: confidential"
@@ -1055,7 +1058,7 @@ def test_include_confidential_bypasses_the_confidential_floor_gate(
     )
 
     assert result.exit_code == 0
-    assert len(fake.calls) == 3
+    assert len(fake.calls) == 2
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     assert concept_path.is_file()
 
@@ -1194,9 +1197,14 @@ def test_stage_derived_objects_union_judge_true_calls_extract_concept_union(
     tmp_path: Path,
 ) -> None:
     """`union_judge=True` routes through `extract_concept_union`: 2
-    extraction calls + 1 judge call."""
+    extraction calls + 1 judge call. Two DISTINCT candidates, because a
+    single-candidate union skips the judge call entirely (#644)."""
     llm = _SequencedLLM(
-        [_concept_reply(), _concept_reply(), '{"keep": ["Stoic Dichotomy Of Control"]}']
+        [
+            _concept_reply(),
+            _concept_reply(title="Negative Visualization"),
+            '{"keep": ["Stoic Dichotomy Of Control", "Negative Visualization"]}',
+        ]
     )
 
     plans, skip_reason, _notice = main._stage_derived_objects(
@@ -1204,7 +1212,7 @@ def test_stage_derived_objects_union_judge_true_calls_extract_concept_union(
     )
 
     assert len(llm.calls) == 3
-    assert len(plans) == 1
+    assert len(plans) == 2
     assert skip_reason is None
 
 
@@ -1221,14 +1229,15 @@ def _patch_sequenced_llm(
 def test_ingest_judge_failure_keeps_the_merged_union_and_reports_distinctly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Task 3.6: base extraction succeeds (2 runs, 2 distinct candidates),
+    """Task 3.6: base extraction succeeds (2 runs, 2 distinct candidates --
+    a single-candidate union would skip the judge call entirely, #644),
     the judge call raises `OllamaError` -- the merged-union candidates
     (backstop-truncated) are staged/written, `_judge_failure_notice` fires
     (distinct wording from `_judge_selection_notice`/`_extraction_cap_notice`
     -- neither of which appears), and `ingest` exits 0."""
     _init_workspace(tmp_path, monkeypatch)
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
-    run2 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(monkeypatch, [run1, run2, OllamaUnavailable("boom")])
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes about self-control.", encoding="utf-8")
@@ -1246,15 +1255,18 @@ def test_ingest_judge_failure_keeps_the_merged_union_and_reports_distinctly(
 def test_ingest_judge_empty_admission_keeps_the_merged_union_and_reports_distinctly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Task 2.24 (#456 gate finding): base extraction succeeds, the judge
-    reply is well-formed but names a title absent from every candidate --
-    the admitted set is empty with nothing to re-admit. The merged-union
-    candidates (backstop-truncated) are still staged/written,
+    """Task 2.24 (#456 gate finding): base extraction succeeds (2 distinct
+    candidates -- a single-candidate union skips the judge entirely, #644),
+    the judge reply is well-formed but names a title absent from every
+    candidate -- the admitted set is empty with nothing to re-admit. The
+    merged-union candidates (backstop-truncated) are still staged/written,
     `_judge_failure_notice` fires with wording distinct from BOTH the
-    `"failed"` degrade and a successful selection, and `ingest` exits 0."""
+    `"failed"` degrade and a successful selection -- and honest about the
+    cause: the judge REPLIED, so "unavailable" (what #644's reporter was
+    misled by) must not appear -- and `ingest` exits 0."""
     _init_workspace(tmp_path, monkeypatch)
     run1 = _concept_reply(title="Stoic Dichotomy Of Control")
-    run2 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Negative Visualization")
     _patch_sequenced_llm(monkeypatch, [run1, run2, '{"keep": ["A Fabricated Title"]}'])
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes about self-control.", encoding="utf-8")
@@ -1262,10 +1274,34 @@ def test_ingest_judge_empty_admission_keeps_the_merged_union_and_reports_distinc
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert "judge selection admitted zero objects" in result.stderr
+    assert "judge reply matched no candidate" in result.stderr
     assert "judge selection unavailable" not in result.stderr
     assert "cap reached" not in result.stderr
     assert "judge dropped" not in result.stderr
+    concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
+    assert concept_path.is_file()
+
+
+def test_ingest_single_candidate_union_skips_the_judge_and_reports_no_degrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#644's exact reported shape: both union runs agree on ONE candidate.
+    No judge call is spent (the fake carries NO judge reply -- a call would
+    degrade to `"failed"` and render the very notice #644 reported), the
+    sole object is written, and no judge degrade notice appears."""
+    _init_workspace(tmp_path, monkeypatch)
+    run1 = _concept_reply(title="Stoic Dichotomy Of Control")
+    run2 = _concept_reply(title="Stoic Dichotomy Of Control")
+    fake = _patch_sequenced_llm(monkeypatch, [run1, run2])
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert len(fake.calls) == 2
+    assert "judge selection unavailable" not in result.stderr
+    assert "judge reply matched no candidate" not in result.stderr
     concept_path = tmp_path / "bundle" / "concepts" / "stoic-dichotomy-of-control.md"
     assert concept_path.is_file()
 
@@ -2171,7 +2207,8 @@ def test_reingest_with_nondeterministic_llm_title_inserts_a_new_distinct_object(
     result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert len(fake.calls) == 3  # 2 extraction runs + 1 judge call (#456)
+    # 2 extraction runs (#456); one merged candidate skips the judge (#644).
+    assert len(fake.calls) == 2
     assert first_concept_path.read_text(encoding="utf-8") == first_content
     second_concept_path = (
         tmp_path / "bundle" / "concepts" / "a-completely-different-title.md"

@@ -2667,11 +2667,14 @@ def _judge_failure_notice(report: ExtractionReport) -> str | None:
     unparseable/wrong-shape reply) and `"empty"` (#456 gate finding: a
     valid-shaped reply whose admitted set was empty). Each status renders
     distinct wording so the two degrade causes stay tellable apart in the
-    terminal."""
+    terminal -- and the `"empty"` wording must be honest that the judge
+    REPLIED (#644: a full-line echo landing here as "unavailable"-adjacent
+    wording sent the reporter chasing a cold-load timeout that measurement
+    falsified; the reply arrived fine, it just named no candidate)."""
     if report.judge_status == "failed":
         reason = "judge selection unavailable"
     elif report.judge_status == "empty":
-        reason = "judge selection admitted zero objects"
+        reason = "judge reply matched no candidate"
     else:
         return None
     return (
