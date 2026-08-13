@@ -2223,15 +2223,18 @@ def test_chunk_lines_packs_multiline_chunks_to_at_most_target() -> None:
 
 def test_small_source_makes_exactly_one_chat_call() -> None:
     """At or under `_CHUNK_THRESHOLD` the single-call path is untouched --
-    the behavior every existing measurement was taken against."""
-    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+    the behavior every existing measurement was taken against. Two objects
+    in the reply, so the count stays about chunk fan-out: a LONE object on a
+    source this long now buys a #642 low-yield re-ask, which is a separate
+    call this test does not pin."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM, _PERSON_ITEM))
     text = "x" * concept_mod._CHUNK_THRESHOLD
 
     outcome = concept_mod.extract_concept(text, source_title="Notes", llm=llm)
 
     assert len(llm.calls) == 1
     assert outcome.report.chunks == 1
-    assert [r.title for r in outcome.objects] == ["Stoicism"]
+    assert [r.title for r in outcome.objects] == ["Stoicism", "Epictetus"]
 
 
 def test_large_source_makes_one_chat_call_per_chunk() -> None:
@@ -3879,6 +3882,151 @@ def test_a_shared_initial_is_not_an_acronym_match() -> None:
     )
 
     assert len(llm.calls) == 1
+    assert outcome.report.sole_object_restates_source is False
+
+
+# --- Low-yield trigger: a lone NON-restating object on a long source (#642) --
+#
+# The restate trigger (#584/#586) fires only when the sole object restates
+# the source's own topic. A source collapsing to one LEGITIMATE-but-
+# insufficient object shows no twin symptom and got no second attempt:
+# `02-how-claude-code-works.md` (2411 chars) returned a single object titled
+# `Agentic Loop` in 3 of 5 runs (`qwen3:8b`), silently losing Context
+# Window / Tools / Permissions. Manually invoking the re-ask on those runs
+# recovered exactly those three subjects all 3 times -- identical to the
+# good runs' object set.
+#
+# So the trigger widens: a sole object that does NOT restate the source also
+# spends the one extra call, but only when the source is long enough for
+# "one object" to be a suspicious answer (`_REASK_LOW_YIELD_THRESHOLD`).
+# The restate arm stays length-independent -- the negative control
+# (`Replica Lag`, 1260 chars, genuinely single-subject) relies on it firing
+# below the threshold, where the additive re-ask added zero junk in 5 of 5
+# runs.
+
+
+def _low_yield_source(chars: int) -> str:
+    """Deterministic prose of EXACTLY `chars` characters, so the boundary
+    tests pin the threshold comparison itself rather than a length that
+    happens to land on one side of it."""
+    base = (
+        "The loop reads the context window, calls tools, and checks "
+        "permissions before every step. "
+    )
+    return (base * (chars // len(base) + 1))[:chars]
+
+
+def test_low_yield_threshold_is_two_thousand_chars() -> None:
+    """The measured rationale, pinned: 2000 sits below the measured recovery
+    case (2411 chars, recovery 3/3) and above the trivial-note class -- a
+    46-byte note yielding one object is a CORRECT answer, not a collapse."""
+    assert concept_mod._REASK_LOW_YIELD_THRESHOLD == 2000
+
+
+def test_lone_non_restating_object_on_a_long_source_triggers_a_re_ask() -> None:
+    """#642's measured shape: one legitimate object that does NOT restate
+    the source title, from a source long enough that one object is a
+    suspicious yield. The re-ask fires, and its additions merge exactly as
+    on the restate path. Exactly 2000 chars, so this test is also the
+    `>=` half of the boundary."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), _array(_PERSON_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        _low_yield_source(2000), source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == ["Stoicism", "Epictetus"]
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ("Epictetus",)
+
+
+def test_no_re_ask_for_a_lone_non_restating_object_just_under_the_threshold() -> None:
+    """The `<` half of the boundary: at 1999 chars the lone non-restating
+    object is today's ordinary single-subject reply, and no second call goes
+    out. Below the threshold the widening changes nothing."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        _low_yield_source(1999), source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism"]
+    assert outcome.report.reask_runs == 0
+    assert outcome.report.reask_added_titles == ()
+
+
+def test_restate_trigger_still_fires_below_the_low_yield_threshold() -> None:
+    """The restate arm is length-INDEPENDENT, exactly as before #642: a sole
+    restating object fires the re-ask on a source far under 2000 chars. The
+    negative control (`Replica Lag`, 1260 chars) relies on this arm, and the
+    length gate must never reach it."""
+    llm = _SequencedLLM([_array(_DICHOTOMY_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        "Notes on what is up to us.",
+        source_title=_DICHOTOMY_TWIN_TITLE,
+        llm=llm,
+    )
+
+    assert len(llm.calls) == 2
+    assert [r.title for r in outcome.objects] == ["Dichotomy of Control", "Apatheia"]
+    assert outcome.report.reask_runs == 1
+
+
+def test_no_low_yield_re_ask_when_more_than_one_object_survives() -> None:
+    """The `exactly one` half of the trigger is untouched by the widening:
+    two surviving objects on a long source is a normal yield, whatever the
+    length -- firing there would silently double extraction cost on every
+    long source."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM, _PERSON_ITEM), _array(_APATHEIA_ITEM)])
+
+    outcome = concept_mod.extract_concept(
+        _low_yield_source(2500), source_title="Notes", llm=llm
+    )
+
+    assert len(llm.calls) == 1
+    assert [r.title for r in outcome.objects] == ["Stoicism", "Epictetus"]
+    assert outcome.report.reask_runs == 0
+
+
+def test_low_yield_re_ask_returning_nothing_leaves_the_object_untouched() -> None:
+    """The additive bound on the newly reachable path: the length trigger
+    fires, the second ask finds nothing, and the output is byte-identical to
+    what it was before the trigger existed. The false-positive cost is one
+    clean extra call, nothing more."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        _low_yield_source(2411), source_title="Notes", llm=llm
+    )
+
+    assert outcome.objects == [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Stoicism",
+            description="A school of Hellenistic philosophy.",
+            body="Founded by Zeno of Citium.",
+        )
+    ]
+    assert outcome.report.reask_runs == 1
+    assert outcome.report.reask_added_titles == ()
+
+
+def test_low_yield_re_ask_does_not_mark_the_source_as_restating() -> None:
+    """The #585 notice keeps its own predicate untouched: a low-yield
+    re-ask fires on an object that does NOT restate the source, so
+    `sole_object_restates_source` stays False even when the re-ask adds
+    nothing. The notice answers "did the source collapse to a restatement
+    of itself", not "did we spend a second call"."""
+    llm = _SequencedLLM([_array(_CONCEPT_ITEM), "[]"])
+
+    outcome = concept_mod.extract_concept(
+        _low_yield_source(2411), source_title="Notes", llm=llm
+    )
+
+    assert outcome.report.reask_runs == 1
     assert outcome.report.sole_object_restates_source is False
 
 
