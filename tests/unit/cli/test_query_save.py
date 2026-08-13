@@ -124,8 +124,10 @@ def test_stage_filed_answer_provenance_equals_cited_ids(tmp_path: Path) -> None:
 def test_stage_filed_answer_title_description_default_to_question(
     tmp_path: Path,
 ) -> None:
-    """Without `--title`/`--description`, both default to the question
-    (spec: "Default filing uses the question as title/description")."""
+    """Without `--title`/`--description`: the description defaults to the
+    question, and the title FALLS BACK to the question when the answer's
+    first sentence is unusable (here: 11 chars, below the declarative
+    minimum) -- the pre-#570 default, kept as the safety net."""
     bundle_dir = tmp_path / "bundle"
     _write_concept(bundle_dir, "concepts", "stoicism")
     citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
@@ -248,7 +250,7 @@ def test_stage_filed_answer_collision_raises(tmp_path: Path) -> None:
     collision handling (mirror ingest)")."""
     bundle_dir = tmp_path / "bundle"
     _write_concept(bundle_dir, "concepts", "stoicism")
-    _write_concept(bundle_dir, "concepts", "what-is-stoicism", title="Existing")
+    _write_concept(bundle_dir, "insights", "what-is-stoicism", title="Existing")
     citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
 
     with pytest.raises(ValueError, match="already exists"):
@@ -450,7 +452,12 @@ def test_query_purity_without_save_is_byte_identical(
         encoding="utf-8"
     ) == index_before
     assert (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8") == log_before
-    assert not (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").exists()
+    assert not (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).exists()
 
 
 def test_query_save_writes_concept_index_and_log(
@@ -469,18 +476,23 @@ def test_query_save_writes_concept_index_and_log(
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
     assert result.exit_code == 0
-    concept_path = tmp_path / "bundle" / "concepts" / "what-is-stoicism.md"
+    concept_path = (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    )
     assert concept_path.is_file()
     content = concept_path.read_text(encoding="utf-8")
-    assert "title: what is stoicism?" in content
-    assert "type: Concept" in content
+    assert "title: Stoicism teaches the dichotomy of control" in content
+    assert "type: Insight" in content
     assert "Stoicism teaches the dichotomy of control." in content
     assert "provenance:\n- concepts/stoicism\n" in content
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
-    assert "what-is-stoicism.md" in index_text
+    assert "stoicism-teaches-the-dichotomy-of-control.md" in index_text
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     assert "**Filed answer**" in log_text
-    assert "what-is-stoicism.md" in log_text
+    assert "stoicism-teaches-the-dichotomy-of-control.md" in log_text
     assert "from query" in log_text
     assert "reindex" in result.output.lower()
 
@@ -537,7 +549,12 @@ def test_query_save_invalid_type_refuses_no_write(
     )
 
     assert result.exit_code != 0
-    assert not (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").exists()
+    assert not (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).exists()
 
 
 def test_query_save_zero_citations_refuses_no_write(
@@ -597,7 +614,12 @@ def test_query_save_preview_and_confirm_on_tty(
 
     assert result.exit_code == 0
     assert "proposed changes" in result.output.lower()
-    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
 
 
 def test_query_save_auto_bypasses_prompt(
@@ -616,7 +638,12 @@ def test_query_save_auto_bypasses_prompt(
 
     assert result.exit_code == 0
     assert "Proceed" not in result.output
-    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
 
 
 def test_query_save_non_tty_without_auto_refuses(
@@ -635,7 +662,12 @@ def test_query_save_non_tty_without_auto_refuses(
 
     assert result.exit_code != 0
     assert "--auto" in result.stderr
-    assert not (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").exists()
+    assert not (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).exists()
     assert (tmp_path / "bundle" / "index.md").read_text(
         encoding="utf-8"
     ) == index_before
@@ -649,22 +681,31 @@ def test_query_save_slug_collision_refuses_no_write(
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     _write_concept(
-        tmp_path / "bundle", "concepts", "what-is-stoicism", title="Existing"
+        tmp_path / "bundle",
+        "insights",
+        "stoicism-teaches-the-dichotomy-of-control",
+        title="Existing",
     )
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
     fake_result = _fake_matched_answer(citations=[citation])
     monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
-    before = (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").read_text(
-        encoding="utf-8"
-    )
+    before = (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).read_text(encoding="utf-8")
 
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
     assert result.exit_code != 0
     assert "already exists" in result.stderr
-    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").read_text(
-        encoding="utf-8"
-    ) == before
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).read_text(encoding="utf-8") == before
 
 
 def test_query_save_malformed_citation_does_not_crash_and_files_confidential(
@@ -689,7 +730,9 @@ def test_query_save_malformed_citation_does_not_crash_and_files_confidential(
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
     assert result.exit_code == 0
-    concept_path = bundle_dir / "concepts" / "what-is-stoicism.md"
+    concept_path = (
+        bundle_dir / "insights" / "stoicism-teaches-the-dichotomy-of-control.md"
+    )
     assert concept_path.is_file()
     assert "sensitivity: confidential" in concept_path.read_text(encoding="utf-8")
 
@@ -714,7 +757,12 @@ def test_query_save_review_false_skips_the_prompt_like_auto(
 
     assert result.exit_code == 0
     assert "Proceed" not in result.output
-    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
 
 
 def test_query_save_prints_reindex_hint(
@@ -812,7 +860,12 @@ def test_a_write_target_edited_during_the_prompt_is_refused(
     assert target in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     # The answer document was never created: the guard precedes every write.
-    assert not (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").exists()
+    assert not (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).exists()
     after = snapshot_with_mtime(tmp_path)
     assert _changed_under_bundle(before, after) == {Path(target)}
 
@@ -881,7 +934,12 @@ def test_targets_that_were_already_crlf_are_not_drift(
 
     assert result.exit_code == 0
     assert "refusing to write" not in result.stderr
-    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
 
 
 @pytest.mark.parametrize("target", _SAVE_WRITE_TARGETS)
@@ -966,7 +1024,12 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     assert "bundle/index.md" in result.stderr
     assert target_path.read_text(encoding="utf-8") == concurrent
     # The answer document was never created: the guard precedes every write.
-    assert not (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").exists()
+    assert not (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).exists()
     assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
         Path("bundle/index.md")
     }
@@ -1001,7 +1064,12 @@ def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
     cannot keep this green.
     """
     _matched_answer_on_a_tty(tmp_path, monkeypatch)
-    answer_path = tmp_path / "bundle" / "concepts" / "what-is-stoicism.md"
+    answer_path = (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    )
     concurrent = "filed by someone else while the prompt waited\n"
 
     def _create_it() -> None:
@@ -1020,7 +1088,9 @@ def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
     # The failure surfaced through the save-failure path, naming the
     # colliding path workspace-relative...
     assert "failed while saving the answer --" in result.stderr
-    assert "bundle/concepts/what-is-stoicism.md" in result.stderr
+    assert (
+        "bundle/insights/stoicism-teaches-the-dichotomy-of-control.md" in result.stderr
+    )
     # ...and NOT through the drift guard, which never saw this file.
     assert "refusing to write --" not in result.stderr
     # The other file's content survives: create-only is what protects it.
@@ -1028,7 +1098,7 @@ def test_the_answer_document_created_during_the_prompt_is_not_clobbered(
     # And the catalog was not touched -- the answer document is written
     # FIRST, so failing there leaves `index.md`/`log.md` untouched.
     assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
-        Path("bundle/concepts/what-is-stoicism.md")
+        Path("bundle/insights/stoicism-teaches-the-dichotomy-of-control.md")
     }
 
 
@@ -1100,12 +1170,17 @@ def test_a_failure_at_the_index_write_names_the_landed_answer_document(
     assert "openkos query: failed while saving the answer --" in result.stderr
     assert (
         "Already written (left partially filed, not rolled back): "
-        "bundle/concepts/what-is-stoicism.md." in result.stderr
+        "bundle/insights/stoicism-teaches-the-dichotomy-of-control.md." in result.stderr
     )
     # The message claims "not rolled back"; prove it on disk.
-    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
     assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
-        Path("bundle/concepts/what-is-stoicism.md")
+        Path("bundle/insights/stoicism-teaches-the-dichotomy-of-control.md")
     }
 
 
@@ -1125,13 +1200,19 @@ def test_a_failure_at_the_log_write_names_the_answer_and_the_index(
     assert "openkos query: failed while saving the answer --" in result.stderr
     assert (
         "Already written (left partially filed, not rolled back): "
-        "bundle/concepts/what-is-stoicism.md, bundle/index.md." in result.stderr
+        "bundle/insights/stoicism-teaches-the-dichotomy-of-control.md, bundle/index.md."
+        in result.stderr
     )
-    assert (tmp_path / "bundle" / "concepts" / "what-is-stoicism.md").is_file()
+    assert (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).is_file()
     index_text = (tmp_path / "bundle" / "index.md").read_text(encoding="utf-8")
-    assert "what-is-stoicism" in index_text
+    assert "stoicism-teaches-the-dichotomy-of-control" in index_text
     assert _changed_under_bundle(before, snapshot_with_mtime(tmp_path)) == {
-        Path("bundle/concepts/what-is-stoicism.md"),
+        Path("bundle/insights/stoicism-teaches-the-dichotomy-of-control.md"),
         Path("bundle/index.md"),
     }
 
@@ -1173,10 +1254,10 @@ def test_query_save_success_autocommits_its_three_writes(
     assert _commit_count(tmp_path) == before + 1
     assert (
         _last_commit_subject(tmp_path)
-        == "openkos: query --save concepts/what-is-stoicism"
+        == "openkos: query --save insights/stoicism-teaches-the-dichotomy-of-control"
     )
     assert _last_commit_files(tmp_path) == {
-        "bundle/concepts/what-is-stoicism.md",
+        "bundle/insights/stoicism-teaches-the-dichotomy-of-control.md",
         "bundle/index.md",
         "bundle/log.md",
     }
@@ -1224,12 +1305,15 @@ def test_query_save_preview_discloses_a_raised_sensitivity(
 
     assert result.exit_code == 0
     assert (
-        "  + bundle/concepts/what-is-secret.md (sensitivity: confidential, "
+        "  + bundle/insights/stoicism-teaches-the-dichotomy-of-control.md (sensitivity: confidential, "
         "inherited from citations)" in result.stdout
     )
-    content = (tmp_path / "bundle" / "concepts" / "what-is-secret.md").read_text(
-        encoding="utf-8"
-    )
+    content = (
+        tmp_path
+        / "bundle"
+        / "insights"
+        / "stoicism-teaches-the-dichotomy-of-control.md"
+    ).read_text(encoding="utf-8")
     assert "sensitivity: confidential" in content
 
 
@@ -1248,5 +1332,125 @@ def test_query_save_preview_stays_silent_at_the_default_sensitivity(
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
     assert result.exit_code == 0
-    assert "  + bundle/concepts/what-is-stoicism.md\n" in result.stdout
+    assert (
+        "  + bundle/insights/stoicism-teaches-the-dichotomy-of-control.md\n"
+        in result.stdout
+    )
     assert "inherited from citations" not in result.stdout
+
+
+# --- Insight filing (issue #570) --------------------------------------------
+
+
+def test_declarative_answer_title_promotes_a_usable_first_sentence() -> None:
+    assert (
+        main._declarative_answer_title(
+            "Symmetric cryptography relies on modular arithmetic. More detail."
+        )
+        == "Symmetric cryptography relies on modular arithmetic"
+    )
+
+
+def test_declarative_answer_title_refuses_fragments_questions_and_prose() -> None:
+    """Too short, too long, or itself a question -> `None`, so the caller
+    falls back to the question (the pre-#570 default)."""
+    assert main._declarative_answer_title("Yes.") is None
+    assert main._declarative_answer_title("It depends.") is None
+    assert main._declarative_answer_title("¿Qué es la criptografía simétrica?") is None
+    assert main._declarative_answer_title("Is it modular arithmetic?") is None
+    assert main._declarative_answer_title("word " * 40 + ".") is None
+
+
+def test_stage_filed_answer_defaults_to_insight_with_declarative_title(
+    tmp_path: Path,
+) -> None:
+    """Issue #570's core: the default filing is an `Insight` under
+    `bundle/insights/`, titled by the answer's first sentence -- never a
+    Concept whose ID is an interrogative sentence."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "stoicism")
+    citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
+
+    plan = _stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="Stoicism teaches the dichotomy of control. It divides.",
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+    )
+
+    assert plan.title == "Stoicism teaches the dichotomy of control"
+    assert plan.description == "what is stoicism?"
+    assert plan.link_dir == "insights"
+    assert plan.section == "Insights"
+    assert "type: Insight" in plan.content
+    assert plan.slug == "stoicism-teaches-the-dichotomy-of-control"
+
+
+def test_stage_filed_answer_classifiable_type_override_still_accepted(
+    tmp_path: Path,
+) -> None:
+    """`--type Concept` remains valid -- Insight is the default, not a
+    restriction on the buildable vocabulary."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "stoicism")
+    citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
+
+    plan = _stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="answer text",
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="private",
+        timestamp="2026-07-23T00:00:00Z",
+        doc_type="Concept",
+    )
+
+    assert plan.link_dir == "concepts"
+    assert "type: Concept" in plan.content
+
+
+def test_query_marks_insight_citations_as_synthesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cited Insight renders `[synthesis]` in the citation list, so the
+    reader can tell which legs of the answer stand on a Source and which
+    on an earlier model synthesis (issue #570)."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = _fake_matched_answer(
+        citations=[
+            Citation(concept_id="insights/earlier-answer", title="Earlier"),
+            Citation(concept_id="concepts/stoicism", title="Stoicism"),
+        ]
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "→ insights/earlier-answer (Earlier) [synthesis]" in result.stdout
+    assert "→ concepts/stoicism (Stoicism)" in result.stdout
+    assert "concepts/stoicism (Stoicism) [synthesis]" not in result.stdout
+    # Mixed citations: at least one leg reaches a Source, so no warning.
+    assert "every citation is itself a filed synthesis" not in result.stderr
+
+
+def test_query_warns_when_every_citation_is_a_synthesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When EVERY citation is an Insight, nothing beneath the answer
+    reaches a Source -- the compounding case #570 warns about."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = _fake_matched_answer(
+        citations=[
+            Citation(concept_id="insights/answer-one", title="One"),
+            Citation(concept_id="insights/answer-two", title="Two"),
+        ]
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "every citation is itself a filed synthesis" in result.stderr

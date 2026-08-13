@@ -82,6 +82,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.model import okf
+from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.retrieval import fusion, pool
 from openkos.state import fts
 from openkos.state.vectorstore import VecHit, VectorStore, VecUnavailable
@@ -337,7 +338,22 @@ def _assemble_context(
         ):
             continue
         title = str(metadata.get("title") or "") or concept_id
-        context_blocks.append(f"[concept_id: {concept_id} — {title}]\n{body}")
+        # Issue #570: an `Insight` is a FILED SYNTHESIS -- model output over
+        # the bundle's state at some earlier answer time, not knowledge
+        # extracted from an immutable Source. The synthesizer must know
+        # which of its context legs stand on model output, or a synthesis
+        # can compound on syntheses indistinguishably from compounding on
+        # sources. Identity by frontmatter type, matching what `query`'s
+        # citation marker derives from the link dir.
+        synthesis_note = (
+            " (filed synthesis: model output over an earlier bundle state, "
+            "not a source-backed concept)"
+            if metadata.get("type") == _INSIGHT_TYPE
+            else ""
+        )
+        context_blocks.append(
+            f"[concept_id: {concept_id} — {title}{synthesis_note}]\n{body}"
+        )
         citations.append(
             Citation(
                 concept_id=concept_id,

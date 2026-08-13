@@ -2280,3 +2280,41 @@ def test_citation_marks_an_explicitly_confidential_source(tmp_path: Path) -> Non
     by_id = {c.concept_id: c for c in result.citations}
     assert by_id["concepts/secret"].confidential is True
     assert by_id["concepts/open"].confidential is False
+
+
+# --- Insight context marking (issue #570) -----------------------------------
+
+
+def test_assemble_context_labels_an_insight_as_filed_synthesis(
+    tmp_path: Path,
+) -> None:
+    """An `Insight`-typed context block carries the filed-synthesis note in
+    its label, so the synthesizer knows which of its context legs stand on
+    model output rather than on a source-backed concept (issue #570). A
+    Concept block stays label-identical to before."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(
+        bundle_dir / "insights" / "earlier-answer.md",
+        doc_type="Insight",
+        title="Earlier Answer",
+        body="A synthesis filed by an earlier query.",
+    )
+    _write_doc(
+        bundle_dir / "concepts" / "stoicism.md",
+        title="Stoicism",
+        body="A source-backed concept.",
+    )
+
+    context_blocks, citations = answer_mod._assemble_context(
+        bundle_dir, ["insights/earlier-answer", "concepts/stoicism"]
+    )
+
+    assert len(context_blocks) == 2
+    assert "filed synthesis" in context_blocks[0]
+    assert context_blocks[1] == (
+        "[concept_id: concepts/stoicism — Stoicism]\nA source-backed concept."
+    )
+    assert [c.concept_id for c in citations] == [
+        "insights/earlier-answer",
+        "concepts/stoicism",
+    ]
