@@ -4986,6 +4986,104 @@ def test_batch_directory_is_non_recursive(
     assert "1 file(s)" in result.stdout
 
 
+def test_batch_directory_skips_non_text_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Directory expansion keeps only text-source extensions (#568): a user
+    pointing at a project folder must not ingest `.DS_Store`, lockfiles, or
+    code into the bundle. The skips are disclosed up front -- one pre-flight
+    line BEFORE the cost gate says what is actually about to be ingested."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(
+        tmp_path,
+        {
+            "a.md": "Alpha notes.",
+            "b.txt": "Beta notes.",
+            ".DS_Store": "binary junk",
+            "script.py": "print('hi')",
+            "uv.lock": "lockfile",
+        },
+    )
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "a.md").is_file()
+    assert (tmp_path / "raw" / "b.txt").is_file()
+    assert not (tmp_path / "raw" / ".DS_Store").exists()
+    assert not (tmp_path / "raw" / "script.py").exists()
+    assert not (tmp_path / "raw" / "uv.lock").exists()
+    assert "2 file(s) matched; 3 skipped as non-text" in result.stderr
+    assert "2 file(s)" in result.stdout
+
+
+def test_batch_directory_of_only_non_text_refuses_and_says_why(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory holding ONLY non-text files refuses like an empty one
+    (#568), but the pre-flight line explains WHY nothing matched -- without
+    it the refusal reads as a bug when the directory is visibly full."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"script.py": "print('hi')", ".gitignore": "*.log"})
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 1
+    assert "0 file(s) matched; 2 skipped as non-text" in result.stderr
+    assert "no files matched" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+def test_batch_glob_applies_the_same_text_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Glob expansion applies the same allowlist as directory expansion
+    (#568): `notes/*` over a mixed folder ingests the prose and skips the
+    code, with the same pre-flight disclosure."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.md": "Alpha notes.", "script.py": "print('hi')"})
+
+    result = runner.invoke(app, ["ingest", str(Path("notes") / "*"), "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "a.md").is_file()
+    assert not (tmp_path / "raw" / "script.py").exists()
+    assert "1 file(s) matched; 1 skipped as non-text" in result.stderr
+
+
+def test_batch_all_text_directory_prints_no_skip_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the filter skipped nothing, no pre-flight line appears (#568) --
+    an advisory that fires on the healthy path is noise, and the cost gate
+    already names the matched count."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_notes(tmp_path, {"a.md": "Alpha notes.", "b.txt": "Beta notes."})
+
+    result = runner.invoke(app, ["ingest", "notes", "--auto"])
+
+    assert result.exit_code == 0
+    assert "skipped as non-text" not in result.stderr
+
+
+def test_explicit_single_file_still_ingests_any_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit single-file path bypasses the allowlist (#568): a user
+    naming one exact file gets it ingested whatever its extension -- the
+    filter guards EXPANSION, never an explicit choice."""
+    _init_workspace(tmp_path, monkeypatch)
+    source = tmp_path / "script.py"
+    source.write_text("print('hi')\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "script.py", "--auto"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "raw" / "script.py").is_file()
+    assert "skipped as non-text" not in result.stderr
+
+
 def test_batch_empty_directory_refuses_nothing_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

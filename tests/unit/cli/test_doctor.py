@@ -50,6 +50,18 @@ def _init_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
 
 
+def _seed_source_doc(tmp_path: Path) -> None:
+    """Make the bundle NON-empty (#568): the index-presence checks fail with
+    a `reindex` remediation only once there is something to index; a fresh
+    `init` bundle skips them instead."""
+    sources_dir = tmp_path / "bundle" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    (sources_dir / "notes.md").write_text(
+        "---\ntype: Source\ntitle: Notes\nresource: raw/notes.txt\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
 def _fake_ollama_client(
     *,
     installed: list[str] | None = None,
@@ -726,6 +738,7 @@ def test_doctor_workspace_vectors_absent_shows_fail_with_reindex_remediation(
     (doctor-command spec: "Absent workspace vectors.db fails with a reindex
     remediation")."""
     _init_workspace(tmp_path, monkeypatch)
+    _seed_source_doc(tmp_path)
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
@@ -766,6 +779,7 @@ def test_doctor_workspace_vectors_check_distinct_from_extension_loadable_check(
     `vectors.db` (`[FAIL]`) coexists with a loadable extension (`[PASS]`),
     proving neither check's outcome depends on the other."""
     _init_workspace(tmp_path, monkeypatch)
+    _seed_source_doc(tmp_path)
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
@@ -1477,6 +1491,7 @@ def test_doctor_workspace_fts_absent_shows_fail_with_reindex_remediation(
     exact evidence shape: doctor passed every check while the first query
     was about to answer without lexical retrieval."""
     _init_workspace(tmp_path, monkeypatch)
+    _seed_source_doc(tmp_path)
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
@@ -1490,6 +1505,33 @@ def test_doctor_workspace_fts_absent_shows_fail_with_reindex_remediation(
     assert result.exit_code == 0
     assert "[FAIL] Workspace FTS index present" in result.stdout
     assert "openkos reindex" in result.stdout
+
+
+def test_doctor_index_checks_skip_on_an_empty_bundle_recommending_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Immediately after `openkos init` there is nothing to index, so the
+    two index-presence checks print `[SKIP]` naming `openkos ingest` as the
+    next action -- never `[FAIL] -> openkos reindex` (#568): a FAIL at step
+    5 of the README quickstart reads as a broken install, and `reindex`
+    over an empty bundle would build nothing anyway."""
+    _init_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient",
+        _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
+    )
+    monkeypatch.setattr("openkos.cli.main.probe_vec_loadable", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.git_available", lambda: True)
+    monkeypatch.setattr("openkos.vcs.git.filter_repo_available", lambda: True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "[SKIP] Workspace vector index present" in result.stdout
+    assert "[SKIP] Workspace FTS index present" in result.stdout
+    assert "openkos ingest" in result.stdout
+    assert "[FAIL] Workspace vector index present" not in result.stdout
+    assert "[FAIL] Workspace FTS index present" not in result.stdout
 
 
 def test_doctor_workspace_fts_check_skipped_outside_workspace(
