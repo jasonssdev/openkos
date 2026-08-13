@@ -647,7 +647,9 @@ def test_doctor_vector_extension_loadable_shows_pass(
 
     assert result.exit_code == 0
     assert "[PASS] Vector extension loadable" in result.stdout
-    assert result.stdout.count("[PASS]") == 12
+    # 13, not 12: since #650 a stock workspace passes the task-model check
+    # too (nothing packaged is left to be missing).
+    assert result.stdout.count("[PASS]") == 13
 
 
 def test_doctor_vector_extension_not_loadable_fails_but_exit_stays_zero(
@@ -1095,16 +1097,21 @@ def test_doctor_locality_still_passes_when_ollama_is_reachable(
 def test_doctor_reports_a_missing_task_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A packaged per-task default that is not installed is REPORTED.
+    """A configured per-task model that is not installed is REPORTED.
 
-    Packaging `edge_typing: gemma2:27b` (#513) means every workspace now
-    points a task at a 15.6 GB model nobody has by default. Before this
-    check, `doctor` looked only at `cfg.model` and reported a clean bill of
-    health, and the operator discovered the gap when `curate`'s Structure
-    stage failed part-way through a session. That is the failure this
-    check exists to move earlier.
+    Since #650 nothing is packaged, so the scenario needs the explicit
+    opt-in; the check's job is unchanged: before it, `doctor` looked only
+    at `cfg.model` and reported a clean bill of health, and the operator
+    discovered the gap when `curate`'s Structure stage failed part-way
+    through a session. That is the failure this check exists to move
+    earlier.
     """
     _init_workspace(tmp_path, monkeypatch)
+    cfg_path = tmp_path / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: gemma2:27b\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
@@ -1130,6 +1137,11 @@ def test_a_missing_task_model_does_not_change_the_exit_code(
     exit 1 on a workspace that is fine for `ingest`, `query`, and
     `adjudicate`, which would be a false alarm rather than a diagnosis."""
     _init_workspace(tmp_path, monkeypatch)
+    cfg_path = tmp_path / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: gemma2:27b\n",
+        encoding="utf-8",
+    )
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
     (openkos_dir / "vectors.db").write_bytes(b"")
@@ -1150,8 +1162,13 @@ def test_a_missing_task_model_does_not_change_the_exit_code(
 def test_doctor_passes_when_every_task_model_is_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With the packaged model present the check passes and names it."""
+    """With the opted-in model present the check passes and names it."""
     _init_workspace(tmp_path, monkeypatch)
+    cfg_path = tmp_path / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: gemma2:27b\n",
+        encoding="utf-8",
+    )
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
     (openkos_dir / "vectors.db").write_bytes(b"")
@@ -1174,22 +1191,19 @@ def test_doctor_passes_when_every_task_model_is_installed(
     assert "[FAIL]" not in result.stdout
 
 
-def test_opting_out_of_the_packaged_default_makes_the_check_pass(
+def test_a_stock_workspace_passes_and_names_the_optional_upgrade(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`edge_typing: null` declines the packaged default, so there is no
-    per-task model left to be missing and the check passes without the
-    15.6 GB pull. This is the escape hatch working end to end."""
+    """#650 end to end: a workspace that configured nothing passes the
+    task-model check without any 15.6 GB pull, and the check's detail
+    names `gemma2:27b` as `edge_typing`'s optional measured upgrade so
+    the recommendation is discoverable exactly where the old default
+    used to be diagnosed."""
     _init_workspace(tmp_path, monkeypatch)
     openkos_dir = tmp_path / ".openkos"
     openkos_dir.mkdir(parents=True, exist_ok=True)
     (openkos_dir / "vectors.db").write_bytes(b"")
     (openkos_dir / "fts.db").write_bytes(b"")
-    cfg_path = tmp_path / "openkos.yaml"
-    cfg_path.write_text(
-        cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: null\n",
-        encoding="utf-8",
-    )
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(installed=[DEFAULT_MODEL, DEFAULT_EMBEDDING_MODEL]),
@@ -1203,6 +1217,8 @@ def test_opting_out_of_the_packaged_default_makes_the_check_pass(
     assert result.exit_code == 0
     assert "[PASS] Task models installed" in result.stdout
     assert "[FAIL]" not in result.stdout
+    assert "edge_typing" in result.stdout
+    assert "gemma2:27b" in result.stdout
 
 
 def test_task_model_check_skips_when_ollama_is_unreachable(
@@ -1210,8 +1226,15 @@ def test_task_model_check_skips_when_ollama_is_unreachable(
 ) -> None:
     """`[SKIP]`, never `[FAIL]`, when Ollama is down — the same D6 one-root-
     cause discipline checks 4 and 5 already follow. Reporting a model as
-    "not installed" when nothing could be listed would be a guess."""
+    "not installed" when nothing could be listed would be a guess. Since
+    #650 the branch needs a configured per-task model to be reachable at
+    all: with none configured the check passes on configuration alone."""
     _init_workspace(tmp_path, monkeypatch)
+    cfg_path = tmp_path / "openkos.yaml"
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8") + "\nmodels:\n  edge_typing: gemma2:27b\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         "openkos.cli.main.OllamaClient",
         _fake_ollama_client(error=OllamaUnavailable("connection refused")),

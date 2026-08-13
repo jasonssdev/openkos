@@ -40,29 +40,36 @@ is advisable: #508's rule is that a per-task default must be justified on a
 fixture, and three of these have no fixture at all. The docs say which is
 which; the schema does not pretend to."""
 
-DEFAULT_TASK_MODELS: dict[str, str | None] = {"edge_typing": "gemma2:27b"}
+DEFAULT_TASK_MODELS: dict[str, str | None] = {"edge_typing": None}
 """Packaged per-task model defaults (issue #513), overriding `DEFAULT_MODEL`
-for the tasks listed here and no others.
+for the tasks listed here and no others. Since #650 no task ships a value:
+`edge_typing`'s key stays listed so the opt-in surface remains visible, and
+its `None` means `resolve_task_model` follows the global `model:`.
 
-`edge_typing` ships `gemma2:27b` because #516's eight-model sweep measured
-it at 0.81 relation-type accuracy on `evals/edge_typing/`'s 17-edge fixture
-against `qwen3:8b`'s 0.44. #513 is precisely that gap: the previous default
-contradicted the prompt's own rubric on about two thirds of the pairs the
-rubric decides, stably, so no sampling or confidence mitigation could
-recover it. A wrong `part_of` asserts something false about how the
-knowledge fits together, and everything reading the graph believes it.
+#513 packaged `gemma2:27b` here on #516's sweep (0.81 relation-TYPE
+accuracy on `evals/edge_typing/`'s 17-edge fixture against `qwen3:8b`'s
+0.44). #650 inverted the default for three reasons, none disputing that
+measurement: (1) the 15.6 GB pull made the out-of-the-box curation path
+the broken one -- for a local-first tool the download IS the barrier to
+entry; (2) DIRECTION was never measured, and direction is where the
+observed errors live (the 2026-08-13 e2e saw `gemma2:27b` reverse at
+least two of five asymmetric edges); (3) since #624 every asymmetric
+suggestion sits behind per-item consent marked `direction
+model-suggested, unverified`, so the accuracy gap buys fewer operator
+rejections, not graph quality. Works on install, better if you opt in --
+see `RECOMMENDED_TASK_MODELS`."""
 
-**This default costs a 15.6 GB `ollama pull`.** That is why nothing else is
-listed and why the trade is worth stating plainly: the same model is the
-worst extractor measured (0.24 subject recall on the long English fixture,
-0.00 on the Spanish one, against the default's 0.81/0.76), so packaging it
-globally would have been indefensible. It is packaged for ONE task, where
-it is the best measured, and `extraction` deliberately stays on the model
-`evals/extraction_cap/` tuned.
+RECOMMENDED_TASK_MODELS: dict[str, str] = {"edge_typing": "gemma2:27b"}
+"""The documented per-task recommendations (#650): tags that measured best
+on a task's harness but are NOT packaged as defaults, with the opt-in being
+an explicit `models: {<task>: <tag>}` in `openkos.yaml`.
 
-Declining it is an explicit `models: {edge_typing: null}` -- see
-`resolve_task_model`. A packaged default that costs a large download and
-offers no opt-out other than naming another tag would be a trap."""
+`edge_typing -> gemma2:27b` carries #516's 0.81-vs-0.44 relation-type
+accuracy, costs a 15.6 GB `ollama pull`, and is the worst extractor
+measured (0.24/0.00 subject recall against the default's 0.81/0.76) -- so
+it must only ever move edge typing. `doctor` and `curate`'s Structure gate
+surface this map so the recommendation is discoverable exactly where the
+old packaged default used to be diagnosed and consented to."""
 
 DEFAULT_EMBEDDING_MODEL = "bge-m3"
 """The packaged default Ollama embedding model tag (ADR-0006: reliability-
@@ -897,8 +904,9 @@ def resolve_task_model(cfg: Config, task: str | None) -> str:
     1. `cfg.models[task]` -- what the workspace explicitly asked for. An
        explicit YAML null here DECLINES a packaged default and falls to
        `cfg.model`, which is the only way to opt out of one.
-    2. `DEFAULT_TASK_MODELS[task]` -- the packaged per-task default, today
-       `edge_typing: gemma2:27b` (#513).
+    2. `DEFAULT_TASK_MODELS[task]` -- the packaged per-task default. Empty
+       since #650 (`edge_typing`'s value is `None`), kept as a mechanism:
+       the precedence is measured and pinned, only the shipped map changed.
     3. `cfg.model` -- the global default.
 
     The operator's stated choice always beats a shipped one, and the shipped

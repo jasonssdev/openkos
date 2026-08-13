@@ -4494,3 +4494,42 @@ def test_cost_gate_output_is_unchanged_when_the_stage_uses_the_global_model(
     curate.gate(stage, probe, ctx)
 
     assert capsys.readouterr().err == "6 candidate group(s) -> 6 LLM call(s)\n"
+
+
+def test_cost_gate_names_the_optional_upgrade_for_an_undecided_edge_typing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#650: with no packaged default, a workspace that never keyed
+    `edge_typing` runs it on the global model -- the gate reports the
+    resolved model and names `gemma2:27b` as the optional measured
+    upgrade, exactly where the operator is consenting to the spend."""
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Structure", noun="untyped edge", task="edge_typing")
+    probe = curate.StageProbe(items=(1,), llm_calls=3)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    err = capsys.readouterr().err
+    assert "3 untyped edge(s) -> 3 LLM call(s)" in err
+    assert "stub-model" in err
+    assert "gemma2:27b" in err
+
+
+def test_cost_gate_stays_quiet_about_the_upgrade_once_the_operator_decided(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A workspace that keyed `edge_typing` -- to ANY value -- made its
+    choice; the gate never nags about the recommendation on top of it."""
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Structure", noun="untyped edge", task="edge_typing")
+    probe = curate.StageProbe(items=(1,), llm_calls=3)
+    ctx = _fake_ctx(Path("unused-root"), auto=True, models={"edge_typing": "qwen3:14b"})
+
+    curate.gate(stage, probe, ctx)
+
+    err = capsys.readouterr().err
+    assert "gemma2:27b" not in err
+    assert "qwen3:14b" in err

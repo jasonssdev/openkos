@@ -434,11 +434,10 @@ def test_suggest_relations_builds_ollama_client_from_configured_model(
     configured in `openkos.yaml`, not a hardcoded value (spec: mirrors
     `adjudicate`'s wiring).
 
-    `edge_typing: null` is what makes this verb follow the GLOBAL `model:`
-    again: #513 packages `gemma2:27b` as this task's default, so without
-    the explicit opt-out the packaged tag would win and this test would be
-    pinning the packaged default rather than the configured one. The
-    packaged path has its own test below."""
+    `edge_typing: null` is kept here even though #650 removed the packaged
+    default (nothing left to decline): an explicit null must still resolve
+    to the global `model:`, and the no-`models:`-at-all path has its own
+    test below."""
     _init_workspace(tmp_path, monkeypatch)
     configured_model = "llama3.2:1b-openkos-test"
     (tmp_path / "openkos.yaml").write_text(
@@ -466,15 +465,16 @@ def test_suggest_relations_builds_ollama_client_from_configured_model(
     assert llm._model == configured_model
 
 
-def test_suggest_relations_uses_the_packaged_edge_typing_default(
+def test_suggest_relations_follows_the_global_model_without_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With no `models:` key at all, this verb runs on the PACKAGED
-    `edge_typing` model (#513), not the global `model:`.
+    """With no `models:` key at all, this verb runs on the GLOBAL `model:`
+    (#650) -- the packaged `gemma2:27b` default is gone; the 15.6 GB pull
+    is now an explicit opt-in via `models: {edge_typing: gemma2:27b}`.
 
-    This is the behavior change the packaged default buys, and it applies to
-    the standalone verb as well as `curate`'s Structure stage — both run
-    `suggest_edge_types`, and the task key is what keeps them together."""
+    This applies to the standalone verb as well as `curate`'s Structure
+    stage — both run `suggest_edge_types`, and the task key is what keeps
+    them together."""
     _init_workspace(tmp_path, monkeypatch)
     (tmp_path / "openkos.yaml").write_text(
         "model: llama3.2:1b-openkos-test\n", encoding="utf-8"
@@ -497,7 +497,7 @@ def test_suggest_relations_uses_the_packaged_edge_typing_default(
     assert isinstance(kwargs, dict)
     llm = kwargs["llm"]
     assert isinstance(llm, OllamaClient)
-    assert llm._model == "gemma2:27b"
+    assert llm._model == "llama3.2:1b-openkos-test"
 
 
 def test_suggest_relations_ollama_unavailable_maps_to_exit_one(
