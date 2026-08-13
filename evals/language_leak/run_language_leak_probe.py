@@ -264,7 +264,26 @@ spaces. Deliberately the same alphabet family as the gate's
 
 
 def _adjacency_normalize(value: str) -> str:
-    return " ".join(_ADJACENCY_WORD_RE.findall(value.casefold()))
+    """#656 candidate: inflection-tolerant, digit-blind normalization.
+
+    Two folds on top of the #622 word-run split, applied symmetrically to
+    title and prose so neither side can drift:
+
+    - pure-digit tokens dissolve (`un repositorio 100% local` reads as
+      `un repositorio local`) -- a numeric interjection is not a word the
+      title could have quoted;
+    - a trailing `s` on a >3-letter word folds away (`fuentes inmutables`
+      reads as `fuente inmutable`) -- Spanish plural morphology is the
+      demonstrated legitimate-title breaker (#656), and English plurals
+      fold identically on both sides, so the test stays symmetric."""
+    words: list[str] = []
+    for word in _ADJACENCY_WORD_RE.findall(value.casefold()):
+        if word.isdigit():
+            continue
+        if len(word) > 3 and word.endswith("s"):
+            word = word[:-1]
+        words.append(word)
+    return " ".join(words)
 
 
 def bigram_adjacent(title: str, source_text: str) -> bool:

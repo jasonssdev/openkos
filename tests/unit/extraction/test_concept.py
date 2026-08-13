@@ -4265,6 +4265,76 @@ def test_gate_exempts_spanish_orthography_before_the_adjacency_test() -> None:
     assert dropped == ()
 
 
+def test_gate_keeps_inflected_and_digit_interrupted_spanish_neutral_titles() -> None:
+    """#656's live false-positive class: legitimate Spanish-neutral titles
+    with NO orthographic marker, whose prose support is morphologically
+    inflected (`fuentes inmutables` for `Fuente Inmutable`) or interrupted
+    by a numeric token (`un repositorio 100% local` for `Repositorio
+    Local`). The inflection-tolerant, digit-blind adjacency must keep both
+    -- while a genuine English recombination in the same document still
+    drops, so the fold cannot have widened into an exemption."""
+    source = (
+        _spanish_lines(500)
+        + "\nDiego: Queremos un repositorio 100% local para el equipo, y las "
+        "fuentes inmutables nunca se reescriben."
+        + "\nAna: El knowledge del equipo alimenta la recovery del sistema y "
+        "el project sigue en curso."
+    )
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept", title="Repositorio Local", description="d", body=""
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept", title="Fuente Inmutable", description="d", body=""
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Knowledge Recovery Project",
+            description="d",
+            body="",
+        ),
+        # A survivor with function words, so the all-drop floor can never
+        # mask a broken fold in this fixture.
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Procedimiento de ingesta",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == [
+        "Repositorio Local",
+        "Fuente Inmutable",
+        "Procedimiento de ingesta",
+    ]
+    assert dropped == ("Knowledge Recovery Project",)
+
+
+def test_adjacency_normalization_folds_inflection_and_digits() -> None:
+    """#656's mechanics, at the seam: pure-digit tokens dissolve on both
+    sides, a trailing `s` on a >3-letter word folds on both sides, and a
+    3-letter word never folds (`dos` stays `dos`)."""
+    assert concept_mod._bigram_adjacent(
+        "Repositorio Local", "un repositorio 100% local"
+    )
+    assert concept_mod._bigram_adjacent("Fuente Inmutable", "las fuentes inmutables")
+    # Symmetric fold: a plural title against singular prose also matches.
+    assert concept_mod._bigram_adjacent("Fuentes Inmutables", "la fuente inmutable")
+    # A 3-letter word never folds -- `dos` must not become `do`.
+    assert concept_mod._bigram_adjacent("Fase Dos", "la fase dos del plan")
+    assert not concept_mod._bigram_adjacent("Fase Dos", "la fase del plan dos veces")
+    # Digit words in the TITLE dissolve too, so `Fase 2` has one word left
+    # and passes as no-bigrams rather than never matching.
+    assert concept_mod._bigram_adjacent("Fase 2", "cualquier prosa")
+    # The fold must not manufacture adjacency for a recombination.
+    assert not concept_mod._bigram_adjacent(
+        "Knowledge Project", "el knowledge recovery y el project"
+    )
+
+
 def test_no_english_function_word_triggers_the_orthographic_exemption() -> None:
     """The disjointness discipline, extended to #630's marker list: no
     English function word may carry a Spanish orthographic marker, or the
