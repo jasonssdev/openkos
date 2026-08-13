@@ -1245,7 +1245,30 @@ def _spanish_orthography(title: str) -> bool:
 
 
 def _adjacency_normalize(value: str) -> str:
-    return " ".join(_ADJACENCY_WORD_RE.findall(value.casefold()))
+    """#656: inflection-tolerant, digit-blind normalization for the
+    adjacency test, applied SYMMETRICALLY to title and prose so neither
+    side can drift:
+
+    - pure-digit tokens dissolve (`un repositorio 100% local` reads as
+      `un repositorio local`) -- a numeric interjection is not a word the
+      title could have quoted;
+    - a trailing `s` on a >3-letter word folds away (`fuentes inmutables`
+      reads as `fuente inmutable`) -- Spanish plural morphology is the
+      demonstrated legitimate-title breaker (#656's `Fuente Inmutable`/
+      `Repositorio Local`, live in production), and English plurals fold
+      identically on both sides, so the test stays symmetric.
+
+    Measured over all 15 stored `evals/language_leak/` runs (597 kept
+    titles): the #630 bar holds at 32/32 residuals caught, 0 false
+    positives, while both #656 register titles are recovered."""
+    words: list[str] = []
+    for word in _ADJACENCY_WORD_RE.findall(value.casefold()):
+        if word.isdigit():
+            continue
+        if len(word) > 3 and word.endswith("s"):
+            word = word[:-1]
+        words.append(word)
+    return " ".join(words)
 
 
 def _bigram_adjacent(title: str, source_text: str) -> bool:
@@ -1325,7 +1348,13 @@ def _drop_wrong_language_titles(
     are NOT all adjacent in the prose (`_bigram_adjacent`) is a
     recombination, not a quote, and drops. Measured over 12 stored runs +
     one fresh 3-run sweep (`evals/language_leak/`): every residual caught,
-    zero false positives. The floor below covers these drops too."""
+    zero false positives. The floor below covers these drops too.
+
+    #656 tightened the adjacency test's NORMALIZATION rather than adding
+    an exemption: digit tokens dissolve and plural `s` folds symmetrically
+    (`_adjacency_normalize`), recovering the live morphological
+    false-positive class (`Repositorio Local`, `Fuente Inmutable`) while
+    the re-scored 15-run bar holds at 32/32 caught, 0 false positives."""
     dominant = _dominant_language(source_text)
     if dominant is None:
         return results, ()

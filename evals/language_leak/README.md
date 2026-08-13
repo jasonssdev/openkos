@@ -172,6 +172,40 @@ orthographic marker, no verbatim support (balanced `(...)` stripped
 first), and non-adjacent bigrams drops — chunked paths only, the all-drop
 floor and both fail-open guards unchanged.
 
+## The #656 inflection-tolerant fold, measured (2026-08-13) — SHIPPED
+
+#630's own measurement predicted the morphological false-positive class
+with `Snapshot Derivado`; #656 demonstrated it LIVE in production on a
+register the fixture corpus did not cover: `Repositorio Local` and
+`Fuente Inmutable` — legitimate Spanish-neutral titles from a Spanish
+meeting transcript, gate-neutral, carrying NO orthographic marker (so the
+#630 exemption never fires), whose prose support is inflected (`fuentes
+inmutables`) or interrupted by a numeric token (`un repositorio 100%
+local`), so `bigram_adjacent` fails structurally.
+
+The candidate (#656's suggested direction 2): make the adjacency
+normalization inflection-tolerant and digit-blind, symmetrically on title
+and prose — pure-digit tokens dissolve, and a trailing `s` on a >3-letter
+word folds away. No new exemption branch: the same adjacency test, run on
+folded text, so a recombination still has to find its bigrams somewhere
+in the prose.
+
+Re-scored offline over ALL stored emission sets (`--analyze`, 15 runs,
+597 kept titles):
+
+| bar | before (#630) | after (#656 fold) |
+| --- | --- | --- |
+| residuals caught | 32/32 | **32/32** |
+| false positives | 0 | **0** |
+
+Both register titles are recovered (adjacency now passes for each), and
+the register is pinned as production unit tests
+(`test_gate_keeps_inflected_and_digit_interrupted_spanish_neutral_titles`,
+`test_adjacency_normalization_folds_inflection_and_digits`). Production
+ships the identical fold in `concept._adjacency_normalize`; this probe's
+`_adjacency_normalize` carries the same code so `--analyze` measures what
+production runs.
+
 ## Measurement lessons (paid for four times)
 
 1. **Never run an eval client uncapped.** A bare `OllamaClient` has no
