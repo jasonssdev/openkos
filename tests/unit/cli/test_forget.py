@@ -333,6 +333,102 @@ def test_sweep_ledger_sidecars_drops_matching_entries_from_other_survivors(
     )
 
 
+def test_sweep_ledger_sidecars_refuses_traversal_survivor_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A committed sidecar whose `survivor_id` FRONTMATTER (file content, not
+    the walked path) is a path-traversal string must never steer the sweep's
+    rewrite off the path it WALKED. A malicious shared bundle could ship such
+    a sidecar; before the fix the sweep rebuilt the write path from that
+    content and could create a file OUTSIDE the bundle. The rewrite must land
+    on the walked path -- so the purge entry is still scrubbed (privacy) and
+    no traversal is possible."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/decoy", title="Decoy")
+    _write_plain_concept(tmp_path, "concepts/keep", title="Keep")
+    _write_plain_concept(tmp_path, "concepts/purge-target", title="Purge target")
+    # Two merges into `decoy`, so after the purge-target entry is dropped one
+    # entry REMAINS -- the non-empty branch that does `mkdir(parents=True)` +
+    # `write_atomic`, i.e. the branch that would CREATE a file at a traversed
+    # path.
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/decoy", "concepts/keep", "--auto"]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/decoy", "concepts/purge-target", "--auto"]
+        ).exit_code
+        == 0
+    )
+    bundle_dir = tmp_path / "bundle"
+    sidecar = bundle_ledger.ledger_path_for("concepts/decoy", bundle_dir)
+    assert sidecar.is_file()
+    # Tamper the sidecar's `survivor_id` CONTENT to a bundle-escaping path,
+    # leaving the walked file where it is (a hostile/portable bundle shape).
+    metadata, _ = okf.load_frontmatter(sidecar.read_text(encoding="utf-8"))
+    metadata["survivor_id"] = "../../../pwned"
+    fsio.write_atomic(sidecar, okf.dump_frontmatter(metadata))
+    escaped = bundle_ledger.ledger_path_for("../../../pwned", bundle_dir)
+    assert not escaped.exists(), "fixture precondition: escape target absent"
+
+    touched = main._sweep_ledger_sidecars_for_ids(bundle_dir, ["concepts/purge-target"])
+
+    assert not escaped.exists(), "the sweep must not write outside the walked path"
+    assert sidecar in touched
+    after, _ = okf.load_frontmatter(sidecar.read_text(encoding="utf-8"))
+    assert {entry.absorbed_id for entry in okf.decode_merged_from(after)} == {
+        "concepts/keep"
+    }, "the purge-target entry is scrubbed IN PLACE on the walked path"
+
+
+def test_sweep_decisions_refuses_traversal_concept_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The decisions sweep's twin of the ledger guard: a decision sidecar
+    whose `concept_id` FRONTMATTER is a traversal string must be rewritten on
+    the walked path, never on a path rebuilt from that content."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle_dir = tmp_path / "bundle"
+    referencing = bundle_decisions.DecisionRecord(
+        decision_key=bundle_decisions.decision_key_for(
+            ("concepts/host", "concepts/purge-target"), None
+        ),
+        pair_ids=("concepts/host", "concepts/purge-target"),
+        merged_absorbed_id=None,
+        state="declined",
+        decided_at="2026-08-12T00:00:00Z",
+    )
+    unrelated = bundle_decisions.DecisionRecord(
+        decision_key=bundle_decisions.decision_key_for(
+            ("concepts/host", "concepts/unrelated"), None
+        ),
+        pair_ids=("concepts/host", "concepts/unrelated"),
+        merged_absorbed_id=None,
+        state="declined",
+        decided_at="2026-08-12T00:00:00Z",
+    )
+    sidecar = bundle_decisions.write_decisions(
+        "concepts/host", bundle_dir, records=[referencing, unrelated]
+    )
+    metadata, _ = okf.load_frontmatter(sidecar.read_text(encoding="utf-8"))
+    metadata["concept_id"] = "../../../pwned"
+    fsio.write_atomic(sidecar, okf.dump_frontmatter(metadata, body=""))
+    escaped = bundle_decisions.decisions_path_for("../../../pwned", bundle_dir)
+    assert not escaped.exists(), "fixture precondition: escape target absent"
+
+    touched = main._sweep_decisions_for_ids(bundle_dir, ["concepts/purge-target"])
+
+    assert not escaped.exists(), "the sweep must not write outside the walked path"
+    assert sidecar in touched
+    remaining = bundle_decisions.read_decisions_at(sidecar)
+    assert [record.pair_ids for record in remaining] == [
+        ("concepts/host", "concepts/unrelated")
+    ], "the referencing record is scrubbed IN PLACE on the walked path"
+
+
 # --- Pending-work decision subtree sweep (forget-command spec: "Forget
 # Sweeps Live Decision Entries Referencing The Purge Set") ------------------
 

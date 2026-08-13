@@ -151,7 +151,16 @@ def read_decisions(concept_id: str, bundle_dir: Path) -> list[DecisionRecord]:
     sidecar on disk (no decision ever declined/reopened under this concept
     id) returns `[]` -- mirrors `bundle.ledger.read_entries`'s own
     "absent file" contract."""
-    path = decisions_path_for(concept_id, bundle_dir)
+    return read_decisions_at(decisions_path_for(concept_id, bundle_dir))
+
+
+def read_decisions_at(path: Path) -> list[DecisionRecord]:
+    """Read every `DecisionRecord` from the sidecar AT `path` -- the walked-
+    path reader the privacy sweep and the declined-listing views use, so a
+    record is read from the file actually on disk, never from a path rebuilt
+    from a (possibly drifted or hostile) `concept_id` frontmatter field.
+    `read_decisions` is the id-addressed wrapper for callers that legitimately
+    own the id. Absent file returns `[]`."""
     if not path.is_file():
         return []
     metadata, _ = okf.load_frontmatter(path.read_text(encoding="utf-8"))
@@ -172,7 +181,26 @@ def write_decisions(
 
     Written via `fsio.write_atomic`, over `okf.dump_frontmatter`'s output
     with an empty body (ADR-0002 invariant 3, preserved literally)."""
-    path = decisions_path_for(concept_id, bundle_dir)
+    return rewrite_decisions_at(
+        decisions_path_for(concept_id, bundle_dir),
+        concept_id=concept_id,
+        records=records,
+    )
+
+
+def rewrite_decisions_at(
+    path: Path, *, concept_id: str, records: list[DecisionRecord]
+) -> Path:
+    """(Re)write the sidecar AT `path` to hold EXACTLY `records`, using
+    `concept_id` only as container CONTENT -- never to derive the path.
+
+    The walked-path twin of `bundle.ledger.rewrite_entries_at`: the privacy
+    sweep must write each rewrite back to the path it WALKED, not to a path
+    rebuilt from the (possibly drifted or hostile) `concept_id` frontmatter
+    field, which would let a traversal id escape the bundle and silently
+    scrub the wrong file. `write_decisions` is the id-addressed wrapper. An
+    empty `records` list removes the file; removing an absent file is a
+    no-op."""
     if not records:
         if path.is_file():
             path.unlink()

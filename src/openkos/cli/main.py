@@ -755,8 +755,12 @@ def _sweep_ledger_sidecars_for_ids(
         ]
         if remaining == entries:
             continue
-        bundle_ledger.write_entries(
-            survivor_id, bundle_dir, survivor_id=survivor_id, entries=remaining
+        # Write back to the WALKED path, never to a path rebuilt from the
+        # sidecar's own `survivor_id` content: a drifted or hostile id must
+        # not steer this rewrite off the file it came from (path traversal +
+        # silent scrub miss). `survivor_id` is content only.
+        bundle_ledger.rewrite_entries_at(
+            ledger_path, survivor_id=survivor_id, entries=remaining
         )
         touched.append(ledger_path)
     return touched
@@ -795,7 +799,10 @@ def _decisions_history_targets(bundle_dir: Path, purge_ids: Iterable[str]) -> li
         concept_id = metadata.get("concept_id")
         if not isinstance(concept_id, str) or not concept_id:
             continue
-        records = bundle_decisions.read_decisions(concept_id, bundle_dir)
+        # Read the WALKED path, not a path rebuilt from the sidecar's own
+        # `concept_id` content, so a drifted or hostile id cannot redirect
+        # this read outside the bundle (F1b read-side traversal).
+        records = bundle_decisions.read_decisions_at(decisions_path)
         references_purge_set = any(
             record.pair_ids[0] in purge_ids_set
             or record.pair_ids[1] in purge_ids_set
@@ -861,7 +868,10 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
         concept_id = metadata.get("concept_id")
         if not isinstance(concept_id, str) or not concept_id:
             continue
-        records = bundle_decisions.read_decisions(concept_id, bundle_dir)
+        # Read AND rewrite the WALKED path, never a path rebuilt from the
+        # sidecar's own `concept_id` content (path traversal + silent scrub
+        # miss). `concept_id` is preserved as container content only.
+        records = bundle_decisions.read_decisions_at(decisions_path)
         remaining = [
             record
             for record in records
@@ -871,7 +881,9 @@ def _sweep_decisions_for_ids(bundle_dir: Path, purge_ids: Iterable[str]) -> list
         ]
         if len(remaining) == len(records):
             continue
-        bundle_decisions.write_decisions(concept_id, bundle_dir, records=remaining)
+        bundle_decisions.rewrite_decisions_at(
+            decisions_path, concept_id=concept_id, records=remaining
+        )
         touched.append(decisions_path)
     return touched
 
@@ -3130,6 +3142,15 @@ def _stage_derived_objects(
             )
             continue
 
+        # An LLM-extracted title carrying a markdown link delimiter (`[`/`]`)
+        # would forge or break the catalog bullet's first link in `index.md`/
+        # `log.md` (making the real entry unremovable, or forging deletion of
+        # another). Neutralize the delimiters rather than drop the candidate,
+        # so a benign bracketed title (e.g. `Array[0]`) is preserved while the
+        # injection is defused. Used for BOTH the concept's own title and its
+        # catalog label so the two stay identical.
+        safe_title = bundle_index.sanitize_link_label(extraction.title)
+
         link_dir = _TYPE_TO_LINK_DIR[extraction.type]
         section = _TYPE_TO_SECTION[extraction.type]
         link_dir_path = bundle_dir / link_dir
@@ -3168,7 +3189,7 @@ def _stage_derived_objects(
         try:
             content = okf.build_concept(
                 type=extraction.type,
-                title=extraction.title,
+                title=safe_title,
                 description=extraction.description,
                 body=extraction.body,
                 provenance=[f"sources/{source_slug}"],
@@ -3191,7 +3212,7 @@ def _stage_derived_objects(
                 section=section,
                 link_dir=link_dir,
                 slug=derived_slug,
-                title=extraction.title,
+                title=safe_title,
                 description=extraction.description,
                 path=derived_path,
                 content=content,
@@ -4081,6 +4102,13 @@ def _ingest_single(
             else source_title.derive_source_title(raw_content)
         )
         title = derived_title if derived_title is not None else _titleize(src.stem)
+        # Neutralize markdown link LABEL delimiters (`[`/`]`) in the Source
+        # title before it feeds the frontmatter, the `# ` heading, and the
+        # `index.md`/`log.md` bullets: a content-derived heading like
+        # `# X](/sources/evil.md)` (injection) or a filename like
+        # `notes[1].txt` (benign) would otherwise forge/break the catalog
+        # link. Idempotent on re-ingest.
+        title = bundle_index.sanitize_link_label(title)
         if raw_content is None:
             description = (
                 f"Raw source imported from '{src}' as {resource}; "
@@ -11742,7 +11770,9 @@ def _contradictions_declined_view(root: Path, layout: config.WorkspaceLayout) ->
         concept_id = metadata.get("concept_id")
         if not isinstance(concept_id, str):
             continue
-        for record in bundle_decisions.read_decisions(concept_id, layout.bundle_dir):
+        # Read the WALKED path, not a path rebuilt from the sidecar's own
+        # `concept_id` content (F1b read-side traversal).
+        for record in bundle_decisions.read_decisions_at(decisions_path):
             if record.state == "declined":
                 declined_records.append(record)
 
@@ -12362,6 +12392,10 @@ def _stage_filed_answer(
     resolved_title = (
         (_declarative_answer_title(answer_text) or question) if title is None else title
     )
+    # Neutralize markdown link LABEL delimiters before the title reaches the
+    # `index.md`/`log.md` bullets (the answer's first sentence or a `--title`
+    # can carry `[`/`]`); the slug is derived independently and is unaffected.
+    resolved_title = bundle_index.sanitize_link_label(resolved_title)
     resolved_description = question if description is None else description
 
     slug = _slugify(resolved_title)
