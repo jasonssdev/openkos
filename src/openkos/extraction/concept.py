@@ -1550,6 +1550,21 @@ def _reask_for_further_subjects(
     ]
 
 
+_REASK_LOW_YIELD_THRESHOLD: Final = 2000
+"""Source length (chars) at or above which a sole NON-restating object is a
+low yield worth one re-ask (#642).
+
+2000 sits between the two measured classes: BELOW the recovery case --
+`02-how-claude-code-works.md`, 2411 chars, which collapsed to one non-twin
+object (`Agentic Loop`) in 3 of 5 runs (`qwen3:8b`) and recovered exactly
+`Context Window`/`Tools`/`Permissions` in 3 of 3 manual re-asks -- and ABOVE
+the trivial-note class, where a 46-byte note yielding one object is the
+CORRECT answer, not a collapse. The restate trigger (#584/#586) stays
+length-independent: the negative control (`Replica Lag`, 1260 chars,
+genuinely single-subject) relies on it firing under this threshold, where
+the additive re-ask added zero junk in 5 of 5 runs."""
+
+
 def _add_reask_subjects(
     results: list[ExtractionResult],
     *,
@@ -1557,15 +1572,17 @@ def _add_reask_subjects(
     source_title: str,
     llm: LLMBackend,
 ) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
-    """Bounded re-ask on a sole object that restates the source title (#584).
+    """Bounded re-ask on a sole object that restates the source title (#584),
+    or on a sole object from a long source whatever its title (#642).
 
     Returns `(objects, reask_runs, added_titles)`. When the trigger does not
     fire, `results` is handed straight back with `(0, ())` and NO call is
     made -- the re-ask must not fire on every source, which would silently
     double extraction cost.
 
-    The trigger is the collapse #584 measured: the FINAL, filtered list is
-    exactly one object AND that object restates the source's own title. On
+    The trigger's first arm is the collapse #584 measured: the FINAL,
+    filtered list is exactly one object AND that object restates the source's
+    own title. On
     the `lesson` pair, `qwen3:8b`, `--runs 5 --seed 7`, the umbrella-titled
     arm returned 1 object in 5 of 5 runs while the same three facts retitled
     and unframed returned 3 in 5 of 5 (`AXIS IMPLICATED`) -- the subjects are
@@ -1587,6 +1604,28 @@ def _add_reask_subjects(
     Neither widening reaches the DROP rule or the additions filter; see
     `_restates_source_topic` and `_reask_for_further_subjects` for why each
     keeps its own threshold.
+
+    The second arm (#642) is the collapse the restate trigger is blind to by
+    construction: one LEGITIMATE-but-insufficient object, no twin symptom.
+    Measured on `02-how-claude-code-works.md` (2411 chars, `qwen3:8b`, 5
+    runs/arm): the source collapsed to the single non-twin object `Agentic
+    Loop` in 3 of 5 runs, silently losing Context Window/Tools/Permissions --
+    and manually invoking `_reask_for_further_subjects` on those runs
+    recovered exactly those three subjects all 3 times, identical to the
+    good runs' object set. So a sole object also triggers when it does NOT
+    restate the source (the first arm's complement) AND the source is at
+    least `_REASK_LOW_YIELD_THRESHOLD` chars -- see that constant for why
+    2000, and why the restate arm keeps working at ANY length exactly as
+    before (the `Replica Lag` negative control at 1260 chars relies on it).
+    The false-positive cost is the one the additive-only design bounds: on
+    that genuinely single-subject control the extra call added ZERO junk in
+    5 of 5 runs -- one clean call, nothing more.
+
+    The restate arm is `_sole_object_restates_source`'s condition with its
+    `len == 1` conjunct hoisted to cover both arms; the restate SPELLING
+    stays `_restates_source_topic`, shared with the #585 notice, which is
+    unchanged -- a low-yield re-ask on a non-restating object never marks
+    the Source as restating itself, because it does not.
 
     It ADDS, never replaces, and that is what makes it bounded rather than a
     gamble on the model. The argument is written down in
@@ -1611,7 +1650,13 @@ def _add_reask_subjects(
     branch (chunked or not) rather than per run or per chunk -- #581's
     precedent, and required by the trigger itself, which reads "the source
     returned exactly one object" and so is meaningless on a slice."""
-    if not _sole_object_restates_source(results, source_title=source_title):
+    if not (
+        len(results) == 1
+        and (
+            _restates_source_topic(results[0], source_title=source_title)
+            or len(source_text) >= _REASK_LOW_YIELD_THRESHOLD
+        )
+    ):
         return results, 0, ()
     added = _reask_for_further_subjects(source_text, source_title, results[0], llm)
     combined = _dedup_merged(results + added)
