@@ -2008,6 +2008,11 @@ def _run_adjudicate_apply(
     for item in declined:
         typer.echo(f"  declined: {item}")
 
+    # #640: once per invocation, after the whole walk -- never inside
+    # `_commit_one_merge`, which runs per accepted pair.
+    if applied:
+        _refresh_derived_after_write(layout, None, verb="adjudicate")
+
 
 def _refused_stacked_line(
     report: "StackedBodyReport", absorbed_canonical: str, survivor_canonical: str
@@ -2262,6 +2267,10 @@ def _run_adjudicate_apply_same(
         f"previewed, skipped {skipped_total} (N>2: {skipped_n_gt2}, "
         f"already-merged: {skipped_already_merged}{stacked_note})"
     )
+
+    # #640: once per batch, after Pass 2 -- never per `_commit_one_merge`.
+    if applied:
+        _refresh_derived_after_write(layout, None, verb="adjudicate")
 
 
 _SLUG_COLLAPSE_RE = re.compile(r"-+")
@@ -3328,8 +3337,8 @@ def _embed_after_ingest(
     Decision D), and passes NO `fts_db_path`: this helper runs once PER
     FILE inside a batch, so building FTS here would make an N-file ingest
     pay N full-text rebuilds. The FTS build ingest DOES perform (issue
-    #553) lives in `_build_fts_after_ingest`, invoked exactly once at the
-    END of each `ingest` run.
+    #553) lives in `_refresh_derived_after_write` (#640 widened it to
+    graph+vectors), invoked exactly once at the END of each `ingest` run.
 
     `warn_nonlocal_host=False` suppresses ONLY the non-local embedding-host
     advisory: `_ingest_batch` emits that advisory itself, once per batch
@@ -3370,38 +3379,114 @@ def _embed_after_ingest(
         )
 
 
-def _build_fts_after_ingest(layout: config.WorkspaceLayout) -> None:
-    """Build the on-disk FTS index once, at the end of an `ingest` run, so
-    the README quickstart (`init` -> `ingest` -> `query`) gets hybrid
-    retrieval on its very first query instead of answering dense-only until
-    a manual `openkos reindex` (issue #553).
+def _refresh_derived_after_write(
+    layout: config.WorkspaceLayout,
+    cfg: config.Config | None,
+    *,
+    verb: str,
+) -> bool:
+    """Refresh the three derived stores as part of the write that just
+    invalidated them (issue #640), returning True iff every store is fresh.
 
-    ONE build per invocation, at the END -- never per file. A batch of N
-    files pays a single rebuild after the loop, which is the cost decision
-    that kept `_embed_after_ingest` FTS-free in the first place: rebuilding
-    inside the per-file pipeline would multiply that cost by N. The
-    manifest-hash gate inside `_reindex_fts` still applies, so an ingest
-    run that wrote nothing new (every file skipped) costs a hash check,
-    not a rebuild.
+    Before #640, only `reindex`, `purge`, and `ingest`'s end-of-run FTS
+    build (#553) ever wrote a derived store -- every other mutating verb
+    left them behind, and the stale-index warnings (`status`/`next`/query's
+    stale line) fired only AFTER a degraded answer. This helper generalizes
+    #553's proven end-of-run pattern to every bundle-writing verb: called
+    ONCE per invocation, at END of run, strictly AFTER the verb's
+    successful write + autocommit -- never per file or per stage, the cost
+    decision that shaped #553 in the first place. Call sites are all on the
+    success path: a refused, declined, or failed write invalidated nothing
+    and must not refresh (nor pay for one).
 
-    FAIL-OPEN, mirroring `_embed_after_ingest`'s promise and for the same
-    reason: the Source and its concepts are already written and COMMITTED
-    by the time this runs, so losing the FTS build must never cost the user
-    the ingest itself. Every mapped failure degrades to one stderr notice
-    naming `openkos reindex` and leaves the exit code unchanged. Unlike the
-    embed, this path needs no Ollama at all -- it is a pure FTS5 projection
-    of the bundle -- so it succeeds even on runs whose embed degraded.
+    CHEAP-FIRST ordering, and it is load-bearing: FTS and graph are pure
+    SQLite projections of the bundle (no Ollama), refreshed before the
+    vector attempt, so an embedder failure can never leave them stale --
+    the degrade path keeps lexical retrieval and the graph current even
+    when embeddings die. One consequence, accepted deliberately: the graph
+    rebuild nominates proximity-candidate edges from the PRE-refresh
+    `vectors.db`. For a frontmatter-only write that store is unchanged
+    anyway (#554 excludes frontmatter from embeddings -- zero embed calls,
+    pure cache hits), and for content writes the next content change or a
+    manual `openkos reindex --force` heals the nomination set.
 
-    Deliberately NOT routed through `_embed_after_ingest`: that helper runs
-    once per file inside a batch, while this must run once per batch."""
+    Each stage degrades independently (a dead FTS5 module must not cost the
+    graph its refresh), but every failure folds into ONE stderr advisory
+    naming what was skipped and the manual fallback -- never N lines, never
+    the exit code. FAIL-OPEN with `except Exception` ON PURPOSE, mirroring
+    `_embed_after_ingest`'s rationale verbatim: the bundle write is already
+    COMMITTED by the time this runs, so no refresh failure -- the full
+    mapped ladder (`OllamaUnavailable`, `OllamaModelNotFound`,
+    `OllamaEmbeddingDimensionMismatch`, `VecUnavailable`, `FtsUnavailable`,
+    `OllamaError`, `sqlite3.Error` including lock contention) or anything
+    nobody anticipated -- may cost the user the write itself. Ctrl-C still
+    interrupts: `KeyboardInterrupt`/`SystemExit` derive from
+    `BaseException`.
+
+    `cfg` is optional because not every call site has one in scope (`merge`
+    never reads config); `None` reads it here, inside the vector stage's
+    own fail-open envelope, so a corrupt `openkos.yaml` degrades the
+    refresh instead of crashing a verb that never needed config before.
+    The vector refresh reuses the exact `state.reindex.reindex` wiring the
+    `reindex` verb uses -- the content-hash cache keeps it incremental --
+    with the same TTY-gated progress idiom (#190) and NO `fts_db_path`
+    (stage 1 already owns FTS). The stale-index warning tiers are
+    deliberately untouched: they remain the safety net for this helper's
+    own degrade path."""
+    failures: list[str] = []
+
     try:
         reindex_module._reindex_fts(layout.bundle_dir, layout.fts_db_path, force=False)
-    except (OSError, sqlite3.Error, FtsUnavailable) as exc:
+    except Exception as exc:
+        failures.append(f"fts: {exc}")
+
+    try:
+        with_candidates = _open_proximity_or_degrade(layout.vectors_db_path)
+        try:
+            sqlite_graph.reindex_graph(
+                layout.bundle_dir,
+                layout.graph_db_path,
+                force=False,
+                candidates=with_candidates,
+            )
+        finally:
+            if with_candidates is not None:
+                with_candidates.close()
+    except Exception as exc:
+        failures.append(f"graph: {exc}")
+
+    try:
+        if cfg is None:
+            cfg = config.read_config(layout.root)
+        embedder = OllamaClient(model=cfg.embedding_model)
+        with open_vector_store(layout.vectors_db_path) as db:
+            report = reindex_module.reindex(
+                layout.bundle_dir,
+                db,
+                embedder,
+                model_tag=cfg.embedding_model,
+                on_progress=observability.progress_callback(verb, "embedding doc"),
+            )
+        # An exception is not the only way embedding degrades: `reindex`
+        # folds a generic per-doc `OllamaError` into `embed_failed` instead
+        # of raising (same trap `_embed_after_ingest` documents), so a run
+        # that embedded nothing must not report a complete refresh.
+        if report.embed_failed:
+            failures.append(
+                f"vectors: {report.embed_failed} doc"
+                f"{_plural(report.embed_failed)} could not be embedded"
+            )
+    except Exception as exc:
+        failures.append(f"vectors: {exc}")
+
+    if failures:
         typer.echo(
-            f"openkos ingest: FTS index not updated -- {exc}; lexical "
-            "retrieval degraded until `openkos reindex` succeeds.",
+            f"openkos {verb}: derived-index refresh incomplete -- "
+            f"{'; '.join(failures)}; run 'openkos reindex' to finish.",
             err=True,
         )
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -3726,12 +3811,12 @@ def _ingest_batch(
             suffix = " (extraction degraded -- Source only; see stderr)"
         outcome_lines.append(f"  {marker} {path} -- {label}{suffix}")
 
-    # End-of-run FTS build (issue #553): ONCE for the whole batch, after
-    # the loop -- never per file. Runs even when every file was skipped:
-    # the manifest gate makes that a hash check, and a workspace that never
-    # had an fts.db gets one built. Fail-open (stderr only), so it can
-    # never change the exit ladder below.
-    _build_fts_after_ingest(config.WorkspaceLayout(root))
+    # End-of-run derived refresh (issue #553, widened to graph+vectors by
+    # #640): ONCE for the whole batch, after the loop -- never per file.
+    # Runs even when every file was skipped: the manifest gates make that a
+    # hash check, and a workspace that never had an fts.db gets one built.
+    # Fail-open (stderr only), so it can never change the exit ladder below.
+    _refresh_derived_after_write(config.WorkspaceLayout(root), cfg, verb="ingest")
 
     # ONE torn-classification aggregate for the WHOLE batch (#566), on
     # stderr before the stdout report so the stdout contract (#349) keeps
@@ -3839,10 +3924,15 @@ def ingest(
         # the command -- never by `_ingest_single`, which the batch path
         # calls once per file.
         _echo_type_alternative_summary(outcome.derived_count, outcome.alternative_pairs)
-        # End-of-run FTS build (issue #553): AFTER the single-file pipeline
-        # returned -- a refusal raises `typer.Exit` above and skips this,
-        # matching the batch path (nothing new was committed).
-        _build_fts_after_ingest(config.WorkspaceLayout(Path.cwd()))
+        # End-of-run derived refresh (issue #553, widened by #640): AFTER
+        # the single-file pipeline returned -- a refusal raises `typer.Exit`
+        # above and skips this, matching the batch path (nothing new was
+        # committed). `cfg=None`: the single-file path reads config inside
+        # `_ingest_single`, not here, and the helper reads its own copy
+        # fail-open.
+        _refresh_derived_after_write(
+            config.WorkspaceLayout(Path.cwd()), None, verb="ingest"
+        )
         return
     matches, skipped_non_text = expansion
     _ingest_batch(
@@ -5088,6 +5178,10 @@ def forget(
         forget_message,
     )
 
+    # #640: also prunes the forgotten concept(s) from `vectors.db` via the
+    # vector stage's prune pass, not only the manifest-gated stores.
+    _refresh_derived_after_write(layout, cfg, verb="forget")
+
 
 _PurgeScope = Literal["self", "source"]
 
@@ -5970,6 +6064,9 @@ def relate(
         f"{prepared.target_canonical} ({prepared.rel_type})",
     )
 
+    # #640: `cfg=None` -- `relate` never reads config at this layer.
+    _refresh_derived_after_write(layout, None, verb="relate")
+
 
 @app.command(
     "set-sensitivity",
@@ -6396,6 +6493,10 @@ def set_sensitivity_cmd(
         + [f"bundle/{canonical_id}.md", "bundle/log.md"],
         f"openkos: set-sensitivity {canonical_id} -> {level}",
     )
+
+    # #640: a frontmatter-only write is a vector cache-hit (#554 excludes
+    # frontmatter from embeddings), so this costs FTS+graph rebuilds only.
+    _refresh_derived_after_write(layout, cfg, verb="set-sensitivity")
 
 
 @app.command(
@@ -6932,6 +7033,9 @@ def normalize_names_cmd(
     )
 
     _autocommit(root, landed, "openkos: normalize-names")
+
+    # #640: a rename changes concept ids, which every derived store keys on.
+    _refresh_derived_after_write(layout, cfg, verb="normalize-names")
 
 
 @app.command(
@@ -8305,6 +8409,10 @@ def merge(
         f"openkos: merge {absorbed_canonical} into {survivor_canonical}",
     )
 
+    # #640: `cfg=None` -- `merge` never reads config; the helper reads its
+    # own copy inside the vector stage's fail-open envelope.
+    _refresh_derived_after_write(layout, None, verb="merge")
+
 
 @app.command(
     help=(
@@ -8482,6 +8590,10 @@ def unmerge(
             auto=auto,
             confirmed=False,
         )
+        # #640: after the single-step write committed. NOT inside
+        # `_execute_single_unmerge`, which the `--to` chain below invokes
+        # once per entry -- the refresh is once per invocation.
+        _refresh_derived_after_write(layout, cfg, verb="unmerge")
         return
 
     try:
@@ -8561,6 +8673,10 @@ def unmerge(
             # conventional 1.
             exit_code = exc.exit_code if isinstance(exc, typer.Exit) else 1
             raise typer.Exit(code=exit_code) from exc
+
+    # #640: once, after the WHOLE chain completed -- a stopped chain raised
+    # above and leaves the stale-index warnings as its safety net.
+    _refresh_derived_after_write(layout, cfg, verb="unmerge")
 
 
 def _unwind_step_preview_lines(
@@ -11079,6 +11195,11 @@ def _run_suggest_relations_apply(
     for item in declined:
         typer.echo(f"  declined: {item}")
 
+    # #640: once per invocation, only when the walk applied at least one
+    # relation write; an all-declined walk invalidated nothing.
+    if applied:
+        _refresh_derived_after_write(layout, None, verb="suggest-relations")
+
 
 @app.command(
     "suggest-relations",
@@ -12949,8 +13070,7 @@ def query(
 
     typer.echo(
         f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
-        f"({save_index_path.name}, {save_log_path.name} updated). Run "
-        "`openkos reindex` to make it searchable."
+        f"({save_index_path.name}, {save_log_path.name} updated)."
     )
 
     # #331: `query --save` was the ONE mutating path without the
@@ -12966,6 +13086,14 @@ def query(
         [answer_rel, "bundle/index.md", "bundle/log.md"],
         f"openkos: query --save {plan.link_dir}/{plan.slug}",
     )
+
+    # #640: this verb used to end with "Run `openkos reindex` to make it
+    # searchable." -- with the write-time refresh, that instruction is FALSE
+    # on the success path, so searchability is claimed only when the refresh
+    # actually completed; the degrade path's advisory (inside the helper)
+    # carries the manual `openkos reindex` pointer instead.
+    if _refresh_derived_after_write(layout, cfg, verb="query"):
+        typer.echo("openkos query: the filed insight is indexed and searchable.")
 
 
 @app.command(
@@ -14131,6 +14259,12 @@ def curate(
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):
         typer.echo(line)
+
+    # #640: once at END of run, only when some stage actually applied a
+    # write -- an all-declined/empty session invalidated nothing. NOT per
+    # stage and NOT inside `_commit_one_merge` (Identity commits per item).
+    if any(outcome.applied for outcome in outcomes):
+        _refresh_derived_after_write(layout, cfg, verb="curate")
 
 
 PANEL_ORDER: Final[tuple[str, ...]] = (
