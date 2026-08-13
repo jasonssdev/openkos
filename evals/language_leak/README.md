@@ -130,6 +130,48 @@ markers (accents, or suffixes `-ción/-sión/-miento/-ería/-encia/-ancia/
 — `Snapshot Derivado` is exempted by `-ado` while every caught residual
 is pure-English orthography. Filed as the follow-up from these numbers.
 
+## The #630 combo, measured (2026-08-13) — SHIPPED
+
+The candidate #622's rejection pointed at: exempt any title containing a
+word with Spanish orthographic markers (accents `áéíóúüñ`, or suffixes
+`-ción/-sión/-miento/-ería/-encia/-ancia/-dad/-ado/-ada`, matched only
+when the word is STRICTLY longer than the suffix, so English `dad` never
+matches) BEFORE the adjacency test. Implemented in this probe
+(`spanish_orthography`, wired into `score_extension`) and measured over
+every stored emission set PLUS one fresh 3-run baseline sweep
+(`20260813T085052Z` — 15 runs, 597 kept titles):
+
+| emission set | residual harmful (post-#618) | caught | false positives |
+| --- | --- | --- | --- |
+| baseline stored ×2 (6 runs) | 9 | 9 | **0** |
+| baseline fresh #1 (3 runs, `071333Z`) | 10 | 10 | **0** |
+| baseline fresh #2 (3 runs, `085052Z`) | 11 | 11 | **0** |
+| treatment stored (3 runs) | 2 | 2 | **0** — `Snapshot Derivado` exempted by `-ado` |
+| **total** | **32** | **32** | **0** |
+
+Residual harmful after gate + extension: **0.00 on every run**. One
+adjudication was needed on the fresh sweep: the model emitted `Language
+Leakage Measurement` — a translation of the transcript's own subject
+(`la fuga de idioma`) none of whose words appear anywhere in the prose —
+which the hand-built marker lists could not label (`language`, `leakage`,
+`measurement` were in neither list), so the scorer initially counted two
+CORRECT drops as false positives. The three unambiguously-English words
+were added to `_EN_MARKERS` (adjudication note inline); the generated
+`085052Z` report file predates that adjudication and shows the stale
+`FP!` marks. The English-collision check the #630 design point asked for:
+zero English titles in any stored emission trigger the exemption, and a
+`/usr/share/dict/words` sweep finds only rare loanwords (`tornado`,
+`armada`, `avocado`) — each a potential missed catch (fail-open), never a
+false positive, which is the side the zero-FP bar protects.
+
+Production shipped the same mechanism in
+`concept._drop_wrong_language_titles` (#630): on a SPANISH-dominant
+document only (the measured direction), a gate-NEUTRAL title (no function
+words on either side; MIXED never reaches the check) with no Spanish
+orthographic marker, no verbatim support (balanced `(...)` stripped
+first), and non-adjacent bigrams drops — chunked paths only, the all-drop
+floor and both fail-open guards unchanged.
+
 ## Measurement lessons (paid for four times)
 
 1. **Never run an eval client uncapped.** A bare `OllamaClient` has no

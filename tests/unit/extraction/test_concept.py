@@ -3970,6 +3970,120 @@ def test_gate_keeps_neutral_and_mixed_titles() -> None:
     assert dropped == ()
 
 
+def test_gate_drops_a_neutral_english_recombination(monkeypatch: object) -> None:
+    """#630's residual class exactly: a bare English noun phrase -- no
+    function words, so #618's voter is blind to it -- assembled from prose
+    fragments that never sit adjacent. Non-verbatim, no Spanish
+    orthography, bigrams non-adjacent: it drops."""
+    source = (
+        _spanish_lines(500) + "\nAna: El knowledge del equipo alimenta la recovery del "
+        "sistema y el project sigue en curso."
+    )
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Knowledge Recovery Project",
+            description="d",
+            body="",
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Procedimiento de ingesta",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == ["Procedimiento de ingesta"]
+    assert dropped == ("Knowledge Recovery Project",)
+
+
+def test_gate_keeps_a_neutral_title_quoted_verbatim() -> None:
+    """A neutral multi-word title that IS in the prose is a quote, not a
+    recombination -- adjacency passes by construction and the paren-strip
+    (#592's precedent) keeps `Proper Name (ACRO)` shaped titles safe."""
+    source = (
+        _spanish_lines(500)
+        + "\nBruno: El evaluation harness ya corre en la integración."
+    )
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Evaluation Harness (EH)",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == ["Evaluation Harness (EH)"]
+    assert dropped == ()
+
+
+def test_gate_exempts_spanish_orthography_before_the_adjacency_test() -> None:
+    """The demonstrated false-positive class (#630): `Snapshot Derivado` --
+    Spanish morphology composing an English loanword's singular while the
+    prose holds the plural, so adjacency fails structurally. The `-ado`
+    orthographic marker exempts it BEFORE the adjacency test, and an
+    accented word is exempt the same way."""
+    source = (
+        _spanish_lines(500)
+        + "\nCarla: Los snapshots derivados se regeneran cada noche, y la "
+        "migración de configuración sigue su curso."
+    )
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept", title="Snapshot Derivado", description="d", body=""
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept", title="Migración Nocturna", description="d", body=""
+        ),
+        # A survivor with function words, so the all-drop floor can never
+        # mask a broken exemption in this fixture.
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Procedimiento de ingesta",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == [
+        "Snapshot Derivado",
+        "Migración Nocturna",
+        "Procedimiento de ingesta",
+    ]
+    assert dropped == ()
+
+
+def test_no_english_function_word_triggers_the_orthographic_exemption() -> None:
+    """The disjointness discipline, extended to #630's marker list: no
+    English function word may carry a Spanish orthographic marker, or the
+    exemption would shield the exact class the gate exists to drop."""
+    for word in concept_mod._EN_FUNCTION_WORDS:
+        assert not concept_mod._spanish_orthography(word), word
+
+
+def test_bigram_adjacency_mechanics() -> None:
+    """The check itself: a verbatim quote passes, a recombination fails, a
+    single word or acronym has no bigrams and passes, and prose punctuation
+    dissolves so a sentence boundary does not break adjacency."""
+    prose = "El knowledge recovery. Project nuevo del equipo."
+
+    assert concept_mod._bigram_adjacent("Knowledge Recovery", prose)
+    # `recovery` and `project` sit across a sentence boundary -- adjacent
+    # after punctuation dissolves (the LENIENT reading; it only reduces
+    # drops).
+    assert concept_mod._bigram_adjacent("Recovery Project", prose)
+    assert not concept_mod._bigram_adjacent("Knowledge Project", prose)
+    assert concept_mod._bigram_adjacent("MCP", prose)
+
+
 def test_gate_fails_open_when_the_source_has_no_dominant_language() -> None:
     """No dominant language, no gate: a heavily code-switched document the
     voter cannot call is left alone rather than guessed at."""

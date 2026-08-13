@@ -15,6 +15,7 @@ wording, and catching `OllamaError` to keep the CLI's Source-only fallback
 UX, looping `openkos.model.okf.build_concept` once per validated object.
 """
 
+import itertools
 import re
 from dataclasses import dataclass, replace
 from typing import Any, Final
@@ -1177,6 +1178,97 @@ def _title_language(title: str) -> str | None:
     return None
 
 
+_ES_ORTHOGRAPHIC_ACCENTS: Final = frozenset("áéíóúüñ")
+"""Characters only Spanish orthography produces within the gate's es/en
+scope (#563) -- one anywhere in a title word exempts the title from the
+#630 adjacency test."""
+
+_ES_ORTHOGRAPHIC_SUFFIXES: Final[tuple[str, ...]] = (
+    "ción",
+    "sión",
+    "miento",
+    "ería",
+    "encia",
+    "ancia",
+    "dad",
+    "ado",
+    "ada",
+)
+"""Spanish derivational suffixes (#630): a title word ending in one --
+STRICTLY longer than the suffix itself, so English `dad` never matches --
+marks the title dominant-language and exempts it from the adjacency test.
+Lives beside `_ES_FUNCTION_WORDS` under the same disjointness discipline:
+no English function word may match (pinned by test). Known fail-open
+residue, checked against the stored emissions and a dictionary sweep: rare
+English loanwords ending in `-ado`/`-ada` (`tornado`, `armada`) would
+exempt a leaked title containing them -- a missed catch, never a false
+positive, which is the side the zero-FP shipping bar protects."""
+
+
+_ADJACENCY_WORD_RE: Final = re.compile(r"[a-z0-9áéíóúüñ]+")
+"""Word runs for the #630 bigram-adjacency check: casefolded letters plus
+digits (`Phase Two`, `fase dos`), punctuation dissolved to spaces --
+deliberately the same alphabet family as `_LANGUAGE_TOKEN_RE` plus
+digits."""
+
+
+def _neutral_title(title: str) -> bool:
+    """Whether `title` holds NO function words from either list -- the
+    class #618's voter cannot see (#630). Strictly narrower than
+    `_title_language(title) is None`, which also covers MIXED titles; a
+    mixed title is a dominant-language title quoting a term and must never
+    reach the adjacency test."""
+    tokens = _LANGUAGE_TOKEN_RE.findall(title.lower())
+    return not any(
+        token in _ES_FUNCTION_WORDS or token in _EN_FUNCTION_WORDS for token in tokens
+    )
+
+
+def _spanish_orthography(title: str) -> bool:
+    """#630's exemption: whether any word of `title` carries a Spanish
+    orthographic marker -- an accented character, or a derivational suffix
+    from `_ES_ORTHOGRAPHIC_SUFFIXES`. The demonstrated false-positive class
+    (`Snapshot Derivado`: Spanish morphology composing an English
+    loanword's singular from the prose's plural) is exactly what this
+    exempts BEFORE the adjacency test; every measured pure-English residual
+    carries neither marker (`evals/language_leak/`, 12 stored runs +
+    fresh)."""
+    for word in _ADJACENCY_WORD_RE.findall(title.casefold()):
+        if any(char in _ES_ORTHOGRAPHIC_ACCENTS for char in word):
+            return True
+        if any(
+            word.endswith(suffix) and len(word) > len(suffix)
+            for suffix in _ES_ORTHOGRAPHIC_SUFFIXES
+        ):
+            return True
+    return False
+
+
+def _adjacency_normalize(value: str) -> str:
+    return " ".join(_ADJACENCY_WORD_RE.findall(value.casefold()))
+
+
+def _bigram_adjacent(title: str, source_text: str) -> bool:
+    """#630's mechanism: whether every consecutive word pair of `title`
+    appears adjacent (in order) somewhere in the prose. A title assembled
+    from non-adjacent fragments (`knowledge recovery` + `project`) is a
+    recombination, not a quote, and fails; a verbatim quote passes by
+    construction. Balanced `(...)` spans are stripped from the TITLE first
+    (#592's precedent), and a single-word or empty title passes -- an
+    acronym has no bigrams to test.
+
+    Prose punctuation dissolves to spaces, so a pair spanning a sentence
+    boundary still counts as adjacent -- deliberately the LENIENT reading:
+    it can only reduce drops, and the shipping bar is zero false
+    positives, not maximum catch."""
+    stripped = re.sub(r"\([^()]*\)", " ", title)
+    words = _adjacency_normalize(stripped).split()
+    if len(words) < 2:
+        return True
+    prose = f" {_adjacency_normalize(source_text)} "
+    return all(f" {a} {b} " in prose for a, b in itertools.pairwise(words))
+
+
 def _quoted_verbatim(title: str, source_text: str) -> bool:
     """Whether `title` appears verbatim in `source_text` -- casefolded,
     whitespace-collapsed substring. A wrong-language title with verbatim
@@ -1218,7 +1310,22 @@ def _drop_wrong_language_titles(
       candidate at once, and an emptied extraction is silent data loss.
 
     Fail-open twice over: no dominant language (`None`) disables the gate
-    entirely, and only the `es`/`en` pair is ever voted on."""
+    entirely, and only the `es`/`en` pair is ever voted on.
+
+    The #630 extension covers the residual the voter is blind to by
+    construction: a bare English noun phrase with NO function words at all
+    (`Knowledge Recovery Project`), measured at 8 of 106 post-gate titles.
+    On a SPANISH-dominant document only -- the direction the measurement
+    covered -- a title that is gate-NEUTRAL (no function words on either
+    side; MIXED titles never reach this branch, they may compose
+    legitimately), carries no Spanish orthographic marker
+    (`_spanish_orthography`, the demonstrated `Snapshot Derivado`
+    false-positive class), is not quoted verbatim from the prose (balanced
+    `(...)` spans stripped first, #592's precedent), and whose word bigrams
+    are NOT all adjacent in the prose (`_bigram_adjacent`) is a
+    recombination, not a quote, and drops. Measured over 12 stored runs +
+    one fresh 3-run sweep (`evals/language_leak/`): every residual caught,
+    zero false positives. The floor below covers these drops too."""
     dominant = _dominant_language(source_text)
     if dominant is None:
         return results, ()
@@ -1230,6 +1337,18 @@ def _drop_wrong_language_titles(
             language is not None
             and language != dominant
             and not _quoted_verbatim(result.title, source_text)
+        ):
+            dropped.append(result.title)
+            continue
+        if (
+            dominant == "es"
+            and language is None
+            and _neutral_title(result.title)
+            and not _spanish_orthography(result.title)
+            and not _quoted_verbatim(
+                re.sub(r"\([^()]*\)", " ", result.title).strip(), source_text
+            )
+            and not _bigram_adjacent(result.title, source_text)
         ):
             dropped.append(result.title)
             continue
