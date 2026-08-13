@@ -1321,11 +1321,19 @@ def _record_finding(
     *,
     pair_ids: tuple[str, str],
     merged_absorbed_id: str | None = None,
+    verdict: str = "contradicts",
+    confidence: float = 0.91,
     input_digests: tuple[findings.InputDigest, ...] = (),
 ) -> None:
     """Persist one contradiction finding directly via
     `state.findings.record_findings` -- the same posture
-    `test_next_action.py` uses: no CLI writer, no LLM call."""
+    `test_next_action.py` uses: no CLI writer, no LLM call.
+
+    `verdict` defaults to the lowercase `Verdict.CONTRADICTS.value` shape
+    curate's `_persist_findings` actually writes (`verdict.verdict.value`),
+    not the uppercase display rendering: #639's verdict filter compares
+    against the persisted enum value, so an uppercase helper would exercise
+    a shape the store never contains."""
     layout = config.WorkspaceLayout(tmp_path)
     conn = derived.open_derived_connection(layout.findings_db_path)
     try:
@@ -1335,8 +1343,8 @@ def _record_finding(
                 findings.Finding(
                     pair_ids=pair_ids,
                     merged_absorbed_id=merged_absorbed_id,
-                    verdict="CONTRADICTS",
-                    confidence=0.91,
+                    verdict=verdict,
+                    confidence=confidence,
                     rationale="Stub rationale.",
                     input_digests=input_digests,
                 )
@@ -1472,6 +1480,126 @@ def test_status_hides_declined_contradiction_findings(
         input_digests=(findings.InputDigest("concepts/gamma", "0" * 64),),
     )
     _decline(tmp_path, pair_ids=("concepts/gamma", "concepts/delta"))
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "contradiction" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
+
+
+def test_status_ignores_consistent_findings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A persisted `consistent` verdict -- curate records EVERY judged
+    pair -- is counted into NEITHER the open nor the stale total, even at
+    high confidence (#639: before the verdict filter, `status` reported
+    consistent pairs as "open contradictions" and no command could clear
+    them)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/alpha", "concepts/beta"),
+        verdict="consistent",
+        confidence=0.95,
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "contradiction" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
+
+
+def test_status_ignores_low_confidence_contradictions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A `contradicts` verdict below `is_high_confidence_finding`'s 0.7
+    threshold is hidden by `contradictions` and skipped by
+    `reconcile --from-findings`, so `status` counting it would report work
+    no other command shows (#639: one shared predicate, one cutoff)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/alpha", "concepts/beta"),
+        verdict="contradicts",
+        confidence=0.5,
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "contradiction" not in result.stdout
+    assert "Nothing needs attention." in result.stdout
+
+
+def test_status_mixed_verdicts_count_only_the_contradiction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """One `consistent` (0.95) plus one `contradicts` (0.9) finding, both
+    open: `status` reports exactly 1 open contradiction -- the consistent
+    pair never inflates the count (#639)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _write_doc(tmp_path / "bundle" / "concepts" / "gamma.md", title="Gamma")
+    _write_doc(tmp_path / "bundle" / "concepts" / "delta.md", title="Delta")
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/alpha", "concepts/beta"),
+        verdict="consistent",
+        confidence=0.95,
+    )
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/gamma", "concepts/delta"),
+        verdict="contradicts",
+        confidence=0.9,
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    section = result.stdout.split("Needs attention:", 1)[1]
+    assert "1 open contradiction " in section
+    assert "1 open contradictions" not in section
+
+
+def test_status_stale_consistent_finding_is_not_counted_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The verdict filter runs BEFORE the stale/open split: a stale
+    `consistent` finding is no more outstanding work than a fresh one, so
+    it lands in neither bucket -- while a stale `contradicts` finding still
+    counts as stale (the filter must never erase the stale bucket for real
+    contradictions; #639 plus "A stale finding remains visible as
+    stale")."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/alpha", "concepts/beta"),
+        verdict="consistent",
+        confidence=0.95,
+        input_digests=(findings.InputDigest("concepts/alpha", "0" * 64),),
+    )
 
     result = runner.invoke(app, ["status"])
 

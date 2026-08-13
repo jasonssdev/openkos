@@ -67,6 +67,7 @@ from openkos import lint as lint_check
 from openkos.bundle import decisions as bundle_decisions
 from openkos.model import okf
 from openkos.resolution import CandidateGroup, find_exact_title_groups
+from openkos.resolution.contradiction import is_high_confidence_finding
 from openkos.state import derived, findings
 from openkos.state.derived import stale_derived_stores
 from openkos.state.vectorstore import content_hash, vector_store_is_empty
@@ -322,10 +323,20 @@ class _BundleSignals:
 
     @property
     def open_contradictions(self) -> tuple[findings.PersistedFinding, ...]:
-        """Every persisted contradiction finding that is **open** (no
-        `declined` decision) **and** not stale (design Decision 6), read
-        only by the LAST tier -- mirrors `non_nfc_entries`'s own
+        """Every persisted finding that is a **high-confidence
+        contradiction** (`is_high_confidence_finding` -- CONTRADICTS at or
+        above the shared display threshold, #639), **open** (no `declined`
+        decision) **and** not stale (design Decision 6), read only by the
+        LAST tier -- mirrors `non_nfc_entries`'s own
         reached-only-when-everything-above-is-clean placement.
+
+        The verdict filter exists because curate persists EVERY judged
+        verdict, `consistent` included (provenance, not pending work) --
+        without it this property ranked pairs already judged consistent as
+        "open contradictions" and nothing could clear them (#639). It is
+        the same predicate `contradictions`, `reconcile --from-findings`,
+        and `cli.main._contradiction_finding_counts` apply, so `next` and
+        `status` can never disagree about what is outstanding.
 
         `.openkos/findings.db`'s pure-derivation contract (`config.
         WorkspaceLayout.findings_db_path`'s own docstring: "this property
@@ -355,7 +366,8 @@ class _BundleSignals:
             self._open_contradictions = tuple(
                 finding
                 for finding in persisted
-                if not finding.stale
+                if is_high_confidence_finding(finding.verdict, finding.confidence)
+                and not finding.stale
                 and not _is_contradiction_declined(self._layout, finding)
             )
         return self._open_contradictions
@@ -746,12 +758,16 @@ def _tier_open_contradictions(signals: _BundleSignals) -> NextAction | None:
     finding) is never paid on a bundle with real work pending higher up.
 
     THE HONESTY GUARD IS THE POINT OF THIS TIER, NOT A SIDE CONDITION
-    (design Decision 6): `open_contradictions` already filters to open ∧
-    not stale ∧ not declined, so a finding that is stale or declined simply
+    (design Decision 6): `open_contradictions` already filters to
+    high-confidence CONTRADICTS ∧ open ∧ not stale ∧ not declined, so a
+    finding that is consistent, low-confidence, stale, or declined simply
     never appears in the tuple this reads -- there is no separate check to
     get wrong here, and this docstring exists so a future edit widening
     that filter is recognised as breaking the guarantee it protects rather
-    than as a harmless tweak. When every persisted finding is stale or
+    than as a harmless tweak. The verdict condition is part of that guard,
+    not an optimisation (#639): curate persists every judged verdict, and
+    dropping the condition makes this tier tell an operator to review pairs
+    already judged consistent -- a recommendation nothing can clear. When every persisted finding is stale or
     declined, this tier returns `None` exactly like every other tier that
     finds nothing to recommend -- the module's `None`-action contract
     (`next_action`'s own docstring, `:616-621`) and `_NO_ACTION_LINE`
@@ -766,7 +782,11 @@ def _tier_open_contradictions(signals: _BundleSignals) -> NextAction | None:
     return NextAction(
         command="openkos contradictions",
         reason=(
-            f"{source_id} <-> {target_id}: an open {finding.verdict} finding "
+            # Fixed wording, not `finding.verdict`: after the #639 filter
+            # the verdict here is always `contradicts`, and interpolating
+            # it printed the raw enum value ("an open contradicts
+            # finding").
+            f"{source_id} <-> {target_id}: an open contradiction finding "
             f"is pending review (confidence: {finding.confidence:.2f})."
         ),
     )

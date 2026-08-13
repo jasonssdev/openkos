@@ -45,11 +45,18 @@ def _record_finding(
     *,
     pair_ids: tuple[str, str] = ("concepts/alpha", "concepts/beta"),
     merged_absorbed_id: str | None = None,
-    verdict: str = "CONTRADICTS",
+    verdict: str = "contradicts",
+    confidence: float = 0.91,
     input_digests: tuple[findings.InputDigest, ...] = (),
 ) -> None:
     """Persist one finding directly via `state.findings.record_findings`
-    (no CLI writer needed -- mirrors Slice A/B1's own test posture)."""
+    (no CLI writer needed -- mirrors Slice A/B1's own test posture).
+
+    `verdict` defaults to the lowercase `Verdict.CONTRADICTS.value` shape
+    curate's `_persist_findings` actually writes (`verdict.verdict.value`)
+    -- NOT the uppercase display rendering -- because #639's verdict filter
+    compares against the persisted enum value, so a helper writing
+    `"CONTRADICTS"` would silently test a shape the store never contains."""
     layout = config.WorkspaceLayout(tmp_path)
     conn = derived.open_derived_connection(layout.findings_db_path)
     try:
@@ -60,7 +67,7 @@ def _record_finding(
                     pair_ids=pair_ids,
                     merged_absorbed_id=merged_absorbed_id,
                     verdict=verdict,
-                    confidence=0.91,
+                    confidence=confidence,
                     rationale="Stub rationale.",
                     input_digests=input_digests,
                 )
@@ -160,3 +167,109 @@ def test_stale_or_declined_only_yields_none_action(
     assert next_action._STATUS_POINTER in result_cli.stdout
     assert "openkos contradictions" not in result_cli.stdout
     assert "clean" not in result_cli.stdout.lower()
+
+
+def test_consistent_finding_is_not_ranked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A persisted `consistent` verdict -- curate records EVERY judged
+    pair, not only contradictions -- is not open contradiction work, so the
+    tier MUST NOT fire on it even at high confidence (#639: before the
+    verdict filter, `next` told operators to review pairs already judged
+    consistent, and nothing could clear the recommendation)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_concept(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_concept(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _record_finding(tmp_path, verdict="consistent", confidence=0.95)
+
+    result = next_action.next_action(config.WorkspaceLayout(tmp_path))
+
+    assert result.action is None
+
+    result_cli = runner.invoke(app, ["next"])
+    assert result_cli.exit_code == 0
+    assert "openkos contradictions" not in result_cli.stdout
+
+
+def test_low_confidence_contradiction_is_not_ranked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A `contradicts` verdict below `is_high_confidence_finding`'s 0.7
+    threshold is not surfaced by `contradictions` or offered by
+    `reconcile --from-findings`, so `next` ranking it would recommend work
+    no other command shows (#639: same shared predicate, same cutoff)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_concept(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_concept(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _record_finding(tmp_path, verdict="contradicts", confidence=0.5)
+
+    result = next_action.next_action(config.WorkspaceLayout(tmp_path))
+
+    assert result.action is None
+
+
+def test_contradiction_reason_line_names_a_contradiction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A high-confidence `contradicts` finding still fires the tier, and
+    the reason line reads "an open contradiction finding" -- fixed wording,
+    not the raw verdict value, because after #639's filter the verdict here
+    is always `contradicts` and interpolating it would print the lowercase
+    enum value ("an open contradicts finding")."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_concept(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_concept(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _record_finding(tmp_path, verdict="contradicts", confidence=0.9)
+
+    result_cli = runner.invoke(app, ["next"])
+
+    assert result_cli.exit_code == 0
+    assert "openkos contradictions" in result_cli.stdout
+    assert (
+        "an open contradiction finding is pending review (confidence: 0.90)"
+        in result_cli.stdout
+    )
+
+
+def test_mixed_verdicts_rank_only_the_contradiction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """With a `consistent` finding (0.95) and a `contradicts` finding (0.9)
+    both persisted, the tier fires ON THE CONTRADICTION: the consistent
+    pair is filtered out even though it sorts first and carries the higher
+    confidence (#639)."""
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_concept(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_concept(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+    _write_concept(tmp_path / "bundle" / "concepts" / "gamma.md", title="Gamma")
+    _write_concept(tmp_path / "bundle" / "concepts" / "delta.md", title="Delta")
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/alpha", "concepts/beta"),
+        verdict="consistent",
+        confidence=0.95,
+    )
+    _record_finding(
+        tmp_path,
+        pair_ids=("concepts/gamma", "concepts/delta"),
+        verdict="contradicts",
+        confidence=0.9,
+    )
+
+    result_cli = runner.invoke(app, ["next"])
+
+    assert result_cli.exit_code == 0
+    assert "concepts/gamma <-> concepts/delta" in result_cli.stdout
+    assert "concepts/alpha" not in result_cli.stdout

@@ -11703,15 +11703,24 @@ def _contradiction_finding_counts(layout: config.WorkspaceLayout) -> tuple[int, 
     Declined findings are dropped outright, not counted into either total
     (pending-work spec: "Declined Findings Are Hidden By Default", which
     names `status`); `contradictions --declined` is the one view that shows
-    them. The open count uses the SAME open ∧ not stale ∧ not declined
-    predicate `next_action.open_contradictions` ranks on, so the two
-    commands can never disagree about what is outstanding. Stale is split
-    off rather than folded in or dropped: `next` excludes it by design, so
-    `status` staying silent would erase it from the operator's view
-    entirely ("A stale finding remains visible as stale")."""
+    them. The open count uses the SAME high-confidence-CONTRADICTS ∧ open ∧
+    not stale ∧ not declined predicate `next_action.open_contradictions`
+    ranks on, so the two commands can never disagree about what is
+    outstanding. The verdict filter (#639) runs BEFORE the stale/open
+    split: curate persists EVERY judged verdict, `consistent` included, and
+    a consistent finding is neither open work nor stale work -- counting it
+    told operators they had contradictions nothing could clear. It is the
+    shared `is_high_confidence_finding` predicate, never a local threshold,
+    so this count can never drift from what `contradictions` shows and
+    `reconcile --from-findings` offers. Stale is split off rather than
+    folded in or dropped: `next` excludes it by design, so `status` staying
+    silent would erase it from the operator's view entirely ("A stale
+    finding remains visible as stale")."""
     open_count = 0
     stale_count = 0
     for finding in _persisted_findings(layout):
+        if not is_high_confidence_finding(finding.verdict, finding.confidence):
+            continue
         if _is_contradiction_declined(
             layout, finding.pair_ids, finding.merged_absorbed_id
         ):
