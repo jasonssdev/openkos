@@ -651,15 +651,50 @@ def candidate_truncation_notice(
         for pair in report.pairs
         if pair[0] not in blocked and pair[1] not in blocked
     ]
+    # `pairs[offset : offset + retained]` is exactly the slice pass 3
+    # inserted (#567 paging); `offset` defaults to 0, so the pre-#567
+    # `[:retained]` window is the unchanged special case.
     visible_retained = sum(
         1
-        for pair in report.pairs[: report.retained]
+        for pair in report.pairs[report.offset : report.offset + report.retained]
         if pair[0] not in blocked and pair[1] not in blocked
     )
     visible_produced = len(visible_pairs)
     if visible_produced <= visible_retained:
         return None
     return f"{visible_retained} of {visible_produced} candidate edge(s) shown (cap reached)"
+
+
+def next_candidate_offset(
+    report: CandidateReport,
+    bundle_dir: Path,
+    *,
+    include_confidential: bool = False,
+    local_exemption: bool = False,
+) -> int | None:
+    """The RAW ranked offset where the batch AFTER this run's window starts
+    (#567 paging), or `None` when nothing the caller may see lies beyond it.
+
+    The returned value is `report.offset + report.retained` -- a mechanical
+    index into the ranked list, the only coordinate paging can use. It is
+    disclosed ONLY when at least one pair beyond the window survives the
+    same `sensitivity.sensitive_concept_ids` walk
+    `candidate_truncation_notice` runs: a tail made purely of confidential
+    pairs must not be advertised to a caller whose edge list already
+    withholds it."""
+    beyond = report.pairs[report.offset + report.retained :]
+    if not beyond:
+        return None
+    blocked = sensitivity.sensitive_concept_ids(
+        bundle_dir,
+        include_confidential=include_confidential,
+        local_exemption=local_exemption,
+    )
+    if any(
+        pair[0] not in blocked and pair[1] not in blocked for pair in beyond
+    ):
+        return report.offset + report.retained
+    return None
 
 
 def suggest_relations(

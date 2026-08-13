@@ -90,6 +90,7 @@ from openkos.resolution.edge_typing import (
     EdgeSuggestionBatch,
     candidate_edges,
     candidate_truncation_notice,
+    next_candidate_offset,
     suggest_edge_types,
 )
 from openkos.resolution.volatility_typing import (
@@ -10526,6 +10527,14 @@ def suggest_relations_cmd(
         "--include-confidential",
         help="Include confidential concepts (excluded by default).",
     ),
+    edge_offset: int = typer.Option(
+        0,
+        "--edge-offset",
+        min=0,
+        help="Skip the first N ranked candidate edges, so the batch beyond "
+        "the cap is browsable without first typing the batch before it "
+        "(#567). The capped run names the next batch's exact offset.",
+    ),
 ) -> None:
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
     edge: read-only, like `adjudicate`.
@@ -10648,7 +10657,9 @@ def suggest_relations_cmd(
     source = _open_proximity_or_degrade(layout.vectors_db_path)
     embeddings_missing = source is None
     try:
-        graph = build_graph(layout.bundle_dir, candidates=source)
+        graph = build_graph(
+            layout.bundle_dir, candidates=source, candidate_offset=edge_offset
+        )
     finally:
         if source is not None:
             source.close()
@@ -10663,6 +10674,15 @@ def suggest_relations_cmd(
 
         typer.echo(f"openkos suggest-relations: workspace at {root}")
         typer.echo()
+        # #567: an offset at or past the candidate set produced an empty
+        # window on purpose -- say so, instead of the zero-candidate state
+        # message below claiming there is nothing untyped at all.
+        if edge_offset > 0 and not edges:
+            typer.echo(
+                f"no candidate edges at --edge-offset {edge_offset}; "
+                "re-run with a smaller offset."
+            )
+            return
         # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
         # truncation, never silent -- but restricted to what THIS caller may
         # see. Read here, INSIDE the `with` block, since `store` closes
@@ -10678,6 +10698,14 @@ def suggest_relations_cmd(
         # walk `candidate_edges` just ran, so this line and `total` below
         # agree on what a caller without `--include-confidential` may see.
         notice = candidate_truncation_notice(
+            store.candidate_report,
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+        # #567: computed inside the `with` block (the report lives on
+        # `store`), printed beside the #560 pointer after the run below.
+        batch_offset = next_candidate_offset(
             store.candidate_report,
             layout.bundle_dir,
             include_confidential=include_confidential,
@@ -10789,6 +10817,14 @@ def suggest_relations_cmd(
             "(--apply or relate), then re-run suggest-relations to surface "
             "the next batch."
         )
+        if batch_offset is not None:
+            # #567: browsing without typing -- name the exact offset the
+            # next ranked batch starts at, gated on a visible pair actually
+            # existing beyond this run's window.
+            typer.echo(
+                f"Or browse it without typing these: re-run with "
+                f"--edge-offset {batch_offset}."
+            )
 
     if batch.failure is not None:
         # Partial batch (#441): the report above already rendered the
