@@ -602,8 +602,7 @@ def test_plan_unmerge_non_tail_error_lists_the_full_unwind_sequence() -> None:
     message = str(excinfo.value)
     assert "LIFO tail" in message
     assert (
-        "'concepts/absorbed-c', 'concepts/absorbed-b', 'concepts/absorbed-a'"
-        in message
+        "'concepts/absorbed-c', 'concepts/absorbed-b', 'concepts/absorbed-a'" in message
     )
     assert "openkos unmerge concepts/survivor --to concepts/absorbed-a" in message
 

@@ -38,6 +38,8 @@ import hashlib
 from pathlib import Path
 from typing import Final, Literal
 
+import yaml
+
 from openkos import fsio
 from openkos.model import okf
 
@@ -65,6 +67,18 @@ RecoveryVerdict = Literal["none", "roll-forward", "roll-back"]
 """The three, and only three, outcomes `recover` can reach -- a TOTAL
 function of on-disk state (design Decision 1's truth table), never a
 heuristic."""
+
+_SIDECAR_SKIP_ERRORS: Final = (OSError, ValueError, yaml.YAMLError)
+"""The three, and only three, per-sidecar failure classes a bundle-wide
+walk skips defensively (#562 review follow-up): unreadable bytes
+(`OSError`), unparseable frontmatter (`yaml.YAMLError` out of
+`okf.load_frontmatter`, which is neither `OSError` nor `ValueError`), and
+entries that fail to decode (the fail-closed `ValueError`
+`okf.decode_merge_ledger_entry` raises, e.g. on an unsupported schema
+version). Deliberately NOT a bare `Exception`: a genuine programming error
+in the walk body must stay visible instead of degrading into a silent
+"nothing found". Shared by `find_absorber`, `scan_nesting_violations`, and
+`bundle_wide_max_entries`, so the skip contract is defined exactly once."""
 
 
 def survivor_sha256(survivor_text: str) -> str:
@@ -147,21 +161,20 @@ def find_absorber(concept_id: str, bundle_dir: Path) -> str | None:
     `okf.load_frontmatter`, which is neither `OSError` nor `ValueError`),
     or whose entries fail to decode (the fail-closed `ValueError`
     `okf.decode_merge_ledger_entry` raises on an unsupported schema
-    version). This lookup only decorates an already-refusing error path
-    with a breadcrumb, so one broken unrelated ledger anywhere in the
-    bundle must never replace that refusal's message -- let alone escape
-    as a raw traceback (review finding, issue #562); `doctor` is where a
-    broken sidecar gets diagnosed, not here."""
+    version) -- exactly the `_SIDECAR_SKIP_ERRORS` classes, no broader.
+    This lookup only decorates an already-refusing error path with a
+    breadcrumb, so one broken unrelated ledger anywhere in the bundle must
+    never replace that refusal's message -- let alone escape as a raw
+    traceback (review finding, issue #562); `doctor` is where a broken
+    sidecar gets diagnosed, not here."""
     for ledger_path in iter_ledgers(bundle_dir):
         try:
-            metadata, _ = okf.load_frontmatter(
-                ledger_path.read_text(encoding="utf-8")
-            )
+            metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
             survivor_id = metadata.get("survivor_id")
             if not isinstance(survivor_id, str) or not survivor_id:
                 continue
             entries = okf.decode_merged_from(metadata)
-        except Exception:  # noqa: S112 -- defensive skip, see docstring
+        except _SIDECAR_SKIP_ERRORS:
             continue
         if any(entry.absorbed_id == concept_id for entry in entries):
             return survivor_id
@@ -319,17 +332,31 @@ def scan_nesting_violations(bundle_dir: Path) -> list[tuple[str, int]]:
     false negative: nothing nested, so the check is blind to it.
 
     Returns `(survivor_id, entry_index)` pairs for every violation found.
-    Read-only: never writes, modifies, or deletes anything."""
+    Read-only: never writes, modifies, or deletes anything. A sidecar this
+    walk cannot read, parse, or decode (`_SIDECAR_SKIP_ERRORS`, #562 review
+    follow-up) is skipped defensively so one broken file never takes down
+    the whole scan -- with the documented honest false negative that the
+    skipped sidecar's own entries go unchecked, the same trade
+    `scan_unmigrated` already makes over an unreadable doc. Inside a
+    decodable sidecar, an embedded snapshot that fails to parse or decode
+    skips ONLY that entry index (focus-lens correction) -- a mid-loop
+    failure never swallows a real violation at a later index."""
     violations: list[tuple[str, int]] = []
     for ledger_path in iter_ledgers(bundle_dir):
-        metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
-        survivor_id = metadata.get("survivor_id")
-        if not isinstance(survivor_id, str) or not survivor_id:
+        try:
+            metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
+            survivor_id = metadata.get("survivor_id")
+            if not isinstance(survivor_id, str) or not survivor_id:
+                continue
+            entries = okf.decode_merged_from(metadata)
+        except _SIDECAR_SKIP_ERRORS:
             continue
-        entries = okf.decode_merged_from(metadata)
         for k in range(1, len(entries)):
-            embedded_metadata, _ = okf.load_frontmatter(entries[k].survivor_before)
-            embedded_entries = okf.decode_merged_from(embedded_metadata)
+            try:
+                embedded_metadata, _ = okf.load_frontmatter(entries[k].survivor_before)
+                embedded_entries = okf.decode_merged_from(embedded_metadata)
+            except _SIDECAR_SKIP_ERRORS:
+                continue
             if not embedded_entries:
                 continue
             if embedded_entries != entries[:k]:
@@ -372,13 +399,22 @@ def bundle_wide_max_entries(bundle_dir: Path) -> int:
     cannot see at every index -- so the migration gate is deliberately
     coarser than the check, refusing whenever ANY survivor bundle-wide
     carries 2 or more entries, regardless of which specific ledger a
-    per-entry check would have flagged."""
+    per-entry check would have flagged.
+
+    A sidecar this walk cannot read, parse, or decode
+    (`_SIDECAR_SKIP_ERRORS`, #562 review follow-up) is skipped defensively
+    -- counted as absent -- so one broken file never takes down the gate;
+    the unmigrated (frontmatter) side below already degrades the same way
+    through `scan_unmigrated`'s per-doc skip."""
     counts: dict[str, int] = {}
     for ledger_path in iter_ledgers(bundle_dir):
-        metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
-        survivor_id = metadata.get("survivor_id")
-        if isinstance(survivor_id, str) and survivor_id:
-            counts[survivor_id] = len(okf.decode_merged_from(metadata))
+        try:
+            metadata, _ = okf.load_frontmatter(ledger_path.read_text(encoding="utf-8"))
+            survivor_id = metadata.get("survivor_id")
+            if isinstance(survivor_id, str) and survivor_id:
+                counts[survivor_id] = len(okf.decode_merged_from(metadata))
+        except _SIDECAR_SKIP_ERRORS:
+            continue
     for concept_id, entries in scan_unmigrated(bundle_dir):
         counts[concept_id] = counts.get(concept_id, 0) + len(entries)
     return max(counts.values(), default=0)

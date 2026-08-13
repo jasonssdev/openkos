@@ -768,3 +768,122 @@ def test_find_absorber_skips_a_sidecar_with_unparseable_frontmatter(
     _write_ledger(bundle_dir, "concepts/top", [_make_entry("concepts/mid")])
 
     assert ledger.find_absorber("concepts/mid", bundle_dir) == "concepts/top"
+
+
+def test_find_absorber_skips_an_unreadable_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sidecar whose bytes cannot be read at all (`OSError`, e.g. a
+    permission-denied file) is skipped defensively like the unparseable and
+    undecodable cases -- the walk keeps going and still resolves an
+    absorber from a HEALTHY sidecar (review follow-up, issue #562)."""
+    bundle_dir = tmp_path / "bundle"
+    locked = ledger.ledger_path_for("concepts/locked", bundle_dir)
+    locked.parent.mkdir(parents=True, exist_ok=True)
+    locked.write_text("irrelevant", encoding="utf-8")
+    _write_ledger(bundle_dir, "concepts/top", [_make_entry("concepts/mid")])
+
+    original_read_text = Path.read_text
+
+    def denying_read_text(self: Path, encoding: str | None = None) -> str:
+        if self.name == "locked.ledger.okf":
+            raise OSError(13, "Permission denied")
+        return original_read_text(self, encoding=encoding)
+
+    monkeypatch.setattr(Path, "read_text", denying_read_text)
+
+    assert ledger.find_absorber("concepts/mid", bundle_dir) == "concepts/top"
+
+
+# --- broken-sidecar resilience of the sibling walkers (#562 follow-up) ------
+
+
+def _write_broken_sidecar_pair(bundle_dir: Path) -> None:
+    """One sidecar with unparseable YAML frontmatter plus one whose entries
+    carry an unsupported schema version -- the two failure classes a
+    bundle-wide walk must survive."""
+    garbled = ledger.ledger_path_for("concepts/garbled", bundle_dir)
+    garbled.parent.mkdir(parents=True, exist_ok=True)
+    garbled.write_text("---\nsurvivor_id: [unclosed\n---\n", encoding="utf-8")
+    undecodable = ledger.ledger_path_for("concepts/broken", bundle_dir)
+    undecodable.write_text(
+        okf.dump_frontmatter(
+            {
+                "schema": ledger.LEDGER_SIDECAR_SCHEMA,
+                "survivor_id": "concepts/broken",
+                "merged_from": [{"schema": "openkos.merge_ledger/v99"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_scan_nesting_violations_skips_a_broken_sidecar(tmp_path: Path) -> None:
+    """One unparseable or undecodable sidecar anywhere in the bundle must
+    not crash `doctor`'s Check B (or the merge-time gate that reuses it):
+    the scan skips it defensively and still reports over every HEALTHY
+    sidecar (review follow-up, issue #562)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_broken_sidecar_pair(bundle_dir)
+    _write_ledger(bundle_dir, "concepts/top", [_make_entry("concepts/mid")])
+
+    assert ledger.scan_nesting_violations(bundle_dir) == []
+
+
+def test_scan_nesting_violations_skips_only_the_undecodable_embedded_entry(
+    tmp_path: Path,
+) -> None:
+    """An embedded snapshot that fails to parse mid-scan (garbled YAML at
+    index 1) must skip ONLY that entry, never abort the rest of the same
+    sidecar's scan: the real violation at index 2 is still reported
+    (focus-lens correction, issue #562)."""
+    bundle_dir = tmp_path / "bundle"
+
+    def legacy_entry(absorbed_id: str, survivor_before: str) -> okf.MergeLedgerEntry:
+        return okf.MergeLedgerEntry(
+            schema=okf.MERGE_LEDGER_SCHEMA_V3,
+            merged_at="2026-07-21T00:00:00Z",
+            absorbed_id=absorbed_id,
+            absorbed_snapshot="absorbed text",
+            survivor_before=survivor_before,
+            index_before="index text",
+            log_before="log text",
+            link_rewrites=[],
+            sensitivity_before="private",
+            sensitivity_after="private",
+        )
+
+    tampered_embedded = okf.dump_frontmatter(
+        {
+            "type": "Concept",
+            "title": "Survivor",
+            "merged_from": okf.encode_merged_from(
+                [_make_entry(absorbed_id="concepts/not-the-real-prefix")]
+            ),
+        }
+    )
+    entries = [
+        _make_entry(absorbed_id="concepts/absorbed-0"),
+        legacy_entry(
+            "concepts/absorbed-1", "---\nmerged_from: [unclosed\n---\nBody.\n"
+        ),
+        legacy_entry("concepts/absorbed-2", tampered_embedded),
+    ]
+    _write_ledger(bundle_dir, "concepts/survivor", entries)
+
+    assert ledger.scan_nesting_violations(bundle_dir) == [("concepts/survivor", 2)]
+
+
+def test_bundle_wide_max_entries_skips_a_broken_sidecar(tmp_path: Path) -> None:
+    """The migration gate's bundle-wide max must survive a broken sidecar
+    the same way: skip it, still count every HEALTHY ledger (review
+    follow-up, issue #562)."""
+    bundle_dir = tmp_path / "bundle"
+    _write_broken_sidecar_pair(bundle_dir)
+    _write_ledger(
+        bundle_dir,
+        "concepts/top",
+        [_make_entry("concepts/mid"), _make_entry("concepts/leaf")],
+    )
+
+    assert ledger.bundle_wide_max_entries(bundle_dir) == 2

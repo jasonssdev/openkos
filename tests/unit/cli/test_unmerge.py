@@ -1638,9 +1638,7 @@ def test_unmerge_non_tail_error_lists_the_unwind_sequence_and_to_command(
     assert isinstance(result.exception, SystemExit)
     assert "LIFO tail" in result.stderr
     assert "'concepts/absorbed-b', 'concepts/absorbed-a'" in result.stderr
-    assert (
-        "openkos unmerge concepts/survivor --to concepts/absorbed-a" in result.stderr
-    )
+    assert "openkos unmerge concepts/survivor --to concepts/absorbed-a" in result.stderr
     assert _snapshot(tmp_path) == before
 
 
@@ -1749,9 +1747,7 @@ def test_unmerge_to_unwinds_the_whole_chain_back_to_pre_merge_bytes(
         assert (tmp_path / "bundle" / rel).read_text(encoding="utf-8") == pre[rel], rel
     log_text = (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
     assert "**Unmerge**" in log_text
-    assert (
-        bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle") == []
-    )
+    assert bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle") == []
 
 
 def test_unmerge_to_partial_unwind_stops_at_the_target(
@@ -1787,12 +1783,8 @@ def test_unmerge_to_the_tail_id_matches_the_two_arg_form(
     assert result.exit_code == 0, result.stderr
     for rel in ("index.md", "concepts/survivor.md", "concepts/alpha.md"):
         assert (tmp_path / "bundle" / rel).read_text(encoding="utf-8") == pre[rel], rel
-    assert "**Unmerge**" in (tmp_path / "bundle" / "log.md").read_text(
-        encoding="utf-8"
-    )
-    assert (
-        bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle") == []
-    )
+    assert "**Unmerge**" in (tmp_path / "bundle" / "log.md").read_text(encoding="utf-8")
+    assert bundle_ledger.read_entries("concepts/survivor", tmp_path / "bundle") == []
 
 
 def test_unmerge_to_previews_every_step_and_prompts_exactly_once(
