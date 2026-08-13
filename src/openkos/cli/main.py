@@ -6303,6 +6303,37 @@ def set_sensitivity_cmd(
             f"sensitivity to {level} ({log_path.name} updated). Only this "
             "concept was changed; no sibling or derived object was touched."
         )
+        # #571: raising a DERIVED object protects one file while extraction
+        # replicated its content into siblings -- the ADR-0009 containment
+        # lever is the Source, whose raise-only propagation covers every
+        # descendant. Name that lever, or the success message implies a
+        # protection the user did not get. Raise-only: on a lowering the
+        # note would read as advice to lower the Source too.
+        raw_provenance = metadata.get("provenance")
+        provenance_sources = [
+            entry
+            for entry in (raw_provenance if isinstance(raw_provenance, list) else [])
+            if isinstance(entry, str) and entry.startswith("sources/")
+        ]
+        if (
+            direction == "raise"
+            and metadata.get("type") != "Source"
+            and provenance_sources
+        ):
+            named = ", ".join(provenance_sources)
+            if len(provenance_sources) == 1:
+                lever = (
+                    "raise the Source: openkos set-sensitivity "
+                    f"{provenance_sources[0]} {level}"
+                )
+            else:
+                lever = f"raise each Source: {named}"
+            typer.echo(
+                f"openkos set-sensitivity: note -- '{canonical_id}' was "
+                f"derived from {named}; raising it does not contain content "
+                "its source(s) replicated into sibling objects. To contain "
+                f"everything derived from them, {lever}."
+            )
 
     _autocommit(
         root,

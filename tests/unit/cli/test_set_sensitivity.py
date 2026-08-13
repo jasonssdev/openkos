@@ -425,6 +425,103 @@ def test_non_source_success_message_keeps_only_this_concept_line(
     assert "derived" in result.output.lower()
 
 
+def test_raising_a_derived_object_names_its_provenance_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raising a DERIVED object adds one line naming the Source(s) in its
+    provenance as the real containment lever (#571): extraction replicates
+    content across siblings, so 'protect this person' via the Person object
+    succeeds while the name keeps flowing from the Source, the Event, and
+    the Decision. The success message must not imply a protection the user
+    did not get."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id]
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", derived_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert f"derived from {source_id}" in result.output
+    assert f"openkos set-sensitivity {source_id} confidential" in result.output
+
+
+def test_lowering_a_derived_object_prints_no_source_lever_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lever line is about CONTAINMENT, so it fires only on a raise
+    (#571): lowering a derived object implies no protection at all, and the
+    note would read as advice to lower the Source too."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path,
+        slug="stoic-dichotomy",
+        provenance=[source_id],
+        sensitivity="confidential",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "set-sensitivity",
+            derived_id,
+            "private",
+            "--auto",
+            "--allow-downgrade",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "derived from" not in result.output
+
+
+def test_raising_a_source_prints_no_derived_from_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Source target keeps its own propagation report (#219) and never
+    gets the derived-object note (#571) -- its provenance is a raw
+    resource, not a Source, and raise-only propagation already IS the
+    containment lever there."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    _write_derived_concept(tmp_path, slug="stoic-dichotomy", provenance=[source_id])
+
+    result = runner.invoke(
+        app, ["set-sensitivity", source_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert "derived from" not in result.output
+
+
+def test_raising_a_derived_object_names_every_provenance_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A derived object citing several Sources names them ALL (#571): in
+    the issue's own evidence the three People came from `transcription1`
+    while only `transcription2` had been raised -- naming just one Source
+    would recreate exactly that gap."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_a = _ingest_source(tmp_path, "a.txt")
+    source_b = _ingest_source(tmp_path, "b.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_a, source_b]
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", derived_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert source_a in result.output
+    assert source_b in result.output
+    assert "derived from" in result.output
+
+
 def test_help_contains_honesty_line(tmp_path: Path) -> None:
     """`--help` states the bounded new scope honestly: the named concept,
     plus raise-only propagation to a Source's provenance descendants (spec
