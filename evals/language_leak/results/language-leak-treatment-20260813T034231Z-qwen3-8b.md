@@ -1,0 +1,18 @@
+# language-leak probe — arm `treatment` (#563)
+
+_Generated: 20260813T034231Z_ · model `qwen3:8b` · **3 runs** · fixture 24650 chars / 7 windows.
+
+| metric | value |
+| --- | --- |
+| **leak rate (en+mixed titles / all titles)** | **0.63** |
+| total objects across runs | 161 |
+| leaked titles across runs | 101 |
+| mean objects per run | 53.7 |
+| mean run latency | 798.2s |
+| window errors across runs | 5 |
+
+## Leaked titles per run
+
+- run 1: Mantener la documentación del engine setup bilingüe; Procedimiento de onboarding para el equipo nuevo; Model Context Protocol (MCP); Evaluation Harness; Knowledge Source Project; Knowledge Object Model; Procedimiento de Onboarding; Modelo de Knowledge Object; Decisión sobre la Documentación del Engine Setup; Decisión sobre el Storage Centralizado y el Bundle; Evaluation Pipeline; Model Context Protocol (MCP); Mantener la documentación del engine setup bilingüe; Procedimiento de onboarding para el equipo nuevo; Model Context Protocol (MCP); Evaluation Harness; Knowledge Object Model; Knowledge Recovery System; Evaluation Pipeline; Knowledge Source Project; Decisión sobre el bundle y el storage centralizado; Procedimiento de onboarding para el equipo nuevo; Pipeline de evaluación y tasa de fuga de idioma; Re-ranking del retrieval con el judge ensemble
+- run 2: Decisión sobre la documentación del engine setup; Procedimiento de onboarding para el equipo nuevo; Knowledge object model; Model Context Protocol (MCP); Evaluation pipeline; Knowledge source project; Evaluation harness; Judge ensemble; Modelo de Knowledge Object; Pipeline de Evaluation; Evaluation Harness; Knowledge Recovery System; Model Context Protocol (MCP); Storage Layer; Onboarding Procedure; Knowledge Source Project; Centralized Knowledge Storage; Staleness; Judge Ensemble; Retrieval; Knowledge Object Model; Evaluation Metrics; Mantenimiento de la documentación bilingüe del engine setup; Procedimiento de onboarding para el equipo nuevo; Model Context Protocol; Evaluation harness; Knowledge recovery system; Knowledge object model; Knowledge source project; Evaluation pipeline; Decisión sobre el bundle y el storage centralizado; Procedimiento de onboarding para el equipo nuevo; Pipeline de evaluación y métricas de idioma; Decisión sobre el re-ranking del retrieval; Knowledge source project
+- run 3: Procedimiento de Onboarding para el Equipo Nuevo; Pipeline de Evaluación; Harness de Evaluación; Re-ranking del Retrieval; Judge Ensemble; Sistema de Embeddings; Setup del Motor de Conocimiento; Guía de Setup y Uso; Procedimiento de Onboarding; Modelo de Knowledge Object; Pipeline de Evaluation; Knowledge Source Project; Mantener la documentación del engine setup bilingüe; Procedimiento de onboarding para el equipo nuevo; Model Context Protocol; Knowledge Source Project; Evaluation Harness; Knowledge Object Model; Centralized Knowledge Storage; Knowledge Recovery System; Procedimiento de Onboarding; Knowledge Object Model; Decisión sobre la Documentación del Engine Setup; Decisión sobre el Storage Centralizado; Model Context Protocol; Evaluation Harness; Decisión sobre la documentación del engine setup; Procedimiento de onboarding para el equipo nuevo; Model Context Protocol (MCP); Evaluation Harness; Knowledge Object Model; Knowledge Recovery System; Knowledge Engine; Centralized Knowledge Storage; Evaluation Pipeline; Knowledge Source Project; Re-ranking del retrieval; Decisión sobre el bundle y el storage centralizado; Procedimiento de onboarding para el equipo nuevo; Pipeline de evaluación y medida de fuga de idioma; Decisión sobre el re-ranking del retrieval; Knowledge Source Project
