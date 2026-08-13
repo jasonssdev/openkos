@@ -6271,3 +6271,47 @@ def test_fts_build_failure_degrades_and_never_fails_the_ingest(
     assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
     assert "FTS index not updated" in result.stderr
     assert "openkos reindex" in result.stderr
+
+
+# --- Wrong-language drop notice (#618) ---------------------------------------
+
+
+def test_ingest_wrong_language_drop_notice_names_the_dropped_titles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunked Spanish source whose window emits the harmful class (a
+    translatable title rendered in English, not quoted from the prose)
+    drops that candidate AND says so on stderr -- a silent deterministic
+    drop would be the same disclosure defect the cap notice fixed (#404)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(tmp_path, "# union_judge: true", "union_judge: false")
+    lines = [
+        "Ana: Revisamos el avance del proyecto y las decisiones pendientes "
+        "sobre la capa de almacenamiento con el equipo de datos.",
+        "Bruno: La migración terminó y los índices se regeneran con el "
+        "modelo nuevo; la búsqueda mejoró bastante en las pruebas.",
+    ]
+    blocks: list[str] = []
+    while sum(len(b) + 1 for b in blocks) <= 19_000:
+        blocks.append(f"{lines[len(blocks) % 2]} (bloque {len(blocks)})")
+    text = "\n".join(blocks)
+    assert len(text) > concept_mod._CHUNK_THRESHOLD
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = "[" + _concept_reply(title="Procedimiento de ingesta") + "]"
+    replies[1] = "[" + _concept_reply(title="Recovery of Knowledge Project") + "]"
+    _patch_sequenced_llm(monkeypatch, replies)
+    source = tmp_path / "notas.txt"
+    source.write_text(text, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notas.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "dropped 1 wrong-language title(s) not quoted from the source: "
+        "Recovery of Knowledge Project" in result.stderr
+    )
+    assert (tmp_path / "bundle" / "concepts" / "procedimiento-de-ingesta.md").exists()
+    assert not (
+        tmp_path / "bundle" / "concepts" / "recovery-of-knowledge-project.md"
+    ).exists()

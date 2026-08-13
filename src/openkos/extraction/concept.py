@@ -1011,6 +1011,234 @@ def _drop_framing_objects(
     ]
 
 
+_ES_FUNCTION_WORDS: Final = frozenset(
+    [
+        "al",
+        "como",
+        "con",
+        "cuando",
+        "de",
+        "del",
+        "desde",
+        "donde",
+        "el",
+        "ella",
+        "ellos",
+        "entre",
+        "es",
+        "esa",
+        "ese",
+        "esta",
+        "este",
+        "hacia",
+        "hasta",
+        "la",
+        "las",
+        "les",
+        "lo",
+        "los",
+        "más",
+        "muy",
+        "para",
+        "pero",
+        "por",
+        "porque",
+        "que",
+        "qué",
+        "se",
+        "según",
+        "sobre",
+        "son",
+        "su",
+        "sus",
+        "también",
+        "todo",
+        "un",
+        "una",
+        "unas",
+        "unos",
+        "y",
+    ]
+)
+"""Spanish FUNCTION words only -- articles, prepositions, conjunctions,
+common pronouns/copulas -- never domain nouns, unlike the fixture-matched
+marker lists in `evals/language_leak/` (which are ground truth for that
+constructed fixture; these have to work on arbitrary documents). Kept
+strictly disjoint from `_EN_FUNCTION_WORDS` (a shared token would vote for
+both sides at once): genuinely ambiguous tokens -- `a`, `no`, `me`, `he`,
+`sin`, `en` -- appear in NEITHER set."""
+
+_EN_FUNCTION_WORDS: Final = frozenset(
+    [
+        "about",
+        "after",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "between",
+        "but",
+        "by",
+        "can",
+        "could",
+        "during",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "how",
+        "into",
+        "is",
+        "it",
+        "its",
+        "not",
+        "of",
+        "off",
+        "on",
+        "or",
+        "our",
+        "out",
+        "over",
+        "that",
+        "the",
+        "their",
+        "these",
+        "this",
+        "those",
+        "to",
+        "under",
+        "was",
+        "were",
+        "when",
+        "where",
+        "which",
+        "while",
+        "will",
+        "with",
+        "would",
+    ]
+)
+"""English counterpart of `_ES_FUNCTION_WORDS`; same rules, same
+disjointness contract."""
+
+_LANGUAGE_TOKEN_RE: Final = re.compile(r"[a-záéíóúüñ]+")
+"""Letter runs (Spanish accents included) over lowercased text -- the
+tokenizer both language voters share. Deliberately NOT `_TITLE_TOKEN_RE`
+(`\\w+`): digits and underscores carry no language and would only dilute
+the vote."""
+
+_DOMINANT_LANGUAGE_MARGIN: Final = 2
+"""How decisively one side must out-vote the other before
+`_dominant_language` calls a document: strictly more than MARGIN times the
+losing side's count. A code-switched document quotes real prose in the
+other language, so its function words show up too ("setup and usage" votes
+`and` for English inside Spanish text); a bare majority would flap on
+exactly the material this gate exists for. Fail-open (`None`) below the
+margin -- the gate then does nothing, which is the pre-#618 behavior."""
+
+
+def _dominant_language(text: str) -> str | None:
+    """`"es"` / `"en"` by function-word voting over `text`, or `None` when
+    neither side clears `_DOMINANT_LANGUAGE_MARGIN` -- deterministic, zero
+    model calls. Only these two languages are voted on: they are the two
+    the leak was measured between (#563), and a language this voter does
+    not know simply yields `None`, disabling the gate rather than
+    misclassifying."""
+    tokens = _LANGUAGE_TOKEN_RE.findall(text.lower())
+    es = sum(1 for token in tokens if token in _ES_FUNCTION_WORDS)
+    en = sum(1 for token in tokens if token in _EN_FUNCTION_WORDS)
+    if es > en * _DOMINANT_LANGUAGE_MARGIN:
+        return "es"
+    if en > es * _DOMINANT_LANGUAGE_MARGIN:
+        return "en"
+    return None
+
+
+def _title_language(title: str) -> str | None:
+    """`"es"` / `"en"` when the title's function words vote for exactly ONE
+    side, else `None` -- neutral titles (acronyms, proper nouns: no function
+    words at all) and MIXED titles (a dominant-language title quoting a
+    term: `Guía de setup and usage`) both decline to vote, and the gate
+    passes them. Only the PURELY wrong-language title is the harmful class
+    #618 measured (`Recovery of Knowledge Project` on a Spanish source)."""
+    tokens = _LANGUAGE_TOKEN_RE.findall(title.lower())
+    has_es = any(token in _ES_FUNCTION_WORDS for token in tokens)
+    has_en = any(token in _EN_FUNCTION_WORDS for token in tokens)
+    if has_es and not has_en:
+        return "es"
+    if has_en and not has_es:
+        return "en"
+    return None
+
+
+def _quoted_verbatim(title: str, source_text: str) -> bool:
+    """Whether `title` appears verbatim in `source_text` -- casefolded,
+    whitespace-collapsed substring. A wrong-language title with verbatim
+    support is the subject's OWN name quoted from the prose (`Model Context
+    Protocol` in Spanish text), arguably the correct title, and never the
+    gate's business."""
+
+    def normalize(value: str) -> str:
+        return " ".join(value.casefold().split())
+
+    return normalize(title) in normalize(source_text)
+
+
+def _drop_wrong_language_titles(
+    results: list[ExtractionResult], *, source_text: str
+) -> tuple[list[ExtractionResult], tuple[str, ...]]:
+    """Deterministic wrong-language-title gate (#618), CHUNKED paths only:
+    drop each candidate whose title votes PURELY for a language other than
+    the document's dominant one and is NOT quoted verbatim from the prose.
+    Returns `(kept, dropped_titles)`; the caller reports the drops.
+
+    Why deterministic: the third prompt-tier failure in a row. A
+    named-language anchor was measured on the exact leaking register and
+    REJECTED (leak 0.69 -> 0.63 within noise, +83% latency, more capped
+    runaways -- `evals/language_leak/`, #563), after the anti-twin clause
+    (#380) and the edge-direction guard (#561) failed the same way. The
+    slug is the permanent Concept ID, so every leaked title that survives
+    selection is a permanent wrong-language identity.
+
+    Two deliberate asymmetries keep false positives out:
+
+    - MIXED and NEUTRAL titles pass (`_title_language` returns `None`): a
+      Spanish title quoting an English term is not a leak, and an acronym
+      carries no language at all.
+    - The FLOOR: if the gate would drop every candidate, it keeps them all
+      and reports nothing -- same philosophy as `_drop_source_title_twins`'
+      floor. An all-drop verdict on a document the voter just called for
+      the other side means the voter is more likely wrong than every
+      candidate at once, and an emptied extraction is silent data loss.
+
+    Fail-open twice over: no dominant language (`None`) disables the gate
+    entirely, and only the `es`/`en` pair is ever voted on."""
+    dominant = _dominant_language(source_text)
+    if dominant is None:
+        return results, ()
+    kept: list[ExtractionResult] = []
+    dropped: list[str] = []
+    for result in results:
+        language = _title_language(result.title)
+        if (
+            language is not None
+            and language != dominant
+            and not _quoted_verbatim(result.title, source_text)
+        ):
+            dropped.append(result.title)
+            continue
+        kept.append(result)
+    if not kept:
+        return results, ()
+    return kept, tuple(dropped)
+
+
 _MAX_OBJECTS_PER_SOURCE = 6
 """Hard ceiling on validated objects returned per source (design D4): a
 safety ceiling applied AFTER per-item validation, not a target -- the
@@ -1370,6 +1598,17 @@ class ExtractionReport:
     Defaulted so every pre-#585 construction site keeps working unchanged,
     and `False` is the honest default: it means "no such disclosure", which
     is what an untouched site is entitled to claim."""
+    wrong_language_dropped_titles: tuple[str, ...] = ()
+    """Titles the deterministic wrong-language gate dropped (#618), in
+    merged-candidate order -- always `()` on the single-call and unchunked
+    union paths, where the gate never runs (the leak it answers is a
+    chunked-fan-out failure; short documents measured zero). A dropped
+    title was PURELY wrong-language by function-word voting AND not quoted
+    verbatim from the source -- the permanent-wrong-slug class, not a
+    proper name. Named rather than counted for the same reason
+    `discarded_titles` is: the reader has to be able to tell a dropped
+    leak from a dropped subject. Defaulted so every existing construction
+    site keeps working unchanged."""
 
 
 @dataclass(frozen=True)
@@ -1463,6 +1702,7 @@ def extract_concept(
             results = _extract_once(source_text, source_title, llm)
         results = _strip_ungrounded_expansions(results, source_text=source_text)
         chunk_count = 1
+        wrong_language_dropped: tuple[str, ...] = ()
     else:
         # #454: above the threshold the single call collapses to one object
         # (the one-object-per-call attractor), so fan out one call per
@@ -1482,6 +1722,13 @@ def extract_concept(
         # the acronym a later chunk re-derives.
         results = _dedup_merged(
             _strip_ungrounded_expansions(merged, source_text=source_text)
+        )
+        # #618, chunked path ONLY: the wrong-language leak is a per-window
+        # anchor-rebinding failure (0.69 of window titles on the measured
+        # fixture); the short-document single-call path measured zero leak
+        # and stays ungated. Voted against the FULL source, like grounding.
+        results, wrong_language_dropped = _drop_wrong_language_titles(
+            results, source_text=source_text
         )
     results = _drop_framing_objects(results, source_title=source_title)
     results = _drop_source_title_twins(results, source_title=source_title)
@@ -1506,6 +1753,7 @@ def extract_concept(
             sole_object_restates_source=_sole_object_restates_source(
                 retained, source_title=source_title
             ),
+            wrong_language_dropped_titles=wrong_language_dropped,
         ),
     )
 
@@ -1676,19 +1924,26 @@ def extract_concept_union(
         )
         chunk_count = 1
         run_count = 2
+        wrong_language_dropped: tuple[str, ...] = ()
     else:
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
         chunked: list[ExtractionResult] = []
         for window in windows:
             chunked.extend(_extract_once(window, source_title, llm))
+        deduped = _dedup_merged(
+            _strip_ungrounded_expansions(chunked, source_text=source_text)
+        )
+        # #618, same placement as `extract_concept`'s chunked branch
+        # (#581's symmetric-filters precedent): the gate runs on the merged
+        # per-window candidates BEFORE the judge sees the list -- a leaked
+        # title the judge selected would become a permanent wrong-language
+        # slug, and the judge is exactly the selector that leak survives.
+        deduped, wrong_language_dropped = _drop_wrong_language_titles(
+            deduped, source_text=source_text
+        )
         merged = _drop_source_title_twins(
-            _drop_framing_objects(
-                _dedup_merged(
-                    _strip_ungrounded_expansions(chunked, source_text=source_text)
-                ),
-                source_title=source_title,
-            ),
+            _drop_framing_objects(deduped, source_title=source_title),
             source_title=source_title,
         )
         run_count = 1
@@ -1722,6 +1977,7 @@ def extract_concept_union(
                 runs=run_count,
                 reask_runs=reask_runs,
                 reask_added_titles=reask_added_titles,
+                wrong_language_dropped_titles=wrong_language_dropped,
             ),
         )
 
@@ -1788,5 +2044,6 @@ def extract_concept_union(
             sole_object_restates_source=_sole_object_restates_source(
                 retained, source_title=source_title
             ),
+            wrong_language_dropped_titles=wrong_language_dropped,
         ),
     )

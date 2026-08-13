@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import statistics
 import sys
 import time
@@ -243,6 +244,25 @@ def classify_title(title: str) -> str:
     return "neutral"
 
 
+def quoted_verbatim(title: str, source_text: str) -> bool:
+    """Whether `title` appears verbatim in the fixture prose (casefolded,
+    whitespace-collapsed substring) -- the #618 class split. A leaked title
+    WITH verbatim support is the subject's own proper name (`Model Context
+    Protocol`); the harmful class is the leaked title WITHOUT it (the
+    translatable title rendered in English).
+
+    Balanced `(...)` spans are stripped from the TITLE first (#592's
+    precedent): `Model Context Protocol (MCP)` is the proper name plus its
+    own acronym, and counting it harmful because the prose names the
+    protocol without the suffix would mislabel a correct proper name."""
+
+    def normalize(value: str) -> str:
+        return " ".join(value.casefold().split())
+
+    stripped = re.sub(r"\([^()]*\)", " ", title)
+    return normalize(stripped) in normalize(source_text)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", choices=["baseline", "treatment"], required=True)
@@ -278,8 +298,12 @@ def main() -> None:
     # the transport deadline killed the whole arm. Production never runs
     # uncapped; neither may a probe measuring production-shaped behavior.
     client = OllamaClient(model=args.model, timeout=1800.0, max_generation_tokens=8192)
-    per_run_titles: list[list[tuple[str, str]]] = []
+    per_run_titles: list[list[tuple[str, str, bool]]] = []
     per_run_leaked: list[list[str]] = []
+    per_run_harmful: list[list[str]] = []
+    per_run_gate_dropped: list[list[str]] = []
+    per_run_harmful_after_gate: list[list[str]] = []
+    per_run_objects_after_gate: list[int] = []
     per_run_errors: list[int] = []
     latencies: list[float] = []
 
@@ -295,7 +319,7 @@ def main() -> None:
     # all-or-nothing runs.
     for index in range(args.runs):
         started = time.monotonic()
-        results: list[tuple[str, str]] = []
+        objects: list[concept_mod.ExtractionResult] = []
         errors = 0
         for window in windows:
             try:
@@ -303,28 +327,82 @@ def main() -> None:
             except OllamaError:
                 errors += 1
                 continue
-            results.extend((r.title, classify_title(r.title)) for r in extracted)
+            objects.extend(extracted)
         latencies.append(time.monotonic() - started)
-        titles = results
-        leaked = [t for t, c in titles if c in ("en", "mixed")]
+        titles = [
+            (r.title, classify_title(r.title), quoted_verbatim(r.title, text))
+            for r in objects
+        ]
+        leaked = [t for t, c, _q in titles if c in ("en", "mixed")]
+        # #618's class split: the harmful class is a PURE-`en` title with NO
+        # verbatim support -- the translatable title rendered in English.
+        # `mixed` is deliberately NOT harmful: on this Spanish fixture a
+        # mixed title is a Spanish title quoting an English term
+        # (`Mantenimiento de la documentación del engine setup`), which is
+        # the model doing the right thing; the first analysis counted those
+        # and overstated the class by ~2x.
+        harmful = [t for t, c, q in titles if c == "en" and not q]
+        # The PRODUCTION gate, applied to this run's window-level union --
+        # the same list the pipeline's `_dedup_merged` would see (dedup
+        # never changes a title's language class, so this is a fair frame).
+        # Deliberately a DIFFERENT classifier than this probe's: the gate
+        # votes generic function words; the probe's marker lists are this
+        # fixture's ground truth. The probe measures the gate, not itself.
+        gated, gate_dropped = concept_mod._drop_wrong_language_titles(
+            objects, source_text=text
+        )
+        harmful_after_gate = [
+            r.title
+            for r in gated
+            if classify_title(r.title) == "en" and not quoted_verbatim(r.title, text)
+        ]
         per_run_titles.append(titles)
         per_run_leaked.append(leaked)
+        per_run_harmful.append(harmful)
+        per_run_gate_dropped.append(list(gate_dropped))
+        per_run_harmful_after_gate.append(harmful_after_gate)
+        per_run_objects_after_gate.append(len(gated))
         per_run_errors.append(errors)
         print(
             f"  run {index + 1}/{args.runs}: {len(titles)} title(s), "
-            f"{len(leaked)} leaked, {errors} window error(s) "
-            f"({latencies[-1]:.1f}s)"
+            f"{len(leaked)} leaked ({len(harmful)} harmful), gate dropped "
+            f"{len(gate_dropped)} -> {len(harmful_after_gate)} harmful left, "
+            f"{errors} window error(s) ({latencies[-1]:.1f}s)"
         )
 
     run_rows = [
-        {"objects": len(titles), "titles": titles, "leaked": leaked, "errors": errs}
-        for titles, leaked, errs in zip(
-            per_run_titles, per_run_leaked, per_run_errors, strict=True
+        {
+            "objects": len(titles),
+            "titles": titles,
+            "leaked": leaked,
+            "harmful": harmful,
+            "gate_dropped": gate_dropped,
+            "harmful_after_gate": harmful_after,
+            "objects_after_gate": objects_after,
+            "errors": errs,
+        }
+        for titles, leaked, harmful, gate_dropped, harmful_after, objects_after, errs in zip(
+            per_run_titles,
+            per_run_leaked,
+            per_run_harmful,
+            per_run_gate_dropped,
+            per_run_harmful_after_gate,
+            per_run_objects_after_gate,
+            per_run_errors,
+            strict=True,
         )
     ]
     total_objects = sum(len(titles) for titles in per_run_titles)
     total_leaked = sum(len(leaked) for leaked in per_run_leaked)
+    total_harmful = sum(len(harmful) for harmful in per_run_harmful)
+    total_gate_dropped = sum(len(dropped) for dropped in per_run_gate_dropped)
+    total_harmful_after = sum(len(after) for after in per_run_harmful_after_gate)
+    total_objects_after = sum(per_run_objects_after_gate)
     leak_rate = total_leaked / total_objects if total_objects else 0.0
+    harmful_rate = total_harmful / total_objects if total_objects else 0.0
+    harmful_rate_after_gate = (
+        total_harmful_after / total_objects_after if total_objects_after else 0.0
+    )
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results_dir = pathlib.Path(__file__).resolve().parent / "results"
@@ -356,18 +434,35 @@ def main() -> None:
         "| metric | value |",
         "| --- | --- |",
         f"| **leak rate (en+mixed titles / all titles)** | **{leak_rate:.2f}** |",
+        f"| **harmful-class rate (pure `en` AND not verbatim-quoted)** | "
+        f"**{harmful_rate:.2f}** |",
+        f"| **harmful-class rate AFTER the #618 gate** | "
+        f"**{harmful_rate_after_gate:.2f}** |",
         f"| total objects across runs | {total_objects} |",
+        f"| objects after gate across runs | {total_objects_after} |",
         f"| leaked titles across runs | {total_leaked} |",
+        f"| harmful titles across runs | {total_harmful} |",
+        f"| gate-dropped titles across runs | {total_gate_dropped} |",
+        f"| harmful titles left after gate | {total_harmful_after} |",
         f"| mean objects per run | "
         f"{total_objects / args.runs if args.runs else 0:.1f} |",
+        f"| mean objects per run after gate | "
+        f"{total_objects_after / args.runs if args.runs else 0:.1f} |",
         f"| mean run latency | {statistics.fmean(latencies):.1f}s |",
         f"| window errors across runs | {sum(per_run_errors)} |",
         "",
-        "## Leaked titles per run",
+        "## Leaked titles per run (harmful class marked `!`)",
         "",
     ]
-    for index, leaked in enumerate(per_run_leaked, start=1):
-        rendered = "; ".join(leaked) if leaked else "(none)"
+    for index, (leaked, harmful) in enumerate(
+        zip(per_run_leaked, per_run_harmful, strict=True), start=1
+    ):
+        marked = [f"{'!' if t in harmful else ''}{t}" for t in leaked]
+        rendered = "; ".join(marked) if marked else "(none)"
+        lines.append(f"- run {index}: {rendered}")
+    lines += ["", "## Gate-dropped titles per run", ""]
+    for index, dropped in enumerate(per_run_gate_dropped, start=1):
+        rendered = "; ".join(dropped) if dropped else "(none)"
         lines.append(f"- run {index}: {rendered}")
 
     report = "\n".join(lines) + "\n"

@@ -2675,6 +2675,31 @@ def _pre_judge_ceiling_notice(report: ExtractionReport) -> str | None:
     )
 
 
+def _wrong_language_notice(report: ExtractionReport) -> str | None:
+    """Render the deterministic wrong-language-title drop (#618), or `None`
+    when the gate dropped nothing -- the common case, and the only possible
+    case on the single-call and unchunked union paths, where the gate never
+    runs.
+
+    Mirrors `_extraction_cap_notice`'s shape (a count plus a bounded list
+    of named titles), because the failure it discloses is the same kind: a
+    candidate the model produced that the pipeline decided not to store.
+    The titles are load-bearing here, not decoration -- a wrong-language
+    title and a genuine subject are told apart by READING them, and the
+    slug this gate protects is the permanent Concept ID."""
+    if not report.wrong_language_dropped_titles:
+        return None
+    shown = report.wrong_language_dropped_titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(report.wrong_language_dropped_titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return (
+        f"dropped {len(report.wrong_language_dropped_titles)} wrong-language "
+        f"title(s) not quoted from the source: {listed}"
+    )
+
+
 def _reask_notice(report: ExtractionReport) -> str | None:
     """Render the bounded sole-twin re-ask notice (#584), or `None` when no
     re-ask was spent -- which is the common case.
@@ -3013,9 +3038,15 @@ def _stage_derived_objects(
         return [], "failed", None
 
     extractions = outcome.objects
-    # #584: the re-ask fires before the judge ever runs (it feeds the merged
-    # candidate list), so its notice renders ahead of every other one --
+    # #618 renders FIRST: the wrong-language gate runs on the merged
+    # per-window candidates before the re-ask, the judge, and every cap --
     # the notices read in the order the pipeline produced them.
+    wrong_language_notice = _wrong_language_notice(outcome.report)
+    if wrong_language_notice is not None:
+        typer.echo(f"openkos ingest: {wrong_language_notice}", err=True)
+
+    # #584: the re-ask fires before the judge ever runs (it feeds the merged
+    # candidate list), so its notice renders ahead of every other one below.
     reask_notice = _reask_notice(outcome.report)
     if reask_notice is not None:
         typer.echo(f"openkos ingest: {reask_notice}", err=True)
