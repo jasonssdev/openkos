@@ -243,6 +243,46 @@ def _reachable_ids(
     )
 
 
+def provenance_source_ancestors(
+    files: Mapping[str, str], *, object_id: str
+) -> list[str]:
+    """Every `sources/` id whose provenance chain REACHES `object_id` --
+    the reverse lookup #628 tracks: 'protect this object' means raising
+    every Source it was derived from, and #571's containment note only
+    names the object's own DIRECT provenance parents.
+
+    Walks the object's provenance UPWARD to a fixed point (the direction
+    opposite `provenance_closure`'s descendant walk): the object's own
+    `provenance` entries, then theirs, and so on -- so a Source reached
+    only through an intermediate derived concept is still found. The
+    answer keeps ONLY the `sources/`-prefixed ancestors, matching the
+    prefix rule #571's note already applies; intermediate concepts are
+    walked through, never reported. A `sources/` entry with no file behind
+    it is still included -- a dangling Source is still one the caller
+    asked to be told about, and hiding it would understate the
+    containment set. A raw-resource entry (e.g. `notes.txt`, what a
+    Source's own provenance holds) never matches the prefix and never
+    joins the walk's answer.
+
+    Termination mirrors `provenance_closure`: the ancestor set only grows
+    and is bounded by the finite id universe, so a provenance cycle
+    terminates and the object citing itself never re-enters the frontier.
+    The returned list is `sorted()` -- deterministic regardless of `files`
+    iteration order."""
+    provenance_by_id = _parse_provenance_by_id(files)
+    ancestors: set[str] = set()
+    frontier = {_normalize_id(object_id)}
+    while frontier:
+        next_frontier: set[str] = set()
+        for concept_id in frontier:
+            for parent in provenance_by_id.get(concept_id, frozenset()):
+                if parent not in ancestors:
+                    ancestors.add(parent)
+                    next_frontier.add(parent)
+        frontier = next_frontier
+    return sorted(ancestor for ancestor in ancestors if ancestor.startswith("sources/"))
+
+
 def resolve_source_raises(
     files: Mapping[str, str], *, source_id: str, level: str
 ) -> list[okf.DescendantRaise]:

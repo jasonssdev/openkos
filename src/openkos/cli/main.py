@@ -6354,7 +6354,9 @@ def set_sensitivity_cmd(
                 f"openkos set-sensitivity: note -- '{canonical_id}' was "
                 f"derived from {named}; raising it does not contain content "
                 "its source(s) replicated into sibling objects. To contain "
-                f"everything derived from them, {lever}."
+                f"everything derived from them, {lever}. For every Source "
+                "that reaches this object, including through intermediate "
+                f"objects: openkos list --sources {canonical_id}."
             )
 
     _autocommit(
@@ -9778,6 +9780,60 @@ def next_cmd() -> None:
         typer.echo(line)
 
 
+def _run_list_sources(layout: config.WorkspaceLayout, object_id: str) -> None:
+    """The `list --sources <id>` reverse-provenance mode (#628): resolve
+    the id through the same gate every id-taking verb uses, walk the
+    bundle's provenance chains upward via
+    `bundle_provenance.provenance_source_ancestors`, and render one row per
+    reaching Source -- `ID  SENSITIVITY  TITLE`, `ljust`-aligned like the
+    ordinary listing, sensitivity front and center because 'which of these
+    still needs raising' is the question this mode answers. A `sources/`
+    provenance entry with no file behind it renders as `(not in bundle)`
+    rather than vanishing. Read-only, exactly like the ordinary listing."""
+    try:
+        _, canonical_id = _resolve_concept_path(layout.bundle_dir, object_id)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos list: refusing to list -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    files: dict[str, str] = {}
+    for path in sorted(layout.bundle_dir.rglob("*.md")):
+        if path.name in okf.RESERVED_FILENAMES:
+            continue
+        rel = path.relative_to(layout.bundle_dir).as_posix()
+        try:
+            files[rel] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # An unreadable doc contributes no provenance edges; mirrors
+            # `_parse_provenance_by_id`'s skip-not-crash contract.
+            continue
+
+    ancestors = bundle_provenance.provenance_source_ancestors(
+        files, object_id=canonical_id
+    )
+    if not ancestors:
+        typer.echo(f"No Source reaches '{canonical_id}' through provenance.")
+        return
+
+    rows_by_id = {
+        row.concept_id: row for row in listing.list_objects(layout.bundle_dir)
+    }
+    typer.echo(f"Sources whose provenance reaches '{canonical_id}':")
+    id_w = max(len("ID"), *(len(ancestor) for ancestor in ancestors))
+    sens_w = max(
+        len("SENSITIVITY"),
+        *(len(rows_by_id[a].sensitivity) if a in rows_by_id else 0 for a in ancestors),
+    )
+    typer.echo(f"{'ID'.ljust(id_w)}  {'SENSITIVITY'.ljust(sens_w)}  TITLE")
+    for ancestor in ancestors:
+        row = rows_by_id.get(ancestor)
+        if row is None:
+            typer.echo(f"{ancestor.ljust(id_w)}  (not in bundle)")
+            continue
+        title = row.title or ("(unreadable)" if not row.readable else "(untitled)")
+        typer.echo(f"{ancestor.ljust(id_w)}  {row.sensitivity.ljust(sens_w)}  {title}")
+
+
 @app.command(
     "list",
     help=(
@@ -9804,6 +9860,15 @@ def list_objects_cmd(
         False,
         "--all",
         help="Print every matching row, ignoring --limit, with no truncation footer.",
+    ),
+    sources_of: str | None = typer.Option(
+        None,
+        "--sources",
+        help="Reverse-provenance lookup (#628): list every Source whose "
+        "provenance chain reaches this concept id -- transitively, with "
+        "each Source's current sensitivity -- so 'protect this object' "
+        "finds the Sources that need raising. A whole mode: takes no TYPE "
+        "filter.",
     ),
 ) -> None:
     """List every bundle object's id, sensitivity, lifecycle status, and
@@ -9876,6 +9941,17 @@ def list_objects_cmd(
     deferral was recorded in the list-verb work, #184, and no issue tracks
     it yet).
     """
+    # #628: `--sources` is a whole mode -- a TYPE filter alongside it has
+    # nothing to filter, so it refuses in the same usage-first ladder slot
+    # the unknown-type refusal occupies.
+    if sources_of is not None and concept_type is not None:
+        typer.echo(
+            "openkos list: refusing to list -- --sources takes no TYPE "
+            "filter; it lists the Sources reaching one object.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     resolved_type: str | None = None
     if concept_type is not None:
         resolved_type = listing.resolve_link_dir(concept_type)
@@ -9905,6 +9981,11 @@ def list_objects_cmd(
         raise typer.Exit(code=1)
 
     layout = config.WorkspaceLayout(root)
+
+    if sources_of is not None:
+        _run_list_sources(layout, sources_of)
+        return
+
     rows = listing.list_objects(layout.bundle_dir)
 
     if resolved_type is not None:

@@ -1293,3 +1293,24 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     assert changed_paths(before, snapshot_with_mtime(tmp_path)) == {
         Path("bundle/sources/notes.md")
     }
+
+
+def test_raising_a_derived_object_points_at_the_reverse_provenance_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The #571 lever line names only the object's own DIRECT provenance
+    parents; #628 adds the pointer to the complete answer -- `openkos list
+    --sources <id>` walks the chain transitively, so a Source reached only
+    through an intermediate object is discoverable from here too."""
+    _init_workspace(tmp_path, monkeypatch)
+    source_id = _ingest_source(tmp_path, "a.txt")
+    derived_id = _write_derived_concept(
+        tmp_path, slug="stoic-dichotomy", provenance=[source_id]
+    )
+
+    result = runner.invoke(
+        app, ["set-sensitivity", derived_id, "confidential", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert f"openkos list --sources {derived_id}" in result.output
