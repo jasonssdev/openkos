@@ -1136,6 +1136,10 @@ def test_merge_scans_bundle_exactly_once_via_rglob_when_scanning_provenance(
         return original(self, pattern, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(Path, "rglob", _counting_rglob)
+    # The #640 write-time refresh legitimately re-walks the bundle AFTER the
+    # merge committed; stub it so this count keeps measuring what T5 is
+    # about -- `prepare_merge`'s single scan -- not the post-write refresh.
+    monkeypatch.setattr(main, "_refresh_derived_after_write", lambda *a, **k: True)
 
     result = runner.invoke(
         app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]

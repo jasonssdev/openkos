@@ -6474,8 +6474,9 @@ def test_fts_build_failure_degrades_and_never_fails_the_ingest(
 ) -> None:
     """The end-of-run FTS build is FAIL-OPEN, exactly like the embed: the
     Source and its concepts are committed by the time it runs, so a build
-    failure costs one stderr notice naming `openkos reindex`, never the
-    exit code and never the ingest itself (issue #553)."""
+    failure costs one stderr advisory naming `openkos reindex`, never the
+    exit code and never the ingest itself (issue #553; advisory wording
+    unified by #640's shared refresh helper)."""
     _init_workspace(tmp_path, monkeypatch)
     source = tmp_path / "notes.txt"
     source.write_text("Some raw notes.", encoding="utf-8")
@@ -6489,7 +6490,7 @@ def test_fts_build_failure_degrades_and_never_fails_the_ingest(
 
     assert result.exit_code == 0
     assert (tmp_path / "bundle" / "sources" / "notes.md").is_file()
-    assert "FTS index not updated" in result.stderr
+    assert "derived-index refresh incomplete" in result.stderr
     assert "openkos reindex" in result.stderr
 
 

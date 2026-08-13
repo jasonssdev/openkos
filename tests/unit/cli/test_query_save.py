@@ -494,7 +494,8 @@ def test_query_save_writes_concept_index_and_log(
     assert "**Filed answer**" in log_text
     assert "stoicism-teaches-the-dichotomy-of-control.md" in log_text
     assert "from query" in log_text
-    assert "reindex" in result.output.lower()
+    # #640: the write-time refresh replaced the manual-reindex instruction.
+    assert "indexed and searchable" in result.output
 
 
 def test_query_save_overrides_apply(
@@ -765,11 +766,15 @@ def test_query_save_review_false_skips_the_prompt_like_auto(
     ).is_file()
 
 
-def test_query_save_prints_reindex_hint(
+def test_query_save_success_reports_searchable_not_a_manual_reindex(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A successful save prints a hint to run `openkos reindex` (spec:
-    "Successful filing hints at reindex")."""
+    """A successful save used to hint at a manual `openkos reindex` (the
+    original spec line "Successful filing hints at reindex") -- since #640
+    the save itself refreshes the derived indexes, so the hint would be
+    false; the success line reports the insight as indexed instead. The
+    manual-reindex pointer survives only on the refresh's degrade path
+    (covered by `test_write_time_refresh.py`)."""
     _init_workspace(tmp_path, monkeypatch)
     _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
     citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
@@ -779,7 +784,8 @@ def test_query_save_prints_reindex_hint(
     result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
 
     assert result.exit_code == 0
-    assert "openkos reindex" in result.output
+    assert "Run `openkos reindex` to make it searchable." not in result.output
+    assert "indexed and searchable" in result.output
 
 
 # -- #313: re-validate every write target after the confirm gate ------------
