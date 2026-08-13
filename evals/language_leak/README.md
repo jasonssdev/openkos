@@ -85,8 +85,50 @@ Onboarding Procedure`) — invisible to function-word voting by
 construction. A bigram-adjacency check (drop a neutral multi-word title
 whose word bigrams are not all adjacent in the prose) separates them on
 these emissions but has an unresolved false-positive risk on legitimate
-dominant-language titles that also vote neutral; that residual class is
-the follow-up filed from these numbers.
+dominant-language titles that also vote neutral; that residual class was
+filed as #622 and measured below.
+
+## The #622 bigram-adjacency extension, measured (2026-08-13) — REJECTED as-is
+
+The candidate: for a title the gate's voter sees NO function words in
+(gate-neutral — deliberately excluding MIXED titles, which may compose
+legitimately), strip balanced `(...)` spans, then require every
+consecutive word pair to appear adjacent in the prose; non-adjacent means
+recombination, not quotation, and drops. Implemented in this probe
+(`bigram_adjacent`, `score_extension`, `--analyze` for stored emissions),
+NOT in production.
+
+Measured over every stored emission set (two stored baseline files, one
+fresh 3-run baseline `20260813T071333Z`, and the rejected-treatment file —
+12 runs, ~500 kept titles):
+
+| emission set | residual harmful (post-#618) | caught | false positives |
+| --- | --- | --- | --- |
+| baseline stored ×2 (6 runs) | 9 | 9 | **0** |
+| baseline fresh (3 runs) | 10 | 10 | **0** |
+| treatment stored (3 runs) | 2 | 2 | **1** — `Snapshot Derivado` |
+
+On production-shaped emissions the extension is perfect: 19/19 caught,
+zero false positives, harmful-after-gate 0.11 → **0.00** on the fresh
+run. But the treatment file holds exactly the false-positive specimen
+#622 predicted: `Snapshot Derivado` — a legitimate dominant-language
+title (Spanish morphology, English loanword), gate-neutral because
+neither word is a function word, and non-adjacent because the prose says
+`snapshots derivados` (plural) while the title composes the singular.
+**Morphological variation breaks bigram adjacency structurally in
+Spanish**, so the false-positive class is demonstrated non-empty on real
+model output — under a different prompt, but the composing behavior is
+the model's, not the prompt's. Per the shipping bar (zero false
+positives; a false positive is silent data loss, the same asymmetry that
+keeps the twin-rule floor), the pure bigram check does NOT ship.
+
+**The evidence-backed next candidate is the combo** (#622's own option
+(a)): exempt any title containing a word with Spanish orthographic
+markers (accents, or suffixes `-ción/-sión/-miento/-ería/-encia/-ancia/
+-dad/-ado/-ada`) before the adjacency test. Re-scored offline over all
+12 stored runs: **21/21 residuals caught, 0 missed, 0 false positives**
+— `Snapshot Derivado` is exempted by `-ado` while every caught residual
+is pure-English orthography. Filed as the follow-up from these numbers.
 
 ## Measurement lessons (paid for four times)
 
