@@ -24,7 +24,9 @@ class ObjectType:
     section: str
     """Catalog section heading (`index.md`) this type's entries rank under."""
     llm_classifiable: bool
-    """Whether the LLM classifier/`okf.build_concept` accept this type."""
+    """Whether the LLM classifier may emit this type. `okf.build_concept`
+    accepts the wider `BUILDABLE_TYPES` (issue #570): `Insight` has a
+    builder path (`query --save`) but must never be extractable."""
 
     default_tier: str
     """This type's default knowledge-volatility tier (freshness-lint-v1,
@@ -43,27 +45,57 @@ REGISTRY: tuple[ObjectType, ...] = (
     ObjectType("Project", "projects", "Projects", True, "volatile"),
     ObjectType("Person", "people", "People", True, "slow"),
     ObjectType("Organization", "organizations", "Organizations", True, "slow"),
+    ObjectType("Insight", "insights", "Insights", False, "volatile"),
     ObjectType("Source", "sources", "Sources", False, "static"),
 )
 """Ordered canonical vocabulary. Order determines `CANONICAL_SECTION_ORDER`
--- reordering this tuple changes catalog section rank."""
+-- reordering this tuple changes catalog section rank.
+
+`Insight` (issue #570) is the filed-synthesis type `query --save` writes: an
+answer synthesized by a model over the bundle's state at answer time. It is
+NOT `llm_classifiable` -- the extractor's closed vocabulary must never emit
+it, because an extracted Concept depends on an immutable Source while an
+Insight depends on the mutable bundle, and conflating the two is how a
+knowledge base rots (the same class-of-object honesty that keeps `Source`
+out of the classifier). `volatile` is its default tier on the same
+reasoning: every ingest, merge, or correction can invalidate it."""
 
 CLASSIFIABLE_TYPES: frozenset[str] = frozenset(
     ot.name for ot in REGISTRY if ot.llm_classifiable
 )
-"""Closed set the classifier/builder accept as valid `type` values."""
+"""Closed set the LLM classifier accepts as valid `type` values."""
+
+INSIGHT_TYPE = "Insight"
+"""The filed-synthesis type (issue #570), named so consumers branch on the
+registry constant, never a string literal."""
+
+BUILDER_ONLY_TYPES: frozenset[str] = frozenset({INSIGHT_TYPE})
+"""Types `okf.build_concept` accepts that the LLM classifier must never
+emit (issue #570). A deliberate hand-listed widening, mirroring
+`model/relations.py::ENGINE_OWNED_RELATION_TYPES`'s hand-listed narrowing:
+membership here is an editorial claim about WHO may author the type (the
+engine's `query --save` path, on explicit user action), not derivable from
+any per-entry flag without conflating it with classifiability."""
+
+BUILDABLE_TYPES: frozenset[str] = CLASSIFIABLE_TYPES | BUILDER_ONLY_TYPES
+"""Closed set `okf.build_concept` accepts as valid `type` values: every
+classifiable type plus the builder-only ones."""
 
 TYPE_TO_LINK_DIR: dict[str, str] = {
     ot.name: ot.link_dir
     for ot in REGISTRY
-    if ot.llm_classifiable and ot.link_dir is not None
+    if (ot.llm_classifiable or ot.name in BUILDER_ONLY_TYPES)
+    and ot.link_dir is not None
 }
-"""`type` -> bundle subdirectory, for classifiable types only."""
+"""`type` -> bundle subdirectory, for buildable types (classifiable plus
+builder-only; `Source` keeps its own dedicated builder and stays out)."""
 
 TYPE_TO_SECTION: dict[str, str] = {
-    ot.name: ot.section for ot in REGISTRY if ot.llm_classifiable
+    ot.name: ot.section
+    for ot in REGISTRY
+    if ot.llm_classifiable or ot.name in BUILDER_ONLY_TYPES
 }
-"""`type` -> catalog section, for classifiable types only."""
+"""`type` -> catalog section, for buildable types."""
 
 CLASSIFIABLE_LINK_DIRS: tuple[str, ...] = tuple(
     ot.link_dir for ot in REGISTRY if ot.llm_classifiable and ot.link_dir is not None

@@ -22,7 +22,7 @@ from typing import Final, Literal, get_args
 
 import frontmatter
 
-from openkos.model.types import CLASSIFIABLE_TYPES as _CONCEPT_TYPES
+from openkos.model.types import BUILDABLE_TYPES as _CONCEPT_TYPES
 
 OKF_VERSION: Final = "0.1"
 """The OKF version this engine targets and declares, per §11."""

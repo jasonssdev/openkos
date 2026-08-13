@@ -17,7 +17,7 @@ import pytest
 from openkos.model import types
 
 
-def test_registry_has_ten_entries_with_project() -> None:
+def test_registry_has_eleven_entries_with_insight() -> None:
     """REGISTRY has the 9 pre-existing types plus `Project`, inserted
     immediately after `Decision`, before `Person` (design: Decision 1)."""
     names = tuple(ot.name for ot in types.REGISTRY)
@@ -31,6 +31,7 @@ def test_registry_has_ten_entries_with_project() -> None:
         "Project",
         "Person",
         "Organization",
+        "Insight",
         "Source",
     )
 
@@ -42,19 +43,21 @@ def test_object_type_is_frozen() -> None:
         entry.name = "Mutated"  # type: ignore[misc]
 
 
-def test_source_is_the_only_non_classifiable_type() -> None:
-    """`Source` is the SOLE ordering-only, non-classifiable registry entry:
-    `Decision` flipped to classifiable (design: Decision 1), so every other
-    type -- including `Decision` and the newly added `Project` -- is
-    `llm_classifiable` (spec: "Classification Prompt Presents the Full
-    9-Type Vocabulary")."""
+def test_source_and_insight_are_the_non_classifiable_types() -> None:
+    """`Source` and `Insight` (#570) are the two non-classifiable registry
+    entries -- neither may ever be emitted by the LLM classifier. `Insight`
+    additionally sits in `BUILDER_ONLY_TYPES`: it has a builder path
+    (`query --save`) that `Source` (own dedicated builder) does not."""
     by_name = {ot.name: ot for ot in types.REGISTRY}
     assert by_name["Decision"].llm_classifiable is True
     assert by_name["Decision"].link_dir == "decisions"
     assert by_name["Project"].llm_classifiable is True
     assert by_name["Project"].link_dir == "projects"
     non_classifiable = {ot.name for ot in types.REGISTRY if not ot.llm_classifiable}
-    assert non_classifiable == {"Source"}
+    assert non_classifiable == {"Source", "Insight"}
+    assert {"Insight"} == types.BUILDER_ONLY_TYPES
+    assert types.CLASSIFIABLE_TYPES | {"Insight"} == types.BUILDABLE_TYPES
+    assert "Insight" not in types.CLASSIFIABLE_TYPES
 
 
 def test_classifiable_types_matches_widened_set() -> None:
@@ -93,6 +96,7 @@ def test_type_to_link_dir_includes_decision_and_project() -> None:
         "Project": "projects",
         "Person": "people",
         "Organization": "organizations",
+        "Insight": "insights",
     }
 
 
@@ -109,6 +113,7 @@ def test_type_to_section_includes_decision_and_project() -> None:
         "Project": "Projects",
         "Person": "People",
         "Organization": "Organizations",
+        "Insight": "Insights",
     }
 
 
@@ -146,6 +151,7 @@ def test_canonical_section_order_inserts_project_after_decisions() -> None:
         "Projects",
         "People",
         "Organizations",
+        "Insights",
         "Sources",
     )
 
@@ -199,5 +205,6 @@ def test_type_to_default_volatility_matches_registry() -> None:
         "Project": "volatile",
         "Person": "slow",
         "Organization": "slow",
+        "Insight": "volatile",
         "Source": "static",
     }

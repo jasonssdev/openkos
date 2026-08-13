@@ -61,7 +61,8 @@ from openkos.llm.ollama import (
 )
 from openkos.model import okf, types
 from openkos.model.relations import validate_relation_type
-from openkos.model.types import CLASSIFIABLE_TYPES as _CLASSIFIABLE_TYPES
+from openkos.model.types import BUILDABLE_TYPES as _BUILDABLE_TYPES
+from openkos.model.types import INSIGHT_TYPE as _INSIGHT_TYPE
 from openkos.model.types import TYPE_TO_LINK_DIR as _TYPE_TO_LINK_DIR
 from openkos.model.types import TYPE_TO_SECTION as _TYPE_TO_SECTION
 from openkos.resolution import find_candidates_report, find_exact_title_groups
@@ -11497,6 +11498,46 @@ class _FiledAnswerPlan:
     sensitivity: str
 
 
+_DECLARATIVE_TITLE_MAX_CHARS = 90
+"""Longest first sentence `_declarative_answer_title` will promote to a
+title (issue #570). Above this a sentence is prose, not a name, and the
+slug -- the permanent Concept ID -- would be a paragraph."""
+
+_DECLARATIVE_TITLE_MIN_CHARS = 15
+"""Shortest first sentence worth promoting: below this the sentence is
+usually a fragment ("Yes.", "It depends.") that names nothing."""
+
+
+def _declarative_answer_title(answer_text: str) -> str | None:
+    """Derive a DECLARATIVE title from `answer_text`'s first sentence, or
+    `None` when no usable one exists (issue #570).
+
+    `query --save` used to title the filed document with the QUESTION
+    verbatim, so the slug -- the permanent OKF Concept ID -- was an
+    interrogative sentence (`qué-relación-hay-entre-...`). The answer's
+    opening sentence is the declarative statement of the same content, so
+    it is the natural title; the question survives as the default
+    DESCRIPTION, where prose belongs.
+
+    Deterministic and conservative: take the text up to the first `.` that
+    ends a word (or the whole first line), collapse whitespace, and refuse
+    (`None`) when the result is shorter than `_DECLARATIVE_TITLE_MIN_CHARS`,
+    longer than `_DECLARATIVE_TITLE_MAX_CHARS`, or itself a question. The
+    caller falls back to the question, exactly the pre-#570 behavior --
+    this helper only ever improves the default, and `--title` still
+    overrides everything."""
+    first_line = answer_text.strip().split("\n", 1)[0]
+    sentence = first_line.split(". ", 1)[0].removesuffix(".")
+    candidate = " ".join(sentence.split())
+    if not (
+        _DECLARATIVE_TITLE_MIN_CHARS <= len(candidate) <= _DECLARATIVE_TITLE_MAX_CHARS
+    ):
+        return None
+    if candidate.endswith("?") or candidate.startswith(("¿", "#", "-", "*", ">")):
+        return None
+    return candidate
+
+
 def _stage_filed_answer(
     *,
     question: str,
@@ -11507,7 +11548,7 @@ def _stage_filed_answer(
     timestamp: str,
     title: str | None = None,
     description: str | None = None,
-    doc_type: str = "Concept",
+    doc_type: str = _INSIGHT_TYPE,
 ) -> _FiledAnswerPlan:
     """Stage a `query --save` filing of `answer_text` as a new derived OKF
     concept -- a pure, in-memory Phase A step mirroring
@@ -11543,12 +11584,20 @@ def _stage_filed_answer(
             "nothing to file -- the answer cited no concepts; --save records "
             "provenance from citations"
         )
-    if doc_type not in _CLASSIFIABLE_TYPES:
+    if doc_type not in _BUILDABLE_TYPES:
         raise ValueError(
-            f"type must be one of {sorted(_CLASSIFIABLE_TYPES)}, got {doc_type!r}"
+            f"type must be one of {sorted(_BUILDABLE_TYPES)}, got {doc_type!r}"
         )
 
-    resolved_title = question if title is None else title
+    # Issue #570: the default title is DECLARATIVE, derived from the
+    # answer's first sentence -- the slug is the permanent Concept ID, and
+    # an interrogative sentence is not an identity. The question keeps its
+    # place as the default description; a first sentence too short, too
+    # long, or itself a question falls back to the question, the pre-#570
+    # default.
+    resolved_title = (
+        (_declarative_answer_title(answer_text) or question) if title is None else title
+    )
     resolved_description = question if description is None else description
 
     slug = _slugify(resolved_title)
@@ -11640,20 +11689,27 @@ def query(
         False,
         "--save",
         help=(
-            "File the cited answer back as a new derived concept (opt-in; "
-            "off by default keeps query read-only)."
+            "File the cited answer back as an Insight -- the filed-synthesis "
+            "type (opt-in; off by default keeps query read-only)."
         ),
     ),
     title: str | None = typer.Option(
-        None, "--title", help="Title for the filed concept (default: the question)."
+        None,
+        "--title",
+        help="Title for the filed document (default: a declarative title "
+        "derived from the answer's first sentence, falling back to the "
+        "question).",
     ),
     description: str | None = typer.Option(
         None,
         "--description",
-        help="Description for the filed concept (default: the question).",
+        help="Description for the filed document (default: the question).",
     ),
     save_type: str = typer.Option(
-        "Concept", "--type", help="Type for the filed concept (default: Concept)."
+        _INSIGHT_TYPE,
+        "--type",
+        help="Type for the filed document (default: Insight -- the filed-"
+        "synthesis type; classifiable types remain accepted).",
     ),
     auto: bool = typer.Option(
         False,
@@ -11725,8 +11781,13 @@ def query(
     (sensitivity-fail-closed-filter) are likewise excluded from every
     retrieval channel before fusion, exactly like a deprecated concept.
 
-    `--save` files the just-printed cited answer as a new concept, and is
-    the only writing path here. It previews the three paths it would touch,
+    `--save` files the just-printed cited answer as a new `Insight` -- the
+    filed-synthesis type (issue #570): a declarative title derived from the
+    answer's first sentence (never the interrogative question, which stays
+    as the description), under `bundle/insights/`, with provenance to every
+    cited concept so the freshness machinery can flag it when they change.
+    `--type` still accepts any classifiable type. It is the only writing
+    path here. It previews the three paths it would touch,
     then gates on the usual precedence: `--auto` skips the prompt outright;
     otherwise config `review: false` skips it the same way; otherwise a TTY
     prompts via `typer.confirm`; otherwise it refuses (exit 1).
@@ -11912,12 +11973,37 @@ def query(
         return
 
     typer.echo(result.answer)
+    insight_prefix = f"{_TYPE_TO_LINK_DIR[_INSIGHT_TYPE]}/"
     if result.citations:
         typer.echo()
         typer.echo("Citations:")
         for citation in result.citations:
             marker = " [confidential]" if citation.confidential else ""
-            typer.echo(f"  → {citation.concept_id} ({citation.title}){marker}")
+            # Issue #570: a cited Insight is itself model output, not
+            # source-backed knowledge -- rendered distinctly so the reader
+            # can tell which legs of the answer stand on a Source and
+            # which stand on an earlier synthesis. Identity by link dir:
+            # the folder IS the type's identity in an OKF bundle.
+            synthesis = (
+                " [synthesis]" if citation.concept_id.startswith(insight_prefix) else ""
+            )
+            typer.echo(
+                f"  → {citation.concept_id} ({citation.title}){synthesis}{marker}"
+            )
+
+    # Issue #570: compounding on sources is the product's thesis;
+    # compounding on model output with no source underneath is how a
+    # knowledge base rots. When EVERY citation is itself a filed synthesis,
+    # say so -- stderr, like every advisory here.
+    if result.citations and all(
+        citation.concept_id.startswith(insight_prefix) for citation in result.citations
+    ):
+        typer.echo(
+            "openkos query: warning -- every citation is itself a filed "
+            "synthesis (Insight); nothing beneath this answer reaches a "
+            "Source.",
+            err=True,
+        )
 
     # Read-path disclosure (issue #569), the mirror of `_autocommit`'s
     # commit NOTICE: the fail-closed gate already decided ADMISSION (the

@@ -433,28 +433,71 @@ prompt is shown.
 - THEN stdout/stderr output is identical to the pre-`--save` behavior
 - AND no new file, index entry, or log entry is created
 
-### Requirement: `--save` Files The Cited Answer As A New Concept
+### Requirement: `--save` Files The Cited Answer As An Insight
 
 WHEN `--save` is passed and `answer()` returns a matched result, `query`
-MUST, after rendering the answer, build a new concept via the ingest
-builder with: body = the rendered answer text; title = the question, or
-`--title` when given; description = the question, or `--description` when
-given; type = `"Concept"`, or `--type` when given; provenance = the cited
-concepts' ids (`result.citations`).
+MUST, after rendering the answer, build a new document via the ingest
+builder with: body = the rendered answer text; title = a DECLARATIVE title
+derived from the answer's first sentence (falling back to the question when
+that sentence is too short, too long, or itself a question), or `--title`
+when given; description = the question, or `--description` when given; type
+= `"Insight"` (the filed-synthesis type, issue #570), or `--type` when
+given (any buildable type); provenance = the cited concepts' ids
+(`result.citations`).
 
-#### Scenario: Default filing uses the question as title/description
+The type distinction is truth-decay (issue #570): an extracted `Concept`
+depends on an immutable `Source`; a filed synthesis depends on the MUTABLE
+bundle, so every ingest, merge, or correction can invalidate it. `Insight`
+therefore defaults to the `volatile` tier, is never emitted by the LLM
+classifier (`BUILDER_ONLY_TYPES`), files under `bundle/insights/`, and its
+slug -- the permanent Concept ID -- is declarative rather than an
+interrogative sentence.
+
+#### Scenario: Default filing is a declaratively-titled Insight
 
 - GIVEN `openkos query "<question>" --save` is run and the answer matches
-- WHEN the concept is built
-- THEN body is the rendered answer, title and description are the
-  question, type is `"Concept"`, and provenance lists the cited concept ids
+  with a usable first sentence
+- WHEN the document is built
+- THEN body is the rendered answer, the title is the answer's first
+  sentence, the description is the question, the type is `"Insight"` under
+  `bundle/insights/`, and provenance lists the cited concept ids
+
+#### Scenario: An unusable first sentence falls back to the question title
+
+- GIVEN the answer's first sentence is shorter than the declarative
+  minimum, longer than the maximum, or itself a question
+- WHEN the document is built
+- THEN the title falls back to the question (the pre-#570 default)
 
 #### Scenario: `--title`, `--description`, `--type` override defaults
 
 - GIVEN `openkos query "<question>" --save --title "T" --type "Procedure"`
-- WHEN the concept is built
-- THEN title is `"T"` and type is `"Procedure"`, overriding the question
-  and `"Concept"` defaults
+- WHEN the document is built
+- THEN title is `"T"` and type is `"Procedure"`, overriding the derived
+  title and `"Insight"` defaults
+
+### Requirement: Cited Syntheses Are Marked
+
+`query` MUST render a cited `Insight` distinctly in the citation list (a
+`[synthesis]` marker) and MUST label an `Insight` context block as model
+output in the synthesizer's prompt, so neither the reader nor the model can
+mistake an earlier synthesis for source-backed knowledge. WHEN every
+citation of an answer is itself an `Insight`, `query` MUST warn on stderr
+that nothing beneath the answer reaches a `Source`.
+
+#### Scenario: A cited Insight carries the synthesis marker
+
+- GIVEN an answer citing one `Insight` and one `Concept`
+- WHEN `openkos query "<question>"` renders its citations
+- THEN the `Insight` line carries `[synthesis]`, the `Concept` line does
+  not, and no all-synthesis warning is printed
+
+#### Scenario: An all-synthesis answer warns
+
+- GIVEN an answer whose every citation is an `Insight`
+- WHEN `openkos query "<question>"` completes
+- THEN a stderr warning states that every citation is itself a filed
+  synthesis
 
 ### Requirement: Sensitivity Is The High-Water-Mark Of Cited Concepts
 
