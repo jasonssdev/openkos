@@ -52,6 +52,42 @@ classes, which prose instructions demonstrably cannot; the deterministic
 follow-up direction (post-extraction language gate on translatable titles)
 is filed from these numbers.
 
+## The #618 gate, measured (qwen3:8b, 3 runs, 2026-08-13)
+
+The probe now measures the class split and the shipped production gate
+(`concept._drop_wrong_language_titles`, chunked paths only) on the same
+emissions:
+
+- **Harmful class** = a PURE-`en` title with no verbatim support in the
+  prose, after stripping balanced `(...)` spans (#592's precedent —
+  `Model Context Protocol (MCP)` is the proper name plus its acronym, not
+  a leak). `mixed` is NOT harmful: on this fixture a mixed title is a
+  Spanish title quoting an English term, which is the model doing the
+  right thing. The first analysis counted `mixed` and unstripped
+  parentheticals as harmful and overstated the class ~2x.
+- The gate's classifier is deliberately DIFFERENT from the probe's: the
+  gate votes generic function words; the probe's marker lists are this
+  fixture's constructed ground truth. The probe measures the gate, not
+  itself.
+
+| metric | value |
+| --- | --- |
+| harmful-class rate, pre-gate | **0.15** (18 of 117 titles) |
+| harmful-class rate, post-gate | **0.08** (8 of 106 titles) |
+| gate drops across runs | 11 — every one harmful-shaped, zero false positives |
+| objects per run | 39.0 → 35.3 (no collapse) |
+
+Every dropped title carried an English function word (`Decision on …`,
+`Onboarding Procedure for …`, `… with Judge Ensemble`). **The residual 8
+are bare English noun phrases with NO function words at all** (`Knowledge
+Recovery Project Phase Two`, `Evaluation Pipeline Project`, `New Team
+Onboarding Procedure`) — invisible to function-word voting by
+construction. A bigram-adjacency check (drop a neutral multi-word title
+whose word bigrams are not all adjacent in the prose) separates them on
+these emissions but has an unresolved false-positive risk on legitimate
+dominant-language titles that also vote neutral; that residual class is
+the follow-up filed from these numbers.
+
 ## Measurement lessons (paid for four times)
 
 1. **Never run an eval client uncapped.** A bare `OllamaClient` has no

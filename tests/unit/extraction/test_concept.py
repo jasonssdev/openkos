@@ -3824,3 +3824,274 @@ def test_a_shared_initial_is_not_an_acronym_match() -> None:
 
     assert len(llm.calls) == 1
     assert outcome.report.sole_object_restates_source is False
+
+
+# --- Wrong-language title gate (#618) ---------------------------------------
+#
+# Measured mechanism (evals/language_leak/, #563): on a ~24 KB code-switched
+# Spanish transcript, 0.69 of window-level candidate titles carried English,
+# and the slug is the permanent Concept ID. A named-language prompt anchor
+# was measured and REJECTED (leak 0.69 -> 0.63, +83% latency) -- prompt
+# instructions do not carry this rule at this tier, so the gate is
+# deterministic and post-extraction, on the CHUNKED paths only (the 39 short
+# fixture documents showed zero leakage; the single-call path is untouched).
+#
+# The class distinction the gate encodes: a wrong-language title quoted
+# VERBATIM from the source prose (`Model Context Protocol`) is the subject's
+# own proper name and passes; a translatable title RENDERED in the wrong
+# language (`Recovery of Knowledge Project`) is the harmful class and drops.
+
+
+def _spanish_lines(chars: int) -> str:
+    """Deterministic Spanish prose comfortably above `chars`, line-shaped so
+    `_chunk_lines` windows it like the transcripts the leak was measured on."""
+    lines = [
+        "Ana: Revisamos el avance del proyecto y las decisiones pendientes "
+        "sobre la capa de almacenamiento con el equipo de datos.",
+        "Bruno: La migración terminó y los índices se regeneran con el "
+        "modelo nuevo; la búsqueda mejoró bastante en las pruebas.",
+        "Carla: Falta documentar el procedimiento de ingesta para el equipo "
+        "de soporte, que lo usa a diario en la operación.",
+    ]
+    blocks: list[str] = []
+    index = 0
+    while sum(len(b) + 1 for b in blocks) <= chars:
+        blocks.append(f"{lines[index % len(lines)]} (bloque {index})")
+        index += 1
+    return "\n".join(blocks)
+
+
+def test_dominant_language_detects_spanish_and_english() -> None:
+    spanish = "la decisión de el equipo sobre los datos y las pruebas en un día"
+    english = "the decision of the team about the data and the tests in a day"
+
+    assert concept_mod._dominant_language(spanish) == "es"
+    assert concept_mod._dominant_language(english) == "en"
+
+
+def test_dominant_language_is_none_when_no_side_clearly_wins() -> None:
+    """Fail-open by construction: an empty text, a neutral text, and an
+    evenly mixed text all yield `None`, and `None` disables the gate."""
+    assert concept_mod._dominant_language("") is None
+    assert concept_mod._dominant_language("MCP HTTP 2026") is None
+    assert concept_mod._dominant_language("el equipo de datos / the data team") is None
+
+
+def test_language_marker_word_lists_are_disjoint() -> None:
+    """A token in both lists would vote for both sides at once; the sets
+    must stay disjoint or the voting is incoherent."""
+    assert not concept_mod._ES_FUNCTION_WORDS & concept_mod._EN_FUNCTION_WORDS
+
+
+def test_title_language_pure_english_pure_spanish_and_neutral() -> None:
+    assert concept_mod._title_language("Recovery of Knowledge Project") == "en"
+    assert concept_mod._title_language("Procedimiento de la ingesta") == "es"
+    # Neutral (no function words at all) and mixed both decline to vote.
+    assert concept_mod._title_language("Model Context Protocol") is None
+    assert concept_mod._title_language("Guía de setup and usage") is None
+
+
+def _es_item(title: str) -> str:
+    return (
+        f'{{"type": "Concept", "title": "{title}", '
+        '"description": "Un objeto derivado.", "body": ""}'
+    )
+
+
+def test_gate_drops_a_pure_wrong_language_non_verbatim_title() -> None:
+    """The harmful class exactly: a translatable title rendered in English
+    on a Spanish document, with no verbatim support in the prose."""
+    source = _spanish_lines(500)
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Recovery of Knowledge Project",
+            description="d",
+            body="",
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept", title="Procedimiento de ingesta", description="d", body=""
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == ["Procedimiento de ingesta"]
+    assert dropped == ("Recovery of Knowledge Project",)
+
+
+def test_gate_keeps_a_verbatim_quoted_wrong_language_title() -> None:
+    """`Model Context Protocol`-shaped: the subject's own proper name,
+    quoted from the prose -- wrong-language by voting, but verbatim in the
+    source, so it passes untouched (case-insensitively)."""
+    source = _spanish_lines(500) + "\nAna: El model context protocol ya funciona."
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Model Context Protocol",
+            description="d",
+            body="",
+        ),
+        # Same voting class (pure `en` title) but nowhere in the prose.
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Decision on the Storage",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == ["Model Context Protocol"]
+    assert dropped == ("Decision on the Storage",)
+
+
+def test_gate_keeps_neutral_and_mixed_titles() -> None:
+    """A title with no function words (acronyms, proper nouns) carries no
+    language; a mixed title is a dominant-language title quoting a term.
+    Both pass -- the gate drops only the PURELY wrong-language class."""
+    source = _spanish_lines(500)
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept", title="MCP", description="d", body=""
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Guía de setup and usage",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == ["MCP", "Guía de setup and usage"]
+    assert dropped == ()
+
+
+def test_gate_fails_open_when_the_source_has_no_dominant_language() -> None:
+    """No dominant language, no gate: a heavily code-switched document the
+    voter cannot call is left alone rather than guessed at."""
+    source = "el equipo de datos / the data team"
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Recovery of Knowledge Project",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == ["Recovery of Knowledge Project"]
+    assert dropped == ()
+
+
+def test_gate_keeps_everything_when_it_would_drop_everything() -> None:
+    """The floor: a gate that empties the extraction result silently
+    deletes real content behind a classifier's opinion -- same philosophy
+    as `_drop_source_title_twins`' floor. All-drop means the voter is
+    probably wrong about this document; keep the set untouched."""
+    source = _spanish_lines(500)
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Recovery of Knowledge Project",
+            description="d",
+            body="",
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Decision on the Storage",
+            description="d",
+            body="",
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert kept == results
+    assert dropped == ()
+
+
+def test_chunked_extraction_drops_wrong_language_titles_and_reports() -> None:
+    """End to end on the chunked `extract_concept` path: a window emitting
+    the harmful class loses that title, the report names it, and the
+    dominant-language objects survive."""
+    text = _spanish_lines(19_000)
+    assert len(text) > concept_mod._CHUNK_THRESHOLD
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = _array(_es_item("Procedimiento de ingesta"))
+    replies[1] = _array(_es_item("Recovery of Knowledge Project"))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept(text, source_title="Notas", llm=llm)
+
+    assert [r.title for r in outcome.objects] == ["Procedimiento de ingesta"]
+    assert outcome.report.wrong_language_dropped_titles == (
+        "Recovery of Knowledge Project",
+    )
+
+
+def test_single_call_path_never_runs_the_language_gate() -> None:
+    """Below `_CHUNK_THRESHOLD` the gate does not exist: the 39 short
+    fixture documents showed ZERO leakage in either direction (#563), so
+    gating them would risk false drops on a path with no measured defect."""
+    text = _spanish_lines(2_000)
+    assert len(text) <= concept_mod._CHUNK_THRESHOLD
+    llm = _FakeLLM(reply=_array(_es_item("Recovery of Knowledge Project")))
+
+    outcome = concept_mod.extract_concept(text, source_title="Notas", llm=llm)
+
+    assert [r.title for r in outcome.objects] == ["Recovery of Knowledge Project"]
+    assert outcome.report.wrong_language_dropped_titles == ()
+
+
+def test_union_chunked_path_drops_wrong_language_titles_and_reports() -> None:
+    """The union path's chunked branch applies the same gate at the same
+    point (#581's symmetric-filters precedent), before the judge sees the
+    candidate list."""
+    text = _spanish_lines(19_000)
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = _array(_es_item("Procedimiento de ingesta"))
+    replies[1] = _array(_es_item("Decision on the Storage"))
+    # The judge call follows the window calls; keep everything it is shown.
+    replies.append('{"keep": ["Procedimiento de ingesta"]}')
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept_union(text, source_title="Notas", llm=llm)
+
+    assert [r.title for r in outcome.objects] == ["Procedimiento de ingesta"]
+    assert outcome.report.wrong_language_dropped_titles == ("Decision on the Storage",)
+
+
+def test_gate_verbatim_check_ignores_parenthesized_acronym_suffixes() -> None:
+    """`Model Context Protocol (MCP)` is the proper name plus its acronym --
+    the `(...)` span breaks a raw substring match against prose that names
+    the protocol without it, and dropping the title for that would delete a
+    correct proper name (#592's balanced-span precedent, applied to the
+    verbatim check)."""
+    source = _spanish_lines(500) + "\nAna: El model context protocol ya funciona."
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Model Context Protocol (MCP)",
+            description="d",
+            body="",
+        ),
+        concept_mod.ExtractionResult(
+            type="Concept", title="Procedimiento de ingesta", description="d", body=""
+        ),
+    ]
+
+    kept, dropped = concept_mod._drop_wrong_language_titles(results, source_text=source)
+
+    assert [r.title for r in kept] == [
+        "Model Context Protocol (MCP)",
+        "Procedimiento de ingesta",
+    ]
+    assert dropped == ()
