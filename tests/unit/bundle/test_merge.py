@@ -555,3 +555,137 @@ def test_plan_unmerge_provenance_rewrites_round_trip() -> None:
     )
 
     assert unmerge_plan.provenance_rewrites == [provenance_rewrite]
+
+
+# --- unwind ergonomics (issue #562) ----------------------------------------
+
+
+def _chained_entries(*absorbed_ids: str) -> list[okf.MergeLedgerEntry]:
+    """Chain `plan_merge` once per absorbed id onto ONE survivor
+    (`concepts/survivor`), threading `merged_survivor`/`ledger_entries`
+    forward, and return the accumulated LIFO ledger (oldest first) -- the
+    exact `entries` shape `bundle.ledger.read_entries` would hand the CLI."""
+    survivor_text = _survivor_text()
+    entries: list[okf.MergeLedgerEntry] = []
+    for n, absorbed_id in enumerate(absorbed_ids):
+        plan = bundle_merge.plan_merge(
+            survivor_id="concepts/survivor",
+            absorbed_id=absorbed_id,
+            survivor_text=survivor_text,
+            absorbed_text=_absorbed_text(title=f"Absorbed {n}"),
+            index_text=_INDEX_TEXT,
+            log_text=_LOG_TEXT,
+            merged_at=f"2026-07-{18 + n:02d}T00:00:00Z",
+            existing_entries=entries,
+        )
+        survivor_text = plan.merged_survivor
+        entries = plan.ledger_entries
+    return entries
+
+
+def test_plan_unmerge_non_tail_error_lists_the_full_unwind_sequence() -> None:
+    """Issue #562: a non-tail `absorbed_id` that IS present in the ledger
+    refuses with the FULL LIFO unwind sequence -- every id from the tail
+    down to and including the requested one, in execution order -- and
+    names `--to` as the one-command alternative."""
+    entries = _chained_entries(
+        "concepts/absorbed-a", "concepts/absorbed-b", "concepts/absorbed-c"
+    )
+
+    with pytest.raises(ValueError, match="LIFO tail") as excinfo:
+        bundle_merge.plan_unmerge(
+            survivor_id="concepts/survivor",
+            absorbed_id="concepts/absorbed-a",
+            entries=entries,
+        )
+
+    message = str(excinfo.value)
+    assert "LIFO tail" in message
+    assert (
+        "'concepts/absorbed-c', 'concepts/absorbed-b', 'concepts/absorbed-a'"
+        in message
+    )
+    assert "openkos unmerge concepts/survivor --to concepts/absorbed-a" in message
+
+
+def test_plan_unmerge_unknown_absorbed_id_refuses_without_an_unwind_hint() -> None:
+    """An `absorbed_id` present NOWHERE in the ledger keeps a plain
+    "not merged into this survivor" refusal -- no unwind sequence, no
+    `--to` hint, since there is nothing to unwind to (issue #562)."""
+    entries = _chained_entries("concepts/absorbed-a")
+
+    with pytest.raises(ValueError, match="never merged into") as excinfo:
+        bundle_merge.plan_unmerge(
+            survivor_id="concepts/survivor",
+            absorbed_id="concepts/never-merged",
+            entries=entries,
+        )
+
+    message = str(excinfo.value)
+    assert "concepts/never-merged" in message
+    assert "merged into" in message
+    assert "--to" not in message
+
+
+def test_plan_unwind_sequence_returns_tail_to_target_in_execution_order() -> None:
+    """`plan_unwind_sequence` returns the tail-to-target slice, tail FIRST
+    (execution order), down to and INCLUDING the entry whose `absorbed_id`
+    equals the target (issue #562)."""
+    entries = _chained_entries(
+        "concepts/absorbed-a", "concepts/absorbed-b", "concepts/absorbed-c"
+    )
+
+    sequence = bundle_merge.plan_unwind_sequence(
+        survivor_id="concepts/survivor",
+        to_absorbed_id="concepts/absorbed-b",
+        entries=entries,
+    )
+
+    assert [entry.absorbed_id for entry in sequence] == [
+        "concepts/absorbed-c",
+        "concepts/absorbed-b",
+    ]
+    assert sequence[0] is entries[2]
+    assert sequence[1] is entries[1]
+
+
+def test_plan_unwind_sequence_to_the_tail_is_a_single_step() -> None:
+    """`--to <tail-id>` degenerates to the classic single-entry unmerge."""
+    entries = _chained_entries("concepts/absorbed-a", "concepts/absorbed-b")
+
+    sequence = bundle_merge.plan_unwind_sequence(
+        survivor_id="concepts/survivor",
+        to_absorbed_id="concepts/absorbed-b",
+        entries=entries,
+    )
+
+    assert sequence == [entries[-1]]
+
+
+def test_plan_unwind_sequence_unknown_target_raises_value_error() -> None:
+    entries = _chained_entries("concepts/absorbed-a")
+
+    with pytest.raises(ValueError, match="never-merged"):
+        bundle_merge.plan_unwind_sequence(
+            survivor_id="concepts/survivor",
+            to_absorbed_id="concepts/never-merged",
+            entries=entries,
+        )
+
+
+def test_plan_unwind_sequence_empty_entries_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="no merged_from entries"):
+        bundle_merge.plan_unwind_sequence(
+            survivor_id="concepts/survivor",
+            to_absorbed_id="concepts/absorbed-a",
+            entries=[],
+        )
+
+
+def test_plan_unwind_sequence_rejects_same_or_blank_ids() -> None:
+    with pytest.raises(ValueError, match="distinct"):
+        bundle_merge.plan_unwind_sequence(
+            survivor_id="concepts/same",
+            to_absorbed_id="concepts/same",
+            entries=[],
+        )

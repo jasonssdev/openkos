@@ -662,3 +662,109 @@ def test_bundle_wide_max_entries_counts_unmigrated_and_migrated_together(
         encoding="utf-8",
     )
     assert ledger.bundle_wide_max_entries(bundle_dir) == 2
+
+
+# --- find_absorber (issue #562) --------------------------------------------
+
+
+def test_find_absorber_returns_the_survivor_whose_ledger_absorbed_the_id(
+    tmp_path: Path,
+) -> None:
+    """Reverse lookup across every committed sidecar (issue #562): the
+    chained-merge case -- `concepts/mid` absorbed `concepts/leaf`, then
+    `concepts/top` absorbed `concepts/mid` -- must resolve `concepts/mid`'s
+    absorber to `concepts/top`, because an absorbed ex-survivor's OWN
+    sidecar survives its absorption on disk."""
+    bundle_dir = tmp_path / "bundle"
+    _write_ledger(bundle_dir, "concepts/mid", [_make_entry("concepts/leaf")])
+    _write_ledger(bundle_dir, "concepts/top", [_make_entry("concepts/mid")])
+
+    assert ledger.find_absorber("concepts/mid", bundle_dir) == "concepts/top"
+    assert ledger.find_absorber("concepts/leaf", bundle_dir) == "concepts/mid"
+
+
+def test_find_absorber_returns_none_when_no_ledger_mentions_the_id(
+    tmp_path: Path,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    _write_ledger(bundle_dir, "concepts/survivor", [_make_entry("concepts/absorbed")])
+
+    assert ledger.find_absorber("concepts/unrelated", bundle_dir) is None
+
+
+def test_find_absorber_returns_none_without_a_ledger_root(tmp_path: Path) -> None:
+    """A bundle where no merge has ever run has no ledger root at all --
+    `None`, never a raised error (mirrors `iter_ledgers`)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+
+    assert ledger.find_absorber("concepts/anything", bundle_dir) is None
+
+
+def test_find_absorber_skips_a_sidecar_with_a_malformed_survivor_id(
+    tmp_path: Path,
+) -> None:
+    """A sidecar whose `survivor_id` is missing or non-string is skipped
+    defensively (mirrors `bundle_wide_max_entries`' posture), never raised
+    over and never returned as an absorber."""
+    bundle_dir = tmp_path / "bundle"
+    malformed = ledger.ledger_path_for("concepts/broken", bundle_dir)
+    malformed.parent.mkdir(parents=True, exist_ok=True)
+    malformed.write_text(
+        okf.dump_frontmatter(
+            {
+                "schema": ledger.LEDGER_SIDECAR_SCHEMA,
+                "merged_from": okf.encode_merged_from(
+                    [_make_entry("concepts/absorbed")]
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert ledger.find_absorber("concepts/absorbed", bundle_dir) is None
+
+
+def test_find_absorber_skips_a_sidecar_whose_entries_fail_to_decode(
+    tmp_path: Path,
+) -> None:
+    """A sidecar whose `merged_from` entries fail to decode (here: an
+    unsupported entry schema version, the exact fail-closed `ValueError`
+    `okf.decode_merge_ledger_entry` raises) is skipped defensively -- the
+    breadcrumb lookup must keep walking and still resolve an absorber from
+    a HEALTHY sidecar, never let one broken unrelated ledger break the
+    lookup for a different survivor (review finding, issue #562)."""
+    bundle_dir = tmp_path / "bundle"
+    undecodable = ledger.ledger_path_for("concepts/broken", bundle_dir)
+    undecodable.parent.mkdir(parents=True, exist_ok=True)
+    undecodable.write_text(
+        okf.dump_frontmatter(
+            {
+                "schema": ledger.LEDGER_SIDECAR_SCHEMA,
+                "survivor_id": "concepts/broken",
+                "merged_from": [{"schema": "openkos.merge_ledger/v99"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_ledger(bundle_dir, "concepts/top", [_make_entry("concepts/mid")])
+
+    assert ledger.find_absorber("concepts/mid", bundle_dir) == "concepts/top"
+    assert ledger.find_absorber("concepts/never-absorbed", bundle_dir) is None
+
+
+def test_find_absorber_skips_a_sidecar_with_unparseable_frontmatter(
+    tmp_path: Path,
+) -> None:
+    """A sidecar whose frontmatter is not even valid YAML raises
+    `yaml.YAMLError` from `okf.load_frontmatter` -- neither `OSError` nor
+    `ValueError` -- so without a defensive skip it would escape as a raw
+    traceback. The lookup must skip it and keep walking (review finding,
+    issue #562)."""
+    bundle_dir = tmp_path / "bundle"
+    garbled = ledger.ledger_path_for("concepts/garbled", bundle_dir)
+    garbled.parent.mkdir(parents=True, exist_ok=True)
+    garbled.write_text("---\nsurvivor_id: [unclosed\n---\n", encoding="utf-8")
+    _write_ledger(bundle_dir, "concepts/top", [_make_entry("concepts/mid")])
+
+    assert ledger.find_absorber("concepts/mid", bundle_dir) == "concepts/top"

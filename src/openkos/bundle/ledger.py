@@ -124,6 +124,50 @@ def iter_ledgers(bundle_dir: Path) -> list[Path]:
     return sorted(root.rglob(f"*{LEDGER_SUFFIX}"))
 
 
+def find_absorber(concept_id: str, bundle_dir: Path) -> str | None:
+    """Reverse lookup across every committed sidecar under `bundle_dir`:
+    the `survivor_id` whose ledger carries an entry with `absorbed_id ==
+    concept_id`, or `None` if no ledger records absorbing it (issue #562).
+
+    Exists because an absorbed ex-survivor's OWN sidecar deliberately
+    SURVIVES its absorption on disk (the merge deletes only the concept
+    `.md` file, never the sidecar), so a chained merge -- `mid` absorbed
+    `leaf`, then `top` absorbed `mid` -- leaves `mid`'s ledger fully
+    recoverable but its concept file gone. `unmerge`'s "concept does not
+    exist" refusal uses this lookup to name WHO absorbed the requested
+    survivor and the exact command to run first, instead of a dead end.
+
+    Read-only and pure over on-disk state: walks `iter_ledgers` (the ONE
+    shared INCLUDE-walk primitive), so a missing ledger root returns
+    `None`. Any sidecar this walk cannot use is skipped defensively --
+    never raised over, never returned as an absorber: a missing or
+    non-string `survivor_id` (mirroring `bundle_wide_max_entries`'
+    posture), and equally one that is unreadable (`OSError`), carries
+    unparseable frontmatter (`yaml.YAMLError` out of
+    `okf.load_frontmatter`, which is neither `OSError` nor `ValueError`),
+    or whose entries fail to decode (the fail-closed `ValueError`
+    `okf.decode_merge_ledger_entry` raises on an unsupported schema
+    version). This lookup only decorates an already-refusing error path
+    with a breadcrumb, so one broken unrelated ledger anywhere in the
+    bundle must never replace that refusal's message -- let alone escape
+    as a raw traceback (review finding, issue #562); `doctor` is where a
+    broken sidecar gets diagnosed, not here."""
+    for ledger_path in iter_ledgers(bundle_dir):
+        try:
+            metadata, _ = okf.load_frontmatter(
+                ledger_path.read_text(encoding="utf-8")
+            )
+            survivor_id = metadata.get("survivor_id")
+            if not isinstance(survivor_id, str) or not survivor_id:
+                continue
+            entries = okf.decode_merged_from(metadata)
+        except Exception:  # noqa: S112 -- defensive skip, see docstring
+            continue
+        if any(entry.absorbed_id == concept_id for entry in entries):
+            return survivor_id
+    return None
+
+
 def _encode_container(
     survivor_id: str, entries: list[okf.MergeLedgerEntry]
 ) -> dict[str, object]:

@@ -291,6 +291,25 @@ non-requirement, not an oversight.
 frontmatter; the parity and precedence contract is unchanged, only the
 entry's storage location and removal target moved to the sidecar.)
 
+Unwind ergonomics (#562): a non-tail `absorbed-id` that IS recorded deeper
+in the ledger MUST refuse with the full LIFO unwind sequence — every id
+from the tail down to and including the request, in execution order — and
+name `--to` as the one-command alternative; an id recorded nowhere keeps a
+plain not-merged refusal. `unmerge <survivor-id> --to <absorbed-id>`
+unwinds the ledger tail-first, one complete single-step unmerge per entry
+(Phase A recomputed from current disk state each step, every fail-closed
+drift/collision check included, per-step audit line and sidecar pop
+included), down to AND INCLUDING the entry that absorbed the target,
+behind ONE whole-plan preview and ONE confirm gate (same precedence as the
+two-arg form); the positional `absorbed-id` and `--to` are mutually
+exclusive, and supplying both or neither refuses cleanly. A mid-chain
+failure stops immediately, reports the failed step and that earlier steps
+completed, and never rolls completed steps back — each intermediate state
+is a consistent bundle. A `survivor-id` whose concept file does not exist
+but which some OTHER survivor's ledger records absorbing MUST be refused
+with an error naming that absorber and the exact unmerge command to run
+first (an absorbed ex-survivor's own sidecar survives its absorption).
+
 #### Scenario: Merge then unmerge restores the pre-merge bundle byte-for-byte
 - GIVEN a merge including a rewritten inbound link
 - WHEN `unmerge <survivor> <absorbed>` is confirmed
@@ -315,12 +334,45 @@ entry's storage location and removal target moved to the sidecar.)
 #### Scenario: Absorbed-id is not the LIFO tail
 - GIVEN a survivor whose latest sidecar entry absorbed a different id
 - WHEN `unmerge <survivor> <absorbed>` names a non-tail absorbed-id
-- THEN it exits non-zero with a clean error and writes nothing
+- THEN it exits non-zero with a clean error and writes nothing; when the
+  absorbed-id is recorded deeper in the ledger, the error lists the full
+  LIFO unwind sequence in execution order and names `--to` as the
+  one-command alternative
 
 #### Scenario: Unmerge of a non-merged pair
 - GIVEN no sidecar entry for that absorbed-id
 - WHEN `unmerge` runs
 - THEN it exits non-zero and writes nothing
+
+#### Scenario: A missing survivor names its absorber
+- GIVEN a chained merge — `mid` absorbed `leaf`, then `top` absorbed `mid`
+- WHEN `unmerge mid leaf` runs
+- THEN it exits non-zero, writes nothing, and the "does not exist" error
+  names `top` as the absorber plus the exact `openkos unmerge top mid`
+  command to run first
+
+#### Scenario: --to unwinds the ledger to the target behind one confirm gate
+- GIVEN a survivor whose sidecar records multiple merges
+- WHEN `unmerge <survivor> --to <buried-absorbed-id>` is confirmed once
+- THEN every entry from the tail down to and including the target is
+  reversed as its own complete single-step unmerge, in LIFO order, with
+  the full per-step plan previewed before the single gate and no per-step
+  prompt; `--to` naming the tail itself behaves exactly like the two-arg
+  form
+
+#### Scenario: --to with an unknown target refuses
+- GIVEN a survivor whose ledger records no entry for the target id, or no
+  ledger at all
+- WHEN `unmerge <survivor> --to <target>` runs
+- THEN it exits non-zero and writes nothing
+
+#### Scenario: A mid-chain --to failure stops without rolling back
+- GIVEN a `--to` unwind whose step N fails Phase A or Phase B
+- WHEN the failure occurs
+- THEN the chain stops immediately with exit non-zero, the report names
+  the failed step and that steps 1..N-1 completed, and completed steps are
+  NOT rolled back — each intermediate state is a consistent,
+  git-recoverable bundle
 
 ### Requirement: Reversible Typed-Relation Rewiring
 

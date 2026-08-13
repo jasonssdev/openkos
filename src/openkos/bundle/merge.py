@@ -199,10 +199,19 @@ def plan_unmerge(
     `absorbed_id` MUST equal the tail entry's `absorbed_id`, else this
     raises `ValueError` with no write -- reversing a non-tail entry is
     unsafe due to nested snapshots/overlapping rewrites (scenario:
-    Absorbed-id is not the LIFO tail). An empty `entries` list (nothing to
-    unmerge for this pair) also raises `ValueError` (scenario: Unmerge of a
-    non-merged pair). `remaining_entries` is `entries` with the tail
-    popped -- the sidecar's new content once a later unit writes it.
+    Absorbed-id is not the LIFO tail). That refusal is not a dead end
+    (issue #562): when `absorbed_id` IS present deeper in `entries`, the
+    error lists the FULL LIFO unwind sequence -- every id from the tail
+    down to and including the requested one, in execution order (the exact
+    slice `plan_unwind_sequence` computes) -- and names
+    `openkos unmerge <survivor> --to <absorbed>` as the one-command
+    alternative. An `absorbed_id` present nowhere in `entries` keeps a
+    plain "was never merged into this survivor" refusal, with no unwind
+    hint, since there is nothing to unwind to. An empty `entries` list
+    (nothing to unmerge for this pair) also raises `ValueError` (scenario:
+    Unmerge of a non-merged pair). `remaining_entries` is `entries` with
+    the tail popped -- the sidecar's new content once a later unit writes
+    it.
     """
     _reject_same_or_blank(survivor_id, absorbed_id)
 
@@ -211,9 +220,26 @@ def plan_unmerge(
 
     tail = entries[-1]
     if tail.absorbed_id != absorbed_id:
+        recorded_ids = [entry.absorbed_id for entry in entries]
+        if absorbed_id not in recorded_ids:
+            raise ValueError(
+                f"{absorbed_id!r} was never merged into {survivor_id!r} -- no "
+                f"matching entry in its merged_from ledger (tail is "
+                f"{tail.absorbed_id!r}); unmerge refused"
+            )
+        # `_reject_already_merged` keeps absorbed ids unique while their
+        # entries coexist, so the LAST (nearest-to-tail) occurrence is THE
+        # occurrence; `rindex` stays correct even against a hand-authored
+        # ledger carrying duplicates by choosing the shortest unwind.
+        target_index = len(recorded_ids) - 1 - recorded_ids[::-1].index(absorbed_id)
+        sequence = ", ".join(
+            repr(entry.absorbed_id) for entry in reversed(entries[target_index:])
+        )
         raise ValueError(
             f"{absorbed_id!r} is not the LIFO tail of {survivor_id!r}'s merged_from "
-            f"ledger (tail is {tail.absorbed_id!r}); unmerge refused"
+            f"ledger; unwinding to it requires reversing, in order: {sequence}. "
+            f"Run `openkos unmerge {survivor_id} --to {absorbed_id}` to do this in "
+            f"one command, or unmerge each pair in that order"
         )
 
     return UnmergePlan(
@@ -226,4 +252,49 @@ def plan_unmerge(
         provenance_rewrites=list(tail.provenance_rewrites),
         entry=tail,
         remaining_entries=list(entries[:-1]),
+    )
+
+
+def plan_unwind_sequence(
+    *,
+    survivor_id: str,
+    to_absorbed_id: str,
+    entries: list[okf.MergeLedgerEntry],
+) -> list[okf.MergeLedgerEntry]:
+    """Pure planning for `unmerge <survivor> --to <absorbed-id>` (issue
+    #562): the tail-to-target slice of `entries`, returned in EXECUTION
+    order -- tail (newest merge) first, down to AND INCLUDING the entry
+    whose `absorbed_id` equals `to_absorbed_id`.
+
+    This computes only the ORDER of single-step unmerges; it deliberately
+    composes nothing in memory. The CLI's `--to` loop re-runs the full
+    single-step machinery per returned entry (Phase A recomputed from
+    CURRENT disk state each time, fail-closed drift/collision checks
+    included), because every intermediate state after a completed
+    single-step unmerge is a consistent bundle -- so `plan_unmerge`'s
+    LIFO-tail safety argument (nested snapshots/overlapping rewrites)
+    holds unchanged at every step.
+
+    Raises `ValueError`, with no write anywhere, on an empty `entries`
+    list (nothing to unwind -- mirrors `plan_unmerge`'s "no merged_from
+    entries" refusal) or a `to_absorbed_id` present nowhere in `entries`
+    (same "was never merged into this survivor" shape `plan_unmerge`
+    raises for an unknown id). Same/blank ids are rejected by the shared
+    `_reject_same_or_blank` guard `plan_merge`/`plan_unmerge` use. Against
+    a hand-authored ledger carrying duplicate absorbed ids (impossible via
+    `plan_merge`, whose `_reject_already_merged` keeps coexisting ids
+    unique), the LAST (nearest-to-tail) occurrence wins -- the shortest
+    unwind, matching `plan_unmerge`'s non-tail error."""
+    _reject_same_or_blank(survivor_id, to_absorbed_id)
+
+    if not entries:
+        raise ValueError(f"{survivor_id!r} has no merged_from entries to unmerge")
+
+    for index in range(len(entries) - 1, -1, -1):
+        if entries[index].absorbed_id == to_absorbed_id:
+            return list(reversed(entries[index:]))
+
+    raise ValueError(
+        f"{to_absorbed_id!r} was never merged into {survivor_id!r} -- no matching "
+        f"entry in its merged_from ledger; unmerge refused"
     )
