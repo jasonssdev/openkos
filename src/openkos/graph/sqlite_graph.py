@@ -272,6 +272,12 @@ class CandidateReport:
     produced: int = 0
     retained: int = 0
     pairs: tuple[tuple[str, str], ...] = ()
+    offset: int = 0
+    """How many ranked pairs the build SKIPPED before its retained window
+    (#567 paging): the inserted slice is `pairs[offset : offset + retained]`,
+    so the pre-#567 `pairs[:retained]` invariant is the `offset == 0`
+    special case. Defaults to `0` so every existing constructor and the
+    `candidates=None` build are untouched."""
 
 
 class SqliteGraphStore:
@@ -356,6 +362,7 @@ def _populate_graph_tables(
     bundle_dir: Path,
     *,
     candidates: CandidateSource | None = None,
+    candidate_offset: int = 0,
 ) -> tuple[list[str], CandidateReport]:
     """Shared node/edge-population core (D-refactor, dedupes the in-memory/
     on-disk writer paths): creates the `nodes`/`edges` tables + indexes on
@@ -525,10 +532,19 @@ def _populate_graph_tables(
         # projection's byte identity (insertion order) matches the
         # pre-slice-2 build for any under-cap bundle.
         ranked = sorted(best, key=lambda pair_key: (best[pair_key], pair_key))
-        retained_keys = ranked[:_MAX_CANDIDATE_EDGES]
+        # #567 paging: the window slides by `candidate_offset` ranked pairs;
+        # the default 0 reproduces the pre-#567 `[:cap]` slice exactly. An
+        # offset at or past the set retains nothing -- honest emptiness,
+        # never a wrap-around.
+        retained_keys = ranked[
+            candidate_offset : candidate_offset + _MAX_CANDIDATE_EDGES
+        ]
         retained = sorted(retained_keys)
         candidate_report = CandidateReport(
-            produced=len(best), retained=len(retained_keys), pairs=tuple(ranked)
+            produced=len(best),
+            retained=len(retained_keys),
+            pairs=tuple(ranked),
+            offset=candidate_offset,
         )
         for source_id, target_id in retained:
             conn.execute(_INSERT_EDGE_SQL, (source_id, target_id, None))
@@ -537,7 +553,10 @@ def _populate_graph_tables(
 
 
 def build_graph(
-    bundle_dir: Path, *, candidates: CandidateSource | None = None
+    bundle_dir: Path,
+    *,
+    candidates: CandidateSource | None = None,
+    candidate_offset: int = 0,
 ) -> SqliteGraphStore:
     """Build an in-memory node-edge projection over every eligible doc under
     `bundle_dir`.
@@ -554,7 +573,7 @@ def build_graph(
     conn = sqlite3.connect(":memory:")
     try:
         skipped, candidate_report = _populate_graph_tables(
-            conn, bundle_dir, candidates=candidates
+            conn, bundle_dir, candidates=candidates, candidate_offset=candidate_offset
         )
     except BaseException:
         conn.close()

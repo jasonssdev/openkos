@@ -82,6 +82,7 @@ from openkos.resolution.contradiction import (
     contradiction_truncation_notice,
     find_contradictions,
     is_high_confidence_contradiction,
+    is_high_confidence_finding,
     plan_candidates,
     vacuous_coverage_notice,
 )
@@ -90,6 +91,7 @@ from openkos.resolution.edge_typing import (
     EdgeSuggestionBatch,
     candidate_edges,
     candidate_truncation_notice,
+    next_candidate_offset,
     suggest_edge_types,
 )
 from openkos.resolution.volatility_typing import (
@@ -4842,20 +4844,40 @@ def forget(
     typer.echo(f"  ~ {log_path.name} (new dated entry)")
     for member in purge_ids:
         typer.echo(f"  - bundle/{member}.md")
+    # #567: aggregate per (member, referrer, kind, relation type) -- a
+    # referrer linking the target 24 times is ONE line with a count, not 24
+    # identical lines. Insertion order preserves the first-seen order the
+    # per-reference loop printed in, and a count of 1 keeps the exact
+    # singular wording this preview always had.
+    aggregated_refs: dict[tuple[str, str, str, str | None], int] = {}
     for member, ref in all_refs:
-        if ref.kind == "link":
-            line = f"  ! bundle/{ref.referrer_id}.md (inbound link)"
-        elif ref.kind == "relation":
-            line = (
-                f"  ! bundle/{ref.referrer_id}.md "
-                f"(inbound relation: {ref.relation_type})"
+        key = (
+            member,
+            ref.referrer_id,
+            ref.kind,
+            ref.relation_type if ref.kind == "relation" else None,
+        )
+        aggregated_refs[key] = aggregated_refs.get(key, 0) + 1
+    for (member, referrer_id, kind, relation_type), count in aggregated_refs.items():
+        if kind == "link":
+            detail = "inbound link" if count == 1 else f"{count} inbound links"
+            line = f"  ! bundle/{referrer_id}.md ({detail})"
+        elif kind == "relation":
+            detail = (
+                f"inbound relation: {relation_type}"
+                if count == 1
+                else f"{count} inbound relations: {relation_type}"
             )
+            line = f"  ! bundle/{referrer_id}.md ({detail})"
         else:
-            line = (
-                f"  ? bundle/{ref.referrer_id}.md "
-                f"(unverifiable: could not parse; may reference {member})"
+            detail = (
+                "unverifiable" if count == 1 else f"{count} unverifiable references"
             )
-        if scope == "source" and ref.kind != "unverifiable":
+            line = (
+                f"  ? bundle/{referrer_id}.md "
+                f"({detail}: could not parse; may reference {member})"
+            )
+        if scope == "source" and kind != "unverifiable":
             line += f" -> {member}"
         typer.echo(line)
     for member, target in resurrection_pairs:
@@ -8851,12 +8873,12 @@ def _reconciliation_state_description(
     rich_help_panel="Curate",
 )
 def reconcile(
-    id_a: str = typer.Argument(
-        ...,
+    id_a: str | None = typer.Argument(
+        None,
         help="Bundle-relative concept id (path minus '.md') of one concept in the pair.",
     ),
-    id_b: str = typer.Argument(
-        ...,
+    id_b: str | None = typer.Argument(
+        None,
         help="Bundle-relative concept id (path minus '.md') of the other concept in the pair.",
     ),
     winner: str | None = typer.Option(
@@ -8871,6 +8893,14 @@ def reconcile(
         False,
         "--auto",
         help="Skip the confirmation prompt and write immediately (unattended).",
+    ),
+    from_findings: bool = typer.Option(
+        False,
+        "--from-findings",
+        help="Walk the persisted open contradiction findings with a per-item "
+        "[y/N] consent prompt, writing each accepted pair's symmetric "
+        "reconciliation through the same write path -- no ids to transcribe "
+        "(#567).",
     ),
 ) -> None:
     """Record a human's resolution of a contradiction between two concepts:
@@ -8986,6 +9016,34 @@ def reconcile(
             )
             raise typer.Exit(code=1)
 
+        # #567: `--from-findings` is a whole mode, never a modifier. Explicit
+        # ids, `--winner`, and `--auto` all belong to the two-id form -- a
+        # directional resolution needs a human to NAME the winner, and the
+        # batch walk's consent is per item by design, so there is no bulk
+        # path to skip a prompt on.
+        if from_findings:
+            if id_a is not None or id_b is not None or winner is not None or auto:
+                raise ValueError(
+                    "--from-findings takes no concept ids, no --winner, and "
+                    "no --auto; use the two-id form for a directional or "
+                    "unattended reconciliation"
+                )
+        elif id_a is None or id_b is None:
+            raise ValueError(
+                "two concept ids are required (or pass --from-findings to "
+                "walk the persisted open findings)"
+            )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"openkos reconcile: refusing to reconcile -- {exc}.", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if from_findings:
+        _run_reconcile_from_findings(root, layout, log_path)
+        return
+    if id_a is None or id_b is None:  # pragma: no cover -- gate above refused
+        raise typer.Exit(code=1)
+
+    try:
         path_a, canonical_a = _resolve_concept_path(layout.bundle_dir, id_a)
         path_b, canonical_b = _resolve_concept_path(layout.bundle_dir, id_b)
         if canonical_a == canonical_b:
@@ -9027,12 +9085,59 @@ def reconcile(
         typer.echo(f"openkos reconcile: refusing to reconcile -- {exc}.", err=True)
         raise typer.Exit(code=1) from exc
 
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos reconcile: failed while preparing the reconcile -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    _reconcile_pair(
+        root,
+        layout,
+        log_path,
+        cfg,
+        path_a,
+        canonical_a,
+        path_b,
+        canonical_b,
+        winner_canonical,
+        loser_canonical,
+        auto=auto,
+    )
+
+
+def _reconcile_pair(
+    root: Path,
+    layout: config.WorkspaceLayout,
+    log_path: Path,
+    cfg: config.Config,
+    path_a: Path,
+    canonical_a: str,
+    path_b: Path,
+    canonical_b: str,
+    winner_canonical: str | None,
+    loser_canonical: str | None,
+    *,
+    auto: bool,
+    announce_preview: bool = True,
+) -> None:
+    """One pair's complete reconcile transaction -- Phase A in-memory build,
+    conflict gate, preview, confirm gate, drift re-validation, Phase B
+    additive writes, and autocommit -- extracted verbatim from the two-id
+    command body so `--from-findings` (#567) walks the SAME write path
+    instead of a second implementation. `announce_preview=False` suppresses
+    only the 'proposed changes' preview (the batch walk collects consent
+    from the finding context before calling); every gate below still runs.
+    Raises `typer.Exit` exactly as the two-id form always did: exit 1 for a
+    prepare/conflict/write failure, exit 3 for post-consent target drift."""
     now = datetime.now(UTC)
     today = now.astimezone().date()
     date_str = today.isoformat()
 
     try:
-        cfg = config.read_config(root)
         # One `_snapshot_read` observation per target: the decoded text
         # feeds the parsers below, the raw bytes feed
         # `_reject_drifted_targets` (issues #306, #313, #318).
@@ -9156,18 +9261,19 @@ def reconcile(
         )
         raise typer.Exit(code=1) from exc
 
-    typer.echo("openkos reconcile: proposed changes:")
-    typer.echo(
-        f"  ~ bundle/{canonical_a}.md (relation "
-        f"{'added' if edge_added_a else 'unchanged'}; note "
-        f"{'appended' if note_added_a else 'already present'})"
-    )
-    typer.echo(
-        f"  ~ bundle/{canonical_b}.md (relation "
-        f"{'added' if edge_added_b else 'unchanged'}; note "
-        f"{'appended' if note_added_b else 'already present'})"
-    )
-    typer.echo(f"  ~ {log_path.name} (new dated entry)")
+    if announce_preview:
+        typer.echo("openkos reconcile: proposed changes:")
+        typer.echo(
+            f"  ~ bundle/{canonical_a}.md (relation "
+            f"{'added' if edge_added_a else 'unchanged'}; note "
+            f"{'appended' if note_added_a else 'already present'})"
+        )
+        typer.echo(
+            f"  ~ bundle/{canonical_b}.md (relation "
+            f"{'added' if edge_added_b else 'unchanged'}; note "
+            f"{'appended' if note_added_b else 'already present'})"
+        )
+        typer.echo(f"  ~ {log_path.name} (new dated entry)")
 
     if not auto and cfg.review:
         if sys.stdin.isatty():
@@ -9233,6 +9339,133 @@ def reconcile(
         [f"bundle/{canonical_a}.md", f"bundle/{canonical_b}.md", "bundle/log.md"],
         reconcile_message,
     )
+
+
+def _run_reconcile_from_findings(
+    root: Path, layout: config.WorkspaceLayout, log_path: Path
+) -> None:
+    """The `reconcile --from-findings` batch walk (#567): read the persisted
+    contradiction findings, narrow to the ACTIONABLE set -- open (not
+    declined), not stale, typed-edge shape (`merged_absorbed_id is None`;
+    a merged-content finding names an absorbed doc that no longer exists as
+    a pair member), and a high-confidence CONTRADICTS verdict (the same
+    `is_high_confidence_finding` threshold the live display uses) -- then
+    prompt per item and write each accepted pair's SYMMETRIC reconciliation
+    through `_reconcile_pair`, the exact transaction the two-id form runs.
+
+    Consent is per item and TTY-only, mirroring curate's Identity walk: a
+    reconciliation is a semantic judgment, so there is deliberately no
+    unattended bulk path. A pair whose transaction refuses (e.g. already
+    reconciled differently -- the at-most-one-resolution gate) is counted
+    as skipped and the walk continues; post-consent target drift (exit 3)
+    still refuses the whole run, exactly as everywhere else in the
+    #306/#313/#319 arc."""
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        typer.echo(
+            f"openkos reconcile: failed while reading the workspace -- {exc}.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    if not sys.stdin.isatty():
+        typer.echo(
+            "openkos reconcile --from-findings: non-interactive write "
+            "consent unavailable -- run `openkos reconcile <id_a> <id_b>` "
+            "per pair instead.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    seen_keys: set[str] = set()
+    actionable: list[findings.PersistedFinding] = []
+    for finding in _persisted_findings(layout):
+        if (
+            finding.stale
+            or finding.merged_absorbed_id is not None
+            or not is_high_confidence_finding(finding.verdict, finding.confidence)
+            or _is_contradiction_declined(
+                layout, finding.pair_ids, finding.merged_absorbed_id
+            )
+        ):
+            continue
+        # A pair judged on several runs has several rows; offer it once,
+        # under the same identity a decision record is keyed on.
+        key = bundle_decisions.decision_key_for(
+            finding.pair_ids, finding.merged_absorbed_id
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        actionable.append(finding)
+
+    typer.echo(f"openkos reconcile --from-findings: workspace at {root}")
+    typer.echo()
+    if not actionable:
+        typer.echo(
+            "No open contradiction findings to reconcile. Findings are "
+            "recorded by `openkos curate` (Contradictions stage) and "
+            "`openkos contradictions`."
+        )
+        return
+
+    applied = 0
+    skipped = 0
+    declined: list[str] = []
+    for finding in actionable:
+        finding_a, finding_b = finding.pair_ids
+        try:
+            path_a, canonical_a = _resolve_concept_path(layout.bundle_dir, finding_a)
+            path_b, canonical_b = _resolve_concept_path(layout.bundle_dir, finding_b)
+        except (OSError, ValueError) as exc:
+            typer.echo(f"  skipping {finding_a} <-> {finding_b} -- {exc}.")
+            skipped += 1
+            continue
+
+        typer.echo(f"{canonical_a} <-> {canonical_b}")
+        typer.echo(
+            f"  verdict: {finding.verdict} (confidence: {finding.confidence:.2f})"
+        )
+        typer.echo(f"  rationale: {finding.rationale}")
+        if not curate_module._confirm(
+            f"Reconcile {canonical_a} <-> {canonical_b} as symmetric "
+            "'reconciled_with'? [y/N]"
+        ):
+            declined.append(f"{canonical_a} <-> {canonical_b}")
+            continue
+
+        try:
+            _reconcile_pair(
+                root,
+                layout,
+                log_path,
+                cfg,
+                path_a,
+                canonical_a,
+                path_b,
+                canonical_b,
+                None,
+                None,
+                auto=True,
+                announce_preview=False,
+            )
+        except typer.Exit as exc:
+            if exc.exit_code == 3:
+                raise
+            # The transaction already printed its refusal (e.g. the pair is
+            # reconciled differently); one bad pair never ends the walk.
+            skipped += 1
+            continue
+        applied += 1
+
+    typer.echo()
+    typer.echo(
+        f"openkos reconcile --from-findings: applied {applied}, "
+        f"skipped {skipped}, declined {len(declined)}."
+    )
+    for item in declined:
+        typer.echo(f"  declined: {item}")
 
 
 RECENT_ACTIVITY_LIMIT = 5
@@ -10504,6 +10737,14 @@ def suggest_relations_cmd(
         "--include-confidential",
         help="Include confidential concepts (excluded by default).",
     ),
+    edge_offset: int = typer.Option(
+        0,
+        "--edge-offset",
+        min=0,
+        help="Skip the first N ranked candidate edges, so the batch beyond "
+        "the cap is browsable without first typing the batch before it "
+        "(#567). The capped run names the next batch's exact offset.",
+    ),
 ) -> None:
     """LLM-suggest a relation `type` for every existing UNTYPED body-link
     edge: read-only, like `adjudicate`.
@@ -10626,7 +10867,9 @@ def suggest_relations_cmd(
     source = _open_proximity_or_degrade(layout.vectors_db_path)
     embeddings_missing = source is None
     try:
-        graph = build_graph(layout.bundle_dir, candidates=source)
+        graph = build_graph(
+            layout.bundle_dir, candidates=source, candidate_offset=edge_offset
+        )
     finally:
         if source is not None:
             source.close()
@@ -10641,6 +10884,15 @@ def suggest_relations_cmd(
 
         typer.echo(f"openkos suggest-relations: workspace at {root}")
         typer.echo()
+        # #567: an offset at or past the candidate set produced an empty
+        # window on purpose -- say so, instead of the zero-candidate state
+        # message below claiming there is nothing untyped at all.
+        if edge_offset > 0 and not edges:
+            typer.echo(
+                f"no candidate edges at --edge-offset {edge_offset}; "
+                "re-run with a smaller offset."
+            )
+            return
         # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
         # truncation, never silent -- but restricted to what THIS caller may
         # see. Read here, INSIDE the `with` block, since `store` closes
@@ -10656,6 +10908,14 @@ def suggest_relations_cmd(
         # walk `candidate_edges` just ran, so this line and `total` below
         # agree on what a caller without `--include-confidential` may see.
         notice = candidate_truncation_notice(
+            store.candidate_report,
+            layout.bundle_dir,
+            include_confidential=include_confidential,
+            local_exemption=local_exemption,
+        )
+        # #567: computed inside the `with` block (the report lives on
+        # `store`), printed beside the #560 pointer after the run below.
+        batch_offset = next_candidate_offset(
             store.candidate_report,
             layout.bundle_dir,
             include_confidential=include_confidential,
@@ -10767,6 +11027,14 @@ def suggest_relations_cmd(
             "(--apply or relate), then re-run suggest-relations to surface "
             "the next batch."
         )
+        if batch_offset is not None:
+            # #567: browsing without typing -- name the exact offset the
+            # next ranked batch starts at, gated on a visible pair actually
+            # existing beyond this run's window.
+            typer.echo(
+                f"Or browse it without typing these: re-run with "
+                f"--edge-offset {batch_offset}."
+            )
 
     if batch.failure is not None:
         # Partial batch (#441): the report above already rendered the

@@ -985,10 +985,15 @@ def test_suggest_relations_opens_the_proximity_source_once_and_forwards_it(
     real_build_graph = sqlite_graph.build_graph
 
     def _recording_build_graph(
-        bundle_dir: Path, *, candidates: sqlite_graph.CandidateSource | None = None
+        bundle_dir: Path,
+        *,
+        candidates: sqlite_graph.CandidateSource | None = None,
+        candidate_offset: int = 0,
     ) -> object:
         build_calls.append(candidates)
-        return real_build_graph(bundle_dir, candidates=candidates)
+        return real_build_graph(
+            bundle_dir, candidates=candidates, candidate_offset=candidate_offset
+        )
 
     def _fake_candidate_edges(bundle_dir: Path, **kwargs: object) -> list[object]:
         forwarded.append(kwargs.get("store"))
@@ -1085,10 +1090,15 @@ def test_suggest_relations_builds_the_graph_once_on_the_zero_path(
     real = sqlite_graph.build_graph
 
     def _counting_build_graph(
-        bundle_dir: Path, *, candidates: sqlite_graph.CandidateSource | None = None
+        bundle_dir: Path,
+        *,
+        candidates: sqlite_graph.CandidateSource | None = None,
+        candidate_offset: int = 0,
     ) -> sqlite_graph.SqliteGraphStore:
         calls.append(bundle_dir)
-        return real(bundle_dir, candidates=candidates)
+        return real(
+            bundle_dir, candidates=candidates, candidate_offset=candidate_offset
+        )
 
     monkeypatch.setattr("openkos.cli.main.build_graph", _counting_build_graph)
     monkeypatch.setattr("openkos.graph.summary.build_graph", _counting_build_graph)
@@ -1126,9 +1136,14 @@ def test_suggest_relations_builds_the_graph_once_on_the_non_zero_path(
     real = sqlite_graph.build_graph
 
     def _counting_build_graph(
-        bundle_dir: Path, *, candidates: sqlite_graph.CandidateSource | None = None
+        bundle_dir: Path,
+        *,
+        candidates: sqlite_graph.CandidateSource | None = None,
+        candidate_offset: int = 0,
     ) -> sqlite_graph.SqliteGraphStore:
-        store = real(bundle_dir, candidates=candidates)
+        store = real(
+            bundle_dir, candidates=candidates, candidate_offset=candidate_offset
+        )
         stores.append(store)
         return store
 
@@ -1594,3 +1609,91 @@ def test_suggest_relations_truncated_run_points_at_the_next_batch(
     assert result.exit_code == 0
     assert "cap reached" in result.stdout
     assert "re-run" in result.stdout
+
+
+def _sixty_pair_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 60-candidate over-cap workspace with a stubbed proximity source and
+    a no-op suggester -- the browsing fixture #567's offset paging needs."""
+    _init_workspace(tmp_path, monkeypatch)
+    (tmp_path / "bundle" / "concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bundle" / "concepts" / "hub.md").write_text(
+        "---\ntype: Concept\ntitle: Hub\n---\nBody.\n", encoding="utf-8"
+    )
+    pairs = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        (tmp_path / "bundle" / "concepts" / f"{leaf_id}.md").write_text(
+            f"---\ntype: Concept\ntitle: {leaf_id}\n---\nBody.\n", encoding="utf-8"
+        )
+        pairs.append(
+            ProximityPair(
+                source_id="concepts/hub",
+                target_id=f"concepts/{leaf_id}",
+                distance=index * 0.001,
+            )
+        )
+
+    class _StubSource:
+        def pairs(self, concept_ids: Sequence[str]) -> list[ProximityPair]:
+            return pairs
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(main, "_open_proximity_or_degrade", lambda path: _StubSource())
+    monkeypatch.setattr(
+        "openkos.cli.main.suggest_edge_types",
+        lambda edges, **kwargs: EdgeSuggestionBatch(results=[]),
+    )
+
+
+def test_suggest_relations_edge_offset_surfaces_the_next_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--edge-offset 50` over 60 candidates surfaces exactly the 10 the
+    default window dropped (#567: the remaining candidates used to be
+    unreachable without typing the first 50)."""
+    _sixty_pair_workspace(tmp_path, monkeypatch)
+
+    captured: list[list[Edge]] = []
+
+    def _capture(edges: Sequence[Edge], **kwargs: object) -> EdgeSuggestionBatch:
+        captured.append(list(edges))
+        return EdgeSuggestionBatch(results=[])
+
+    monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _capture)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--edge-offset", "50"])
+
+    assert result.exit_code == 0
+    assert len(captured) == 1
+    targets = {edge.target_id for edge in captured[0]}
+    assert targets == {f"concepts/leaf{index:03d}" for index in range(51, 61)}
+    assert "10 of 60 candidate edge(s) shown (cap reached)" in result.stdout
+
+
+def test_suggest_relations_truncation_notice_names_the_next_offset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capped run points at the next batch's exact offset, so the
+    remaining candidates are reachable by browsing, not only by typing the
+    ones shown (#567)."""
+    _sixty_pair_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto"])
+
+    assert result.exit_code == 0
+    assert "--edge-offset 50" in result.stdout
+
+
+def test_suggest_relations_edge_offset_beyond_the_set_reports_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An offset at or past the candidate set says so instead of printing
+    the misleading zero-candidate state message (#567)."""
+    _sixty_pair_workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--edge-offset", "60"])
+
+    assert result.exit_code == 0
+    assert "no candidate edges at --edge-offset 60" in result.stdout

@@ -2119,3 +2119,53 @@ def test_typed_edge_survives_a_decomposed_filename_spelled_nfc_in_relations(
 
     assert edges == [("concepts/stoicism", f"concepts/{nfc_stem}", "depends_on")]
     assert f"concepts/{nfc_stem}" in nodes
+
+
+# --- #567: candidate_offset pages the retained window -----------------------
+
+
+def test_pass_three_offset_shifts_the_retained_window(tmp_path: Path) -> None:
+    """`candidate_offset=50` over 60 ranked pairs retains exactly the pairs
+    the default window dropped (#567): the ranking is unchanged, only the
+    slice moves."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "hub.md", title="Hub")
+    pairs: list[tuple[str, str, float]] = []
+    for index in range(1, 61):
+        leaf_id = f"leaf{index:03d}"
+        _write_doc(bundle / "concepts" / f"{leaf_id}.md", title=leaf_id)
+        pairs.append(("concepts/hub", f"concepts/{leaf_id}", index * 0.001))
+    stub = _StubCandidateSource(pairs)
+
+    with sqlite_graph.build_graph(
+        bundle, candidates=stub, candidate_offset=50
+    ) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    retained_targets = {row[1] for row in rows}
+    expected_targets = {f"concepts/leaf{index:03d}" for index in range(51, 61)}
+    assert retained_targets == expected_targets
+    assert report.produced == 60
+    assert report.retained == 10
+    assert report.offset == 50
+
+
+def test_pass_three_offset_at_or_beyond_the_set_retains_nothing(
+    tmp_path: Path,
+) -> None:
+    """An offset at or past the ranked set retains zero candidate rows and
+    reports it honestly, never wrapping around (#567)."""
+    bundle = tmp_path / "bundle"
+    _write_doc(bundle / "concepts" / "a.md", title="A")
+    _write_doc(bundle / "concepts" / "b.md", title="B")
+    stub = _StubCandidateSource([("concepts/a", "concepts/b", 0.1)])
+
+    with sqlite_graph.build_graph(bundle, candidates=stub, candidate_offset=5) as store:
+        rows = _edge_rows(store)
+        report = store.candidate_report
+
+    assert rows == []
+    assert report.produced == 1
+    assert report.retained == 0
+    assert report.offset == 5

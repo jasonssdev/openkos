@@ -1491,3 +1491,19 @@ def test_candidate_truncation_notice_suppressed_when_confidentiality_removes_a_r
     # (only keep1 survives from the retained prefix). 2 > 1, so the notice
     # still fires, with the reduced counts.
     assert notice == "1 of 2 candidate edge(s) shown (cap reached)"
+
+
+def test_candidate_truncation_notice_counts_the_offset_window(
+    tmp_path: Path,
+) -> None:
+    """With a non-zero `offset`, the visible retained count comes from the
+    OFFSET window `pairs[offset : offset + retained]` -- the slice pass 3
+    actually inserted -- never from the head of the ranked list (#567)."""
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    pairs = tuple((f"concepts/a{i:03d}", f"concepts/b{i:03d}") for i in range(1, 6))
+    report = CandidateReport(produced=5, retained=2, pairs=pairs, offset=2)
+
+    notice = edge_typing_mod.candidate_truncation_notice(report, bundle_dir)
+
+    assert notice == "2 of 5 candidate edge(s) shown (cap reached)"

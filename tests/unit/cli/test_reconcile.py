@@ -932,3 +932,144 @@ def test_reconcile_names_the_status_the_loser_will_show_as(
     assert result.exit_code == 0
     assert "superseding" in result.stdout
     assert "deprecated" in result.stdout
+
+
+# -- #567: `--from-findings` batch mode --------------------------------------
+
+
+def _seed_finding(
+    tmp_path: Path,
+    pair: tuple[str, str],
+    *,
+    verdict: str = "contradicts",
+    confidence: float = 0.9,
+    merged_absorbed_id: str | None = None,
+) -> None:
+    """Persist one finding straight into `.openkos/findings.db` (the same
+    store curate's Contradictions stage writes). Empty `input_digests`
+    keeps it non-stale by construction."""
+    from openkos import config as config_mod
+    from openkos.state import derived, findings
+
+    layout = config_mod.WorkspaceLayout(tmp_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        findings.record_findings(
+            conn,
+            [
+                findings.Finding(
+                    pair_ids=pair,
+                    merged_absorbed_id=merged_absorbed_id,
+                    verdict=verdict,
+                    confidence=confidence,
+                    rationale="they disagree",
+                    input_digests=(),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+
+def test_from_findings_walks_open_findings_with_per_item_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--from-findings` reads the persisted findings and walks them with a
+    per-item [y/N] prompt: an accepted pair gets the SAME symmetric
+    `reconciled_with` write the two-id form performs, a declined pair is
+    left untouched and listed (#567: no more transcribing ids by hand)."""
+    _init_workspace(tmp_path, monkeypatch)
+    a = _ingest_source(tmp_path, "alpha.md")
+    b = _ingest_source(tmp_path, "beta.md")
+    c = _ingest_source(tmp_path, "gamma.md")
+    d = _ingest_source(tmp_path, "delta.md")
+    _seed_finding(tmp_path, (a, b))
+    _seed_finding(tmp_path, (c, d))
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert any(
+        rel.target == b and rel.type == "reconciled_with"
+        for rel in _relations_of(tmp_path, a)
+    )
+    assert any(
+        rel.target == a and rel.type == "reconciled_with"
+        for rel in _relations_of(tmp_path, b)
+    )
+    assert _relations_of(tmp_path, c) == []
+    assert "applied 1, skipped 0, declined 1." in result.output
+    assert f"  declined: {c} <-> {d}" in result.output
+
+
+def test_from_findings_refuses_without_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No TTY means no per-item consent channel: the batch walk refuses
+    outright rather than writing anything unattended (#567) -- there is
+    deliberately no --auto bulk path for reconciliations."""
+    _init_workspace(tmp_path, monkeypatch)
+    a = _ingest_source(tmp_path, "alpha.md")
+    b = _ingest_source(tmp_path, "beta.md")
+    _seed_finding(tmp_path, (a, b))
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"])
+
+    assert result.exit_code == 1
+    assert "non-interactive write consent unavailable" in result.stderr
+    assert _relations_of(tmp_path, a) == []
+
+
+def test_from_findings_skips_non_actionable_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Consistent verdicts, low confidence, and merged-content findings are
+    not reconcilable pairs -- the walk never offers them (#567)."""
+    _init_workspace(tmp_path, monkeypatch)
+    a = _ingest_source(tmp_path, "alpha.md")
+    b = _ingest_source(tmp_path, "beta.md")
+    _seed_finding(tmp_path, (a, b), verdict="consistent")
+    _seed_finding(tmp_path, (a, b), confidence=0.2)
+    _seed_finding(tmp_path, (a, b), merged_absorbed_id="concepts/gone")
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"])
+
+    assert result.exit_code == 0
+    assert "No open contradiction findings to reconcile." in result.output
+    assert _relations_of(tmp_path, a) == []
+
+
+def test_from_findings_rejects_explicit_ids_and_winner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--from-findings` is a whole mode: mixing it with explicit ids or
+    `--winner` refuses -- a directional resolution still needs the two-id
+    form, where the human names the winner (#567)."""
+    _init_workspace(tmp_path, monkeypatch)
+    a = _ingest_source(tmp_path, "alpha.md")
+    b = _ingest_source(tmp_path, "beta.md")
+
+    with_ids = runner.invoke(app, ["reconcile", a, b, "--from-findings"])
+    with_winner = runner.invoke(app, ["reconcile", "--from-findings", "--winner", a])
+
+    assert with_ids.exit_code == 1
+    assert "--from-findings" in with_ids.stderr
+    assert with_winner.exit_code == 1
+    assert "--from-findings" in with_winner.stderr
+
+
+def test_two_id_form_still_requires_both_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without `--from-findings`, omitting an id still refuses -- making the
+    arguments optional for the batch mode must not weaken the two-id
+    form (#567)."""
+    _init_workspace(tmp_path, monkeypatch)
+    a = _ingest_source(tmp_path, "alpha.md")
+
+    result = runner.invoke(app, ["reconcile", a])
+
+    assert result.exit_code == 1
+    assert "two concept ids" in result.stderr
