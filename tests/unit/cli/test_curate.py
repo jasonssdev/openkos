@@ -4053,6 +4053,134 @@ def test_accept_structure_on_a_pipe_skips_related_to_instead_of_prompting(
     assert "concepts/c" not in source_text
 
 
+def _asymmetric_structure_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A COMPLETE 2-edge Structure queue: one `references` suggestion (the
+    remaining bulk-acceptable specific type) and one ASYMMETRIC `part_of`
+    (#624) -- the shape that separates what `--accept structure` may still
+    write silently from what must reach the operator."""
+    from openkos.graph.base import Edge
+    from openkos.resolution.edge_typing import EdgeSuggestion, EdgeSuggestionBatch
+
+    symmetric = Edge(source_id="concepts/a", target_id="concepts/b")
+    asymmetric = Edge(source_id="concepts/a", target_id="concepts/c")
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.candidate_edges",
+        lambda *a, **k: [symmetric, asymmetric],
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.suggest_edge_types",
+        lambda *a, **k: EdgeSuggestionBatch(
+            results=[
+                EdgeSuggestion(
+                    edge=symmetric, suggested_type="references", rationale="names it"
+                ),
+                EdgeSuggestion(
+                    edge=asymmetric, suggested_type="part_of", rationale="inside it"
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setattr("openkos.cli.curate._concept_type_names", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "openkos.cli.curate._contradiction_plan", lambda *a, **k: _empty_plan()
+    )
+
+
+def test_accept_structure_still_prompts_for_an_asymmetric_suggestion(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--accept structure` applies `references` silently but still prompts
+    for an asymmetric type (#624).
+
+    #613 measured both models answering the SAME asymmetric type with
+    SOURCE/TARGET swapped on nearly every edge -- there is no direction
+    evidence behind an asymmetric suggestion, so bulk acceptance would
+    write unverified structure the whole graph then believes. The consent
+    line itself must say so."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _asymmetric_structure_queue(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    # The cost gate's "y", then a decline for the `part_of` prompt that
+    # must still be asked.
+    result = runner.invoke(app, ["curate", "--accept", "structure"], input="y\nn\n")
+
+    assert result.exit_code == 0
+    assert "Relate concepts/a -> concepts/b" not in result.stdout
+    assert (
+        "Relate concepts/a -> concepts/c [part_of] "
+        "(direction model-suggested, unverified)? [y/N]" in result.stdout
+    )
+    assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
+    assert "  declined: concepts/a -> concepts/c [part_of]" in result.stdout
+
+
+def test_accept_structure_on_a_pipe_skips_asymmetric_instead_of_prompting(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a non-TTY run there is no channel to consent on, so an asymmetric
+    suggestion is SKIPPED rather than written (#624) -- the acceptance
+    criterion verbatim: `--accept structure` writes NO asymmetric type
+    without per-item consent, and a pipe cannot give one."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _asymmetric_structure_queue(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--auto", "--accept", "structure"])
+
+    assert result.exit_code == 0
+    assert "Relate concepts/a" not in result.stdout
+    assert "Structure: applied 1, skipped 1." in _lines(result.stdout)
+    source_text = (tmp_path / "bundle" / "concepts" / "a.md").read_text(
+        encoding="utf-8"
+    )
+    assert "concepts/b" in source_text
+    assert "concepts/c" not in source_text
+
+
+def test_per_item_walk_marks_direction_unverified_only_on_asymmetric_types(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-item consent line for an asymmetric type states the direction
+    is model-suggested and unverified; a symmetric-scope prompt
+    (`references`) carries no such note (#624). The human decides with the
+    caveat in view, not from a bare type name."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
+    _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
+    _write_doc(tmp_path / "bundle" / "concepts" / "c.md", title="Concept C")
+    _reindexed_workspace(tmp_path, monkeypatch)
+    _asymmetric_structure_queue(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    # The cost gate's "y", then a decline per suggestion.
+    result = runner.invoke(app, ["curate"], input="y\nn\nn\n")
+
+    assert result.exit_code == 0
+    assert "Relate concepts/a -> concepts/b [references]? [y/N]" in result.stdout
+    assert (
+        "Relate concepts/a -> concepts/c [part_of] "
+        "(direction model-suggested, unverified)? [y/N]" in result.stdout
+    )
+
+
 def test_accepted_structure_discloses_that_types_go_in_unreviewed(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
@@ -4063,9 +4191,10 @@ def test_accepted_structure_discloses_that_types_go_in_unreviewed(
 
     `evals/edge_typing/` measures the suggester emitting a specific type
     correctly about 60% of the time, so roughly two in five bulk-written
-    relation types are wrong by the rubric -- and a wrong `part_of`
-    asserts something false that everything reading the graph believes.
-    The flag stays; going in blind does not."""
+    relation types are wrong by the rubric. The flag stays; going in blind
+    does not -- and since #624 the advisory names the split: only the
+    symmetric-scope types go in unreviewed, asymmetric ones ask per
+    item."""
     _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
     _write_doc(tmp_path / "bundle" / "concepts" / "a.md", title="Concept A")
     _write_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Concept B")
@@ -4077,7 +4206,11 @@ def test_accepted_structure_discloses_that_types_go_in_unreviewed(
 
     assert result.exit_code == 0
     assert result.stderr.count("applied without review") == 1
-    assert "openkos curate: Structure: suggested relation types are" in result.stderr
+    assert (
+        "openkos curate: Structure: symmetric suggested relation types are"
+        in result.stderr
+    )
+    assert "Asymmetric types and related_to still ask per item" in result.stderr
 
 
 def test_structure_without_accept_prints_no_bulk_advisory(

@@ -164,10 +164,14 @@ a specific claim, and an honest one is better than a guessed `part_of`. What
 sets it apart is narrower and uncontested -- accepting it adds no claim to
 the graph beyond the untyped link that was already there.
 
-That is why `curate --accept structure` applies every other type in bulk but
-still routes this one to the operator: it is the cheapest place to spend a
-human glance, and at a measured 67% of accepted edges it is also where the
-volume is."""
+That is why `curate --accept structure` still routes this one to the
+operator: it is the cheapest place to spend a human glance, and at a
+measured 67% of accepted edges it is also where the volume is. Since #624
+it shares that routing with every ASYMMETRIC type
+(`model.relations.ASYMMETRIC_RELATION_TYPES`) -- for the opposite reason:
+an asymmetric suggestion asserts a direction the model was measured to
+possess no evidence for (#613), so only the symmetric-scope remainder is
+bulk-applied."""
 
 _RUBRIC_LINES = "\n".join(
     f"- {name}: {_RELATION_RUBRIC[name]}."

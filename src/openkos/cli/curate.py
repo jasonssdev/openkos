@@ -65,6 +65,7 @@ from openkos.llm.ollama import (
     OllamaUnavailable,
 )
 from openkos.model import okf
+from openkos.model.relations import ASYMMETRIC_RELATION_TYPES
 from openkos.resolution import candidate_group_truncation_notice, find_candidates_report
 from openkos.resolution.adjudication import (
     AdjudicatedCandidate,
@@ -838,16 +839,18 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
     if _accepts(ctx, "Structure"):
         # #513: `evals/edge_typing/` measures this suggester emitting a
         # SPECIFIC type correctly about 60% of the time, so roughly two in
-        # five bulk-written types are wrong by the rubric -- and a wrong
-        # `part_of` asserts something false that everything reading the
-        # graph then believes. The operator asked for bulk acceptance and
-        # keeps it; what they do not keep is going in blind. Once per run,
+        # five bulk-written types are wrong by the rubric. The operator
+        # asked for bulk acceptance and keeps it; what they do not keep is
+        # going in blind. Since #624 the bulk path covers only the
+        # symmetric-scope types -- asymmetric ones and `related_to` always
+        # ask per item -- so the advisory names that split. Once per run,
         # on stderr, so a piped summary stays clean.
         typer.echo(
-            "openkos curate: Structure: suggested relation types are "
-            "applied without review -- accuracy is measured, not assumed "
-            "(see evals/edge_typing/ and issue #513). Re-run without "
-            "`--accept structure` to decide each one.",
+            "openkos curate: Structure: symmetric suggested relation types "
+            "are applied without review -- accuracy is measured, not "
+            "assumed (see evals/edge_typing/ and issue #513). Asymmetric "
+            "types and related_to still ask per item (issue #624). Re-run "
+            "without `--accept structure` to decide each one.",
             err=True,
         )
 
@@ -880,17 +883,28 @@ def _structure_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             f"[{suggestion.suggested_type}] {edge.source_id} -> {edge.target_id}"
         )
         typer.echo(f"  rationale: {suggestion.rationale}")
+        # #624: an asymmetric suggestion carries no direction evidence --
+        # #613 measured both models answering the SAME asymmetric type with
+        # SOURCE/TARGET swapped on nearly every edge -- so its consent line
+        # says so, and it is never bulk-acceptable.
+        asymmetric = suggestion.suggested_type in ASYMMETRIC_RELATION_TYPES
+        direction_caveat = (
+            " (direction model-suggested, unverified)" if asymmetric else ""
+        )
         if not _confirm_item(
             ctx,
             "Structure",
             f"Relate {edge.source_id} -> {edge.target_id} "
-            f"[{suggestion.suggested_type}]? [y/N]",
-            # #508: `--accept structure` applies every specific type in
-            # bulk, but the least-specific one asserts nothing beyond the
+            f"[{suggestion.suggested_type}]{direction_caveat}? [y/N]",
+            # #508: the least-specific type asserts nothing beyond the
             # untyped link that already existed, so it still reaches a
-            # human. See `edge_typing.LEAST_SPECIFIC_RELATION_TYPE`.
+            # human even in a bulk-accepted run; #624 extends the same
+            # routing to every asymmetric type, whose direction is
+            # unverified. See `edge_typing.LEAST_SPECIFIC_RELATION_TYPE`
+            # and `relations.ASYMMETRIC_RELATION_TYPES`.
             acceptable_in_bulk=(
                 suggestion.suggested_type != LEAST_SPECIFIC_RELATION_TYPE
+                and not asymmetric
             ),
         ):
             skipped += 1

@@ -134,3 +134,21 @@ def test_validate_relation_type_rejects_whitespace_only_type() -> None:
 def test_validate_relation_type_strips_surrounding_whitespace() -> None:
     """A type with surrounding whitespace is stripped before validation."""
     assert relations.validate_relation_type("  references  ") == "references"
+
+
+def test_asymmetric_relation_types_are_exactly_the_direction_bearing_five() -> None:
+    """The asymmetric set is the five types whose meaning flips when SOURCE
+    and TARGET swap -- the set #613 measured direction confusion over and
+    #624 quarantines behind per-item consent. `related_to` is symmetric by
+    definition and `references` stays outside #624's scope."""
+    assert (
+        frozenset({"caused_by", "depends_on", "member_of", "part_of", "produced_by"})
+        == relations.ASYMMETRIC_RELATION_TYPES
+    )
+
+
+def test_asymmetric_relation_types_are_a_subset_of_the_suggestable_vocabulary() -> None:
+    """Every asymmetric type must remain suggestable: the set narrows HOW a
+    suggestion is consented to, never what may be suggested -- mirroring
+    `ENGINE_OWNED_RELATION_TYPES`' narrowing contract."""
+    assert relations.ASYMMETRIC_RELATION_TYPES <= relations.SUGGESTABLE_RELATION_TYPES

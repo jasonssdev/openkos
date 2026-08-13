@@ -87,6 +87,31 @@ Derived rather than hand-listed on purpose -- a second literal tuple would
 drift from `REGISTRY` the first time a type is added to one and not the
 other, and the drift would be silent."""
 
+ASYMMETRIC_RELATION_TYPES: frozenset[str] = frozenset(
+    {"caused_by", "depends_on", "member_of", "part_of", "produced_by"}
+)
+"""Seeded types whose meaning FLIPS when SOURCE and TARGET swap, and whose
+direction an LLM suggester cannot be trusted to have chosen (issue #624).
+
+The evidence is #613's flip-question measurement (`evals/edge_typing/`,
+arms `flip-check`): both measured models answer the SAME asymmetric type
+with SOURCE/TARGET swapped on nearly every edge, so a suggested direction
+carries no evidence at all -- the fixture's 0.82 "forward accuracy" was
+orientation luck. A wrong-direction `part_of` or `caused_by` asserts false
+structure that everything reading the graph then believes.
+
+Like `ENGINE_OWNED_RELATION_TYPES`, this narrows CONSENT, never the
+vocabulary: every member stays in `SUGGESTABLE_RELATION_TYPES`, and a human
+running `relate` writes any of them freely -- a person asserting direction
+is stating a fact. What the set gates is `curate --accept structure`'s bulk
+path: an asymmetric suggestion always reaches the operator per item, with
+the consent line saying the direction is model-suggested and unverified.
+
+`related_to` is symmetric by definition and `references` sits outside
+#624's scope -- the flip measurement covered exactly these five, and a
+mis-directed citation claim is checkable against the citing document in a
+way invented containment/causal structure is not."""
+
 
 def validate_relation_type(rel_type: str, *, warn: bool = True) -> str:
     """Validate `rel_type` for the `relate` CLI verb's write path.
