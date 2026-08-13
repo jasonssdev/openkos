@@ -760,3 +760,71 @@ def test_reverse_provenance_rewrites_recomputes_forward_through_link_and_relatio
     )
 
     assert restored == original
+
+
+# -- #628: reverse-provenance lookup -----------------------------------------
+
+
+def _prov_doc(provenance: list[str] | None = None, type_: str = "Concept") -> str:
+    lines = ["---", f"type: {type_}", "title: T"]
+    if provenance is not None:
+        lines.append("provenance:")
+        lines.extend(f"  - {entry}" for entry in provenance)
+    lines.extend(["---", "", "Body.", ""])
+    return "\n".join(lines)
+
+
+def test_source_ancestors_names_the_direct_source_parent() -> None:
+    """The #571 scenario in miniature: an object whose provenance names one
+    Source resolves to exactly that Source (#628)."""
+    files = {
+        "people/jane.md": _prov_doc(provenance=["sources/transcription1"]),
+        "sources/transcription1.md": _prov_doc(type_="Source", provenance=["raw.txt"]),
+    }
+
+    assert provenance.provenance_source_ancestors(files, object_id="people/jane") == [
+        "sources/transcription1"
+    ]
+
+
+def test_source_ancestors_walks_through_intermediate_concepts() -> None:
+    """A Source reached only THROUGH an intermediate derived concept is
+    still named -- the lookup is transitive, and the intermediate concept
+    itself (not a Source) never appears in the answer (#628)."""
+    files = {
+        "decisions/d.md": _prov_doc(provenance=["concepts/mid"]),
+        "concepts/mid.md": _prov_doc(provenance=["sources/deep"]),
+        "sources/deep.md": _prov_doc(type_="Source", provenance=["raw.txt"]),
+    }
+
+    assert provenance.provenance_source_ancestors(files, object_id="decisions/d") == [
+        "sources/deep"
+    ]
+
+
+def test_source_ancestors_empty_for_an_object_with_no_provenance() -> None:
+    """No provenance, no ancestors -- and a provenance CYCLE terminates
+    rather than spinning (#628)."""
+    files = {
+        "concepts/orphan.md": _prov_doc(),
+        "concepts/a.md": _prov_doc(provenance=["concepts/b"]),
+        "concepts/b.md": _prov_doc(provenance=["concepts/a"]),
+    }
+
+    assert (
+        provenance.provenance_source_ancestors(files, object_id="concepts/orphan") == []
+    )
+    assert provenance.provenance_source_ancestors(files, object_id="concepts/a") == []
+
+
+def test_source_ancestors_includes_a_dangling_source_entry() -> None:
+    """A `sources/` provenance entry with no file behind it is still
+    reported: 'this Source needs raising' is exactly what the caller asks,
+    and hiding a dangling one would understate the containment set (#628)."""
+    files = {
+        "people/jane.md": _prov_doc(provenance=["sources/gone"]),
+    }
+
+    assert provenance.provenance_source_ancestors(files, object_id="people/jane") == [
+        "sources/gone"
+    ]

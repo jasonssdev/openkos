@@ -648,3 +648,114 @@ def test_list_type_column_falls_back_to_unknown_outside_the_registry(
         line for line in again.stdout.splitlines() if line.startswith("people/jane")
     )
     assert "Person" in jane_row
+
+
+# -- #628: `list --sources <id>` reverse-provenance lookup -------------------
+
+
+def _write_provenance_doc(
+    path: Path,
+    *,
+    type_: str = "Concept",
+    title: str = "T",
+    provenance: list[str] | None = None,
+    sensitivity: str | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---", f"type: {type_}", f"title: {title}"]
+    if sensitivity is not None:
+        lines.append(f"sensitivity: {sensitivity}")
+    if provenance is not None:
+        lines.append("provenance:")
+        lines.extend(f"  - {entry}" for entry in provenance)
+    lines.extend(["---", "", "Body.", ""])
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_list_sources_names_every_source_reaching_the_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The #571 acceptance scenario (#628): a Person extracted from
+    transcription1 -- `list --sources` names transcription1 WITH its
+    current sensitivity, so 'protect this person' finds the Source that
+    needs raising without reading frontmatter by hand. A transitively
+    reached Source is named too."""
+    _init_workspace(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundle"
+    _write_provenance_doc(
+        bundle / "people" / "jane.md",
+        type_="Person",
+        title="Jane",
+        provenance=["sources/transcription1", "concepts/mid"],
+    )
+    _write_provenance_doc(
+        bundle / "sources" / "transcription1.md",
+        type_="Source",
+        title="Transcription 1",
+        sensitivity="private",
+        provenance=["raw1.txt"],
+    )
+    _write_provenance_doc(bundle / "concepts" / "mid.md", provenance=["sources/deep"])
+    _write_provenance_doc(
+        bundle / "sources" / "deep.md",
+        type_="Source",
+        title="Deep",
+        provenance=["raw2.txt"],
+    )
+
+    result = runner.invoke(app, ["list", "--sources", "people/jane"])
+
+    assert result.exit_code == 0
+    assert "sources/transcription1" in result.stdout
+    assert "private" in result.stdout
+    assert "sources/deep" in result.stdout
+    assert "concepts/mid" not in result.stdout.replace("reaches 'people/jane'", "")
+
+
+def test_list_sources_reports_when_nothing_reaches_the_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An object no Source reaches says so plainly (#628)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_provenance_doc(tmp_path / "bundle" / "concepts" / "solo.md")
+
+    result = runner.invoke(app, ["list", "--sources", "concepts/solo"])
+
+    assert result.exit_code == 0
+    assert "No Source reaches 'concepts/solo' through provenance." in result.stdout
+
+
+def test_list_sources_marks_a_dangling_source_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provenance entry naming a Source with no file behind it is listed
+    and marked, never silently dropped (#628)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_provenance_doc(
+        tmp_path / "bundle" / "people" / "jane.md",
+        type_="Person",
+        provenance=["sources/gone"],
+    )
+
+    result = runner.invoke(app, ["list", "--sources", "people/jane"])
+
+    assert result.exit_code == 0
+    assert "sources/gone" in result.stdout
+    assert "(not in bundle)" in result.stdout
+
+
+def test_list_sources_refuses_a_type_filter_and_a_bad_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--sources` is a whole mode: a TYPE filter alongside it refuses, and
+    the id resolves through the same gate every id-taking verb uses (#628)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_provenance_doc(tmp_path / "bundle" / "concepts" / "a.md")
+
+    with_type = runner.invoke(app, ["list", "people", "--sources", "concepts/a"])
+    missing = runner.invoke(app, ["list", "--sources", "concepts/ghost"])
+
+    assert with_type.exit_code == 1
+    assert "--sources" in with_type.stderr
+    assert missing.exit_code == 1
+    assert "concepts/ghost" in missing.stderr
