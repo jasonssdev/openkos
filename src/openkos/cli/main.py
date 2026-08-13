@@ -2877,6 +2877,15 @@ class _DerivedPlan:
     (design: Disambiguation loop, #131); Phase B uses it to emit the one
     audit `insert_log_entry` call for a disambiguated write."""
 
+    type_alternative: str | None = None
+    """The runner-up type the model also weighed (#401), or `None` when the
+    classification was clear. Carried on the plan so the CALLER can
+    aggregate one summary line per run (#566) -- the per-candidate stderr
+    line fired on ~100% of extracted objects in real sessions and carried
+    no signal. The durable record stays in the document's
+    `type_alternative` frontmatter key, written by `build_concept` above,
+    independent of this field."""
+
 
 def _stage_derived_objects(
     *,
@@ -3173,26 +3182,6 @@ def _stage_derived_objects(
             )
             continue
 
-        if extraction.type_alternative is not None:
-            # #401: the type is not cosmetic -- it decides the bundle
-            # subdirectory, the `index.md` catalog section, and the default
-            # volatility tier (`model/types.py` gives Event the `static`
-            # tier and Project the `volatile` one). When the model reports
-            # it was torn, saying so puts this choice on the same footing as
-            # every other consequential call this function makes (empty
-            # slug, in-batch collision, existing file, disambiguation,
-            # failed build, the #404 cap) -- all of which report per
-            # candidate. Recording the alternative does NOT resolve the
-            # ambiguity; a genuinely ambiguous subject stays ambiguous. It
-            # stops a coin flip from being filed as a settled fact.
-            typer.echo(
-                f"openkos ingest: '{extraction.title}' classified as "
-                f"{extraction.type}, but the model also weighed "
-                f"{extraction.type_alternative}; recorded as "
-                f"{okf.TYPE_ALTERNATIVE_KEY} on the document.",
-                err=True,
-            )
-
         seen_slugs.add(derived_slug)
         plans.append(
             _DerivedPlan(
@@ -3205,6 +3194,12 @@ def _stage_derived_objects(
                 path=derived_path,
                 content=content,
                 disambiguated_from=original_slug,
+                # #401 via #566: the torn classification is no longer echoed
+                # per candidate here (it fired on ~100% of objects, so it
+                # carried no signal); it rides the plan for the caller's
+                # one-line-per-run aggregate. The frontmatter record above
+                # (`build_concept`) is unchanged.
+                type_alternative=extraction.type_alternative,
             )
         )
 
@@ -3400,6 +3395,36 @@ class _SingleIngestOutcome:
 
     regenerated: bool
     extraction_degraded: bool
+    derived_count: int = 0
+    """How many derived objects this run staged (the aggregate line's
+    denominator, #566)."""
+    alternative_pairs: tuple[tuple[str, str], ...] = ()
+    """One `(type, type_alternative)` pair per staged object whose
+    classification the model reported as torn (#401) -- the callers
+    (`ingest`'s single path and `_ingest_batch`) aggregate these into ONE
+    summary line per run instead of the retired per-object echo (#566)."""
+
+
+def _echo_type_alternative_summary(
+    derived_count: int, pairs: Sequence[tuple[str, str]]
+) -> None:
+    """Emit the ONE aggregate disclosure line for torn classifications
+    (#566): `{n} of {m} derived object(s) recorded a type_alternative`,
+    naming the most common `{type}/{alternative}` pair. Silent when no
+    object recorded one -- an advisory that fires on the healthy path is
+    noise. stderr, like every other ingest notice, so the stdout batch
+    contract (#349) is untouched."""
+    if not pairs:
+        return
+    counts = Counter(pairs)
+    (primary, alternative), _ = counts.most_common(1)[0]
+    qualifier = "all" if len(counts) == 1 else "most common"
+    typer.echo(
+        f"openkos ingest: {len(pairs)} of {derived_count} derived object(s) "
+        f"recorded a type_alternative on the document "
+        f"({qualifier}: {primary}/{alternative}).",
+        err=True,
+    )
 
 
 _GLOB_MAGIC_CHARS = frozenset("*?[")
@@ -3600,6 +3625,8 @@ def _ingest_batch(
     degraded_count = 0
     skipped_count = 0
     hard_skip_count = 0
+    derived_total = 0
+    alternative_pairs: list[tuple[str, str]] = []
     for index, path in enumerate(matches, start=1):
         if progress is not None:
             progress(index, total, path)
@@ -3624,6 +3651,8 @@ def _ingest_batch(
                 f"{exc.exit_code}; its reason is on stderr above)"
             )
             continue
+        derived_total += outcome.derived_count
+        alternative_pairs.extend(outcome.alternative_pairs)
         if outcome.regenerated:
             reingested_count += 1
             marker, label = "~", "re-ingested"
@@ -3642,6 +3671,11 @@ def _ingest_batch(
     # had an fts.db gets one built. Fail-open (stderr only), so it can
     # never change the exit ladder below.
     _build_fts_after_ingest(config.WorkspaceLayout(root))
+
+    # ONE torn-classification aggregate for the WHOLE batch (#566), on
+    # stderr before the stdout report so the stdout contract (#349) keeps
+    # its promised shape: outcome lines first, batch summary last.
+    _echo_type_alternative_summary(derived_total, alternative_pairs)
 
     # Per-file outcome lines FIRST, the aggregate summary as the batch's
     # last word -- the order the docstrings and docs/cli.md promise
@@ -3735,7 +3769,13 @@ def ingest(
         )
         raise typer.Exit(code=1) from exc
     if matches is None:
-        _ingest_single(src, auto=auto, include_confidential=include_confidential)
+        outcome = _ingest_single(
+            src, auto=auto, include_confidential=include_confidential
+        )
+        # ONE aggregate torn-classification line per run (#566), printed by
+        # the command -- never by `_ingest_single`, which the batch path
+        # calls once per file.
+        _echo_type_alternative_summary(outcome.derived_count, outcome.alternative_pairs)
         # End-of-run FTS build (issue #553): AFTER the single-file pipeline
         # returned -- a refusal raises `typer.Exit` above and skips this,
         # matching the batch path (nothing new was committed).
@@ -4338,6 +4378,12 @@ def _ingest_single(
     return _SingleIngestOutcome(
         regenerated=regenerate,
         extraction_degraded=skip_reason is not None,
+        derived_count=len(derived_plans),
+        alternative_pairs=tuple(
+            (plan.doc_type, plan.type_alternative)
+            for plan in derived_plans
+            if plan.type_alternative is not None
+        ),
     )
 
 
