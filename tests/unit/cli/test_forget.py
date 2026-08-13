@@ -2078,9 +2078,7 @@ def test_preview_aggregates_repeated_inbound_links_per_referrer(
     result = runner.invoke(app, ["forget", target_id, "--auto"])
 
     assert result.exit_code == 1
-    assert (
-        result.output.count("  ! bundle/concepts/referrer.md (3 inbound links)") == 1
-    )
+    assert result.output.count("  ! bundle/concepts/referrer.md (3 inbound links)") == 1
     assert "(inbound link)" not in result.output
     assert "3 inbound reference(s)" in result.stderr
 

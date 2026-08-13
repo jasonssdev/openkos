@@ -251,10 +251,13 @@ There are two shapes, chosen by `--winner`:
 
 Reconciliation is idempotent per pair: re-running the exact same request (same mode, same winner) is a no-op; requesting a **different** resolution for a pair already reconciled (a mode switch, or an opposite `--winner`) refuses rather than silently flipping it. Same Phase A / confirm gate / Phase B shape and `--auto` precedence as `relate`.
 
+**Batch mode** (`--from-findings`, no ids): instead of transcribing pair ids from `contradictions` output by hand, walk the persisted open contradiction findings directly. Each actionable finding — open (not declined), not stale, a high-confidence CONTRADICTS verdict, and a real pair (merged-content findings are excluded) — is shown with its verdict, confidence, and rationale, then gated behind a per-item `[y/N]` prompt; an accepted pair gets the **same symmetric `reconciled_with` transaction** the two-id form performs, through the same write path. Consent is per item and TTY-only — there is deliberately no unattended bulk path, so `--from-findings` refuses on a pipe and rejects `--auto`, `--winner`, and explicit ids (a directional resolution still needs the two-id form, where the human names the winner). A pair whose transaction refuses (e.g. already reconciled differently) is counted as skipped and the walk continues; declines are listed at the end.
+
 | Flag | Meaning |
 | --- | --- |
 | `--winner <id>` | The concept (must resolve to `id-a` or `id-b`) that supersedes its counterpart — writes a directional `supersedes` edge. Omit for a symmetric `reconciled_with` reconciliation. |
 | `--auto` | Skip the confirmation prompt and write immediately (unattended). Config `review: false` skips the prompt the same way. |
+| `--from-findings` | Walk the persisted open contradiction findings with a per-item consent prompt instead of naming one pair — see **Batch mode** above. Takes no ids, no `--winner`, no `--auto`. |
 
 ### `openkos suggest-relations`
 
@@ -265,6 +268,7 @@ The model is offered the seeded vocabulary **minus `derived_from`**, and a reply
 | Flag | Meaning |
 | --- | --- |
 | `--include-confidential` | Include confidential concepts. Excluded by default when the LLM backend is **not** verifiably on this machine — an untyped edge with a confidential endpoint is then dropped before `llm.chat` is ever called for it. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
+| `--edge-offset N` | Skip the first N **ranked** candidate edges, sliding the per-run candidate cap's window so the batch beyond it is browsable without first typing the batch before it. A capped run names the next batch's exact offset; an offset at or past the candidate set says so instead of claiming nothing is untyped. Default 0 — identical to before. |
 
 ### `openkos relate <source-id> <type> <target-id>`
 

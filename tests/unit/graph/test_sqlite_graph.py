@@ -2137,7 +2137,9 @@ def test_pass_three_offset_shifts_the_retained_window(tmp_path: Path) -> None:
         pairs.append(("concepts/hub", f"concepts/{leaf_id}", index * 0.001))
     stub = _StubCandidateSource(pairs)
 
-    with sqlite_graph.build_graph(bundle, candidates=stub, candidate_offset=50) as store:
+    with sqlite_graph.build_graph(
+        bundle, candidates=stub, candidate_offset=50
+    ) as store:
         rows = _edge_rows(store)
         report = store.candidate_report
 

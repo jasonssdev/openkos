@@ -690,9 +690,7 @@ def next_candidate_offset(
         include_confidential=include_confidential,
         local_exemption=local_exemption,
     )
-    if any(
-        pair[0] not in blocked and pair[1] not in blocked for pair in beyond
-    ):
+    if any(pair[0] not in blocked and pair[1] not in blocked for pair in beyond):
         return report.offset + report.retained
     return None
 

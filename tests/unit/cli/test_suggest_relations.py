@@ -1096,7 +1096,9 @@ def test_suggest_relations_builds_the_graph_once_on_the_zero_path(
         candidate_offset: int = 0,
     ) -> sqlite_graph.SqliteGraphStore:
         calls.append(bundle_dir)
-        return real(bundle_dir, candidates=candidates, candidate_offset=candidate_offset)
+        return real(
+            bundle_dir, candidates=candidates, candidate_offset=candidate_offset
+        )
 
     monkeypatch.setattr("openkos.cli.main.build_graph", _counting_build_graph)
     monkeypatch.setattr("openkos.graph.summary.build_graph", _counting_build_graph)
@@ -1139,7 +1141,9 @@ def test_suggest_relations_builds_the_graph_once_on_the_non_zero_path(
         candidates: sqlite_graph.CandidateSource | None = None,
         candidate_offset: int = 0,
     ) -> sqlite_graph.SqliteGraphStore:
-        store = real(bundle_dir, candidates=candidates, candidate_offset=candidate_offset)
+        store = real(
+            bundle_dir, candidates=candidates, candidate_offset=candidate_offset
+        )
         stores.append(store)
         return store
 
@@ -1607,9 +1611,7 @@ def test_suggest_relations_truncated_run_points_at_the_next_batch(
     assert "re-run" in result.stdout
 
 
-def _sixty_pair_workspace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _sixty_pair_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A 60-candidate over-cap workspace with a stubbed proximity source and
     a no-op suggester -- the browsing fixture #567's offset paging needs."""
     _init_workspace(tmp_path, monkeypatch)
@@ -1653,17 +1655,15 @@ def test_suggest_relations_edge_offset_surfaces_the_next_batch(
     unreachable without typing the first 50)."""
     _sixty_pair_workspace(tmp_path, monkeypatch)
 
-    captured: list[list] = []
+    captured: list[list[Edge]] = []
 
-    def _capture(edges, **kwargs):
+    def _capture(edges: Sequence[Edge], **kwargs: object) -> EdgeSuggestionBatch:
         captured.append(list(edges))
         return EdgeSuggestionBatch(results=[])
 
     monkeypatch.setattr("openkos.cli.main.suggest_edge_types", _capture)
 
-    result = runner.invoke(
-        app, ["suggest-relations", "--auto", "--edge-offset", "50"]
-    )
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--edge-offset", "50"])
 
     assert result.exit_code == 0
     assert len(captured) == 1
@@ -1693,9 +1693,7 @@ def test_suggest_relations_edge_offset_beyond_the_set_reports_it(
     the misleading zero-candidate state message (#567)."""
     _sixty_pair_workspace(tmp_path, monkeypatch)
 
-    result = runner.invoke(
-        app, ["suggest-relations", "--auto", "--edge-offset", "60"]
-    )
+    result = runner.invoke(app, ["suggest-relations", "--auto", "--edge-offset", "60"])
 
     assert result.exit_code == 0
     assert "no candidate edges at --edge-offset 60" in result.stdout

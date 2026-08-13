@@ -771,6 +771,18 @@ def is_high_confidence_contradiction(verdict: ContradictionVerdict) -> bool:
     )
 
 
+def is_high_confidence_finding(verdict_value: str, confidence: float) -> bool:
+    """`is_high_confidence_contradiction` over a PERSISTED finding's flat
+    `(verdict_value, confidence)` shape (`state.findings` stores
+    `Verdict.value` strings, never the enum) -- the same threshold and the
+    same CONTRADICTS-only rule, so a reader of `.openkos/findings.db` (#567's
+    `reconcile --from-findings`) can never drift from the live predicate."""
+    return (
+        verdict_value == Verdict.CONTRADICTS.value
+        and confidence >= _CONFIDENCE_DISPLAY_THRESHOLD
+    )
+
+
 def _pairs_and_types(
     store: GraphStore, excluded: frozenset[str], *, cap: int | None = _MAX_PAIRS
 ) -> tuple[list[tuple[str, str]], int, dict[tuple[str, str], str]]:
