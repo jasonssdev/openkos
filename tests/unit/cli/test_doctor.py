@@ -1272,9 +1272,12 @@ def test_doctor_ledger_checks_pass_trivially_when_no_ledgers_exist(
     assert "[PASS] Merge ledger entries free of post-merge mutation" in result.stdout
 
 
-def test_doctor_torn_write_check_fails_with_repair_remediation(
+def test_doctor_torn_write_check_fails_with_merge_unmerge_remediation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#603: the remediation names `merge`/`unmerge` -- whose recovery pass
+    actually resolves a pending marker -- never `openkos repair`, whose
+    Gate 1 refuses outright while any marker is pending."""
     _init_workspace(tmp_path, monkeypatch)
     _fake_client_and_git(monkeypatch)
     bundle_dir = WorkspaceLayout(tmp_path).bundle_dir
@@ -1295,9 +1298,15 @@ def test_doctor_torn_write_check_fails_with_repair_remediation(
     # Informational: never affects the exit code (critical=False).
     assert result.exit_code == 0
     assert "[FAIL] Merge ledger torn writes" in result.stdout
-    fail_and_after = result.stdout.split("[FAIL] Merge ledger torn writes", 1)[1]
-    assert "  -> " in fail_and_after
-    assert "openkos repair" in fail_and_after
+    lines = result.stdout.splitlines()
+    fail_index = next(
+        i for i, line in enumerate(lines) if "[FAIL] Merge ledger torn writes" in line
+    )
+    remediation = lines[fail_index + 1]
+    assert remediation.startswith("  -> ")
+    assert "openkos merge" in remediation
+    assert "openkos unmerge" in remediation
+    assert "openkos repair" not in remediation
 
 
 def test_doctor_nesting_violation_check_names_both_remedies_when_reset_point_exists(
