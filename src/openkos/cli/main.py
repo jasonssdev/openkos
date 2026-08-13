@@ -3433,10 +3433,26 @@ _GLOB_MAGIC_CHARS = frozenset("*?[")
 these is treated as a quoted glob pattern, not a missing file (issue #267)."""
 
 
-def _expand_batch_sources(src: Path) -> list[Path] | None:
+_TEXT_SOURCE_EXTENSIONS = frozenset(
+    {".adoc", ".markdown", ".md", ".org", ".rst", ".srt", ".text", ".txt", ".vtt"}
+)
+"""Extensions directory/glob EXPANSION keeps (#568): prose documents and
+transcript formats. A user pointing `ingest` at a project folder must not
+sweep `.DS_Store`, lockfiles, code, or binaries into the bundle -- the
+degrade path handles them without crashing, but each one still becomes a
+permanent Source document. Matched case-insensitively on `Path.suffix`, so
+extensionless files (`LICENSE`, `Makefile`) are skipped too. An EXPLICIT
+single-file path bypasses this entirely: naming one exact file is a choice,
+expansion is a sweep."""
+
+
+def _expand_batch_sources(src: Path) -> tuple[list[Path], int] | None:
     """Route `ingest`'s `src` argument (issue #267): return `None` when it
-    must take the existing single-file path unchanged, or the SORTED list
-    of matched files for the batch path.
+    must take the existing single-file path unchanged, or a `(matches,
+    skipped_non_text)` pair for the batch path -- the SORTED list of
+    text-source files kept, plus how many expanded files the
+    `_TEXT_SOURCE_EXTENSIONS` allowlist dropped (#568), for the batch's
+    pre-flight disclosure line.
 
     `None` covers two cases: an existing plain FILE (single-file behavior
     stays byte-identical -- checked FIRST, so even a filename containing a
@@ -3460,7 +3476,7 @@ def _expand_batch_sources(src: Path) -> list[Path] | None:
     if src.is_file():
         return None
     if src.is_dir():
-        return sorted(
+        candidates = sorted(
             (
                 entry
                 for entry in src.iterdir()
@@ -3468,14 +3484,14 @@ def _expand_batch_sources(src: Path) -> list[Path] | None:
             ),
             key=str,
         )
-    if any(char in str(src) for char in _GLOB_MAGIC_CHARS):
+    elif any(char in str(src) for char in _GLOB_MAGIC_CHARS):
         # `glob.glob`, deliberately not `Path.glob` (PTH207): pathlib
         # refuses an absolute pattern outright (`NotImplementedError`) and
         # rebases every relative match onto its base directory, where
         # `glob.glob` accepts both forms and echoes each match in the
         # pattern's OWN relative/absolute shape -- which is exactly what the
         # batch report and its outcome lines print back to the user.
-        return sorted(
+        candidates = sorted(
             (
                 match_path
                 for match in glob.glob(str(src), recursive=True)  # noqa: PTH207
@@ -3483,7 +3499,12 @@ def _expand_batch_sources(src: Path) -> list[Path] | None:
             ),
             key=str,
         )
-    return None
+    else:
+        return None
+    matches = [
+        path for path in candidates if path.suffix.lower() in _TEXT_SOURCE_EXTENSIONS
+    ]
+    return matches, len(candidates) - len(matches)
 
 
 def _refuse_basename_collisions(matches: Sequence[Path]) -> None:
@@ -3514,7 +3535,12 @@ def _refuse_basename_collisions(matches: Sequence[Path]) -> None:
 
 
 def _ingest_batch(
-    src: Path, matches: list[Path], *, auto: bool, include_confidential: bool
+    src: Path,
+    matches: list[Path],
+    *,
+    auto: bool,
+    include_confidential: bool,
+    skipped_non_text: int = 0,
 ) -> None:
     """Drive every file in `matches` (already expanded and sorted by
     `_expand_batch_sources`) through the EXISTING single-file pipeline
@@ -3568,6 +3594,18 @@ def _ingest_batch(
     retryability it cannot deliver (#234: distinct causes must not read
     alike)."""
     root = Path.cwd()
+    if skipped_non_text:
+        # Pre-flight disclosure (#568), BEFORE the empty-match refusal and
+        # the cost gate: says what expansion actually kept, so a directory
+        # full of code refusing with "no files matched" explains itself,
+        # and the cost gate's count covers exactly what will be ingested.
+        # Silent when the allowlist dropped nothing -- the cost gate
+        # already names the matched count on the healthy path.
+        typer.echo(
+            f"openkos ingest: {len(matches)} file(s) matched; "
+            f"{skipped_non_text} skipped as non-text.",
+            err=True,
+        )
     if not matches:
         typer.echo(
             f"openkos ingest: refusing to ingest -- no files matched '{src}'; "
@@ -3731,11 +3769,13 @@ def ingest(
     A plain existing FILE keeps the exact single-file behavior documented
     on `_ingest_single` -- copy into `raw/`, one OKF Source concept,
     bounded LLM extraction, one confirm gate, per-ingest auto-commit. A
-    DIRECTORY ingests every readable file directly inside it
+    DIRECTORY ingests every readable TEXT-SOURCE file directly inside it
     (non-recursive; subdirectories are never walked into). A quoted GLOB
     (detected by its magic characters `*`, `?`, `[`; expanded relative to
     the cwd, recursion only via an explicit `**`) ingests every matched
-    file. Matched files are SORTED by path string -- never filesystem
+    text-source file. Both expansions apply the `_TEXT_SOURCE_EXTENSIONS`
+    allowlist (#568) and disclose any skips in one pre-flight line before
+    the cost gate; an explicit single-file path bypasses the filter. Matched files are SORTED by path string -- never filesystem
     order -- so `log.md` and the per-file commits are reproducible across
     machines.
 
@@ -3761,14 +3801,14 @@ def ingest(
     written). See `_ingest_batch` for the full batch contract.
     """
     try:
-        matches = _expand_batch_sources(src)
+        expansion = _expand_batch_sources(src)
     except OSError as exc:
         typer.echo(
             f"openkos ingest: failed while expanding '{src}' -- {exc}.",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    if matches is None:
+    if expansion is None:
         outcome = _ingest_single(
             src, auto=auto, include_confidential=include_confidential
         )
@@ -3781,7 +3821,14 @@ def ingest(
         # matching the batch path (nothing new was committed).
         _build_fts_after_ingest(config.WorkspaceLayout(Path.cwd()))
         return
-    _ingest_batch(src, matches, auto=auto, include_confidential=include_confidential)
+    matches, skipped_non_text = expansion
+    _ingest_batch(
+        src,
+        matches,
+        auto=auto,
+        include_confidential=include_confidential,
+        skipped_non_text=skipped_non_text,
+    )
 
 
 def _ingest_single(
@@ -12816,8 +12863,15 @@ def doctor() -> None:
             )
 
     # 6. bundle-readable (informational, workspace-only; SKIP outside)
+    bundle_empty = False
     if in_workspace:
         survey = okf.survey_bundle(config.WorkspaceLayout(root).bundle_dir)
+        # #568: a clean survey counting nothing means a freshly-`init`ed
+        # bundle -- checks 7/7b below use this to skip instead of failing
+        # with a `reindex` that would build nothing.
+        bundle_empty = (
+            not survey.findings and survey.sources == 0 and survey.concepts == 0
+        )
         if not survey.findings:
             results.append(
                 CheckResult(
@@ -12839,6 +12893,8 @@ def doctor() -> None:
     else:
         results.append(CheckResult("Bundle readable", "skip", critical=False))
 
+    _EMPTY_BUNDLE_DETAIL = "empty bundle -- ingest a source first (openkos ingest)"
+
     # 7. workspace-vectors-present (informational, workspace-only; SKIP
     # outside -- mirrors check 6's workspace-only shape). Distinct from
     # vector-extension-loadable's throwaway `:memory:` probe
@@ -12851,6 +12907,18 @@ def doctor() -> None:
         if config.WorkspaceLayout(root).vectors_db_path.exists():
             results.append(
                 CheckResult("Workspace vector index present", "pass", critical=False)
+            )
+        elif bundle_empty:
+            # #568: right after `init` there is nothing to index -- a
+            # `[FAIL] -> openkos reindex` at step 5 of the README quickstart
+            # reads as a broken install, and `reindex` would build nothing.
+            results.append(
+                CheckResult(
+                    "Workspace vector index present",
+                    "skip",
+                    critical=False,
+                    detail=_EMPTY_BUNDLE_DETAIL,
+                )
             )
         else:
             results.append(
@@ -12877,6 +12945,15 @@ def doctor() -> None:
         if config.WorkspaceLayout(root).fts_db_path.exists():
             results.append(
                 CheckResult("Workspace FTS index present", "pass", critical=False)
+            )
+        elif bundle_empty:
+            results.append(
+                CheckResult(
+                    "Workspace FTS index present",
+                    "skip",
+                    critical=False,
+                    detail=_EMPTY_BUNDLE_DETAIL,
+                )
             )
         else:
             results.append(
