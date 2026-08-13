@@ -561,6 +561,63 @@ def test_purge_dirty_tree_refuses(tmp_git_repo: TmpGitRepo) -> None:
     )
 
 
+def test_purge_dirty_tree_refusal_names_the_offending_paths(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """#647: the engine owns this repo and commits on the user's behalf, so
+    its refusal must name WHAT is dirty rather than sending the user to
+    `git status` to interpret an engine message."""
+    (tmp_git_repo.root / "bundle" / "index.md").write_text(
+        (tmp_git_repo.root / "bundle" / "index.md").read_text(encoding="utf-8")
+        + "\nstray edit\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert result.exit_code == 1
+    assert "bundle/index.md" in result.output
+
+
+def test_purge_dirty_tree_refusal_names_an_untracked_editor_dir(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """The exact #647 chain: an untracked `.obsidian/` vault blocks purge in
+    a workspace whose `.gitignore` predates the #647 template (simulated by
+    stripping the entry) -- the refusal must name the vault directory."""
+    gitignore = tmp_git_repo.root / ".gitignore"
+    gitignore.write_text(
+        gitignore.read_text(encoding="utf-8").replace(".obsidian/\n", ""),
+        encoding="utf-8",
+    )
+    _git(["commit", "-am", "strip the #647 gitignore entry"], cwd=tmp_git_repo.root)
+    vault = tmp_git_repo.root / ".obsidian"
+    vault.mkdir()
+    (vault / "workspace.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert result.exit_code == 1
+    assert ".obsidian/" in result.output
+
+
+def test_purge_dirty_tree_refusal_caps_the_path_list(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """Many dirty paths must not flood stderr: at most 10 are named, with
+    an honest `... and N more` tail."""
+    for i in range(13):
+        (tmp_git_repo.root / f"stray-{i:02d}.txt").write_text("x", encoding="utf-8")
+
+    result = runner.invoke(app, ["purge", tmp_git_repo.source_id])
+
+    assert result.exit_code == 1
+    assert "stray-00.txt" in result.output
+    assert "stray-09.txt" in result.output
+    assert "stray-10.txt" not in result.output
+    assert "and 3 more" in result.output
+
+
 # --- Rail 5: commits published on a remote ----------------------------------
 
 

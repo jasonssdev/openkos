@@ -41,6 +41,13 @@ _GITIGNORE_TEMPLATE = r"""# --- openkos workspace (derived artifacts) ---
 # `openkos reindex`, so they are never committed.
 .openkos/
 
+# --- recommended editors (#647) ---
+# The README recommends opening the bundle in Obsidian and VS Code by name,
+# so their per-workspace artifacts are foreseeable; left untracked they
+# dirty the tree and block `purge`.
+.obsidian/
+.vscode/
+
 # Created by https://www.toptal.com/developers/gitignore/api/windows,linux,macos,python
 # Edit at https://www.toptal.com/developers/gitignore?templates=windows,linux,macos,python
 
@@ -393,10 +400,30 @@ def repo_root(cwd: Path) -> Path | None:
 def is_clean(cwd: Path) -> bool:
     """`True` iff `git status --porcelain` reports no untracked, unstaged, or
     staged changes under `cwd`."""
+    return not dirty_paths(cwd)
+
+
+def dirty_paths(cwd: Path) -> list[str]:
+    """Every path `git status --porcelain` reports as untracked, unstaged,
+    or staged under `cwd`, in git's own order (#647: `purge`'s dirty-tree
+    refusal names these instead of sending the user to `git status`).
+
+    Each entry is the path exactly as porcelain v1 prints it -- an
+    untracked directory keeps its trailing `/`. A rename/copy line
+    (`XY old -> new`) contributes the NEW path: that is the one the user
+    must commit or stash. Raises `GitError` if the probe itself fails."""
     result = _run(["git", "status", "--porcelain"], cwd=cwd)
     if result.returncode != 0:
         raise GitError(f"git status failed: {result.stderr.strip()}")
-    return result.stdout.strip() == ""
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.append(path)
+    return paths
 
 
 def has_published_commits(cwd: Path) -> bool:
