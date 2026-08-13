@@ -103,6 +103,40 @@ same list MUST NOT add further score.
 - THEN `cid`'s FTS contribution to `fused` equals `1 / (60 + 1)`, not the
   sum of both occurrences
 
+### Requirement: Filed Syntheses Are Down-Weighted In The Ranking
+
+An id under `insights/` (a filed synthesis — model output over an earlier
+bundle state, issue #649) MUST have its accumulated fused score scaled by
+`0.5` before ordering. The scaling is part of the ranking function itself,
+not a layer over it: purity, determinism, and the two-list contract are
+unchanged, and a fuse whose inputs contain no `insights/` id MUST order
+byte-identically to the unpenalized formula. The penalty re-ranks and never
+excludes: a penalized insight still participates in the ordering with its
+scaled score.
+
+#### Scenario: An insight at equal rank orders below the source
+
+- GIVEN `insights/earlier-answer` at rank 1 in the FTS list and
+  `sources/notes` at rank 1 in the dense list
+- WHEN `fuse(fts_hits, vec_hits)` is called
+- THEN `sources/notes` (`1/61`) is ordered before `insights/earlier-answer`
+  (`0.5/61`)
+
+#### Scenario: A dual-channel insight does not outrank a dual-channel source
+
+- GIVEN `insights/earlier-answer` at rank 1 in both lists and a source-backed
+  concept at rank 2 in both lists
+- WHEN `fuse(...)` is called
+- THEN the source-backed concept (`2/62`) is ordered before the insight
+  (`0.5 × 2/61`)
+
+#### Scenario: A relevant insight still beats a barely-relevant source
+
+- GIVEN `insights/earlier-answer` at rank 1 in the FTS list and a source at
+  rank 63 in the same list
+- WHEN `fuse(...)` is called
+- THEN the insight (`0.5/61`) is ordered before the source (`1/123`)
+
 ### Requirement: Pure Function, Deterministic, Zero I/O
 
 `fuse` MUST perform no file, network, or database access, and MUST return

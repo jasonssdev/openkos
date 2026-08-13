@@ -12442,6 +12442,13 @@ _DECLARATIVE_TITLE_MIN_CHARS = 15
 """Shortest first sentence worth promoting: below this the sentence is
 usually a fragment ("Yes.", "It depends.") that names nothing."""
 
+_SYNTHESIS_SHARE_WARN_THRESHOLD = 0.5
+"""Share of an answer's citations that are filed syntheses (`insights/`)
+at which `query` warns (issue #649). The all-or-nothing predecessor fired
+only at 1.0, a threshold a drifting base approaches without crossing;
+half-or-more means the answer stands as much on model output as on
+sources. Below it the `[synthesis]` markers still disclose each leg."""
+
 
 def _declarative_answer_title(answer_text: str) -> str | None:
     """Derive a DECLARATIVE title from `answer_text`'s first sentence, or
@@ -13018,17 +13025,36 @@ def query(
 
     # Issue #570: compounding on sources is the product's thesis;
     # compounding on model output with no source underneath is how a
-    # knowledge base rots. When EVERY citation is itself a filed synthesis,
-    # say so -- stderr, like every advisory here.
-    if result.citations and all(
-        citation.concept_id.startswith(insight_prefix) for citation in result.citations
+    # knowledge base rots. #649 made the signal PROPORTIONAL: the
+    # all-or-nothing guard fired only when every citation was a synthesis,
+    # a threshold a drifting base approaches without ever crossing. Now
+    # the share warns at >= _SYNTHESIS_SHARE_WARN_THRESHOLD, with the
+    # all-synthesis case keeping its stronger wording -- stderr, like
+    # every advisory here.
+    synthesis_count = sum(
+        1
+        for citation in result.citations
+        if citation.concept_id.startswith(insight_prefix)
+    )
+    if (
+        result.citations
+        and synthesis_count / len(result.citations) >= _SYNTHESIS_SHARE_WARN_THRESHOLD
     ):
-        typer.echo(
-            "openkos query: warning -- every citation is itself a filed "
-            "synthesis (Insight); nothing beneath this answer reaches a "
-            "Source.",
-            err=True,
-        )
+        if synthesis_count == len(result.citations):
+            typer.echo(
+                "openkos query: warning -- every citation is itself a filed "
+                "synthesis (Insight); nothing beneath this answer reaches a "
+                "Source.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                f"openkos query: warning -- {synthesis_count} of "
+                f"{len(result.citations)} citations are themselves filed "
+                "syntheses (Insights); this answer increasingly stands on "
+                "model output rather than sources.",
+                err=True,
+            )
 
     # Read-path disclosure (issue #569), the mirror of `_autocommit`'s
     # commit NOTICE: the fail-closed gate already decided ADMISSION (the

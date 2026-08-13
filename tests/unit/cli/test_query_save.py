@@ -1524,3 +1524,52 @@ def test_query_warns_when_every_citation_is_a_synthesis(
 
     assert result.exit_code == 0
     assert "every citation is itself a filed synthesis" in result.stderr
+
+
+def test_query_warns_proportionally_at_half_synthesis_share(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#649: the all-or-nothing guard never fired while the share climbed.
+    At >= 0.5 synthesis share the proportional warning names the count --
+    here 2 of 4 -- before the base drifts to compounding on model output."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = _fake_matched_answer(
+        citations=[
+            Citation(concept_id="insights/answer-one", title="One"),
+            Citation(concept_id="insights/answer-two", title="Two"),
+            Citation(concept_id="concepts/stoicism", title="Stoicism"),
+            Citation(concept_id="sources/notes", title="Notes"),
+        ]
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "2 of 4 citations are themselves filed syntheses" in result.stderr
+    assert "every citation is itself a filed synthesis" not in result.stderr
+
+
+def test_query_below_the_synthesis_share_threshold_stays_quiet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """1 of 5 (the #649 evidence case) is visible via the `[synthesis]`
+    markers but does not warn -- the threshold keeps the advisory rare
+    enough to stay read."""
+    _init_workspace(tmp_path, monkeypatch)
+    fake_result = _fake_matched_answer(
+        citations=[
+            Citation(concept_id="insights/answer-one", title="One"),
+            Citation(concept_id="concepts/stoicism", title="Stoicism"),
+            Citation(concept_id="concepts/epictetus", title="Epictetus"),
+            Citation(concept_id="sources/notes", title="Notes"),
+            Citation(concept_id="sources/course", title="Course"),
+        ]
+    )
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?"])
+
+    assert result.exit_code == 0
+    assert "filed syntheses" not in result.stderr
+    assert "every citation is itself a filed synthesis" not in result.stderr
