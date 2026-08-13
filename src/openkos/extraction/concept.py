@@ -1655,7 +1655,9 @@ class ExtractionReport:
     """`"skipped"` whenever the judge never ran: the single-run
     `extract_concept` path, which never calls it, and
     `extract_concept_union` on an EMPTY merged union (nothing to judge, so
-    no call is spent); `"ok"` when `extract_concept_union`'s judge call
+    no call is spent) or on a SINGLE-candidate one (#644: every possible
+    judge outcome keeps that candidate, so the call is a provable no-op and
+    is not spent either); `"ok"` when `extract_concept_union`'s judge call
     returned a usable selection admitting at least one candidate; `"failed"`
     when the judge call itself was unusable (`OllamaError`, empty reply, or
     unparseable/wrong-shape reply -- design D7); `"empty"` when the reply was
@@ -1992,7 +1994,12 @@ def extract_concept_union(
     (design D8) -- candidates beyond the ceiling never reach the judge at
     all, and `report.pre_judge_dropped` names how many. An EMPTY merged
     list skips the judge entirely (`judge_status` stays `"skipped"` -- no
-    LLM call is spent deciding among zero candidates); otherwise
+    LLM call is spent deciding among zero candidates), and so does a
+    SINGLE-candidate one (#644: a kept title keeps it, `None`/failed keeps
+    the full set, an empty admitted set degrades to the full set -- every
+    outcome keeps that candidate, so the call is a provable no-op whose
+    only possible contribution is noise, measured as exactly the cold-start
+    full-line-echo degrade #644 reported); otherwise
     `judge.select` is called with the (possibly ceiling-truncated) merged
     list and
     `source_text`; a `None` result (any `llm.chat` exception, an empty
@@ -2100,21 +2107,35 @@ def extract_concept_union(
             ),
         )
 
-    selected = judge_mod.select(
-        source_text,
-        [
-            judge_mod.JudgeCandidate(
-                type=c.type, title=c.title, description=c.description
-            )
-            for c in judge_input
-        ],
-        llm,
-    )
-
-    if selected is None:
+    if len(judge_input) == 1:
+        # A single candidate makes the judge call a provable no-op (#644):
+        # every possible outcome keeps that candidate -- its title echoed
+        # back keeps it, `None` (failed) keeps the full one-candidate set,
+        # and an empty admitted set degrades to that same full set. The
+        # call cannot change the output; it costs one model round trip and
+        # can ONLY add noise -- measured as exactly the noise #644
+        # reported: a cold-start full-line echo on the first file of a
+        # batch, surfacing a degrade notice about a selection that had
+        # nothing to select. Skip it; "skipped" already means "judge not
+        # run", shared with the empty-union skip above.
+        kept = judge_input
+        judge_status = "skipped"
+        judged_out_titles: tuple[str, ...] = ()
+    elif (
+        selected := judge_mod.select(
+            source_text,
+            [
+                judge_mod.JudgeCandidate(
+                    type=c.type, title=c.title, description=c.description
+                )
+                for c in judge_input
+            ],
+            llm,
+        )
+    ) is None:
         kept = judge_input
         judge_status = "failed"
-        judged_out_titles: tuple[str, ...] = ()
+        judged_out_titles = ()
     else:
         # Normalized on BOTH sides (design D4): the judge echoes titles as
         # prose, and case/whitespace drift in that echo must not silently

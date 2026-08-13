@@ -7,6 +7,7 @@ there): zero network, zero real Ollama process. `judge.py` is a LEAF --
 D2) -- so these tests never import `concept_mod`.
 """
 
+import json
 from collections.abc import Sequence
 
 import pytest
@@ -131,6 +132,74 @@ def test_select_returns_none_when_keep_is_an_empty_list() -> None:
     llm = _FakeLLM('{"keep": []}')
 
     assert judge_mod.select("source text", _CANDIDATES, llm) is None
+
+
+# --- full-line echo salvage (#644) ----------------------------------------
+
+
+def test_select_salvages_a_full_candidate_line_echo_with_single_quotes() -> None:
+    """#644 (measured on a cold-start probe): instead of echoing the kept
+    TITLE, the model sometimes echoes the WHOLE candidate line it was shown
+    -- `type='Concept' title='Stoicism' description='...'`. That string is a
+    valid `keep` entry to `_validate_selection`, but it matches no candidate
+    title downstream, so the union degraded to the full unfiltered set.
+    `select()` must resolve such an echo back to the bare candidate title."""
+    line = "type='Concept' title='Stoicism' description='A school of philosophy.'"
+    llm = _FakeLLM(json.dumps({"keep": [line]}))
+
+    selected = judge_mod.select("source text", _CANDIDATES, llm)
+
+    assert selected == ("Stoicism",)
+
+
+def test_select_salvages_a_full_candidate_line_echo_with_double_quotes() -> None:
+    """`_build_judge_messages` formats fields with `!r`, which switches to
+    double quotes when the value contains an apostrophe -- so the echoed
+    line can carry `title="..."` too. Both quote styles must salvage."""
+    line = '2. type="Person" title="Epictetus" description="A Stoic philosopher."'
+    llm = _FakeLLM(json.dumps({"keep": [line]}))
+
+    selected = judge_mod.select("source text", _CANDIDATES, llm)
+
+    assert selected == ("Epictetus",)
+
+
+def test_select_salvage_replaces_a_case_drifted_echoed_title() -> None:
+    """The salvage matches the extracted title against candidates with the
+    same strip/casefold/whitespace-collapse normalization the union applies
+    on both sides (design D4), and returns the candidate's EXACT title so
+    the union's own matching cannot miss it."""
+    line = "1. type='Concept' title='STOICISM' description='A school of philosophy.'"
+    llm = _FakeLLM(json.dumps({"keep": [line]}))
+
+    selected = judge_mod.select("source text", _CANDIDATES, llm)
+
+    assert selected == ("Stoicism",)
+
+
+def test_select_leaves_an_unresolvable_kept_string_as_is() -> None:
+    """A kept string that neither matches a candidate title nor carries the
+    candidate-line encoding stays as-is -- the union's closed-set matching
+    already ignores it. Same for a full-line echo whose embedded title
+    names no candidate: never invent a selection out of it."""
+    fabricated = "type='Concept' title='Fabricated' description='Not a candidate.'"
+    llm = _FakeLLM(json.dumps({"keep": ["utter garbage", fabricated, "Stoicism"]}))
+
+    selected = judge_mod.select("source text", _CANDIDATES, llm)
+
+    assert selected == ("utter garbage", fabricated, "Stoicism")
+
+
+def test_select_leaves_a_clean_title_list_untouched() -> None:
+    """A reply already echoing bare candidate titles passes through the
+    salvage byte-identical, in reply order -- including alongside a
+    full-line echo needing resolution."""
+    line = "type='Concept' title='Stoicism' description='A school of philosophy.'"
+    llm = _FakeLLM(json.dumps({"keep": ["Epictetus", line]}))
+
+    selected = judge_mod.select("source text", _CANDIDATES, llm)
+
+    assert selected == ("Epictetus", "Stoicism")
 
 
 # --- llm.chat failure is total (design D7) --------------------------------

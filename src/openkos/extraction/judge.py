@@ -19,6 +19,7 @@ unparseable, or wrong-shaped reply degrades the same way. The caller
 candidate set, backstop-truncated, whenever `select()` returns `None`.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -101,6 +102,60 @@ def _validate_selection(data: dict[str, Any]) -> tuple[str, ...] | None:
     return tuple(keep)
 
 
+_ECHOED_TITLE_RE = re.compile(r"title=(['\"])(.*?)\1 description=")
+"""The `title=...` span of one `_build_judge_messages` candidate line
+(`{i}. type={c.type!r} title={c.title!r} description={c.description!r}`),
+anchored on both sides to that exact encoding: `!r` quotes with `'` normally
+and switches to `\"` when the value contains an apostrophe, so both quote
+styles are one alternation. Exists ONLY for `_salvage_full_line_echoes`
+(#644) -- it recognizes this module's own prompt format echoed back, never
+arbitrary prose."""
+
+
+def _normalize_title(value: str) -> str:
+    """strip + casefold + collapsed internal whitespace -- MIRRORS
+    `concept._normalize_title` byte-for-byte, because that is the
+    normalization `extract_concept_union` applies to BOTH sides of its
+    post-judge title matching (design D4) and this module must resolve a
+    salvaged echo to a title that matching will accept. Mirrored, not
+    imported: this module is a leaf that never imports `concept.py`
+    (design D2)."""
+    return " ".join(value.strip().casefold().split())
+
+
+def _salvage_full_line_echoes(
+    kept: tuple[str, ...],
+    candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
+) -> tuple[str, ...]:
+    """Resolve kept strings that echo a WHOLE candidate line back to the
+    bare candidate title (#644, measured on a cold-start probe): despite
+    the prompt's echo-the-title-EXACTLY instruction, the model sometimes
+    replies `{"keep": ["type='Concept' title='X' description='...'"]}` --
+    a valid shape to `_validate_selection`, but a string the union's
+    closed-set title matching can never match, so a genuine selection
+    degraded to the full unfiltered set.
+
+    Deterministic and fail-closed: a kept string is rewritten ONLY when it
+    (a) matches no candidate title under the shared normalization, (b)
+    carries this module's own candidate-line encoding, and (c) that
+    encoding's extracted title normalizes to a real candidate title -- in
+    which case the CANDIDATE's exact title is returned, so downstream
+    matching cannot miss it. Anything else passes through byte-identical,
+    exactly as before."""
+    titles_by_norm = {_normalize_title(c.title): c.title for c in candidates}
+    resolved: list[str] = []
+    for title in kept:
+        if _normalize_title(title) in titles_by_norm:
+            resolved.append(title)
+            continue
+        match = _ECHOED_TITLE_RE.search(title)
+        candidate_title = (
+            titles_by_norm.get(_normalize_title(match.group(2))) if match else None
+        )
+        resolved.append(candidate_title if candidate_title is not None else title)
+    return tuple(resolved)
+
+
 def select(
     source_text: str,
     candidates: "list[JudgeCandidate] | tuple[JudgeCandidate, ...]",
@@ -109,10 +164,12 @@ def select(
     """Ask `llm` which of `candidates` are genuine, distinct subjects.
 
     Returns the titles it keeps, echoed verbatim from the closed candidate
-    list, in reply order. `None` means unusable -- `llm.chat` raised any
-    exception, the reply was not valid JSON, or the parsed shape failed
-    `_validate_selection` -- and the caller must fail closed to the whole
-    candidate set (design D7). Never raises.
+    list, in reply order -- a kept string that instead echoes a whole
+    candidate line is first resolved back to its bare candidate title
+    (`_salvage_full_line_echoes`, #644). `None` means unusable -- `llm.chat`
+    raised any exception, the reply was not valid JSON, or the parsed shape
+    failed `_validate_selection` -- and the caller must fail closed to the
+    whole candidate set (design D7). Never raises.
 
     Deliberate bound (#457): the reply is TITLE-ONLY, so it cannot
     disambiguate two candidates of different types sharing one normalized
@@ -133,4 +190,7 @@ def select(
     parsed = parsing.extract_json_object(reply)
     if parsed is None:
         return None
-    return _validate_selection(parsed)
+    validated = _validate_selection(parsed)
+    if validated is None:
+        return None
+    return _salvage_full_line_echoes(validated, candidates)
