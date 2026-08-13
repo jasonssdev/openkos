@@ -118,6 +118,7 @@ Beyond that: a desktop app, graph visualization, richer memory, and federation �
 - [`docs/philosophy.md`](https://github.com/jasonssdev/openkos/blob/main/docs/philosophy.md) — the foundational essay: what knowledge is and why OpenKOS matters
 - [`docs/knowledge-object-model.md`](https://github.com/jasonssdev/openkos/blob/main/docs/knowledge-object-model.md) — how knowledge is represented (OKF + the OpenKOS layer)
 - [`docs/roadmap.md`](https://github.com/jasonssdev/openkos/blob/main/docs/roadmap.md) — the MVP roadmap
+- [`docs/ideas.md`](https://github.com/jasonssdev/openkos/blob/main/docs/ideas.md) — ideas under consideration, none of them committed
 - [`docs/tech_stack.md`](https://github.com/jasonssdev/openkos/blob/main/docs/tech_stack.md) — technology choices
 - [`docs/architecture.md`](https://github.com/jasonssdev/openkos/blob/main/docs/architecture.md) — repository and bundle structure, and source versioning
 - [`docs/okf-alignment.md`](https://github.com/jasonssdev/openkos/blob/main/docs/okf-alignment.md) — how OpenKOS relates to OKF
