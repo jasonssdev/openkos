@@ -180,3 +180,78 @@ def test_fuse_takes_exactly_the_two_retriever_lists() -> None:
     parameters = list(inspect.signature(fusion.fuse).parameters)
 
     assert parameters == ["fts_hits", "vec_hits"]
+
+
+# --- #649: insights are down-weighted so a synthesis never outranks the
+# evidence it was built from -------------------------------------------------
+
+
+def test_insight_penalty_constant_is_half() -> None:
+    """The deterministic down-weight (#649): an `insights/` id's fused
+    score is scaled by 0.5 -- with `k=60`, a single-channel insight at
+    rank 1 (`0.5/61`) orders below any single-channel source up to rank
+    62, while a dual-channel insight still meets a same-rank
+    single-channel source at parity."""
+    assert fusion.INSIGHT_FUSION_PENALTY == 0.5
+    assert fusion.INSIGHT_ID_PREFIX == "insights/"
+
+
+def test_an_insight_at_equal_rank_orders_below_the_source() -> None:
+    """Rank 1 in FTS (insight) vs rank 1 in dense (source): without the
+    penalty the tie would break lexicographically (insight first); with it
+    the source wins."""
+    fts_hits = [FtsHit(concept_id="insights/earlier-answer", score=0.0)]
+    vec_hits = [VecHit(concept_id="sources/notes", distance=0.0)]
+
+    assert fusion.fuse(fts_hits, vec_hits) == [
+        "sources/notes",
+        "insights/earlier-answer",
+    ]
+
+
+def test_a_dual_channel_insight_does_not_outrank_a_dual_channel_source() -> None:
+    """The compounding shape exactly: an insight strong in BOTH channels
+    (rank 1 twice) must not evict the source-backed concept beneath it
+    (rank 2 twice)."""
+    fts_hits = [
+        FtsHit(concept_id="insights/earlier-answer", score=0.0),
+        FtsHit(concept_id="concepts/model-context-protocol", score=1.0),
+    ]
+    vec_hits = [
+        VecHit(concept_id="insights/earlier-answer", distance=0.0),
+        VecHit(concept_id="concepts/model-context-protocol", distance=0.1),
+    ]
+
+    result = fusion.fuse(fts_hits, vec_hits)
+
+    assert result == [
+        "concepts/model-context-protocol",
+        "insights/earlier-answer",
+    ]
+
+
+def test_an_insight_still_ranks_above_a_far_worse_source() -> None:
+    """Down-weight, not exclusion: a rank-1 insight (0.5/61) still orders
+    above a source at rank 63 (1/123) -- the penalty re-ranks, it never
+    silently removes a relevant synthesis."""
+    fts_hits = [FtsHit(concept_id="insights/earlier-answer", score=0.0)]
+    fts_hits += [
+        FtsHit(concept_id=f"concepts/filler-{i:03d}", score=float(i)) for i in range(61)
+    ]
+    fts_hits += [FtsHit(concept_id="sources/deep-cut", score=99.0)]
+
+    result = fusion.fuse(fts_hits, [])
+
+    assert result.index("insights/earlier-answer") < result.index("sources/deep-cut")
+
+
+def test_non_insight_scores_are_byte_identical_to_plain_rrf() -> None:
+    """The penalty touches ONLY `insights/` ids: a fuse with no insight in
+    either list orders exactly as the unpenalized formula says."""
+    fts_hits = [
+        FtsHit(concept_id="cid_A", score=0.0),
+        FtsHit(concept_id="cid_B", score=1.0),
+    ]
+    vec_hits = [VecHit(concept_id="cid_B", distance=0.0)]
+
+    assert fusion.fuse(fts_hits, vec_hits) == ["cid_B", "cid_A"]

@@ -44,6 +44,24 @@ from openkos.state.vectorstore import VecHit
 K_RRF = 60
 """RRF's `k` constant: dampens the contribution of low ranks (spec-pinned)."""
 
+INSIGHT_ID_PREFIX = "insights/"
+"""The id prefix identifying a filed synthesis (issue #649). The folder IS
+the type's identity in an OKF bundle -- the same rule `query`'s
+`[synthesis]` citation marker applies."""
+
+INSIGHT_FUSION_PENALTY = 0.5
+"""Deterministic down-weight applied to an `insights/` id's fused score
+(issue #649): a filed synthesis is model output over an earlier bundle
+state, and it must never outrank the source-derived evidence it was built
+from just because it phrases the answer the way questions do.
+
+`0.5` with `k=60` gives exact, checkable geometry: a single-channel insight
+at rank 1 scores `0.5/61`, below ANY single-channel source through rank 62
+(`1/(60+r)` for `r <= 62`), while a dual-channel insight meets a same-rank
+single-channel source at parity. A re-rank, never an exclusion -- a
+relevant synthesis still beats a barely-relevant source (rank 63+), and a
+bundle with no insights fuses byte-identically to plain RRF."""
+
 
 def _accumulate[Hit: (FtsHit, VecHit)](
     scores: dict[str, float], hits: list[Hit]
@@ -74,9 +92,15 @@ def fuse(fts_hits: list[FtsHit], vec_hits: list[VecHit]) -> list[str]:
     identical output for identical inputs across repeated calls.
 
     This is the ENTIRE ranking. Nothing is layered on top of it and
-    nothing permutes it (issue #434).
+    nothing permutes it (issue #434). The one refinement inside it: an
+    `insights/` id's accumulated score is scaled by
+    `INSIGHT_FUSION_PENALTY` (issue #649) -- part of the ranking function
+    itself, not a layer, so purity/determinism are unchanged.
     """
     scores: dict[str, float] = {}
     _accumulate(scores, fts_hits)
     _accumulate(scores, vec_hits)
+    for concept_id in scores:
+        if concept_id.startswith(INSIGHT_ID_PREFIX):
+            scores[concept_id] *= INSIGHT_FUSION_PENALTY
     return sorted(scores, key=lambda concept_id: (-scores[concept_id], concept_id))
