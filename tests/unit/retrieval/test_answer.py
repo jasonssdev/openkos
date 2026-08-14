@@ -1078,6 +1078,44 @@ def test_absent_fts_index_degrades_to_empty_not_raise(tmp_path: Path) -> None:
     assert result.answer == "dense only, no fts"
 
 
+def test_fts_query_terms_drop_function_words() -> None:
+    """#648: ES/EN function words in the QUESTION match the wrong domain's
+    documents in FTS (`¿qué es MCP y para qué sirve?` ranked the Spanish
+    MVP concept FIRST for an English-domain question). The FTS query keeps
+    content words only; the dense channel keeps the full question."""
+    assert answer_mod._fts_query_terms("¿qué es MCP y para qué sirve?") == "MCP sirve"
+    assert answer_mod._fts_query_terms("¿qué es el Model Context Protocol?") == (
+        "Model Context Protocol"
+    )
+    assert answer_mod._fts_query_terms("what is the context window?") == (
+        "what context window"
+    )
+
+
+def test_fts_query_terms_fall_open_when_nothing_would_remain() -> None:
+    """A question made ONLY of function words keeps the raw question --
+    an empty FTS query would silently disable the lexical channel."""
+    assert answer_mod._fts_query_terms("¿qué es y para qué?") == "¿qué es y para qué?"
+
+
+def test_answer_searches_fts_with_content_words_only(tmp_path: Path) -> None:
+    """The wiring: `fts_index.search` receives the filtered query, never
+    the raw question (#648) -- pinned via the recording handle."""
+    bundle_dir = tmp_path / "bundle"
+    _write_doc(bundle_dir / "concepts" / "mcp.md", title="MCP")
+    index = _RecordingIndex(hits=[fts.FtsHit(concept_id="concepts/mcp", score=0.0)])
+    llm = _FakeLLM(reply="answer")
+
+    answer_mod.answer(
+        "¿qué es MCP?",
+        bundle_dir=bundle_dir,
+        llm=llm,
+        fts_index=index,
+    )
+
+    assert [call[0] for call in index.calls] == ["MCP"]
+
+
 def test_typed_exception_from_fts_search_propagates_unswallowed(
     tmp_path: Path,
 ) -> None:

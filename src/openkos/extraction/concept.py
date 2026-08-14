@@ -1128,6 +1128,14 @@ _EN_FUNCTION_WORDS: Final = frozenset(
 """English counterpart of `_ES_FUNCTION_WORDS`; same rules, same
 disjointness contract."""
 
+LANGUAGE_FUNCTION_WORDS: Final = _ES_FUNCTION_WORDS | _EN_FUNCTION_WORDS
+"""Public union of the two gate lists (#648): `retrieval/answer.py`
+filters the FTS query's terms through it, because a question's function
+words (`¿qué es ... y para qué sirve?`) lexically match the WRONG domain's
+documents in a bundle spanning unrelated topics -- measured in
+`evals/retrieval_stability/`. The two lists themselves stay private to the
+#618 voter; this union is the only public surface."""
+
 _LANGUAGE_TOKEN_RE: Final = re.compile(r"[a-záéíóúüñ]+")
 """Letter runs (Spanish accents included) over lowercased text -- the
 tokenizer both language voters share. Deliberately NOT `_TITLE_TOKEN_RE`

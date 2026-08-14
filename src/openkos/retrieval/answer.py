@@ -74,6 +74,7 @@ from pathlib import Path
 from typing import Literal
 
 from openkos import lifecycle, sensitivity
+from openkos.extraction.concept import LANGUAGE_FUNCTION_WORDS
 from openkos.llm.base import Embedder, LLMBackend, Message
 from openkos.llm.ollama import (
     OllamaEmbeddingDimensionMismatch,
@@ -396,6 +397,37 @@ def _classify_no_match(
     return "all_unreadable"
 
 
+_QUESTION_WORD_RE = re.compile(r"[^\W\d_]+")
+"""Letter runs of the question, for `_fts_query_terms` -- the same
+letters-only family as the language voters' tokenizer: digits and
+underscores carry no language and are not the terms causing #648."""
+
+
+def _fts_query_terms(question: str) -> str:
+    """The FTS query for `question`: content words only (#648).
+
+    On a bundle spanning unrelated domains, the QUESTION's function words
+    are what pull the wrong domain in through the lexical channel --
+    `¿qué es MCP y para qué sirve?` ranked the Spanish MVP concept FIRST
+    for an English-domain question, because `qué`/`es`/`para` match every
+    Spanish document (FTS5 ships no Spanish stopword list). Dropping the
+    ES/EN function words (`LANGUAGE_FUNCTION_WORDS`, the #618 voter's own
+    vocabulary) measured strictly better on `evals/retrieval_stability/`:
+    cross-domain intrusions halved in the failing family, the
+    `¿qué es el Model Context Protocol?` variant became exactly the
+    canonical set, and canonical retention stayed 8/8. The pool-size
+    hypothesis the issue also named was measured and FALSIFIED (floors
+    10/20/30 produced identical citation sets).
+
+    Fail-open: a question made only of function words keeps its raw text
+    -- an empty FTS query would silently disable the lexical channel. The
+    DENSE channel always embeds the full question; meaning lives there,
+    while FTS is bag-of-words and only ever saw the noise."""
+    tokens = _QUESTION_WORD_RE.findall(question)
+    kept = [token for token in tokens if token.lower() not in LANGUAGE_FUNCTION_WORDS]
+    return " ".join(kept) if kept else question
+
+
 def _fts_search(
     fts_index: fts.FtsSearchHandle | None, question: str, *, limit: int
 ) -> tuple[list[fts.FtsHit], list[str]]:
@@ -540,7 +572,11 @@ def answer(
 
     limit_pool = pool.pool_limit(limit)
 
-    hits, skip_notices = _fts_search(fts_index, question, limit=limit_pool)
+    # #648: the lexical channel searches content words only; the dense
+    # channel keeps the full question (see `_fts_query_terms`).
+    hits, skip_notices = _fts_search(
+        fts_index, _fts_query_terms(question), limit=limit_pool
+    )
 
     vec_hits, dense_degraded = _dense_search(
         question, embedder=embedder, vector_store=vector_store, pool_limit=limit_pool
