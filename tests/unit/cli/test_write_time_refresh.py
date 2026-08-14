@@ -747,7 +747,9 @@ def test_reconcile_from_findings_refreshes_once_when_pairs_applied(
     _write_doc(tmp_path / "bundle" / "concepts" / "gamma.md", title="Gamma")
     _write_doc(tmp_path / "bundle" / "concepts" / "delta.md", title="Delta")
 
-    def _pair_digests(first: str, second: str) -> tuple[object, ...]:
+    def _pair_digests(
+        first: str, second: str
+    ) -> tuple[findings_module.InputDigest, ...]:
         return tuple(
             findings_module.InputDigest(
                 concept_id,

@@ -812,6 +812,44 @@ def _sweep_ledger_sidecars_for_ids(
     return touched
 
 
+def _sweep_findings_for_ids(
+    layout: config.WorkspaceLayout, purge_ids: Iterable[str]
+) -> None:
+    """Privacy sweep of `.openkos/findings.db` for `purge_ids` membership
+    (#685 item 1; forget-command spec: "Deletion Sweep Includes Persisted
+    Findings"): `finding_claims` persists verbatim claim text quoted from
+    concept bodies, so a finding referencing a purge-set member must not
+    survive the member -- the same class of leak the ledger
+    (`_sweep_ledger_sidecars_for_ids`, #602/#667) and decisions
+    (`_sweep_decisions_for_ids`) sweeps already close, one store over.
+
+    `forget`-only: `purge` deletes `findings.db` wholesale in
+    `_purge_rebuild_indexes`, a strictly stronger erasure.
+
+    A missing store is a no-op (never created here --
+    `findings_db_path`'s pure-derivation contract). A corrupt or locked
+    store degrades to one LOUD stderr warning naming the residue and the
+    remedy rather than aborting a forget whose bundle writes already
+    landed -- a privacy scrub that fails silently would be worse than one
+    that fails out loud, and `findings.db` is recomputable derived state."""
+    if not layout.findings_db_path.exists():
+        return
+    try:
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            findings.delete_findings_referencing(conn, set(purge_ids))
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            "openkos forget: warning -- failed to sweep persisted findings "
+            f"({exc}); '.openkos/findings.db' may still quote the forgotten "
+            "concept(s). Delete the file to clear the residue (findings are "
+            "recomputable at LLM cost).",
+            err=True,
+        )
+
+
 def _decisions_history_targets(bundle_dir: Path, purge_ids: Iterable[str]) -> list[str]:
     """Every `bundle/.state/decisions/**` path -- own OR foreign -- that
     references a purge-set member, for inclusion in `purge`'s
@@ -5259,6 +5297,12 @@ def forget(
         # rewrite, so this call IS the entire sweep for it (unlike
         # `purge`, which also puts these paths into `expunge_targets`).
         decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
+        # Persisted-findings privacy sweep (#685 item 1), same Phase B:
+        # a derived cache only (never autocommitted), and it degrades to a
+        # loud warning internally rather than raising into this block --
+        # the bundle deletes above must not be reported as failed over a
+        # recomputable cache.
+        _sweep_findings_for_ids(layout, purge_ids)
     except (OSError, ValueError) as exc:
         message = f"openkos forget: failed while writing the forget -- {exc}."
         # K-of-N observability on a mid-cascade unlink failure (`--scope

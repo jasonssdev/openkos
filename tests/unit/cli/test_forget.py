@@ -2386,3 +2386,109 @@ def test_unmerge_refuses_a_redacted_ledger_entry(
     assert "SURVIVOR-OWN-BODY woven with FIRST-SECRET-BODY" in survivor_path.read_text(
         encoding="utf-8"
     )
+
+
+# --- #685 item 1: forget sweeps persisted findings referencing the purge set
+
+
+def _seed_finding(
+    tmp_path: Path,
+    pair_ids: tuple[str, str],
+    *,
+    claim: str = "SECRET-CLAIM-TEXT quoted from the target body",
+) -> Path:
+    from openkos.state import derived, findings
+    from openkos.state.vectorstore import content_hash
+
+    db_path = tmp_path / ".openkos" / "findings.db"
+    conn = derived.open_derived_connection(db_path)
+    try:
+        findings.record_findings(
+            conn,
+            [
+                findings.Finding(
+                    pair_ids=pair_ids,
+                    merged_absorbed_id=None,
+                    verdict="contradicts",
+                    confidence=0.9,
+                    rationale="rationale",
+                    input_digests=(
+                        findings.InputDigest(pair_ids[0], content_hash(b"a")),
+                        findings.InputDigest(pair_ids[1], content_hash(b"b")),
+                    ),
+                    conflicting_claims=(claim,),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+    return db_path
+
+
+def test_forgetting_a_concept_scrubs_its_persisted_finding_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """forget-command spec: "Deletion Sweep Includes Persisted Findings"
+    (#685 item 1) -- `finding_claims` persists verbatim claim text quoted
+    from concept bodies into `.openkos/findings.db`; forgetting the quoted
+    concept must scrub it, the same class of leak #602/#667 closed for the
+    merge ledger, one store over. Byte-level assertion: the deleted claim
+    must not survive in freelist-recoverable pages either."""
+    from openkos.state import derived, findings
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+    _write_plain_concept(tmp_path, "concepts/other", title="Other")
+    db_path = _seed_finding(tmp_path, ("concepts/target", "concepts/other"))
+    _seed_finding(
+        tmp_path,
+        ("concepts/unrelated-a", "concepts/unrelated-b"),
+        claim="unrelated claim survives",
+    )
+
+    result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert b"SECRET-CLAIM-TEXT" not in db_path.read_bytes()
+    conn = derived.open_derived_connection(db_path)
+    try:
+        (survivor,) = findings.open_findings(conn)
+    finally:
+        conn.close()
+    assert survivor.pair_ids == ("concepts/unrelated-a", "concepts/unrelated-b")
+    assert survivor.conflicting_claims == ("unrelated claim survives",)
+
+
+def test_forget_findings_sweep_failure_warns_and_does_not_abort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupt `.openkos/findings.db` must not abort a forget whose
+    bundle writes already landed -- the sweep degrades to one LOUD stderr
+    warning naming the residue (a privacy scrub that silently failed would
+    be worse than one that failed out loud)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+    db_path = tmp_path / ".openkos" / "findings.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_bytes(b"this is not sqlite")
+
+    result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "bundle" / "concepts" / "target.md").exists()
+    assert "failed to sweep persisted findings" in result.stderr
+
+
+def test_forget_without_a_findings_store_creates_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep honors `findings_db_path`'s pure-derivation contract: a
+    workspace that never persisted a finding stays free of a stray
+    `findings.db` after forget."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+
+    result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / ".openkos" / "findings.db").exists()

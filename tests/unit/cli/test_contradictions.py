@@ -2359,7 +2359,9 @@ def test_contradictions_partition_computes_digests_only_for_persisted_rows(
     digest_calls: list[object] = []
     original = curate_module.finding_input_digests
 
-    def _recording(bundle_dir: Path, spec: object) -> tuple[str, ...]:
+    def _recording(
+        bundle_dir: Path, spec: _CandidateSpec
+    ) -> tuple[findings.InputDigest, ...]:
         digest_calls.append(spec)
         return original(bundle_dir, spec)
 

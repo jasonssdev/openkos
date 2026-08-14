@@ -188,6 +188,41 @@ pointing at an id no longer present in the bundle.
 - WHEN `openkos forget <id>` completes
 - THEN that unrelated decision entry is left unchanged
 
+### Requirement: Deletion Sweep Includes Persisted Findings
+
+`openkos forget` MUST delete, from the live `.openkos/findings.db` store,
+every persisted finding whose `pair_ids` (either element) or
+`merged_absorbed_id` names a purge-set member. `finding_claims` persists
+verbatim claim text quoted from concept bodies, so a finding referencing a
+forgotten concept is the same class of leak the ledger and decisions
+sweeps already close. The deletion MUST be an erasure (no
+freelist-recoverable pages, no residual WAL images), not a row-level
+tombstone. A missing store is a no-op and is never created by the sweep; a
+corrupt or unreadable store degrades to a stderr warning naming the
+residue and remedy, never an aborted forget.
+
+#### Scenario: Forgetting a concept scrubs its persisted finding claims
+
+- GIVEN `.openkos/findings.db` holds a finding whose `pair_ids` names
+  concept id `<id>`, with verbatim `finding_claims` text quoted from its
+  body
+- WHEN `openkos forget <id>` completes Phase B successfully
+- THEN that finding and its claims are deleted, and the quoted claim text
+  is not recoverable from the database file's bytes
+
+#### Scenario: An unrelated finding is preserved
+
+- GIVEN a persisted finding references only concepts outside the purge set
+- WHEN `openkos forget <id>` completes
+- THEN that finding, its claims, and its digest rows are left unchanged
+
+#### Scenario: A corrupt findings store warns instead of aborting
+
+- GIVEN `.openkos/findings.db` exists but cannot be opened as a database
+- WHEN `openkos forget <id>` completes its bundle writes
+- THEN the forget succeeds and one stderr warning names the possible
+  residue and the remedy
+
 ### Requirement: Inbound Reference Detection
 
 `openkos forget` MUST enumerate every inbound markdown link and inbound

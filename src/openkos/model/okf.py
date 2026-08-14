@@ -88,6 +88,7 @@ def merged_content_heading(absorbed_id: str) -> str:
     miss."""
     return f"{MERGED_CONTENT_HEADING_PREFIX}{absorbed_id})"
 
+
 TYPE_ALTERNATIVE_KEY: Final = "type_alternative"
 """The optional frontmatter key a derived object carries WHEN the model
 reported a runner-up type it also weighed (issue #401); ABSENT otherwise --
