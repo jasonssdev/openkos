@@ -759,6 +759,70 @@ def test_plan_merge_does_not_annotate_a_still_delimited_prior_section() -> None:
     assert plan.ledger_entry.carried_content_ids == []
 
 
+def test_plan_merge_does_not_annotate_an_empty_bodied_prior() -> None:
+    """#685 item 3: a prior merge whose absorbed BODY was empty or
+    whitespace-only contributed no content to the survivor, so the absence
+    of its delimiter (a #645 reconciliation swept it away with the rest)
+    must NOT annotate it as carried -- annotating it buys no privacy and
+    costs a wholesale `survivor_before` redaction on a later forget."""
+    import dataclasses
+
+    reconciled_survivor = okf.dump_frontmatter(
+        {"type": "Concept", "title": "Stoicism", "sensitivity": "private"},
+        "# Stoicism\n\nSurvivor body, reconciled with no delimiters left.",
+    )
+    empty_prior = dataclasses.replace(
+        _prior_entry("concepts/first"),
+        absorbed_snapshot=okf.dump_frontmatter(
+            {"type": "Concept", "title": "Empty", "sensitivity": "private"},
+            "   \n\n  ",
+        ),
+    )
+
+    plan = bundle_merge.plan_merge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/second",
+        survivor_text=reconciled_survivor,
+        absorbed_text=_absorbed_text(),
+        index_text=_INDEX_TEXT,
+        log_text=_LOG_TEXT,
+        merged_at="2026-07-20T00:00:00Z",
+        existing_entries=[empty_prior],
+    )
+
+    assert plan.ledger_entry.carried_content_ids == []
+
+
+def test_plan_merge_still_annotates_a_malformed_prior_snapshot() -> None:
+    """Fail closed (#602's privacy-over-reversibility rule): a prior
+    `absorbed_snapshot` this planner cannot parse cannot be PROVEN empty,
+    so the carried annotation must survive -- under-redacting a body that
+    might exist is the failure mode this annotation exists to prevent."""
+    import dataclasses
+
+    reconciled_survivor = okf.dump_frontmatter(
+        {"type": "Concept", "title": "Stoicism", "sensitivity": "private"},
+        "# Stoicism\n\nSurvivor body, reconciled with no delimiters left.",
+    )
+    malformed_prior = dataclasses.replace(
+        _prior_entry("concepts/first"),
+        absorbed_snapshot="not a frontmatter document at all",
+    )
+
+    plan = bundle_merge.plan_merge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/second",
+        survivor_text=reconciled_survivor,
+        absorbed_text=_absorbed_text(),
+        index_text=_INDEX_TEXT,
+        log_text=_LOG_TEXT,
+        merged_at="2026-07-20T00:00:00Z",
+        existing_entries=[malformed_prior],
+    )
+
+    assert plan.ledger_entry.carried_content_ids == ["concepts/first"]
+
+
 def test_plan_unmerge_refuses_a_redacted_survivor_snapshot() -> None:
     """#667: forget's sweep replaces a carried-content snapshot with the
     redaction sentinel; restoring it would overwrite the live survivor

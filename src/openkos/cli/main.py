@@ -625,7 +625,7 @@ def _excise_merged_sections(snapshot: str, purge_ids: set[str]) -> str:
     text: a generic body (`Body.`) contained coincidentally in an
     unrelated snapshot must not vaporize that entry's restore data."""
     for purge_id in purge_ids:
-        separator = f"{okf.MERGED_CONTENT_HEADING_PREFIX}{purge_id})\n\n"
+        separator = f"{okf.merged_content_heading(purge_id)}\n\n"
         while True:
             start = snapshot.find(separator)
             if start == -1:
@@ -693,8 +693,7 @@ def _scrub_entry_snapshots(
     ) or (
         entry.schema != okf.MERGE_LEDGER_SCHEMA_V4
         and any(
-            f"{okf.MERGED_CONTENT_HEADING_PREFIX}{purge_id})"
-            not in entry.survivor_before
+            okf.merged_content_heading(purge_id) not in entry.survivor_before
             for purge_id in purge_ids & prior_absorbed_ids
         )
     )
@@ -8313,7 +8312,7 @@ def _reconcile_merged_survivor(
 
     merged_text = prepared.plan.merged_survivor
     metadata, merged_body = okf.load_frontmatter(merged_text)
-    separator = f"{okf.MERGED_CONTENT_HEADING_PREFIX}{prepared.absorbed_canonical})\n\n"
+    separator = f"{okf.merged_content_heading(prepared.absorbed_canonical)}\n\n"
     if separator not in merged_body:
         return prepared, "stacked heading not found in the merged body"
     survivor_body, absorbed_body = merged_body.split(separator, 1)

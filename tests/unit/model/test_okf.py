@@ -2849,3 +2849,25 @@ def test_decode_v4_entry_requires_carried_content_ids_key() -> None:
 
     with pytest.raises(ValueError, match="carried_content_ids"):
         okf.decode_merge_ledger_entry(encoded)
+
+
+def test_merged_content_heading_matches_build_merged_document_bytes() -> None:
+    """#685 item 3: the `## Merged content (<id>)` probe string was
+    hand-assembled at every consumer site; `merged_content_heading` is the
+    one shared spelling, and it must agree byte-for-byte with what
+    `build_merged_document` actually emits -- a drift here is a silent
+    scrub/annotation miss."""
+    heading = okf.merged_content_heading("concepts/x")
+
+    assert heading == "\n\n## Merged content (concepts/x)"
+
+    _, body = okf.build_merged_document(
+        {"type": "Concept", "title": "S", "sensitivity": "private"},
+        "Survivor body.",
+        {"type": "Concept", "title": "A", "sensitivity": "private"},
+        "Absorbed body.",
+        "concepts/x",
+        "concepts/s",
+    )
+
+    assert f"{heading}\n\n" in body
