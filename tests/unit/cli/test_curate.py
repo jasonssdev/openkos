@@ -178,12 +178,14 @@ def _fake_ctx(
     *,
     auto: bool = False,
     models: dict[str, str] | None = None,
+    accepted_stages: frozenset[str] = frozenset(),
 ) -> curate.CurateContext:
     return curate.CurateContext(
         root=tmp_path,
         layout=_FakeLayout(tmp_path),  # type: ignore[arg-type]
         cfg=_FakeConfig(models=models),  # type: ignore[arg-type]
         auto=auto,
+        accepted_stages=accepted_stages,
     )
 
 
@@ -200,6 +202,8 @@ def _fake_stage(
     halts_run: bool = False,
     live: bool = True,
     task: str | None = None,
+    auto_acceptable: bool = False,
+    accept_caveat: str = "",
 ) -> curate.Stage:
     def _default_probe(ctx: curate.CurateContext) -> curate.StageProbe:
         return curate.StageProbe()
@@ -220,6 +224,8 @@ def _fake_stage(
         halts_run=halts_run,
         live=live,
         task=task,
+        auto_acceptable=auto_acceptable,
+        accept_caveat=accept_caveat,
     )
 
 
@@ -4671,3 +4677,210 @@ def test_cost_gate_stays_quiet_about_the_upgrade_once_the_operator_decided(
     err = capsys.readouterr().err
     assert "gemma2:27b" not in err
     assert "qwen3:14b" in err
+
+
+# ---------------------------------------------------------------------------
+# #702 gap 1 -- `--accept` is surfaced at the moment it becomes actionable
+# ---------------------------------------------------------------------------
+
+
+def test_gate_surfaces_accept_when_a_stage_will_ask_many_questions(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The bulk-accept mechanism is named while the queue is still ahead.
+
+    Measured (2026-08-14): a full `curate` took 5m 10s, of which its own
+    stage timers account for 90s of inference. The remaining ~220s was the
+    operator answering per-item prompts. `--accept` already removes 13 of
+    ~16 of them -- and was never mentioned anywhere in the output, so the
+    users who most need it are exactly the ones who never find it.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Structure", noun="untyped edge", auto_acceptable=True)
+    probe = curate.StageProbe(items=tuple(range(7)), llm_calls=7)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    err = capsys.readouterr().err
+    assert "--accept structure" in err
+    assert "7" in err
+
+
+def test_gate_stays_silent_about_accept_for_a_short_queue(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A short queue prints nothing new: the flag costs more to read about
+    than it saves, and a hint on every run is how a hint stops being read."""
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Structure", noun="untyped edge", auto_acceptable=True)
+    probe = curate.StageProbe(items=(1, 2), llm_calls=2)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    assert capsys.readouterr().err == "2 untyped edge(s) -> 2 LLM call(s)\n"
+
+
+def test_gate_never_offers_accept_for_a_stage_that_has_no_bulk_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Identity is excluded from bulk BY CONSTRUCTION -- its merges delete a
+    concept -- so offering `--accept identity` would advertise a flag that
+    is refused, and would advertise it hardest on the one stage where
+    accepting unseen is most destructive."""
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Identity", noun="candidate group", auto_acceptable=False)
+    probe = curate.StageProbe(items=tuple(range(9)), llm_calls=9)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    assert "--accept" not in capsys.readouterr().err
+
+
+def test_gate_stops_offering_accept_once_the_stage_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An operator already running `--accept structure` is told nothing: the
+    hint exists to make an unknown mechanism discoverable, and repeating it
+    to someone using it is noise."""
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Structure", noun="untyped edge", auto_acceptable=True)
+    probe = curate.StageProbe(items=tuple(range(7)), llm_calls=7)
+    ctx = _fake_ctx(
+        Path("unused-root"), auto=True, accepted_stages=frozenset({"Structure"})
+    )
+
+    curate.gate(stage, probe, ctx)
+
+    assert "--accept" not in capsys.readouterr().err
+
+
+def test_the_accept_hint_names_what_still_gets_asked(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Structure's caveat is part of the offer, not a footnote.
+
+    Under `--accept structure` the asymmetric types and `related_to` still
+    ask per item (#624/#508), because the engine cannot vouch for a
+    direction it only guessed. A hint that promised to remove all seven
+    prompts would be selling something the flag does not do, and the
+    operator would discover the difference mid-run.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage(
+        "Structure",
+        noun="untyped edge",
+        auto_acceptable=True,
+        accept_caveat="asymmetric types and related_to are still asked per item",
+    )
+    probe = curate.StageProbe(items=tuple(range(7)), llm_calls=7)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    assert "asymmetric types and related_to are still asked per item" in (
+        capsys.readouterr().err
+    )
+
+
+def test_a_stage_with_no_caveat_promises_nothing_extra(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Metadata holds nothing back under `--accept metadata`, so its hint
+    carries no caveat clause rather than an empty or hedged one."""
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Metadata", noun="concept type", auto_acceptable=True)
+    probe = curate.StageProbe(items=tuple(range(6)), llm_calls=6)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    err = capsys.readouterr().err
+    assert "--accept metadata" in err
+    assert "still" not in err
+
+
+def test_the_shipped_structure_stage_carries_its_accept_caveat() -> None:
+    """The caveat is wired on the REAL descriptor, not only reachable
+    through a test double. Structure is the one shipped stage whose bulk
+    path holds items back, and a hint that overstated that would be worse
+    than no hint."""
+    structure = next(s for s in curate._STAGES if s.name == "Structure")
+    metadata = next(s for s in curate._STAGES if s.name == "Metadata")
+
+    assert structure.auto_acceptable is True
+    assert "asymmetric" in structure.accept_caveat
+    assert "related_to" in structure.accept_caveat
+    # Metadata accepts its whole queue in bulk -- nothing is held back, so
+    # there is nothing to disclose.
+    assert metadata.auto_acceptable is True
+    assert metadata.accept_caveat == ""
+
+
+def test_gate_is_silent_one_item_below_the_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Three items is still a short exchange, and prints nothing new.
+
+    Pinned at the exact boundary rather than at a comfortable distance from
+    it: an off-by-one in the comparison is the likeliest way this threshold
+    breaks, and a test at 2-vs-7 cannot see one.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Structure", noun="untyped edge", auto_acceptable=True)
+    probe = curate.StageProbe(items=(1, 2, 3), llm_calls=3)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    assert capsys.readouterr().err == "3 untyped edge(s) -> 3 LLM call(s)\n"
+
+
+def test_gate_speaks_exactly_at_the_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Four items is where the hint starts. The other half of the boundary:
+    together these two pin the comparison as `>=`, which neither can do
+    alone."""
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage("Structure", noun="untyped edge", auto_acceptable=True)
+    probe = curate.StageProbe(items=(1, 2, 3, 4), llm_calls=4)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    assert "--accept structure" in capsys.readouterr().err
+
+
+def test_gate_never_offers_accept_for_a_read_only_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A stage that writes nothing asks no per-item WRITE questions, so
+    `--accept` would save nothing there.
+
+    No shipped stage is both `auto_acceptable` and read-only today, which is
+    exactly why this guard needs a test: nothing else in the suite would
+    notice if it were dropped, and a future read-only stage that set
+    `auto_acceptable` would start advertising a flag with no effect.
+    """
+    _patch_stdin_isatty(monkeypatch, True)
+    stage = _fake_stage(
+        "Contradictions", noun="pair", auto_acceptable=True, writes=False
+    )
+    probe = curate.StageProbe(items=tuple(range(10)), llm_calls=10)
+    ctx = _fake_ctx(Path("unused-root"), auto=True)
+
+    curate.gate(stage, probe, ctx)
+
+    assert "--accept" not in capsys.readouterr().err
