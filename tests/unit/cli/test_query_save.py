@@ -93,6 +93,7 @@ def _default_cfg(**overrides: object) -> config.Config:
         "embedding_model": "bge-m3",
         "chat_timeout": config.DEFAULT_CHAT_TIMEOUT,
         "max_generation_tokens": config.DEFAULT_MAX_GENERATION_TOKENS,
+        "context_window": config.DEFAULT_CONTEXT_WINDOW,
         "confidential_local_exemption": config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION,
         "volatility_windows": {},
         "type_tiers": {},

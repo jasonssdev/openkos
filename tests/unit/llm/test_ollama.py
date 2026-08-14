@@ -297,6 +297,84 @@ def test_chat_merges_all_configured_options() -> None:
     assert sent["options"] == {"num_predict": 8192, "temperature": 0.0, "seed": 7}
 
 
+# --- Context window: `num_ctx` (#691) --------------------------------------
+
+
+def test_chat_sends_num_ctx_when_context_window_configured() -> None:
+    """`chat()` emits `options.num_ctx` when a context window is configured.
+
+    Unpinned, the model reserves whatever its Modelfile ships -- 32768 tokens
+    and a ~10 GB footprint on `qwen3:8b` (#691), which leaves no room for a
+    second slot on a 16 GB machine.
+    """
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        context_window=12288,
+        urlopen=_fake_urlopen(_ok_body("hi"), captured),
+    )
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    sent = _sent_body(captured[0])
+    assert sent["options"] == {"num_ctx": 12288}
+
+
+def test_chat_omits_num_ctx_when_context_window_not_configured() -> None:
+    """`context_window=None` contributes nothing, so an opted-out workspace
+    sends a byte-identical request to the pre-#691 one and keeps inheriting
+    the model's own default window."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient("qwen3", urlopen=_fake_urlopen(_ok_body("hi"), captured))
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    sent = _sent_body(captured[0])
+    assert "options" not in sent
+
+
+def test_chat_merges_num_ctx_with_the_other_options() -> None:
+    """The window shares the one `options` object with the ceiling and the
+    sampling pins -- `num_ctx` and `num_predict` are different bounds and both
+    must survive together."""
+    captured: list[urllib.request.Request] = []
+    client = OllamaClient(
+        "qwen3",
+        max_generation_tokens=8192,
+        temperature=0.0,
+        seed=7,
+        context_window=12288,
+        urlopen=_fake_urlopen(_ok_body("hi"), captured),
+    )
+
+    client.chat([{"role": "user", "content": "hi"}])
+
+    sent = _sent_body(captured[0])
+    assert sent["options"] == {
+        "num_predict": 8192,
+        "temperature": 0.0,
+        "seed": 7,
+        "num_ctx": 12288,
+    }
+
+
+def test_embed_never_sends_num_ctx() -> None:
+    """`num_ctx` is CHAT-only, exactly like `num_predict`: the embedding
+    endpoint takes no generation options, and adding one there would be a
+    silent request-shape change on a seam #691 never measured."""
+    captured: list[urllib.request.Request] = []
+    body = json.dumps({"embeddings": [[0.0] * 1024]}).encode("utf-8")
+    client = OllamaClient(
+        "bge-m3",
+        context_window=12288,
+        urlopen=_fake_urlopen(body, captured),
+    )
+
+    client.embed(["hi"])
+
+    assert "options" not in _sent_body(captured[0])
+
+
 def _ok_body_with_done_reason(content: str, done_reason: str) -> bytes:
     """Build a well-formed `/api/chat` success body carrying `done_reason`."""
     return json.dumps(

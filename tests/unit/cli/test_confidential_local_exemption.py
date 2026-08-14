@@ -152,6 +152,7 @@ def _cfg(exemption: bool) -> config.Config:
         embedding_model=config.DEFAULT_EMBEDDING_MODEL,
         chat_timeout=config.DEFAULT_CHAT_TIMEOUT,
         max_generation_tokens=config.DEFAULT_MAX_GENERATION_TOKENS,
+        context_window=config.DEFAULT_CONTEXT_WINDOW,
         confidential_local_exemption=exemption,
         volatility_windows={},
         type_tiers={},

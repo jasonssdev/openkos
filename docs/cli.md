@@ -618,6 +618,9 @@ confidential_local_exemption: true  # send confidential concepts to a LOCAL LLM 
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
 chat_timeout: 600         # seconds an LLM chat call may take before giving up
 max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate
+context_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it
+                          # reserves its own 32K default and ~10 GB. Refused below the
+                          # derived floor; blank the value to leave it unpinned.
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d
@@ -674,6 +677,24 @@ The default is grounded in a measurement (2026-08-06): five extraction calls thr
 A value that is absent or explicitly null falls back to the default. A non-positive value, a boolean, a fraction, or one of Ollama's own `num_predict` sentinels (`0` = return no completion, `-1` = unlimited, `-2` = fill the context window) is refused when the config is read, rather than silently accepted: `-1` would silently disable the very bound this setting installs.
 
 When the ceiling is reached before the model finishes, the client raises `OllamaGenerationCapped` rather than returning the truncated reply — a truncated JSON reply cannot be salvaged (`extract_json_items` returns `[]` on a mid-object truncation), so this lands in the same loud, per-source failure handling a hung call already gets, rather than a silent empty result. It does **not** protect against a slow-but-terminating generation (`chat_timeout` covers that), and it does not improve extraction quality — only `_MAX_OBJECTS_PER_SOURCE` and the prompt itself govern what gets kept.
+
+### `context_window`
+
+How many tokens the model holds at once — prompt **and** reply together — forwarded to Ollama as `options.num_ctx`. Default `12288`.
+
+It governs the same CHAT seams `chat_timeout` and `max_generation_tokens` do, and nothing else.
+
+Left unpinned, every installation inherits whatever window the model's own Modelfile ships. Measured on `qwen3:8b` (2026-08-14), that was a 32768-token window and a **10 GB** footprint: weights are ~5 GB and the rest is KV cache for a window the engine never fills. KV cache scales linearly with the window, so pinning `12288` brought the same model to **7.2 GB** on the same machine ([#691](https://github.com/jasonssdev/openkos/issues/691)).
+
+On a 48 GB machine that difference is invisible. On a **16 GB** machine — a realistic target for a local-first tool — it is the whole question: 16 GB minus ~5 GB for the OS leaves ~11 GB, so a single 10 GB slot leaves no room for a second and puts the machine at the edge of swapping on a large corpus.
+
+**Setting this too low is worse than leaving it unset.** Ollama does not raise when the prompt exceeds the window — it silently drops the head of it, and the model answers confidently from a truncated document. So the value is not merely type-checked, it is **floor-checked**: a `context_window` below a prompt allowance of 4096 tokens plus this workspace's own `max_generation_tokens` is refused when the config is read. The floor moves with the ceiling, because a raised `max_generation_tokens` beside an unchanged window is exactly the pair that truncates.
+
+The 4096-token prompt allowance is measured, not guessed. Both prompt shapes the engine builds were sent to local `qwen3:8b` at their largest and Ollama's own `prompt_eval_count` read back, on Spanish prose (which tokenizes worse than English): a **full** extraction chunk came to 2707 tokens, and a `query` packing five retrieved bodies in full came to 3263. `query` is the real bound, not extraction — it has no per-body budget of its own — and 4096 leaves 833 tokens of headroom over it.
+
+A value **absent** from the file resolves to the default, raised if necessary to clear this workspace's own floor: a workspace that had set `max_generation_tokens: 16384` and never heard of this key gets `20480`, not a window that would truncate it. An **explicitly null** value (`context_window:` written with no value) means *do not pin*, sending a request byte-identical to the pre-#691 one. This is the one setting whose explicit null does not mean the packaged default, and deliberately so: "no window pinned" is a real state that no positive integer can express.
+
+Related, from the same measurement session: `OLLAMA_KEEP_ALIVE` defaults to 5 minutes, so any pause longer than that pays a full model reload. That is an Ollama environment variable, not an OpenKOS setting.
 
 ### `union_judge`
 
