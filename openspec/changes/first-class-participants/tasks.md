@@ -68,11 +68,11 @@ Trigger (from design D6 / spec "Probe Result Gates Phase-2 Scoped Pass"): open O
 - [x] 3.4 RED: Added `test_participant_capture_pass_leaves_system_prompt_byte_identical` — hash-pins `_SYSTEM_PROMPT` (mirrors `CONTROL_PROMPT_SHA`'s precedent) and asserts the new prompt constant is a distinct value.
 - [x] 3.5 GREEN: Implemented `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT` (new, separate constant), `_build_participant_capture_messages`, `_capture_further_participants`, and `_add_participant_capture` in `concept.py`; wired into `extract_concept_union` right after `_add_reask_subjects`, joining `merged` BEFORE `judge_input`/the judge call, on both the unchunked and chunked union paths (single call site after the branches converge). `ExtractionReport` gained additive `participant_capture_runs`/`participant_capture_added_titles` fields (both defaulted). `judge.py` untouched (confirmed via `git diff`).
 - [x] 3.6 Mutation-verified all 3 new tests' exact target lines (`__pycache__` purged before each run; every mutation reverted via the exact inverse edit) — see TDD Cycle Evidence in apply-progress.md.
-- [ ] 3.7 NOT RUN — out of scope for this apply batch; the orchestrator re-runs `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` to measure the phase-2 effect and updates `evals/decision_extraction/report.md`.
+- [x] 3.7 DONE by the orchestrator (2026-08-14, recorded in `evals/decision_extraction/report.md`): the `--participants --runs 3` re-run reproduced the zero baseline exactly — a NULL EXPERIMENT, because the harness's `path.stem` source titles never match `_MEETING_SHAPED_TITLE_RE`, so the pass never fired. An isolated gate-fired probe (truthful meeting title, 2 runs) validated the mechanism: 4/4 anchored Person objects (AMI's A/B/C/D speakers), deterministic, zero stub flooding. The detection gap (title-only gate blind to code-titled transcripts) is filed as a follow-up issue with both measurements as evidence.
 
 ## Phase 4: Cross-Cutting Verification
 
-- [ ] 4.1 Run full unit suite unpiped: `pytest tests/unit -v` and confirm no regressions from PR1/PR2 (and PR3 if opened).
-- [ ] 4.2 Confirm D7 finding stands: no changes needed to `_scrub_entry_snapshots` or `_reconcile_merged_survivor` — both remain type-blind; no task required, verification only.
-- [ ] 4.3 Confirm no `judge.py` diff exists anywhere in the change (D2 — judge.py unchanged).
-- [ ] 4.4 Confirm no per-type sensitivity code landed anywhere in `concept.py` or `run_type_coverage.py` (proposal out-of-scope / #669 boundary).
+- [x] 4.1 Full unit suite unpiped on the PR3 branch (all three slices present): `4614 passed, 1 skipped in 176.31s` — zero regressions.
+- [x] 4.2 Confirm D7 finding stands: no changes needed to `_scrub_entry_snapshots` or `_reconcile_merged_survivor` — both remain type-blind; no task required, verification only.
+- [x] 4.3 Confirm no `judge.py` diff exists anywhere in the change (D2 — judge.py unchanged).
+- [x] 4.4 Confirm no per-type sensitivity code landed anywhere in `concept.py` or `run_type_coverage.py` (proposal out-of-scope / #669 boundary).
