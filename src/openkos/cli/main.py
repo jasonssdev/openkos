@@ -827,18 +827,26 @@ def _sweep_findings_for_ids(
     `_purge_rebuild_indexes`, a strictly stronger erasure.
 
     A missing store is a no-op (never created here --
-    `findings_db_path`'s pure-derivation contract). A corrupt or locked
-    store degrades to one LOUD stderr warning naming the residue and the
-    remedy rather than aborting a forget whose bundle writes already
-    landed -- a privacy scrub that fails silently would be worse than one
-    that fails out loud, and `findings.db` is recomputable derived state."""
-    # The existence probe sits INSIDE the guard (review lineage
-    # review-66cd062e562f43bb, R3): `Path.exists()` suppresses only
-    # ENOENT/ENOTDIR/EBADF/ELOOP and re-raises the rest, so an EACCES on
-    # `.openkos/` would otherwise escape into forget's outer handler and
-    # mis-report bundle deletes that already landed.
+    `findings_db_path`'s pure-derivation contract). A corrupt, locked, or
+    unreadable store degrades to one LOUD stderr warning naming the
+    residue and the remedy rather than aborting a forget whose bundle
+    writes already landed -- a privacy scrub that fails silently would be
+    worse than one that fails out loud, and `findings.db` is recomputable
+    derived state."""
+    # `stat()`, never `exists()`, for the presence probe (review lineage
+    # review-66cd062e562f43bb, R3): the two answers this sweep must tell
+    # apart are "never persisted anything" (silent no-op, per
+    # `findings_db_path`'s pure-derivation contract) and "present but
+    # unreachable" (loud warning -- there may be residue nobody can
+    # scrub). `exists()` collapses them, and WHICH errnos it collapses is
+    # version-dependent: 3.12/3.13 re-raise EACCES while 3.14 suppresses
+    # it, so the same unreadable store aborted forget on one interpreter
+    # and vanished silently on another. `stat()` never suppresses, so the
+    # two cases stay distinguishable on every supported interpreter.
     try:
-        if not layout.findings_db_path.exists():
+        try:
+            layout.findings_db_path.stat()
+        except FileNotFoundError:
             return
         conn = derived.open_derived_connection(layout.findings_db_path)
         try:

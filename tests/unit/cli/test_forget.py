@@ -2498,12 +2498,21 @@ def test_forget_findings_sweep_unreadable_store_warns_and_does_not_abort(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Review correction (lineage review-66cd062e562f43bb, R3): the spec
-    promises the UNREADABLE store degrades exactly like the corrupt one.
-    `pathlib.Path.exists()` re-raises EACCES-class errors (only
-    ENOENT/ENOTDIR/EBADF/ELOOP are suppressed), so a permission-denied
-    `.openkos/` must surface as the sweep's own stderr warning -- never as
-    forget's 'failed while writing' abort after the bundle deletes already
-    landed."""
+    promises the UNREADABLE store degrades exactly like the corrupt one --
+    a LOUD warning about possible residue, never forget's 'failed while
+    writing' abort after the bundle deletes already landed.
+
+    The presence probe must therefore be `stat()`, not `exists()`.
+    `exists()` cannot express this at all: it collapses "absent" and
+    "unreachable" into one `False`, and WHICH errnos it collapses moves
+    between interpreters -- Python 3.12/3.13 re-raise EACCES (which
+    escaped into forget's outer handler) while 3.14 suppresses it (which
+    skipped the store in silence, warning nobody about the residue). Both
+    behaviors are wrong, in opposite directions; `stat()` has neither.
+
+    Skipped when the process can read through a 0o000 directory anyway
+    (running as root, as some containers do), where the premise cannot be
+    set up rather than the behavior being wrong."""
     _init_workspace(tmp_path, monkeypatch)
     _write_plain_concept(tmp_path, "concepts/target", title="Target")
     openkos_dir = tmp_path / ".openkos"
@@ -2511,6 +2520,12 @@ def test_forget_findings_sweep_unreadable_store_warns_and_does_not_abort(
     (openkos_dir / "findings.db").write_bytes(b"placeholder")
     openkos_dir.chmod(0o000)
     try:
+        try:
+            (openkos_dir / "findings.db").stat()
+        except PermissionError:
+            pass
+        else:
+            pytest.skip("this process can stat through a 0o000 directory (root?)")
         result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
     finally:
         openkos_dir.chmod(0o700)
