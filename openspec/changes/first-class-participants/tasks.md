@@ -52,8 +52,8 @@ Chain strategy: stacked-to-main
 - [x] 2.5 RED: Extend `_self_test()` with a two-meeting fixture that asserts the stub-flooding guard fires (re-admitted count vs. judge-selected count diverges as expected) before the scoring code exists.
 - [x] 2.6 GREEN: Implement the flooding-guard computation/report row so `_self_test()` passes.
 - [x] 2.7 Run `python evals/decision_extraction/scripts/run_type_coverage.py --self-test` and confirm pass (no live model call).
-- [ ] 2.8 Run `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` against AMI fixtures to produce the real measured baseline. (OUT OF SCOPE for this apply batch — orchestrator runs the live measurement afterward)
-- [ ] 2.9 Record the baseline in `evals/decision_extraction/report.md` following the existing recording convention for other types. (spec: "Recorded Baseline for Comparison") (OUT OF SCOPE for this apply batch — depends on 2.8's real output)
+- [x] 2.8 DONE by the orchestrator (2026-08-13): `--participants --runs 3`, qwen3:8b, 4 sources — zero Person/Organization generation everywhere; phase-2 trigger met.
+- [x] 2.9 DONE by the orchestrator: baseline recorded in `evals/decision_extraction/report.md` (2026-08-13 participant coverage baseline section, merged in PR #671).
 - [x] 2.10 Read the recorded baseline back and confirm it is present and comparable by a subsequent run (spec scenario check) — readback mechanism (`render_participant_baseline`/`read_participant_baseline`) implemented and round-trip-verified via `--self-test`; real-baseline readback pending 2.9.
 
 ## Phase 3: PR3 — Conditional Phase-2 Scoped Pass (D6, BLOCKED ON PR2 MEASUREMENT)
@@ -62,17 +62,17 @@ Chain strategy: stacked-to-main
 
 Trigger (from design D6 / spec "Probe Result Gates Phase-2 Scoped Pass"): open ONLY if the PR2 baseline shows zero or near-zero `Person`/`Organization` generation across ≥2 AMI meetings and ≥3 runs. If PR2 shows non-zero recall improvement from phase 1a alone, these tasks MUST NOT be executed on this change's evidence — stop after PR2 and record that phase 2 was not justified.
 
-- [ ] 3.1 (BLOCKED ON PR2) Confirm the trigger condition against the recorded PR2 baseline; if not met, stop here and do not proceed with 3.2–3.7.
-- [ ] 3.2 (BLOCKED ON PR2) RED: Add a unit test in `tests/unit/extraction/test_concept.py` mirroring `_reask_for_further_subjects`/`_add_reask_subjects` (#584) shape, gated on `_MEETING_SHAPED_TITLE_RE`, asserting a scoped second call joins Person/Organization candidates before the judge on a meeting-shaped source.
-- [ ] 3.3 (BLOCKED ON PR2) RED: Add a unit test asserting the scoped pass does NOT fire on a non-meeting-shaped source.
-- [ ] 3.4 (BLOCKED ON PR2) RED: Add a unit test asserting `_SYSTEM_PROMPT` is untouched (no diff to the general prompt) by the phase-2 pass.
-- [ ] 3.5 (BLOCKED ON PR2) GREEN: Implement the scoped second call in `concept.py`, joining candidates before judge selection, per design D6.
-- [ ] 3.6 (BLOCKED ON PR2) Mutate each new test's exact target line (purge `__pycache__`) before trusting it.
-- [ ] 3.7 (BLOCKED ON PR2) Re-run `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` to measure the phase-2 effect and update `evals/decision_extraction/report.md`.
+- [x] 3.1 Trigger confirmed MET: `evals/decision_extraction/report.md`'s 2026-08-13 baseline section (qwen3:8b, 3 runs × 4 AMI sources, PR1's re-admission live) shows ZERO Person/Organization generation everywhere — re-admitted 0, anchor-less discards 0 — satisfying the spec's "zero generation on ≥2 meetings across ≥3 runs" gate.
+- [x] 3.2 RED: Added `test_participant_capture_pass_joins_candidates_before_judge_on_meeting_source` in `tests/unit/extraction/test_concept.py` — mirrors `_reask_for_further_subjects`/`_add_reask_subjects` (#584) shape, gated on `_MEETING_SHAPED_TITLE_RE`, asserts a scoped second call joins a Person candidate before the judge on a meeting-shaped source and the judge's own reply must select it to be kept.
+- [x] 3.3 RED: Added `test_participant_capture_pass_does_not_fire_on_non_meeting_source` — asserts the scoped pass spends zero extra calls on a non-meeting-shaped (technical-article) source.
+- [x] 3.4 RED: Added `test_participant_capture_pass_leaves_system_prompt_byte_identical` — hash-pins `_SYSTEM_PROMPT` (mirrors `CONTROL_PROMPT_SHA`'s precedent) and asserts the new prompt constant is a distinct value.
+- [x] 3.5 GREEN: Implemented `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT` (new, separate constant), `_build_participant_capture_messages`, `_capture_further_participants`, and `_add_participant_capture` in `concept.py`; wired into `extract_concept_union` right after `_add_reask_subjects`, joining `merged` BEFORE `judge_input`/the judge call, on both the unchunked and chunked union paths (single call site after the branches converge). `ExtractionReport` gained additive `participant_capture_runs`/`participant_capture_added_titles` fields (both defaulted). `judge.py` untouched (confirmed via `git diff`).
+- [x] 3.6 Mutation-verified all 3 new tests' exact target lines (`__pycache__` purged before each run; every mutation reverted via the exact inverse edit) — see TDD Cycle Evidence in apply-progress.md.
+- [x] 3.7 DONE by the orchestrator (2026-08-14, recorded in `evals/decision_extraction/report.md`): the `--participants --runs 3` re-run reproduced the zero baseline exactly — a NULL EXPERIMENT, because the harness's `path.stem` source titles never match `_MEETING_SHAPED_TITLE_RE`, so the pass never fired. An isolated gate-fired probe (truthful meeting title, 2 runs) validated the mechanism: 4/4 anchored Person objects (AMI's A/B/C/D speakers), deterministic, zero stub flooding. The detection gap (title-only gate blind to code-titled transcripts) is filed as a follow-up issue with both measurements as evidence.
 
 ## Phase 4: Cross-Cutting Verification
 
-- [ ] 4.1 Run full unit suite unpiped: `pytest tests/unit -v` and confirm no regressions from PR1/PR2 (and PR3 if opened).
-- [ ] 4.2 Confirm D7 finding stands: no changes needed to `_scrub_entry_snapshots` or `_reconcile_merged_survivor` — both remain type-blind; no task required, verification only.
-- [ ] 4.3 Confirm no `judge.py` diff exists anywhere in the change (D2 — judge.py unchanged).
-- [ ] 4.4 Confirm no per-type sensitivity code landed anywhere in `concept.py` or `run_type_coverage.py` (proposal out-of-scope / #669 boundary).
+- [x] 4.1 Full unit suite unpiped on the PR3 branch (all three slices present): `4614 passed, 1 skipped in 176.31s` — zero regressions.
+- [x] 4.2 Confirm D7 finding stands: no changes needed to `_scrub_entry_snapshots` or `_reconcile_merged_survivor` — both remain type-blind; no task required, verification only.
+- [x] 4.3 Confirm no `judge.py` diff exists anywhere in the change (D2 — judge.py unchanged).
+- [x] 4.4 Confirm no per-type sensitivity code landed anywhere in `concept.py` or `run_type_coverage.py` (proposal out-of-scope / #669 boundary).

@@ -144,3 +144,40 @@ machinery is in place and measurably inert). This satisfies the
 2 meetings across 3 runs — and is the recorded justification for opening
 the phase-2 scoped capture pass (design D6). Phase-1a alone moves nothing
 on this corpus, as predicted.
+
+## 2026-08-14 — capture-pass effect measurement (change `first-class-participants`, #668, PR3)
+
+The post-capture-pass `--participants` re-run (qwen3:8b, 3 runs × 4
+sources) reproduced the baseline exactly: zero Person/Organization
+everywhere, zero anchor-less discards. **That re-run is a NULL EXPERIMENT,
+not a verdict on the pass**: the harness passes `path.stem`
+(`TS3005a.transcript`) as `source_title`, which never matches
+`_MEETING_SHAPED_TITLE_RE`, so neither PR1's re-admission nor PR3's
+capture pass ever fired on this corpus. The mechanism was measurably inert
+by gating, not by failure.
+
+An isolated gate-fired probe (same transcript text, truthful title
+"AMI project meeting TS3005a (transcript)", 2 runs) measured the mechanism
+itself:
+
+| Run | capture_runs | Captured | Anchor-less discards | In final set |
+|---|---:|---|---:|---|
+| 1 | 1 | Person A, B, C, D | 0 | all 4 |
+| 2 | 1 | Person A, B, C, D | 0 | all 4 |
+
+The pass emits exactly the meeting's four speakers (AMI anonymizes
+participants to letters), each carrying a role anchor, deterministically
+across runs, with zero stub flooding. Recall against the 4-speaker floor is
+4/4 once the gate fires; the single-letter titles are the corpus's own
+anonymization, not a naming defect.
+
+**Reading.** PR3's mechanism is validated in isolation; the epic's
+remaining gap is DETECTION: a real meeting transcript whose title is a
+code (`TS3005a.transcript`, an export named `2026-08-13-recording.txt`)
+is invisible to the title-only gate that D3 chose — the exact target of
+the owner's transcript-scope contract. Content-shape detection
+(speaker-turn density — D3's named alternative) is the follow-up, filed
+separately with both measurements as evidence. Per the probe spec's gate
+semantics, phase-2 work shipped on the recorded zero-generation baseline;
+this section records its measured effect honestly rather than
+overclaiming corpus recall the gating cannot yet deliver.

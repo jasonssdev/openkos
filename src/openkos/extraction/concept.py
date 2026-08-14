@@ -1778,6 +1778,155 @@ def _add_reask_subjects(
     return combined, 1, tuple(result.title for result in combined[1:])
 
 
+_PARTICIPANT_CAPTURE_SYSTEM_PROMPT = (
+    "A first extraction pass over the meeting-shaped SOURCE below already "
+    "ran. This is a narrow follow-up question, NOT a request to extract "
+    "the source again: nothing the first pass already found is discarded "
+    "by your answer here.\n\n"
+    "Question: does the source name any MEETING PARTICIPANT -- a specific "
+    "person or organization who attended, spoke, chaired, facilitated, or "
+    "was otherwise present or represented in this meeting -- that the "
+    "first pass may have missed?\n\n"
+    "Only report a participant you can anchor with a role, affiliation, "
+    "or relation beyond their bare name -- for example their meeting role "
+    "(chair, facilitator, presenter, secretary, organizer), the "
+    "organization they represent or work for, or an explicit relation "
+    "such as spoke in this meeting, attended, or is a member of. State "
+    "that anchor explicitly in the description or body of your answer. A "
+    "name alone, with no such anchor, is NOT a valid answer -- omit it "
+    "rather than guess at a role the source does not state.\n\n"
+    "An empty array [] is a CORRECT and EXPECTED answer whenever no "
+    "further anchored participant is named. Do not invent a participant, "
+    "and do not promote a passing mention with no stated role or "
+    "affiliation into an answer.\n\n"
+    'Vocabulary: each object\'s "type" MUST be exactly "Person" or '
+    '"Organization" -- no other type is a valid answer to this question.\n\n'
+    "Return ONLY a JSON array, with NO prose, NO markdown, and NO code "
+    "fences around it. Each element matches exactly this shape:\n"
+    '[{"type": "Person"|"Organization", "title": "...", '
+    '"description": "...", "body": "..."}, ...]\n'
+    "Do NOT wrap the array in an outer object."
+)
+"""System half of the SCOPED PARTICIPANT CAPTURE prompt (#668 design D6) --
+a SEPARATE constant, never an edit to `_SYSTEM_PROMPT`, for the same reason
+`_REASK_SYSTEM_PROMPT` (#584) is separate: `_SYSTEM_PROMPT` is the general
+nine-type extraction prompt every source gets, and this is a NARROW,
+scoped follow-up question that only meeting-shaped sources pay for.
+
+Exists because the #668 coverage probe's measured baseline
+(`evals/decision_extraction/report.md`) showed phase 1a's anchor-gated
+judge re-admission (design D1/D3/D4) alone produced ZERO Person/
+Organization generation across every meeting source and run recorded --
+re-admission had nothing to re-admit, because the general extraction pass
+never proposed a participant candidate in the first place. Widening the
+re-admission set could not fix a pass that never generated a candidate to
+re-admit; this prompt exists to give the general pass a scoped second
+chance at generating one.
+
+Deliberately asks for the anchor (role/affiliation/relation) explicitly,
+mirroring the Stub Rejection requirement (design D4, `_has_participant_anchor`)
+this pass's candidates are gated on exactly like every other Person/
+Organization candidate reaching judge re-admission -- a name-only answer
+here would only be discarded downstream, so the prompt asks for the anchor
+up front instead of relying on the deterministic gate alone to catch a
+stub after paying for the call."""
+
+
+def _build_participant_capture_messages(
+    source_text: str, source_title: str
+) -> list[Message]:
+    """Assemble the participant-capture pass's 2-message prompt (#668
+    design D6). Always carries the source title -- this pass fires ONLY on
+    meeting-shaped sources (`_MEETING_SHAPED_TITLE_RE`), where the general
+    extraction prompt's own meeting-shaped branch (`_build_messages`)
+    already omits the title from the user turn in favor of
+    `_LANGUAGE_ANCHOR`; this narrower follow-up question needs the title as
+    its own reference point (what meeting this is), not a language
+    anchor -- the source text itself still carries the source's language."""
+    return [
+        {"role": "system", "content": _PARTICIPANT_CAPTURE_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (f"SOURCE TITLE: {source_title}\n\nSOURCE TEXT:\n{source_text}"),
+        },
+    ]
+
+
+def _capture_further_participants(
+    source_text: str, source_title: str, llm: LLMBackend
+) -> list[ExtractionResult]:
+    """One scoped participant-capture call's validated ADDITIONS (#668
+    design D6), or `[]`. Never raises -- mirrors `_reask_for_further_subjects`
+    (#584): an optional extra call sitting on top of an already-complete
+    result must degrade to "found nothing" on any backend failure, never
+    destroy work the first pass already produced.
+
+    Only `Person`/`Organization` candidates survive this function, even
+    though the prompt's own closed two-value vocabulary already asks for
+    nothing else: this call's only license is to answer the participant
+    question it was asked, so a candidate of any other type the model
+    returns anyway is dropped here rather than trusted."""
+    try:
+        reply = llm.chat(_build_participant_capture_messages(source_text, source_title))
+    except Exception:  # broad, and for the same reason the #584 re-ask is:
+        # a bonus call's own failure must never destroy already-validated
+        # extraction work.
+        return []
+    results = [
+        result
+        for result in (_validate(item) for item in parsing.extract_json_items(reply))
+        if result is not None
+    ]
+    results = _strip_ungrounded_expansions(results, source_text=source_text)
+    return [result for result in results if result.type in _PARTICIPANT_TYPES]
+
+
+def _add_participant_capture(
+    results: list[ExtractionResult],
+    *,
+    source_text: str,
+    source_title: str,
+    meeting_shaped: bool,
+    llm: LLMBackend,
+) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
+    """Scoped Person/Organization capture pass (#668 design D6), gated on
+    the SAME `_MEETING_SHAPED_TITLE_RE` predicate `extract_concept_union`
+    already computes for judge re-admission (design D3) -- never a second,
+    drifting definition of "is this source a meeting".
+
+    Shaped like `_add_reask_subjects`/`_reask_for_further_subjects` (#584):
+    additive only, joining candidates into `merged` BEFORE the judge sees
+    them, so a captured candidate is selected -- or judge-re-admitted, or
+    judged out -- through the SAME existing pipeline every other candidate
+    goes through. No bypass: passing this gate only earns a seat at the
+    judge table, never automatic admission.
+
+    Unlike the #584 re-ask's narrow single-object trigger, this pass fires
+    UNCONDITIONALLY on every meeting-shaped source, whatever `results`
+    already holds: the #668 baseline this pass exists to answer showed the
+    failure mode is not "usually fine, occasionally collapses" but "zero
+    Person/Organization candidates on every meeting source measured", so a
+    narrower trigger tied to the existing candidate set would simply not
+    fire on the sources this pass is for.
+
+    Returns `(objects, capture_runs, added_titles)`. `capture_runs` is `1`
+    when the pass fired (whether or not it found anything) and `0` when
+    `meeting_shaped` is false -- mirrors `reask_runs`'s own "spent a call"
+    accounting. `results` carries no internal duplicate keys by
+    construction at this call site (already deduped by the branch above),
+    so `_dedup_merged` keeps every original entry at its original position
+    and appends only the surviving new ones after it -- `added_titles` can
+    therefore be read off the tail of `combined` exactly like the #584
+    re-ask reads its own single-original tail."""
+    if not meeting_shaped:
+        return results, 0, ()
+    added = _capture_further_participants(source_text, source_title, llm)
+    if not added:
+        return results, 1, ()
+    combined = _dedup_merged(results + added)
+    return combined, 1, tuple(result.title for result in combined[len(results) :])
+
+
 @dataclass(frozen=True)
 class ExtractionReport:
     """What the `_MAX_OBJECTS_PER_SOURCE` cap discarded on one call (#404).
@@ -1913,6 +2062,24 @@ class ExtractionReport:
     `judged_out_titles` restricted to `_PARTICIPANT_TYPES`. Always `()`
     outside the successful non-empty `judge_status == "ok"` admission
     path."""
+    participant_capture_runs: int = 0
+    """EXTRA chat calls spent on the scoped participant-capture pass (#668
+    design D6): `1` when the source is meeting-shaped and the pass fired,
+    `0` otherwise. Counted separately from `reask_runs`, which names the
+    #584 sole-twin re-ask -- a different call, with a different prompt and
+    a different trigger. Mirrors `reask_runs`'s own accounting: `1` with an
+    empty `participant_capture_added_titles` covers both "the call honestly
+    found nothing further" and a call whose backend failed; the two are not
+    distinguished here, matching `_reask_for_further_subjects`'s own
+    fail-degrades-to-nothing contract."""
+    participant_capture_added_titles: tuple[str, ...] = ()
+    """Titles the scoped participant-capture pass (#668 design D6)
+    CONTRIBUTED, in the pass's own reply order -- always `()` when the pass
+    never fired or found nothing. A captured title reaching this field only
+    means it was ADDED to the merged candidate list BEFORE the judge; it is
+    NOT a claim the judge or re-admission ultimately kept it -- read
+    `participant_judge_selected_titles`/`participant_readmitted_titles` for
+    that."""
 
 
 @dataclass(frozen=True)
@@ -2268,13 +2435,33 @@ def extract_concept_union(
         merged, source_text=source_text, source_title=source_title, llm=llm
     )
 
-    pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
-    judge_input = merged[:_MAX_JUDGE_CANDIDATES]
-    # Computed once, reused by the judge re-admission conjunct below (design
+    # Computed once, reused both by the participant-capture gate directly
+    # below and by the judge re-admission conjunct further down (design
     # D3): the same tight, single-definition gate `_build_messages` and
     # `_drop_framing_objects` already use for "is this source a
     # transcript/meeting?" -- never a second, drifting definition.
-    meeting_shaped = _MEETING_SHAPED_TITLE_RE.search(source_title)
+    meeting_shaped = bool(_MEETING_SHAPED_TITLE_RE.search(source_title))
+
+    # #668 design D6: a scoped second call, shaped like the #584 re-ask,
+    # asking specifically for Person/Organization participants -- gated on
+    # the SAME meeting-shaped predicate as judge re-admission, joining its
+    # findings into `merged` BEFORE the judge so they go through the SAME
+    # selection/re-admission pipeline as every other candidate. See
+    # `_add_participant_capture` for why phase 1a's re-admission alone
+    # could not fix a general pass that never proposed a participant to
+    # re-admit in the first place.
+    merged, participant_capture_runs, participant_capture_added_titles = (
+        _add_participant_capture(
+            merged,
+            source_text=source_text,
+            source_title=source_title,
+            meeting_shaped=meeting_shaped,
+            llm=llm,
+        )
+    )
+
+    pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
+    judge_input = merged[:_MAX_JUDGE_CANDIDATES]
 
     if not judge_input:
         # Nothing to judge: an empty merged union used to spend a real
@@ -2292,6 +2479,8 @@ def extract_concept_union(
                 reask_runs=reask_runs,
                 reask_added_titles=reask_added_titles,
                 wrong_language_dropped_titles=wrong_language_dropped,
+                participant_capture_runs=participant_capture_runs,
+                participant_capture_added_titles=participant_capture_added_titles,
             ),
         )
 
@@ -2407,5 +2596,7 @@ def extract_concept_union(
             participant_judge_selected_titles=participant_judge_selected_titles,
             participant_readmitted_titles=participant_readmitted_titles,
             participant_anchorless_discarded_titles=participant_anchorless_discarded_titles,
+            participant_capture_runs=participant_capture_runs,
+            participant_capture_added_titles=participant_capture_added_titles,
         ),
     )
