@@ -108,7 +108,7 @@ Inheritance". Design D3 (count plumbing), D4 (ingest advisory wording).
 and disjoint test files — safe to run as sibling stacked PRs on top of WU2,
 but land in a defined order per `chain_strategy: stacked-to-main`).
 
-1. [ ] RED: extend `tests/unit/cli/test_ingest.py` with:
+1. [x] RED: extend `tests/unit/cli/test_ingest.py` with:
    - Birth seam: `_stage_derived_objects` births a `Person` above the floor
      given a `public`-resolved Source and the shipped `{"Person": 1}`
      mapping (asserts `private`); a non-defaulted type (e.g.
@@ -129,7 +129,7 @@ but land in a defined order per `chain_strategy: stacked-to-main`).
      Concepts").
    Run `python -m pytest tests/unit/cli/test_ingest.py -x` and confirm the
    new cases fail.
-2. [ ] RED: extend `tests/unit/cli/test_set_sensitivity.py` with the
+2. [x] RED: extend `tests/unit/cli/test_set_sensitivity.py` with the
    Requirement-9 downgrade test: `set-sensitivity <person-id> private
    --allow-downgrade` succeeds on a type-defaulted-`confidential` Person,
    the frontmatter reads `private` afterward, and nothing re-raises it.
@@ -137,22 +137,22 @@ but land in a defined order per `chain_strategy: stacked-to-main`).
    confirm it fails (or passes vacuously only if the fixture cannot yet
    produce a type-defaulted Person — in that case fix the fixture first,
    not the assertion).
-3. [ ] GREEN: wire `_stage_derived_objects` (`cli/main.py:3249`) to call
+3. [x] GREEN: wire `_stage_derived_objects` (`cli/main.py:3249`) to call
    `config.type_birth_sensitivity(cfg, doc_type, stamp_sensitivity)` and set
    `_DerivedPlan.type_floor_raised = (resolved != stamp_sensitivity)`.
-4. [ ] GREEN: add `_SingleIngestOutcome.type_floor_pairs: tuple[tuple[str, str], ...]`
+4. [x] GREEN: add `_SingleIngestOutcome.type_floor_pairs: tuple[tuple[str, str], ...]`
    built at `main.py:4595` the same way `alternative_pairs` is; add
    `_echo_type_floor_summary(derived_count, pairs)` beside
    `_echo_type_alternative_summary`, silent when `pairs` is empty, emitting
    the two-line stderr advisory from design D4 (aggregate line, then the
    confidential-consequence line only when applicable); call it from both
    `main.py:3874` (batch aggregate) and `main.py:3976` (single).
-5. [ ] Confirm the WU2 `set-sensitivity` downgrade path needs no code
+5. [x] Confirm the WU2 `set-sensitivity` downgrade path needs no code
    change (design: "Independent write path; never consults the type
    default") — the test from step 2 should now pass with zero
    `set-sensitivity` implementation edits. If it does not, the failure is in
    the fixture/staging path, not in `set-sensitivity` itself.
-6. [ ] Run `python -m pytest tests/unit/cli/test_ingest.py tests/unit/cli/test_set_sensitivity.py -v`
+6. [x] Run `python -m pytest tests/unit/cli/test_ingest.py tests/unit/cli/test_set_sensitivity.py -v`
    green, then `python -m pytest tests/unit/cli/ -q` for the full CLI suite.
 
 ---

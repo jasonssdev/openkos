@@ -22,7 +22,7 @@ from typing import ClassVar
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
-from openkos import fsio
+from openkos import config, fsio
 from openkos.bundle import index as bundle_index
 from openkos.bundle import log as bundle_log
 from openkos.cli import main
@@ -1067,6 +1067,32 @@ def test_include_confidential_bypasses_the_confidential_floor_gate(
 # Ordering) -------------------------------------------------------------
 
 
+def _default_cfg(**overrides: object) -> config.Config:
+    """Build a minimal `config.Config` for direct `_stage_derived_objects`
+    calls (issue #669) -- mirrors `test_lint.py::_cfg`'s hand-built-Config
+    pattern. Defaults to the shipped `{"Person": 1}` type-sensitivity-offset
+    mapping so callers exercising the type default need only override
+    `stamp_sensitivity`/`default_sensitivity`; pass
+    `type_sensitivity_defaults={}` to opt out entirely."""
+    fields: dict[str, object] = {
+        "model": "qwen3:8b",
+        "review": True,
+        "default_sensitivity": "private",
+        "freshness_window": "7d",
+        "embedding_model": "bge-m3",
+        "chat_timeout": config.DEFAULT_CHAT_TIMEOUT,
+        "max_generation_tokens": config.DEFAULT_MAX_GENERATION_TOKENS,
+        "confidential_local_exemption": config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION,
+        "volatility_windows": {},
+        "type_tiers": {},
+        "models": {},
+        "union_judge": config.DEFAULT_UNION_JUDGE,
+        "type_sensitivity_defaults": dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
+    }
+    fields.update(overrides)
+    return config.Config(**fields)  # type: ignore[arg-type]
+
+
 def _stage_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "raw_content": "Some raw notes about self-control.",
@@ -1077,6 +1103,7 @@ def _stage_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         "timestamp": "2026-07-14T18:30:00Z",
         "bundle_dir": tmp_path / "bundle",
         "llm": _FakeLLM('{"extract": false}'),
+        "cfg": _default_cfg(),
     }
     kwargs.update(overrides)
     return kwargs
@@ -1150,6 +1177,224 @@ def test_stage_derived_objects_returns_none_reason_on_success(
 
     assert len(plans) == 1
     assert skip_reason is None
+
+
+# --- type-sensitivity-defaults: ingest birth seam (issue #669) --------------
+
+
+def test_stage_derived_objects_births_person_above_the_floor(
+    tmp_path: Path,
+) -> None:
+    """A `Person` extracted from a `public`-resolved Source is born
+    `private` under the shipped `{"Person": 1}` mapping -- the ingest half
+    of `type_birth_sensitivity`'s floor-relative raise (spec:
+    `type-sensitivity-defaults`, "Both `build_concept` Birth Seams Consult
+    The Type Default"; design D3/D4).
+
+    TWIN-RULE GUARD (design D6): this is one of the two independent birth
+    -seam site tests -- it must fail if ONLY `_stage_derived_objects`'s
+    call site is reverted to `sensitivity=stamp_sensitivity` (a `base`-only
+    stamp), independent of the `query --save` seam's own site test (WU4)."""
+    plans, reason, _notice = main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            llm=_FakeLLM(_person_reply()),
+            stamp_sensitivity="public",
+            cfg=_default_cfg(default_sensitivity="public"),
+        )
+    )
+
+    assert reason is None
+    assert len(plans) == 1
+    metadata, _ = okf.load_frontmatter(plans[0].content)
+    assert metadata["sensitivity"] == "private"
+    assert plans[0].type_floor_raised is True
+
+
+def test_stage_derived_objects_non_defaulted_type_is_untouched(
+    tmp_path: Path,
+) -> None:
+    """A type absent from the mapping (`Organization`) is born exactly at
+    the Source's resolved level, with no per-type raise (spec: "A type
+    absent from the mapping is unaffected")."""
+    plans, reason, _notice = main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            llm=_FakeLLM(_organization_reply()),
+            stamp_sensitivity="public",
+            cfg=_default_cfg(default_sensitivity="public"),
+        )
+    )
+
+    assert reason is None
+    assert len(plans) == 1
+    metadata, _ = okf.load_frontmatter(plans[0].content)
+    assert metadata["sensitivity"] == "public"
+    assert plans[0].type_floor_raised is False
+
+
+def test_stage_derived_objects_clamps_at_confidential(tmp_path: Path) -> None:
+    """A `confidential` floor stays `confidential` -- clamped, never an
+    out-of-range value (spec: "Confidential floor stays confidential")."""
+    plans, reason, _notice = main._stage_derived_objects(
+        **_stage_kwargs(  # type: ignore[arg-type]
+            tmp_path,
+            llm=_FakeLLM(_person_reply()),
+            stamp_sensitivity="confidential",
+            workspace_floor="confidential",
+            include_confidential=True,
+            cfg=_default_cfg(default_sensitivity="confidential"),
+        )
+    )
+
+    assert reason is None
+    assert len(plans) == 1
+    metadata, _ = okf.load_frontmatter(plans[0].content)
+    assert metadata["sensitivity"] == "confidential"
+
+
+def test_ingest_source_sensitivity_is_never_type_defaulted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Source's own resolved `sensitivity` is untouched by the `Person`
+    type default -- only `okf.build_concept` call sites consult the
+    mapping, `build_source_concept` never does (spec: "Sources Are Never
+    Type-Defaulted"). The Person derived from it IS raised, proving the two
+    are computed independently rather than one leaking into the other."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _person_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    source_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "sources" / "notes.md").read_text(encoding="utf-8")
+    )
+    assert source_metadata["sensitivity"] == "private"
+    person_metadata, _ = okf.load_frontmatter(
+        (tmp_path / "bundle" / "people" / "epictetus.md").read_text(encoding="utf-8")
+    )
+    assert person_metadata["sensitivity"] == "confidential"
+
+
+def test_ingest_no_backfill_of_existing_person_after_unrelated_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing on-disk `Person` concept's `sensitivity` field is
+    byte-identical after an unrelated `ingest` run, even though the type
+    default is active throughout the run -- birth-time only, never a
+    retroactive scan (spec: "No Backfill Of Existing On-Disk Concepts")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _person_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
+    first = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert first.exit_code == 0
+    person_path = tmp_path / "bundle" / "people" / "epictetus.md"
+    original = person_path.read_text(encoding="utf-8")
+
+    _patch_llm(monkeypatch, _concept_reply())
+    other = tmp_path / "other.txt"
+    other.write_text("Some unrelated other content.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "other.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert person_path.read_text(encoding="utf-8") == original
+
+
+# --- type-sensitivity-defaults: ingest run-summary advisory (issue #669) ----
+
+
+def test_ingest_prints_type_floor_advisory_with_confidential_consequence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `private`-floor workspace raises `Person` to `confidential`; the
+    ingest run summary names the count/type and adds the #569
+    retrieval-exclusion consequence line (spec: "Write-Time Advisory Names
+    Type-Defaulted Objects And The Retrieval Consequence")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _person_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "1 of 1 derived object(s) were born above the workspace sensitivity "
+        "floor by type default" in result.stderr
+    )
+    assert "Person -> confidential" in result.stderr
+    assert (
+        "confidential objects are excluded from query, contradictions, and "
+        "suggest-relations against a non-local backend" in result.stderr
+    )
+
+
+def test_ingest_prints_type_floor_advisory_without_consequence_at_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `public`-floor workspace raises `Person` to `private` -- the
+    aggregate line fires, but the confidential-exclusion consequence line
+    does NOT, since the raised level is not `confidential` (spec: the
+    consequence line "fires only when the raised level is confidential")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    _patch_llm(monkeypatch, _person_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert (
+        "1 of 1 derived object(s) were born above the workspace sensitivity "
+        "floor by type default" in result.stderr
+    )
+    assert "Person -> private" in result.stderr
+    assert "excluded from query" not in result.stderr
+
+
+def test_ingest_type_floor_advisory_silent_when_nothing_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No object raised by the type default -> no advisory line at all
+    (spec: "No advisory when nothing was raised by a type default")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _organization_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Praxis Foundation notes.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "born above the workspace sensitivity floor" not in result.stderr
+
+
+def test_ingest_batch_aggregates_type_floor_advisory_across_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory ingest emits the type-floor advisory ONCE for the whole
+    batch, aggregated across files -- identical shape to the single-file
+    seam (spec: works identically single-file and batch; mirrors #566's own
+    batch-aggregate precedent)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _person_reply())
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.txt").write_text("Epictetus, first half.", encoding="utf-8")
+    (docs / "b.txt").write_text("Epictetus, second half.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "docs", "--auto"])
+
+    assert result.exit_code == 0
+    assert result.stderr.count("born above the workspace sensitivity floor") == 1
+    assert "2 of 2 derived object(s) were born above" in result.stderr
 
 
 # --- union_judge kwarg (#456, design D9) -------------------------------------
