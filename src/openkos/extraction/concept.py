@@ -292,6 +292,109 @@ excluded English words. `retrospectiva` is arguable and deliberately left
 for its own measurement rather than bundled in here."""
 
 
+_TRANSCRIPT_TURN_RE: Final = re.compile(
+    r"^\s{0,4}"
+    r"(?:[\[(]\d{1,2}:\d{2}(?::\d{2})?[\])]\s+|\d{1,2}:\d{2}(?::\d{2})?\s+)?"
+    r"(?P<label>[^\s:#\->*+|`][^:\n]{0,39}):\s+\S"
+)
+"""One speaker-turn line: an optional timestamp prefix, a short label, a
+colon, then a non-empty utterance. The colon must be followed by
+whitespace, which structurally excludes URLs (`https://...`). The label
+must not OPEN with a markdown structure character (`#` heading, `-`/`*`/`+`
+bullet, `>` quote, `|` table, backtick) -- the repo FP sweep found SDD
+specs recurring on `#### Requirement:`/`- Scenario:` lines, and a speaker
+turn never begins with document structure. Label validity beyond the shape
+(token count, digits, all-caps) is enforced in `_transcript_shaped_text`,
+where the rules are statable."""
+
+_TRANSCRIPT_MIN_SPEAKERS: Final = 2
+_TRANSCRIPT_MIN_TURNS_PER_SPEAKER: Final = 3
+_TRANSCRIPT_MIN_RECURRING_TURNS: Final = 10
+
+
+def _transcript_shaped_text(source_text: str) -> bool:
+    """Deterministic content-shape transcript detection (#673): does this
+    text READ as speaker-labelled turns, whatever its title says?
+
+    The #668 participant machinery was gated on `_MEETING_SHAPED_TITLE_RE`
+    alone, which made it measurably inert on code-titled transcripts
+    (`TS3005a.transcript` -> title `TS3005a transcript`, no gathering
+    word) -- the null experiment recorded in
+    `evals/decision_extraction/report.md`. Structure is the language-neutral
+    signal the title cannot carry: a transcript is MOSTLY turn lines, drawn
+    from a SMALL set of RECURRING speaker labels.
+
+    Fires only when all three hold, each guarding a measured or named
+    false-positive class (#459's asymmetry: a false positive reroutes the
+    document to the no-title prompt branch, which regressed recall 0.75 ->
+    0.57 when applied broadly; a false negative merely keeps the status
+    quo):
+
+    - at least `_TRANSCRIPT_MIN_SPEAKERS` labels recur (a single recurring
+      label is a narration or log shape, not a conversation);
+    - recurring turns number at least `_TRANSCRIPT_MIN_RECURRING_TURNS`
+      (a short exchange is a quote, not a transcript);
+    - recurring turns cover at least half the non-blank lines (a transcript
+      EXCERPT inside an article must not flip the whole document).
+
+    A label recurs when it appears `_TRANSCRIPT_MIN_TURNS_PER_SPEAKER`+
+    times -- `key: value` metadata blocks share the colon shape but their
+    keys appear once each. Labels are rejected structurally, never by
+    lexicon: more than three word tokens (prose sentences containing a
+    colon), any digit (date-time log prefixes), or three-plus characters
+    in all caps (`INFO:`/`ERROR:` severity labels; one- and two-letter
+    labels stay valid because AMI's anonymized speakers are `A:`/`B:`)."""
+    label_counts: dict[str, int] = {}
+    non_blank = 0
+    for line in source_text.split("\n"):
+        if not line.strip():
+            continue
+        non_blank += 1
+        match = _TRANSCRIPT_TURN_RE.match(line)
+        if match is None:
+            continue
+        label = match.group("label").strip()
+        if (
+            len(label.split()) > 3
+            or any(ch.isdigit() for ch in label)
+            or (len(label) >= 3 and label.isupper())
+        ):
+            continue
+        label_counts[label] = label_counts.get(label, 0) + 1
+    recurring_turns = sum(
+        count
+        for count in label_counts.values()
+        if count >= _TRANSCRIPT_MIN_TURNS_PER_SPEAKER
+    )
+    recurring_speakers = sum(
+        1
+        for count in label_counts.values()
+        if count >= _TRANSCRIPT_MIN_TURNS_PER_SPEAKER
+    )
+    return (
+        recurring_speakers >= _TRANSCRIPT_MIN_SPEAKERS
+        and recurring_turns >= _TRANSCRIPT_MIN_RECURRING_TURNS
+        and recurring_turns * 2 >= non_blank
+    )
+
+
+def _is_meeting_shaped(source_title: str, source_text: str) -> bool:
+    """THE single "is this source a transcript/meeting?" predicate (#673):
+    title gate OR content shape, consulted by the prompt channel
+    (`_build_messages`), framing-object enforcement
+    (`_drop_framing_objects` call sites), and the participant machinery
+    (`_add_participant_capture` + judge re-admission) -- design D3's
+    one-definition rule, now with two signals behind the one definition.
+
+    Extends, never replaces, `_MEETING_SHAPED_TITLE_RE`: every source the
+    title gate admitted before #673 is still admitted, and a code-titled
+    source is admitted exactly when its CONTENT carries the speaker-turn
+    structure a transcript cannot hide."""
+    return bool(
+        _MEETING_SHAPED_TITLE_RE.search(source_title)
+    ) or _transcript_shaped_text(source_text)
+
+
 _LANGUAGE_ANCHOR: Final = (
     'Write every "title", "description" and "body" in the same language as '
     "the SOURCE TEXT below."
@@ -330,8 +433,17 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
     derived upstream (`derive_source_title`) and is not affected. It lives
     here and not in `derive_source_title` for exactly that reason: the
     title is genuinely descriptive FOR HUMANS, it is only the model's
-    generation that it primes into a single-Event summary."""
-    if _MEETING_SHAPED_TITLE_RE.search(source_title):
+    generation that it primes into a single-Event summary.
+
+    #673: the gate is `_is_meeting_shaped`, not the title regex alone -- a
+    code-titled transcript (`TS3005a transcript`) whose CONTENT is
+    speaker-turn shaped takes this same no-title branch. Its title carries
+    no gathering word to prime with, but the branch is the configuration
+    the gate-fired probe measured working (4/4 anchored Persons), and one
+    predicate everywhere is the design D3 rule. On the chunked paths this
+    runs per WINDOW; a transcript's windows are themselves turn-dense, so
+    the per-window verdict tracks the whole-source one."""
+    if _is_meeting_shaped(source_title, source_text):
         user_content = f"{_LANGUAGE_ANCHOR}\n\nSOURCE TEXT:\n{source_text}"
     else:
         user_content = (
@@ -1046,7 +1158,7 @@ def _strip_ungrounded_expansions(
 
 
 def _drop_framing_objects(
-    results: list[ExtractionResult], *, source_title: str
+    results: list[ExtractionResult], *, meeting_shaped: bool
 ) -> list[ExtractionResult]:
     """Deterministic framing-object enforcement (#522/#533): on a
     meeting-shaped source, an object whose OWN title is meeting-shaped names
@@ -1072,15 +1184,18 @@ def _drop_framing_objects(
       honest, where keeping the container stub would store framing as
       knowledge.
 
-    Gated on the SOURCE title being meeting-shaped -- the same gate that
-    already strips the title from the prompt channel (#459) -- because on
-    an ordinary document a gathering word can name a genuine subject
-    (`Sprint Retrospective Practices` in an agile handbook), and #459's
-    asymmetry applies here identically: a false positive is silent data
-    loss. A `Procedure` is never framing, whatever its title (#413's role
-    exemption: an object carrying the steps is not a lazy restatement of
-    the gathering)."""
-    if not _MEETING_SHAPED_TITLE_RE.search(source_title):
+    Gated on the SOURCE being meeting-shaped -- the caller passes the same
+    `_is_meeting_shaped` verdict that strips the title from the prompt
+    channel (#459/#673), precomputed so this function never grows a second,
+    drifting definition -- because on an ordinary document a gathering word
+    can name a genuine subject (`Sprint Retrospective Practices` in an
+    agile handbook), and #459's asymmetry applies here identically: a false
+    positive is silent data loss. The OBJECT-title match stays
+    `_MEETING_SHAPED_TITLE_RE`: a framing object names the gathering
+    lexically, whatever got the source through the gate. A `Procedure` is
+    never framing, whatever its title (#413's role exemption: an object
+    carrying the steps is not a lazy restatement of the gathering)."""
+    if not meeting_shaped:
         return results
     return [
         result
@@ -1890,9 +2005,11 @@ def _add_participant_capture(
     llm: LLMBackend,
 ) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
     """Scoped Person/Organization capture pass (#668 design D6), gated on
-    the SAME `_MEETING_SHAPED_TITLE_RE` predicate `extract_concept_union`
+    the SAME `_is_meeting_shaped` predicate `extract_concept_union`
     already computes for judge re-admission (design D3) -- never a second,
-    drifting definition of "is this source a meeting".
+    drifting definition of "is this source a meeting". Since #673 that
+    predicate is title OR content shape, so this pass also fires on
+    code-titled transcripts.
 
     Shaped like `_add_reask_subjects`/`_reask_for_further_subjects` (#584):
     additive only, joining candidates into `merged` BEFORE the judge sees
@@ -2201,7 +2318,9 @@ def extract_concept(
         results, wrong_language_dropped = _drop_wrong_language_titles(
             results, source_text=source_text
         )
-    results = _drop_framing_objects(results, source_title=source_title)
+    results = _drop_framing_objects(
+        results, meeting_shaped=_is_meeting_shaped(source_title, source_text)
+    )
     results = _drop_source_title_twins(results, source_title=source_title)
     # #584: the list is final and filtered here, which is the only place the
     # trigger's "the source returned exactly one object" is a true statement
@@ -2380,20 +2499,26 @@ def extract_concept_union(
     is `judge.select`'s alone and is never extended to cover extraction
     failures.
     """
+    # Computed ONCE for the whole union path (#673): the same single
+    # `_is_meeting_shaped` verdict feeds framing-object enforcement here,
+    # the participant-capture gate, and the judge re-admission conjunct
+    # below -- design D3's one-definition rule, now title OR content shape.
+    meeting_shaped = _is_meeting_shaped(source_title, source_text)
+
     if len(source_text) <= _CHUNK_THRESHOLD:
         run1 = _drop_framing_objects(
             _strip_ungrounded_expansions(
                 _extract_once(source_text, source_title, llm),
                 source_text=source_text,
             ),
-            source_title=source_title,
+            meeting_shaped=meeting_shaped,
         )
         run2 = _drop_framing_objects(
             _strip_ungrounded_expansions(
                 _extract_once(source_text, source_title, llm),
                 source_text=source_text,
             ),
-            source_title=source_title,
+            meeting_shaped=meeting_shaped,
         )
         merged = _drop_source_title_twins(
             _merge_union(run1 + run2), source_title=source_title
@@ -2419,7 +2544,7 @@ def extract_concept_union(
             deduped, source_text=source_text
         )
         merged = _drop_source_title_twins(
-            _drop_framing_objects(deduped, source_title=source_title),
+            _drop_framing_objects(deduped, meeting_shaped=meeting_shaped),
             source_title=source_title,
         )
         run_count = 1
@@ -2434,13 +2559,6 @@ def extract_concept_union(
     merged, reask_runs, reask_added_titles = _add_reask_subjects(
         merged, source_text=source_text, source_title=source_title, llm=llm
     )
-
-    # Computed once, reused both by the participant-capture gate directly
-    # below and by the judge re-admission conjunct further down (design
-    # D3): the same tight, single-definition gate `_build_messages` and
-    # `_drop_framing_objects` already use for "is this source a
-    # transcript/meeting?" -- never a second, drifting definition.
-    meeting_shaped = bool(_MEETING_SHAPED_TITLE_RE.search(source_title))
 
     # #668 design D6: a scoped second call, shaped like the #584 re-ask,
     # asking specifically for Person/Organization participants -- gated on

@@ -1091,7 +1091,7 @@ def test_meeting_titled_person_still_dropped_by_framing_removal() -> None:
     )
 
     kept = concept_mod._drop_framing_objects(
-        [framing_person, concept], source_title="Team Meeting"
+        [framing_person, concept], meeting_shaped=True
     )
 
     assert kept == [concept]
@@ -2774,7 +2774,7 @@ def test_procedure_behavior_unchanged_at_all_three_sites() -> None:
 
     # Framing-drop: `Procedure` stays exempt, survives.
     assert concept_mod._drop_framing_objects(
-        [procedure_twin, concept], source_title="Team Meeting"
+        [procedure_twin, concept], meeting_shaped=True
     ) == [procedure_twin, concept]
 
     # Judge re-admission: `Procedure` is re-admitted even without an
@@ -4833,3 +4833,234 @@ def test_gate_verbatim_check_ignores_parenthesized_acronym_suffixes() -> None:
         "Procedimiento de ingesta",
     ]
     assert dropped == ()
+
+
+# --- Content-shape transcript detection (#673) ------------------------------
+
+_TRANSCRIPT_SHAPED_TEXT = (
+    "# AMI meeting TS3005a\n"
+    "\n"
+    "A: Okay, shall we get started with the agenda?\n"
+    "B: Yes, I have the notes from last time.\n"
+    "A: Great, first item is the remote control design.\n"
+    "C: I think the shape should be curved.\n"
+    "B: The market research supports that.\n"
+    "A: Any objections to the curved shape?\n"
+    "C: None from me.\n"
+    "B: Let's also talk about the battery.\n"
+    "A: The battery should be rechargeable.\n"
+    "C: Agreed, rechargeable is better.\n"
+    "B: Then we are settled on both points.\n"
+    "A: Moving on to the next item now.\n"
+)
+"""Twelve speaker turns across three recurring labels, one heading line --
+the structural shape of a real meeting transcript whose TITLE carries no
+gathering word (`TS3005a transcript`, the #673 null-experiment shape)."""
+
+
+def test_transcript_shaped_text_fires_on_speaker_turns() -> None:
+    """#673: recurring short speaker labels covering most of the document
+    are the transcript signature -- deterministic, zero model calls."""
+    assert concept_mod._transcript_shaped_text(_TRANSCRIPT_SHAPED_TEXT)
+
+
+def test_transcript_shaped_text_is_language_neutral() -> None:
+    """#673 constraint: structure, not lexicon -- a Spanish transcript with
+    Spanish names fires identically, with no word list involved."""
+    text = "\n".join(
+        [
+            "Ana: ¿Empezamos con la agenda de hoy?",
+            "Luis: Sí, tengo las notas de la última vez.",
+            "Ana: Primero el diseño del control remoto.",
+            "Luis: Creo que la forma debería ser curva.",
+            "Ana: ¿Alguna objeción a la forma curva?",
+            "Luis: Ninguna por mi parte.",
+            "Ana: También hablemos de la batería.",
+            "Luis: De acuerdo, recargable es mejor.",
+            "Ana: Entonces quedamos en ambos puntos.",
+            "Luis: Perfecto, seguimos avanzando.",
+        ]
+    )
+    assert concept_mod._transcript_shaped_text(text)
+
+
+def test_transcript_shaped_text_accepts_timestamped_turns() -> None:
+    """#673: timestamped turn prefixes (`[00:12:34] A: ...`) are the other
+    named transcript line shape; the timestamp must not hide the label."""
+    lines = []
+    for index in range(6):
+        lines.append(f"[00:1{index}:02] A: a point being made here")
+        lines.append(f"[00:1{index}:40] B: a reply to that point")
+    assert concept_mod._transcript_shaped_text("\n".join(lines))
+
+
+def test_transcript_shaped_text_rejects_prose() -> None:
+    """An ordinary markdown document must never fire -- the #459 asymmetry:
+    a false positive silently reroutes the document to the meeting prompt
+    branch, which measurably regressed recall when applied broadly."""
+    text = (
+        "# Designing the sync engine\n"
+        "\n"
+        "The sync engine reconciles local and remote state. It uses a\n"
+        "three-way merge over content digests.\n"
+        "\n"
+        "## Conflict handling\n"
+        "\n"
+        "Conflicts are surfaced to the user rather than auto-resolved.\n"
+        "The design favours explicitness over convenience.\n"
+    )
+    assert not concept_mod._transcript_shaped_text(text)
+
+
+def test_transcript_shaped_text_rejects_key_value_blocks() -> None:
+    """`key: value` metadata blocks share the colon shape but not the
+    RECURRENCE shape -- every key appears once, so no label recurs."""
+    text = "\n".join(
+        [
+            "name: openkos",
+            "version: 0.2.4",
+            "license: MIT",
+            "author: someone",
+            "homepage: https://example.org",
+            "language: python",
+            "keywords: knowledge, extraction",
+            "status: active",
+            "audience: developers",
+            "platform: any",
+            "encoding: utf-8",
+            "layout: src",
+        ]
+    )
+    assert not concept_mod._transcript_shaped_text(text)
+
+
+def test_transcript_shaped_text_rejects_log_lines() -> None:
+    """Log files recur on severity labels (`INFO:`, `ERROR:`) and on
+    date-time prefixes; both are structurally excluded (all-caps labels of
+    three or more letters, digit-bearing labels) without any lexicon."""
+    plain = "\n".join(
+        ["INFO: service starting", "ERROR: bind failed", "INFO: retrying"] * 4
+    )
+    dated = "\n".join(
+        f"2026-08-13 10:22:{sec:02d} INFO: heartbeat ok" for sec in range(12)
+    )
+    assert not concept_mod._transcript_shaped_text(plain)
+    assert not concept_mod._transcript_shaped_text(dated)
+
+
+def test_transcript_shaped_text_rejects_single_speaker() -> None:
+    """A single recurring label is a narration or log shape, not a
+    conversation -- two distinct recurring speakers minimum."""
+    text = "\n".join(f"Narrator: line number {n} of the story" for n in range(12))
+    assert not concept_mod._transcript_shaped_text(text)
+
+
+def test_transcript_shaped_text_rejects_below_turn_floor() -> None:
+    """Two speakers exchanging a handful of lines is a quote, not a
+    transcript -- the floor keeps short embedded dialogues out."""
+    text = "\n".join(
+        [
+            "A: a first point",
+            "B: a first reply",
+            "A: a second point",
+            "B: a second reply",
+            "A: a third point",
+            "B: a third reply",
+            "A: a fourth point",
+            "B: a fourth reply",
+        ]
+    )
+    assert not concept_mod._transcript_shaped_text(text)
+
+
+def test_transcript_shaped_text_rejects_dialogue_buried_in_prose() -> None:
+    """A transcript EXCERPT inside a longer article must not flip the whole
+    document: turn lines must cover at least half of the non-blank lines."""
+    prose = [
+        f"Prose sentence number {n} discussing the interview in detail."
+        for n in range(30)
+    ]
+    dialogue = [
+        "A: a quoted question from the interview"
+        if n % 2 == 0
+        else "B: a quoted answer"
+        for n in range(10)
+    ]
+    assert not concept_mod._transcript_shaped_text("\n".join(prose + dialogue))
+
+
+def test_meeting_shaped_predicate_is_title_or_content() -> None:
+    """#673: `_is_meeting_shaped` extends -- never replaces -- the title
+    gate. Either signal alone is sufficient; neither is necessary."""
+    assert concept_mod._is_meeting_shaped("Team Meeting", "ordinary prose")
+    assert concept_mod._is_meeting_shaped("TS3005a transcript", _TRANSCRIPT_SHAPED_TEXT)
+    assert not concept_mod._is_meeting_shaped("API Reference Guide", "ordinary prose")
+
+
+def test_capture_fires_on_code_titled_transcript_source() -> None:
+    """#673 requested outcome: the participant machinery (#668 D6 capture
+    pass) fires on a source whose TITLE is a code but whose CONTENT is
+    speaker-turn shaped -- the exact null-experiment configuration that
+    measured inert under the title-only gate."""
+    run1 = _array(_CONCEPT_ITEM)
+    run2 = _array(_DECISION_ITEM)
+    llm = _SequencedLLM(
+        [
+            run1,
+            run2,
+            _array(_CAPTURED_PARTICIPANT_ITEM),
+            _keep_reply("Stoicism", "Frame the Essay Around Control", "Sam Okafor"),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        _TRANSCRIPT_SHAPED_TEXT, source_title="TS3005a transcript", llm=llm
+    )
+
+    titles = {r.title for r in outcome.objects}
+    assert "Sam Okafor" in titles
+    assert outcome.report.participant_capture_runs == 1
+
+
+def test_capture_still_skips_code_titled_prose_source() -> None:
+    """The widened gate must not leak: a code-titled ORDINARY document
+    (neither title nor content transcript-shaped) spends no capture call."""
+    run1 = _array(_CONCEPT_ITEM)
+    run2 = _array(_PERSON_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism", "Epictetus")])
+
+    outcome = concept_mod.extract_concept_union(
+        "A technical article.", source_title="TS3005a transcript", llm=llm
+    )
+
+    assert len(llm.calls) == 3
+    assert outcome.report.participant_capture_runs == 0
+
+
+def test_prompt_omits_code_title_on_transcript_shaped_source() -> None:
+    """#673: the prompt channel follows the same single predicate -- a
+    content-detected transcript takes the no-title branch (with its #522
+    language anchor), exactly as a gathering-titled source does."""
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept(
+        _TRANSCRIPT_SHAPED_TEXT, source_title="TS3005a transcript", llm=llm
+    )
+
+    user_content = llm.calls[0][1]["content"]
+    assert "TS3005a transcript" not in user_content
+    assert "SOURCE TITLE" not in user_content
+    assert "same language as the SOURCE TEXT" in user_content
+
+
+def test_transcript_shaped_text_rejects_markdown_structure_lines() -> None:
+    """FP found by the #673 repo sweep: an SDD spec recurs on
+    `#### Requirement:` and `- Scenario:` lines, which share the
+    label-colon shape. A speaker turn never begins with a markdown
+    structure character -- excluded structurally, no lexicon."""
+    blocks = []
+    for n in range(8):
+        blocks.append(f"#### Requirement: The system MUST do thing {chr(97 + n)}")
+        blocks.append(f"- Scenario: WHEN thing happens THEN outcome {chr(97 + n)}")
+        blocks.append(f"- Scenario: WHEN other thing THEN outcome {chr(97 + n)}")
+    assert not concept_mod._transcript_shaped_text("\n".join(blocks))
