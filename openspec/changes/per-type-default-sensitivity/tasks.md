@@ -216,17 +216,17 @@ discover (`models:`, `type_tiers:` precedent).
 shipped behavior), but has no code dependency — safe to draft in parallel
 and land last in the stack.
 
-1. [ ] Create `docs/adr/0015-per-type-default-sensitivity.md` using the full
+1. [x] Create `docs/adr/0015-per-type-default-sensitivity.md` using the full
    draft text in `design.md`'s Appendix verbatim (frontmatter, Context,
    Decision, Consequences, Alternatives considered), status `Proposed`.
-2. [ ] Add a commented `# type_sensitivity_defaults:` line to the
+2. [x] Add a commented `# type_sensitivity_defaults:` line to the
    `openkos.yaml` example block in `docs/cli.md` (`docs/cli.md:557-583`),
    alongside the existing `type_tiers:`/`models:` commented examples, and a
    short subsection (matching the `chat_timeout`/`max_generation_tokens`
    style at `docs/cli.md:585-608`) documenting: shape (`{Type: offset}`),
    shipped default `{"Person": 1}`, eager-validation-fails-closed behavior,
    and that it is birth-time only with no backfill.
-3. [ ] Structural readback of both files (no automated test — documentation
+3. [x] Structural readback of both files (no automated test — documentation
    only): confirm the ADR number (`0015`) is genuinely the next free one and
    the `docs/cli.md` addition renders as valid Markdown/YAML.
 

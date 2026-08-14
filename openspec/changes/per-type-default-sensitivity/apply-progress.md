@@ -400,3 +400,18 @@ wording is byte-identical post-slice.
 ### Status
 
 5/5 tasks complete for this slice (WU4: 5/5). Ready for next batch (WU5).
+
+
+## Slice 4 (WU5) — ADR-0015 + docs (2026-08-14)
+
+- `docs/adr/0015-per-type-default-sensitivity.md` created VERBATIM from design.md's
+  Appendix (113 lines, status Proposed). 0015 confirmed the next free number
+  (0014 was the highest on disk).
+- `docs/cli.md`: commented `type_sensitivity_defaults:` example added to the
+  `openkos.yaml` block beside `type_tiers:`/`models:`, plus a dedicated
+  subsection (chat_timeout style) covering shape, shipped default, the
+  floor-relative formula, both birth seams, the #569 disclosure, absent/{}/0
+  semantics, eager fail-closed validation, and birth-time-only/no-backfill.
+- Structural readback done: ADR frontmatter parses (template fields present),
+  cli.md YAML example and markdown render clean. Docs-only slice — no code,
+  no tests changed.
