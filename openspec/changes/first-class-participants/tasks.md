@@ -52,8 +52,8 @@ Chain strategy: stacked-to-main
 - [x] 2.5 RED: Extend `_self_test()` with a two-meeting fixture that asserts the stub-flooding guard fires (re-admitted count vs. judge-selected count diverges as expected) before the scoring code exists.
 - [x] 2.6 GREEN: Implement the flooding-guard computation/report row so `_self_test()` passes.
 - [x] 2.7 Run `python evals/decision_extraction/scripts/run_type_coverage.py --self-test` and confirm pass (no live model call).
-- [ ] 2.8 Run `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` against AMI fixtures to produce the real measured baseline. (OUT OF SCOPE for this apply batch — orchestrator runs the live measurement afterward)
-- [ ] 2.9 Record the baseline in `evals/decision_extraction/report.md` following the existing recording convention for other types. (spec: "Recorded Baseline for Comparison") (OUT OF SCOPE for this apply batch — depends on 2.8's real output)
+- [x] 2.8 DONE by the orchestrator (2026-08-13): `--participants --runs 3`, qwen3:8b, 4 sources — zero Person/Organization generation everywhere; phase-2 trigger met.
+- [x] 2.9 DONE by the orchestrator: baseline recorded in `evals/decision_extraction/report.md` (2026-08-13 participant coverage baseline section, merged in PR #671).
 - [x] 2.10 Read the recorded baseline back and confirm it is present and comparable by a subsequent run (spec scenario check) — readback mechanism (`render_participant_baseline`/`read_participant_baseline`) implemented and round-trip-verified via `--self-test`; real-baseline readback pending 2.9.
 
 ## Phase 3: PR3 — Conditional Phase-2 Scoped Pass (D6, BLOCKED ON PR2 MEASUREMENT)
