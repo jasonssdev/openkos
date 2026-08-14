@@ -2221,3 +2221,168 @@ def test_preview_aggregates_repeated_inbound_relations_by_type(
         "  ! bundle/concepts/referrer.md (inbound relation: references)"
         in result.output
     )
+
+
+# --- #667: reconciled bodies defeat structural excision -- redact wholesale --
+
+
+def test_sweep_redacts_a_snapshot_annotated_as_carrying_reconciled_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#667's chain, end to end: merge A with reconciliation (simulated by
+    weaving A's body into the live survivor and removing the delimiter),
+    merge B (whose ledger entry snapshots the reconciled body and is
+    annotated `carried_content_ids=[A]` by `plan_merge`), then forget A --
+    the sweep cannot excise structurally, so it redacts entry B's
+    `survivor_before` wholesale with the sentinel. Privacy over
+    reversibility (#602's own rule)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="SURVIVOR-OWN-BODY.\n"
+    )
+    _write_plain_concept(
+        tmp_path, "concepts/first", title="First", body="FIRST-SECRET-BODY.\n"
+    )
+    _write_plain_concept(
+        tmp_path, "concepts/second", title="Second", body="SECOND-BODY.\n"
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/first", "--auto"]
+        ).exit_code
+        == 0
+    )
+    # Simulate #645's reconciliation: the live survivor body weaves the
+    # absorbed content in, with no `## Merged content (...)` delimiter left.
+    survivor_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    survivor_path.write_text(
+        "---\ntype: Concept\ntitle: Survivor\n---\n\n# Survivor\n\n"
+        "SURVIVOR-OWN-BODY woven with FIRST-SECRET-BODY as one document.\n",
+        encoding="utf-8",
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/second", "--auto"]
+        ).exit_code
+        == 0
+    )
+    bundle_dir = tmp_path / "bundle"
+    sidecar = bundle_ledger.ledger_path_for("concepts/survivor", bundle_dir)
+    metadata, _ = okf.load_frontmatter(sidecar.read_text(encoding="utf-8"))
+    entries = okf.decode_merged_from(metadata)
+    assert entries[-1].carried_content_ids == ["concepts/first"]
+
+    touched = main._sweep_ledger_sidecars_for_ids(bundle_dir, ["concepts/first"])
+
+    assert sidecar in touched
+    sidecar_text = sidecar.read_text(encoding="utf-8")
+    assert "FIRST-SECRET-BODY" not in sidecar_text
+    metadata, _ = okf.load_frontmatter(sidecar_text)
+    remaining = okf.decode_merged_from(metadata)
+    assert [entry.absorbed_id for entry in remaining] == ["concepts/second"]
+    assert remaining[0].survivor_before == okf.REDACTED_SNAPSHOT_SENTINEL
+    # The entry's OTHER restore data is untouched -- redaction is scoped to
+    # the one snapshot that carried the content.
+    assert "SECOND-BODY" in remaining[0].absorbed_snapshot
+
+
+def test_sweep_falls_back_to_history_detection_for_pre_v4_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-#667 (v3) sidecar carries no annotation. The conservative
+    fallback: a purge id absorbed by an EARLIER entry of the same sidecar,
+    whose delimited section is ABSENT from a later entry's
+    `survivor_before`, marks that snapshot as carrying the content
+    undelimited -- redact it wholesale."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/survivor", title="Survivor")
+    bundle_dir = tmp_path / "bundle"
+
+    def _v3_entry(absorbed_id: str, survivor_before_body: str) -> okf.MergeLedgerEntry:
+        return okf.MergeLedgerEntry(
+            schema=okf.MERGE_LEDGER_SCHEMA_V3,
+            merged_at="2026-07-20T00:00:00Z",
+            absorbed_id=absorbed_id,
+            absorbed_snapshot=(
+                "---\ntype: Concept\ntitle: Absorbed\n---\nAbsorbed body.\n"
+            ),
+            survivor_before=(
+                f"---\ntype: Concept\ntitle: Survivor\n---\n{survivor_before_body}"
+            ),
+            index_before="",
+            log_before="",
+            link_rewrites=[],
+            sensitivity_before="private",
+            sensitivity_after="private",
+            relation_rewrites=[],
+            provenance_rewrites=[],
+        )
+
+    bundle_ledger.write_entries(
+        "concepts/survivor",
+        bundle_dir,
+        survivor_id="concepts/survivor",
+        entries=[
+            _v3_entry("concepts/first", "Original survivor body.\n"),
+            # Entry 2's snapshot carries the first body WOVEN IN -- no
+            # `## Merged content (concepts/first)` delimiter anywhere.
+            _v3_entry(
+                "concepts/second",
+                "Survivor woven with FIRST-SECRET-BODY as one document.\n",
+            ),
+        ],
+    )
+
+    main._sweep_ledger_sidecars_for_ids(bundle_dir, ["concepts/first"])
+
+    sidecar = bundle_ledger.ledger_path_for("concepts/survivor", bundle_dir)
+    metadata, _ = okf.load_frontmatter(sidecar.read_text(encoding="utf-8"))
+    remaining = okf.decode_merged_from(metadata)
+    assert [entry.absorbed_id for entry in remaining] == ["concepts/second"]
+    assert remaining[0].survivor_before == okf.REDACTED_SNAPSHOT_SENTINEL
+
+
+def test_unmerge_refuses_a_redacted_ledger_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After the #667 redaction, `unmerge` must refuse rather than restore
+    the sentinel string as the live survivor body."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(
+        tmp_path, "concepts/survivor", title="Survivor", body="SURVIVOR-OWN-BODY.\n"
+    )
+    _write_plain_concept(
+        tmp_path, "concepts/first", title="First", body="FIRST-SECRET-BODY.\n"
+    )
+    _write_plain_concept(
+        tmp_path, "concepts/second", title="Second", body="SECOND-BODY.\n"
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/first", "--auto"]
+        ).exit_code
+        == 0
+    )
+    survivor_path = tmp_path / "bundle" / "concepts" / "survivor.md"
+    survivor_path.write_text(
+        "---\ntype: Concept\ntitle: Survivor\n---\n\n# Survivor\n\n"
+        "SURVIVOR-OWN-BODY woven with FIRST-SECRET-BODY as one document.\n",
+        encoding="utf-8",
+    )
+    assert (
+        runner.invoke(
+            app, ["merge", "concepts/survivor", "concepts/second", "--auto"]
+        ).exit_code
+        == 0
+    )
+    main._sweep_ledger_sidecars_for_ids(tmp_path / "bundle", ["concepts/first"])
+
+    result = runner.invoke(
+        app, ["unmerge", "concepts/survivor", "concepts/second", "--auto"]
+    )
+
+    assert result.exit_code != 0
+    assert "redacted" in result.stderr
+    assert "SURVIVOR-OWN-BODY woven with FIRST-SECRET-BODY" in survivor_path.read_text(
+        encoding="utf-8"
+    )

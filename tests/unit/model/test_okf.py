@@ -1600,12 +1600,12 @@ def test_merge_ledger_entry_round_trips_adversarial_snapshot_content(
 
 
 def test_decode_merge_ledger_entry_rejects_unsupported_schema_version() -> None:
-    """A `schema` value other than `MERGE_LEDGER_SCHEMA_V1`/`_V2`/`_V3` must
-    be rejected rather than silently reinterpreted as any of them --
-    ADR-0002's "migrate rather than silently reinterpret" promise. (`v3` is
-    now a genuinely supported schema -- design D1/rewrite-provenance-on-merge
-    -- so this uses a still-unsupported `v4` literal instead.)"""
-    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v4")
+    """A `schema` value other than the supported `MERGE_LEDGER_SCHEMA_V*`
+    versions must be rejected rather than silently reinterpreted as any of
+    them -- ADR-0002's "migrate rather than silently reinterpret" promise.
+    (`v4` became a genuinely supported schema in #667, so this uses a
+    still-unsupported `v5` literal instead.)"""
+    entry = _valid_encoded_entry(schema="openkos.merge_ledger/v5")
 
     with pytest.raises(ValueError, match="unsupported merged_from schema version"):
         okf.decode_merged_from({"merged_from": [entry]})
@@ -2766,3 +2766,86 @@ def test_build_source_concept_emits_the_origin_key(tmp_path: Path) -> None:
     metadata, _ = okf.load_frontmatter(text)
     assert metadata["origin_key"] == key
     assert f"origin_key: {key}\n" in text
+
+
+# --- #667: MERGE_LEDGER_SCHEMA_V4 / carried_content_ids ---------------------
+
+
+def test_merge_ledger_schema_v4_constant() -> None:
+    """`MERGE_LEDGER_SCHEMA_V4` exists as the schema value `plan_merge`
+    always writes from #667 onward."""
+    assert okf.MERGE_LEDGER_SCHEMA_V4 == "openkos.merge_ledger/v4"
+
+
+def test_v4_carried_content_ids_round_trips_through_frontmatter() -> None:
+    """A V4 entry's `carried_content_ids` round-trips losslessly through
+    encode -> dump_frontmatter -> load_frontmatter -> decode."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V4,
+        relation_rewrites=[],
+        provenance_rewrites=[],
+        carried_content_ids=["concepts/reconciled-away"],
+    )
+
+    encoded = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter({"merged_from": encoded}, "")
+    metadata, _ = okf.load_frontmatter(text)
+    (decoded,) = okf.decode_merged_from(metadata)
+
+    assert decoded.carried_content_ids == ["concepts/reconciled-away"]
+    assert decoded == entry
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        okf.MERGE_LEDGER_SCHEMA_V1,
+        okf.MERGE_LEDGER_SCHEMA_V2,
+        okf.MERGE_LEDGER_SCHEMA_V3,
+    ],
+)
+def test_encode_pre_v4_schema_rejects_carried_content_ids(schema: str) -> None:
+    """Only V4 introduces `carried_content_ids` -- an earlier-schema entry
+    constructed with a non-empty list is self-contradictory and must fail
+    loudly at encode time, mirroring the V1/V2 `provenance_rewrites`
+    guard."""
+    entry = _sample_ledger_entry(
+        schema=schema,
+        relation_rewrites=[],
+        carried_content_ids=["concepts/x"],
+    )
+
+    with pytest.raises(ValueError, match="carried_content_ids"):
+        okf.encode_merge_ledger_entry(entry)
+
+
+def test_decode_v3_entry_defaults_carried_content_ids_empty() -> None:
+    """A V3 entry already on disk decodes with empty `carried_content_ids`
+    -- the pre-#667 ledgers stay readable unchanged."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        relation_rewrites=[],
+        provenance_rewrites=[],
+    )
+    encoded = okf.encode_merged_from([entry])
+    text = okf.dump_frontmatter({"merged_from": encoded}, "")
+    metadata, _ = okf.load_frontmatter(text)
+
+    (decoded,) = okf.decode_merged_from(metadata)
+
+    assert decoded.carried_content_ids == []
+
+
+def test_decode_v4_entry_requires_carried_content_ids_key() -> None:
+    """V4's decode branch fails closed on a missing `carried_content_ids`
+    key, exactly like V3 does for `provenance_rewrites`."""
+    entry = _sample_ledger_entry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V4,
+        relation_rewrites=[],
+        provenance_rewrites=[],
+    )
+    (encoded,) = okf.encode_merged_from([entry])
+    del encoded["carried_content_ids"]
+
+    with pytest.raises(ValueError, match="carried_content_ids"):
+        okf.decode_merge_ledger_entry(encoded)
