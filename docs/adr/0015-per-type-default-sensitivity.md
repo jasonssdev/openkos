@@ -2,7 +2,7 @@
 type: Decision
 title: "ADR-0015: Per-type default sensitivity as a floor-relative offset"
 description: Why a Person is born one level above the workspace sensitivity floor.
-status: Proposed
+status: Accepted
 date: 2026-08-14
 tags:
   - openkos
@@ -14,7 +14,7 @@ sensitivity: public
 
 # ADR-0015: Per-type default sensitivity as a floor-relative offset
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-14
 
 ## Context

@@ -15,7 +15,7 @@ sensitivity: public
 
 Definitions of the terms that appear throughout OpenKOS. Terms are listed alphabetically.
 
-**Bundle (OKF bundle)** — A directory of markdown concept documents that together form a knowledge base. The bundle is the unit of storage and interchange; it is plain files, portable to any tool. In OpenKOS it lives at `bundle/` inside a [Workspace](#workspace) and contains concept documents and nothing else — no sources, no config — so it stays conformant and can be shared on its own. See [Open Knowledge Format](#open-knowledge-format-okf).
+**Bundle (OKF bundle)** — A directory of markdown concept documents that together form a knowledge base. The bundle is the unit of storage and interchange; it is plain files, portable to any tool. In OpenKOS it lives at `bundle/` inside a [Workspace](#workspace) and contains concept documents and nothing else — no sources, no config — so it stays conformant. Conformance is not the same as being shareable as-is, though: the engine keeps durable sidecars under `bundle/.state/`, and the merge ledger among them holds the verbatim pre-merge bytes of every absorbed object, `confidential` ones included. Their `.ledger.okf` suffix keeps them out of every `*.md` walk, so conformance holds by construction; a copy of `bundle/` handed to someone else still carries them. See [Open Knowledge Format](#open-knowledge-format-okf).
 
 **Canonical layer** — The durable part of an OpenKOS installation: the OKF bundle (markdown + frontmatter), the immutable raw sources, git history, and the SQLite operational store. It is the source of truth and is meant to outlive any tool. Contrast with the [Derived layer](#derived-layer).
 
@@ -27,7 +27,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Conformance (OKF)** — The three rules of OKF §9: every non-reserved `.md` file has parseable YAML frontmatter; every frontmatter block has a non-empty `type`; and `index.md` / `log.md` follow their prescribed structure when present. Everything else is soft guidance — consumers must not reject a bundle over unknown types, extra keys, broken links, or a missing index. Distinct from the [Lint](#lint), which is OpenKOS's separate opinion about quality.
 
-**Config (`openkos.yaml`)** — A per-bundle configuration file holding the engine's settings for that bundle: the local chat and embedding models, review mode, default sensitivity, the confidential local exemption, the freshness window, and per-tier/per-type volatility overrides. Structured YAML, owned by the engine and edited by the user. Distinct from the [Operating manual](#operating-manual-agentsmd).
+**Config (`openkos.yaml`)** — A per-bundle configuration file holding the engine's settings for that bundle: the local chat and embedding models, review mode, default sensitivity, the per-type birth-sensitivity offsets (`type_sensitivity_defaults`), the confidential local exemption, the freshness window, and per-tier/per-type volatility overrides. Structured YAML, owned by the engine and edited by the user. Distinct from the [Operating manual](#operating-manual-agentsmd).
 
 **Consumer** — Any tool that reads and reasons over an OKF bundle (a viewer, a search index, an agent). OpenKOS is both a consumer and a [Producer](#producer).
 
@@ -49,7 +49,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **High-water-mark (sensitivity)** — The rule that a derived object is at least as sensitive as the most sensitive source it was compiled from; sensitivity propagates upward along the provenance chain.
 
-**Ingest** — The operation of compiling a raw source into the bundle: reading it, writing a Source concept and up to five derived concepts, and recording provenance and log entries. (Automatically revising *related, existing* concepts during ingest remains a later capability.)
+**Ingest** — The operation of compiling a raw source into the bundle: reading it, writing a Source concept and the derived concepts a selector judge keeps from what extraction proposed, and recording provenance and log entries. (Automatically revising *related, existing* concepts during ingest remains a later capability.)
 
 **index.md** — A catalog file that lists the bundle's concepts with short summaries, used for navigation and index-first retrieval. Defined by OKF as an optional, reserved filename.
 
@@ -87,7 +87,7 @@ Definitions of the terms that appear throughout OpenKOS. Terms are listed alphab
 
 **Representation, not truth** — The principle that OpenKOS stores how an individual understands and documents knowledge, not objective truth. It is not an epistemic authority: conflicting perspectives may coexist, each keeping its own context (source, assumptions, evidence). Distinct from freshness — the engine reconciles what is out of date, not what is genuinely contested.
 
-**Sensitivity** — An OpenKOS-layer label (`public`, `private`, or `confidential`) that governs what may cross a trust boundary: what an agent may read, what may be sent to a cloud model, and what is included in exports or sync. It is a disclosure policy, not encryption, defaults to `private`, and propagates along the provenance chain by a high-water-mark rule.
+**Sensitivity** — An OpenKOS-layer label (`public`, `private`, or `confidential`) that governs what may cross a trust boundary: what an agent may read, what may be sent to a cloud model, and what is included in exports or sync. It is a disclosure policy, not encryption, and propagates along the provenance chain by a high-water-mark rule. Its floor is the workspace's `default_sensitivity` (`private` out of the box), raised at birth for any type listed in `type_sensitivity_defaults` — `Person: 1` on a stock workspace, which makes a person page `confidential` from the moment it is compiled. Whichever of the two is more restrictive wins.
 
 **Slow fact** — A fact stable for weeks, months, or years (how a system is built, who owns what, a decision and its reasoning). Slow facts are what a knowledge base exists to store. Contrast with [Fast fact](#fast-fact).
 
