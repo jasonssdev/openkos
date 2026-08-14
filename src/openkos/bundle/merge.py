@@ -115,9 +115,10 @@ def plan_merge(
     rewrite-provenance-on-merge) likewise defaults to `[]`; the actual
     third-party inbound scan (`bundle/provenance.py`) and CLI wiring are
     PR2's concern -- this layer only carries whatever the caller injects
-    into the new ledger entry, and ALWAYS writes `MERGE_LEDGER_SCHEMA_V3`
-    (the reader still accepts v1 and v2 entries already on disk from before
-    this merge).
+    into the new ledger entry, and ALWAYS writes `MERGE_LEDGER_SCHEMA_V4`
+    (#667: v4 adds `carried_content_ids`, computed HERE from
+    `existing_entries` vs `survivor_text`; the reader still accepts v1-v3
+    entries already on disk from before this merge).
 
     `existing_entries` (durable-derived-state slice 1a) is the survivor's
     CURRENT sidecar content, read by the caller via `bundle.ledger.
@@ -148,9 +149,21 @@ def plan_merge(
         survivor_id,
     )
 
+    # #667: a prior absorbed id whose delimited section is ABSENT from the
+    # survivor text being snapshotted has been woven in undelimited (a #645
+    # reconciliation, or an operator edit -- either way the #602 structural
+    # excision cannot reach it inside THIS entry's `survivor_before`).
+    # Recorded at snapshot time, when the fact is still decidable.
+    carried_content_ids = [
+        prior.absorbed_id
+        for prior in existing
+        if f"{okf.MERGED_CONTENT_HEADING_PREFIX}{prior.absorbed_id})"
+        not in survivor_text
+    ]
+
     sensitivity_before = survivor_metadata.get("sensitivity")
     entry = okf.MergeLedgerEntry(
-        schema=okf.MERGE_LEDGER_SCHEMA_V3,
+        schema=okf.MERGE_LEDGER_SCHEMA_V4,
         merged_at=merged_at,
         absorbed_id=absorbed_id,
         absorbed_snapshot=absorbed_text,
@@ -168,6 +181,7 @@ def plan_merge(
         provenance_rewrites=list(provenance_rewrites)
         if provenance_rewrites is not None
         else [],
+        carried_content_ids=carried_content_ids,
     )
 
     merged_survivor = okf.dump_frontmatter(merged_metadata, merged_body)
@@ -240,6 +254,18 @@ def plan_unmerge(
             f"ledger; unwinding to it requires reversing, in order: {sequence}. "
             f"Run `openkos unmerge {survivor_id} --to {absorbed_id}` to do this in "
             f"one command, or unmerge each pair in that order"
+        )
+
+    # #667: forget's sweep replaces a carried-content snapshot with the
+    # redaction sentinel (privacy over reversibility). Restoring it would
+    # overwrite the LIVE survivor body with the notice string -- refuse
+    # loudly instead; this merge is no longer reversible by design.
+    if tail.survivor_before == okf.REDACTED_SNAPSHOT_SENTINEL:
+        raise ValueError(
+            f"{survivor_id!r}'s ledger entry for {absorbed_id!r} was redacted "
+            "by `openkos forget` (it carried a forgotten concept's "
+            "reconciled content); this merge is no longer reversible -- "
+            "unmerge refused"
         )
 
     return UnmergePlan(

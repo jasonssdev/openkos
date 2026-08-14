@@ -238,9 +238,30 @@ MERGE_LEDGER_SCHEMA_V3: Final = "openkos.merge_ledger/v3"
 rewrite-provenance-on-merge onward carries (design; ADR-0011): the ONLY
 additive change from V2 is the REQUIRED `provenance_rewrites` key
 (whole-file third-party snapshots for inbound `provenance:` retargets/
-dedupes). `plan_merge` always writes V3; the reader accepts V1, V2, and V3
-(spec: "A v1 and a v2 ledger entry are still readable after the v3
-bump")."""
+dedupes). Superseded by `MERGE_LEDGER_SCHEMA_V4`; the reader accepts V1,
+V2, V3 and V4 (spec: "A v1 and a v2 ledger entry are still readable after
+the v3 bump")."""
+
+MERGE_LEDGER_SCHEMA_V4: Final = "openkos.merge_ledger/v4"
+"""The `schema` value every `merged_from` entry carries from #667 onward:
+the ONLY additive change from V3 is the REQUIRED `carried_content_ids`
+key -- the prior-absorbed ids whose content this entry's `survivor_before`
+may carry WITHOUT its `## Merged content (<id>)` delimiter (a #645
+reconciliation weaves the absorbed body into the live survivor, so a
+LATER merge's snapshot embeds it undelimited, where `forget`'s #602
+structural excision cannot reach it). `plan_merge` computes the set at
+snapshot time; `forget`'s sweep redacts the whole snapshot for a match
+(privacy over reversibility, #602's own rule)."""
+
+REDACTED_SNAPSHOT_SENTINEL: Final = (
+    "[redacted by openkos forget: this snapshot carried reconciled "
+    "content of a forgotten concept]"
+)
+"""The exact string `forget`'s ledger sweep writes IN PLACE OF a
+`survivor_before` snapshot that carried a forgotten concept's reconciled
+(undelimited) content (#667). `plan_unmerge` refuses to restore a
+snapshot equal to this sentinel -- restoring it would replace the live
+survivor body with this notice."""
 
 
 def dump_frontmatter(
@@ -671,6 +692,15 @@ class MergeLedgerEntry:
     sensitivity_after: str
     relation_rewrites: list[RelationRewrite] = field(default_factory=list)
     provenance_rewrites: list[ProvenanceRewrite] = field(default_factory=list)
+    carried_content_ids: list[str] = field(default_factory=list)
+    """V4 addition (#667): prior-absorbed ids whose content
+    `survivor_before` may carry WITHOUT its delimited section -- computed
+    by `plan_merge` as "absorbed earlier into this survivor, but its
+    `## Merged content (<id>)` heading is absent from the snapshot being
+    recorded" (the #645-reconciled shape). Defaults to `[]` for the same
+    backward-compatibility reason as the other versioned fields;
+    `plan_merge` always populates it explicitly and always writes
+    `MERGE_LEDGER_SCHEMA_V4`."""
 
 
 def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
@@ -702,6 +732,12 @@ def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
         and entry.provenance_rewrites
     ):
         raise ValueError(f"a {entry.schema} entry must not carry provenance_rewrites")
+    if (
+        entry.schema
+        in (MERGE_LEDGER_SCHEMA_V1, MERGE_LEDGER_SCHEMA_V2, MERGE_LEDGER_SCHEMA_V3)
+        and entry.carried_content_ids
+    ):
+        raise ValueError(f"a {entry.schema} entry must not carry carried_content_ids")
     return {
         "schema": entry.schema,
         "merged_at": entry.merged_at,
@@ -728,6 +764,7 @@ def encode_merge_ledger_entry(entry: MergeLedgerEntry) -> dict[str, object]:
             {"file": pr.file, "snapshot": pr.snapshot}
             for pr in entry.provenance_rewrites
         ],
+        "carried_content_ids": list(entry.carried_content_ids),
     }
 
 
@@ -810,6 +847,7 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
         schema = str(raw["schema"])
         relation_rewrites: list[RelationRewrite]
         provenance_rewrites: list[ProvenanceRewrite]
+        carried_content_ids: list[str] = []
         if schema == MERGE_LEDGER_SCHEMA_V1:
             relation_rewrites = []
             provenance_rewrites = []
@@ -825,6 +863,20 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
             provenance_rewrites = [
                 _decode_provenance_rewrite(item) for item in raw["provenance_rewrites"]
             ]
+        elif schema == MERGE_LEDGER_SCHEMA_V4:
+            relation_rewrites = [
+                _decode_relation_rewrite(item) for item in raw["relation_rewrites"]
+            ]
+            provenance_rewrites = [
+                _decode_provenance_rewrite(item) for item in raw["provenance_rewrites"]
+            ]
+            raw_carried = raw["carried_content_ids"]
+            if not isinstance(raw_carried, list):
+                raise ValueError(
+                    "carried_content_ids must be a list, got "
+                    f"{type(raw_carried).__name__}"
+                )
+            carried_content_ids = [str(item) for item in raw_carried]
         else:
             raise ValueError(f"unsupported merged_from schema version: {schema!r}")
         link_rewrites = [_decode_link_rewrite(item) for item in raw["link_rewrites"]]
@@ -841,6 +893,7 @@ def decode_merge_ledger_entry(raw: object) -> MergeLedgerEntry:
             sensitivity_after=str(raw["sensitivity_after"]),
             relation_rewrites=relation_rewrites,
             provenance_rewrites=provenance_rewrites,
+            carried_content_ids=carried_content_ids,
         )
     except KeyError as exc:
         raise ValueError(f"merged_from entry missing field {exc}") from exc

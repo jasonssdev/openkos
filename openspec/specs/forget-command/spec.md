@@ -295,6 +295,20 @@ forgotten body.
   survivor's own pre-merge content, entry 2's absorbed snapshot) is
   untouched
 
+#### Scenario: A reconciled (undelimited) carried body is redacted wholesale
+- GIVEN a merge whose reconciliation pass (#645) wove an absorbed body
+  into the live survivor with no delimiter, a LATER merge on the same
+  survivor whose ledger entry therefore snapshots that content
+  undelimited (annotated in the entry's `carried_content_ids`, or — for a
+  pre-annotation entry — detected as a purge id absorbed earlier into the
+  same sidecar whose delimited section is absent from the snapshot), and
+  a `forget` of the first absorbed id
+- WHEN the sweep completes
+- THEN the later entry's `survivor_before` is replaced wholesale with the
+  redaction sentinel (privacy over reversibility, #667); the entry's
+  other restore fields keep the ordinary structural scrub, and a later
+  `unmerge` of that entry refuses rather than restoring the sentinel
+
 #### Scenario: A third-party rewrite snapshot of the member is removed
 - GIVEN a member's whole file was snapshotted into a DIFFERENT survivor's
   entry as a `provenance_rewrites` (or `relation_rewrites`) element,

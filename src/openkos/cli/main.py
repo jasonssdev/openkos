@@ -639,7 +639,10 @@ def _excise_merged_sections(snapshot: str, purge_ids: set[str]) -> str:
 
 
 def _scrub_entry_snapshots(
-    entry: okf.MergeLedgerEntry, purge_ids: set[str]
+    entry: okf.MergeLedgerEntry,
+    purge_ids: set[str],
+    *,
+    prior_absorbed_ids: frozenset[str] = frozenset(),
 ) -> okf.MergeLedgerEntry:
     """Scrub one SURVIVING ledger entry's snapshot fields of every purge-set
     member's content (issue #602; forget-command spec: "Deletion Sweep
@@ -662,12 +665,43 @@ def _scrub_entry_snapshots(
 
     Returns the entry unchanged (same object) when nothing matched, so the
     caller's no-op detection stays cheap and a byte-identical rewrite is
-    never performed."""
+    never performed.
+
+    Carried-content redaction (#667): a #645-reconciled merge weaves an
+    absorbed body into the live survivor WITHOUT the delimiter, so a LATER
+    merge's `survivor_before` embeds it where the structural excision above
+    cannot reach. Two detection channels, evaluated BEFORE excision (the
+    excision itself removes the delimiter this decision reads):
+
+    - a V4 entry's own `carried_content_ids` annotation, recorded by
+      `plan_merge` at snapshot time (authoritative for V4);
+    - for pre-V4 entries only, the conservative history fallback: a purge
+      id in `prior_absorbed_ids` (absorbed EARLIER into this same sidecar)
+      whose delimited section is absent from this entry's ORIGINAL
+      `survivor_before`.
+
+    On a hit, `survivor_before` is replaced wholesale with
+    `okf.REDACTED_SNAPSHOT_SENTINEL` -- privacy over reversibility, #602's
+    own rule; `plan_unmerge` refuses the sentinel rather than restoring
+    it. The entry's other fields keep the ordinary structural scrub."""
 
     def _keeps(file: str) -> bool:
         return unicodedata.normalize("NFC", file.removesuffix(".md")) not in purge_ids
 
-    survivor_before = _excise_merged_sections(entry.survivor_before, purge_ids)
+    carried_hit = any(
+        carried in purge_ids for carried in entry.carried_content_ids
+    ) or (
+        entry.schema != okf.MERGE_LEDGER_SCHEMA_V4
+        and any(
+            f"{okf.MERGED_CONTENT_HEADING_PREFIX}{purge_id})"
+            not in entry.survivor_before
+            for purge_id in purge_ids & prior_absorbed_ids
+        )
+    )
+    if carried_hit:
+        survivor_before = okf.REDACTED_SNAPSHOT_SENTINEL
+    else:
+        survivor_before = _excise_merged_sections(entry.survivor_before, purge_ids)
     absorbed_snapshot = _excise_merged_sections(entry.absorbed_snapshot, purge_ids)
     index_before = _excise_merged_sections(entry.index_before, purge_ids)
     log_before = _excise_merged_sections(entry.log_before, purge_ids)
@@ -752,11 +786,20 @@ def _sweep_ledger_sidecars_for_ids(
         if not isinstance(survivor_id, str) or not survivor_id:
             continue
         entries = okf.decode_merged_from(metadata)
-        remaining = [
-            _scrub_entry_snapshots(e, purge_ids_set)
-            for e in entries
-            if e.absorbed_id not in purge_ids_set
-        ]
+        # `prior` accumulates EVERY earlier entry's absorbed id -- dropped
+        # ones included, since their content contributed to later snapshots
+        # regardless of whether their own entry survives this sweep (#667's
+        # pre-V4 history fallback reads this set).
+        remaining = []
+        prior: set[str] = set()
+        for e in entries:
+            if e.absorbed_id not in purge_ids_set:
+                remaining.append(
+                    _scrub_entry_snapshots(
+                        e, purge_ids_set, prior_absorbed_ids=frozenset(prior)
+                    )
+                )
+            prior.add(e.absorbed_id)
         if remaining == entries:
             continue
         # Write back to the WALKED path, never to a path rebuilt from the

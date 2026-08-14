@@ -474,8 +474,9 @@ def test_plan_unmerge_rejects_blank_ids() -> None:
 # -- v3 ledger: provenance_rewrites threading (tasks 3.1-3.2) --------------
 
 
-def test_plan_merge_always_writes_v3_schema() -> None:
-    """`plan_merge` always writes `MERGE_LEDGER_SCHEMA_V3` (task 3.1)."""
+def test_plan_merge_always_writes_v4_schema() -> None:
+    """`plan_merge` always writes `MERGE_LEDGER_SCHEMA_V4` (#667; was V3
+    from rewrite-provenance-on-merge, task 3.1)."""
     plan = bundle_merge.plan_merge(
         survivor_id="concepts/survivor",
         absorbed_id="concepts/absorbed",
@@ -486,7 +487,7 @@ def test_plan_merge_always_writes_v3_schema() -> None:
         merged_at="2026-07-20T00:00:00Z",
     )
 
-    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V3
+    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V4
 
 
 def test_plan_merge_provenance_rewrites_default_to_empty_list() -> None:
@@ -526,7 +527,7 @@ def test_plan_merge_threads_provenance_rewrites_into_ledger_entry() -> None:
     )
 
     assert plan.ledger_entry.provenance_rewrites == [provenance_rewrite]
-    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V3
+    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V4
     assert plan.ledger_entries == [plan.ledger_entry]
 
 
@@ -687,4 +688,91 @@ def test_plan_unwind_sequence_rejects_same_or_blank_ids() -> None:
             survivor_id="concepts/same",
             to_absorbed_id="concepts/same",
             entries=[],
+        )
+
+
+# --- #667: carried_content_ids annotation + redacted-snapshot refusal -------
+
+
+def _prior_entry(absorbed_id: str) -> okf.MergeLedgerEntry:
+    return okf.MergeLedgerEntry(
+        schema=okf.MERGE_LEDGER_SCHEMA_V4,
+        merged_at="2026-07-19T00:00:00Z",
+        absorbed_id=absorbed_id,
+        absorbed_snapshot=_absorbed_text(),
+        survivor_before=_survivor_text(),
+        index_before=_INDEX_TEXT,
+        log_before=_LOG_TEXT,
+        link_rewrites=[],
+        sensitivity_before="private",
+        sensitivity_after="private",
+    )
+
+
+def test_plan_merge_writes_v4_and_annotates_reconciled_prior_content() -> None:
+    """#667: a prior absorbed id whose `## Merged content (<id>)` heading is
+    ABSENT from the survivor text being snapshotted (the #645-reconciled
+    shape) is recorded in the new entry's `carried_content_ids` -- the
+    forget sweep's only way to know this snapshot carries that content
+    undelimited."""
+    reconciled_survivor = okf.dump_frontmatter(
+        {"type": "Concept", "title": "Stoicism", "sensitivity": "private"},
+        "# Stoicism\n\nSurvivor body woven with the first absorbed content.",
+    )
+
+    plan = bundle_merge.plan_merge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/second",
+        survivor_text=reconciled_survivor,
+        absorbed_text=_absorbed_text(),
+        index_text=_INDEX_TEXT,
+        log_text=_LOG_TEXT,
+        merged_at="2026-07-20T00:00:00Z",
+        existing_entries=[_prior_entry("concepts/first")],
+    )
+
+    assert plan.ledger_entry.schema == okf.MERGE_LEDGER_SCHEMA_V4
+    assert plan.ledger_entry.carried_content_ids == ["concepts/first"]
+
+
+def test_plan_merge_does_not_annotate_a_still_delimited_prior_section() -> None:
+    """The ordinary un-reconciled stack keeps its delimiter, so the #602
+    structural excision still reaches it -- no annotation, no over-eager
+    wholesale redaction later."""
+    stacked_survivor = okf.dump_frontmatter(
+        {"type": "Concept", "title": "Stoicism", "sensitivity": "private"},
+        "# Stoicism\n\nSurvivor body."
+        "\n\n## Merged content (concepts/first)\n\nFirst absorbed body.",
+    )
+
+    plan = bundle_merge.plan_merge(
+        survivor_id="concepts/survivor",
+        absorbed_id="concepts/second",
+        survivor_text=stacked_survivor,
+        absorbed_text=_absorbed_text(),
+        index_text=_INDEX_TEXT,
+        log_text=_LOG_TEXT,
+        merged_at="2026-07-20T00:00:00Z",
+        existing_entries=[_prior_entry("concepts/first")],
+    )
+
+    assert plan.ledger_entry.carried_content_ids == []
+
+
+def test_plan_unmerge_refuses_a_redacted_survivor_snapshot() -> None:
+    """#667: forget's sweep replaces a carried-content snapshot with the
+    redaction sentinel; restoring it would overwrite the live survivor
+    body with the notice string -- `plan_unmerge` must refuse instead."""
+    import dataclasses
+
+    redacted_tail = dataclasses.replace(
+        _prior_entry("concepts/first"),
+        survivor_before=okf.REDACTED_SNAPSHOT_SENTINEL,
+    )
+
+    with pytest.raises(ValueError, match="redacted"):
+        bundle_merge.plan_unmerge(
+            survivor_id="concepts/survivor",
+            absorbed_id="concepts/first",
+            entries=[redacted_tail],
         )
