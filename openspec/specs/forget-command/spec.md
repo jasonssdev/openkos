@@ -313,12 +313,38 @@ forgotten body.
 - THEN that snapshot no longer contains the forgotten concept's body under
   `bundle/.state/ledger/`
 
+Body content is not the only way a member's identity enters another
+entry's snapshots (issue #689). A member that was never absorbed by a
+given survivor can still be REFERENCED from it — a `## Related` link in
+the snapshotted body, a catalog bullet in `index_before`, an ingest line
+or a `forget` tombstone in `log_before` — each carrying the member's
+title, its one-line description and a link to its former path. No
+delimiter marks these, and the entry itself is rightly kept because its
+`absorbed_id` is a different concept, so the body excision above cannot
+reach them. The sweep MUST therefore ALSO drop, from every snapshot
+field of every surviving entry, each bullet whose first markdown link (or
+`(id: <x>)` anchor) resolves to a purge-set member. This match is
+structural — resolved link identity, never a substring match on body text
+— so a bullet that merely MENTIONS a purged title in its description
+survives, and a YAML sequence item in a snapshot's frontmatter, carrying
+neither link nor anchor, can never match.
+
 #### Scenario: Forgetting a survivor sweeps its own ledger entries
 - GIVEN the purge-set member is a merge survivor with its own ledger
   sidecar under `bundle/.state/ledger/`
 - WHEN `openkos forget <concept-id>` completes
 - THEN that sidecar is swept as part of the same Phase B write, not left
   behind
+
+#### Scenario: A reference to the forgotten concept is scrubbed from a surviving entry
+- GIVEN a surviving ledger entry whose snapshot fields reference a
+  purge-set member as an ordinary bullet — a `## Related` link, a catalog
+  bullet, or a log line — while that entry's own `absorbed_id` is a
+  DIFFERENT concept
+- WHEN the Phase B sweep runs
+- THEN every such bullet is dropped, the member's title and former path
+  appear in no snapshot field, the entry itself is retained, and any
+  unrelated bullet in the same snapshot round-trips verbatim
 
 #### Scenario: A two-entry ledger keeps no accumulated copy of the forgotten body
 - GIVEN a survivor with two ledger entries, where entry 2's
