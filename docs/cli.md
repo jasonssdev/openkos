@@ -226,11 +226,14 @@ Refuses (exit 1) outside an initialized workspace, using the same shared workspa
 
 ### `openkos contradictions`
 
-**Read-only.** LLM-detects contradictions between already-related concepts (candidate pairs drawn from the bundle's typed relation graph), printing a verdict (`CONTRADICTS`/`CONSISTENT`/`UNCERTAIN`), confidence, rationale, and the cited conflicting claims per pair. By default only high-confidence `CONTRADICTS` verdicts are shown. Degrades the same way `adjudicate`/`query` do on an unreachable Ollama server or a missing model.
+**Bundle-read-only.** LLM-detects contradictions between already-related concepts (candidate pairs drawn from the bundle's typed relation graph), printing a verdict (`CONTRADICTS`/`CONSISTENT`/`UNCERTAIN`), confidence, rationale, and the cited conflicting claims per pair. By default only high-confidence `CONTRADICTS` verdicts are shown. Degrades the same way `adjudicate`/`query` do on an unreachable Ollama server or a missing model.
+
+**Persisted findings are served before re-judging (issue #653).** `curate`'s Contradictions stage and this verb both persist every judged verdict — `consistent` included — to `.openkos/findings.db`, alongside content digests of exactly the inputs the verdict was computed from. A default run therefore serves any candidate pair whose latest persisted finding is digest-fresh straight from the store, with **no model call**, and judges only the pairs that are new or whose inputs changed; a `N of M candidate(s) served from persisted findings; K judged fresh.` line reports the split. Freshly judged verdicts are persisted through `curate`'s exact write path (this is the one thing the verb writes — derived state under `.openkos/`, never a bundle file), so the store converges: the second identical run costs zero model time. Two verbs, one source of truth.
 
 | Flag | Meaning |
 | --- | --- |
-| `--all` | Display-only filter: reveal every verdict regardless of type or confidence. `find_contradictions` still judges every candidate pair either way. |
+| `--all` | Display-only filter: reveal every verdict — served or freshly judged — regardless of type or confidence. It never changes which pairs are judged. |
+| `--fresh` | Bypass the persisted-findings serve and re-judge every candidate pair with the model. The fresh verdicts are re-persisted, refreshing the store. |
 | `--include-deprecated` | Include deprecated and superseded concepts. Excluded by default — a candidate pair with either endpoint deprecated/superseded is never judged. |
 | `--include-confidential` | Include confidential concepts. Excluded by default when the LLM backend is **not** verifiably on this machine — a candidate pair with either endpoint confidential is then never judged. See [Sensitivity and the local backend](#sensitivity-and-the-local-backend). |
 

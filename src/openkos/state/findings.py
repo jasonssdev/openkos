@@ -49,6 +49,14 @@ CREATE TABLE IF NOT EXISTS finding_input_digests (
 )
 """
 
+_CREATE_CLAIMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS finding_claims (
+    finding_id INTEGER NOT NULL REFERENCES findings(id),
+    ordinal INTEGER NOT NULL,
+    claim TEXT NOT NULL
+)
+"""
+
 _INSERT_FINDING_SQL = """
 INSERT INTO findings
     (pair_id_0, pair_id_1, merged_absorbed_id, verdict, confidence, rationale)
@@ -60,6 +68,11 @@ INSERT INTO finding_input_digests (finding_id, ordinal, input_ref, digest)
 VALUES (?, ?, ?, ?)
 """
 
+_INSERT_CLAIM_SQL = """
+INSERT INTO finding_claims (finding_id, ordinal, claim)
+VALUES (?, ?, ?)
+"""
+
 _SELECT_FINDINGS_SQL = """
 SELECT id, pair_id_0, pair_id_1, merged_absorbed_id, verdict, confidence, rationale
 FROM findings
@@ -69,6 +82,13 @@ ORDER BY id
 _SELECT_INPUT_DIGESTS_SQL = """
 SELECT input_ref, digest
 FROM finding_input_digests
+WHERE finding_id = ?
+ORDER BY ordinal
+"""
+
+_SELECT_CLAIMS_SQL = """
+SELECT claim
+FROM finding_claims
 WHERE finding_id = ?
 ORDER BY ordinal
 """
@@ -100,6 +120,11 @@ class Finding:
     confidence: float
     rationale: str
     input_digests: tuple[InputDigest, ...]
+    conflicting_claims: tuple[str, ...] = ()
+    """The claims a `CONTRADICTS` verdict cited (#653): persisted so a
+    served finding renders exactly like a freshly judged one. Defaulted
+    empty -- `CONSISTENT`/`UNCERTAIN` never carry claims, and every
+    pre-#653 construction site keeps working unchanged."""
 
 
 @dataclass(frozen=True)
@@ -119,6 +144,7 @@ def record_findings(conn: sqlite3.Connection, batch: Sequence[Finding]) -> None:
     is sufficient rather than one commit per run)."""
     conn.execute(_CREATE_FINDINGS_TABLE_SQL)
     conn.execute(_CREATE_INPUT_DIGESTS_TABLE_SQL)
+    conn.execute(_CREATE_CLAIMS_TABLE_SQL)
     for finding in batch:
         cursor = conn.execute(
             _INSERT_FINDING_SQL,
@@ -137,6 +163,8 @@ def record_findings(conn: sqlite3.Connection, batch: Sequence[Finding]) -> None:
                 _INSERT_INPUT_DIGEST_SQL,
                 (finding_id, ordinal, input_digest.input_ref, input_digest.digest),
             )
+        for ordinal, claim in enumerate(finding.conflicting_claims):
+            conn.execute(_INSERT_CLAIM_SQL, (finding_id, ordinal, claim))
     conn.commit()
 
 
@@ -181,6 +209,7 @@ def open_findings(
     }
     if "findings" not in tables:
         return ()
+    has_claims_table = "finding_claims" in tables
 
     results: list[PersistedFinding] = []
     for (
@@ -198,6 +227,17 @@ def open_findings(
                 _SELECT_INPUT_DIGESTS_SQL, (finding_id,)
             ).fetchall()
         )
+        # A store written before #653 has no `finding_claims` table --
+        # claims read back empty rather than raising (the same absent-table
+        # posture the whole-store `findings` check above takes).
+        conflicting_claims: tuple[str, ...] = ()
+        if has_claims_table:
+            conflicting_claims = tuple(
+                claim
+                for (claim,) in conn.execute(
+                    _SELECT_CLAIMS_SQL, (finding_id,)
+                ).fetchall()
+            )
         results.append(
             PersistedFinding(
                 pair_ids=(pair_id_0, pair_id_1),
@@ -206,6 +246,7 @@ def open_findings(
                 confidence=confidence,
                 rationale=rationale,
                 input_digests=input_digests,
+                conflicting_claims=conflicting_claims,
                 stale=_is_stale(input_digests, current_digest),
             )
         )

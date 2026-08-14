@@ -117,9 +117,11 @@ the candidate set, the report MUST state this explicitly — never silently.
 
 ### Requirement: Read-Only `contradictions` CLI Verb, High-Confidence Default
 
-The CLI MUST expose a read-only `contradictions` verb gating on
-`require_workspace`, building `OllamaClient` and injecting it into
-`find_contradictions`, performing zero bundle writes. By default it MUST
+The CLI MUST expose a `contradictions` verb gating on `require_workspace`,
+building `OllamaClient` and injecting it into `find_contradictions`,
+performing zero bundle writes. Its only persistence is the findings store
+under `.openkos/` (#653) — the same "persisting a finding is not a bundle
+write" carve-out `curate`'s Contradictions stage holds. By default it MUST
 display only `CONTRADICTS` verdicts above the confidence threshold;
 `CONSISTENT` and `UNCERTAIN` MUST be hidden.
 
@@ -130,11 +132,49 @@ display only `CONTRADICTS` verdicts above the confidence threshold;
 - THEN only high-confidence `CONTRADICTS` verdicts print, no bundle file is
   created or modified
 
+### Requirement: Persisted Findings Are Served Before Re-Judging
+
+A default `contradictions` run MUST serve a candidate pair from the
+persisted findings store instead of re-judging it iff the pair's LATEST
+persisted finding's input digests exactly match the digests computed from
+the pair's current bytes by the same function that recorded them.
+`consistent` findings serve identically — they are what proves a pair
+needs no re-judging. Any other candidate — no persisted row, digest
+drift, an unreadable input, or an unrecognized stored verdict — MUST be
+re-judged, and every freshly judged verdict MUST be persisted through the
+same write path `curate` uses, cited claims included, so a served
+`CONTRADICTS` renders indistinguishably from a fresh one. The run MUST
+report how many candidates were served versus judged. A `--fresh` flag
+MUST bypass serving and re-judge every candidate.
+
+#### Scenario: Digest-fresh finding serves without a model call
+
+- GIVEN a candidate pair whose persisted finding's digests match its
+  current bytes
+- WHEN `contradictions` runs without `--fresh`
+- THEN the stored verdict prints (claims included) and `llm.chat` is never
+  called for that pair
+
+#### Scenario: Stale pair re-judges and re-persists
+
+- GIVEN a persisted finding whose stored digest no longer matches the
+  pair's current bytes
+- WHEN `contradictions` runs
+- THEN that pair is judged with one model call and the fresh verdict is
+  persisted, so the next default run serves it
+
+#### Scenario: `--fresh` re-judges everything
+
+- GIVEN digest-fresh persisted findings for every candidate
+- WHEN `contradictions --fresh` runs
+- THEN every candidate is judged with a model call
+
 ### Requirement: `--all` Reveals Every Verdict
 
 The `contradictions` verb MAY accept `--all` to display every verdict
-regardless of type or confidence. This flag MUST NOT affect
-`find_contradictions`, which always judges every pair.
+regardless of type or confidence. This flag MUST NOT change which pairs
+are judged: it is a display-only filter over the served-plus-judged
+verdict list.
 
 #### Scenario: `--all` shows CONSISTENT and UNCERTAIN too
 

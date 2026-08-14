@@ -78,7 +78,9 @@ from openkos.resolution.candidates import (
     candidate_group_truncation_notice,
 )
 from openkos.resolution.contradiction import (
+    CandidatePlan,
     ContradictionBatch,
+    ContradictionVerdict,
     contradiction_truncation_notice,
     find_contradictions,
     is_high_confidence_contradiction,
@@ -86,6 +88,7 @@ from openkos.resolution.contradiction import (
     plan_candidates,
     vacuous_coverage_notice,
 )
+from openkos.resolution.contradiction import Verdict as ContradictionVerdictValue
 from openkos.resolution.edge_typing import (
     EdgeSuggestion,
     EdgeSuggestionBatch,
@@ -11921,6 +11924,81 @@ def _persisted_findings(
         conn.close()
 
 
+def _contradiction_spec_key(spec: object) -> tuple[tuple[str, str], str | None]:
+    """The `(pair_ids, merged_absorbed_id)` identity of one candidate spec
+    -- the SAME identity `bundle.decisions.decision_key_for` and the
+    findings store key on (design Decision 3), spelled as a plain tuple so
+    specs and persisted rows can be joined without hashing the (unhashable,
+    ledger-entry-carrying) spec itself. `spec` is typed loosely because
+    `_CandidateSpec` is `resolution.contradiction`'s own private shape;
+    only its two identity attributes are read here."""
+    merge_entry = getattr(spec, "merge_entry", None)
+    absorbed = merge_entry.absorbed_id if merge_entry is not None else None
+    return (spec.pair_ids, absorbed)  # type: ignore[attr-defined]
+
+
+def _partition_persisted_serves(
+    layout: config.WorkspaceLayout, plan: CandidatePlan
+) -> tuple[
+    dict[tuple[tuple[str, str], str | None], ContradictionVerdict], CandidatePlan
+]:
+    """Split `plan` into verdicts servable from `.openkos/findings.db` and
+    the candidates that still need a model call (#653).
+
+    A candidate is SERVED iff its latest persisted finding's stored digest
+    rows are exactly the rows `cli.curate.finding_input_digests` computes
+    for the pair's CURRENT bytes -- the same function that recorded them,
+    so equality means "nothing this verdict was computed from has changed".
+    Everything else re-judges, conservatively: no persisted row, any digest
+    drift, an unreadable input (fewer current rows than stored), or a
+    stored verdict value outside the enum. `consistent` rows serve exactly
+    like `contradicts` rows -- they are what proves a pair needs no
+    re-judging (the display filter, not this partition, decides what is
+    shown).
+
+    Returns `(served_by_key, judged_plan)`: the served verdicts keyed by
+    `_contradiction_spec_key`, and a copy of `plan` whose `specs` are only
+    the candidates to judge -- totals untouched, so the truncation notice
+    keeps describing the ORIGINAL plan."""
+    if not layout.findings_db_path.exists():
+        return {}, plan
+    conn = derived.open_derived_connection(layout.findings_db_path)
+    try:
+        persisted = findings.open_findings(conn)
+    finally:
+        conn.close()
+    # Insertion order is `record_findings` order: iterating forward and
+    # overwriting leaves the LATEST row for each identity -- a pair curate
+    # judged twice serves its newest verdict, never a superseded one.
+    latest: dict[tuple[tuple[str, str], str | None], findings.PersistedFinding] = {}
+    for pf in persisted:
+        latest[(pf.pair_ids, pf.merged_absorbed_id)] = pf
+
+    served: dict[tuple[tuple[str, str], str | None], ContradictionVerdict] = {}
+    to_judge = []
+    for spec in plan.specs:
+        key = _contradiction_spec_key(spec)
+        row = latest.get(key)
+        current = curate_module.finding_input_digests(layout.bundle_dir, spec)
+        if row is None or not current or tuple(row.input_digests) != current:
+            to_judge.append(spec)
+            continue
+        try:
+            verdict_value = ContradictionVerdictValue(row.verdict)
+        except ValueError:
+            to_judge.append(spec)
+            continue
+        served[key] = ContradictionVerdict(
+            pair_ids=row.pair_ids,
+            verdict=verdict_value,
+            confidence=row.confidence,
+            rationale=row.rationale,
+            conflicting_claims=row.conflicting_claims,
+            merged_absorbed_id=row.merged_absorbed_id,
+        )
+    return served, dataclasses.replace(plan, specs=tuple(to_judge))
+
+
 def _open_findings_by_decision_key(
     layout: config.WorkspaceLayout,
 ) -> dict[str, findings.PersistedFinding]:
@@ -12086,6 +12164,13 @@ def contradictions(
         help="List every declined finding instead of running LLM "
         "contradiction detection.",
     ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help="Re-judge every candidate pair with the model. By default, a "
+        "pair whose persisted finding is digest-fresh is served from "
+        ".openkos/findings.db without a model call (#653).",
+    ),
 ) -> None:
     """LLM-detect contradictions between already-related concepts: read-only,
     like `adjudicate`/`suggest-relations`/`suggest-volatility`.
@@ -12104,18 +12189,33 @@ def contradictions(
     forbids only canonical-layer imports of `openkos.graph` and a `graph`
     CLI verb.
 
-    `contradictions` never writes, merges, or reconciles -- it only prints a
-    verdict, confidence, rationale, and cited conflicting claims per
-    candidate pair for human review. No `--auto`, no confirmation gate, no
-    `--json` or other structured mode.
+    `contradictions` never writes the BUNDLE -- no merge, no reconcile, no
+    file under `bundle/` is ever touched; it prints a verdict, confidence,
+    rationale, and cited conflicting claims per candidate pair for human
+    review. No `--auto`, no confirmation gate, no `--json` or other
+    structured mode. Since #653 it DOES persist its freshly judged
+    verdicts to `.openkos/findings.db`, through `cli.curate`'s exact
+    `persist_findings` write path -- the same "persisting a finding is not
+    a bundle write" carve-out curate's Contradictions stage already holds.
+
+    Serving before judging (#653): by default, a candidate pair whose
+    LATEST persisted finding carries input digests exactly matching the
+    pair's current bytes (`cli.curate.finding_input_digests`, the function
+    that recorded them) is served from the store with NO model call --
+    `consistent` rows included, since they are precisely what proves a
+    pair needs no re-judging. New pairs, digest-drifted pairs, unreadable
+    inputs, and unrecognized stored verdicts re-judge conservatively; a
+    "N of M candidate(s) served" line reports the split. `--fresh`
+    bypasses the store and re-judges everything (and re-persists, so the
+    store converges to the newest verdicts either way).
 
     By DEFAULT only high-confidence `CONTRADICTS` verdicts are shown
     (`is_high_confidence_contradiction`); `CONSISTENT` and `UNCERTAIN`, and
     low-confidence `CONTRADICTS`, are hidden (spec: Default view hides
     CONSISTENT/UNCERTAIN). `--all` is a DISPLAY-only filter: it reveals
-    every verdict regardless of type or confidence, but
-    `find_contradictions` always judges every candidate pair either way
-    (spec: `--all` Reveals Every Verdict).
+    every verdict -- served or freshly judged -- regardless of type or
+    confidence, and never changes which pairs are judged (spec: `--all`
+    Reveals Every Verdict).
 
     A candidate set truncated by the engine leaf's pair cap is reported as
     an explicit "N of M pairs shown (cap reached)" line -- never silent
@@ -12264,6 +12364,16 @@ def contradictions(
         vacuous = vacuous_coverage_notice(plan)
         if vacuous is not None:
             typer.echo(f"openkos contradictions: {vacuous}", err=True)
+        # #653: serve persisted, digest-fresh findings instead of re-billing
+        # the model for verdicts the store already holds. `--fresh` bypasses
+        # the store; the truncation/vacuous notices above keep describing
+        # the ORIGINAL plan either way.
+        served_by_key: dict[
+            tuple[tuple[str, str], str | None], ContradictionVerdict
+        ] = {}
+        judged_plan = plan
+        if not fresh:
+            served_by_key, judged_plan = _partition_persisted_serves(layout, plan)
         try:
             batch, _total_pairs = find_contradictions(
                 layout.bundle_dir,
@@ -12272,7 +12382,7 @@ def contradictions(
                 include_confidential=include_confidential,
                 local_exemption=local_exemption,
                 store=store,
-                plan=plan,
+                plan=judged_plan,
                 # TTY-gated per-pair progress on stderr; `None` (silent)
                 # when output is piped (issue #190, mirrors
                 # `suggest-relations`' #134 per-edge line).
@@ -12304,9 +12414,45 @@ def contradictions(
             typer.echo(f"openkos contradictions: failed -- {exc}.", err=True)
             raise typer.Exit(code=1) from exc
 
-        verdicts = batch.results
+        # #653: freshly judged verdicts persist through curate's EXACT write
+        # path (`persist_findings`), so the next default run serves them --
+        # `.openkos/` derived state only, never a bundle write. Partial
+        # batches persist their completed prefix (`zip` inside stops there).
+        fresh_verdicts = list(batch.results)
+        if fresh_verdicts:
+            curate_module.persist_findings(layout, judged_plan, fresh_verdicts)
+
+        # Reassemble in the ORIGINAL plan order: a served verdict and a
+        # fresh one must interleave exactly where their candidates sat, or
+        # the display order would depend on what happened to be cached.
+        fresh_by_key = {
+            _contradiction_spec_key(spec): verdict
+            for spec, verdict in zip(judged_plan.specs, fresh_verdicts, strict=False)
+        }
+        verdicts = []
+        placed: set[int] = set()
+        for spec in plan.specs:
+            key = _contradiction_spec_key(spec)
+            if key in served_by_key:
+                verdicts.append(served_by_key[key])
+            elif key in fresh_by_key:
+                verdicts.append(fresh_by_key[key])
+                placed.add(id(fresh_by_key[key]))
+        # #441 posture: a judged result that maps onto no plan spec (an
+        # injected finder in tests, or a future planner/finder drift) is
+        # paid-for work -- appended after the plan-ordered ones rather than
+        # silently dropped. In production every result maps, so this is a
+        # provable no-op there.
+        verdicts.extend(v for v in fresh_verdicts if id(v) not in placed)
         typer.echo(f"openkos contradictions: workspace at {root}")
         typer.echo()
+        if not fresh and plan.specs:
+            typer.echo(
+                f"{len(served_by_key)} of {len(plan.specs)} candidate(s) "
+                "served from persisted findings; "
+                f"{len(judged_plan.specs)} judged fresh."
+            )
+            typer.echo()
         # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
         # truncation, never silent -- distinct from
         # `contradiction_truncation_notice(plan)` below, which reports the
@@ -12435,7 +12581,12 @@ def contradictions(
         # completed verdicts exactly as a complete run over that list -- the
         # paid-for work is never discarded -- so all that remains is the one
         # stderr failure line and the OllamaError-family exit code.
-        _echo_contradictions_batch_failure(batch, total=plan.llm_calls, model=cfg.model)
+        # #653: the completed-of-total counts describe what was actually
+        # SENT to the model this run -- the judged subset, not the full
+        # plan, since served candidates cost nothing and cannot fail.
+        _echo_contradictions_batch_failure(
+            batch, total=judged_plan.llm_calls, model=cfg.model
+        )
         raise typer.Exit(code=1) from batch.failure
 
 

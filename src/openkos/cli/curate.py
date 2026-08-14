@@ -1286,7 +1286,7 @@ def _contradictions_probe(ctx: CurateContext) -> StageProbe:
     )
 
 
-def _finding_input_digests(
+def finding_input_digests(
     bundle_dir: Path, spec: _CandidateSpec
 ) -> tuple[findings.InputDigest, ...]:
     """Per-input `(input_ref, sha256)` rows for one judged candidate
@@ -1333,8 +1333,8 @@ def _finding_input_digests(
     return tuple(digests)
 
 
-def _persist_findings(
-    ctx: CurateContext,
+def persist_findings(
+    layout: config.WorkspaceLayout,
     plan: CandidatePlan,
     verdicts: Sequence[ContradictionVerdict],
 ) -> None:
@@ -1348,7 +1348,11 @@ def _persist_findings(
     the candidate it was judged from without re-deriving anything; a
     partial batch (#441) yields fewer `verdicts` than `specs`, and `zip`
     stops there -- exactly the already-judged prefix, never a mismatch.
-    An empty `verdicts` list opens no connection at all."""
+    An empty `verdicts` list opens no connection at all.
+
+    Public since #653: the `contradictions` verb persists its own fresh
+    verdicts through this exact write path, so the store the two verbs
+    share can never diverge in shape or digest convention."""
     batch = [
         findings.Finding(
             pair_ids=verdict.pair_ids,
@@ -1356,13 +1360,14 @@ def _persist_findings(
             verdict=verdict.verdict.value,
             confidence=verdict.confidence,
             rationale=verdict.rationale,
-            input_digests=_finding_input_digests(ctx.layout.bundle_dir, spec),
+            input_digests=finding_input_digests(layout.bundle_dir, spec),
+            conflicting_claims=verdict.conflicting_claims,
         )
         for spec, verdict in zip(plan.specs, verdicts, strict=False)
     ]
     if not batch:
         return
-    conn = derived.open_derived_connection(ctx.layout.findings_db_path)
+    conn = derived.open_derived_connection(layout.findings_db_path)
     try:
         findings.record_findings(conn, batch)
     finally:
@@ -1448,7 +1453,7 @@ def _contradictions_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             typer.echo(f"  - {claim}")
         typer.echo(f"  rationale: {verdict.rationale}")
 
-    _persist_findings(ctx, plan, verdicts)
+    persist_findings(ctx.layout, plan, verdicts)
 
     if isinstance(batch.failure, OllamaUnavailable | OllamaModelNotFound):
         # Availability failures stay raise-shaped so the sequencer's handler
