@@ -12558,9 +12558,22 @@ def contradictions(
         # path (`persist_findings`), so the next default run serves them --
         # `.openkos/` derived state only, never a bundle write. Partial
         # batches persist their completed prefix (`zip` inside stops there).
+        # Fail-open (review R4-persist-on-critical-path, lineage
+        # review-f5e797b9b50625cd): this write runs AFTER the paid model
+        # calls and BEFORE any verdict is displayed -- a locked or corrupt
+        # findings.db degrades to one stderr advisory, never a crash that
+        # discards the paid-for verdicts (#441's posture).
         fresh_verdicts = list(batch.results)
         if fresh_verdicts:
-            curate_module.persist_findings(layout, judged_plan, fresh_verdicts)
+            try:
+                curate_module.persist_findings(layout, judged_plan, fresh_verdicts)
+            except (OSError, sqlite3.Error) as exc:
+                typer.echo(
+                    "openkos contradictions: warning -- failed to persist "
+                    f"findings ({exc}); this run's verdicts are shown below "
+                    "but will not be served from the store on a later run.",
+                    err=True,
+                )
 
         # Reassemble in the ORIGINAL plan order: a served verdict and a
         # fresh one must interleave exactly where their candidates sat, or
