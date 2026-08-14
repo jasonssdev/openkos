@@ -6818,3 +6818,46 @@ def test_ingest_wrong_language_drop_notice_names_the_dropped_titles(
     assert not (
         tmp_path / "bundle" / "concepts" / "recovery-of-knowledge-project.md"
     ).exists()
+
+
+def test_participant_anchor_notice_names_the_stub_rule_not_the_judge() -> None:
+    """Issue #690: the engine has known since #668 which participant
+    candidates the ANCHOR gate discarded -- `participant_anchorless_discarded_titles`
+    -- and no caller had ever read it. The operator saw only
+    `judge dropped 2 candidate(s): ...` and reasonably concluded the judge
+    rejected them on merit.
+
+    Two different findings with two different remedies: "the judge has poor
+    taste in people" invites tuning the judge, while "the candidates were
+    name-only stubs" points at the generator or the anchor lexicon. Reporting
+    the first when the second is true is what made the earlier runs
+    unfalsifiable."""
+    report = concept_mod.ExtractionReport(
+        produced=9,
+        retained=9,
+        judge_status="ok",
+        judged_out_titles=("Jason Sepulveda", "Gustavo Martinez"),
+        participant_anchorless_discarded_titles=("Jason Sepulveda", "Gustavo Martinez"),
+    )
+
+    notice = main._participant_anchor_notice(report)
+
+    assert notice is not None
+    assert "name-only stubs" in notice
+    assert "role, affiliation, or relation cue" in notice
+    assert "Jason Sepulveda" in notice
+    assert "Gustavo Martinez" in notice
+    assert "2 participant candidate(s)" in notice
+
+
+def test_participant_anchor_notice_is_silent_when_the_gate_discarded_none() -> None:
+    """A run whose participants were selected or re-admitted says nothing
+    extra -- the healthy path stays quiet, like every other notice here."""
+    report = concept_mod.ExtractionReport(
+        produced=4,
+        retained=4,
+        judge_status="ok",
+        judged_out_titles=("Some Concept",),
+    )
+
+    assert main._participant_anchor_notice(report) is None

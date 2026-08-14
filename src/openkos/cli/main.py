@@ -3034,6 +3034,40 @@ def _judge_selection_notice(report: ExtractionReport) -> str | None:
     return f"judge dropped {len(report.judged_out_titles)} candidate(s): {listed}"
 
 
+def _participant_anchor_notice(report: ExtractionReport) -> str | None:
+    """Name the ANCHOR gate when it is what discarded a `Person`/
+    `Organization` candidate, or `None` when it discarded none (issue #690).
+
+    Without this the operator sees only `judge dropped 2 candidate(s): Jason
+    Sepulveda, Gustavo Martínez` and reasonably concludes the judge rejected
+    them on merit. What actually happened is two decisions: the judge did not
+    select them, AND the #668 re-admission declined to save them because
+    neither carried a role, affiliation, or relation cue beyond a bare name
+    -- the STUB RULE, working exactly as specified.
+
+    Those are different findings with different remedies. "The judge has poor
+    taste in people" invites tuning the judge; "the candidates were name-only
+    stubs" points at the generator or at the anchor lexicon, and is the
+    question worth measuring. Reporting the first when the second is true is
+    what made the earlier runs unfalsifiable.
+
+    The engine already computed this -- `participant_anchorless_discarded_titles`
+    has been on the report since #668 and no caller had ever read it."""
+    if not report.participant_anchorless_discarded_titles:
+        return None
+    titles = report.participant_anchorless_discarded_titles
+    shown = titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return (
+        f"{len(titles)} participant candidate(s) discarded as name-only "
+        f"stubs -- no role, affiliation, or relation cue beyond the name: "
+        f"{listed}. They were not re-admitted after the judge dropped them."
+    )
+
+
 def _extraction_cap_notice(report: ExtractionReport) -> str | None:
     """Render the `_MAX_OBJECTS_PER_SOURCE` truncation notice, or `None` when
     the cap did not fire (#404).
@@ -3343,6 +3377,14 @@ def _stage_derived_objects(
     )
     if judge_notice is not None:
         typer.echo(f"openkos ingest: {judge_notice}", err=True)
+
+    # #690: renders immediately after the judge notice it qualifies. The
+    # judge line names WHAT was dropped; this one names WHY the re-admission
+    # declined to save it, which is a different decision with a different
+    # remedy.
+    anchor_notice = _participant_anchor_notice(outcome.report)
+    if anchor_notice is not None:
+        typer.echo(f"openkos ingest: {anchor_notice}", err=True)
 
     # #404: the cap was the ONE drop in this function that said nothing --
     # empty slug, in-batch collision, existing file and failed build all
