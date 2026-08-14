@@ -2334,3 +2334,37 @@ def test_contradictions_served_consistent_finding_hidden_by_default(
     assert all_view.exit_code == 0
     assert _CountingOllamaClient.calls == []
     assert "[CONSISTENT] concepts/a <-> concepts/b" in all_view.stdout
+
+
+def test_contradictions_persist_failure_degrades_to_advisory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """Review finding R4-persist-on-critical-path (lineage
+    review-f5e797b9b50625cd, CRITICAL): the #653 persist step runs AFTER
+    the paid model calls and BEFORE any verdict is displayed -- a locked
+    or corrupt findings.db must degrade to one stderr advisory with the
+    verdicts still rendered, never crash the verb and discard paid-for
+    work (#441's posture)."""
+    import sqlite3 as _sqlite3
+
+    from openkos.cli import curate as curate_module
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_related_pair(tmp_path)
+    seed_vectors_db(tmp_path)
+    _CountingOllamaClient.calls = []
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingOllamaClient)
+
+    def _broken_persist(*args: object, **kwargs: object) -> None:
+        raise _sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(curate_module, "persist_findings", _broken_persist)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
+    assert "failed to persist findings" in result.stderr
+    assert "database is locked" in result.stderr
