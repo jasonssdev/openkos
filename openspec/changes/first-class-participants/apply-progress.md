@@ -165,7 +165,100 @@ None — no test runner or infrastructure failures. `named_entity_floor`/AMI cor
 9/10 tasks in this work unit complete (2.1–2.7, 2.10). Tasks 2.8/2.9 intentionally deferred to the orchestrator's live-measurement step. Ready for the orchestrator to run `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` against ollama and record the baseline in `report.md`.
 
 ### Remaining Tasks (out of scope for this work unit)
-- [ ] 2.8 Live measured baseline run (orchestrator-owned, one probe process at a time)
-- [ ] 2.9 Record baseline in `evals/decision_extraction/report.md`
-- [ ] Phase 3 (PR3, tasks 3.1–3.7) — conditional on PR2 measurement (D6)
+- [x] 2.8 Live measured baseline run — completed by the orchestrator (see report.md 2026-08-13 section)
+- [x] 2.9 Recorded in `evals/decision_extraction/report.md` — completed by the orchestrator
+- [x] Phase 3 (PR3, tasks 3.1–3.6) — trigger met, implemented this batch (see below). Task 3.7 (live re-measurement) remains orchestrator-owned.
+- [ ] Phase 4 (tasks 4.1–4.4) — cross-cutting verification
+
+---
+
+## Work Unit 3 (PR3) — Scoped Phase-2 Capture Pass (D6)
+
+Branch: `feat/668-participant-capture-pass` (from `feat/668-participant-coverage-probe`, stacked; that branch is pushed and open as PR #671)
+Scope: tasks 3.1–3.6 only. Task 3.7 (live re-measurement) is EXCLUDED — the orchestrator runs it. Phase 4 untouched.
+
+### Completed Tasks
+
+- [x] 3.1 Trigger confirmed MET (recorded by the orchestrator before this batch): `evals/decision_extraction/report.md`'s 2026-08-13 baseline section (qwen3:8b, 3 runs × 4 AMI sources, PR1's re-admission live) shows ZERO Person/Organization generation everywhere — re-admitted 0, anchor-less discards 0 — satisfying the spec's "zero generation on ≥2 meetings across ≥3 runs" phase-2 gate.
+- [x] 3.2 RED: `test_participant_capture_pass_joins_candidates_before_judge_on_meeting_source` — mirrors `_reask_for_further_subjects`/`_add_reask_subjects` (#584) shape, gated on `_MEETING_SHAPED_TITLE_RE`; asserts a scoped second call joins a Person candidate into `merged` before the judge on a meeting-shaped source, and the judge's own reply must select it to be kept (no bypass). Confirmed RED: `AttributeError: module 'openkos.extraction.concept' has no attribute '_PARTICIPANT_CAPTURE_SYSTEM_PROMPT'` before GREEN (missing symbol, not an import error).
+- [x] 3.3 RED: `test_participant_capture_pass_does_not_fire_on_non_meeting_source` — asserts the scoped pass spends zero extra calls and `participant_capture_runs == 0` on a non-meeting-shaped (technical-article) source. Confirmed RED: `AttributeError: 'ExtractionReport' object has no attribute 'participant_capture_runs'`.
+- [x] 3.4 RED: `test_participant_capture_pass_leaves_system_prompt_byte_identical` — hash-pins `_SYSTEM_PROMPT` (sha256, mirrors `CONTROL_PROMPT_SHA`'s precedent in `evals/extraction_collapse/`) and asserts `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT != _SYSTEM_PROMPT`. Confirmed RED: `AttributeError: module 'openkos.extraction.concept' has no attribute '_PARTICIPANT_CAPTURE_SYSTEM_PROMPT'`.
+- [x] 3.5 GREEN: Implemented in `src/openkos/extraction/concept.py`:
+  - `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT` — a NEW, separate prompt constant (never an edit to `_SYSTEM_PROMPT`), asking specifically for Person/Organization meeting participants WITH an explicit role/affiliation/relation anchor (so candidates can pass the existing `_has_participant_anchor` stub gate downstream).
+  - `_build_participant_capture_messages(source_text, source_title)` — 2-message prompt, always carries the title (unlike the meeting-shaped branch of the general extraction prompt, which omits it in favor of `_LANGUAGE_ANCHOR`).
+  - `_capture_further_participants(source_text, source_title, llm)` — one scoped call's validated additions or `[]`; never raises (mirrors `_reask_for_further_subjects`'s fail-degrades-to-nothing contract); filters to `_PARTICIPANT_TYPES` only.
+  - `_add_participant_capture(results, *, source_text, source_title, meeting_shaped, llm)` — gated on `meeting_shaped` (the SAME `_MEETING_SHAPED_TITLE_RE` predicate `extract_concept_union` already computes for judge re-admission, reused rather than recomputed); joins via `_dedup_merged`, mirroring `_add_reask_subjects`'s combine pattern.
+  - Wired into `extract_concept_union` immediately after `_add_reask_subjects`, joining `merged` BEFORE `judge_input`/the judge call — covers BOTH the unchunked and chunked union paths via the single post-branch call site.
+  - `ExtractionReport` gained two additive fields: `participant_judge_selected_titles`/`participant_readmitted_titles`/`participant_anchorless_discarded_titles` were already PR2's; new here are `participant_capture_runs: int = 0` and `participant_capture_added_titles: tuple[str, ...] = ()`, both defaulted so every pre-existing construction site keeps working unchanged.
+  - `judge.py`: zero changes (confirmed via `git diff -- src/openkos/extraction/judge.py` → empty). No per-type sensitivity code introduced anywhere.
+  - Updated 8 pre-existing meeting-shaped `extract_concept_union` tests (2 call-order/count tests + 6 Person-participant tests) to account for the new unconditional capture call on meeting-shaped sources — each now supplies a `"[]"` reply at the correct sequence position; one test (`test_union_chunked_source_makes_exactly_chunks_plus_one_calls`) was retitled to a non-meeting source to preserve its original chunked-call-count invariant, with a NEW sibling test (`test_union_chunked_meeting_source_spends_one_extra_capture_call`) added to cover the meeting-shaped chunked case explicitly.
+- [x] 3.6 Mutation-verified all 3 new tests' exact target line, `__pycache__` purged before each run, every mutation reverted via the exact inverse edit (never `git checkout --`):
+
+| Test | Target line | Mutation | Result |
+|------|-------------|----------|--------|
+| `test_participant_capture_pass_joins_candidates_before_judge_on_meeting_source` | `if not meeting_shaped:` → `if True:` (disables the pass entirely) | Pass never fires | `AssertionError: assert 'Sam Okafor' in {'Frame the Essay Around Control', 'Stoicism'}` — caught, reverted |
+| `test_participant_capture_pass_does_not_fire_on_non_meeting_source` | `if not meeting_shaped:` → `if not True:` (fires unconditionally) | Pass fires on non-meeting source | `assert 4 == 3` (extra call made) — caught, reverted |
+| `test_participant_capture_pass_leaves_system_prompt_byte_identical` | One character added to `_SYSTEM_PROMPT`'s literal text | Hash pin breaks | `AssertionError` on hash mismatch — caught, reverted |
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `src/openkos/extraction/concept.py` | Modified | Added `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT`, `_build_participant_capture_messages`, `_capture_further_participants`, `_add_participant_capture`; wired the join site into `extract_concept_union` before the judge on both union paths; added `participant_capture_runs`/`participant_capture_added_titles` to `ExtractionReport` (both construction sites) |
+| `tests/unit/extraction/test_concept.py` | Modified | Added 3 new tests (3.2–3.4) plus 1 new sibling test for the chunked-meeting case; updated 8 pre-existing meeting-shaped `extract_concept_union` tests to account for the new unconditional capture call; added `import hashlib` |
+| `src/openkos/extraction/judge.py` | Unchanged | D2 — verified zero diff via `git diff` |
+| `evals/` | Unchanged | Task 3.7 (live re-measurement) is orchestrator-owned, out of scope for this batch |
+
+### TDD Cycle Evidence
+
+| Task | Test | Layer | Safety Net | RED | GREEN | Mutation |
+|------|------|-------|------------|-----|-------|----------|
+| 3.2 | `test_participant_capture_pass_joins_candidates_before_judge_on_meeting_source` | Unit | 254/254 (251 baseline post-fixture-updates + 3 new) | `AttributeError` (missing `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT`) | Passed | `if not meeting_shaped:` → `if True:` → failed correctly (`Sam Okafor` absent), reverted |
+| 3.3 | `test_participant_capture_pass_does_not_fire_on_non_meeting_source` | Unit | 254/254 | `AttributeError` (missing `participant_capture_runs`) | Passed | `if not meeting_shaped:` → `if not True:` → failed correctly (4 calls instead of 3), reverted |
+| 3.4 | `test_participant_capture_pass_leaves_system_prompt_byte_identical` | Unit | 254/254 | `AttributeError` (missing `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT`) | Passed | Added one character to `_SYSTEM_PROMPT`'s literal text → sha256 pin mismatch, reverted |
+
+### Test Summary
+- Total new tests written: 4 (3 required by tasks 3.2–3.4, plus 1 sibling test for the chunked-meeting call-count case, added to keep the pre-existing chunked-call-count invariant test honest rather than silently widen its assertion)
+- Total pre-existing tests updated (fixture-only, no behavior change to the test's own assertions): 8
+- Total tests passing: 254/254 in `test_concept.py` (250 PR1/PR2 baseline + 4 new: 3 required by tasks 3.2–3.4 plus 1 sibling test for the chunked-meeting call-count case)
+- Mutations run: 3/3, all caught (100%)
+- `__pycache__` purged before every mutation run
+- Every mutation reverted with the exact inverse edit
+- Full unit suite (unpiped): `pytest tests/unit -q` → `4614 passed, 1 skipped` (4610 baseline from PR2 + 4 net new/changed at the suite level) — 0 regressions
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `pytest tests/unit/extraction/test_concept.py -v` (unpiped) → `254 passed in 0.50s`; `ruff check src/openkos/extraction/concept.py tests/unit/extraction/test_concept.py` → "All checks passed!" |
+| Runtime harness command/scenario and exact result | `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` against AMI fixtures — NOT run in this batch (task 3.7 explicitly out of scope, orchestrator-owned); production code path is exercised end-to-end by the unit suite's `_SequencedLLM`-based tests with zero live model calls |
+| Rollback boundary | Revert the diff to `src/openkos/extraction/concept.py` (removes `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT`, `_build_participant_capture_messages`, `_capture_further_participants`, `_add_participant_capture`, the `extract_concept_union` join site, and the two new `ExtractionReport` fields) and to `tests/unit/extraction/test_concept.py` (removes the 4 new tests and the 8 fixture updates); PR1's judge re-admission set and PR2's coverage probe are untouched by this revert |
+
+### Deviations from Design
+
+None on the architecture itself — implementation matches D6 exactly: a scoped second call shaped like `_reask_for_further_subjects`/`_add_reask_subjects`, gated on `_MEETING_SHAPED_TITLE_RE`, joining candidates before the judge, `_SYSTEM_PROMPT` untouched.
+
+One necessary consequence flagged explicitly: D6 specifies the pass fires unconditionally on every meeting-shaped source (no narrower trigger condition is named in the design, unlike the #584 re-ask's single-object trigger), which meant 8 pre-existing tests that exercised `extract_concept_union` with a meeting-shaped `source_title` and a fixed-length `_SequencedLLM` reply sequence needed a `"[]"` reply inserted at the correct position to keep working — otherwise the new call would consume a reply meant for the judge. This is a mechanical fixture update, not a change to what any of those 8 tests assert about the pre-existing behavior they cover (D1/D3/D4/D5). One of the 8 (`test_union_chunked_source_makes_exactly_chunks_plus_one_calls`) was retitled to a non-meeting source to keep its own exactly-chunks-plus-one invariant meaningful, with a new sibling test explicitly covering the meeting-shaped chunked case instead of silently widening the original assertion.
+
+### Issues Found
+
+None — no test runner or infrastructure failures; `judge.py` and `evals/` untouched throughout.
+
+### Cross-cutting confirmation (informational, not Phase 4 scope)
+- `git diff -- src/openkos/extraction/judge.py` → zero diff (D2 confirmed for this unit too)
+- `git diff --stat` (this work unit only) → 328 insertions(+)/15 deletions(-) across 2 files — under the 400-line review budget and well under the 450-line attempt cap
+- `ruff check` on both touched files → "All checks passed!"
+- Full `pytest tests/unit -q` (unpiped) → `4614 passed, 1 skipped` — 0 regressions from PR1+PR2's 4610 baseline
+
+### Workload / PR Boundary
+- Mode: chained/stacked PR slice (auto-chain, stacked-to-main), branch `feat/668-participant-capture-pass` stacked on `feat/668-participant-coverage-probe` (PR2, open as #671)
+- Current work unit: Unit 3 — Scoped phase-2 Person/Organization capture pass (PR3), tasks 3.1–3.6 only
+- Boundary: starts from PR2's tip, ends with a complete, independently revertible D6 capture-pass implementation, fully RED→GREEN→mutation-verified with zero live model calls; task 3.7 (live re-measurement to confirm the phase-2 effect) is a deliberately separate orchestrator-owned follow-up step
+- Estimated review budget impact: ~328 changed lines, under the 400-line review budget guideline
+
+### Status
+6/7 tasks in this work unit complete (3.1–3.6). Task 3.7 intentionally deferred to the orchestrator's live-measurement step. Ready for the orchestrator to run `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` against ollama and update `evals/decision_extraction/report.md` with the phase-2 effect.
+
+### Remaining Tasks (out of scope for this work unit)
+- [ ] 3.7 Live re-measurement of the phase-2 effect (orchestrator-owned)
 - [ ] Phase 4 (tasks 4.1–4.4) — cross-cutting verification

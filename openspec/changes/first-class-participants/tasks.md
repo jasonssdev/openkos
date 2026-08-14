@@ -62,13 +62,13 @@ Chain strategy: stacked-to-main
 
 Trigger (from design D6 / spec "Probe Result Gates Phase-2 Scoped Pass"): open ONLY if the PR2 baseline shows zero or near-zero `Person`/`Organization` generation across ≥2 AMI meetings and ≥3 runs. If PR2 shows non-zero recall improvement from phase 1a alone, these tasks MUST NOT be executed on this change's evidence — stop after PR2 and record that phase 2 was not justified.
 
-- [ ] 3.1 (BLOCKED ON PR2) Confirm the trigger condition against the recorded PR2 baseline; if not met, stop here and do not proceed with 3.2–3.7.
-- [ ] 3.2 (BLOCKED ON PR2) RED: Add a unit test in `tests/unit/extraction/test_concept.py` mirroring `_reask_for_further_subjects`/`_add_reask_subjects` (#584) shape, gated on `_MEETING_SHAPED_TITLE_RE`, asserting a scoped second call joins Person/Organization candidates before the judge on a meeting-shaped source.
-- [ ] 3.3 (BLOCKED ON PR2) RED: Add a unit test asserting the scoped pass does NOT fire on a non-meeting-shaped source.
-- [ ] 3.4 (BLOCKED ON PR2) RED: Add a unit test asserting `_SYSTEM_PROMPT` is untouched (no diff to the general prompt) by the phase-2 pass.
-- [ ] 3.5 (BLOCKED ON PR2) GREEN: Implement the scoped second call in `concept.py`, joining candidates before judge selection, per design D6.
-- [ ] 3.6 (BLOCKED ON PR2) Mutate each new test's exact target line (purge `__pycache__`) before trusting it.
-- [ ] 3.7 (BLOCKED ON PR2) Re-run `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` to measure the phase-2 effect and update `evals/decision_extraction/report.md`.
+- [x] 3.1 Trigger confirmed MET: `evals/decision_extraction/report.md`'s 2026-08-13 baseline section (qwen3:8b, 3 runs × 4 AMI sources, PR1's re-admission live) shows ZERO Person/Organization generation everywhere — re-admitted 0, anchor-less discards 0 — satisfying the spec's "zero generation on ≥2 meetings across ≥3 runs" gate.
+- [x] 3.2 RED: Added `test_participant_capture_pass_joins_candidates_before_judge_on_meeting_source` in `tests/unit/extraction/test_concept.py` — mirrors `_reask_for_further_subjects`/`_add_reask_subjects` (#584) shape, gated on `_MEETING_SHAPED_TITLE_RE`, asserts a scoped second call joins a Person candidate before the judge on a meeting-shaped source and the judge's own reply must select it to be kept.
+- [x] 3.3 RED: Added `test_participant_capture_pass_does_not_fire_on_non_meeting_source` — asserts the scoped pass spends zero extra calls on a non-meeting-shaped (technical-article) source.
+- [x] 3.4 RED: Added `test_participant_capture_pass_leaves_system_prompt_byte_identical` — hash-pins `_SYSTEM_PROMPT` (mirrors `CONTROL_PROMPT_SHA`'s precedent) and asserts the new prompt constant is a distinct value.
+- [x] 3.5 GREEN: Implemented `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT` (new, separate constant), `_build_participant_capture_messages`, `_capture_further_participants`, and `_add_participant_capture` in `concept.py`; wired into `extract_concept_union` right after `_add_reask_subjects`, joining `merged` BEFORE `judge_input`/the judge call, on both the unchunked and chunked union paths (single call site after the branches converge). `ExtractionReport` gained additive `participant_capture_runs`/`participant_capture_added_titles` fields (both defaulted). `judge.py` untouched (confirmed via `git diff`).
+- [x] 3.6 Mutation-verified all 3 new tests' exact target lines (`__pycache__` purged before each run; every mutation reverted via the exact inverse edit) — see TDD Cycle Evidence in apply-progress.md.
+- [ ] 3.7 NOT RUN — out of scope for this apply batch; the orchestrator re-runs `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` to measure the phase-2 effect and updates `evals/decision_extraction/report.md`.
 
 ## Phase 4: Cross-Cutting Verification
 

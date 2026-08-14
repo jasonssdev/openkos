@@ -14,6 +14,7 @@ membership is the positive per-item signal (no more `extract` field), and
 
 import ast
 import dataclasses
+import hashlib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -1125,8 +1126,10 @@ def test_union_framing_drop_applies_per_run_before_merge() -> None:
     call this test inspects (#644)."""
     run1 = _array(_MEETING_DISCUSSION_FRAMING_ITEM, _DECISION_ITEM)
     run2 = _array(_DECISION_ITEM, _CONCEPT_ITEM)
+    # A meeting-shaped source now also spends the #668 D6 participant
+    # capture call before the judge -- "[]" finds nothing further.
     llm = _SequencedLLM(
-        [run1, run2, _keep_reply("Frame the Essay Around Control", "Stoicism")]
+        [run1, run2, "[]", _keep_reply("Frame the Essay Around Control", "Stoicism")]
     )
 
     outcome = concept_mod.extract_concept_union(
@@ -1136,7 +1139,7 @@ def test_union_framing_drop_applies_per_run_before_merge() -> None:
     assert "Meeting Discussion on Remote Control Design" not in {
         r.title for r in outcome.objects
     }
-    judge_call = llm.calls[2]
+    judge_call = llm.calls[3]
     assert "Meeting Discussion on Remote Control Design" not in judge_call[1]["content"]
 
 
@@ -2603,8 +2606,13 @@ def test_union_merge_both_equal_keeps_first_occurrence_order() -> None:
 
 def test_union_chunked_source_makes_exactly_chunks_plus_one_calls() -> None:
     """Above `_CHUNK_THRESHOLD`, no second extraction pass per chunk: exactly
-    `chunks + 1` total calls (one per chunk, plus one judge call), and
-    `report.runs == 1`."""
+    `chunks + 1` total calls (one per chunk, plus one judge call) on a
+    NON-meeting-shaped source, and `report.runs == 1`. `source_title` here
+    is deliberately not meeting-shaped so the #668 D6 participant capture
+    pass (a separate, additional call gated on `_MEETING_SHAPED_TITLE_RE`)
+    does not change this count; see
+    `test_union_chunked_meeting_source_spends_one_extra_capture_call` for
+    the meeting-shaped case."""
     text = _long_text()
     windows = concept_mod._chunk_lines(text)
     replies: list[str | Exception] = ["[]"] * len(windows)
@@ -2614,11 +2622,34 @@ def test_union_chunked_source_makes_exactly_chunks_plus_one_calls() -> None:
     replies.append(_keep_reply("Frame the Essay Around Control", "Stoicism"))
     llm = _SequencedLLM(replies)
 
-    outcome = concept_mod.extract_concept_union(text, source_title="Meeting", llm=llm)
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Weekly Notes", llm=llm
+    )
 
     assert len(llm.calls) == len(windows) + 1
     assert outcome.report.runs == 1
     assert outcome.report.chunks == len(windows)
+
+
+def test_union_chunked_meeting_source_spends_one_extra_capture_call() -> None:
+    """#668 design D6: the participant capture pass fires on BOTH union
+    paths -- the chunked branch included. A meeting-shaped chunked source
+    spends `chunks + 2` calls: one per chunk, one capture call, one judge
+    call."""
+    text = _long_text()
+    windows = concept_mod._chunk_lines(text)
+    replies: list[str | Exception] = ["[]"] * len(windows)
+    replies[0] = _array(_DECISION_ITEM, _CONCEPT_ITEM)
+    replies.append("[]")  # participant capture call: nothing further
+    replies.append(_keep_reply("Frame the Essay Around Control", "Stoicism"))
+    llm = _SequencedLLM(replies)
+
+    outcome = concept_mod.extract_concept_union(text, source_title="Meeting", llm=llm)
+
+    assert len(llm.calls) == len(windows) + 2
+    assert outcome.report.runs == 1
+    assert outcome.report.chunks == len(windows)
+    assert outcome.report.participant_capture_runs == 1
 
 
 def test_union_ceiling_caps_judge_input_at_24_candidates() -> None:
@@ -2787,7 +2818,8 @@ def test_judge_dropped_person_with_anchor_on_meeting_source_is_readmitted() -> N
     run1 = _array(_CONCEPT_ITEM, _PERSON_WITH_ANCHOR_ITEM)
     run2 = _array(_CONCEPT_ITEM)
     # Judge rejects Jordan Ellis -- only "Stoicism" is kept in its reply.
-    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+    # "[]" is the #668 D6 participant capture call: nothing further.
+    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism")])
 
     outcome = concept_mod.extract_concept_union(
         "Team meeting notes.", source_title="Team Meeting", llm=llm
@@ -2804,7 +2836,8 @@ def test_person_without_anchor_not_readmitted() -> None:
     meeting-shaped source. Re-admission is not a blanket type amnesty."""
     run1 = _array(_CONCEPT_ITEM, _PERSON_NAME_ONLY_ITEM)
     run2 = _array(_CONCEPT_ITEM)
-    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+    # "[]" is the #668 D6 participant capture call: nothing further.
+    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism")])
 
     outcome = concept_mod.extract_concept_union(
         "Team meeting notes.", source_title="Team Meeting", llm=llm
@@ -2821,7 +2854,8 @@ def test_person_with_meeting_role_anchor_is_readmitted() -> None:
     cue, not only a relation verb."""
     run1 = _array(_CONCEPT_ITEM, _PERSON_CHAIR_ROLE_ITEM)
     run2 = _array(_CONCEPT_ITEM)
-    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+    # "[]" is the #668 D6 participant capture call: nothing further.
+    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism")])
 
     outcome = concept_mod.extract_concept_union(
         "Team meeting notes.", source_title="Team Meeting", llm=llm
@@ -2859,7 +2893,8 @@ def test_participant_readmitted_reported_separately_from_judge_selected() -> Non
     judge selection."""
     run1 = _array(_CONCEPT_ITEM, _PERSON_WITH_ANCHOR_ITEM)
     run2 = _array(_CONCEPT_ITEM)
-    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+    # "[]" is the #668 D6 participant capture call: nothing further.
+    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism")])
 
     outcome = concept_mod.extract_concept_union(
         "Team meeting notes.", source_title="Team Meeting", llm=llm
@@ -2876,7 +2911,8 @@ def test_participant_selected_by_judge_reported_in_selected_not_readmitted() -> 
     for a candidate the judge genuinely selected."""
     run1 = _array(_CONCEPT_ITEM, _PERSON_WITH_ANCHOR_ITEM)
     run2 = _array(_CONCEPT_ITEM)
-    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism", "Jordan Ellis")])
+    # "[]" is the #668 D6 participant capture call: nothing further.
+    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism", "Jordan Ellis")])
 
     outcome = concept_mod.extract_concept_union(
         "Team meeting notes.", source_title="Team Meeting", llm=llm
@@ -2894,13 +2930,95 @@ def test_anchorless_participant_reported_in_discarded_titles() -> None:
     successful re-admission."""
     run1 = _array(_CONCEPT_ITEM, _PERSON_NAME_ONLY_ITEM)
     run2 = _array(_CONCEPT_ITEM)
-    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+    # "[]" is the #668 D6 participant capture call: nothing further.
+    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism")])
 
     outcome = concept_mod.extract_concept_union(
         "Team meeting notes.", source_title="Team Meeting", llm=llm
     )
 
     assert outcome.report.participant_anchorless_discarded_titles == ("Alex Rivera",)
+
+
+# --- Scoped participant capture pass (#668 design D6) -----------------------
+
+_CAPTURED_PARTICIPANT_ITEM = (
+    '{"type": "Person", "title": "Sam Okafor", '
+    '"description": "Sam Okafor, the meeting facilitator.", "body": ""}'
+)
+
+
+def test_participant_capture_pass_joins_candidates_before_judge_on_meeting_source() -> (
+    None
+):
+    """#668 design D6: on a meeting-shaped source, a scoped second call --
+    shaped like the #584 sole-twin re-ask, gated on the SAME
+    `_MEETING_SHAPED_TITLE_RE` predicate as judge re-admission -- asks
+    specifically for Person/Organization participants and joins its
+    findings into `merged` BEFORE the judge, so a captured candidate is
+    selected through the SAME existing pipeline as every other candidate:
+    the judge's own reply must name it to be kept, exactly like any
+    general-pass candidate (no bypass)."""
+    run1 = _array(_CONCEPT_ITEM)
+    run2 = _array(_DECISION_ITEM)
+    llm = _SequencedLLM(
+        [
+            run1,
+            run2,
+            _array(_CAPTURED_PARTICIPANT_ITEM),
+            _keep_reply("Stoicism", "Frame the Essay Around Control", "Sam Okafor"),
+        ]
+    )
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    titles = {r.title for r in outcome.objects}
+    assert "Sam Okafor" in titles
+    assert len(llm.calls) == 4
+    capture_call = llm.calls[2]
+    assert (
+        capture_call[0]["content"] == concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT
+    )
+    judge_call = llm.calls[3]
+    assert "Sam Okafor" in judge_call[1]["content"]
+    assert outcome.report.participant_capture_runs == 1
+    assert outcome.report.participant_capture_added_titles == ("Sam Okafor",)
+
+
+def test_participant_capture_pass_does_not_fire_on_non_meeting_source() -> None:
+    """Scope rule (#668 design D6): the capture pass is gated on the exact
+    same meeting-shape predicate as judge re-admission -- a non-meeting
+    (technical-article) source spends no extra call and the merged
+    candidate set is unaffected."""
+    run1 = _array(_CONCEPT_ITEM)
+    run2 = _array(_PERSON_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism", "Epictetus")])
+
+    outcome = concept_mod.extract_concept_union(
+        "A technical article.", source_title="API Reference Guide", llm=llm
+    )
+
+    assert len(llm.calls) == 3
+    assert outcome.report.participant_capture_runs == 0
+    assert outcome.report.participant_capture_added_titles == ()
+
+
+def test_participant_capture_pass_leaves_system_prompt_byte_identical() -> None:
+    """D6 constraint: the capture pass is a NEW, separate prompt constant --
+    `_SYSTEM_PROMPT`, the general extraction prompt, is never touched by
+    this change. Pinned by hash (mirrors `CONTROL_PROMPT_SHA`'s own
+    precedent in `evals/extraction_collapse/`) rather than a full-string
+    comparison, so any future accidental edit to `_SYSTEM_PROMPT` fails
+    loudly here."""
+    assert (
+        hashlib.sha256(concept_mod._SYSTEM_PROMPT.encode()).hexdigest()
+        == "6744054466c750dd9b91e2380d9ec37d7f5076e6da0709cdd426d4b681f90c11"
+    )
+    assert (
+        concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT != concept_mod._SYSTEM_PROMPT
+    )
 
 
 @pytest.mark.parametrize(
