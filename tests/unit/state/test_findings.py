@@ -186,3 +186,69 @@ def test_typed_edge_and_merged_body_finding_over_the_same_pair_stay_distinct(
     by_absorbed = {row.merged_absorbed_id: row for row in rows}
     assert by_absorbed[None].rationale == "typed edge"
     assert by_absorbed["concepts/absorbed"].rationale == "merged body"
+
+
+# --- #653: conflicting_claims round-trip -----------------------------------
+
+
+def test_record_and_open_round_trips_conflicting_claims(
+    conn: sqlite3.Connection,
+) -> None:
+    """#653: a served CONTRADICTS verdict must render its cited claims
+    exactly like a freshly judged one, so the store persists them --
+    ordered, per finding."""
+    findings.record_findings(
+        conn,
+        [
+            findings.Finding(
+                pair_ids=("concepts/a", "concepts/b"),
+                merged_absorbed_id=None,
+                verdict="contradicts",
+                confidence=0.9,
+                rationale="r",
+                conflicting_claims=("first claim", "second claim"),
+                input_digests=(findings.InputDigest("concepts/a", content_hash(b"a")),),
+            )
+        ],
+    )
+
+    (row,) = findings.open_findings(conn)
+
+    assert row.conflicting_claims == ("first claim", "second claim")
+
+
+def test_open_findings_tolerates_a_store_predating_the_claims_table(
+    conn: sqlite3.Connection,
+) -> None:
+    """A findings.db written before #653 has no `finding_claims` table;
+    reading it back yields empty claims, never an error."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS findings (\n"
+        "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "    pair_id_0 TEXT NOT NULL,\n"
+        "    pair_id_1 TEXT NOT NULL,\n"
+        "    merged_absorbed_id TEXT,\n"
+        "    verdict TEXT NOT NULL,\n"
+        "    confidence REAL NOT NULL,\n"
+        "    rationale TEXT NOT NULL\n"
+        ")"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS finding_input_digests (\n"
+        "    finding_id INTEGER NOT NULL REFERENCES findings(id),\n"
+        "    ordinal INTEGER NOT NULL,\n"
+        "    input_ref TEXT NOT NULL,\n"
+        "    digest TEXT NOT NULL\n"
+        ")"
+    )
+    conn.execute(
+        "INSERT INTO findings\n"
+        "    (pair_id_0, pair_id_1, merged_absorbed_id, verdict, confidence,"
+        " rationale)\n"
+        "VALUES ('concepts/a', 'concepts/b', NULL, 'contradicts', 0.9, 'r')"
+    )
+    conn.commit()
+
+    (row,) = findings.open_findings(conn)
+
+    assert row.conflicting_claims == ()

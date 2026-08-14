@@ -18,6 +18,7 @@ zero network, zero real Ollama process.
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
@@ -2146,3 +2147,190 @@ def test_decline_leaves_unrelated_dirty_file_untouched(
     assert (tmp_path / "unrelated.txt").read_text(encoding="utf-8") == (
         "pre-existing dirty content"
     )
+
+
+# ---------------------------------------------------------------------------
+# Serving persisted findings (issue #653)
+# ---------------------------------------------------------------------------
+
+
+class _CountingOllamaClient(_FakeOllamaClient):
+    """`_FakeOllamaClient` that records every `chat` call at CLASS level --
+    the CLI constructs its own instance, so instance-level counters would
+    be invisible to the test. Reset `calls` at each test's start."""
+
+    calls: ClassVar[list[list[object]]] = []
+
+    def chat(self, messages: list[object]) -> str:
+        type(self).calls.append(messages)
+        return super().chat(messages)
+
+
+def _write_related_pair(tmp_path: Path) -> None:
+    """Two concepts joined by one `related_to` edge -- exactly one
+    typed-edge candidate pair for the real `plan_candidates` to find."""
+    _write_relation_doc(
+        tmp_path / "bundle" / "concepts" / "a.md",
+        title="Alpha",
+        relations=[("concepts/b", "related_to")],
+    )
+    _write_relation_doc(tmp_path / "bundle" / "concepts" / "b.md", title="Beta")
+
+
+def _current_pair_digests(tmp_path: Path) -> tuple[findings.InputDigest, ...]:
+    """The exact digest rows `cli.curate.finding_input_digests` computes for
+    the `_write_related_pair` candidate at its current on-disk bytes."""
+    rows = [
+        findings.InputDigest(
+            concept_id,
+            content_hash((tmp_path / "bundle" / f"{concept_id}.md").read_bytes()),
+        )
+        for concept_id in ("concepts/a", "concepts/b")
+    ]
+    rows.append(findings.InputDigest("relation_type", content_hash(b"related_to")))
+    return tuple(rows)
+
+
+def _persist_pair_finding(
+    tmp_path: Path,
+    *,
+    verdict: str = "contradicts",
+    confidence: float = 0.9,
+    input_digests: tuple[findings.InputDigest, ...],
+    conflicting_claims: tuple[str, ...] = ("persisted claim",),
+) -> None:
+    conn = derived.open_derived_connection(tmp_path / ".openkos" / "findings.db")
+    try:
+        findings.record_findings(
+            conn,
+            [
+                findings.Finding(
+                    pair_ids=("concepts/a", "concepts/b"),
+                    merged_absorbed_id=None,
+                    verdict=verdict,
+                    confidence=confidence,
+                    rationale="persisted rationale",
+                    conflicting_claims=conflicting_claims,
+                    input_digests=input_digests,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+
+
+def test_contradictions_serves_persisted_finding_without_llm_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#653: a default run whose every candidate pair has a persisted,
+    digest-fresh finding serves the stored verdicts -- rendered exactly
+    like a judged run, cited claims included -- and never calls
+    `llm.chat`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_related_pair(tmp_path)
+    seed_vectors_db(tmp_path)
+    _persist_pair_finding(tmp_path, input_digests=_current_pair_digests(tmp_path))
+    _CountingOllamaClient.calls = []
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingOllamaClient)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0
+    assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
+    assert "persisted claim" in result.stdout
+    assert "persisted rationale" in result.stdout
+    assert "1 of 1 candidate(s) served from persisted findings" in result.stdout
+    assert _CountingOllamaClient.calls == []
+
+
+def test_contradictions_rejudges_stale_pair_and_persists_the_fresh_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#653: a persisted finding whose stored digest no longer matches the
+    pair's current bytes is STALE -- the pair is re-judged (one `llm.chat`
+    call), and the fresh verdict is persisted so the NEXT default run
+    serves it without a call."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_related_pair(tmp_path)
+    seed_vectors_db(tmp_path)
+    stale = (
+        findings.InputDigest("concepts/a", "0" * 64),
+        *_current_pair_digests(tmp_path)[1:],
+    )
+    _persist_pair_finding(tmp_path, input_digests=stale)
+    _CountingOllamaClient.calls = []
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingOllamaClient)
+
+    first = runner.invoke(app, ["contradictions"])
+
+    assert first.exit_code == 0
+    assert len(_CountingOllamaClient.calls) == 1
+    assert "0 of 1 candidate(s) served from persisted findings" in first.stdout
+
+    _CountingOllamaClient.calls = []
+    second = runner.invoke(app, ["contradictions"])
+
+    assert second.exit_code == 0
+    assert _CountingOllamaClient.calls == []
+    assert "1 of 1 candidate(s) served from persisted findings" in second.stdout
+
+
+def test_contradictions_fresh_flag_forces_rejudging_every_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#653: `--fresh` bypasses the persisted-findings serve entirely --
+    every candidate is re-judged even when a digest-fresh finding exists,
+    and no serve line is printed."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_related_pair(tmp_path)
+    seed_vectors_db(tmp_path)
+    _persist_pair_finding(tmp_path, input_digests=_current_pair_digests(tmp_path))
+    _CountingOllamaClient.calls = []
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingOllamaClient)
+
+    result = runner.invoke(app, ["contradictions", "--fresh"])
+
+    assert result.exit_code == 0
+    assert len(_CountingOllamaClient.calls) == 1
+    assert "served from persisted findings" not in result.stdout
+
+
+def test_contradictions_served_consistent_finding_hidden_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#653: curate persists EVERY judged verdict, `consistent` included --
+    those rows are exactly what proves a pair needs no re-judging. A served
+    CONSISTENT verdict spends no call, stays hidden by the default display
+    filter, and appears under `--all`."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_related_pair(tmp_path)
+    seed_vectors_db(tmp_path)
+    _persist_pair_finding(
+        tmp_path,
+        verdict="consistent",
+        confidence=0.8,
+        input_digests=_current_pair_digests(tmp_path),
+        conflicting_claims=(),
+    )
+    _CountingOllamaClient.calls = []
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingOllamaClient)
+
+    default_view = runner.invoke(app, ["contradictions"])
+
+    assert default_view.exit_code == 0
+    assert _CountingOllamaClient.calls == []
+    assert "No high-confidence contradictions found." in default_view.stdout
+
+    all_view = runner.invoke(app, ["contradictions", "--all"])
+
+    assert all_view.exit_code == 0
+    assert _CountingOllamaClient.calls == []
+    assert "[CONSISTENT] concepts/a <-> concepts/b" in all_view.stdout
