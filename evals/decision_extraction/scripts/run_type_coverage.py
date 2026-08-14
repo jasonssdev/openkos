@@ -88,6 +88,7 @@ from openkos.extraction.concept import (
     _MAX_OBJECTS_PER_SOURCE,
     _PARTICIPANT_TYPES,
     _UNION_BACKSTOP,
+    ExtractionOutcome,
     extract_concept,
     extract_concept_union,
 )
@@ -229,27 +230,23 @@ def _split_name(path: Path) -> tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) >= 3 else (parts[0], "source")
 
 
-def _participant_run_report(outcome: object) -> ParticipantRunReport:
+def _participant_run_report(outcome: ExtractionOutcome) -> ParticipantRunReport:
     """Build one run's `ParticipantRunReport` (#668 design D5) off a real
     `ExtractionOutcome` -- the type/title join `ExtractionReport`'s new
     fields cannot do on their own (see `ParticipantRunReport`'s docstring)."""
-    type_by_title = {obj.title: obj.type for obj in outcome.objects}  # type: ignore[attr-defined]
+    type_by_title = {obj.title: obj.type for obj in outcome.objects}
     admitted_titles = {
-        okf_type: tuple(
-            obj.title
-            for obj in outcome.objects
-            if obj.type == okf_type  # type: ignore[attr-defined]
-        )
+        okf_type: tuple(obj.title for obj in outcome.objects if obj.type == okf_type)
         for okf_type in sorted(_PARTICIPANT_TYPES)
     }
     judge_selected = collections.Counter(
         type_by_title[title]
-        for title in outcome.report.participant_judge_selected_titles  # type: ignore[attr-defined]
+        for title in outcome.report.participant_judge_selected_titles
         if title in type_by_title
     )
     readmitted = collections.Counter(
         type_by_title[title]
-        for title in outcome.report.participant_readmitted_titles  # type: ignore[attr-defined]
+        for title in outcome.report.participant_readmitted_titles
         if title in type_by_title
     )
     return ParticipantRunReport(
@@ -257,7 +254,7 @@ def _participant_run_report(outcome: object) -> ParticipantRunReport:
         judge_selected=dict(judge_selected),
         readmitted=dict(readmitted),
         anchorless_discarded_total=len(
-            outcome.report.participant_anchorless_discarded_titles  # type: ignore[attr-defined]
+            outcome.report.participant_anchorless_discarded_titles
         ),
     )
 
