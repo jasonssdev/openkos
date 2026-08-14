@@ -519,6 +519,76 @@ is the alarm if the vocabulary ever renames it, since a typo here would
 silently restore the deletion rather than fail."""
 
 
+_JUDGE_READMIT_TYPES: Final = frozenset({"Procedure", "Person", "Organization"})
+"""The set of types eligible for judge re-admission ONLY (#668) -- the
+deterministic post-filter step, applied AFTER `judge.select`, that restores
+a candidate the judge's selection dropped. This is a SEPARATE, wider set
+from `_TWIN_EXEMPT_TYPE`, deliberately not one shared constant (design D1):
+`_TWIN_EXEMPT_TYPE` scopes the two DELETION sites
+(`_is_droppable_source_title_twin`, `_drop_framing_objects`) and MUST stay
+`Procedure`-only there -- widening it to `Person` would retain a Person
+titled `"Team Meeting"` as a framing stub, the exact defect #522/#533
+measured, and would re-open title-twin deletion for `Person`. Deletion and
+additive re-admission are different consumers with different costs of
+error and MUST NOT share one predicate (the module's standing rule, see
+`_restates_source_title`). Used ONLY at the judge re-admission site;
+`Person`/`Organization` re-admission there is further gated on
+`meeting_shaped` and `_has_participant_anchor` (design D3/D4) -- `Procedure`
+alone is unconditional, exactly as before this change.
+`test_judge_readmit_types_subset_of_classifiable_types` is the alarm if a
+member here ever falls out of the closed vocabulary."""
+
+
+_PARTICIPANT_ANCHOR_RE: Final = re.compile(
+    r"\b("
+    r"chair(?:s|ed|person)?|facilitat\w*|moderat\w*|organiz\w*|presenter?s?|"
+    r"speakers?|secretary|treasurer|president|directors?|managers?|"
+    r"coordinators?|leads?|members?|attendees?|participants?|"
+    r"works? at|employee of|affiliated with|representative of|part of|"
+    r"belongs to|"
+    r"spoke|presided|attended|joined|participated|"
+    r"presidente|moderador(?:a|es|as)?|facilitador(?:a|es|as)?|"
+    r"organizador(?:a|es|as)?|presentador(?:a|es|as)?|orador(?:a|es|as)?|"
+    r"secretario(?:a)?|tesorero(?:a)?|director(?:a|es|as)?|gerente(?:s)?|"
+    r"coordinador(?:a|es|as)?|l[ií]der(?:es)?|miembro(?:s)?|"
+    r"asistente(?:s)?|participante(?:s)?|"
+    r"trabaja en|empleado de|afiliad[oa] con|representante de|parte de|"
+    r"pertenece a|"
+    r"habl[oó]|presidi[oó]|asisti[oó]|particip[oó]"
+    r")\b",
+    re.IGNORECASE,
+)
+"""A minimal context anchor beyond a bare name -- a meeting role,
+affiliation, or relation cue (the Stub Rejection requirement, design D4).
+Membership is deliberately TIGHT, the same asymmetry #459/#522 documented
+for `_MEETING_SHAPED_TITLE_RE`: a false negative merely keeps a genuine
+participant dropped (the status quo before #668), while a false positive
+re-admits a name-only stub -- exactly the defect this gate exists to
+prevent.
+
+The lexicon ships English+Spanish ONLY, mirroring
+`_MEETING_SHAPED_TITLE_RE`'s own #522 two-language limit -- a THIRD
+language is silently unsupported here on the same grounds: no coverage
+measurement exists yet for one, and an unmeasured addition is exactly the
+shape of change #459 warns against. Extend only after measuring through
+`evals/decision_extraction/`."""
+
+
+def _has_participant_anchor(result: ExtractionResult) -> bool:
+    """Does `result` carry a role, affiliation, or relation cue beyond its
+    bare name (design D4)? Reads `description` and `body` -- either field
+    can carry the anchor, since a role is sometimes named in the
+    description and sometimes only in the body. `title` is NOT consulted:
+    a name-only title with an anchored description is exactly the shape
+    this check exists to admit, and a title alone was never a valid signal
+    (the STUB RULE this check enforces: a bare name, wherever it appears,
+    is not a participant).
+
+    Used ONLY at the judge re-admission step (`_JUDGE_READMIT_TYPES`); the
+    twin-drop and framing-drop DELETION sites never call this."""
+    return bool(_PARTICIPANT_ANCHOR_RE.search(f"{result.description} {result.body}"))
+
+
 def _restates_source_title(result: ExtractionResult, *, source_title: str) -> bool:
     """Does `result`'s title merely restate `source_title`? TITLE ONLY --
     type is not consulted.
@@ -2169,6 +2239,11 @@ def extract_concept_union(
 
     pre_judge_dropped = max(0, len(merged) - _MAX_JUDGE_CANDIDATES)
     judge_input = merged[:_MAX_JUDGE_CANDIDATES]
+    # Computed once, reused by the judge re-admission conjunct below (design
+    # D3): the same tight, single-definition gate `_build_messages` and
+    # `_drop_framing_objects` already use for "is this source a
+    # transcript/meeting?" -- never a second, drifting definition.
+    meeting_shaped = _MEETING_SHAPED_TITLE_RE.search(source_title)
 
     if not judge_input:
         # Nothing to judge: an empty merged union used to spend a real
@@ -2231,7 +2306,13 @@ def extract_concept_union(
             c
             for c in judge_input
             if _normalize_title(c.title) in selected_titles
-            or c.type == _TWIN_EXEMPT_TYPE
+            or (
+                c.type in _JUDGE_READMIT_TYPES
+                and (
+                    c.type == _TWIN_EXEMPT_TYPE
+                    or (meeting_shaped and _has_participant_anchor(c))
+                )
+            )
         ]
         if not admitted and judge_input:
             # Empty-admission floor (#456, 2026-08-07 gate finding): a
