@@ -13012,7 +13012,7 @@ def _stage_filed_answer(
     title: str | None = None,
     description: str | None = None,
     doc_type: str = _INSIGHT_TYPE,
-    cfg: config.Config | None = None,
+    cfg: config.Config,
 ) -> _FiledAnswerPlan:
     """Stage a `query --save` filing of `answer_text` as a new derived OKF
     concept -- a pure, in-memory Phase A step mirroring
@@ -13043,13 +13043,15 @@ def _stage_filed_answer(
     confidential content -- classified below `confidential`, a future-leak
     vector.
 
-    When `cfg` is given (issue #669, design D3), the cited-concept
-    high-water-mark computed above is then a FLOOR, not the final value:
-    `config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)`
-    may raise it further, never lower it, per `doc_type`'s configured
-    offset (`query-command` spec: "Sensitivity Is The High-Water-Mark Of
-    Cited Concepts"). `cfg=None` (the pre-#669 shape) applies no type
-    default -- the high-water-mark alone is the final value, unchanged.
+    `cfg` is REQUIRED (#685 item 2; issue #669, design D3): the
+    cited-concept high-water-mark computed above is a FLOOR, not the final
+    value -- `config.type_birth_sensitivity(cfg, doc_type,
+    cited_high_water_mark)` may raise it further, never lower it, per
+    `doc_type`'s configured offset (`query-command` spec: "Sensitivity Is
+    The High-Water-Mark Of Cited Concepts"). The former `cfg=None` default
+    silently skipped that security raise for any caller that omitted the
+    parameter; an empty `type_sensitivity_defaults` mapping is the
+    supported opt-out and leaves the high-water-mark alone.
     """
     if not citations:
         raise ValueError(
@@ -13130,11 +13132,7 @@ def _stage_filed_answer(
     # applies to the CONFIG FLOOR, never to `cited_high_water_mark` itself,
     # so a citation set already resolved above the floor-plus-offset still
     # wins via the high-water-mark inside `type_birth_sensitivity`.
-    sensitivity = (
-        config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)
-        if cfg is not None
-        else cited_high_water_mark
-    )
+    sensitivity = config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)
 
     content = okf.build_concept(
         type=doc_type,
