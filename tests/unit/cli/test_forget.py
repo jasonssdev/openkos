@@ -333,6 +333,76 @@ def test_sweep_ledger_sidecars_drops_matching_entries_from_other_survivors(
     )
 
 
+def test_sweep_ledger_sidecars_scrubs_referring_bullets_from_snapshots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #689: a purge-set member that was never ABSORBED by a survivor
+    still leaks into that survivor's sidecar as an ordinary REFERENCE -- a
+    `## Related` bullet in the snapshotted body, and a catalog bullet in
+    `index_before` -- each carrying the member's title, its one-line
+    description and a link to its former path.
+
+    `_excise_merged_sections` cannot reach these: it removes the delimited
+    `## Merged content (<id>)` sections `build_merged_document` appends, and
+    a mere reference has no such delimiter. The entry itself is not dropped
+    either, since its `absorbed_id` is a DIFFERENT concept. So before the
+    fix every snapshot field kept the member's title verbatim.
+
+    The scrub reuses `bundle.log.remove_log_entry` -- the strict superset of
+    `remove_index_entry`'s matcher (same `_LINK_RE`/`_BULLET_MARKERS`/
+    `_link_identity`, plus the `(id: <x>)` tombstone anchor) that needs no
+    frontmatter split -- so a bullet is dropped on resolved LINK IDENTITY,
+    never on a substring match against body text."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(
+        tmp_path, "concepts/purge-target", title="Filosofía del Proyecto"
+    )
+    _write_plain_concept(
+        tmp_path,
+        "concepts/survivor",
+        title="Survivor",
+        body=(
+            "Body.\n\n## Related\n\n"
+            "* [Filosofía del Proyecto](/concepts/purge-target.md) - Objetivo central\n"
+            "* [Kept Neighbour](/concepts/neighbour.md) - Stays put\n"
+        ),
+    )
+    _write_plain_concept(tmp_path, "concepts/absorbed", title="Absorbed")
+    index_path = tmp_path / "bundle" / "index.md"
+    index_path.write_text(
+        index_path.read_text(encoding="utf-8")
+        + "\n# Concepts\n\n"
+        + "* [Filosofía del Proyecto](/concepts/purge-target.md) - Objetivo central\n",
+        encoding="utf-8",
+    )
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.output
+    bundle_dir = tmp_path / "bundle"
+    sidecar = bundle_ledger.ledger_path_for("concepts/survivor", bundle_dir)
+    assert "Filosofía del Proyecto" in sidecar.read_text(encoding="utf-8"), (
+        "fixture precondition: the survivor's snapshots must carry the "
+        "reference before the sweep runs"
+    )
+
+    touched = main._sweep_ledger_sidecars_for_ids(bundle_dir, ["concepts/purge-target"])
+
+    assert sidecar in touched
+    after = sidecar.read_text(encoding="utf-8")
+    assert "Filosofía del Proyecto" not in after, (
+        "the purged member's title must not survive in any snapshot field"
+    )
+    assert "concepts/purge-target" not in after
+    assert "Kept Neighbour" in after, (
+        "an unrelated bullet in the same snapshot must round-trip verbatim"
+    )
+    metadata, _ = okf.load_frontmatter(after)
+    assert {entry.absorbed_id for entry in okf.decode_merged_from(metadata)} == {
+        "concepts/absorbed"
+    }, "the entry itself is kept -- only the reference goes"
+
+
 def test_sweep_ledger_sidecars_refuses_traversal_survivor_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

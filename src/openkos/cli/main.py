@@ -638,6 +638,37 @@ def _excise_merged_sections(snapshot: str, purge_ids: set[str]) -> str:
     return snapshot
 
 
+def _scrub_referring_bullets(snapshot: str, purge_ids: set[str]) -> str:
+    """Drop every bullet in a ledger snapshot whose FIRST markdown link (or
+    `(id: <x>)` anchor) resolves to a purge-set member (issue #689).
+
+    The companion to `_excise_merged_sections`, covering the OTHER way a
+    member's identity enters a surviving entry's snapshots: not as absorbed
+    body text under a `## Merged content (<id>)` delimiter, but as an
+    ordinary REFERENCE -- a `## Related` bullet in a snapshotted concept
+    body, a catalog bullet in `index_before`, an `**Ingest**: Extracted
+    [...]` line or a `forget` tombstone in `log_before`. Each carries the
+    member's TITLE, its one-line description and a link to its former path,
+    which is precisely the fragment an erasure exists to remove.
+
+    REUSES `bundle.log.remove_log_entry` rather than re-implementing the
+    match: it is the strict superset of `bundle.index.remove_index_entry`'s
+    matcher (it imports that module's `_LINK_RE`, `_BULLET_MARKERS` and
+    `_link_identity`, and adds the tombstone anchor on top) and, unlike
+    `remove_index_entry`, needs no frontmatter split -- so it applies
+    uniformly to concept bodies, `index.md` and `log.md` snapshots alike,
+    and cannot raise on a snapshot whose frontmatter is malformed.
+
+    Structural, never a substring match: a bullet is dropped on resolved
+    LINK IDENTITY, so a bullet that merely MENTIONS a purged title in its
+    description text is left alone, and a YAML `- ` sequence item in a
+    snapshot's frontmatter (which carries neither a markdown link nor an
+    anchor) can never match."""
+    for purge_id in purge_ids:
+        snapshot, _ = bundle_log.remove_log_entry(snapshot, purge_id)
+    return snapshot
+
+
 def _scrub_entry_snapshots(
     entry: okf.MergeLedgerEntry,
     purge_ids: set[str],
@@ -648,8 +679,8 @@ def _scrub_entry_snapshots(
     member's content (issue #602; forget-command spec: "Deletion Sweep
     Includes Ledger Storage" enumerates all six fields).
 
-    Two structural scrubs, matching the only two mechanisms by which a
-    member's body ever ENTERS another entry's snapshots:
+    Three structural scrubs, matching the mechanisms by which a member's
+    body or IDENTITY ever enters another entry's snapshots:
 
     - the delimited `## Merged content (<id>)` section that
       `build_merged_document`'s append accumulates into later
@@ -661,7 +692,14 @@ def _scrub_entry_snapshots(
       the member's own file (the member was snapshotted whole as a third
       party whose `relations:`/`provenance:` targeted the absorbed id) --
       dropped outright; a KEPT rewrite's snapshot is still excised, since a
-      third party that was itself a survivor embeds merged sections too.
+      third party that was itself a survivor embeds merged sections too;
+    - a REFERENCE bullet naming the member -- a `## Related` link in a
+      snapshotted body, a catalog bullet in `index_before`, an ingest line
+      or tombstone in `log_before` -- dropped by `_scrub_referring_bullets`
+      (#689). This is the leak an absorbed-body excision structurally
+      cannot reach: the member was never absorbed by THIS survivor, merely
+      linked from it, so no delimiter marks it and the entry itself is
+      rightly kept.
 
     Returns the entry unchanged (same object) when nothing matched, so the
     caller's no-op detection stays cheap and a byte-identical rewrite is
@@ -697,24 +735,29 @@ def _scrub_entry_snapshots(
             for purge_id in purge_ids & prior_absorbed_ids
         )
     )
+
+    def _scrub(snapshot: str) -> str:
+        """Both structural scrubs, in the order they must run: absorbed BODY
+        text under its delimiter first (#602), then any surviving REFERENCE
+        bullet naming a purge-set member (#689)."""
+        return _scrub_referring_bullets(
+            _excise_merged_sections(snapshot, purge_ids), purge_ids
+        )
+
     if carried_hit:
         survivor_before = okf.REDACTED_SNAPSHOT_SENTINEL
     else:
-        survivor_before = _excise_merged_sections(entry.survivor_before, purge_ids)
-    absorbed_snapshot = _excise_merged_sections(entry.absorbed_snapshot, purge_ids)
-    index_before = _excise_merged_sections(entry.index_before, purge_ids)
-    log_before = _excise_merged_sections(entry.log_before, purge_ids)
+        survivor_before = _scrub(entry.survivor_before)
+    absorbed_snapshot = _scrub(entry.absorbed_snapshot)
+    index_before = _scrub(entry.index_before)
+    log_before = _scrub(entry.log_before)
     relation_rewrites = [
-        dataclasses.replace(
-            rewrite, snapshot=_excise_merged_sections(rewrite.snapshot, purge_ids)
-        )
+        dataclasses.replace(rewrite, snapshot=_scrub(rewrite.snapshot))
         for rewrite in entry.relation_rewrites
         if _keeps(rewrite.file)
     ]
     provenance_rewrites = [
-        dataclasses.replace(
-            rewrite, snapshot=_excise_merged_sections(rewrite.snapshot, purge_ids)
-        )
+        dataclasses.replace(rewrite, snapshot=_scrub(rewrite.snapshot))
         for rewrite in entry.provenance_rewrites
         if _keeps(rewrite.file)
     ]
@@ -6057,9 +6100,27 @@ def purge(
     # deletes `.openkos/vectors.db` and deliberately does NOT rebuild it
     # (design: "Index cleanup decision") -- warn every time so an operator
     # is never left assuming dense retrieval is still intact.
+    # #698: `vectors.db` holds BOTH the `vector_meta` content-hash cache and
+    # the `meta` embedding-model tag, so dropping the file drops both. The
+    # restore is therefore a FULL re-embed -- one embedding call per
+    # surviving document, not an incremental top-up -- and `reindex` will
+    # report it as `embedding model changed (unset -> <model>)` because the
+    # tag went with the store. Disclose both here: the cost, because it is a
+    # long wait on a large corpus arriving straight after an irreversible
+    # operation; and the wording, so an operator does not read the store loss
+    # as a configuration change they did not make.
+    #
+    # Preserving the tag alone would NOT make the rebuild incremental -- the
+    # vectors themselves are gone, so every document must be embedded again
+    # regardless of what the tag says. Only carrying the SURVIVORS' vectors
+    # into a fresh database would deliver that, which changes #142's
+    # delete-and-rebuild erasure posture and belongs in its own design pass.
     typer.echo(
-        "openkos purge: dense retrieval degraded (vectors.db dropped) — "
-        "run `openkos reindex` to restore it."
+        "openkos purge: dense retrieval degraded (vectors.db dropped) — run "
+        "`openkos reindex` to restore it. That restore is a full re-embed of "
+        "every surviving document (one embedding call each), and reindex will "
+        "report it as 'embedding model changed' because the model tag lived "
+        "in the dropped store."
     )
 
 

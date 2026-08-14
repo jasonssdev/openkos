@@ -124,6 +124,23 @@ whose snapshot fields embed the purge-set member's body or id (if the
 purge-set member was absorbed by a prior merge). This coverage MUST NOT
 introduce a second `git-filter-repo` invocation.
 
+`purge`'s live-tree half of this sweep is the SAME shared primitive
+`forget`'s Phase B calls, and therefore carries the same
+reference-scrubbing obligation (issue #689): a purge-set member that was
+merely REFERENCED from a surviving sidecar — a `## Related` link, a
+catalog bullet, a log line, each carrying its title and former path — MUST
+be dropped from every snapshot field, not only members whose absorbed
+BODY is embedded there. `purge` is irreversible and cannot be re-run to
+correct a partial erasure, so this MUST be verified as a rail against the
+real rewrite, not on the primitive alone.
+
+#### Scenario: Purging a referenced concept scrubs it from a surviving sidecar
+- GIVEN a concept is referenced as an ordinary bullet inside another
+  survivor's ledger snapshot, without ever having been absorbed by it
+- WHEN `openkos purge <concept-id>` completes
+- THEN that survivor's sidecar remains, and neither the purged concept's
+  title nor its former path appears anywhere in it
+
 #### Scenario: Purging a merge survivor removes its ledger sidecar from history
 - GIVEN a successful purge of a concept-id that is a merge survivor with a
   ledger sidecar under `bundle/.state/ledger/`
@@ -307,12 +324,29 @@ is rebuilt, and MUST instruct the user to run `openkos reindex`. This MUST
 be message-only: `purge` MUST NOT prompt interactively and MUST NOT
 auto-run `reindex` itself.
 
+That warning MUST also disclose what the rebuild costs (issue #698).
+`vectors.db` holds BOTH the `vector_meta` content-hash cache and the
+`meta` embedding-model tag, so dropping the file drops both: the restore
+is a FULL re-embed of every surviving document, one embedding call each,
+never an incremental top-up. `reindex` will additionally report it as
+`embedding model changed (unset -> <model>)`, because the tag lived in the
+dropped store — the warning MUST pre-empt that wording so an operator does
+not read the store loss as a configuration change they did not make.
+
+Preserving the model tag alone would NOT make the rebuild incremental, and
+MUST NOT be offered as if it would: the vectors themselves are gone, so
+every document must be embedded again whatever the tag says. Only carrying
+the SURVIVORS' vectors into a fresh database would deliver incrementality,
+which changes the delete-and-rebuild erasure posture above and is out of
+scope for this requirement.
+
 #### Scenario: Successful purge warns about degraded dense retrieval
 
 - GIVEN a successful `openkos purge <concept-id>` run
 - WHEN the command prints its success output
-- THEN the output includes a warning that dense retrieval is degraded and
-  an instruction to run `openkos reindex`
+- THEN the output includes a warning that dense retrieval is degraded, an
+  instruction to run `openkos reindex`, the fact that the restore is a
+  full re-embed, and the reason reindex will report a model change
 
 #### Scenario: No interactive prompt or auto-reindex occurs
 

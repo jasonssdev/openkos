@@ -774,6 +774,36 @@ def test_purge_self_scope_removes_blobs_from_history(
     assert not (tmp_git_repo.root / ".openkos" / "vectors.db").exists()
 
 
+def test_purge_announces_the_restore_is_a_full_re_embed(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """Issue #698: dropping `vectors.db` takes the `vector_meta` content-hash
+    cache AND the `meta` embedding-model tag with it -- both tables live in
+    that one file -- so the next `openkos reindex` re-embeds EVERY surviving
+    document at one embedding call each and reports it as a model change
+    (`unset -> <model>`) rather than as the store loss it actually is.
+
+    The old closing line said only that a reindex was needed, which reads as
+    a cheap repair. On a corpus of a few thousand documents it is not, and it
+    arrives right after an irreversible operation. The line must therefore
+    disclose the COST and the reason the model-change wording will appear."""
+    phrase = f"purge {tmp_git_repo.source_id}"
+    result = runner.invoke(
+        app, ["purge", tmp_git_repo.source_id, "--confirm-phrase", phrase]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_git_repo.root / ".openkos" / "vectors.db").exists()
+    assert "full re-embed" in result.output, (
+        "the closing line must name the full re-embed, not merely that a "
+        "reindex is needed"
+    )
+    assert "embedding model changed" in result.output, (
+        "and must pre-empt reindex's misleading model-change wording, so an "
+        "operator does not read the store loss as a configuration change"
+    )
+
+
 def test_purging_a_merge_survivor_removes_its_ledger_sidecar_from_history(
     tmp_git_repo: TmpGitRepo,
 ) -> None:
@@ -814,6 +844,61 @@ def test_purging_a_merge_survivor_removes_its_ledger_sidecar_from_history(
     assert not _blob_history_contains(tmp_git_repo.root, sidecar_rel)
     assert _reflog_is_empty(tmp_git_repo.root)
     assert not sidecar_path.exists()
+
+
+def test_purge_scrubs_referring_bullets_from_surviving_ledger_sidecars(
+    tmp_git_repo: TmpGitRepo,
+) -> None:
+    """Issue #689, as reported: `purge` expunged the target from ALL git
+    history while its title, description and link survived in a THIRD
+    concept's ledger sidecar -- the purged object was never absorbed by that
+    survivor, only REFERENCED from its `## Related` section, so neither the
+    entry-drop (`absorbed_id` does not match) nor `_excise_merged_sections`
+    (no `## Merged content` delimiter) touched it.
+
+    `purge` is the irreversible right-to-be-forgotten verb and cannot be
+    re-run to correct a partial erasure, so this is asserted end to end
+    against the real `git filter-repo` binary, not only on the primitive."""
+    root = tmp_git_repo.root
+    _write_plain_concept(root, "concepts/purge-target", title="Filosofía del Proyecto")
+    survivor_path = root / "bundle" / "concepts" / "survivor.md"
+    survivor_path.parent.mkdir(parents=True, exist_ok=True)
+    survivor_path.write_text(
+        "---\ntype: Concept\ntitle: Survivor\n---\n\n# Survivor\n\nBody.\n\n"
+        "## Related\n\n"
+        "* [Filosofía del Proyecto](/concepts/purge-target.md) - Objetivo central\n",
+        encoding="utf-8",
+    )
+    _write_plain_concept(root, "concepts/absorbed", title="Absorbed")
+    _git(["add", "-A"], cwd=root)
+    _git(["commit", "-m", "Add referring survivor + absorbed"], cwd=root)
+
+    merge_result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+    assert merge_result.exit_code == 0, merge_result.output
+    sidecar = bundle_ledger.ledger_path_for("concepts/survivor", root / "bundle")
+    assert "Filosofía del Proyecto" in sidecar.read_text(encoding="utf-8"), (
+        "fixture precondition: the reference must be snapshotted pre-purge"
+    )
+    _git(["add", "-A"], cwd=root)
+    _git(["commit", "-m", "Merge survivor <- absorbed"], cwd=root)
+
+    # `--force`: the survivor's LIVE `## Related` bullet is an inbound
+    # reference, so the ordinary gate refuses. Leaving that link dangling is
+    # exactly the documented `--force` contract, and it is the shape the
+    # #689 report was filed from -- a purged object still referenced
+    # elsewhere is precisely when the snapshot residue matters.
+    phrase = "purge concepts/purge-target"
+    result = runner.invoke(
+        app, ["purge", "concepts/purge-target", "--confirm-phrase", phrase, "--force"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sidecar.is_file(), "the unrelated survivor's sidecar itself must remain"
+    after = sidecar.read_text(encoding="utf-8")
+    assert "Filosofía del Proyecto" not in after
+    assert "concepts/purge-target" not in after
 
 
 def test_purge_sibling_survives_no_over_delete(tmp_git_repo: TmpGitRepo) -> None:
