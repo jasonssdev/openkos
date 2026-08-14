@@ -177,6 +177,23 @@ class Stage:
     what keeps a future writing stage from silently inheriting accept-all
     just by being added to `_STAGES`."""
 
+    accept_caveat: str = ""
+    """What `--accept <this stage>` still asks per item, or `""` when it
+    holds nothing back (issue #702, gap 1).
+
+    Part of the offer, not a footnote. Structure's bulk path covers only the
+    symmetric-scope types -- asymmetric ones and `related_to` keep asking,
+    because the engine marks those directions `model-suggested, unverified`
+    and cannot vouch for them (#624/#508). A hint that promised to remove
+    every prompt would be selling something the flag does not do, and the
+    operator would find out mid-run.
+
+    Lives on the descriptor beside `auto_acceptable` for the same reason
+    that field does: the two answer "may this stage be bulk-accepted" and
+    "what survives if it is", and a future stage that sets the first without
+    the second should have to think about it here rather than inherit a
+    silence that happens to be wrong."""
+
     task: str | None = None
     """Which measured task this stage's LLM calls belong to (issue #515), or
     `None` for a stage that makes none.
@@ -310,6 +327,63 @@ def cost_line(stage: Stage, probe: StageProbe) -> str:
     without this helper needing to change."""
     n = probe.llm_calls
     return f"{n} {stage.noun}(s) -> {n} LLM call(s)"
+
+
+_ACCEPT_HINT_THRESHOLD = 4
+"""Queue length at or above which `gate` names `--accept` (issue #702).
+
+Four, not one: a hint printed on every run is a hint that stops being read,
+and below four the flag costs more to learn about than it saves. Four is
+also comfortably under both stages measured in the 2026-08-14 session that
+filed the issue -- Structure at 7 edges and Metadata at 6 concept types --
+so the case the issue is actually about clears it without the threshold
+having been fitted to those two numbers."""
+
+
+def accept_notice(stage: Stage, probe: StageProbe, ctx: CurateContext) -> str | None:
+    """The one-line `--accept` hint, or `None` when it would be noise
+    (issue #702, gap 1).
+
+    `curate`'s wall time is dominated by the operator, not the model: the
+    measured session spent 90s of inference inside 310s, and the remaining
+    ~220s was answering per-item prompts. The mechanism that fixes that
+    already exists and is well designed -- it was simply never mentioned
+    while the questions were being asked, so the users who most need it are
+    exactly the ones who have not read the full `--help`.
+
+    Four conditions, each of which would make the line wrong rather than
+    merely unhelpful:
+
+    - `auto_acceptable` -- Identity is excluded from bulk by construction,
+      since its merges DELETE a concept. Offering `--accept identity` would
+      advertise a flag that is refused, and advertise it hardest on the one
+      stage where accepting unseen does the most damage.
+    - not already accepted -- an operator running `--accept structure` is
+      told nothing; the hint exists to make an unknown mechanism
+      discoverable, not to congratulate someone using it.
+    - a queue of at least `_ACCEPT_HINT_THRESHOLD`.
+    - a stage that actually WRITES -- a read-only stage asks no per-item
+      write questions, so there is nothing for the flag to save there.
+
+    The count is `len(probe.items)`, deliberately not `probe.llm_calls`:
+    this line is about QUESTIONS, and `cost_line` right above it is already
+    the authority on calls. The two coincide for every stage shipped today
+    and would diverge for a stage whose cost unit is not its queue -- at
+    which point reporting calls here would misstate what the flag saves.
+    """
+    if not stage.auto_acceptable or not stage.writes:
+        return None
+    if stage.name in ctx.accepted_stages:
+        return None
+    count = len(probe.items)
+    if count < _ACCEPT_HINT_THRESHOLD:
+        return None
+    caveat = f"; {stage.accept_caveat}" if stage.accept_caveat else ""
+    return (
+        f"openkos curate: {stage.name}: {count} {stage.noun}(s) to review "
+        f"one by one. Pass `--accept {stage.name.lower()}` to accept them in "
+        f"bulk{caveat}."
+    )
 
 
 def stage_model(ctx: CurateContext, stage: Stage) -> str:
@@ -559,6 +633,14 @@ def gate(stage: Stage, probe: StageProbe, ctx: CurateContext) -> bool:
     upgrade = upgrade_notice(ctx, stage)
     if upgrade is not None:
         typer.echo(upgrade, err=True)
+    # #702 gap 1: printed HERE, with the other disclosures, because this is
+    # the moment it becomes actionable -- the queue is known, the stage has
+    # not started, and the operator is being asked to consent to the run
+    # that contains the prompts. Naming it after the walk has begun would be
+    # a hint about work already done.
+    accept = accept_notice(stage, probe, ctx)
+    if accept is not None:
+        typer.echo(accept, err=True)
     if ctx.auto:
         return True
     if sys.stdin.isatty():
@@ -1536,6 +1618,10 @@ _STAGES: tuple[Stage, ...] = (
         unattended_hint="openkos relate <source> <type> <target>",
         live=True,
         auto_acceptable=True,
+        accept_caveat=(
+            "asymmetric types and related_to are still asked per item, "
+            "since their direction is model-suggested and unverified"
+        ),
         task="edge_typing",
     ),
     Stage(
