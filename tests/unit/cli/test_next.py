@@ -627,11 +627,16 @@ def test_trap1_multi_source_uncovered_never_surfaces_a_negated_command(
     monkeypatch: pytest.MonkeyPatch,
     seed_vectors_db: Callable[[Path], None],
 ) -> None:
-    """A bundle with only a `multi-source-uncovered` finding (no
-    `below-source-sensitivity` finding) never fires tier 3, and never
-    surfaces the negated `openkos backfill-sensitivity` command that
-    `multi-source-uncovered`'s own detail string contains
-    (`lint.py:766-768`)."""
+    """A bundle with only a `multi-source-uncovered` finding never fires
+    tier 3, and never surfaces the negated `openkos backfill-sensitivity`
+    command that `multi-source-uncovered`'s own detail string contains
+    (`lint.py:766-768`).
+
+    Trap 1 is unchanged by #693 -- the negated command must still never
+    appear. What changed is what happens INSTEAD: the finding now has a tier
+    of its own recommending the command that does resolve it, rather than
+    `next` reporting nothing to do while `status` lists it as actionable.
+    """
     _init_workspace(tmp_path, monkeypatch)
     seed_vectors_db(tmp_path)
     _write_multi_source_uncovered_only_bundle(tmp_path)
@@ -640,7 +645,62 @@ def test_trap1_multi_source_uncovered_never_surfaces_a_negated_command(
 
     assert result.exit_code == 0
     assert "openkos backfill-sensitivity" not in result.stdout
-    assert "No ranked action found" in result.stdout
+    assert "No ranked action found" not in result.stdout
+    assert "Run: openkos set-sensitivity concepts/mixed confidential" in result.stdout
+
+
+def test_next_no_longer_disagrees_with_status_on_an_actionable_finding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The two verbs answer the same question and must not contradict (#693).
+
+    Reproduces the e2e exactly: `status` listed the finding under *Needs
+    attention* while `next`, run seconds later against the same unchanged
+    bundle, said there was nothing to do. Asserting BOTH outputs in one test
+    is the point -- either alone can look correct while the pair disagrees.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_multi_source_uncovered_only_bundle(tmp_path)
+
+    status_result = runner.invoke(app, ["status"])
+    next_result = runner.invoke(app, ["next"])
+
+    assert "multi-source-uncovered" in status_result.stdout
+    assert "No ranked action found" not in next_result.stdout
+    assert "concepts/mixed" in next_result.stdout
+
+
+def test_below_source_sensitivity_still_outranks_multi_source_uncovered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """The new tier ranks BELOW the existing sensitivity tier, not above it.
+
+    Both are sensitivity mislabellings sharing one walk, so cost cannot order
+    them. `below-source-sensitivity` wins because `backfill-sensitivity`
+    fixes a whole closure in one sweep, while `set-sensitivity` fixes exactly
+    one document -- recommending the single-document repair while a sweep is
+    pending would send the operator the long way round.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_multi_source_uncovered_only_bundle(tmp_path)
+    # A second, single-Source-closure descendant: a below-source finding.
+    (tmp_path / "bundle" / "concepts" / "under.md").write_text(
+        "---\ntype: Concept\ntitle: Under\nsensitivity: public\n"
+        "provenance:\n  - sources/c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos backfill-sensitivity" in result.stdout
+    assert "set-sensitivity" not in result.stdout
 
 
 # --- Trap 2: check_unextracted's empty-`resource` fallback ----------------
@@ -1752,3 +1812,76 @@ def test_next_fts_tier_declines_when_the_fts_index_is_present(
 
     assert result.exit_code == 0
     assert "openkos reindex" not in result.stdout
+
+
+def test_multi_source_uncovered_declines_an_unspellable_concept_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A concept id that cannot be printed as an argument declines LOUDLY.
+
+    Mirrors tier 2's discipline exactly (#276): the finding is real, so
+    dropping it silently would leave the operator no trace of it at all. The
+    recommendation is withheld because the command would not run as printed
+    -- not because the problem went away.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_multi_source_uncovered_only_bundle(tmp_path)
+    # Same shape as `mixed.md`, but under a directory whose name cannot be
+    # spelled as a bare argument.
+    odd_dir = tmp_path / "bundle" / "concepts" / "a b"
+    odd_dir.mkdir(parents=True, exist_ok=True)
+    (odd_dir / "mixed2.md").write_text(
+        "---\ntype: Concept\ntitle: Mixed Two\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n  - concepts/from-c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bundle" / "concepts" / "mixed.md").unlink()
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    assert "Run: openkos set-sensitivity" not in result.stdout
+    assert "concepts/a b/mixed2" in result.stdout
+    assert "not a runnable argument" in result.stdout
+
+
+def test_a_declined_multi_source_finding_is_named_beside_a_recommended_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """A declined finding is named even when a LATER one in the same tier
+    fires.
+
+    The declination and the recommendation come from the same loop, so a
+    `continue` that skipped the record -- or a `return` placed before it --
+    would lose the declined document silently while the run still looked
+    productive. This is tier 4's version of the guard tier 2 already carries
+    (`test_declination_is_named_even_when_a_lower_tier_fires`), and the
+    orderings differ: here the surviving finding is a SIBLING, not a lower
+    tier.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    seed_vectors_db(tmp_path)
+    _write_multi_source_uncovered_only_bundle(tmp_path)
+    # A second uncovered document, sorted BEFORE `concepts/mixed`, whose id
+    # cannot be spelled as a bare argument.
+    odd_dir = tmp_path / "bundle" / "concepts" / "a b"
+    odd_dir.mkdir(parents=True, exist_ok=True)
+    (odd_dir / "early.md").write_text(
+        "---\ntype: Concept\ntitle: Early\nsensitivity: public\n"
+        "provenance:\n  - sources/a\n  - concepts/from-c\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["next"])
+
+    assert result.exit_code == 0
+    # The runnable sibling is still recommended...
+    assert "Run: openkos set-sensitivity concepts/mixed confidential" in result.stdout
+    # ...and the one that could not be is still named, not swallowed.
+    assert "concepts/a b/early" in result.stdout
+    assert "not a runnable argument" in result.stdout

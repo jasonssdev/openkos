@@ -170,13 +170,21 @@ def test_below_source_detail_spells_backfill_sensitivity_as_a_whole_span() -> No
     assert "openkos backfill-sensitivity" in _spans(below[0].detail)
 
 
-def test_multi_source_uncovered_detail_also_spells_a_whole_span() -> None:
-    """This detail names `openkos backfill-sensitivity` only to RULE IT OUT
-    ("is not covered by"). `next` never surfaces it, because tier 3 filters
-    on `finding.kind` before extracting anything -- not because the span is
-    malformed. Pinning the span here keeps that guard honest: if this ever
-    started passing for the wrong reason, the kind filter would be the only
-    thing standing between a negated sentence and a printed command."""
+def test_multi_source_uncovered_detail_spells_only_the_resolving_command() -> None:
+    """The one whole span this detail spells is the command that WORKS (#693).
+
+    It used to spell `openkos backfill-sensitivity` -- named only to rule it
+    out ("is not covered by") -- and nothing else. `next` was kept away from
+    it by tier 3's kind filter alone. That was fine while `next` printed
+    nothing for this finding, and stopped being fine the moment it grew a
+    tier of its own: the reason line echoes this detail verbatim, so a
+    negated command sitting in copy-paste shape would reach the screen by
+    the front door instead of the back.
+
+    So the sweep is now named as prose and the only backtick command is
+    `openkos set-sensitivity`. This test pins that: exactly one `openkos ...`
+    span, and it is the resolving one.
+    """
     source_public = _concept("sources/a", doc_type="Source", sensitivity="public")
     source_conf = _concept("sources/c", doc_type="Source", sensitivity="confidential")
     from_c = _concept(
@@ -193,4 +201,6 @@ def test_multi_source_uncovered_detail_also_spells_a_whole_span() -> None:
     )
 
     uncovered = [f for f in findings if f.kind == "multi-source-uncovered"]
-    assert "openkos backfill-sensitivity" in _spans(uncovered[0].detail)
+    commands = [s for s in _spans(uncovered[0].detail) if s.startswith("openkos ")]
+    assert commands == ["openkos set-sensitivity concepts/mixed confidential"]
+    assert commands[0] == uncovered[0].remediation

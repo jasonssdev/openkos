@@ -22,6 +22,7 @@ reuses `bundle.provenance.provenance_closure` plus `okf.combine_sensitivity`
 does not keep (design D2).
 """
 
+import re
 from pathlib import Path
 
 from openkos import lint
@@ -262,3 +263,189 @@ def test_collect_docs_surfaces_corrupt_provenance_below_a_source(
 
     assert lint.check_below_source_sensitivity(docs) == []
     assert skipped == ["concepts/derived.md: skipped (invalid provenance)"]
+
+
+# --- #693: the finding names the verb that actually RESOLVES it -------------
+
+
+def test_multi_source_uncovered_names_set_sensitivity_as_the_resolving_verb() -> None:
+    """The detail names `openkos set-sensitivity`, the command that fixes it.
+
+    Before #693 the detail named only `openkos backfill-sensitivity` -- the
+    command that explicitly CANNOT resolve this kind -- so a reader was
+    pointed at the one verb guaranteed not to help and never at the one that
+    does. `doctor` already names the resolving verb; `lint` had not followed.
+    """
+    source_a = _doc("sources/a", doc_type="Source", sensitivity="public")
+    source_c = _doc("sources/c", doc_type="Source", sensitivity="confidential")
+    derived_from_c = _doc(
+        "concepts/from-c", sensitivity="confidential", provenance=("sources/c",)
+    )
+    doc = _doc(
+        "concepts/mixed",
+        sensitivity="public",
+        provenance=("sources/a", "concepts/from-c"),
+    )
+
+    findings = lint.check_below_source_sensitivity(
+        [source_a, source_c, derived_from_c, doc]
+    )
+
+    (finding,) = [f for f in findings if f.path == "concepts/mixed.md"]
+    assert "`openkos set-sensitivity concepts/mixed confidential`" in finding.detail
+    # The negation stays: it is still true, and still the reason the sweep
+    # will not pick this up. It just no longer stands alone.
+    assert "not covered by" in finding.detail
+
+
+def test_multi_source_uncovered_carries_a_runnable_remediation() -> None:
+    """`remediation` carries the exact resolving command, ENGINE-COMPUTED.
+
+    `next` reads this field rather than re-parsing the detail prose. That
+    matters for more than tidiness: the detail interpolates document-controlled
+    values (a raw `sensitivity` string, cited ids), so a document could plant
+    a backtick span spelling a plausible command with the WRONG level. A field
+    the engine computes cannot be forged from a document's frontmatter.
+    """
+    source_a = _doc("sources/a", doc_type="Source", sensitivity="public")
+    source_c = _doc("sources/c", doc_type="Source", sensitivity="confidential")
+    derived_from_c = _doc(
+        "concepts/from-c", sensitivity="confidential", provenance=("sources/c",)
+    )
+    doc = _doc(
+        "concepts/mixed",
+        sensitivity="public",
+        provenance=("sources/a", "concepts/from-c"),
+    )
+
+    findings = lint.check_below_source_sensitivity(
+        [source_a, source_c, derived_from_c, doc]
+    )
+
+    (finding,) = [f for f in findings if f.path == "concepts/mixed.md"]
+    assert finding.remediation == "openkos set-sensitivity concepts/mixed confidential"
+
+
+def test_remediation_names_the_high_water_mark_not_the_first_cite() -> None:
+    """The level is the high-water-mark ACROSS every cite, not whichever one
+    happened to be listed first. Naming the first cite's level would produce
+    a runnable command that leaves the document still under-labelled."""
+    source_a = _doc("sources/a", doc_type="Source", sensitivity="public")
+    source_c = _doc("sources/c", doc_type="Source", sensitivity="private")
+    derived_from_c = _doc(
+        "concepts/from-c", sensitivity="private", provenance=("sources/c",)
+    )
+    doc = _doc(
+        "concepts/mixed",
+        sensitivity="public",
+        provenance=("sources/a", "concepts/from-c"),
+    )
+
+    findings = lint.check_below_source_sensitivity(
+        [source_a, source_c, derived_from_c, doc]
+    )
+
+    (finding,) = [f for f in findings if f.path == "concepts/mixed.md"]
+    assert finding.remediation == "openkos set-sensitivity concepts/mixed private"
+
+
+def test_below_source_sensitivity_findings_carry_no_remediation() -> None:
+    """`remediation` is opt-in per kind, not retrofitted onto all nine.
+
+    `below-source-sensitivity` already has a working tier that reads its
+    command out of the detail, and rewriting that seam is not what #693 asks
+    for. An empty default keeps every other kind byte-identical.
+    """
+    source = _doc("sources/a", doc_type="Source", sensitivity="confidential")
+    descendant = _doc("concepts/d", sensitivity="public", provenance=("sources/a",))
+
+    findings = lint.check_below_source_sensitivity([source, descendant])
+
+    (finding,) = findings
+    assert finding.kind == "below-source-sensitivity"
+    assert finding.remediation == ""
+
+
+def test_multi_source_uncovered_spells_exactly_one_runnable_command() -> None:
+    """The detail spells ONE `openkos ...` command, and it is the one that works.
+
+    `next` echoes this detail verbatim as its reason line, so a negated
+    `openkos backfill-sensitivity` sitting there in copy-paste shape would
+    put the one command that cannot help back on the screen -- which is
+    exactly what `cli/next_action.py`'s trap-1 filter exists to prevent. The
+    sweep is still named, as prose; it is no longer offered as a command.
+    """
+    source_a = _doc("sources/a", doc_type="Source", sensitivity="public")
+    source_c = _doc("sources/c", doc_type="Source", sensitivity="confidential")
+    derived_from_c = _doc(
+        "concepts/from-c", sensitivity="confidential", provenance=("sources/c",)
+    )
+    doc = _doc(
+        "concepts/mixed",
+        sensitivity="public",
+        provenance=("sources/a", "concepts/from-c"),
+    )
+
+    findings = lint.check_below_source_sensitivity(
+        [source_a, source_c, derived_from_c, doc]
+    )
+
+    (finding,) = [f for f in findings if f.path == "concepts/mixed.md"]
+    spans = re.findall(r"`([^`]+)`", finding.detail)
+    commands = [s for s in spans if s.startswith("openkos ")]
+    assert commands == ["openkos set-sensitivity concepts/mixed confidential"]
+    # The sweep is still named -- just never as something to run.
+    assert "backfill-sensitivity sweep" in finding.detail
+
+
+def test_a_backtick_bearing_identity_never_forges_a_command_in_the_detail() -> None:
+    """A ``` in the concept id must not close the command span early.
+
+    This is #274's defect, one field over. That issue fixed it for a Source's
+    `resource`; #693 introduced a SECOND value interpolated inside a backtick
+    span -- the concept's own identity -- and a backtick in it closes the span
+    early, leaving a well-formed `openkos set-sensitivity <other id> <level>`
+    behind. `next` echoes this detail verbatim as its reason line, so the
+    forged command would reach the screen looking exactly like a real
+    recommendation.
+
+    A concept id really can carry one: identity is derived from the on-disk
+    path, and a backtick is a legal POSIX filename character.
+    """
+    source_a = _doc("sources/a", doc_type="Source", sensitivity="public")
+    source_c = _doc("sources/c", doc_type="Source", sensitivity="confidential")
+    derived_from_c = _doc(
+        "concepts/from-c", sensitivity="confidential", provenance=("sources/c",)
+    )
+    doc = _doc(
+        "concepts/od`d",
+        sensitivity="public",
+        provenance=("sources/a", "concepts/from-c"),
+    )
+
+    findings = lint.check_below_source_sensitivity(
+        [source_a, source_c, derived_from_c, doc]
+    )
+
+    (finding,) = [f for f in findings if f.path == "concepts/od`d.md"]
+    # No `openkos ...` span at all -- not a truncated one, not a forged one.
+    assert [s for s in re.findall(r"`([^`]+)`", finding.detail) if "openkos" in s] == []
+    assert finding.remediation == ""
+    # The finding still fires and still says what to do about it.
+    assert "not covered by" in finding.detail
+    assert "rename" in finding.detail
+
+
+def test_the_safe_argument_regexes_have_not_drifted_apart() -> None:
+    """`lint._SAFE_COMMAND_ARGUMENT` and `next_action._SAFE_ARGUMENT` agree.
+
+    They are separate objects on purpose -- `lint` is a leaf that `cli` reads,
+    so importing across that boundary would invert the dependency -- but
+    `remediation`'s whole claim to be trustworthy downstream is that it
+    already cleared the bar its consumer would apply. If the two drift, a
+    `remediation` `lint` considers safe could be one `next` would refuse, and
+    the guarantee becomes a comment rather than a fact.
+    """
+    from openkos.cli import next_action
+
+    assert lint._SAFE_COMMAND_ARGUMENT.pattern == next_action._SAFE_ARGUMENT.pattern
