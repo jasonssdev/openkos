@@ -268,6 +268,43 @@ def progress_callback(
     return _callback
 
 
+def phase_callback(
+    verb: str, sink: Callable[[str], None]
+) -> Callable[[str], None] | None:
+    """Build the TTY-gated PHASE hook a CLI verb passes into a library
+    `on_progress` seam whose work is a sequence of named phases rather than
+    a uniform loop (issue #701).
+
+    The third sibling of `progress_callback` and `stage_notice`, for the
+    shape neither covered. `progress_callback` needs `(index, total)` over
+    homogeneous items; `stage_notice` prints once and then goes quiet. A
+    long `ingest` is neither: underneath one line it runs a model call per
+    ~4 KB window, then a re-ask, then a participant pass, then a judge --
+    heterogeneous phases, only some of which have a count, and only some of
+    which run at all. A 4m 28s ingest showed ONE static line for its whole
+    duration, which reads as a hang; the first instinct is Ctrl+C, and on
+    this session's evidence users do act on it.
+
+    So the library reports a phase LABEL and nothing else. It owns which
+    phases exist and what they are called -- that is domain knowledge, not
+    display policy -- while this layer owns the prefix and the caller owns
+    the surface. Returns `None` off a TTY, exactly like `progress_callback`,
+    so a piped run passes no hook and pays nothing.
+
+    Writes to no stream itself: everything goes through `sink`. That is what
+    lets `ingest` route it into the Rich status already wrapping its
+    extraction call, so the counter REPLACES the static line rather than
+    scrolling underneath the spinner that is still animating over it.
+    """
+    if not sys.stderr.isatty():
+        return None
+
+    def _callback(phase: str) -> None:
+        sink(f"openkos {verb}: {phase}...")
+
+    return _callback
+
+
 def stage_notice(verb: str, message: str) -> None:
     """Print one TTY-gated `openkos <verb>: <message>` stage line to STDERR
     -- `progress_callback`'s single-call sibling for verbs whose long wait

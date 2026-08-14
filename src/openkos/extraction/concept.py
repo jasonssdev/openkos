@@ -15,8 +15,10 @@ wording, and catching `OllamaError` to keep the CLI's Source-only fallback
 UX, looping `openkos.model.okf.build_concept` once per validated object.
 """
 
+import contextlib
 import itertools
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
@@ -1651,6 +1653,58 @@ corpus shape does (#454's own counter-evidence) -- and no cheap detector
 for "transcript-shaped" exists yet. Lowering the boundary is an eval run
 away (`evals/decision_extraction/`), not a code change."""
 
+ProgressHook = Callable[[str], None]
+"""A phase reporter: called with one human-readable label per phase the
+extraction is about to enter (issue #701).
+
+A LABEL, not `(index, total)`, because these phases are heterogeneous. A
+chunked run has a counter (`extracting chunk 7/12`); the judge, the re-ask
+and the participant pass do not, and two of those three may not run at all.
+One shape that fits all of them keeps the seam from growing a field per
+phase.
+
+This module owns the words. Which phases exist and what they are called is
+extraction's own knowledge; how they are displayed -- prefix, spinner,
+in-place rewrite -- belongs to the CLI, and `cli/observability.
+phase_callback` is where that lives. Reporting is best-effort and purely
+additive: `None` is the default at every seam, and no phase label ever
+changes what is extracted."""
+
+
+def _report(on_progress: "ProgressHook | None", phase: str) -> None:
+    """Emit `phase` when a hook was given. One helper so no call site has to
+    repeat the `is not None` guard, and so a piped run (which passes `None`)
+    costs exactly one comparison per phase.
+
+    The hook is called inside a bare `except Exception`. A progress display
+    must never be able to destroy an extraction: this seam fires on every
+    chunk -- roughly a dozen times on the source that filed #701 -- and its
+    sink is a LIVE terminal display, which has more ways to fail than a
+    plain stderr write (a closed stream, a resized terminal, a rendering
+    error deep in the display library). Losing the four minutes of model
+    work already spent, because the thing describing that work raised, is
+    not a trade worth making for a cosmetic feature.
+
+    `BaseException` is deliberately NOT caught: a `KeyboardInterrupt` during
+    a long ingest is the user asking to stop, and swallowing it here would
+    make Ctrl+C stop working -- the exact frustration #701 exists to reduce.
+
+    This isolation is scoped to THIS seam and does not retroactively change
+    the older `on_progress` seams (`state.reindex`, the four `resolution`
+    passes), which call their hooks unguarded. Those fire once per item on a
+    loop the caller can see, not many times inside one opaque call, and
+    changing them is a separate decision with its own blast radius."""
+    if on_progress is None:
+        return
+    # `contextlib.suppress(Exception)`, not a bare `except: pass`: it says
+    # the swallow is deliberate in the construct itself, and it cannot
+    # accidentally widen to `BaseException`. Nothing is logged -- there is
+    # no logger in this leaf module, and the only thing lost is one line of
+    # cosmetic progress on a run that is otherwise proceeding normally.
+    with contextlib.suppress(Exception):
+        on_progress(phase)
+
+
 _CHUNK_TARGET = 4_000
 """Window size (chars) `_chunk_lines` packs toward. The 2026-08-06 probes
 measured recovery at this size: every ~4 KB chunk of `TS3005b` returned one
@@ -1801,6 +1855,7 @@ def _add_reask_subjects(
     source_text: str,
     source_title: str,
     llm: LLMBackend,
+    on_progress: ProgressHook | None = None,
 ) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
     """Bounded re-ask on a sole object that restates the source title (#584),
     or on a sole object from a long source whatever its title (#642).
@@ -1888,6 +1943,11 @@ def _add_reask_subjects(
         )
     ):
         return results, 0, ()
+    # Reported HERE rather than at the call site, past the trigger: the
+    # helper returns `(0, ())` and makes no call when the trigger does not
+    # fire, so a label printed before this point would name a wait that
+    # never happens (#701).
+    _report(on_progress, "re-asking for a further subject")
     added = _reask_for_further_subjects(source_text, source_title, results[0], llm)
     combined = _dedup_merged(results + added)
     return combined, 1, tuple(result.title for result in combined[1:])
@@ -2003,6 +2063,7 @@ def _add_participant_capture(
     source_title: str,
     meeting_shaped: bool,
     llm: LLMBackend,
+    on_progress: ProgressHook | None = None,
 ) -> tuple[list[ExtractionResult], int, tuple[str, ...]]:
     """Scoped Person/Organization capture pass (#668 design D6), gated on
     the SAME `_is_meeting_shaped` predicate `extract_concept_union`
@@ -2037,6 +2098,9 @@ def _add_participant_capture(
     re-ask reads its own single-original tail."""
     if not meeting_shaped:
         return results, 0, ()
+    # Past the gate, for the same reason the re-ask reports past its
+    # trigger: a non-meeting-shaped source never spends this call (#701).
+    _report(on_progress, "capturing further participants")
     added = _capture_further_participants(source_text, source_title, llm)
     if not added:
         return results, 1, ()
@@ -2223,7 +2287,11 @@ class ExtractionOutcome:
 
 
 def extract_concept(
-    source_text: str, *, source_title: str, llm: LLMBackend
+    source_text: str,
+    *,
+    source_title: str,
+    llm: LLMBackend,
+    on_progress: ProgressHook | None = None,
 ) -> ExtractionOutcome:
     """Prompt `llm` to classify zero or more distinct derived objects from
     `source_text`.
@@ -2278,6 +2346,7 @@ def extract_concept(
     `openkos.model.okf.build_concept` once per returned object.
     """
     if len(source_text) <= _CHUNK_THRESHOLD:
+        _report(on_progress, "extracting the source")
         results = _extract_once(source_text, source_title, llm)
         if not results:
             # #524: the model answers `[]` on substantive sources in ~5% of
@@ -2287,6 +2356,7 @@ def extract_concept(
             # quadratically; two empties in a row mean `[]` IS the answer.
             # Single-call path only -- an empty CHUNK is normal fan-out
             # (#454), and the union path's second run already covers it.
+            _report(on_progress, "retrying an empty extraction")
             results = _extract_once(source_text, source_title, llm)
         results = _strip_ungrounded_expansions(results, source_text=source_text)
         chunk_count = 1
@@ -2303,7 +2373,8 @@ def extract_concept(
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
         merged: list[ExtractionResult] = []
-        for window in windows:
+        for index, window in enumerate(windows, start=1):
+            _report(on_progress, f"extracting chunk {index}/{chunk_count}")
             merged.extend(_extract_once(window, source_title, llm))
         # Grounding checks against the FULL source, not the window that
         # produced the object -- an expansion stated once in chunk 1 grounds
@@ -2326,7 +2397,11 @@ def extract_concept(
     # trigger's "the source returned exactly one object" is a true statement
     # about the source. Additions then take the same cap as everything else.
     results, reask_runs, reask_added_titles = _add_reask_subjects(
-        results, source_text=source_text, source_title=source_title, llm=llm
+        results,
+        source_text=source_text,
+        source_title=source_title,
+        llm=llm,
+        on_progress=on_progress,
     )
     retained = results[:_MAX_OBJECTS_PER_SOURCE]
     return ExtractionOutcome(
@@ -2422,8 +2497,44 @@ again, the escalation is a rank-returning judge reply (cut from the
 bottom of an ordering), not another raise -- see #564's discussion."""
 
 
+def _select_with_progress(
+    source_text: str,
+    judge_input: list[ExtractionResult],
+    llm: LLMBackend,
+    on_progress: ProgressHook | None,
+) -> tuple[str, ...] | None:
+    """Report the judge phase, then run it (issue #701).
+
+    One function so the label and the call cannot drift apart. Reporting
+    from the caller instead needed a guard duplicating the judge's own
+    skip conditions -- `if len(judge_input) != 1` sitting immediately above
+    the pre-existing `if len(judge_input) == 1`, two spellings of one fact
+    that a later edit to either could silently desynchronise. Here the
+    label is unreachable unless the call happens, structurally.
+
+    Everything about WHICH candidates are judged and how the reply is read
+    stays in `judge_mod.select`; this wrapper adds a phase label and
+    nothing else.
+    """
+    _report(on_progress, f"judging {len(judge_input)} candidates")
+    return judge_mod.select(
+        source_text,
+        [
+            judge_mod.JudgeCandidate(
+                type=c.type, title=c.title, description=c.description
+            )
+            for c in judge_input
+        ],
+        llm,
+    )
+
+
 def extract_concept_union(
-    source_text: str, *, source_title: str, llm: LLMBackend
+    source_text: str,
+    *,
+    source_title: str,
+    llm: LLMBackend,
+    on_progress: ProgressHook | None = None,
 ) -> ExtractionOutcome:
     """Union-of-runs + selector-judge orchestrator (design D1, #456): a
     SIBLING to `extract_concept` in this same module, replacing the blind
@@ -2506,6 +2617,10 @@ def extract_concept_union(
     meeting_shaped = _is_meeting_shaped(source_title, source_text)
 
     if len(source_text) <= _CHUNK_THRESHOLD:
+        # `pass i/2`, not `chunk 1/1`: below the threshold this branch runs
+        # the IDENTICAL prompt twice and merges, which is a different shape
+        # from a one-window fan-out and should not be described as one.
+        _report(on_progress, "extracting pass 1/2")
         run1 = _drop_framing_objects(
             _strip_ungrounded_expansions(
                 _extract_once(source_text, source_title, llm),
@@ -2513,6 +2628,7 @@ def extract_concept_union(
             ),
             meeting_shaped=meeting_shaped,
         )
+        _report(on_progress, "extracting pass 2/2")
         run2 = _drop_framing_objects(
             _strip_ungrounded_expansions(
                 _extract_once(source_text, source_title, llm),
@@ -2530,7 +2646,8 @@ def extract_concept_union(
         windows = _chunk_lines(source_text)
         chunk_count = len(windows)
         chunked: list[ExtractionResult] = []
-        for window in windows:
+        for index, window in enumerate(windows, start=1):
+            _report(on_progress, f"extracting chunk {index}/{chunk_count}")
             chunked.extend(_extract_once(window, source_title, llm))
         deduped = _dedup_merged(
             _strip_ungrounded_expansions(chunked, source_text=source_text)
@@ -2557,7 +2674,11 @@ def extract_concept_union(
     # never saw could not be selected against, and would leave two
     # inconsistent notions of what the candidate set was.
     merged, reask_runs, reask_added_titles = _add_reask_subjects(
-        merged, source_text=source_text, source_title=source_title, llm=llm
+        merged,
+        source_text=source_text,
+        source_title=source_title,
+        llm=llm,
+        on_progress=on_progress,
     )
 
     # #668 design D6: a scoped second call, shaped like the #584 re-ask,
@@ -2575,6 +2696,7 @@ def extract_concept_union(
             source_title=source_title,
             meeting_shaped=meeting_shaped,
             llm=llm,
+            on_progress=on_progress,
         )
     )
 
@@ -2625,16 +2747,7 @@ def extract_concept_union(
         judge_status = "skipped"
         judged_out_titles: tuple[str, ...] = ()
     elif (
-        selected := judge_mod.select(
-            source_text,
-            [
-                judge_mod.JudgeCandidate(
-                    type=c.type, title=c.title, description=c.description
-                )
-                for c in judge_input
-            ],
-            llm,
-        )
+        selected := _select_with_progress(source_text, judge_input, llm, on_progress)
     ) is None:
         kept = judge_input
         judge_status = "failed"

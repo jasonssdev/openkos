@@ -582,3 +582,70 @@ def test_stage_notice_is_silent_when_stderr_is_not_a_tty(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+# ---------------------------------------------------------------------------
+# #701 -- phase_callback: in-file progress for a single long extraction
+# ---------------------------------------------------------------------------
+
+
+def test_phase_callback_returns_none_when_stderr_is_not_a_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A piped run gets NO hook at all, so the library skips every call.
+
+    Same discipline `progress_callback` already follows: returning `None`
+    rather than a silent callback means a redirected run pays zero per-phase
+    overhead and stdout stays byte-clean for scripting.
+    """
+    import sys
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+
+    assert observability.phase_callback("ingest", lambda _text: None) is None
+
+
+def test_phase_callback_forwards_a_prefixed_line_to_its_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a TTY the hook hands the sink one `openkos <verb>: <phase>...` line.
+
+    The sink is the caller's own display -- for `ingest` that is the Rich
+    status already wrapping the extraction call, so the counter replaces the
+    static line instead of scrolling underneath it.
+    """
+    import sys
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    seen: list[str] = []
+
+    hook = observability.phase_callback("ingest", seen.append)
+    assert hook is not None
+    hook("extracting chunk 3/12")
+
+    assert seen == ["openkos ingest: extracting chunk 3/12..."]
+
+
+def test_phase_callback_never_writes_to_a_stream_itself(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The hook writes NOTHING on its own -- everything goes through the
+    sink.
+
+    That is what lets `ingest` route it into a live Rich status: a helper
+    that also wrote to stderr would interleave with the spinner it is
+    supposed to be updating, and produce the scrollback `progress_callback`'s
+    in-place rewrite was built to avoid.
+    """
+    import sys
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+
+    hook = observability.phase_callback("ingest", lambda _text: None)
+    assert hook is not None
+    hook("judging 14 candidates")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""

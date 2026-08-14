@@ -5064,3 +5064,246 @@ def test_transcript_shaped_text_rejects_markdown_structure_lines() -> None:
         blocks.append(f"- Scenario: WHEN thing happens THEN outcome {chr(97 + n)}")
         blocks.append(f"- Scenario: WHEN other thing THEN outcome {chr(97 + n)}")
     assert not concept_mod._transcript_shaped_text("\n".join(blocks))
+
+
+# ---------------------------------------------------------------------------
+# #701 -- the extractor reports the progress it already knows
+# ---------------------------------------------------------------------------
+
+
+def test_union_reports_a_chunk_counter_for_a_chunked_source() -> None:
+    """A chunked source names which window it is on, `i/N`.
+
+    A 4m 28s ingest showed ONE static line for its entire duration while the
+    engine underneath ran a model call per ~4 KB window. Perceived duration
+    is not measured duration: four minutes behind `chunk 7/12` reads as a
+    system working through a known amount of work, and the same four minutes
+    behind a frozen line reads as a hang -- which users act on with Ctrl+C.
+    """
+    seen: list[str] = []
+    text = "Una frase con contenido suficiente.\n" * 900
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Notas", llm=llm, on_progress=seen.append
+    )
+
+    chunks = outcome.report.chunks
+    assert chunks > 1, "fixture must exceed the chunk threshold to test this"
+    chunk_phases = [p for p in seen if p.startswith("extracting chunk ")]
+    assert chunk_phases == [
+        f"extracting chunk {i}/{chunks}" for i in range(1, chunks + 1)
+    ]
+
+
+def test_union_reports_both_passes_for_an_unchunked_source() -> None:
+    """Below the chunk threshold the union runs the identical prompt TWICE,
+    so `pass 1/2` and `pass 2/2` is the honest counter -- reporting a chunk
+    count of 1 would describe a shape this branch does not have."""
+    seen: list[str] = []
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM))
+
+    concept_mod.extract_concept_union(
+        "A short source.", source_title="Notes", llm=llm, on_progress=seen.append
+    )
+
+    assert "extracting pass 1/2" in seen
+    assert "extracting pass 2/2" in seen
+    assert not [p for p in seen if p.startswith("extracting chunk ")]
+
+
+def test_union_names_the_judge_phase() -> None:
+    """The judge is a distinct wait, and it is the LAST one -- a run that
+    appeared to stop after the final chunk was in fact still judging."""
+    seen: list[str] = []
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM))
+
+    concept_mod.extract_concept_union(
+        "A short source.", source_title="Notes", llm=llm, on_progress=seen.append
+    )
+
+    judging = [p for p in seen if p.startswith("judging ")]
+    assert judging == ["judging 2 candidates"]
+
+
+def test_union_stays_silent_about_a_judge_it_never_runs() -> None:
+    """A single candidate makes the judge a provable no-op and it is skipped
+    (#644). Announcing a phase that does not run would be worse than saying
+    nothing: the reader would attribute the next silent stretch to it."""
+    seen: list[str] = []
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM))
+
+    concept_mod.extract_concept_union(
+        "A short source.", source_title="Notes", llm=llm, on_progress=seen.append
+    )
+
+    assert not [p for p in seen if p.startswith("judging ")]
+
+
+def test_union_names_the_reask_only_when_it_actually_fires() -> None:
+    """The re-ask is conditional, so its phase is too.
+
+    `_add_reask_subjects` returns `(0, ())` and makes NO call when its
+    trigger does not fire, and a phase line printed regardless would be a
+    label on a wait that never happened.
+    """
+    fired: list[str] = []
+    quiet: list[str] = []
+    # Sole object, long source -> the low-yield arm of the trigger fires.
+    long_text = "x" * (concept_mod._REASK_LOW_YIELD_THRESHOLD + 1)
+    concept_mod.extract_concept_union(
+        long_text,
+        source_title="Notes",
+        llm=_FakeLLM(reply=_array(_CONCEPT_ITEM)),
+        on_progress=fired.append,
+    )
+    # Two objects -> the `len == 1` conjunct fails, no re-ask.
+    concept_mod.extract_concept_union(
+        "A short source.",
+        source_title="Notes",
+        llm=_FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM)),
+        on_progress=quiet.append,
+    )
+
+    assert "re-asking for a further subject" in fired
+    assert "re-asking for a further subject" not in quiet
+
+
+def test_extraction_runs_unchanged_without_a_progress_hook() -> None:
+    """`on_progress=None` is the default and costs nothing.
+
+    Every existing caller -- the eval harnesses among them -- keeps calling
+    the two extractors positionally with no hook, so the seam must be purely
+    additive.
+    """
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM))
+
+    outcome = concept_mod.extract_concept_union(
+        "A short source.", source_title="Notes", llm=llm
+    )
+
+    assert [result.title for result in outcome.objects] == [
+        "Stoicism",
+        "Zettelkasten App",
+    ]
+
+
+def test_single_run_extractor_also_reports_its_chunks() -> None:
+    """The `union_judge: false` rollback path chunks too, and `ingest` picks
+    between the two extractors at runtime -- so a hook wired to only one of
+    them would make the progress display depend on a config key the operator
+    set for an unrelated reason."""
+    seen: list[str] = []
+    text = "Una frase con contenido suficiente.\n" * 900
+
+    outcome = concept_mod.extract_concept(
+        text,
+        source_title="Notas",
+        llm=_FakeLLM(reply=_array(_CONCEPT_ITEM)),
+        on_progress=seen.append,
+    )
+
+    chunks = outcome.report.chunks
+    assert chunks > 1
+    assert [p for p in seen if p.startswith("extracting chunk ")] == [
+        f"extracting chunk {i}/{chunks}" for i in range(1, chunks + 1)
+    ]
+
+
+def test_union_names_the_participant_pass_only_on_a_meeting_shaped_source() -> None:
+    """The participant capture is gated on `meeting_shaped`, so its phase is
+    too.
+
+    Both directions in one test, because either alone passes for the wrong
+    reason: a test that only checks the meeting case cannot tell a correct
+    gate from no gate at all, and one that only checks the ordinary case
+    cannot tell a correct gate from a phase that never fires.
+    """
+    meeting: list[str] = []
+    ordinary: list[str] = []
+
+    concept_mod.extract_concept_union(
+        "Notes from the session.",
+        source_title="AMI meeting TS3005b",
+        llm=_FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM)),
+        on_progress=meeting.append,
+    )
+    concept_mod.extract_concept_union(
+        "A short source.",
+        source_title="Notes",
+        llm=_FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM)),
+        on_progress=ordinary.append,
+    )
+
+    assert "capturing further participants" in meeting
+    assert "capturing further participants" not in ordinary
+
+
+def test_single_run_extractor_names_its_short_source_phases() -> None:
+    """`extract_concept`'s non-chunked branch reports too, including the
+    #524 empty-result retry -- the one wait a reader would otherwise see as
+    the first call simply taking twice as long."""
+    first: list[str] = []
+    retried: list[str] = []
+
+    concept_mod.extract_concept(
+        "A short source.",
+        source_title="Notes",
+        llm=_FakeLLM(reply=_array(_CONCEPT_ITEM)),
+        on_progress=first.append,
+    )
+    # An empty reply triggers the single retry (#524).
+    concept_mod.extract_concept(
+        "A short source.",
+        source_title="Notes",
+        llm=_FakeLLM(reply="[]"),
+        on_progress=retried.append,
+    )
+
+    assert first[0] == "extracting the source"
+    assert "retrying an empty extraction" not in first
+    assert "retrying an empty extraction" in retried
+
+
+def test_a_raising_progress_hook_never_fails_the_extraction() -> None:
+    """A broken display must not destroy four minutes of model work.
+
+    This seam fires once per chunk into a LIVE terminal display, which has
+    more ways to fail than a plain stderr write. The extraction is the
+    valuable thing; the counter describing it is not.
+    """
+
+    def _explode(_phase: str) -> None:
+        raise RuntimeError("the terminal went away")
+
+    outcome = concept_mod.extract_concept_union(
+        "A short source.",
+        source_title="Notes",
+        llm=_FakeLLM(reply=_array(_CONCEPT_ITEM, _ENTITY_ITEM)),
+        on_progress=_explode,
+    )
+
+    assert [result.title for result in outcome.objects] == [
+        "Stoicism",
+        "Zettelkasten App",
+    ]
+
+
+def test_a_progress_hook_never_swallows_a_keyboard_interrupt() -> None:
+    """Ctrl+C during a long ingest is the user asking to stop.
+
+    The isolation above catches `Exception`, deliberately not
+    `BaseException`: swallowing `KeyboardInterrupt` here would break Ctrl+C
+    during exactly the long wait #701 exists to make bearable.
+    """
+
+    def _interrupt(_phase: str) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        concept_mod.extract_concept_union(
+            "A short source.",
+            source_title="Notes",
+            llm=_FakeLLM(reply=_array(_CONCEPT_ITEM)),
+            on_progress=_interrupt,
+        )

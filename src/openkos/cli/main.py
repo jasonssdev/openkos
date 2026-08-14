@@ -3340,8 +3340,22 @@ def _stage_derived_objects(
 
     extractor = extract_concept_union if union_judge else extract_concept
     try:
-        with Console(stderr=True).status("openkos ingest: extracting concepts…"):
-            outcome = extractor(raw_content, source_title=source_title, llm=llm)
+        with Console(stderr=True).status(
+            "openkos ingest: extracting concepts…"
+        ) as status:
+            # #701: the status line stopped being static. Underneath it the
+            # extractor runs a model call per ~4 KB window, then a re-ask,
+            # then a participant pass, then a judge -- roughly a dozen calls
+            # on the 4m 28s ingest that filed the issue, all behind one
+            # frozen line that reads as a hang. `phase_callback` returns
+            # `None` off a TTY, so a piped run passes no hook and the
+            # extractor's per-phase cost is one `is not None` comparison.
+            outcome = extractor(
+                raw_content,
+                source_title=source_title,
+                llm=llm,
+                on_progress=observability.phase_callback("ingest", status.update),
+            )
     except OllamaError as exc:
         typer.echo(
             f"openkos ingest: concept extraction skipped -- {exc}; "
