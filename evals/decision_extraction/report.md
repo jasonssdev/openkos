@@ -181,3 +181,41 @@ separately with both measurements as evidence. Per the probe spec's gate
 semantics, phase-2 work shipped on the recorded zero-generation baseline;
 this section records its measured effect honestly rather than
 overclaiming corpus recall the gating cannot yet deliver.
+
+## 2026-08-14 — content-shape detection closes the gating gap (#673)
+
+The detector (`_transcript_shaped_text`: recurring short speaker labels
+covering most of the document — structure only, no lexicon) was measured
+twice before shipping, per the #613/#622 measure-first rule.
+
+**Deterministic FP sweep** (zero model calls): the detector ran over every
+`.txt`/`.md` fixture in the repository — 785 files across `evals/`,
+`docs/`, `tests/`, `openspec/` — and fired on exactly the two real AMI
+transcripts. One intermediate FP (an archived SDD spec recurring on
+`#### Requirement:`/`- Scenario:` lines) was closed structurally: a
+speaker turn never opens with a markdown structure character. Final:
+2/2 true positives, 0/783 false positives.
+
+**E2E re-run of the null experiment** (qwen3:8b, 2 runs × 4 sources,
+`--participants`, `path.stem` titles — the exact configuration recorded
+above as the null experiment):
+
+| Source | Person emitted | Via | Flooding |
+|---|---:|---|---|
+| TS3005a.summary | 0 | gate correctly closed | — |
+| TS3005a.transcript | 4 (run 1) | judge-selected 4 | none |
+| TS3005b.summary | 0 | gate correctly closed | — |
+| TS3005b.transcript | 4 | re-admitted 4 | guard fired, 0 anchor-less |
+
+Against the recorded zero baseline (`re-admitted 0`, `capture_runs` never
+incremented, zero Person/Organization on every source), the machinery now
+fires on code-titled transcripts while the two summary documents — prose,
+not turns — correctly stay ungated. Zero anchor-less discards anywhere:
+the stub rule held. TS3005a.transcript run 2 collapsed to 0 objects
+total (0 proposed by the union), the known stochastic emission variance
+(#643), not a gating failure — run 1 on the same bytes produced the full
+4/4 speaker set.
+
+Organization remains at 0 (TS3005a affords 4 mentions): generation-side,
+same as the baseline — detection widens WHERE the gates fire, and does
+not change what the model proposes. Tracked by the epic, not this fix.
