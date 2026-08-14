@@ -2381,7 +2381,9 @@ def extract_concept_union(
                 and _normalize_title(c.title) not in selected_titles
             )
             participant_anchorless_discarded_titles = tuple(
-                c.title for c in judge_input if c.type in _PARTICIPANT_TYPES and c not in kept
+                c.title
+                for c in judge_input
+                if c.type in _PARTICIPANT_TYPES and c not in kept
             )
 
     retained = kept[:_UNION_BACKSTOP]

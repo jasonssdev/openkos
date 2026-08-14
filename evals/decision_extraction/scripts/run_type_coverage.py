@@ -236,7 +236,9 @@ def _participant_run_report(outcome: object) -> ParticipantRunReport:
     type_by_title = {obj.title: obj.type for obj in outcome.objects}  # type: ignore[attr-defined]
     admitted_titles = {
         okf_type: tuple(
-            obj.title for obj in outcome.objects if obj.type == okf_type  # type: ignore[attr-defined]
+            obj.title
+            for obj in outcome.objects
+            if obj.type == okf_type  # type: ignore[attr-defined]
         )
         for okf_type in sorted(_PARTICIPANT_TYPES)
     }
@@ -423,7 +425,13 @@ def render_participant_section(
     annotated mentions exist for it in that source, and every object of
     that type admitted anyway is, by construction, unexplained by any
     ground-truth mention for that source."""
-    lines: list[str] = ["", "=" * 72, "PARTICIPANT COVERAGE (Person/Organization)", "=" * 72, ""]
+    lines: list[str] = [
+        "",
+        "=" * 72,
+        "PARTICIPANT COVERAGE (Person/Organization)",
+        "=" * 72,
+        "",
+    ]
     for result in results:
         if not result.participant_runs:
             continue
@@ -460,7 +468,9 @@ def render_participant_section(
                     f"({judge_selected[okf_type]}) -- re-admission is carrying "
                     "most of this type's coverage"
                 )
-        lines.append(f"  anchor-less discards (Person+Organization): {anchorless_total}")
+        lines.append(
+            f"  anchor-less discards (Person+Organization): {anchorless_total}"
+        )
         lines.append("")
     return "\n".join(lines)
 
@@ -580,7 +590,9 @@ def _self_test() -> int:
     # guard MUST fire) and one where it is not (the guard MUST stay
     # silent) -- a fixture that could pass by always firing, or never
     # firing, would not prove the divergence check runs at all.
-    participant_a = SourceResult(name="A.transcript.txt", meeting="A", variant="transcript")
+    participant_a = SourceResult(
+        name="A.transcript.txt", meeting="A", variant="transcript"
+    )
     participant_a.participant_runs = [
         ParticipantRunReport(
             admitted_titles={
@@ -592,7 +604,9 @@ def _self_test() -> int:
             anchorless_discarded_total=0,
         )
     ]
-    participant_b = SourceResult(name="B.transcript.txt", meeting="B", variant="transcript")
+    participant_b = SourceResult(
+        name="B.transcript.txt", meeting="B", variant="transcript"
+    )
     participant_b.participant_runs = [
         ParticipantRunReport(
             admitted_titles={"Person": ("Eve", "Fay"), "Organization": ("Acme",)},
@@ -606,7 +620,9 @@ def _self_test() -> int:
         "B": collections.Counter(),
     }
     participant_results = [participant_a, participant_b]
-    participant_report = render_participant_section(participant_results, participant_floors)
+    participant_report = render_participant_section(
+        participant_results, participant_floors
+    )
     baseline = render_participant_baseline(participant_results, participant_floors)
     parsed_baseline = read_participant_baseline(baseline)
 
