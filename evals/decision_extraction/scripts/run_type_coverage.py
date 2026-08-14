@@ -86,6 +86,7 @@ from pathlib import Path
 
 from openkos.extraction.concept import (
     _MAX_OBJECTS_PER_SOURCE,
+    _PARTICIPANT_TYPES,
     _UNION_BACKSTOP,
     extract_concept,
     extract_concept_union,
@@ -120,6 +121,26 @@ def _parse_xml(path: Path) -> ET.Element:
 
 
 @dataclass
+class ParticipantRunReport:
+    """One run's `Person`/`Organization` stub-flooding guard data (#668
+    design D5), read off `ExtractionOutcome.objects` (for per-type admitted
+    titles -- the type each new `ExtractionReport` field's titles carries is
+    not stored on the report itself) and the three new `ExtractionReport`
+    fields directly for judge-selected vs re-admitted counts.
+
+    `anchorless_discarded_total` is COMBINED across `Person`+`Organization`
+    rather than split, because `ExtractionReport.participant_anchorless_
+    discarded_titles` carries titles only -- the dropped candidate's type is
+    not recoverable from a title alone once it never reached `outcome.
+    objects`, and guessing would misattribute a discard to the wrong type."""
+
+    admitted_titles: dict[str, tuple[str, ...]]
+    judge_selected: dict[str, int]
+    readmitted: dict[str, int]
+    anchorless_discarded_total: int
+
+
+@dataclass
 class SourceResult:
     """Every run's outcome for one source file."""
 
@@ -131,6 +152,10 @@ class SourceResult:
     retained: list[int] = field(default_factory=list)
     discarded: list[tuple[str, ...]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    participant_runs: list[ParticipantRunReport] = field(default_factory=list)
+    """Populated ONLY when `--participants` is passed (#668) -- empty on the
+    default coverage run, so every existing caller/report keeps working
+    unchanged."""
 
     @property
     def emitted_types(self) -> set[str]:
@@ -204,8 +229,44 @@ def _split_name(path: Path) -> tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) >= 3 else (parts[0], "source")
 
 
+def _participant_run_report(outcome: object) -> ParticipantRunReport:
+    """Build one run's `ParticipantRunReport` (#668 design D5) off a real
+    `ExtractionOutcome` -- the type/title join `ExtractionReport`'s new
+    fields cannot do on their own (see `ParticipantRunReport`'s docstring)."""
+    type_by_title = {obj.title: obj.type for obj in outcome.objects}  # type: ignore[attr-defined]
+    admitted_titles = {
+        okf_type: tuple(
+            obj.title for obj in outcome.objects if obj.type == okf_type  # type: ignore[attr-defined]
+        )
+        for okf_type in sorted(_PARTICIPANT_TYPES)
+    }
+    judge_selected = collections.Counter(
+        type_by_title[title]
+        for title in outcome.report.participant_judge_selected_titles  # type: ignore[attr-defined]
+        if title in type_by_title
+    )
+    readmitted = collections.Counter(
+        type_by_title[title]
+        for title in outcome.report.participant_readmitted_titles  # type: ignore[attr-defined]
+        if title in type_by_title
+    )
+    return ParticipantRunReport(
+        admitted_titles=admitted_titles,
+        judge_selected=dict(judge_selected),
+        readmitted=dict(readmitted),
+        anchorless_discarded_total=len(
+            outcome.report.participant_anchorless_discarded_titles  # type: ignore[attr-defined]
+        ),
+    )
+
+
 def run_source(
-    path: Path, llm: object, runs: int, *, union_judge: bool = False
+    path: Path,
+    llm: object,
+    runs: int,
+    *,
+    union_judge: bool = False,
+    participants: bool = False,
 ) -> SourceResult:
     """`union_judge` (#456) toggles between the single-cap `extract_concept`
     (default -- byte-identical to before this flag existed) and the
@@ -213,7 +274,14 @@ def run_source(
     before/after type-coverage comparison the Pre-Archive Measurement Gate
     requires. Both return the same `ExtractionOutcome` shape, so every
     downstream field below (`report.produced`/`retained`/`discarded_titles`)
-    keeps meaning what it already means regardless of which pipeline ran."""
+    keeps meaning what it already means regardless of which pipeline ran.
+
+    `participants` (#668) additionally records each run's
+    `ParticipantRunReport` on `result.participant_runs` -- the stub-flooding
+    guard the coverage probe measures. Independent of `union_judge`: the
+    guard is only meaningful when the judge actually ran, but this function
+    does not enforce that -- an empty `participant_runs` on the single-cap
+    path is simply the honest "the judge never ran" answer."""
     meeting, variant = _split_name(path)
     result = SourceResult(name=path.name, meeting=meeting, variant=variant)
     text = path.read_text(encoding="utf-8")
@@ -230,6 +298,8 @@ def run_source(
         result.produced.append(outcome.report.produced)
         result.retained.append(outcome.report.retained)
         result.discarded.append(tuple(outcome.report.discarded_titles))
+        if participants:
+            result.participant_runs.append(_participant_run_report(outcome))
         print(
             f"    run {index}: {outcome.report.retained} kept "
             f"of {outcome.report.produced} proposed"
@@ -335,6 +405,131 @@ def render(
     return "\n".join(lines)
 
 
+def render_participant_section(
+    results: list[SourceResult],
+    floors: dict[str, collections.Counter[str]],
+) -> str:
+    """The `--participants` (#668 design D5) stub-flooding guard + the
+    precision-side report (spec "Precision-Side Reporting Alongside
+    Recall"). Only reads `SourceResult.participant_runs` and the named-
+    entity mention FLOOR already computed by `named_entity_floor` -- no new
+    corpus parsing, and no per-type sensitivity value or branch anywhere in
+    this function (spec "No Per-Type Sensitivity Behavior in Probe Scope").
+
+    Precision here is deliberately the SAME kind of evidence `render`'s
+    affordance section already uses (a mention-count floor), not a per-
+    object name match against the transcript: `named_entity_floor` is a
+    MENTION COUNT, so a floor of zero for a type means literally zero
+    annotated mentions exist for it in that source, and every object of
+    that type admitted anyway is, by construction, unexplained by any
+    ground-truth mention for that source."""
+    lines: list[str] = ["", "=" * 72, "PARTICIPANT COVERAGE (Person/Organization)", "=" * 72, ""]
+    for result in results:
+        if not result.participant_runs:
+            continue
+        lines.append(f"## {result.name}")
+        judge_selected: collections.Counter[str] = collections.Counter()
+        readmitted: collections.Counter[str] = collections.Counter()
+        anchorless_total = 0
+        for run in result.participant_runs:
+            judge_selected.update(run.judge_selected)
+            readmitted.update(run.readmitted)
+            anchorless_total += run.anchorless_discarded_total
+        floor = floors.get(result.meeting, collections.Counter())
+        for okf_type in sorted(_PARTICIPANT_TYPES):
+            emitted = sum(
+                len(run.admitted_titles.get(okf_type, ()))
+                for run in result.participant_runs
+            )
+            lines.append(
+                f"  {okf_type:<14} emitted {emitted}  "
+                f"judge-selected {judge_selected[okf_type]}  "
+                f"re-admitted {readmitted[okf_type]}"
+            )
+            mentions = floor.get(okf_type, 0)
+            if emitted and not mentions:
+                lines.append(
+                    f"    PRECISION: {emitted} admitted {okf_type} object(s), "
+                    "0 annotated mentions -- unexplained by any ground-truth "
+                    "mention for this source"
+                )
+            if readmitted[okf_type] and readmitted[okf_type] > judge_selected[okf_type]:
+                lines.append(
+                    f"    FLOODING GUARD: {okf_type} re-admitted "
+                    f"({readmitted[okf_type]}) exceeds judge-selected "
+                    f"({judge_selected[okf_type]}) -- re-admission is carrying "
+                    "most of this type's coverage"
+                )
+        lines.append(f"  anchor-less discards (Person+Organization): {anchorless_total}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+_BASELINE_HEADER = "## Participant coverage baseline (Person/Organization)"
+_BASELINE_COLUMNS = (
+    "| Meeting | Type | Emitted | Judge-selected | Re-admitted | Unexplained |"
+)
+
+
+def render_participant_baseline(
+    results: list[SourceResult],
+    floors: dict[str, collections.Counter[str]],
+) -> str:
+    """The recorded-baseline block for `evals/decision_extraction/report.md`
+    (#668 task 2.9, run separately from this change) -- follows the file's
+    existing markdown-table recording convention (see the "Absences the
+    corpus does not explain" table already there) so `read_participant_
+    baseline` can parse it back (spec "Recorded Baseline for Comparison")."""
+    lines = [_BASELINE_HEADER, "", _BASELINE_COLUMNS, "|---|---|---:|---:|---:|---:|"]
+    for result in results:
+        if not result.participant_runs:
+            continue
+        judge_selected: collections.Counter[str] = collections.Counter()
+        readmitted: collections.Counter[str] = collections.Counter()
+        for run in result.participant_runs:
+            judge_selected.update(run.judge_selected)
+            readmitted.update(run.readmitted)
+        floor = floors.get(result.meeting, collections.Counter())
+        for okf_type in sorted(_PARTICIPANT_TYPES):
+            emitted = sum(
+                len(run.admitted_titles.get(okf_type, ()))
+                for run in result.participant_runs
+            )
+            unexplained = emitted if emitted and not floor.get(okf_type, 0) else 0
+            lines.append(
+                f"| {result.meeting} | {okf_type} | {emitted} | "
+                f"{judge_selected[okf_type]} | {readmitted[okf_type]} | "
+                f"{unexplained} |"
+            )
+    return "\n".join(lines)
+
+
+def read_participant_baseline(text: str) -> dict[tuple[str, str], dict[str, int]]:
+    """Parse a block `render_participant_baseline` wrote back into
+    `{(meeting, type): {"emitted": n, ...}}` -- the readback half of the
+    recording convention (spec "Baseline is available after a probe run"):
+    a later probe run reads this to compare against what was recorded."""
+    rows: dict[tuple[str, str], dict[str, int]] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or stripped.startswith("|---"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) != 6 or cells[0] == "Meeting":
+            continue
+        meeting, okf_type, emitted, selected, readmitted, unexplained = cells
+        try:
+            rows[(meeting, okf_type)] = {
+                "emitted": int(emitted),
+                "judge_selected": int(selected),
+                "readmitted": int(readmitted),
+                "unexplained": int(unexplained),
+            }
+        except ValueError:
+            continue
+    return rows
+
+
 def _self_test() -> int:
     """Exercise the verdict logic with no model.
 
@@ -380,14 +575,91 @@ def _self_test() -> int:
             "zero Place mentions and none emitted must read as explained",
         ),
     ]
+    # Second fixture (#668 tasks 2.5-2.7, 2.10): two meetings again, one
+    # where re-admission is doing most of a type's work (the flooding
+    # guard MUST fire) and one where it is not (the guard MUST stay
+    # silent) -- a fixture that could pass by always firing, or never
+    # firing, would not prove the divergence check runs at all.
+    participant_a = SourceResult(name="A.transcript.txt", meeting="A", variant="transcript")
+    participant_a.participant_runs = [
+        ParticipantRunReport(
+            admitted_titles={
+                "Person": ("Ana", "Ben", "Cid", "Dee"),
+                "Organization": (),
+            },
+            judge_selected={"Person": 1},
+            readmitted={"Person": 3},
+            anchorless_discarded_total=0,
+        )
+    ]
+    participant_b = SourceResult(name="B.transcript.txt", meeting="B", variant="transcript")
+    participant_b.participant_runs = [
+        ParticipantRunReport(
+            admitted_titles={"Person": ("Eve", "Fay"), "Organization": ("Acme",)},
+            judge_selected={"Person": 2},
+            readmitted={"Person": 0},
+            anchorless_discarded_total=2,
+        )
+    ]
+    participant_floors = {
+        "A": collections.Counter({"Person": 12}),
+        "B": collections.Counter(),
+    }
+    participant_results = [participant_a, participant_b]
+    participant_report = render_participant_section(participant_results, participant_floors)
+    baseline = render_participant_baseline(participant_results, participant_floors)
+    parsed_baseline = read_participant_baseline(baseline)
+
+    expectations += [
+        (
+            "FLOODING GUARD: Person re-admitted (3) exceeds judge-selected (1)"
+            in participant_report,
+            "A's Person re-admission (3) outweighing judge-selection (1) must "
+            "trigger the flooding guard",
+        ),
+        (
+            participant_report.count("FLOODING GUARD") == 1,
+            "B's Person re-admission (0) does not exceed judge-selection (2) "
+            "-- the guard must fire exactly once, for A only",
+        ),
+        (
+            "PRECISION: 1 admitted Organization object(s), 0 annotated "
+            "mentions" in participant_report,
+            "B admitted 1 Organization object against a zero mention floor "
+            "-- must read as an unexplained/unmatched precision finding",
+        ),
+        (
+            "PRECISION: 4 admitted Person" not in participant_report,
+            "A's Person floor is non-zero (12) -- its admitted objects must "
+            "NOT read as unexplained by the floor-zero precision check",
+        ),
+        (
+            "anchor-less discards (Person+Organization): 2" in participant_report,
+            "B's 2 anchor-less discards must be reported on B's block",
+        ),
+        (
+            parsed_baseline.get(("A", "Person"), {}).get("readmitted") == 3
+            and parsed_baseline.get(("A", "Person"), {}).get("emitted") == 4,
+            "the baseline readback must recover the exact emitted/readmitted "
+            "counts the render step wrote for A's Person row",
+        ),
+        (
+            parsed_baseline.get(("B", "Organization"), {}).get("unexplained") == 1,
+            "the baseline readback must recover B's Organization unexplained "
+            "count (1) written by the recording convention",
+        ),
+    ]
+
     failures = [why for ok, why in expectations if not ok]
     if failures:
         print(report)
+        print(participant_report)
         for why in failures:
             print(f"SELF-TEST FAILED: {why}")
         return 1
 
     print(report)
+    print(participant_report)
     print("self-test OK")
     return 0
 
@@ -421,6 +693,14 @@ def main(argv: list[str] | None = None) -> int:
         "instead of the default single-cap extract_concept, for a TS3005b "
         "before/after type-coverage comparison.",
     )
+    parser.add_argument(
+        "--participants",
+        action="store_true",
+        help="Report the Person/Organization stub-flooding guard and "
+        "precision-side counts (#668 design D5) alongside the normal "
+        "coverage report. Implies --union-judge (the guard reads the "
+        "judge re-admission fields, which only the union-judge path sets).",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -443,17 +723,30 @@ def main(argv: list[str] | None = None) -> int:
     ) + (f", seed {args.seed}" if args.seed is not None else "")
     print(f"model {args.model}, {args.runs} run(s) per source{sampling}\n")
 
+    union_judge = args.union_judge or args.participants
+
     results: list[SourceResult] = []
     for path in sources:
         print(f"  {path.name}")
-        results.append(run_source(path, llm, args.runs, union_judge=args.union_judge))
+        results.append(
+            run_source(
+                path,
+                llm,
+                args.runs,
+                union_judge=union_judge,
+                participants=args.participants,
+            )
+        )
 
     floors = {
         meeting: named_entity_floor(ami_root, meeting)
         for meeting in sorted({r.meeting for r in results})
     }
-    cap = _UNION_BACKSTOP if args.union_judge else _MAX_OBJECTS_PER_SOURCE
+    cap = _UNION_BACKSTOP if union_judge else _MAX_OBJECTS_PER_SOURCE
     print(render(results, floors, cap=cap))
+    if args.participants:
+        print(render_participant_section(results, floors))
+        print(render_participant_baseline(results, floors))
     return 0
 
 
