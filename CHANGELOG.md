@@ -16,6 +16,148 @@ and commit history follows [Conventional Commits](https://www.conventionalcommit
 
 _Nothing yet._
 
+## [0.2.5] - 2026-08-14
+
+### Added
+
+- **Contradiction verdicts are persisted and served instead of re-judged**:
+  `contradictions` now reads `.openkos/findings.db` and serves a stored
+  verdict whenever the pair's current bytes still match the digests the
+  verdict was computed from, so a repeat run costs no model calls at all.
+  Anything else re-judges conservatively — no stored row, any digest drift,
+  an unreadable input, or a verdict value outside the enum — and `--fresh`
+  bypasses the store entirely. Freshly judged verdicts persist through
+  `curate`'s own write path, and the write is fail-open: a locked or
+  corrupt store degrades to one advisory rather than discarding verdicts
+  the model was already paid for (#653, #684).
+
+- **Per-type default sensitivity**: a new `type_sensitivity_defaults` map in
+  `openkos.yaml` lets an object type be born above the workspace floor
+  rather than at it. It ships with `Person: 1`, so a Person object is
+  created one level above `default_sensitivity`, clamped at
+  `confidential`, and the offset applies to the configured floor rather
+  than to a citation set that already resolved higher — the
+  high-water-mark still wins outright whenever a source is more sensitive.
+  Both birth seams consult it: `ingest`'s derived objects and `query
+  --save`'s filed answers. See ADR-0015 (#669).
+
+- **Person and Organization as first-class participants**: judge
+  re-admission now covers Person and Organization objects behind a
+  meeting-shape and anchor gate, so the people a meeting names survive
+  extraction instead of being dropped as low-yield. Includes a participant
+  coverage eval probe with a stub-flooding guard and a recorded baseline
+  (#668).
+
+- **Transcript detection now reads content, not just the title**: a
+  meeting-shaped body activates the participant machinery even when the
+  file is named like source code, closing a gap where the whole mechanism
+  measured as an inert zero on realistically-named files (#673).
+
+- **`merge` reconciles the merged body instead of stapling it**: when the
+  absorbed body would make up a large enough share of the result, one model
+  call rewrites both bodies as a single coherent document. The pass is
+  disclosed in the plan before the consent gate, `--no-reconcile` opts out,
+  and any failure falls back to the previous stacked form rather than
+  failing the merge (#645).
+
+- **Derived indexes refresh as part of the write that invalidates them**, so
+  `reindex` is no longer something to remember after almost every write.
+  `reconcile` was the last write verb to join the contract (#640, #655).
+
+- **`forget` now sweeps persisted findings.** `finding_claims` stores
+  verbatim conflicting-claim text quoted from concept bodies, and nothing
+  scrubbed it when the quoted concept was forgotten. Forgetting a concept
+  now deletes every finding naming it, as an erasure rather than a
+  row-level tombstone — the freelist pages a plain `DELETE` leaves behind
+  are reclaimed and the write-ahead log is truncated — matching the
+  guarantees the merge-ledger and decision sweeps already made (#685).
+
+- **Carried-content annotation in the merge ledger**: a reconciled body
+  woven into a survivor without its delimiter is now recorded at snapshot
+  time, while the fact is still decidable, so a later `forget` can redact
+  it instead of silently leaving it in a subsequent merge's snapshot
+  (#667).
+
+- **Filed syntheses are down-weighted in retrieval fusion**, with a warning
+  when syntheses reach half the result share, so answers stop citing
+  answers (#649).
+
+- **A filed insight is titled by the question's subject** when the answer's
+  first sentence cannot serve as a declarative title (#646).
+
+- **The extraction re-ask trigger widened** to a sole low-yield object on a
+  long source (#658).
+
+### Changed
+
+- **`edge_typing` follows the global `model:` by default.** The packaged
+  default no longer requires a 15.6 GB `gemma2:27b` pull, so curation works
+  out of the box on the two models `init` already asks for. `gemma2:27b`
+  remains a measured, documented opt-in — `models: {edge_typing:
+  gemma2:27b}` in `openkos.yaml` — surfaced by both `doctor` and `curate`
+  exactly where the packaged default used to be diagnosed (#650).
+
+- **`status` and `next` count only high-confidence CONTRADICTS findings as
+  open work.** A `consistent` verdict was being counted as an outstanding
+  contradiction that nothing could clear (#639).
+
+### Fixed
+
+- **Security**: closed a path traversal in the sweep and a link injection in
+  the catalog (#637).
+
+- **Retrieval stability**: full-text search now matches on content words
+  only, so two near-identical questions stop returning different sources
+  and the more specific one stops returning less (#648).
+
+- **Duplicate detection**: the `ACRONYM` tier now requires the acronym to be
+  its title's head instead of matching anywhere in the string, which had it
+  proposing topics as duplicates of their own parents (#641).
+
+- **Extraction language gate**: inflection and digits are folded into the
+  adjacency test, so legitimate Spanish-neutral titles are no longer
+  dropped (#656).
+
+- **Extraction**: the no-op single-candidate judge call is skipped, and
+  full-line echoes are salvaged rather than discarded (#657).
+
+- **`purge`**: editor directories are gitignored so they stop silently
+  blocking a purge, and any remaining dirty paths are named (#647).
+
+- **The packaged `openkos.yaml` template contradicted the engine.** Every
+  workspace created since #650 was told, in its own config file, that
+  `edge_typing` defaults to `gemma2:27b` and has to be explicitly declined —
+  the 15.6 GB barrier that change removed. The template now describes what
+  the engine actually does (every task follows `model:`, with `gemma2:27b`
+  as a scoped opt-in) and its commented example shows the opt-in rather than
+  the decline. It also surfaces `type_sensitivity_defaults`, which was
+  validated but undiscoverable.
+
+- **Review follow-ups**: `_stage_filed_answer` now requires its config
+  argument so the per-type sensitivity raise cannot be skipped in silence;
+  the persisted-serve partition fails open on a corrupt store and computes
+  digests only for candidates that actually have a stored row; a prior
+  merge whose absorbed body was empty no longer triggers a wholesale
+  snapshot redaction on a later forget; and the partial-batch counts stop
+  reporting planned model calls as though they had been sent (#685).
+
+### Documentation
+
+- **A full audit against the shipped code**, prompted by this release. The
+  corrections worth knowing about: the roadmap described durable pending
+  work as not started when both stores had shipped; the knowledge-object
+  model and the CLI reference still placed the merge ledger in survivor
+  frontmatter rather than its sidecar; `docs/testing.md` still instructed a
+  manual `reindex` after nearly every write, which #640 removed; three
+  documents described `bundle/` as safe to share on its own without noting
+  that its ledger carries the verbatim bodies of absorbed concepts,
+  including ones frozen at `confidential`; the architecture tree omitted
+  `bundle/.state/` and counted three derived stores where there are now
+  four; `openkos repair` and `openkos normalize-names` were undocumented
+  entirely; and `suggest-relations` was described as a verb that never
+  writes, which `--apply` disproves. ADR-0015 is recorded as accepted and
+  indexed.
+
 ## [0.2.4] - 2026-08-13
 
 ### Added
@@ -866,7 +1008,9 @@ and Memory) work.
 - Default embedding model is `bge-m3` (ADR-0006), superseding the earlier
   `qwen3-embedding:0.6b` default.
 
-[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/jasonssdev/openkos/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/jasonssdev/openkos/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/jasonssdev/openkos/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jasonssdev/openkos/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/jasonssdev/openkos/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jasonssdev/openkos/compare/v0.1.2...v0.2.0

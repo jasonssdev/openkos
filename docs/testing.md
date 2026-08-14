@@ -113,8 +113,8 @@ Both models are mandatory for full coverage — they serve different commands:
 
 | Model | Used by |
 |---|---|
-| `qwen3:8b` (chat) | `ingest` extraction, `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions`, `query` |
-| `bge-m3` (embeddings) | `reindex`, and the dense-retrieval channel of `query` |
+| `qwen3:8b` (chat) | `ingest` extraction, `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions`, `merge`'s reconciliation pass, `query` |
+| `bge-m3` (embeddings) | `reindex`, every bundle-writing verb's end-of-run index refresh, and the dense-retrieval channel of `query` |
 
 > The embedding dimension is hard-coded to 1024. `bge-m3` produces 1024
 > dimensions; substituting a differently-sized embedding model fails at runtime.
@@ -287,7 +287,8 @@ after them:
 | `openkos.yaml` | workspace marker + config (written last) |
 | `.git/` + `.gitignore` | git setup, done by `init` itself — see below |
 
-There should be **no** `.openkos/` yet (created lazily by `reindex`) and no
+There should be **no** `.openkos/` yet (created lazily by the first write that
+builds a derived store — an `ingest`, or an explicit `reindex`) and no
 concept-type subfolders (created by `ingest`).
 
 ### 2.1 Verify the git setup `init` performed
@@ -436,29 +437,52 @@ what it announces is what it is about to compile into your bundle.
 
 ---
 
-## Phase 4 — Build the derived stores, then query
+## Phase 4 — Check the derived stores, then query
 
-`ingest` maintains the retrieval indexes for what it just wrote, so a query
-right after an ingest is not degraded. Every **other** mutating verb leaves at
-least one derived store behind, and `reindex` is what catches them up.
+Every bundle-writing verb maintains the retrieval indexes for what it just
+wrote: at the end of a successful run it refreshes all three derived stores in
+one pass — FTS first, then the graph projection, then the vectors. So the
+stores already exist by the time you get here, built by the Phase 3 ingests,
+and `reindex` should have nothing to catch up:
 
 ```bash
-openkos reindex ; echo "exit: $?"
-ls -la .openkos/          # vectors.db, fts.db, graph.db
+ls -la .openkos/          # vectors.db, fts.db, graph.db — already present
+openkos reindex ; echo "exit: $?"    # expect a cheap pass: cache hits, little or nothing re-embedded
 ```
 
-> **The rule for the rest of the run: watch for the staleness signal, and
-> reindex when you see it.** After a write that invalidates an index,
-> `openkos status` lists it under *Needs attention*, `openkos next` recommends
-> `reindex`, and `query` prints a `warning: derived indexes are stale (...)`
-> line before answering. Those three are the behaviour under test — if you
-> write, then query, and get **no** warning while an index is genuinely stale,
-> that is a finding. So is the reverse: being told to reindex when nothing
+`reindex` remains the manual rebuild — the fallback when a refresh degraded,
+and, with `--force`, the way to ignore the content-hash cache. It is no longer
+a step you owe after every write.
+
+> **The rule for the rest of the run: the indexes should already be fresh, so
+> a staleness signal is itself the finding.** After an ordinary successful
+> write, `openkos status` should list no derived store under *Needs
+> attention*, `openkos next` should not recommend `reindex`, and `query`
+> should answer without a `warning: derived indexes are stale (...)` line.
+> Seeing any of those after a write that reported success means the
+> write-time refresh did not happen — record it.
+>
+> Check stderr before you file, because the refresh is fail-open and says so
+> when it degrades: the verb prints `derived-index refresh incomplete -- …;
+> run 'openkos reindex' to finish.` in one line naming which stores were
+> skipped, and its exit code stays unchanged. A staleness warning that
+> *follows* that advisory is the safety net working as designed, not a second
+> bug. The reverse is still a finding too: being told to reindex when nothing
 > changed.
 >
-> Note the asymmetry while testing: the graph projection is rebuilt only by
-> `reindex`, so relation-dependent behaviour (`contradictions` candidate
-> seeding, in particular) is only as current as your last one.
+> The refresh runs **once per invocation and only on the success path**. A
+> declined confirmation gate, a refusal, or a failed write invalidated nothing
+> and must refresh nothing — decline an `ingest` at the prompt and confirm no
+> embedding work follows.
+>
+> One real asymmetry survives, and it is worth knowing before you read a
+> result as a bug: the stores are refreshed cheap-first, so the graph is
+> rebuilt *before* the vectors are, and its proximity-candidate edges are
+> nominated from the **pre-refresh** `vectors.db`. After a content write, the
+> document you just added can therefore be missing from the proximity
+> candidates until the next content change or a manual `openkos reindex
+> --force`. Explicit relations are unaffected — `relate` writes frontmatter,
+> and the graph rebuild reads it directly.
 
 ```bash
 openkos query "a question your corpus can answer"
@@ -468,14 +492,18 @@ openkos query "..." --limit 10 --include-deprecated
 Judge the answer harshly: are the citations real and traceable to your sources,
 or does the model invent to fill gaps?
 
-**The un-indexed gap test** (important):
+**The fresh-index test** (important):
 
 ```bash
 openkos ingest /path/to/new.md --auto
-openkos query "a question only the new file answers"    # dense may hit (ingest embeds); FTS/graph miss it — check the stderr retrieval: line
-openkos reindex
-openkos query "the same question"                       # all three channels now see it
+openkos query "a question only the new file answers"    # all three channels should already see it — check the stderr retrieval: line
 ```
+
+No `reindex` in between: that is the point of the test. The `retrieval:` line
+on stderr reports the raw FTS and dense hit counts, so it tells you whether
+both channels found the new document. A lexical miss on a question whose
+wording appears verbatim in the file you just ingested — with no
+`refresh incomplete` advisory to explain it — is a finding.
 
 **`query --save`** is the only writing form of query. It auto-commits its three
 writes (answer document, `index.md`, `log.md`) like every other mutating verb,
@@ -485,8 +513,14 @@ so no manual commit step remains:
 openkos query "a synthesis question" --save
 git status                                    # expect clean — auto-committed
 head -15 bundle/insights/*.md                 # inspect what was filed
-openkos reindex
 ```
+
+On a complete refresh the run ends with `openkos query: the filed insight is
+indexed and searchable.` — that sentence is a claim about the derived stores,
+so test it: ask a follow-up question the filed answer alone can answer, with
+no `reindex` in between, and confirm it is retrievable. The line is printed
+**only** when every store refreshed; if a store degraded you get the
+`refresh incomplete` advisory instead, and the claim is correctly withheld.
 
 A filed answer is **not** an extracted concept and is stored apart from one.
 Three things to verify, because each is a distinct guarantee:
@@ -551,7 +585,10 @@ Record for each whether it found what you planted. `contradictions` only inspect
 
 Every verb in this phase auto-commits, so inspect each one with
 `git log -1 --stat` (not `git status`, which should stay clean) and check stderr
-for any `WARNING -- ... skipped auto-commit`. Run `reindex` after any of them.
+for any `WARNING -- ... skipped auto-commit` or `derived-index refresh
+incomplete`. None of them needs a `reindex` afterwards — each refreshes the
+derived stores itself — so treat a stale-index warning after one of these
+writes as a finding (Phase 4).
 
 ### 7.1 `relate`
 
@@ -586,10 +623,19 @@ the plan. It restores `index.md`/`log.md` from a pre-merge snapshot,
 **discarding any intervening writes** — do not run other writes between a merge
 and its unmerge during this test.
 
+Read the plan before you confirm: above a threshold on how much of the merged
+body comes from the absorbed side, `merge` also runs a **reconciliation pass**
+by default — one model call that rewrites the two bodies as a single coherent
+document instead of stapling them — and the plan discloses it as a line of its
+own. `--no-reconcile` opts out and keeps the appended form with no model call;
+run one merge each way and compare the results.
+
 Worth measuring while you are here: compare the survivor's size before and
-after a merge (`wc -l`). Absorbing one document should cost roughly the size of
-that document. A survivor that grows by orders of magnitude is a serious
-finding.
+after a merge (`wc -l`). A stapled merge should cost roughly the size of the
+absorbed document; a reconciled one can legitimately come out shorter, because
+removing duplication is the point. A survivor that grows by orders of
+magnitude is a serious finding, and so is a reconciled body that lost content
+the two inputs carried.
 
 `adjudicate` can drive this same merge path in bulk. If your corpus still has
 SAME pairs, test both modes:
@@ -606,17 +652,22 @@ every applied merge is an ordinary commit, reversible via `unmerge`.
 
 ```bash
 openkos relate <id_a> related_to <id_b>    # contradictions needs them related
-openkos reindex
 openkos contradictions                     # should detect the conflict
 openkos reconcile <id_a> <id_b> --winner <id_a>    # directional: id_a supersedes id_b
 ```
+
+No `reindex` between the `relate` and the `contradictions`: `relate` rebuilds
+the graph projection as part of its own run, so the new relation is already
+visible to candidate seeding. If `contradictions` cannot see a relation you
+just wrote, that is a finding — check stderr for a `refresh incomplete`
+advisory on the `relate` before filing it.
 
 Without `--winner`, `reconcile` records a symmetric `reconciled_with` on both. A
 conflicting re-resolution is refused (test that too).
 
 ```bash
 git log -2 --stat        # relate and reconcile each left their own auto-commit
-openkos reindex
+openkos status           # expect nothing under "Needs attention" — both verbs refreshed their own indexes
 ```
 
 ### 7.4 `suggest-volatility` → `set-volatility`
@@ -654,8 +705,14 @@ openkos forget <concept_id>
 git log -1 --stat             # the deletion, committed: concept + index.md + log.md
 openkos status                # concept is gone
 git revert --no-edit HEAD     # undo the ENTIRE forget in one commit
-openkos status                # concept is back
+openkos status                # concept is back — but the indexes are now stale
+openkos reindex               # a git-side restore is not an openkos write; nothing refreshed it
 ```
+
+The revert is the expected place to see a staleness warning during this run,
+and it is not a finding: `git revert` restores the bundle behind OpenKOS's
+back, so no verb ran to refresh the derived stores. `forget` itself refreshes
+them.
 
 Options: `--scope self` (default) or `--scope source` (cascades over provenance
 descendants); `--force` proceeds even when inbound links would dangle (it does
@@ -682,9 +739,20 @@ Test at least two rails before the real run: make the tree dirty and confirm rai
 
 ```bash
 openkos purge <concept_id>          # type the exact phrase when prompted
-openkos reindex                     # purge deletes vectors.db and does NOT rebuild it
+openkos reindex                     # the one place a manual reindex is still required — see below
 openkos query "..."                 # confirm dense retrieval works again
 ```
+
+`purge` is the exception to Phase 4's rule, deliberately. It physically
+**deletes** all four derived stores — `.openkos/vectors.db`, `fts.db`,
+`graph.db` and `findings.db` — because row-level deletes would leave
+recoverable pages, which defeats an erasure. It then rebuilds **only** FTS and
+the graph: `vectors.db` is left for a later `openkos reindex` to re-embed
+(rebuilding it in-line would make `purge` depend on a running Ollama, which it
+must never do), and `findings.db` is left deleted and never rebuilt, because
+regenerating a contradiction finding costs LLM calls. So after a purge, expect
+`.openkos/` to hold `fts.db` and `graph.db` only, and expect dense retrieval to
+stay dark until you reindex.
 
 Verify the erasure is total:
 
@@ -741,9 +809,15 @@ not:
   particular are presented as `(direction model-suggested, unverified)`. That
   wording is the engine telling you it cannot vouch for the direction, not a
   defect. Rejecting those proposals is the intended use.
-- **Merged documents are appended, not rewritten.** The plan says so before you
-  confirm (`bodies were appended, not reconciled`, with a percentage). The
-  stapled result is a known limitation, disclosed on purpose.
+- **A merged body may still be a staple — and the plan tells you which you are
+  getting.** When the absorbed text is a meaningful share of the merged
+  document, `merge` plans a reconciliation pass (one model call that rewrites
+  both bodies as a single coherent document) and discloses it before you
+  confirm. Below that threshold, with `--no-reconcile`, or when the model's
+  reply fails the safety checks, the bodies are appended instead and the plan
+  says so (`bodies were appended, not reconciled`, with a percentage). Falling
+  back to the staple is the designed behaviour — a bad rewrite would be silent
+  data loss — not a defect.
 
 A finding that reappears after being closed is a **regression** and deserves a
 new issue, not a comment on the closed one.
