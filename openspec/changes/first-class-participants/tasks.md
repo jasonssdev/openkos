@@ -45,16 +45,16 @@ Chain strategy: stacked-to-main
 
 ## Phase 2: PR2 — Participant Coverage Probe (D5)
 
-- [ ] 2.1 In `evals/decision_extraction/scripts/run_type_coverage.py`, add `ExtractionReport` fields for per-run `Person`/`Organization` emitted counts, re-admitted-vs-judge-selected counts, and anchor-less-discard counts.
-- [ ] 2.2 Add per-meeting Person/Organization recall scoring against AMI `PERSON`/`ORGANIZATION` ground truth, following the existing explained-vs-unexplained-absence shape. (spec: participant-coverage-probe, "Recall is reported per type")
-- [ ] 2.3 Add precision-side reporting: count of admitted Person/Organization objects unexplained by any ground-truth mention for that source, alongside recall. (spec: "Unexplained participant objects are counted")
-- [ ] 2.4 Add `--participants` CLI flag gating the new scoring/reporting path; ensure no per-type sensitivity value or branch is introduced anywhere in the report or measured path. (spec: "No Per-Type Sensitivity Behavior in Probe Scope")
-- [ ] 2.5 RED: Extend `_self_test()` with a two-meeting fixture that asserts the stub-flooding guard fires (re-admitted count vs. judge-selected count diverges as expected) before the scoring code exists.
-- [ ] 2.6 GREEN: Implement the flooding-guard computation/report row so `_self_test()` passes.
-- [ ] 2.7 Run `python evals/decision_extraction/scripts/run_type_coverage.py --self-test` and confirm pass (no live model call).
-- [ ] 2.8 Run `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` against AMI fixtures to produce the real measured baseline.
-- [ ] 2.9 Record the baseline in `evals/decision_extraction/report.md` following the existing recording convention for other types. (spec: "Recorded Baseline for Comparison")
-- [ ] 2.10 Read the recorded baseline back and confirm it is present and comparable by a subsequent run (spec scenario check).
+- [x] 2.1 In `evals/decision_extraction/scripts/run_type_coverage.py`, add `ExtractionReport` fields for per-run `Person`/`Organization` emitted counts, re-admitted-vs-judge-selected counts, and anchor-less-discard counts.
+- [x] 2.2 Add per-meeting Person/Organization recall scoring against AMI `PERSON`/`ORGANIZATION` ground truth, following the existing explained-vs-unexplained-absence shape. (spec: participant-coverage-probe, "Recall is reported per type")
+- [x] 2.3 Add precision-side reporting: count of admitted Person/Organization objects unexplained by any ground-truth mention for that source, alongside recall. (spec: "Unexplained participant objects are counted")
+- [x] 2.4 Add `--participants` CLI flag gating the new scoring/reporting path; ensure no per-type sensitivity value or branch is introduced anywhere in the report or measured path. (spec: "No Per-Type Sensitivity Behavior in Probe Scope")
+- [x] 2.5 RED: Extend `_self_test()` with a two-meeting fixture that asserts the stub-flooding guard fires (re-admitted count vs. judge-selected count diverges as expected) before the scoring code exists.
+- [x] 2.6 GREEN: Implement the flooding-guard computation/report row so `_self_test()` passes.
+- [x] 2.7 Run `python evals/decision_extraction/scripts/run_type_coverage.py --self-test` and confirm pass (no live model call).
+- [ ] 2.8 Run `python evals/decision_extraction/scripts/run_type_coverage.py --participants --runs <n>` against AMI fixtures to produce the real measured baseline. (OUT OF SCOPE for this apply batch — orchestrator runs the live measurement afterward)
+- [ ] 2.9 Record the baseline in `evals/decision_extraction/report.md` following the existing recording convention for other types. (spec: "Recorded Baseline for Comparison") (OUT OF SCOPE for this apply batch — depends on 2.8's real output)
+- [x] 2.10 Read the recorded baseline back and confirm it is present and comparable by a subsequent run (spec scenario check) — readback mechanism (`render_participant_baseline`/`read_participant_baseline`) implemented and round-trip-verified via `--self-test`; real-baseline readback pending 2.9.
 
 ## Phase 3: PR3 — Conditional Phase-2 Scoped Pass (D6, BLOCKED ON PR2 MEASUREMENT)
 
