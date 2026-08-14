@@ -257,3 +257,146 @@ now-active raise (`private` workspace floor -> `Person` born
 ### Status
 
 6/6 tasks complete for this slice (WU3: 6/6). Ready for next batch (WU4).
+
+---
+
+## Slice 3 — WU4 (this batch)
+
+Branch: `feat/669-s3-query-save-seam`, stacked on slice 1-2's merged code
+(`okf.raise_by`, `config.type_sensitivity_defaults`,
+`config.type_birth_sensitivity`, and the ingest birth seam all pre-existing
+on this branch, untouched by this slice). Slice 3 of the 5-WU plan in
+`tasks.md`.
+
+### Completed
+
+- **WU4** — wired `config.type_birth_sensitivity` into the `query --save`
+  birth seam (`_stage_filed_answer`, `src/openkos/cli/main.py`); added
+  `_FiledAnswerPlan.type_floor_raised`; replaced the two-way #569 preview
+  branch with the three-way branch from design D4 (type-default cause
+  outranks the citation cause; citation wording preserved byte-for-byte);
+  added the `!` confidential-consequence preview line (fires whenever the
+  resolved level is `confidential`, regardless of route); added the
+  spec-required success-message advisory immediately after the `filed
+  answer as ...` line, before `_autocommit`, gated on
+  `plan.type_floor_raised` (design D4).
+
+All tasks.md checkboxes for WU4 (items 1-5) are marked `[x]`.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| WU4.1-4 `--save` birth seam + preview + success advisory | `tests/unit/cli/test_query_save.py` | Unit | ✅ 61-8=53 pre-existing (module baseline before this slice, all green) | ✅ Written (`TypeError: _stage_filed_answer() got an unexpected keyword argument 'cfg'`; preview/success-message assertions failed on missing stdout text) | ✅ 8 new tests, 61/61 passed after GREEN | ✅ birth-seam raise, citation-hwm-wins, no-cfg-untouched, preview type-default branch, preview confidential-via-type-default, success-message ordering/wording, success-message-silent-when-nothing-raised, plus 1 extra assertion appended to the pre-existing #569 "raised" test proving the `!` line also fires on the citation-inherited route | ➖ None needed — mirrors WU3's `_echo_type_floor_summary` shape and the existing #569 preview branch exactly |
+
+### Test Summary
+
+- **Total tests written**: 8 new tests (3 unit-level `_stage_filed_answer`
+  birth-seam tests + 5 integration tests via `CliRunner`), plus 2
+  non-mutating assertions appended to 2 pre-existing #569 tests
+  (`test_query_save_preview_discloses_a_raised_sensitivity`,
+  `test_query_save_preview_stays_silent_at_the_default_sensitivity`) —
+  their original assertions are untouched, byte-identical
+- **Total tests passing**: 61/61 in `tests/unit/cli/test_query_save.py`
+  (53 pre-existing + 8 new); 4704 passed, 1 skipped in the FULL
+  `tests/unit/` suite, run twice (zero regressions repo-wide)
+- **Layers used**: Unit (3 direct `_stage_filed_answer` calls) + Integration
+  (5 `CliRunner`-driven `query --save` invocations)
+- **Approval tests**: None
+- **Twin-rule guard**: `test_stage_filed_answer_type_default_raises_above_the_floor`
+  is the `--save`-site half (WU3's `test_stage_derived_objects_births_person_above_the_floor`
+  is the ingest-site half) — it fails if `_stage_filed_answer`'s call site
+  alone reverts to `sensitivity=cited_high_water_mark`, independent of any
+  resolver-level test or the ingest-site test.
+
+### Work Unit Evidence
+
+| Evidence | WU4 |
+|---|---|
+| Focused test command and result | `python -m pytest tests/unit/cli/test_query_save.py -q` → 61/61 passed |
+| Runtime harness | Direct `_stage_filed_answer` calls for the 3 unit-level birth-seam tests (a hand-built `config.Config` via a new `_default_cfg` helper mirroring `test_ingest.py`'s); `CliRunner`-driven `query --save` invocations against a real `tmp_path` workspace with `openkos.cli.main.answer` monkeypatched, for the 5 integration tests — the same harness every other `--save` test in this file already uses |
+| Rollback boundary | Revert the `cli/main.py` diff (`_FiledAnswerPlan.type_floor_raised` field, the `cfg` param + `config.type_birth_sensitivity` call in `_stage_filed_answer`, the `cfg=cfg` argument at the call site, the three-way preview branch + `!` line, the success-message advisory block) + the one touched test file; slices 1-2's config/ingest seams (prior, already-merged) are untouched and need no reverting |
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `src/openkos/cli/main.py` | Modified | `_FiledAnswerPlan.type_floor_raised` field; `_stage_filed_answer` gained a `cfg: config.Config \| None = None` kwarg (default `None` keeps the pre-#669 shape for the 15+ existing direct-call unit tests that pass no `cfg`) and now calls `config.type_birth_sensitivity` when `cfg` is given, before `okf.build_concept`; the `query --save` call site passes `cfg=cfg`; the #569 two-way preview branch became a three-way branch (type-default / citation-inherited / unaffected) plus the `!` confidential-consequence line; a new success-message advisory block fires after `filed answer as ...`, gated on `plan.type_floor_raised` |
+| `tests/unit/cli/test_query_save.py` | Modified | Added `config` import, a `_default_cfg` helper (mirrors `test_ingest.py::_default_cfg`), 3 new unit-level `_stage_filed_answer` tests (birth-seam raise, citation-hwm-wins, no-cfg-untouched), 5 new integration tests (preview type-default branch, preview confidential-via-type-default, success-message ordering/wording, success-message-silent-when-nothing-raised — plus the twin-rule birth-seam test lives in the unit section), and 2 additive (non-mutating) assertions appended to the pre-existing #569 preview tests |
+| `openspec/changes/per-type-default-sensitivity/tasks.md` | Modified | WU4 (5) checkboxes marked `[x]` |
+
+### Deviations from Design
+
+1. **`_stage_filed_answer` gained `cfg: config.Config \| None = None`
+   (nullable, defaulted), not a required `cfg: config.Config` like WU3's
+   `_stage_derived_objects`.** WU3's ingest-seam function is called ONLY
+   from `ingest`/`_ingest_batch`, both of which always hold a real `cfg`,
+   so a required kwarg cost nothing there. `_stage_filed_answer` is
+   exercised directly by 15+ pre-existing unit tests in
+   `test_query_save.py` that construct no `Config` at all (they test
+   title/description/slug/citation-fold logic, orthogonal to #669). Making
+   `cfg` required would have forced updating every one of those call sites
+   with an unrelated fixture, which the design's stated goal ("keep the
+   existing #569 citation wording byte-identical... tests... must stay
+   green") argues against doing gratuitously. `cfg=None` is defined as
+   exactly the pre-#669 behavior (the high-water-mark alone, no type
+   default applied) — behaviorally identical to what those 15+ tests
+   already assumed, so none of them needed touching. The one real call
+   site (`query`'s `--save` block) always passes the real `cfg`.
+2. **The `!` confidential-consequence preview line did not previously
+   exist in shipped code** (design's markdown draft shows it as already
+   present at `main.py:13443-13457`, but the pre-slice code had only the
+   two-way `sensitivity: ...`/no-annotation branch, no `!` line at all —
+   confirmed by reading the pre-slice source before editing). This slice
+   adds the `!` line fresh, per design D4's explicit instruction ("The `!`
+   line prints whenever the resolved level is `confidential`, by either
+   route"), rather than modifying a pre-existing line. No test asserted
+   its prior absence as a requirement, so this is additive, not a
+   behavior change to an existing assertion.
+3. No other deviation — the birth-seam formula call
+   (`config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)`),
+   the three-way preview branch precedence (type-default outranks
+   citation-inherited), and the success-message wording (singular "1
+   concept", `{type} -> {level}`, #569 consequence line gated on
+   `confidential`, silent when nothing raised) match design D3/D4 exactly.
+
+### Issues Found
+
+None. The two pre-existing #569 preview tests
+(`test_query_save_preview_discloses_a_raised_sensitivity` at line ~1318,
+`test_query_save_preview_stays_silent_at_the_default_sensitivity` at line
+~1348 in the task brief's stale line numbers) stayed green with their
+original assertions completely unmodified, confirming the citation
+wording is byte-identical post-slice.
+
+### Remaining Tasks (later slices, NOT this batch)
+
+- [ ] WU5 — ADR-0015 + docs
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`delivery_strategy: auto-chain`,
+  `chain_strategy: stacked-to-main`)
+- Current work unit: WU4 (slice 3 of the stack)
+- Boundary: starts from `feat/669-s3-query-save-seam` (slices 1-2's merged
+  code already present); ends with the `query --save` birth seam wired,
+  previewed, and advised, tested, and typed/linted clean. The ADR and docs
+  (WU5) are untouched — next slice's scope.
+- `git diff --stat` (excluding `apply-progress.md`) = 3 files: `tasks.md`
+  (+5/-5 checkbox flips), `src/openkos/cli/main.py` (+77/-9),
+  `tests/unit/cli/test_query_save.py` (+253/-1) → 335 insertions(+), 15
+  deletions(-) total — comfortably under the 400-line individual-WU budget
+  and under the ~285-line WU4 estimate on the code+test axis (the
+  tasks.md checkbox churn and doc/comment lines are the only
+  non-strictly-functional contributors).
+- Full verification: `python -m pytest tests/unit/cli/test_query_save.py -q`
+  → 61/61 passed; `python -m pytest tests/unit/` → 4704 passed, 1 skipped
+  (run twice, identical result both times); `python -m mypy src/` →
+  Success, no issues in 63 source files; `python -m ruff check src/
+  tests/` → All checks passed; `python -m ruff format src/ tests/` → 1
+  file reformatted (`test_query_save.py`, wrapping only, re-verified green
+  after).
+
+### Status
+
+5/5 tasks complete for this slice (WU4: 5/5). Ready for next batch (WU5).
