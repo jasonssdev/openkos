@@ -550,6 +550,26 @@ def sensitivity_direction(
     return "lower"
 
 
+def raise_by(level: object, offset: int) -> str:
+    """Raise `level` by `offset` steps in `SENSITIVITY_ORDER`, clamped at the
+    ceiling (`confidential`).
+
+    Pure, stdlib-only, reuses `_rank`'s fail-closed ranking, so a missing,
+    blank, non-string, or unrecognized `level` still resolves to a
+    canonical member before the offset is applied. Clamps rather than
+    raising on overflow: the offset is operator-configured against a
+    workspace floor that may already be `confidential`, and that must not
+    make every birth fail. A negative `offset` raises `ValueError`: a
+    helper named `raise_by` that could LOWER a security level is a
+    downgrade vector, and config-load validation (design D1) already
+    refuses a negative offset earlier -- this is defence in depth at the
+    pure layer (design D2).
+    """
+    if offset < 0:
+        raise ValueError(f"raise_by: offset must be non-negative, got {offset!r}")
+    return SENSITIVITY_ORDER[min(_rank(level) + offset, len(SENSITIVITY_ORDER) - 1)]
+
+
 def combine_sensitivity(a: object, b: object) -> str:
     """Combine two sensitivity values into the more restrictive (max-rank)
     of the two, per ADR-0003's high-water-mark rule.

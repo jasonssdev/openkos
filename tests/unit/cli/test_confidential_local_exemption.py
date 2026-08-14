@@ -157,6 +157,7 @@ def _cfg(exemption: bool) -> config.Config:
         type_tiers={},
         models={},
         union_judge=config.DEFAULT_UNION_JUDGE,
+        type_sensitivity_defaults=dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
     )
 
 

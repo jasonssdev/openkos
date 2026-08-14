@@ -11,12 +11,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 import yaml
 
 from openkos import fsio
-from openkos.model import types
+from openkos.model import okf, types
 
 DEFAULT_MODEL = "qwen3:8b"
 """The packaged default Ollama model tag, offered when no `--model` is given."""
@@ -94,6 +94,13 @@ DEFAULT_REVIEW = True
 
 DEFAULT_SENSITIVITY = "private"
 """Packaged default for `default_sensitivity`, matching `openkos.yaml.template`."""
+
+DEFAULT_TYPE_SENSITIVITY_DEFAULTS: Final[dict[str, int]] = {"Person": 1}
+"""Packaged default for `type_sensitivity_defaults` (issue #669, ADR-0015):
+`Person` concepts are born one level above the workspace `default_sensitivity`
+floor. `read_config` always returns a COPY of this dict, never the shared
+module object -- a caller mutating the returned mapping must not corrupt the
+packaged default for the next `read_config` call."""
 
 DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION = True
 """Packaged default for `confidential_local_exemption` (issue #240): a
@@ -695,6 +702,17 @@ class Config:
     value explicitly to `_stage_derived_objects`'s `union_judge` kwarg
     rather than defaulting it there, so the product-ON default lives in
     exactly ONE place."""
+    type_sensitivity_defaults: dict[str, int]
+    """Per-OKF-type sensitivity offset above `default_sensitivity` (issue
+    #669, ADR-0015): `DEFAULT_TYPE_SENSITIVITY_DEFAULTS` (`{"Person": 1}`,
+    a copy) when the key is absent from `openkos.yaml` or explicitly null;
+    an explicit `{}` is the total opt-out, applying no per-type offset to
+    any type. Unlike `volatility_windows`/`type_tiers`'s lazy passthrough,
+    entries ARE validated eagerly at `read_config` time (see below),
+    mirroring `models:`'s precedent: a silently-wrong SECURITY default
+    produces a run that looks completely ordinary.
+
+    Consumed by `type_birth_sensitivity`, never by `read_config` itself."""
 
 
 def read_config(root: Path) -> Config:
@@ -738,6 +756,7 @@ def read_config(root: Path) -> Config:
     type_tiers = raw.get("type_tiers")
     models = raw.get("models")
     union_judge = raw.get("union_judge")
+    type_sensitivity_defaults = raw.get("type_sensitivity_defaults")
     if model is not None and not isinstance(model, str):
         raise ValueError(
             f"{layout.config_path.name}: 'model' must be a string, got "
@@ -855,6 +874,50 @@ def read_config(root: Path) -> Config:
             f"{layout.config_path.name}: 'union_judge' must be a boolean, got "
             f"{type(union_judge).__name__}"
         )
+    if type_sensitivity_defaults is not None:
+        # Validated entry by entry, eagerly, mirroring `models:`'s own
+        # precedent (issue #515) rather than `volatility_windows`/
+        # `type_tiers`'s lazy passthrough (design D1): a wrong freshness
+        # window shows up as a stale stamp the operator can re-lint, a wrong
+        # SECURITY default does not -- the run completes, the documents look
+        # ordinary, and concepts are born at a level nobody chose.
+        if not isinstance(type_sensitivity_defaults, dict):
+            raise ValueError(
+                f"{layout.config_path.name}: 'type_sensitivity_defaults' must be "
+                f"a mapping of type -> offset, got "
+                f"{type(type_sensitivity_defaults).__name__}"
+            )
+        for doc_type, offset in type_sensitivity_defaults.items():
+            if doc_type not in types.BUILDABLE_TYPES:
+                # `BUILDABLE_TYPES`, not `CLASSIFIABLE_TYPES`: the wider set
+                # `_stage_filed_answer` accepts (`Insight`), and it refuses
+                # `Source` for free -- `Source` is not buildable, so "Sources
+                # are never type-defaulted" is enforced by the type domain
+                # itself, not by a comment (design D1).
+                raise ValueError(
+                    f"{layout.config_path.name}: 'type_sensitivity_defaults' names "
+                    f"unrecognized type {doc_type!r}"
+                )
+            if (
+                isinstance(offset, bool)
+                or not isinstance(offset, int)
+                or not (0 <= offset <= len(okf.SENSITIVITY_ORDER) - 1)
+            ):
+                # `bool` excluded FIRST and explicitly, mirroring
+                # `chat_timeout`/`confidential_local_exemption`'s own guards:
+                # without it, `Person: true` would resolve to offset `1` by
+                # Python's numeric tower. `0 <= offset <= len(...) - 1`:
+                # `offset == 0` is the legal, inert "no raise for this type"
+                # spelling; `offset >= len(SENSITIVITY_ORDER)` is unreachable
+                # at every possible floor -- indistinguishable from the
+                # ceiling offset, so it is a typo, not a policy, and must
+                # fail loudly (design D1).
+                raise ValueError(
+                    f"{layout.config_path.name}: "
+                    f"'type_sensitivity_defaults.{doc_type}' must be an integer "
+                    f"offset between 0 and {len(okf.SENSITIVITY_ORDER) - 1}, "
+                    f"got {offset!r}"
+                )
     return Config(
         model=model if model is not None else DEFAULT_MODEL,
         review=review if review is not None else DEFAULT_REVIEW,
@@ -893,6 +956,11 @@ def read_config(root: Path) -> Config:
         type_tiers=(type_tiers if type_tiers is not None else {}),
         models=(models if models is not None else {}),
         union_judge=(union_judge if union_judge is not None else DEFAULT_UNION_JUDGE),
+        type_sensitivity_defaults=(
+            type_sensitivity_defaults
+            if type_sensitivity_defaults is not None
+            else dict(DEFAULT_TYPE_SENSITIVITY_DEFAULTS)
+        ),
     )
 
 
@@ -956,6 +1024,35 @@ def resolve_task_model(cfg: Config, task: str | None) -> str:
     if isinstance(packaged, str) and packaged.strip():
         return packaged.strip()
     return cfg.model
+
+
+def type_birth_sensitivity(cfg: Config, doc_type: str, base: object) -> str:
+    """Return the birth-time sensitivity for a concept of `doc_type` given
+    `base`, the sensitivity it would otherwise be born at (issue #669,
+    ADR-0015, design D3).
+
+    `base` is the Source's resolved `stamp_sensitivity` on the ingest path,
+    or the cited-concept high-water-mark on the `query --save` path -- this
+    function does not care which, it only needs the value. When `doc_type`
+    is present in `cfg.type_sensitivity_defaults`, the result is
+    `combine_sensitivity(base, raise_by(cfg.default_sensitivity, offset))`:
+    the offset is applied to the CONFIG FLOOR, never to `base` directly, so
+    a `base` already above the floor-plus-offset still wins via the
+    high-water-mark -- the type default can only raise, never lower or
+    override an already-higher inherited value. When `doc_type` has no
+    entry, `base` is returned canonicalized unchanged (folded through
+    `combine_sensitivity(base, base)`, which is `_rank`'s own fail-closed
+    canonicalization, not a verbatim passthrough of a possibly-dirty value).
+
+    Both `build_concept` birth seams (`_stage_derived_objects`,
+    `_stage_filed_answer`) call this with the base appropriate to their own
+    seam, and MUST produce identical output for identical inputs -- the
+    formula lives here exactly once so that identity holds by construction.
+    """
+    offset = cfg.type_sensitivity_defaults.get(doc_type)
+    if offset is None:
+        return okf.combine_sensitivity(base, base)
+    return okf.combine_sensitivity(base, okf.raise_by(cfg.default_sensitivity, offset))
 
 
 _TYPE_TIERS_HEADER_PREFIX = "type_tiers:"

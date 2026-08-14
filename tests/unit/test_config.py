@@ -1942,6 +1942,7 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
         type_tiers={},
         models=None,  # type: ignore[arg-type]
         union_judge=True,
+        type_sensitivity_defaults={},
     )
 
     # A non-mapping `models` cannot express an opt-out, so an unreachable
@@ -2066,3 +2067,249 @@ def test_a_blank_model_value_is_still_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match=r"'models.edge_typing' must not be blank"):
         config.read_config(tmp_path)
+
+
+# --- type_sensitivity_defaults: floor-relative per-type offsets (#669) ------
+
+
+def test_read_config_type_sensitivity_defaults_absent_uses_shipped_default(
+    tmp_path: Path,
+) -> None:
+    """A `type_sensitivity_defaults` field absent from `openkos.yaml` falls
+    back to the packaged `{"Person": 1}` default (spec: Per-Type Offset
+    Config Shape, absent-field scenario)."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.type_sensitivity_defaults == {"Person": 1}
+
+
+def test_read_config_type_sensitivity_defaults_explicit_null_uses_shipped_default(
+    tmp_path: Path,
+) -> None:
+    """An explicit YAML null behaves exactly like absence, mirroring every
+    other field's `is not None` fallback."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults: null\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.type_sensitivity_defaults == {"Person": 1}
+
+
+def test_read_config_type_sensitivity_defaults_returns_a_copy_not_the_module_constant(
+    tmp_path: Path,
+) -> None:
+    """The returned dict is a COPY of `DEFAULT_TYPE_SENSITIVITY_DEFAULTS`,
+    never the shared module object -- mutating the result must not corrupt
+    the packaged default for the next `read_config` call."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+    result.type_sensitivity_defaults["Organization"] = 2
+
+    assert config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS == {"Person": 1}
+
+
+def test_read_config_type_sensitivity_defaults_explicit_empty_map_is_total_opt_out(
+    tmp_path: Path,
+) -> None:
+    """An explicit `{}` is the opt-out: no per-type offset applies to any
+    type (spec: Explicit empty mapping opts out of every type default)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults: {}\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.type_sensitivity_defaults == {}
+
+
+def test_read_config_type_sensitivity_defaults_offset_zero_loads_and_is_inert(
+    tmp_path: Path,
+) -> None:
+    """`offset: 0` is a legal, inert entry: the explicit "no raise for this
+    type" spelling (design D1)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  Person: 0\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.type_sensitivity_defaults == {"Person": 0}
+
+
+def test_read_config_type_sensitivity_defaults_offset_two_loads(
+    tmp_path: Path,
+) -> None:
+    """`offset: 2` is legal -- it clamps from `private` but is meaningfully
+    different from a `public` floor (design D1)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  Person: 2\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.type_sensitivity_defaults == {"Person": 2}
+
+
+def test_read_config_rejects_non_mapping_type_sensitivity_defaults(
+    tmp_path: Path,
+) -> None:
+    """A non-mapping value is refused outright, mirroring `models`'s own
+    type guard."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults: Person\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match=r"'type_sensitivity_defaults' must be a mapping"
+    ):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_unknown_type_sensitivity_defaults_key(
+    tmp_path: Path,
+) -> None:
+    """A key outside `BUILDABLE_TYPES` fails config load and the message
+    names the unrecognized key (spec: Unknown type key fails config load)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  NotAType: 1\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"unrecognized type 'NotAType'"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_source_as_a_type_sensitivity_defaults_key(
+    tmp_path: Path,
+) -> None:
+    """`Source` is explicitly refused: it is not in `BUILDABLE_TYPES`, so
+    the non-goal "Sources are never type-defaulted" is enforced by the type
+    domain itself (design D1, spec: Sources Are Never Type-Defaulted)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  Source: 1\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"unrecognized type 'Source'"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_a_non_int_type_sensitivity_defaults_value(
+    tmp_path: Path,
+) -> None:
+    """A non-int value fails config load with a clear error naming the
+    offending type and value."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  Person: private\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match=r"'type_sensitivity_defaults.Person' must be an integer"
+    ):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_a_bool_type_sensitivity_defaults_value(
+    tmp_path: Path,
+) -> None:
+    """A `bool` value is refused, checked BEFORE the numeric-tower coercion:
+    without this, `Person: true` would silently resolve to offset `1`
+    (design D1)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  Person: true\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError, match=r"'type_sensitivity_defaults.Person' must be an integer"
+    ):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_a_negative_type_sensitivity_defaults_offset(
+    tmp_path: Path,
+) -> None:
+    """A negative offset is refused (spec: Out-of-range offset fails config
+    load)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  Person: -1\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"'type_sensitivity_defaults.Person' must be"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_a_type_sensitivity_defaults_offset_of_three(
+    tmp_path: Path,
+) -> None:
+    """`offset: 3` is unreachable at every possible floor -- refused as a
+    typo, not a policy (design D1)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  Person: 3\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"'type_sensitivity_defaults.Person' must be"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_type_sensitivity_defaults_malformed_entry_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """One malformed entry fails the whole load; it does not discard only
+    the malformed entry or substitute the shipped default for it (spec: A
+    malformed entry does not silently default)."""
+    (tmp_path / "openkos.yaml").write_text(
+        "type_sensitivity_defaults:\n  Person: 1\n  NotAType: 1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"unrecognized type 'NotAType'"):
+        config.read_config(tmp_path)
+
+
+class TestTypeBirthSensitivity:
+    """`config.type_birth_sensitivity(cfg, doc_type, base)` (design D3)."""
+
+    def _cfg(self, tmp_path: Path, yaml_text: str) -> Any:
+        (tmp_path / "openkos.yaml").write_text(yaml_text, encoding="utf-8")
+        return config.read_config(tmp_path)
+
+    def test_public_floor_raises_person_to_private(self, tmp_path: Path) -> None:
+        cfg = self._cfg(tmp_path, "default_sensitivity: public\n")
+
+        assert config.type_birth_sensitivity(cfg, "Person", "public") == "private"
+
+    def test_private_floor_raises_person_to_confidential(self, tmp_path: Path) -> None:
+        cfg = self._cfg(tmp_path, "default_sensitivity: private\n")
+
+        assert config.type_birth_sensitivity(cfg, "Person", "private") == "confidential"
+
+    def test_confidential_floor_stays_confidential(self, tmp_path: Path) -> None:
+        cfg = self._cfg(tmp_path, "default_sensitivity: confidential\n")
+
+        assert (
+            config.type_birth_sensitivity(cfg, "Person", "confidential")
+            == "confidential"
+        )
+
+    def test_base_already_above_floor_plus_offset_wins(self, tmp_path: Path) -> None:
+        """A Source resolved at `confidential` still wins over the
+        type-defaulted `private` on a `public` floor -- the high-water-mark
+        is preserved."""
+        cfg = self._cfg(tmp_path, "default_sensitivity: public\n")
+
+        assert (
+            config.type_birth_sensitivity(cfg, "Person", "confidential")
+            == "confidential"
+        )
+
+    def test_unmapped_doc_type_returns_base_canonicalized_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        """A `doc_type` absent from the mapping (e.g. `Organization`, absent
+        from the shipped `{"Person": 1}`) returns `base` unaffected."""
+        cfg = self._cfg(tmp_path, "default_sensitivity: public\n")
+
+        assert config.type_birth_sensitivity(cfg, "Organization", "public") == "public"
