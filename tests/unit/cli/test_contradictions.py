@@ -1661,9 +1661,28 @@ def test_contradictions_partial_batch_reports_completed_then_exits_one(
     assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
     assert "kept work" in result.stdout
     assert result.stderr == (
-        "openkos contradictions: failed after judging 1 of 2 candidate(s) -- boom.\n"
+        "openkos contradictions: failed after judging 1 of 2 planned "
+        "candidate(s) -- boom.\n"
     )
     assert "Traceback" not in result.stderr
+
+
+def test_contradictions_partial_batch_serve_line_reports_actual_judged_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#685 item 6: the serve/judge split line describes what actually
+    HAPPENED, not the plan -- a mid-batch failure that judged 1 of 2 must
+    print '1 judged fresh', never the planned 2, or the stdout report
+    overstates the model spend the stderr epilogue then contradicts."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_candidate_partial_batch(monkeypatch, OllamaError("boom"))
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 1
+    assert "0 of 2 candidate(s) served from persisted findings" in result.stdout
+    assert "1 judged fresh." in result.stdout
+    assert "2 judged fresh." not in result.stdout
 
 
 def test_contradictions_partial_batch_unavailable_keeps_remediation_and_counts(
@@ -1746,7 +1765,8 @@ def test_contradictions_first_candidate_failure_keeps_failure_over_zero_state(
     assert "The graph has no typed edges yet." not in result.stdout
     assert "Candidate relations unavailable" not in result.stdout
     assert result.stderr == (
-        "openkos contradictions: failed after judging 0 of 1 candidate(s) -- boom.\n"
+        "openkos contradictions: failed after judging 0 of 1 planned "
+        "candidate(s) -- boom.\n"
     )
 
 

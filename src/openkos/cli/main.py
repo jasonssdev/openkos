@@ -1740,14 +1740,15 @@ def _echo_contradictions_batch_failure(
     how much paid-for work survived (mirrors
     `_echo_adjudicate_batch_failure`). `total` is `plan.llm_calls` -- the
     judged-candidate budget the verb already holds, so the count needs no
-    second planning pass. The `isinstance` dispatch mirrors the handlers'
+    second planning pass; the line says "planned" (#685 item 6) so the
+    denominator reads as the plan and never overstates what was sent. The `isinstance` dispatch mirrors the handlers'
     ORDER for the same reason they are ordered: both specific classes
     subclass `OllamaError`, so the generic branch must come last or their
     actionable remediation is lost."""
     failure = batch.failure
     context = (
         f"openkos contradictions: failed after judging {len(batch.results)} "
-        f"of {total} candidate(s)"
+        f"of {total} planned candidate(s)"
     )
     if isinstance(failure, OllamaUnavailable):
         typer.echo(
@@ -12622,10 +12623,14 @@ def contradictions(
         typer.echo(f"openkos contradictions: workspace at {root}")
         typer.echo()
         if not fresh and plan.specs:
+            # #685 item 6: the judged-fresh count is what actually HAPPENED
+            # (`batch.results`), never the planned `judged_plan.specs` -- on
+            # a partial batch the two differ, and printing the plan here
+            # overstated the spend the stderr epilogue then contradicted.
             typer.echo(
                 f"{len(served_by_key)} of {len(plan.specs)} candidate(s) "
                 "served from persisted findings; "
-                f"{len(judged_plan.specs)} judged fresh."
+                f"{len(fresh_verdicts)} judged fresh."
             )
             typer.echo()
         # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
