@@ -236,7 +236,20 @@ def delete_findings_referencing(
     )
     conn.commit()
     conn.execute("VACUUM")
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    # SQLite reports a blocked checkpoint through the returned row's `busy`
+    # column, never an exception (review lineage review-66cd062e562f43bb,
+    # R4): a concurrent reader pinning the WAL would otherwise leave the
+    # deleted claims' plaintext in un-truncated frames while this sweep
+    # reports success. Raising turns that silent residue into the caller's
+    # fail-loud warning path.
+    busy, _wal_frames, _checkpointed = conn.execute(
+        "PRAGMA wal_checkpoint(TRUNCATE)"
+    ).fetchone()
+    if busy:
+        raise sqlite3.OperationalError(
+            "wal checkpoint busy: a concurrent reader held the WAL open, so "
+            "deleted finding bytes may remain in it"
+        )
     return len(doomed)
 
 

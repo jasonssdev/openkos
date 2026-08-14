@@ -832,9 +832,14 @@ def _sweep_findings_for_ids(
     remedy rather than aborting a forget whose bundle writes already
     landed -- a privacy scrub that fails silently would be worse than one
     that fails out loud, and `findings.db` is recomputable derived state."""
-    if not layout.findings_db_path.exists():
-        return
+    # The existence probe sits INSIDE the guard (review lineage
+    # review-66cd062e562f43bb, R3): `Path.exists()` suppresses only
+    # ENOENT/ENOTDIR/EBADF/ELOOP and re-raises the rest, so an EACCES on
+    # `.openkos/` would otherwise escape into forget's outer handler and
+    # mis-report bundle deletes that already landed.
     try:
+        if not layout.findings_db_path.exists():
+            return
         conn = derived.open_derived_connection(layout.findings_db_path)
         try:
             findings.delete_findings_referencing(conn, set(purge_ids))

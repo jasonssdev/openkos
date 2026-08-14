@@ -335,3 +335,32 @@ def test_delete_findings_referencing_tolerates_a_pre_findings_store(
     """A store with no `findings` table yet answers 0 rather than raising
     -- the same absent-table posture `open_findings` takes."""
     assert findings.delete_findings_referencing(conn, {"concepts/target"}) == 0
+
+
+def test_delete_findings_referencing_raises_when_wal_checkpoint_is_busy(
+    tmp_path: Path,
+) -> None:
+    """Review correction (lineage review-66cd062e562f43bb, R4): SQLite
+    reports a blocked `wal_checkpoint(TRUNCATE)` through the returned
+    `busy` column, never an exception -- ignoring it would let deleted
+    claim plaintext survive in un-truncated WAL frames while the sweep
+    reports success. A busy checkpoint must raise so the caller's
+    fail-loud warning path fires."""
+    db_path = tmp_path / ".openkos" / "findings.db"
+    conn = derived.open_derived_connection(db_path)
+    reader = derived.open_derived_connection(db_path)
+    try:
+        findings.record_findings(
+            conn,
+            [_referencing_finding(pair_ids=("concepts/target", "concepts/b"))],
+        )
+        # A concurrent read transaction pins the WAL: TRUNCATE cannot
+        # complete and reports busy=1 in its result row.
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM findings").fetchall()
+
+        with pytest.raises(sqlite3.OperationalError, match="checkpoint"):
+            findings.delete_findings_referencing(conn, {"concepts/target"})
+    finally:
+        reader.close()
+        conn.close()

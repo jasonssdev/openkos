@@ -2492,3 +2492,30 @@ def test_forget_without_a_findings_store_creates_none(
 
     assert result.exit_code == 0, result.output
     assert not (tmp_path / ".openkos" / "findings.db").exists()
+
+
+def test_forget_findings_sweep_unreadable_store_warns_and_does_not_abort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review correction (lineage review-66cd062e562f43bb, R3): the spec
+    promises the UNREADABLE store degrades exactly like the corrupt one.
+    `pathlib.Path.exists()` re-raises EACCES-class errors (only
+    ENOENT/ENOTDIR/EBADF/ELOOP are suppressed), so a permission-denied
+    `.openkos/` must surface as the sweep's own stderr warning -- never as
+    forget's 'failed while writing' abort after the bundle deletes already
+    landed."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_plain_concept(tmp_path, "concepts/target", title="Target")
+    openkos_dir = tmp_path / ".openkos"
+    openkos_dir.mkdir(exist_ok=True)
+    (openkos_dir / "findings.db").write_bytes(b"placeholder")
+    openkos_dir.chmod(0o000)
+    try:
+        result = runner.invoke(app, ["forget", "concepts/target", "--auto"])
+    finally:
+        openkos_dir.chmod(0o700)
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "bundle" / "concepts" / "target.md").exists()
+    assert "failed to sweep persisted findings" in result.stderr
+    assert "failed while writing the forget" not in result.stderr
