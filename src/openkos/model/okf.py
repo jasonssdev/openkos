@@ -76,6 +76,19 @@ test_build_merged_document_body_layout_is_pinned` pins the rendered layout
 against its own literal, so a change here still fails loudly there rather
 than silently altering merged documents."""
 
+
+def merged_content_heading(absorbed_id: str) -> str:
+    """The complete `\\n\\n## Merged content (<absorbed_id>)` heading for one
+    absorbed id -- the one spelling of the probe string every consumer must
+    agree on byte-for-byte (#685): `build_merged_document` WRITES it (plus a
+    trailing blank line), `bundle.merge.plan_merge`'s carried-content
+    annotation and the forget sweep's structural excision both FIND it. Each
+    site previously assembled `f"{MERGED_CONTENT_HEADING_PREFIX}{id})"` by
+    hand; a one-character drift there was a silent scrub or annotation
+    miss."""
+    return f"{MERGED_CONTENT_HEADING_PREFIX}{absorbed_id})"
+
+
 TYPE_ALTERNATIVE_KEY: Final = "type_alternative"
 """The optional frontmatter key a derived object carries WHEN the model
 reported a runner-up type it also weighed (issue #401); ABSENT otherwise --
@@ -1272,7 +1285,7 @@ def build_merged_document(
     else:
         merged.pop(RELATIONS_KEY, None)
 
-    separator = f"{MERGED_CONTENT_HEADING_PREFIX}{absorbed_id})\n\n"
+    separator = f"{merged_content_heading(absorbed_id)}\n\n"
     merged_body = survivor_body.rstrip("\n") + separator + absorbed_body
     if not merged_body.endswith("\n"):
         merged_body += "\n"

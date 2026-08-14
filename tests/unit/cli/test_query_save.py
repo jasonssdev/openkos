@@ -141,6 +141,7 @@ def test_stage_filed_answer_provenance_equals_cited_ids(tmp_path: Path) -> None:
         bundle_dir=bundle_dir,
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert "provenance:\n- concepts/stoicism\n- concepts/epictetus\n" in plan.content
@@ -165,6 +166,7 @@ def test_stage_filed_answer_title_description_default_to_question(
         bundle_dir=bundle_dir,
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert plan.title == "Stoicism"
@@ -189,6 +191,7 @@ def test_stage_filed_answer_title_description_overrides_apply(
         timestamp="2026-07-23T00:00:00Z",
         title="Stoicism, briefly",
         description="A short primer.",
+        cfg=_default_cfg(),
     )
 
     assert plan.title == "Stoicism, briefly"
@@ -211,6 +214,7 @@ def test_stage_filed_answer_type_override_validated(tmp_path: Path) -> None:
             default_sensitivity="private",
             timestamp="2026-07-23T00:00:00Z",
             doc_type="NotAType",
+            cfg=_default_cfg(),
         )
 
 
@@ -228,6 +232,7 @@ def test_stage_filed_answer_valid_type_override_applies(tmp_path: Path) -> None:
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
         doc_type="Procedure",
+        cfg=_default_cfg(),
     )
 
     assert plan.link_dir == "procedures"
@@ -248,6 +253,7 @@ def test_stage_filed_answer_zero_citations_raises(tmp_path: Path) -> None:
             bundle_dir=bundle_dir,
             default_sensitivity="private",
             timestamp="2026-07-23T00:00:00Z",
+            cfg=_default_cfg(),
         )
 
 
@@ -268,6 +274,7 @@ def test_stage_filed_answer_empty_slug_raises(tmp_path: Path) -> None:
             default_sensitivity="private",
             timestamp="2026-07-23T00:00:00Z",
             title="???",
+            cfg=_default_cfg(),
         )
 
 
@@ -289,6 +296,7 @@ def test_stage_filed_answer_collision_raises(tmp_path: Path) -> None:
             bundle_dir=bundle_dir,
             default_sensitivity="private",
             timestamp="2026-07-23T00:00:00Z",
+            cfg=_default_cfg(),
         )
 
 
@@ -310,6 +318,7 @@ def test_stage_filed_answer_missing_citation_folds_confidential(
         bundle_dir=bundle_dir,
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert plan.sensitivity == "confidential"
@@ -367,6 +376,7 @@ def test_stage_filed_answer_sensitivity_survives_a_decomposed_citation_filename(
         bundle_dir=bundle_dir,
         default_sensitivity="public",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert plan.sensitivity == "private"
@@ -396,6 +406,7 @@ def test_stage_filed_answer_malformed_frontmatter_folds_confidential(
         bundle_dir=bundle_dir,
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert plan.sensitivity == "confidential"
@@ -419,6 +430,7 @@ def test_stage_filed_answer_all_readable_private_stays_private(
         bundle_dir=bundle_dir,
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert plan.sensitivity == "private"
@@ -442,6 +454,7 @@ def test_stage_filed_answer_confidential_citation_is_high_water_mark(
         bundle_dir=bundle_dir,
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert plan.sensitivity == "confidential"
@@ -514,12 +527,25 @@ def test_stage_filed_answer_citation_high_water_mark_wins_over_type_default(
     assert plan.type_floor_raised is False
 
 
-def test_stage_filed_answer_no_cfg_is_untouched_by_the_type_default(
+def test_stage_filed_answer_cfg_is_required(tmp_path: Path) -> None:
+    """#685 item 2: `cfg` has no default -- the pre-#669 `cfg=None` shape
+    silently skipped the type-default security raise for any future caller
+    that forgot the parameter. Requiring it turns that silent policy hole
+    into a `TypeError` at the call site (and mypy at review time)."""
+    import inspect
+
+    param = inspect.signature(_stage_filed_answer).parameters["cfg"]
+
+    assert param.default is inspect.Parameter.empty
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_stage_filed_answer_empty_mapping_is_untouched_by_the_type_default(
     tmp_path: Path,
 ) -> None:
-    """Callers that pass no `cfg` (the pre-#669 shape) get exactly the
-    pre-#669 behavior -- `cited_high_water_mark` alone, no type-default
-    raise applied."""
+    """An empty `type_sensitivity_defaults` mapping is the supported
+    opt-out (#685 item 2 retired the `cfg=None` shape): the
+    cited high-water-mark alone decides, no type-default raise applied."""
     bundle_dir = tmp_path / "bundle"
     _write_concept(bundle_dir, "concepts", "stoicism", sensitivity="public")
     citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
@@ -532,6 +558,7 @@ def test_stage_filed_answer_no_cfg_is_untouched_by_the_type_default(
         default_sensitivity="public",
         timestamp="2026-07-23T00:00:00Z",
         doc_type="Person",
+        cfg=_default_cfg(type_sensitivity_defaults={}),
     )
 
     assert plan.sensitivity == "public"
@@ -1673,6 +1700,7 @@ def test_stage_filed_answer_uses_the_subject_when_the_sentence_is_unusable(
         bundle_dir=bundle_dir,
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert plan.title == "Model Context Protocol"
@@ -1697,6 +1725,7 @@ def test_stage_filed_answer_defaults_to_insight_with_declarative_title(
         bundle_dir=bundle_dir,
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
+        cfg=_default_cfg(),
     )
 
     assert plan.title == "Stoicism teaches the dichotomy of control"
@@ -1727,6 +1756,7 @@ def test_stage_filed_answer_classifiable_type_override_still_accepted(
         default_sensitivity="private",
         timestamp="2026-07-23T00:00:00Z",
         doc_type="Concept",
+        cfg=_default_cfg(),
     )
 
     assert plan.link_dir == "concepts"

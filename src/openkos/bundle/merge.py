@@ -72,6 +72,21 @@ def _reject_same_or_blank(survivor_id: str, absorbed_id: str) -> None:
         )
 
 
+def _absorbed_snapshot_has_content(absorbed_snapshot: str) -> bool:
+    """`True` unless `absorbed_snapshot`'s BODY is provably empty or
+    whitespace-only (#685): only a body with actual content can have been
+    woven undelimited into a reconciled survivor, so only it earns the
+    carried-content annotation. Fails CLOSED to `True` (annotate) on a
+    snapshot this planner cannot parse -- under-redacting a body that might
+    exist is the failure mode the annotation exists to prevent (#602's
+    privacy-over-reversibility rule)."""
+    try:
+        _, body = okf.load_frontmatter(absorbed_snapshot)
+    except Exception:  # broad: any parse failure means "cannot prove empty"
+        return True
+    return body.strip() != ""
+
+
 def _reject_already_merged(
     absorbed_id: str, existing_entries: list[okf.MergeLedgerEntry]
 ) -> None:
@@ -154,11 +169,15 @@ def plan_merge(
     # reconciliation, or an operator edit -- either way the #602 structural
     # excision cannot reach it inside THIS entry's `survivor_before`).
     # Recorded at snapshot time, when the fact is still decidable.
+    # #685: a prior whose absorbed BODY was empty/whitespace-only
+    # contributed no content, so its missing delimiter must not annotate --
+    # the annotation would buy no privacy and cost a wholesale
+    # `survivor_before` redaction on a later forget.
     carried_content_ids = [
         prior.absorbed_id
         for prior in existing
-        if f"{okf.MERGED_CONTENT_HEADING_PREFIX}{prior.absorbed_id})"
-        not in survivor_text
+        if okf.merged_content_heading(prior.absorbed_id) not in survivor_text
+        and _absorbed_snapshot_has_content(prior.absorbed_snapshot)
     ]
 
     sensitivity_before = survivor_metadata.get("sensitivity")

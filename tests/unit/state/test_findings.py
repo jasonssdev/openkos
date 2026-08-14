@@ -252,3 +252,115 @@ def test_open_findings_tolerates_a_store_predating_the_claims_table(
     (row,) = findings.open_findings(conn)
 
     assert row.conflicting_claims == ()
+
+
+# --- #685 item 1: forget's privacy sweep over persisted findings ----------
+
+
+def _referencing_finding(
+    pair_ids: tuple[str, str] = ("concepts/a", "concepts/b"),
+    merged_absorbed_id: str | None = None,
+    claim: str = "SECRET-CLAIM-TEXT quoted from a concept body",
+) -> findings.Finding:
+    return findings.Finding(
+        pair_ids=pair_ids,
+        merged_absorbed_id=merged_absorbed_id,
+        verdict="contradicts",
+        confidence=0.9,
+        rationale="rationale",
+        input_digests=(
+            findings.InputDigest(pair_ids[0], content_hash(b"a body")),
+            findings.InputDigest(pair_ids[1], content_hash(b"b body")),
+        ),
+        conflicting_claims=(claim,),
+    )
+
+
+def test_delete_findings_referencing_drops_pair_member_rows(
+    conn: sqlite3.Connection,
+) -> None:
+    """#685 item 1: a finding whose `pair_ids` (either element) or
+    `merged_absorbed_id` names a purge-set member is deleted whole --
+    claims and digest child rows included -- mirroring the decisions
+    sweep's referencing predicate exactly."""
+    findings.record_findings(
+        conn,
+        [
+            _referencing_finding(pair_ids=("concepts/target", "concepts/b")),
+            _referencing_finding(pair_ids=("concepts/c", "concepts/target")),
+            _referencing_finding(
+                pair_ids=("concepts/s", "concepts/s"),
+                merged_absorbed_id="concepts/target",
+            ),
+            _referencing_finding(
+                pair_ids=("concepts/x", "concepts/y"),
+                claim="unrelated claim survives",
+            ),
+        ],
+    )
+
+    deleted = findings.delete_findings_referencing(conn, {"concepts/target"})
+
+    assert deleted == 3
+    (survivor,) = findings.open_findings(conn)
+    assert survivor.pair_ids == ("concepts/x", "concepts/y")
+    assert survivor.conflicting_claims == ("unrelated claim survives",)
+
+
+def test_delete_findings_referencing_leaves_no_recoverable_claim_bytes(
+    tmp_path: Path,
+) -> None:
+    """The deletion is an ERASURE, not a row-level tombstone: after the
+    sweep the database FILE no longer contains the deleted claim text --
+    row-level DELETE alone leaves SQLite freelist-recoverable pages, which
+    defeats the point (the same rationale `purge`'s index cleanup
+    documents)."""
+    db_path = tmp_path / ".openkos" / "findings.db"
+    conn = derived.open_derived_connection(db_path)
+    try:
+        findings.record_findings(
+            conn,
+            [_referencing_finding(pair_ids=("concepts/target", "concepts/b"))],
+        )
+        findings.delete_findings_referencing(conn, {"concepts/target"})
+    finally:
+        conn.close()
+
+    assert b"SECRET-CLAIM-TEXT" not in db_path.read_bytes()
+
+
+def test_delete_findings_referencing_tolerates_a_pre_findings_store(
+    conn: sqlite3.Connection,
+) -> None:
+    """A store with no `findings` table yet answers 0 rather than raising
+    -- the same absent-table posture `open_findings` takes."""
+    assert findings.delete_findings_referencing(conn, {"concepts/target"}) == 0
+
+
+def test_delete_findings_referencing_raises_when_wal_checkpoint_is_busy(
+    tmp_path: Path,
+) -> None:
+    """Review correction (lineage review-66cd062e562f43bb, R4): SQLite
+    reports a blocked `wal_checkpoint(TRUNCATE)` through the returned
+    `busy` column, never an exception -- ignoring it would let deleted
+    claim plaintext survive in un-truncated WAL frames while the sweep
+    reports success. A busy checkpoint must raise so the caller's
+    fail-loud warning path fires."""
+    db_path = tmp_path / ".openkos" / "findings.db"
+    conn = derived.open_derived_connection(db_path)
+    reader = derived.open_derived_connection(db_path)
+    try:
+        findings.record_findings(
+            conn,
+            [_referencing_finding(pair_ids=("concepts/target", "concepts/b"))],
+        )
+        # A concurrent read transaction pins the WAL: TRUNCATE cannot
+        # complete and reports busy=1 in its result row.
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM findings").fetchall()
+
+        with pytest.raises(sqlite3.OperationalError, match="checkpoint"):
+            findings.delete_findings_referencing(conn, {"concepts/target"})
+    finally:
+        reader.close()
+        conn.close()

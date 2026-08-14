@@ -625,7 +625,7 @@ def _excise_merged_sections(snapshot: str, purge_ids: set[str]) -> str:
     text: a generic body (`Body.`) contained coincidentally in an
     unrelated snapshot must not vaporize that entry's restore data."""
     for purge_id in purge_ids:
-        separator = f"{okf.MERGED_CONTENT_HEADING_PREFIX}{purge_id})\n\n"
+        separator = f"{okf.merged_content_heading(purge_id)}\n\n"
         while True:
             start = snapshot.find(separator)
             if start == -1:
@@ -693,8 +693,7 @@ def _scrub_entry_snapshots(
     ) or (
         entry.schema != okf.MERGE_LEDGER_SCHEMA_V4
         and any(
-            f"{okf.MERGED_CONTENT_HEADING_PREFIX}{purge_id})"
-            not in entry.survivor_before
+            okf.merged_content_heading(purge_id) not in entry.survivor_before
             for purge_id in purge_ids & prior_absorbed_ids
         )
     )
@@ -811,6 +810,57 @@ def _sweep_ledger_sidecars_for_ids(
         )
         touched.append(ledger_path)
     return touched
+
+
+def _sweep_findings_for_ids(
+    layout: config.WorkspaceLayout, purge_ids: Iterable[str]
+) -> None:
+    """Privacy sweep of `.openkos/findings.db` for `purge_ids` membership
+    (#685 item 1; forget-command spec: "Deletion Sweep Includes Persisted
+    Findings"): `finding_claims` persists verbatim claim text quoted from
+    concept bodies, so a finding referencing a purge-set member must not
+    survive the member -- the same class of leak the ledger
+    (`_sweep_ledger_sidecars_for_ids`, #602/#667) and decisions
+    (`_sweep_decisions_for_ids`) sweeps already close, one store over.
+
+    `forget`-only: `purge` deletes `findings.db` wholesale in
+    `_purge_rebuild_indexes`, a strictly stronger erasure.
+
+    A missing store is a no-op (never created here --
+    `findings_db_path`'s pure-derivation contract). A corrupt, locked, or
+    unreadable store degrades to one LOUD stderr warning naming the
+    residue and the remedy rather than aborting a forget whose bundle
+    writes already landed -- a privacy scrub that fails silently would be
+    worse than one that fails out loud, and `findings.db` is recomputable
+    derived state."""
+    # `stat()`, never `exists()`, for the presence probe (review lineage
+    # review-66cd062e562f43bb, R3): the two answers this sweep must tell
+    # apart are "never persisted anything" (silent no-op, per
+    # `findings_db_path`'s pure-derivation contract) and "present but
+    # unreachable" (loud warning -- there may be residue nobody can
+    # scrub). `exists()` collapses them, and WHICH errnos it collapses is
+    # version-dependent: 3.12/3.13 re-raise EACCES while 3.14 suppresses
+    # it, so the same unreadable store aborted forget on one interpreter
+    # and vanished silently on another. `stat()` never suppresses, so the
+    # two cases stay distinguishable on every supported interpreter.
+    try:
+        try:
+            layout.findings_db_path.stat()
+        except FileNotFoundError:
+            return
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            findings.delete_findings_referencing(conn, set(purge_ids))
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            "openkos forget: warning -- failed to sweep persisted findings "
+            f"({exc}); '.openkos/findings.db' may still quote the forgotten "
+            "concept(s). Delete the file to clear the residue (findings are "
+            "recomputable at LLM cost).",
+            err=True,
+        )
 
 
 def _decisions_history_targets(bundle_dir: Path, purge_ids: Iterable[str]) -> list[str]:
@@ -1741,14 +1791,15 @@ def _echo_contradictions_batch_failure(
     how much paid-for work survived (mirrors
     `_echo_adjudicate_batch_failure`). `total` is `plan.llm_calls` -- the
     judged-candidate budget the verb already holds, so the count needs no
-    second planning pass. The `isinstance` dispatch mirrors the handlers'
+    second planning pass; the line says "planned" (#685 item 6) so the
+    denominator reads as the plan and never overstates what was sent. The `isinstance` dispatch mirrors the handlers'
     ORDER for the same reason they are ordered: both specific classes
     subclass `OllamaError`, so the generic branch must come last or their
     actionable remediation is lost."""
     failure = batch.failure
     context = (
         f"openkos contradictions: failed after judging {len(batch.results)} "
-        f"of {total} candidate(s)"
+        f"of {total} planned candidate(s)"
     )
     if isinstance(failure, OllamaUnavailable):
         typer.echo(
@@ -5259,6 +5310,12 @@ def forget(
         # rewrite, so this call IS the entire sweep for it (unlike
         # `purge`, which also puts these paths into `expunge_targets`).
         decisions_touched = _sweep_decisions_for_ids(layout.bundle_dir, purge_ids)
+        # Persisted-findings privacy sweep (#685 item 1), same Phase B:
+        # a derived cache only (never autocommitted), and it degrades to a
+        # loud warning internally rather than raising into this block --
+        # the bundle deletes above must not be reported as failed over a
+        # recomputable cache.
+        _sweep_findings_for_ids(layout, purge_ids)
     except (OSError, ValueError) as exc:
         message = f"openkos forget: failed while writing the forget -- {exc}."
         # K-of-N observability on a mid-cascade unlink failure (`--scope
@@ -8313,7 +8370,7 @@ def _reconcile_merged_survivor(
 
     merged_text = prepared.plan.merged_survivor
     metadata, merged_body = okf.load_frontmatter(merged_text)
-    separator = f"{okf.MERGED_CONTENT_HEADING_PREFIX}{prepared.absorbed_canonical})\n\n"
+    separator = f"{okf.merged_content_heading(prepared.absorbed_canonical)}\n\n"
     if separator not in merged_body:
         return prepared, "stacked heading not found in the merged body"
     survivor_body, absorbed_body = merged_body.split(separator, 1)
@@ -12090,8 +12147,11 @@ def _partition_persisted_serves(
     for the pair's CURRENT bytes -- the same function that recorded them,
     so equality means "nothing this verdict was computed from has changed".
     Everything else re-judges, conservatively: no persisted row, any digest
-    drift, an unreadable input (fewer current rows than stored), or a
-    stored verdict value outside the enum. `consistent` rows serve exactly
+    drift, an unreadable input (fewer current rows than stored), a
+    stored verdict value outside the enum -- or a present-but-corrupt
+    store, which degrades to one stderr advisory and a full fresh judge
+    (#685 item 4) rather than crashing before any model spend. `consistent`
+    rows serve exactly
     like `contradicts` rows -- they are what proves a pair needs no
     re-judging (the display filter, not this partition, decides what is
     shown).
@@ -12102,11 +12162,25 @@ def _partition_persisted_serves(
     keeps describing the ORIGINAL plan."""
     if not layout.findings_db_path.exists():
         return {}, plan
-    conn = derived.open_derived_connection(layout.findings_db_path)
+    # Fail OPEN to judging on a present-but-corrupt store (#685 item 4,
+    # mirroring the persist path's #684 posture): this read runs BEFORE any
+    # model spend, so a crash here would cost the whole run to protect a
+    # cache -- one stderr advisory and a full fresh judge is strictly
+    # better. `sqlite3.Error` covers a non-database file; `OSError` an
+    # unreadable one.
     try:
-        persisted = findings.open_findings(conn)
-    finally:
-        conn.close()
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = findings.open_findings(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            "openkos contradictions: warning -- failed to read persisted "
+            f"findings ({exc}); judging every candidate fresh.",
+            err=True,
+        )
+        return {}, plan
     # Insertion order is `record_findings` order: iterating forward and
     # overwriting leaves the LATEST row for each identity -- a pair curate
     # judged twice serves its newest verdict, never a superseded one.
@@ -12119,8 +12193,14 @@ def _partition_persisted_serves(
     for spec in plan.specs:
         key = _contradiction_spec_key(spec)
         row = latest.get(key)
+        # Row lookup FIRST (#685 item 4): a candidate with no persisted
+        # finding is judged without paying the per-pair digest I/O -- the
+        # hashes exist only to compare against a stored row.
+        if row is None:
+            to_judge.append(spec)
+            continue
         current = curate_module.finding_input_digests(layout.bundle_dir, spec)
-        if row is None or not current or tuple(row.input_digests) != current:
+        if not current or tuple(row.input_digests) != current:
             to_judge.append(spec)
             continue
         try:
@@ -12600,10 +12680,14 @@ def contradictions(
         typer.echo(f"openkos contradictions: workspace at {root}")
         typer.echo()
         if not fresh and plan.specs:
+            # #685 item 6: the judged-fresh count is what actually HAPPENED
+            # (`batch.results`), never the planned `judged_plan.specs` -- on
+            # a partial batch the two differ, and printing the plan here
+            # overstated the spend the stderr epilogue then contradicted.
             typer.echo(
                 f"{len(served_by_key)} of {len(plan.specs)} candidate(s) "
                 "served from persisted findings; "
-                f"{len(judged_plan.specs)} judged fresh."
+                f"{len(fresh_verdicts)} judged fresh."
             )
             typer.echo()
         # #378 slice 2 (post-review correction): pass 3's candidate-edge cap
@@ -12985,7 +13069,7 @@ def _stage_filed_answer(
     title: str | None = None,
     description: str | None = None,
     doc_type: str = _INSIGHT_TYPE,
-    cfg: config.Config | None = None,
+    cfg: config.Config,
 ) -> _FiledAnswerPlan:
     """Stage a `query --save` filing of `answer_text` as a new derived OKF
     concept -- a pure, in-memory Phase A step mirroring
@@ -13016,13 +13100,15 @@ def _stage_filed_answer(
     confidential content -- classified below `confidential`, a future-leak
     vector.
 
-    When `cfg` is given (issue #669, design D3), the cited-concept
-    high-water-mark computed above is then a FLOOR, not the final value:
-    `config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)`
-    may raise it further, never lower it, per `doc_type`'s configured
-    offset (`query-command` spec: "Sensitivity Is The High-Water-Mark Of
-    Cited Concepts"). `cfg=None` (the pre-#669 shape) applies no type
-    default -- the high-water-mark alone is the final value, unchanged.
+    `cfg` is REQUIRED (#685 item 2; issue #669, design D3): the
+    cited-concept high-water-mark computed above is a FLOOR, not the final
+    value -- `config.type_birth_sensitivity(cfg, doc_type,
+    cited_high_water_mark)` may raise it further, never lower it, per
+    `doc_type`'s configured offset (`query-command` spec: "Sensitivity Is
+    The High-Water-Mark Of Cited Concepts"). The former `cfg=None` default
+    silently skipped that security raise for any caller that omitted the
+    parameter; an empty `type_sensitivity_defaults` mapping is the
+    supported opt-out and leaves the high-water-mark alone.
     """
     if not citations:
         raise ValueError(
@@ -13103,11 +13189,7 @@ def _stage_filed_answer(
     # applies to the CONFIG FLOOR, never to `cited_high_water_mark` itself,
     # so a citation set already resolved above the floor-plus-offset still
     # wins via the high-water-mark inside `type_birth_sensitivity`.
-    sensitivity = (
-        config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)
-        if cfg is not None
-        else cited_high_water_mark
-    )
+    sensitivity = config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)
 
     content = okf.build_concept(
         type=doc_type,

@@ -26,6 +26,7 @@ because no cross-file invariant exists between them)."""
 
 import sqlite3
 from collections.abc import Callable, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
 _CREATE_FINDINGS_TABLE_SQL = """
@@ -166,6 +167,90 @@ def record_findings(conn: sqlite3.Connection, batch: Sequence[Finding]) -> None:
         for ordinal, claim in enumerate(finding.conflicting_claims):
             conn.execute(_INSERT_CLAIM_SQL, (finding_id, ordinal, claim))
     conn.commit()
+
+
+def delete_findings_referencing(
+    conn: sqlite3.Connection, purge_ids: AbstractSet[str]
+) -> int:
+    """Privacy sweep (#685 item 1; forget-command spec: "Deletion Sweep
+    Includes Persisted Findings"): delete every finding whose `pair_ids`
+    (either element) or `merged_absorbed_id` names a `purge_ids` member --
+    claims and digest child rows included -- and return how many findings
+    were removed.
+
+    The referencing predicate is EXACTLY the decisions sweep's
+    (`cli.main._sweep_decisions_for_ids`): `finding_claims` persists
+    verbatim claim text quoted from the pair's concept bodies, so a finding
+    referencing a forgotten concept is the same class of leak #602/#667
+    closed for the merge ledger, one store over.
+
+    The deletion is an ERASURE, not a row-level tombstone: after the
+    deletes commit, `VACUUM` rebuilds the file without the freelist pages a
+    plain `DELETE` leaves recoverable (the same rationale `purge`'s
+    index-cleanup delete documents), and `wal_checkpoint(TRUNCATE)` clears
+    the WAL sidecar the deleted page images passed through
+    (`open_derived_connection` runs every derived store in WAL mode).
+
+    A store with no `findings` table yet answers 0 rather than raising --
+    the same absent-table posture `open_findings` takes."""
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "findings" not in tables or not purge_ids:
+        return 0
+    members = sorted(purge_ids)
+    # The interpolated fragments below are "?" placeholder marks only --
+    # every VALUE travels through the parameter tuple, so S608's
+    # string-built-query concern does not apply (SQLite has no native
+    # array binding for IN).
+    member_marks = ",".join("?" for _ in members)
+    doomed = [
+        row[0]
+        for row in conn.execute(
+            f"SELECT id FROM findings WHERE pair_id_0 IN ({member_marks}) "  # noqa: S608
+            f"OR pair_id_1 IN ({member_marks}) "
+            f"OR merged_absorbed_id IN ({member_marks})",
+            (*members, *members, *members),
+        ).fetchall()
+    ]
+    if not doomed:
+        return 0
+    doomed_marks = ",".join("?" for _ in doomed)
+    if "finding_input_digests" in tables:
+        conn.execute(
+            f"DELETE FROM finding_input_digests "  # noqa: S608
+            f"WHERE finding_id IN ({doomed_marks})",
+            doomed,
+        )
+    if "finding_claims" in tables:
+        conn.execute(
+            f"DELETE FROM finding_claims WHERE finding_id IN ({doomed_marks})",  # noqa: S608
+            doomed,
+        )
+    conn.execute(
+        f"DELETE FROM findings WHERE id IN ({doomed_marks})",  # noqa: S608
+        doomed,
+    )
+    conn.commit()
+    conn.execute("VACUUM")
+    # SQLite reports a blocked checkpoint through the returned row's `busy`
+    # column, never an exception (review lineage review-66cd062e562f43bb,
+    # R4): a concurrent reader pinning the WAL would otherwise leave the
+    # deleted claims' plaintext in un-truncated frames while this sweep
+    # reports success. Raising turns that silent residue into the caller's
+    # fail-loud warning path.
+    busy, _wal_frames, _checkpointed = conn.execute(
+        "PRAGMA wal_checkpoint(TRUNCATE)"
+    ).fetchone()
+    if busy:
+        raise sqlite3.OperationalError(
+            "wal checkpoint busy: a concurrent reader held the WAL open, so "
+            "deleted finding bytes may remain in it"
+        )
+    return len(doomed)
 
 
 def _is_stale(

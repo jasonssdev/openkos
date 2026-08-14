@@ -1661,9 +1661,28 @@ def test_contradictions_partial_batch_reports_completed_then_exits_one(
     assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
     assert "kept work" in result.stdout
     assert result.stderr == (
-        "openkos contradictions: failed after judging 1 of 2 candidate(s) -- boom.\n"
+        "openkos contradictions: failed after judging 1 of 2 planned "
+        "candidate(s) -- boom.\n"
     )
     assert "Traceback" not in result.stderr
+
+
+def test_contradictions_partial_batch_serve_line_reports_actual_judged_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#685 item 6: the serve/judge split line describes what actually
+    HAPPENED, not the plan -- a mid-batch failure that judged 1 of 2 must
+    print '1 judged fresh', never the planned 2, or the stdout report
+    overstates the model spend the stderr epilogue then contradicts."""
+    _init_workspace(tmp_path, monkeypatch)
+    _two_candidate_partial_batch(monkeypatch, OllamaError("boom"))
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 1
+    assert "0 of 2 candidate(s) served from persisted findings" in result.stdout
+    assert "1 judged fresh." in result.stdout
+    assert "2 judged fresh." not in result.stdout
 
 
 def test_contradictions_partial_batch_unavailable_keeps_remediation_and_counts(
@@ -1746,7 +1765,8 @@ def test_contradictions_first_candidate_failure_keeps_failure_over_zero_state(
     assert "The graph has no typed edges yet." not in result.stdout
     assert "Candidate relations unavailable" not in result.stdout
     assert result.stderr == (
-        "openkos contradictions: failed after judging 0 of 1 candidate(s) -- boom.\n"
+        "openkos contradictions: failed after judging 0 of 1 planned "
+        "candidate(s) -- boom.\n"
     )
 
 
@@ -2277,6 +2297,88 @@ def test_contradictions_rejudges_stale_pair_and_persists_the_fresh_verdict(
     assert second.exit_code == 0
     assert _CountingOllamaClient.calls == []
     assert "1 of 1 candidate(s) served from persisted findings" in second.stdout
+
+
+def test_contradictions_corrupt_findings_db_fails_open_to_judging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#685 item 4: a present-but-corrupt `.openkos/findings.db` must not
+    crash the run before any model spend -- the serve partition fails OPEN
+    to judging everything (one stderr advisory), mirroring the persist
+    path's own #684 fail-open posture."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_related_pair(tmp_path)
+    seed_vectors_db(tmp_path)
+    (tmp_path / ".openkos" / "findings.db").write_bytes(b"this is not sqlite")
+    _CountingOllamaClient.calls = []
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingOllamaClient)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0, result.output
+    assert len(_CountingOllamaClient.calls) == 1
+    assert "failed to read persisted findings" in result.stderr
+    assert "[CONTRADICTS] concepts/a <-> concepts/b" in result.stdout
+
+
+def test_contradictions_partition_computes_digests_only_for_persisted_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_vectors_db: Callable[[Path], None],
+) -> None:
+    """#685 item 4: `_partition_persisted_serves` looks the row up FIRST and
+    hashes the pair's current bytes only when one exists -- a candidate with
+    no persisted finding must not pay the per-pair digest I/O just to be
+    told what `row is None` already said."""
+    from openkos.cli import curate as curate_module
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_related_pair(tmp_path)
+    seed_vectors_db(tmp_path)
+    # The store EXISTS (a row for an unrelated identity), so the partition
+    # runs its per-spec loop rather than returning at the missing-file gate.
+    conn = derived.open_derived_connection(tmp_path / ".openkos" / "findings.db")
+    try:
+        findings.record_findings(
+            conn,
+            [
+                findings.Finding(
+                    pair_ids=("concepts/x", "concepts/y"),
+                    merged_absorbed_id=None,
+                    verdict="contradicts",
+                    confidence=0.9,
+                    rationale="unrelated row",
+                    input_digests=(findings.InputDigest("concepts/x", "0" * 64),),
+                )
+            ],
+        )
+    finally:
+        conn.close()
+    digest_calls: list[object] = []
+    original = curate_module.finding_input_digests
+
+    def _recording(
+        bundle_dir: Path, spec: _CandidateSpec
+    ) -> tuple[findings.InputDigest, ...]:
+        digest_calls.append(spec)
+        return original(bundle_dir, spec)
+
+    monkeypatch.setattr(curate_module, "finding_input_digests", _recording)
+    _CountingOllamaClient.calls = []
+    monkeypatch.setattr("openkos.cli.main.OllamaClient", _CountingOllamaClient)
+
+    result = runner.invoke(app, ["contradictions"])
+
+    assert result.exit_code == 0, result.output
+    # The one candidate pair has no persisted row: it is judged fresh and
+    # its digests are never computed by the partition. (`persist_findings`
+    # takes its own digests through the SAME seam after judging, so the
+    # assertion is zero calls BEFORE the model ran -- the judged write's
+    # calls are the ones recorded, and there is exactly one spec.)
+    assert len(_CountingOllamaClient.calls) == 1
+    assert len(digest_calls) == 1  # persist-after-judge only, never partition
 
 
 def test_contradictions_fresh_flag_forces_rejudging_every_pair(

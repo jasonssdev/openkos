@@ -729,25 +729,35 @@ def test_reconcile_declined_does_not_refresh(
     assert result.exit_code != 0
 
 
-def test_reconcile_from_findings_refreshes_once_when_a_pair_applied(
+def test_reconcile_from_findings_refreshes_once_when_pairs_applied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#655: the `--from-findings` walk shares `_reconcile_pair` with the
-    two-id form; one accepted pair -> ONE end-of-run refresh, not one per
-    item."""
+    two-id form; TWO accepted pairs -> ONE end-of-run refresh, never one
+    per item (reconcile-command spec: "Batch walk refreshes once for the
+    whole run"). Two pairs, not one (#685 item 5): with a single pair,
+    once-per-pair and once-per-run are indistinguishable and the test
+    proved nothing about the 'never per pair' clause."""
     from openkos.state import derived as derived_module
     from openkos.state import findings as findings_module
     from openkos.state.vectorstore import content_hash
 
     _init_workspace(tmp_path, monkeypatch)
     _write_reconcile_pair(tmp_path)
-    digests = tuple(
-        findings_module.InputDigest(
-            concept_id,
-            content_hash((tmp_path / "bundle" / f"{concept_id}.md").read_bytes()),
+    _write_doc(tmp_path / "bundle" / "concepts" / "gamma.md", title="Gamma")
+    _write_doc(tmp_path / "bundle" / "concepts" / "delta.md", title="Delta")
+
+    def _pair_digests(
+        first: str, second: str
+    ) -> tuple[findings_module.InputDigest, ...]:
+        return tuple(
+            findings_module.InputDigest(
+                concept_id,
+                content_hash((tmp_path / "bundle" / f"{concept_id}.md").read_bytes()),
+            )
+            for concept_id in (first, second)
         )
-        for concept_id in ("concepts/alpha", "concepts/beta")
-    )
+
     conn = derived_module.open_derived_connection(tmp_path / ".openkos" / "findings.db")
     try:
         findings_module.record_findings(
@@ -759,8 +769,16 @@ def test_reconcile_from_findings_refreshes_once_when_a_pair_applied(
                     verdict="contradicts",
                     confidence=0.9,
                     rationale="dates conflict",
-                    input_digests=digests,
-                )
+                    input_digests=_pair_digests("concepts/alpha", "concepts/beta"),
+                ),
+                findings_module.Finding(
+                    pair_ids=("concepts/gamma", "concepts/delta"),
+                    merged_absorbed_id=None,
+                    verdict="contradicts",
+                    confidence=0.9,
+                    rationale="places conflict",
+                    input_digests=_pair_digests("concepts/gamma", "concepts/delta"),
+                ),
             ],
         )
     finally:
@@ -768,9 +786,10 @@ def test_reconcile_from_findings_refreshes_once_when_a_pair_applied(
     calls = _patch_refresh_recorder(monkeypatch)
     _simulate_tty(monkeypatch)
 
-    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\n")
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\ny\n")
 
     assert result.exit_code == 0
+    assert "applied 2" in result.stdout  # BOTH pairs actually reconciled
     assert calls == ["reconcile"]
 
 
