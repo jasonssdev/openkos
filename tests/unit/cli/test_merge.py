@@ -1538,3 +1538,175 @@ def test_an_edit_landing_after_the_snapshot_observation_is_refused(
     assert changed_paths(before, _snapshot(tmp_path)) == {
         Path("bundle/concepts/survivor.md")
     }
+
+
+# --- #645: the opt-out reconciliation pass ----------------------------------
+
+_LONG_BODY = (
+    "This side says a great deal about the shared subject, repeating the "
+    "same claims in its own voice across several sentences so the stacked "
+    "share of the merged body is well above the reconciliation threshold."
+)
+
+_RECONCILED_BODY = (
+    "One coherent document now covers the shared subject in a single "
+    "voice, folding both sides' claims together without repeating them."
+)
+
+
+def _patch_reconciliation(
+    monkeypatch: pytest.MonkeyPatch, reply: "str | None"
+) -> list[dict[str, object]]:
+    """Patch the model seam (`reconcile_merged_body`) and record calls."""
+    calls: list[dict[str, object]] = []
+
+    def _fake(**kwargs: object) -> "str | None":
+        calls.append(kwargs)
+        return reply
+
+    monkeypatch.setattr(main, "reconcile_merged_body", _fake)
+    return calls
+
+
+def test_merge_reconciles_the_stacked_body_above_the_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#645 end to end: above the unreconciled-share threshold the merge
+    runs the (mocked) reconciliation call, the preview discloses it before
+    consent, and the WRITTEN survivor carries the reconciled body -- no
+    stacked `## Merged content` heading left."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body=_LONG_BODY)
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body=_LONG_BODY)
+    calls = _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "reconcile merged body" in result.stdout
+    assert len(calls) == 1
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert _RECONCILED_BODY in survivor_text
+    assert "## Merged content" not in survivor_text
+
+
+def test_merge_below_the_threshold_never_calls_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A small absorbed contribution stays an honest append -- zero model
+    calls, stacked body kept, no reconcile preview line."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body=_LONG_BODY * 5)
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body="Tiny.")
+    calls = _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "reconcile merged body" not in result.stdout
+    assert calls == []
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Merged content (concepts/absorbed)" in survivor_text
+
+
+def test_merge_below_the_absolute_floor_never_calls_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two one-line bodies stack at ~50% share while carrying nothing worth
+    a model call -- the absolute char floor keeps the pass off."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body="One line.")
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body="One line.")
+    calls = _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "reconcile merged body" not in result.stdout
+    assert calls == []
+
+
+def test_merge_no_reconcile_flag_keeps_the_stacked_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--no-reconcile` is the opt-out: no model call even above the
+    threshold, stacked body written."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body=_LONG_BODY)
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body=_LONG_BODY)
+    calls = _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+
+    result = runner.invoke(
+        app,
+        [
+            "merge",
+            "concepts/survivor",
+            "concepts/absorbed",
+            "--auto",
+            "--no-reconcile",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert calls == []
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Merged content (concepts/absorbed)" in survivor_text
+
+
+def test_merge_reconciliation_failure_falls_back_to_the_stacked_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused/failed reconciliation keeps the stacked body, notices on
+    stderr, and the merge still succeeds (exit 0) -- the pass is an
+    improvement step, never a new failure mode for the merge itself."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body=_LONG_BODY)
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body=_LONG_BODY)
+    calls = _patch_reconciliation(monkeypatch, None)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed", "--auto"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert len(calls) == 1
+    assert "kept the stacked body" in result.stderr
+    survivor_text = (tmp_path / "bundle" / "concepts" / "survivor.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Merged content (concepts/absorbed)" in survivor_text
+
+
+def test_merge_reconciliation_preview_lands_before_the_confirm_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ruling's disclosure requirement: the reconcile line is part of
+    the plan the human consents to, and declining leaves the bundle
+    untouched with zero model calls."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path, "concepts/survivor", title="Survivor", body=_LONG_BODY)
+    _write_concept(tmp_path, "concepts/absorbed", title="Absorbed", body=_LONG_BODY)
+    calls = _patch_reconciliation(monkeypatch, _RECONCILED_BODY)
+    _simulate_tty(monkeypatch)
+    before = _snapshot(tmp_path)
+
+    result = runner.invoke(
+        app, ["merge", "concepts/survivor", "concepts/absorbed"], input="n\n"
+    )
+
+    assert result.exit_code == 1
+    assert "reconcile merged body" in result.stdout
+    assert calls == []
+    assert _snapshot(tmp_path) == before
