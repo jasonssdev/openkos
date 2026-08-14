@@ -663,3 +663,154 @@ def test_query_save_degrade_path_still_points_at_manual_reindex(
     assert "openkos reindex" in result.stderr
     # The success line must not CLAIM searchability the degrade disproved.
     assert "searchable" not in result.stdout
+
+
+# --- reconcile (#655): the last write verb joins the #640 contract ----------
+
+
+def _write_reconcile_pair(tmp_path: Path) -> None:
+    _write_doc(tmp_path / "bundle" / "concepts" / "alpha.md", title="Alpha")
+    _write_doc(tmp_path / "bundle" / "concepts" / "beta.md", title="Beta")
+
+
+def test_reconcile_two_id_refreshes_derived_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#655: a successful two-id `reconcile` writes relation edges and body
+    notes (graph-invalidating), so it refreshes end-of-run exactly like
+    `merge`/`relate` -- once, with its own verb tag."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_reconcile_pair(tmp_path)
+    calls = _patch_refresh_recorder(monkeypatch)
+
+    result = runner.invoke(
+        app, ["reconcile", "concepts/alpha", "concepts/beta", "--auto"]
+    )
+
+    assert result.exit_code == 0
+    assert calls == ["reconcile"]
+
+
+def test_reconcile_idempotent_rerun_does_not_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clean re-run changes no edge and appends no note -- nothing was
+    invalidated, so the refresh must not run (the same no-write rule the
+    declined paths follow)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_reconcile_pair(tmp_path)
+    first = runner.invoke(
+        app, ["reconcile", "concepts/alpha", "concepts/beta", "--auto"]
+    )
+    assert first.exit_code == 0
+    calls = _patch_refresh_recorder(monkeypatch)
+
+    rerun = runner.invoke(
+        app, ["reconcile", "concepts/alpha", "concepts/beta", "--auto"]
+    )
+
+    assert rerun.exit_code == 0
+    assert calls == []
+
+
+def test_reconcile_declined_does_not_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_workspace(tmp_path, monkeypatch)
+    _write_reconcile_pair(tmp_path)
+    calls = _patch_refresh_recorder(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(
+        app, ["reconcile", "concepts/alpha", "concepts/beta"], input="n\n"
+    )
+
+    assert calls == []
+    assert result.exit_code != 0
+
+
+def test_reconcile_from_findings_refreshes_once_when_a_pair_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#655: the `--from-findings` walk shares `_reconcile_pair` with the
+    two-id form; one accepted pair -> ONE end-of-run refresh, not one per
+    item."""
+    from openkos.state import derived as derived_module
+    from openkos.state import findings as findings_module
+    from openkos.state.vectorstore import content_hash
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_reconcile_pair(tmp_path)
+    digests = tuple(
+        findings_module.InputDigest(
+            concept_id,
+            content_hash((tmp_path / "bundle" / f"{concept_id}.md").read_bytes()),
+        )
+        for concept_id in ("concepts/alpha", "concepts/beta")
+    )
+    conn = derived_module.open_derived_connection(tmp_path / ".openkos" / "findings.db")
+    try:
+        findings_module.record_findings(
+            conn,
+            [
+                findings_module.Finding(
+                    pair_ids=("concepts/alpha", "concepts/beta"),
+                    merged_absorbed_id=None,
+                    verdict="contradicts",
+                    confidence=0.9,
+                    rationale="dates conflict",
+                    input_digests=digests,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+    calls = _patch_refresh_recorder(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="y\n")
+
+    assert result.exit_code == 0
+    assert calls == ["reconcile"]
+
+
+def test_reconcile_from_findings_all_declined_skips_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openkos.state import derived as derived_module
+    from openkos.state import findings as findings_module
+    from openkos.state.vectorstore import content_hash
+
+    _init_workspace(tmp_path, monkeypatch)
+    _write_reconcile_pair(tmp_path)
+    digests = tuple(
+        findings_module.InputDigest(
+            concept_id,
+            content_hash((tmp_path / "bundle" / f"{concept_id}.md").read_bytes()),
+        )
+        for concept_id in ("concepts/alpha", "concepts/beta")
+    )
+    conn = derived_module.open_derived_connection(tmp_path / ".openkos" / "findings.db")
+    try:
+        findings_module.record_findings(
+            conn,
+            [
+                findings_module.Finding(
+                    pair_ids=("concepts/alpha", "concepts/beta"),
+                    merged_absorbed_id=None,
+                    verdict="contradicts",
+                    confidence=0.9,
+                    rationale="dates conflict",
+                    input_digests=digests,
+                )
+            ],
+        )
+    finally:
+        conn.close()
+    calls = _patch_refresh_recorder(monkeypatch)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["reconcile", "--from-findings"], input="n\n")
+
+    assert result.exit_code == 0
+    assert calls == []

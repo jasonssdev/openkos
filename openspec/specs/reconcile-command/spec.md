@@ -100,3 +100,32 @@ The system MUST NOT delete or overwrite existing body content or relations; all 
 - WHEN the user runs `reconcile alpha beta` and confirms
 - THEN all prior body content and relations on `alpha` remain unchanged
 - AND only the new edge and note are appended
+
+### Requirement: Write-Time Derived-Index Refresh
+
+After a successful `reconcile` that changed at least one concept document
+(either form: two-id or `--from-findings`), the derived indexes MUST be
+refreshed end-of-run through the shared write-time refresh helper (#640),
+exactly once per invocation, fail-open with the single advisory line. A
+run that changed nothing — the idempotent re-run, a declined confirm
+gate, or a walk where every pair was declined or skipped — MUST NOT
+trigger a refresh.
+
+#### Scenario: Successful reconcile refreshes once
+
+- GIVEN two concepts with no prior reconciliation
+- WHEN `reconcile alpha beta --auto` succeeds
+- THEN the derived indexes refresh exactly once, tagged with the
+  `reconcile` verb
+
+#### Scenario: Idempotent re-run does not refresh
+
+- GIVEN the same pair already reconciled identically
+- WHEN `reconcile alpha beta --auto` re-runs
+- THEN no document changes and no refresh runs
+
+#### Scenario: Batch walk refreshes once for the whole run
+
+- GIVEN two accepted pairs in a `--from-findings` walk
+- WHEN the walk completes
+- THEN the derived indexes refresh exactly once, never per pair

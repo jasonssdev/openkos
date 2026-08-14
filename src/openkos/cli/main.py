@@ -9619,7 +9619,7 @@ def reconcile(
         )
         raise typer.Exit(code=1) from exc
 
-    _reconcile_pair(
+    changed = _reconcile_pair(
         root,
         layout,
         log_path,
@@ -9632,6 +9632,11 @@ def reconcile(
         loser_canonical,
         auto=auto,
     )
+    # #655: the last write verb joins #640's contract -- once, end of run,
+    # only when a concept document actually changed (the idempotent
+    # no-change re-run invalidated nothing).
+    if changed:
+        _refresh_derived_after_write(layout, cfg, verb="reconcile")
 
 
 def _reconcile_pair(
@@ -9648,7 +9653,7 @@ def _reconcile_pair(
     *,
     auto: bool,
     announce_preview: bool = True,
-) -> None:
+) -> bool:
     """One pair's complete reconcile transaction -- Phase A in-memory build,
     conflict gate, preview, confirm gate, drift re-validation, Phase B
     additive writes, and autocommit -- extracted verbatim from the two-id
@@ -9657,7 +9662,13 @@ def _reconcile_pair(
     only the 'proposed changes' preview (the batch walk collects consent
     from the finding context before calling); every gate below still runs.
     Raises `typer.Exit` exactly as the two-id form always did: exit 1 for a
-    prepare/conflict/write failure, exit 3 for post-consent target drift."""
+    prepare/conflict/write failure, exit 3 for post-consent target drift.
+
+    Returns whether this run CHANGED a concept document (#655): an edge
+    added or a note appended on either side. `False` is the idempotent
+    no-change re-run, which writes only the log entry -- `log.md` is a
+    catalog file no derived index reads, so the caller's #640 write-time
+    refresh keys on this signal, never on "the transaction completed"."""
     now = datetime.now(UTC)
     today = now.astimezone().date()
     date_str = today.isoformat()
@@ -9864,6 +9875,7 @@ def _reconcile_pair(
         [f"bundle/{canonical_a}.md", f"bundle/{canonical_b}.md", "bundle/log.md"],
         reconcile_message,
     )
+    return changed
 
 
 def _run_reconcile_from_findings(
@@ -9936,6 +9948,7 @@ def _run_reconcile_from_findings(
         return
 
     applied = 0
+    changed_pairs = 0
     skipped = 0
     declined: list[str] = []
     for finding in actionable:
@@ -9961,7 +9974,7 @@ def _run_reconcile_from_findings(
             continue
 
         try:
-            _reconcile_pair(
+            pair_changed = _reconcile_pair(
                 root,
                 layout,
                 log_path,
@@ -9983,6 +9996,8 @@ def _run_reconcile_from_findings(
             skipped += 1
             continue
         applied += 1
+        if pair_changed:
+            changed_pairs += 1
 
     typer.echo()
     typer.echo(
@@ -9991,6 +10006,12 @@ def _run_reconcile_from_findings(
     )
     for item in declined:
         typer.echo(f"  declined: {item}")
+
+    # #655: ONE end-of-run refresh for the whole walk, mirroring `curate`'s
+    # own once-per-invocation call -- never per accepted pair -- and only
+    # when at least one pair's documents actually changed.
+    if changed_pairs:
+        _refresh_derived_after_write(layout, cfg, verb="reconcile")
 
 
 RECENT_ACTIVITY_LIMIT = 5
