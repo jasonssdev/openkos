@@ -574,6 +574,8 @@ max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call m
 #   Person: volatile      # the built-in registry default; see docs/adr/0007)
 # models:                 # per-task model overrides; unlisted tasks keep `model:`
 #   edge_typing: gemma2:27b   # the measured optional upgrade — see below
+# type_sensitivity_defaults:  # per-type birth floor: offset above default_sensitivity
+#   Person: 1               # shipped default; {} opts out entirely (see ADR-0015)
 
 # Layout — where the engine keeps things, relative to this file.
 raw: raw/                 # immutable sources; any extension, never rewritten
@@ -581,6 +583,16 @@ bundle: bundle/           # the OKF bundle root
 
 # type_registry is maintained by the engine (canonical + emergent types)
 ```
+
+### `type_sensitivity_defaults`
+
+A per-type **birth floor** for derived objects: a mapping from an OKF type to a non-negative integer offset **above the workspace `default_sensitivity` floor**, applied when the object is first written. Shipped default: `{Person: 1}` — on a `private` workspace, a `Person` is born `confidential` ([#669](https://github.com/jasonssdev/openkos/issues/669); the full rationale is [ADR-0015](adr/0015-per-type-default-sensitivity.md)).
+
+The born level is `combine_sensitivity(base, raise_by(default_sensitivity, offset))`: the offset lands on the **configured floor, never on the inherited base**, so Source inheritance and the high-water-mark (ADR-0003) always win when the source is more sensitive — the type default is a floor-relative minimum, not a bonus. It applies at both birth seams identically: `ingest`'s derived objects (base = the Source's resolved sensitivity) and `query --save` (base = the cited concepts' high-water-mark). Both verbs disclose at write time when an object was born above the floor by type default — and, when the resulting level is `confidential`, that the fail-closed retrieval filter will exclude it from `query`/`contradictions`/`suggest-relations` against a non-local backend (#569). That exclusion is the intended effect.
+
+An **absent** field (or explicit null) means the shipped default applies; an explicit **`{}`** opts out entirely; an offset of `0` declines the raise for that one type while keeping the map. Validation is **eager and fails closed** at config read, following the `models:` precedent: an unknown type key (keys must be buildable OKF types — `Source` is not one), a boolean, a negative offset, or an offset too large to matter at any floor (`>= 3` on the three-level ladder) refuses the config load rather than silently disabling a security default.
+
+Birth-time only: nothing is migrated or backfilled — concepts already on disk keep their level, and `set-sensitivity <id> <level> --allow-downgrade` can still lower a type-defaulted object freely.
 
 ### `chat_timeout`
 
