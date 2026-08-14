@@ -942,6 +942,37 @@ def test_twin_exempt_type_is_in_the_vocabulary() -> None:
     assert concept_mod._TWIN_EXEMPT_TYPE in CLASSIFIABLE_TYPES
 
 
+def test_judge_readmit_types_subset_of_classifiable_types() -> None:
+    """`_JUDGE_READMIT_TYPES` (#668) is the ADDITIVE-only widening of
+    judge re-admission -- a typo here would silently narrow re-admission
+    rather than fail loudly, the same alarm shape as
+    `test_twin_exempt_type_is_in_the_vocabulary` above. Every member must be
+    a real, classifiable type."""
+    assert concept_mod._JUDGE_READMIT_TYPES <= CLASSIFIABLE_TYPES
+
+
+def test_person_title_twin_of_source_still_dropped() -> None:
+    """D1 regression guard (#668): `_JUDGE_READMIT_TYPES` only widens the
+    ADDITIVE judge re-admission site -- it must never leak into the
+    DELETION twin-drop rule, which stays scoped to `_TWIN_EXEMPT_TYPE`
+    only. `Person` is not exempt here, unlike `Procedure`."""
+    person_twin = concept_mod.ExtractionResult(
+        type="Person",
+        title="Team Meeting",
+        description="A person whose title happens to restate the source.",
+        body="",
+    )
+    concept = concept_mod.ExtractionResult(
+        type="Concept", title="Something Else", description="D", body=""
+    )
+
+    kept = concept_mod._drop_source_title_twins(
+        [person_twin, concept], source_title="Team Meeting"
+    )
+
+    assert kept == [concept]
+
+
 # --- The framing-object rule (#522/#533) -------------------------------------
 
 _AMI_FRAMING_EVENT_ITEM = (
@@ -1040,6 +1071,29 @@ def test_framing_rule_inert_on_a_non_meeting_source() -> None:
     )
 
     assert [r.title for r in result] == ["Sprint Retrospective Practices", "Stoicism"]
+
+
+def test_meeting_titled_person_still_dropped_by_framing_removal() -> None:
+    """D1 regression guard (#668): `_JUDGE_READMIT_TYPES` widening judge
+    re-admission must not leak into `_drop_framing_objects`'s deletion,
+    which stays scoped to `_TWIN_EXEMPT_TYPE` only -- a `Person` titled
+    after the meeting itself (the #522/#533 framing shape) is still
+    dropped."""
+    framing_person = concept_mod.ExtractionResult(
+        type="Person",
+        title="Team Meeting",
+        description="A person named after the gathering itself.",
+        body="",
+    )
+    concept = concept_mod.ExtractionResult(
+        type="Concept", title="Something Else", description="D", body=""
+    )
+
+    kept = concept_mod._drop_framing_objects(
+        [framing_person, concept], source_title="Team Meeting"
+    )
+
+    assert kept == [concept]
 
 
 def test_procedure_exempt_from_framing_drop() -> None:
@@ -2665,6 +2719,135 @@ def test_union_procedure_survives_judge_rejection_via_deterministic_readmission(
     titles = {r.title for r in outcome.objects}
     assert "Morning Journaling Routine" in titles
     assert "Morning Journaling Routine" not in outcome.report.judged_out_titles
+
+
+def test_procedure_behavior_unchanged_at_all_three_sites() -> None:
+    """Non-regression (#668): `_JUDGE_READMIT_TYPES` widens the ADDITIVE
+    judge re-admission site only. `Procedure`'s behavior at twin-drop,
+    framing-drop, and judge re-admission stays byte-identical to before
+    this change -- no meeting-shape or anchor gate applies to it."""
+    procedure_twin = concept_mod.ExtractionResult(
+        type="Procedure",
+        title="Team Meeting",
+        description="A procedure whose title restates the source.",
+        body="Steps.",
+    )
+    concept = concept_mod.ExtractionResult(
+        type="Concept", title="Something Else", description="D", body=""
+    )
+
+    # Twin-drop: `Procedure` stays exempt, survives.
+    assert concept_mod._drop_source_title_twins(
+        [procedure_twin, concept], source_title="Team Meeting"
+    ) == [procedure_twin, concept]
+
+    # Framing-drop: `Procedure` stays exempt, survives.
+    assert concept_mod._drop_framing_objects(
+        [procedure_twin, concept], source_title="Team Meeting"
+    ) == [procedure_twin, concept]
+
+    # Judge re-admission: `Procedure` is re-admitted even without an
+    # anchor, on a non-meeting source -- unaffected by the anchor/
+    # meeting-shape gate that now scopes `Person`/`Organization`.
+    run1 = _array(_CONCEPT_ITEM, _PROCEDURE_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union("Notes.", source_title="Notes", llm=llm)
+
+    titles = {r.title for r in outcome.objects}
+    assert "Morning Journaling Routine" in titles
+    assert "Morning Journaling Routine" not in outcome.report.judged_out_titles
+
+
+# --- Judge re-admission of Person/Organization participants (#668) ---------
+
+_PERSON_WITH_ANCHOR_ITEM = (
+    '{"type": "Person", "title": "Jordan Ellis", '
+    '"description": "Jordan Ellis chairs the weekly planning meeting.", '
+    '"body": ""}'
+)
+
+_PERSON_CHAIR_ROLE_ITEM = (
+    '{"type": "Person", "title": "Morgan Lee", '
+    '"description": "Morgan Lee, chair of the committee.", "body": ""}'
+)
+
+_PERSON_NAME_ONLY_ITEM = (
+    '{"type": "Person", "title": "Alex Rivera", '
+    '"description": "Alex Rivera is mentioned in passing.", "body": ""}'
+)
+
+
+def test_judge_dropped_person_with_anchor_on_meeting_source_is_readmitted() -> None:
+    """Judge re-admission (#668) restores a `Person` candidate the judge
+    dropped when the source is meeting-shaped AND the candidate carries a
+    participant anchor -- deterministic re-admission, never a judge prompt
+    clause, mirroring `Procedure`'s existing D5 re-admission."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_WITH_ANCHOR_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    # Judge rejects Jordan Ellis -- only "Stoicism" is kept in its reply.
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    titles = {r.title for r in outcome.objects}
+    assert "Jordan Ellis" in titles
+    assert "Jordan Ellis" not in outcome.report.judged_out_titles
+
+
+def test_person_without_anchor_not_readmitted() -> None:
+    """Stub rejection (#668): a name-only `Person` -- no role, affiliation,
+    or relation cue -- the judge dropped stays dropped, even on a
+    meeting-shaped source. Re-admission is not a blanket type amnesty."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_NAME_ONLY_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    titles = {r.title for r in outcome.objects}
+    assert "Alex Rivera" not in titles
+    assert "Alex Rivera" in outcome.report.judged_out_titles
+
+
+def test_person_with_meeting_role_anchor_is_readmitted() -> None:
+    """A `Person` carrying a meeting role ("chair") alongside its name is
+    re-admitted (#668) -- the anchor requirement is satisfied by a role
+    cue, not only a relation verb."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_CHAIR_ROLE_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    titles = {r.title for r in outcome.objects}
+    assert "Morgan Lee" in titles
+    assert "Morgan Lee" not in outcome.report.judged_out_titles
+
+
+def test_person_not_readmitted_from_non_meeting_source() -> None:
+    """Scope rule (#668): re-admission of `Person`/`Organization` is gated
+    on the SOURCE being meeting-shaped, exactly like `_drop_framing_objects`
+    -- an anchored `Person` on a non-meeting (technical-article) source is
+    NOT re-admitted through this path."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_WITH_ANCHOR_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "A technical article.", source_title="API Reference Guide", llm=llm
+    )
+
+    titles = {r.title for r in outcome.objects}
+    assert "Jordan Ellis" not in titles
+    assert "Jordan Ellis" in outcome.report.judged_out_titles
 
 
 @pytest.mark.parametrize(
