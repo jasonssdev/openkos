@@ -109,3 +109,85 @@ def test_the_prompt_carries_title_and_both_bodies() -> None:
     assert "Model Context Protocol" in user_content
     assert _SURVIVOR in user_content
     assert _ABSORBED in user_content
+
+
+def test_a_leading_heading_is_pinned_to_the_survivor_title() -> None:
+    """Issue #695: the model is free to head the reconciled document with
+    whichever of the two notes it found more natural -- in the reported case
+    the ABSORBED note's title -- while the merged frontmatter `title:` keeps
+    the SURVIVOR's (the survivor-wins scalar rule in
+    `okf.build_merged_document`). The two then disagree permanently: the
+    frontmatter title is what `index.md`, `status`, `list` and citations
+    render, and the heading is what a human reads on opening the file.
+
+    Pinned deterministically rather than asked for in the prompt: the
+    survivor's title is already known here, so trusting the model to echo
+    it would trade a fact for a probability."""
+    reply = (
+        "# Reunión de Evaluación de Decisión AFG\n\n"
+        "The Model Context Protocol (MCP) is an open protocol that connects "
+        "language models to external tools and data sources through servers. "
+        "Each server exposes tools over a standard transport."
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n"), out[:80]
+    assert "Reunión de Evaluación de Decisión AFG" not in out
+    assert "Each server exposes tools over a standard transport." in out
+
+
+def test_a_body_with_no_leading_heading_is_left_alone() -> None:
+    """The pin rewrites a heading that is already there; it never INVENTS
+    one. A reconciled body that legitimately opens with prose keeps its
+    shape -- the frontmatter title still names the document."""
+    reply = (
+        "The Model Context Protocol (MCP) is an open protocol that connects "
+        "language models to external tools and data sources through servers."
+    )
+
+    out = _reconcile(reply)
+
+    assert out == reply
+
+
+def test_only_the_leading_heading_is_pinned() -> None:
+    """A later `# ` heading inside the body is the model's own sectioning,
+    not the document's name -- rewriting it would corrupt real structure."""
+    reply = (
+        "# Wrong Title\n\n"
+        "The Model Context Protocol is an open protocol connecting language "
+        "models to external tools and data sources through servers.\n\n"
+        "# Transport\n\n"
+        "Each server exposes tools over a standard transport, so one client "
+        "works with any conformant server."
+    )
+
+    out = _reconcile(reply)
+
+    assert out is not None
+    assert out.startswith("# Model Context Protocol\n")
+    assert "# Transport" in out
+    assert "Wrong Title" not in out
+
+
+def test_a_title_that_cannot_be_spliced_safely_leaves_the_body_alone() -> None:
+    """The pin fails CLOSED on a title it cannot write as one heading line.
+    Keeping the model's own heading is strictly better than corrupting the
+    document with a multi-line one, and such a title cannot reach here
+    through the ordinary write paths anyway (`bundle.index` rejects
+    newlines in titles) -- this is a guard, not a live code path."""
+    reply = (
+        "# Model Heading\n\n"
+        "The Model Context Protocol is an open protocol connecting language "
+        "models to external tools and data sources through servers."
+    )
+    for bad_title in ("", "   ", "Two\nLines", "Carriage\rReturn"):
+        out = reconciliation.reconcile_merged_body(
+            survivor_title=bad_title,
+            survivor_body=_SURVIVOR,
+            absorbed_body=_ABSORBED,
+            llm=_FakeLLM(reply),
+        )
+        assert out == reply, bad_title

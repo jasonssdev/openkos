@@ -235,6 +235,16 @@ class CurateContext:
     -- the pre-#385 behavior. Membership is only ever populated from
     `auto_acceptable` stages, which is why no code downstream re-checks
     whether Identity slipped in: it structurally cannot."""
+    no_reconcile: bool = False
+    """Whether Identity's merges skip the #645 merged-body reconciliation
+    pass (issue #688) -- `curate --no-reconcile`, the same opt-out lever
+    `merge` takes, rather than a second differently-named one.
+
+    Defaults to `False` (reconciliation ON) because #645's ruling is
+    opt-OUT, and because that is the direction a forgotten thread-through
+    should fail: reconciling a merge that did not need it costs one model
+    call, while stacking one that did produces the stapled document this
+    issue was filed about."""
     ollama_client: LLMBackend | None = field(default=None, init=False)
     """The client for the stage currently running -- reassigned by the
     sequencer before each `needs_llm` stage's `run`.
@@ -729,7 +739,9 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
             skipped += 1
             continue
 
-        typer.echo(cli_main._format_merge_preview_line(prepared))
+        typer.echo(
+            cli_main._format_merge_preview_line(prepared, no_reconcile=ctx.no_reconcile)
+        )
         if not _confirm(
             f"Merge {prepared.absorbed_canonical} into "
             f"{prepared.survivor_canonical}? [y/N]"
@@ -739,6 +751,14 @@ def _identity_run(ctx: CurateContext, probe: StageProbe) -> StageOutcome:
                 f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
             )
             continue
+
+        # #688: the reconciliation runs AFTER this item's consent (the
+        # preview disclosed it) and BEFORE the drift re-check, so the model
+        # call sits inside the window the guard re-validates -- the exact
+        # ordering `merge` uses, via the exact same helper.
+        prepared = cli_main._apply_reconciliation(
+            ctx.root, prepared, no_reconcile=ctx.no_reconcile, verb="curate"
+        )
 
         absorbed_path = layout.bundle_dir / f"{prepared.absorbed_canonical}.md"
         cli_main._reject_drifted_targets(

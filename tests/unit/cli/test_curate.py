@@ -995,6 +995,142 @@ def test_accepted_identity_pair_commits_via_shared_merge_cores(
     assert "Identity: applied 1, skipped 0." in _lines(result.stdout)
 
 
+def _write_bodied_doc(path: Path, *, title: str, body: str) -> None:
+    """A concept with a real body, so a merge of two of them clears the
+    #645 reconciliation thresholds (share >= 0.2 AND absorbed >= 200 chars)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntype: Concept\ntitle: {title}\n---\n# {title}\n\n{body}\n",
+        encoding="utf-8",
+    )
+
+
+def test_identity_plans_and_applies_the_merged_body_reconciliation(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #688: the #645 reconciliation pass shipped inside the `merge`
+    command's own body, while `curate`'s Identity stage reuses
+    `_prepare_one_merge`/`_commit_one_merge` directly -- so the path the
+    product RECOMMENDS, and the one `next` points at, silently stacked
+    bodies at shares well above the threshold the standalone verb honoured.
+
+    Both halves are asserted: the plan must DISCLOSE the pass before the
+    consent gate (it is a model call the human is approving), and the
+    accepted merge must actually RUN it."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    body_a = "Alpha states the shared subject at length. " * 8
+    body_b = "Beta restates the same subject in a second voice. " * 8
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "a.md", title="Concept A", body=body_a
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "b.md", title="Concept B", body=body_b
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+    reconciled: list[str] = []
+
+    def _fake_reconcile(root: Path, prepared: object) -> tuple[object, None]:
+        reconciled.append(getattr(prepared, "absorbed_canonical", "?"))
+        return prepared, None
+
+    monkeypatch.setattr("openkos.cli.main._reconcile_merged_survivor", _fake_reconcile)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate"], input="y\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" in result.stdout, (
+        "the reconciliation must be disclosed in the plan, before consent"
+    )
+    assert reconciled == ["concepts/b"], (
+        "the accepted Identity merge must actually run the reconciliation"
+    )
+
+
+def test_identity_no_reconcile_opts_out(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--no-reconcile` is `merge`'s opt-out under the #645 ruling; Identity
+    gains the same lever rather than a second, differently-named one."""
+    _stub_later_stages_empty(monkeypatch)
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    body = "Shared subject stated at length for the threshold. " * 8
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "a.md", title="Concept A", body=body
+    )
+    _write_bodied_doc(
+        tmp_path / "bundle" / "concepts" / "b.md", title="Concept B", body=body
+    )
+    _reindexed_workspace(tmp_path, monkeypatch)
+
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.curate.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[
+                AdjudicatedCandidate(
+                    candidate=group,
+                    verdict=Verdict.SAME,
+                    confidence=0.9,
+                    rationale="same",
+                )
+            ]
+        ),
+    )
+    called: list[str] = []
+
+    def _fake_reconcile(root: Path, prepared: object) -> tuple[object, None]:
+        called.append(getattr(prepared, "absorbed_canonical", "?"))
+        return prepared, None
+
+    monkeypatch.setattr("openkos.cli.main._reconcile_merged_survivor", _fake_reconcile)
+    _simulate_tty(monkeypatch)
+
+    result = runner.invoke(app, ["curate", "--no-reconcile"], input="y\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" not in result.stdout
+    assert called == []
+
+
 # ---------------------------------------------------------------------------
 # issue #441 -- a partial adjudication batch keeps its completed verdicts
 # ---------------------------------------------------------------------------

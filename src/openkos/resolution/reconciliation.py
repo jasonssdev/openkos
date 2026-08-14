@@ -42,6 +42,47 @@ _SYSTEM_PROMPT: Final = (
 )
 
 
+def _pin_leading_heading(body: str, survivor_title: str) -> str:
+    """Rewrite `body`'s LEADING `# ` heading to `survivor_title` (issue #695).
+
+    Both input notes carry their own `# ` heading, so the model is free to
+    head the reconciled document with either -- in the reported case it took
+    the ABSORBED note's. The merged frontmatter `title:`, meanwhile, is
+    always the survivor's (the survivor-wins scalar rule in
+    `okf.build_merged_document`), and the two then disagree permanently: the
+    frontmatter title is what `index.md`, `status`, `list` and citations
+    render, while the heading is what a human -- or an OKF consumer with no
+    OpenKOS awareness -- reads as the document's name.
+
+    Deterministic rather than prompt-asked, matching the discipline the
+    language gates (#618/#630) settled on: the survivor's title is a fact
+    already in hand here, so asking the model to echo it would trade that
+    fact for a probability.
+
+    Fails CLOSED on a title it cannot splice safely -- blank, or carrying a
+    newline or carriage return -- returning the body untouched rather than
+    writing a heading that would break the document's structure. Such a
+    title cannot reach here through the ordinary write paths (`bundle.index`
+    rejects newlines in titles), so this is a guard, not a code path with a
+    known producer; keeping the model's own heading is strictly better than
+    corrupting the document with a multi-line one.
+
+    Scope is exactly the leading heading. A `# ` heading further down is the
+    model's own sectioning, not the document's name, and rewriting it would
+    corrupt real structure. A body that opens with prose is left untouched:
+    this pins a heading that exists, it never INVENTS one, so a legitimately
+    heading-less body keeps its shape and the frontmatter title still names
+    the document."""
+    if not survivor_title.strip() or "\n" in survivor_title or "\r" in survivor_title:
+        return body
+    stripped = body.lstrip("\n")
+    if not stripped.startswith("# "):
+        return body
+    leading_blanks = body[: len(body) - len(stripped)]
+    _old_heading, separator, rest = stripped.partition("\n")
+    return f"{leading_blanks}# {survivor_title}{separator}{rest}"
+
+
 def _unwrap_fence(reply: str) -> str:
     """Unwrap a reply the model wrapped in one whole-message code fence."""
     lines = reply.splitlines()
@@ -93,4 +134,6 @@ def reconcile_merged_body(
     floor = _MIN_LENGTH_RATIO * max(len(survivor_body), len(absorbed_body))
     if len(text) < floor:
         return None
-    return text
+    # #695: pin AFTER every refusal gate, so the length floor still scores
+    # the model's own reply rather than one this function just edited.
+    return _pin_leading_heading(text, survivor_title)

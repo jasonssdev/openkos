@@ -464,3 +464,79 @@ object as a provenance descendant and propagate to it (existing
 - WHEN `set-sensitivity <survivor> <higher-level>` runs and is confirmed
 - THEN that object is resolved as a descendant, raised via
   `combine_sensitivity`, and appears in the preview/success message
+
+### Requirement: Merged-Body Reconciliation Reaches Every Consenting Caller
+
+The #645 merged-body reconciliation pass — one model call that rewrites a
+merge's stacked body as a single coherent document — MUST be planned and
+applied by EVERY caller that consents to a merge, not only the `merge`
+command. The consenting callers are `merge`, `curate`'s Identity stage,
+`adjudicate --apply`, and `adjudicate --apply-same`; the latter three drive
+`_prepare_one_merge`/`_commit_one_merge` directly.
+
+The decision MUST come from a single shared predicate that both the plan
+DISCLOSURE and the APPLICATION read, so a caller can neither promise a pass
+it does not run nor run one it did not disclose. The disclosure MUST ride
+the shared merge preview line, on the same reasoning the stacked-share
+guardrail warning does: a caller shows it without having to remember to.
+Every consenting caller MUST expose the opt-out, and it MUST be the same
+`--no-reconcile` lever rather than a second differently-named one:
+`merge --no-reconcile`, `curate --no-reconcile`, and `adjudicate
+--no-reconcile` (covering both `--apply` and `--apply-same`). Its default
+MUST be reconciliation ON, per #645's opt-out ruling. A caller that plans
+the pass without offering the opt-out would send both note bodies to the
+model with no way for the operator to refuse.
+
+The application MUST run AFTER that caller's consent and BEFORE its drift
+re-check, so the slow model call sits inside the window the drift guard
+re-validates. Any failure MUST keep the stacked body and notice on stderr:
+the merge itself never gains a new failure mode from an improvement pass.
+
+This is the defect issue #688 reports: the planning lived in the `merge`
+command body while `curate` — the path the product recommends and `next`
+points at — stacked bodies at shares of 38%, 46% and 54%, above the very
+thresholds at which the standalone verb offered the pass at 27%.
+
+#### Scenario: Curate's Identity stage plans and applies the reconciliation
+- GIVEN an Identity pair whose prepared merge clears the reconciliation
+  thresholds
+- WHEN the per-item preview is printed and the merge is accepted
+- THEN the preview discloses the reconciliation before the consent prompt,
+  and the accepted merge runs the pass
+
+#### Scenario: The opt-out suppresses both halves
+- GIVEN the same pair and `--no-reconcile`
+- WHEN the preview is printed and the merge is accepted
+- THEN the preview does not disclose the pass and no reconciliation call is
+  made
+
+### Requirement: The Reconciled Body's Leading Heading Names The Survivor
+
+Both input notes carry their own `# ` heading, so a reconciled body may
+open with either. The merged frontmatter `title:` is always the survivor's
+(the survivor-wins scalar rule), and the two MUST NOT be allowed to
+disagree: the frontmatter title is what `index.md`, `status`, `list` and
+citations render, while the heading is what a human — or an OKF consumer
+with no OpenKOS awareness — reads as the document's name.
+
+The reconciled body's LEADING `# ` heading MUST therefore be pinned to the
+survivor's title deterministically, after every refusal gate so the length
+floor still scores the model's own reply. The pin MUST NOT invent a
+heading where the body opens with prose, and MUST NOT rewrite a later `# `
+heading, which is the model's own sectioning rather than the document's
+name. Pinning is deterministic rather than prompt-asked because the
+survivor's title is a fact already in hand; asking the model to echo it
+would trade that fact for a probability (issue #695).
+
+#### Scenario: A reconciled body headed with the absorbed title is corrected
+- GIVEN a reconciled reply whose first line is the ABSORBED document's
+  heading
+- WHEN the reply passes every refusal gate
+- THEN the returned body's leading heading is the survivor's title, the
+  absorbed title does not appear as that heading, and the body's remaining
+  content is unchanged
+
+#### Scenario: A heading-less reconciled body keeps its shape
+- GIVEN a reconciled reply that opens with prose
+- WHEN the reply passes every refusal gate
+- THEN the returned body is byte-identical to the reply
