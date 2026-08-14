@@ -12827,6 +12827,13 @@ class _FiledAnswerPlan:
     path: Path
     content: str
     sensitivity: str
+    type_floor_raised: bool = False
+    """`True` when this filing's resolved `sensitivity` is strictly above
+    the cited-concept high-water-mark because of the per-type offset
+    mapping (issue #669, design D3) -- `resolved != cited_high_water_mark`,
+    the `--save`-site mirror of `_DerivedPlan.type_floor_raised`. `False`
+    on the common path (no offset configured for this type, or the
+    citation high-water-mark already at or above the floor-plus-offset)."""
 
 
 _DECLARATIVE_TITLE_MAX_CHARS = 90
@@ -12965,6 +12972,7 @@ def _stage_filed_answer(
     title: str | None = None,
     description: str | None = None,
     doc_type: str = _INSIGHT_TYPE,
+    cfg: config.Config | None = None,
 ) -> _FiledAnswerPlan:
     """Stage a `query --save` filing of `answer_text` as a new derived OKF
     concept -- a pure, in-memory Phase A step mirroring
@@ -12994,6 +13002,14 @@ def _stage_filed_answer(
     otherwise leave a filed answer -- which may have synthesized
     confidential content -- classified below `confidential`, a future-leak
     vector.
+
+    When `cfg` is given (issue #669, design D3), the cited-concept
+    high-water-mark computed above is then a FLOOR, not the final value:
+    `config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)`
+    may raise it further, never lower it, per `doc_type`'s configured
+    offset (`query-command` spec: "Sensitivity Is The High-Water-Mark Of
+    Cited Concepts"). `cfg=None` (the pre-#669 shape) applies no type
+    default -- the high-water-mark alone is the final value, unchanged.
     """
     if not citations:
         raise ValueError(
@@ -13043,7 +13059,7 @@ def _stage_filed_answer(
             "--title to file under a different name, or forget the existing one"
         )
 
-    sensitivity = default_sensitivity
+    cited_high_water_mark = default_sensitivity
     for citation in citations:
         try:
             # `okf.concept_path_for`, not `bundle_dir / f"{id}.md"` (#473):
@@ -13062,9 +13078,23 @@ def _stage_filed_answer(
             # fails CLOSED to "confidential" (cannot verify -> most
             # restrictive), mirroring `_assemble_context`'s broad
             # `except Exception` in retrieval/answer.py.
-            sensitivity = okf.combine_sensitivity(sensitivity, "confidential")
+            cited_high_water_mark = okf.combine_sensitivity(
+                cited_high_water_mark, "confidential"
+            )
             continue
-        sensitivity = okf.combine_sensitivity(sensitivity, metadata.get("sensitivity"))
+        cited_high_water_mark = okf.combine_sensitivity(
+            cited_high_water_mark, metadata.get("sensitivity")
+        )
+
+    # Per-type sensitivity default (issue #669, design D3): the offset
+    # applies to the CONFIG FLOOR, never to `cited_high_water_mark` itself,
+    # so a citation set already resolved above the floor-plus-offset still
+    # wins via the high-water-mark inside `type_birth_sensitivity`.
+    sensitivity = (
+        config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)
+        if cfg is not None
+        else cited_high_water_mark
+    )
 
     content = okf.build_concept(
         type=doc_type,
@@ -13086,6 +13116,7 @@ def _stage_filed_answer(
         path=path,
         content=content,
         sensitivity=sensitivity,
+        type_floor_raised=(sensitivity != cited_high_water_mark),
     )
 
 
@@ -13482,6 +13513,7 @@ def query(
             title=title,
             description=description,
             doc_type=save_type,
+            cfg=cfg,
         )
     except ValueError as exc:
         typer.echo(f"openkos query: refusing to save -- {exc}.", err=True)
@@ -13517,18 +13549,35 @@ def query(
         raise typer.Exit(code=1) from exc
 
     typer.echo("openkos query: proposed changes (--save):")
-    # High-water-mark disclosure (issue #569): `_stage_filed_answer` already
-    # inherited the fold (ADR-0003); what was missing is TELLING the user
-    # before they consent. Named only when the fold RAISED the level above
-    # the workspace default -- printing it unconditionally would bury the
-    # one case that matters.
-    if plan.sensitivity != cfg.default_sensitivity:
+    # High-water-mark disclosure (issue #569), extended to a three-way
+    # branch by the per-type default (issue #669, design D4): the type
+    # default cause outranks the citation cause when both could apply --
+    # it is the NEW, surprising one -- and the citation wording is
+    # preserved byte-for-byte for the cases it still owns, so #569's
+    # existing assertions stay green. Neither branch fires when the
+    # resolved level is at the workspace default: printing it
+    # unconditionally would bury the one case that matters.
+    if plan.type_floor_raised:
+        typer.echo(
+            f"  + bundle/{plan.link_dir}/{plan.slug}.md "
+            f"(sensitivity: {plan.sensitivity}, raised by the {save_type} "
+            "type default)"
+        )
+    elif plan.sensitivity != cfg.default_sensitivity:
         typer.echo(
             f"  + bundle/{plan.link_dir}/{plan.slug}.md "
             f"(sensitivity: {plan.sensitivity}, inherited from citations)"
         )
     else:
         typer.echo(f"  + bundle/{plan.link_dir}/{plan.slug}.md")
+    # The `!` consequence line prints whenever the resolved level is
+    # `confidential`, by either route -- the consequence belongs to the
+    # level, not to the cause (design D4).
+    if plan.sensitivity == "confidential":
+        typer.echo(
+            "  ! confidential: excluded from query, contradictions, and "
+            "suggest-relations against a non-local backend."
+        )
     typer.echo(f"  ~ {save_index_path.name} (new entry)")
     typer.echo(f"  ~ {save_log_path.name} (new dated entry)")
 
@@ -13591,6 +13640,25 @@ def query(
         f"openkos query: filed answer as bundle/{plan.link_dir}/{plan.slug}.md "
         f"({save_index_path.name}, {save_log_path.name} updated)."
     )
+    # Write-Time Advisory (issue #669, design D4): the spec-required
+    # success-message advisory, the `query --save` mirror of ingest's
+    # run-summary line -- fires even when `--auto` skips the confirmation
+    # prompt, since the preview block above can, in principle, be bypassed
+    # in ways the success message must never depend on. stdout, like
+    # `query`'s own success line -- `query --save` has no batch stdout
+    # contract to protect (unlike ingest's stderr notices, #349).
+    if plan.type_floor_raised:
+        typer.echo(
+            f"openkos query: 1 concept was born above the workspace "
+            f"sensitivity floor by type default ({save_type} -> "
+            f"{plan.sensitivity})."
+        )
+        if plan.sensitivity == "confidential":
+            typer.echo(
+                "openkos query: confidential concepts are excluded from "
+                "query, contradictions, and suggest-relations against a "
+                "non-local backend (#569)."
+            )
 
     # #331: `query --save` was the ONE mutating path without the
     # workspace-autocommit safety net, for no documented reason -- the

@@ -167,7 +167,7 @@ Of Cited Concepts". Design D3, D4 (preview + success-message wording).
 
 **Depends on**: WU2. **Parallel-safe with**: WU3 (see note above).
 
-1. [ ] RED: extend `tests/unit/cli/test_query_save.py` with:
+1. [x] RED: extend `tests/unit/cli/test_query_save.py` with:
    - Birth seam: `--type Person` births above the floor given a
      `public`-resolved citation high-water-mark and the shipped mapping
      (asserts `private`); a higher citation high-water-mark still wins over
@@ -189,17 +189,17 @@ Of Cited Concepts". Design D3, D4 (preview + success-message wording).
      itself is skipped in that mode.
    Run `python -m pytest tests/unit/cli/test_query_save.py -x` and confirm
    the new cases fail.
-2. [ ] GREEN: wire `_stage_filed_answer` (`cli/main.py:12993`) to call
+2. [x] GREEN: wire `_stage_filed_answer` (`cli/main.py:12993`) to call
    `config.type_birth_sensitivity(cfg, doc_type, cited_high_water_mark)` and
    set `_FiledAnswerPlan.type_floor_raised = (resolved != cited_high_water_mark)`.
-3. [ ] GREEN: replace the two-way preview branch at `main.py:13443-13457`
+3. [x] GREEN: replace the two-way preview branch at `main.py:13443-13457`
    with the three-way branch from design D4 (type-default cause outranks
    the citation cause when both could apply; citation wording preserved
    byte-for-byte for the cases it still owns).
-4. [ ] GREEN: add the success-message advisory immediately after
+4. [x] GREEN: add the success-message advisory immediately after
    `main.py:13514-13517`'s `filed answer as ...` line, before `_autocommit`,
    gated on `plan.type_floor_raised`, per design D4's two-line wording.
-5. [ ] Run `python -m pytest tests/unit/cli/test_query_save.py -v` green,
+5. [x] Run `python -m pytest tests/unit/cli/test_query_save.py -v` green,
    then `python -m pytest tests/unit/cli/ -q` for the full CLI suite (must
    still be green alongside WU3's changes once both are stacked).
 

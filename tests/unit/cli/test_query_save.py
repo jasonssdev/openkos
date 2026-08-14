@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, _NamedTextIOWrapper
 
-from openkos import fsio
+from openkos import config, fsio
 from openkos.cli import main
 from openkos.cli.main import _stage_filed_answer, app
 from openkos.graph import sqlite_graph
@@ -77,6 +77,31 @@ def _write_concept(
     lines.append("---")
     lines.append("body")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _default_cfg(**overrides: object) -> config.Config:
+    """Build a minimal `config.Config` for direct `_stage_filed_answer`
+    calls (issue #669) -- mirrors `test_ingest.py::_default_cfg`'s
+    hand-built-Config pattern exactly, so the shipped `{"Person": 1}`
+    type-sensitivity-offset mapping applies by default; pass
+    `type_sensitivity_defaults={}` to opt out entirely."""
+    fields: dict[str, object] = {
+        "model": "qwen3:8b",
+        "review": True,
+        "default_sensitivity": "private",
+        "freshness_window": "7d",
+        "embedding_model": "bge-m3",
+        "chat_timeout": config.DEFAULT_CHAT_TIMEOUT,
+        "max_generation_tokens": config.DEFAULT_MAX_GENERATION_TOKENS,
+        "confidential_local_exemption": config.DEFAULT_CONFIDENTIAL_LOCAL_EXEMPTION,
+        "volatility_windows": {},
+        "type_tiers": {},
+        "models": {},
+        "union_judge": config.DEFAULT_UNION_JUDGE,
+        "type_sensitivity_defaults": dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
+    }
+    fields.update(overrides)
+    return config.Config(**fields)  # type: ignore[arg-type]
 
 
 def _fake_matched_answer(
@@ -421,6 +446,96 @@ def test_stage_filed_answer_confidential_citation_is_high_water_mark(
 
     assert plan.sensitivity == "confidential"
     assert "sensitivity: confidential" in plan.content
+
+
+# --- type-sensitivity-defaults: `--save` birth seam (issue #669) ------------
+
+
+def test_stage_filed_answer_type_default_raises_above_the_floor(
+    tmp_path: Path,
+) -> None:
+    """`--type Person` births above the cited-concept high-water-mark given
+    the shipped `{"Person": 1}` mapping (spec: `query-command` "A
+    type-defaulted filed answer is saved above the cited high-water-mark").
+
+    **Twin-rule guard** (design D6): this is the second of the two
+    independent birth-seam site tests -- it must fail if ONLY the `--save`
+    call site (`_stage_filed_answer`) reverts to
+    `sensitivity=cited_high_water_mark`, independent of WU3's ingest-site
+    test in `test_ingest.py`."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "stoicism", sensitivity="public")
+    citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
+
+    plan = _stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="answer text",
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="public",
+        timestamp="2026-07-23T00:00:00Z",
+        doc_type="Person",
+        cfg=_default_cfg(default_sensitivity="public"),
+    )
+
+    assert plan.sensitivity == "private"
+    assert plan.type_floor_raised is True
+    assert "sensitivity: private" in plan.content
+
+
+def test_stage_filed_answer_citation_high_water_mark_wins_over_type_default(
+    tmp_path: Path,
+) -> None:
+    """A higher citation high-water-mark still wins over the type-defaulted
+    floor -- `combine_sensitivity`'s high-water-mark is never bypassed by
+    the offset (design D3: "the high-water-mark still wins outright
+    whenever a source is more sensitive than that")."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "secret", sensitivity="confidential")
+    citations = [
+        Citation(concept_id="concepts/secret", title="Secret", confidential=True)
+    ]
+
+    plan = _stage_filed_answer(
+        question="what is the secret?",
+        answer_text="answer text",
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="public",
+        timestamp="2026-07-23T00:00:00Z",
+        doc_type="Person",
+        cfg=_default_cfg(default_sensitivity="public"),
+    )
+
+    assert plan.sensitivity == "confidential"
+    # The high-water-mark, not the type default, produced `confidential`
+    # here -- `resolved == cited_high_water_mark`, so the type default did
+    # not raise anything.
+    assert plan.type_floor_raised is False
+
+
+def test_stage_filed_answer_no_cfg_is_untouched_by_the_type_default(
+    tmp_path: Path,
+) -> None:
+    """Callers that pass no `cfg` (the pre-#669 shape) get exactly the
+    pre-#669 behavior -- `cited_high_water_mark` alone, no type-default
+    raise applied."""
+    bundle_dir = tmp_path / "bundle"
+    _write_concept(bundle_dir, "concepts", "stoicism", sensitivity="public")
+    citations = [Citation(concept_id="concepts/stoicism", title="Stoicism")]
+
+    plan = _stage_filed_answer(
+        question="what is stoicism?",
+        answer_text="answer text",
+        citations=citations,
+        bundle_dir=bundle_dir,
+        default_sensitivity="public",
+        timestamp="2026-07-23T00:00:00Z",
+        doc_type="Person",
+    )
+
+    assert plan.sensitivity == "public"
+    assert plan.type_floor_raised is False
 
 
 # --- Integration tests: `query --save` --------------------------------------
@@ -1324,6 +1439,14 @@ def test_query_save_preview_discloses_a_raised_sensitivity(
         / "stoicism-teaches-the-dichotomy-of-control.md"
     ).read_text(encoding="utf-8")
     assert "sensitivity: confidential" in content
+    # issue #669, design D4: the `!` consequence line prints whenever the
+    # resolved level is `confidential`, regardless of which branch (citation
+    # inheritance here, the type default in the sibling tests below)
+    # produced it.
+    assert (
+        "  ! confidential: excluded from query, contradictions, and "
+        "suggest-relations against a non-local backend." in result.stdout
+    )
 
 
 def test_query_save_preview_stays_silent_at_the_default_sensitivity(
@@ -1346,6 +1469,135 @@ def test_query_save_preview_stays_silent_at_the_default_sensitivity(
         in result.stdout
     )
     assert "inherited from citations" not in result.stdout
+    assert "excluded from query" not in result.stdout
+
+
+# --- type-sensitivity-defaults: `--save` preview + success advisory (#669) --
+
+
+def test_query_save_preview_names_the_type_default_when_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three-way preview branch (design D4): the type-default cause
+    outranks the citation cause -- names the raise with `raised by the
+    {Type} type default`, distinct from the citation-inherited wording,
+    and stays silent on the confidential-consequence line at a non-
+    confidential raised level."""
+    _init_workspace(tmp_path, monkeypatch)
+    _set_config_field(
+        tmp_path, "default_sensitivity: private", "default_sensitivity: public"
+    )
+    _write_concept(
+        tmp_path / "bundle",
+        "concepts",
+        "stoicism",
+        title="Stoicism",
+        sensitivity="public",
+    )
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(
+        app, ["query", "what is stoicism?", "--save", "--auto", "--type", "Person"]
+    )
+
+    assert result.exit_code == 0
+    assert "(sensitivity: private, raised by the Person type default)" in result.stdout
+    assert "inherited from citations" not in result.stdout
+    assert "excluded from query" not in result.stdout
+
+
+def test_query_save_preview_confidential_consequence_via_type_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `!` consequence line prints when the TYPE DEFAULT (not citation
+    inheritance) is the route that landed the resolved level on
+    `confidential` -- the consequence belongs to the level, not the cause
+    (design D4)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path / "bundle",
+        "concepts",
+        "stoicism",
+        title="Stoicism",
+        sensitivity="private",
+    )
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(
+        app, ["query", "what is stoicism?", "--save", "--auto", "--type", "Person"]
+    )
+
+    assert result.exit_code == 0
+    assert (
+        "(sensitivity: confidential, raised by the Person type default)"
+        in result.stdout
+    )
+    assert (
+        "  ! confidential: excluded from query, contradictions, and "
+        "suggest-relations against a non-local backend." in result.stdout
+    )
+
+
+def test_query_save_success_message_names_the_type_default_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec Requirement 6 / `query-command` spec: the success message
+    (immediately after `filed answer as ...`) carries the born-above-floor
+    advisory, naming count + type + level, with the #569 consequence line
+    at `confidential` -- fires even under `--auto` (the preview block is
+    printed unconditionally in this codebase, but the success message must
+    never depend on it either way)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(
+        tmp_path / "bundle",
+        "concepts",
+        "stoicism",
+        title="Stoicism",
+        sensitivity="private",
+    )
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(
+        app, ["query", "what is stoicism?", "--save", "--auto", "--type", "Person"]
+    )
+
+    assert result.exit_code == 0
+    stdout = result.stdout
+    filed_idx = stdout.index("openkos query: filed answer as")
+    advisory_idx = stdout.index(
+        "openkos query: 1 concept was born above the workspace sensitivity "
+        "floor by type default (Person -> confidential)."
+    )
+    consequence_idx = stdout.index(
+        "openkos query: confidential concepts are excluded from query, "
+        "contradictions, and suggest-relations against a non-local backend "
+        "(#569)."
+    )
+    assert filed_idx < advisory_idx < consequence_idx
+
+
+def test_query_save_success_message_silent_when_nothing_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No per-type-default advisory when the filed type has no configured
+    offset (the default `--type Insight` here is not in the shipped
+    `{"Person": 1}` mapping)."""
+    _init_workspace(tmp_path, monkeypatch)
+    _write_concept(tmp_path / "bundle", "concepts", "stoicism", title="Stoicism")
+    citation = Citation(concept_id="concepts/stoicism", title="Stoicism")
+    fake_result = _fake_matched_answer(citations=[citation])
+    monkeypatch.setattr("openkos.cli.main.answer", lambda *args, **kwargs: fake_result)
+
+    result = runner.invoke(app, ["query", "what is stoicism?", "--save", "--auto"])
+
+    assert result.exit_code == 0
+    assert "type default" not in result.stdout
 
 
 # --- Insight filing (issue #570) --------------------------------------------
