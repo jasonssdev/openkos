@@ -94,6 +94,7 @@ from openkos.resolution.edge_typing import (
     next_candidate_offset,
     suggest_edge_types,
 )
+from openkos.resolution.reconciliation import reconcile_merged_body
 from openkos.resolution.volatility_typing import (
     TierSuggestionBatch,
     suggest_volatility,
@@ -7552,6 +7553,19 @@ def _expected_post_merge_index_and_log(
     return expected_index, expected_log
 
 
+_RECONCILE_SHARE_THRESHOLD = 0.2
+"""Stacked share at or above which `merge` plans the reconciliation pass
+(#645, opt-out by ruling). Below it the absorbed contribution is a stacked
+sentence or two -- an honest append, not worth a model call; the measured
+production shares (0.31-0.47, every merge of the 2026-08-13 e2e session)
+all land above it. `--no-reconcile` skips the pass regardless."""
+
+_RECONCILE_MIN_ABSORBED_CHARS = 200
+"""Absolute floor under which the pass is never planned, whatever the
+share: two one-line bodies can stack at 50% share while carrying nothing
+worth a model call, and appending them is already readable. The #645
+evidence merges contributed 384-615 absorbed chars each."""
+
 _STACKED_SHARE_GUARDRAIL = 0.8
 """Merged-body share at or above which a proposed merge is flagged as a
 likely about-X/is-X confusion (issue #559).
@@ -8151,6 +8165,57 @@ def set_volatility_core(config_path: Path, prepared: PreparedSetVolatility) -> N
     fsio.write_atomic(config_path, prepared.new_config_text)
 
 
+def _reconcile_merged_survivor(
+    root: Path, prepared: "PreparedMerge"
+) -> tuple["PreparedMerge", str | None]:
+    """Run the #645 reconciliation pass over `prepared`'s merged survivor:
+    returns `(updated_prepared, None)` on success, or `(prepared,
+    failure_reason)` -- the caller keeps the stacked body and notices.
+
+    Splits the merged body back at the exact `## Merged content (<id>)`
+    separator `okf.build_merged_document` wrote, hands both halves to
+    `reconcile_merged_body` on the workspace's global chat model
+    (`task=None`: reconciliation has no harness, so #508's rule forbids a
+    per-task key), and rebuilds the survivor text with the reconciled body
+    under the UNCHANGED merged frontmatter. Every failure -- unreadable
+    config, transport errors, a reply that failed validation -- is a
+    reason string, never an exception: the merge itself must not gain a
+    new failure mode from an improvement pass.
+
+    The ledger entry is untouched: `unmerge` restores `survivor_before`/
+    `absorbed_snapshot`, so reversibility is identical either way."""
+    try:
+        cfg = config.read_config(root)
+    except (OSError, ValueError) as exc:
+        return prepared, f"workspace config unreadable ({exc})"
+
+    merged_text = prepared.plan.merged_survivor
+    metadata, merged_body = okf.load_frontmatter(merged_text)
+    separator = f"{okf.MERGED_CONTENT_HEADING_PREFIX}{prepared.absorbed_canonical})\n\n"
+    if separator not in merged_body:
+        return prepared, "stacked heading not found in the merged body"
+    survivor_body, absorbed_body = merged_body.split(separator, 1)
+    title = str(metadata.get("title") or "") or prepared.survivor_canonical
+
+    try:
+        reconciled = reconcile_merged_body(
+            survivor_title=title,
+            survivor_body=survivor_body,
+            absorbed_body=absorbed_body,
+            llm=_chat_client(cfg),
+        )
+    except OllamaError as exc:
+        return prepared, str(exc)
+    if reconciled is None:
+        return prepared, "the model reply failed validation"
+
+    if not reconciled.endswith("\n"):
+        reconciled += "\n"
+    new_text = okf.dump_frontmatter(metadata, reconciled)
+    new_plan = dataclasses.replace(prepared.plan, merged_survivor=new_text)
+    return dataclasses.replace(prepared, plan=new_plan), None
+
+
 @app.command(
     help=(
         "Fuse two concepts into one, keeping a ledger entry that makes the "
@@ -8179,6 +8244,15 @@ def merge(
             "Bypass the doctor-flagged ledger-integrity refusal (Check B, "
             "post-merge mutation) for the survivor's sidecar. Independent "
             "of --auto -- it never skips the confirmation prompt."
+        ),
+    ),
+    no_reconcile: bool = typer.Option(
+        False,
+        "--no-reconcile",
+        help=(
+            "Skip the reconciliation pass (#645): keep the merged body as "
+            "the survivor's text with the absorbed text appended under a "
+            "'## Merged content' heading, with no model call."
         ),
     ),
 ) -> None:
@@ -8345,11 +8419,28 @@ def merge(
         typer.echo(f"  - drop self-loop: {relation.target} ({relation.type})")
     for relation in prepared.deduped_collisions:
         typer.echo(f"  ~ dedupe collision: {relation.target} ({relation.type})")
+    # #645 (ruling: opt-out): plan the reconciliation pass when the stacked
+    # share reaches the threshold, disclosed HERE -- in the plan, before
+    # the consent gate -- so the model call is part of what the human
+    # approves. `--no-reconcile` is the opt-out; failure falls back to the
+    # stacked body after the gate.
+    reconcile_planned = (
+        not no_reconcile
+        and prepared.stacked_body is not None
+        and prepared.stacked_body.share >= _RECONCILE_SHARE_THRESHOLD
+        and prepared.stacked_body.absorbed_chars >= _RECONCILE_MIN_ABSORBED_CHARS
+    )
     if prepared.stacked_body is not None:
         typer.echo(
             f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
             f"unreconciled char(s) ({prepared.stacked_body.share:.0%} of "
             "merged body -- bodies were appended, not reconciled)"
+        )
+    if reconcile_planned:
+        typer.echo(
+            "  ~ reconcile merged body: one model call rewrites it as a "
+            "single coherent document (falls back to the stacked form on "
+            "failure; pass --no-reconcile to skip)"
         )
     for rel in prepared.rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
@@ -8373,6 +8464,20 @@ def merge(
                 err=True,
             )
             raise typer.Exit(code=1)
+
+    # #645: the reconciliation call runs AFTER consent (the plan disclosed
+    # it) and BEFORE the drift re-check below, so the slow model call sits
+    # inside the window the drift guard re-validates rather than after it.
+    # Any failure keeps the stacked body and notices -- the merge itself
+    # never fails on an improvement pass.
+    if reconcile_planned:
+        prepared, reconcile_failure = _reconcile_merged_survivor(root, prepared)
+        if reconcile_failure is not None:
+            typer.echo(
+                f"openkos merge: notice -- reconciliation failed "
+                f"({reconcile_failure}); kept the stacked body.",
+                err=True,
+            )
 
     # Issue #334: every byte `merge_core` writes below was computed from a
     # pre-prompt read, so re-validate each target now -- after the gate,
