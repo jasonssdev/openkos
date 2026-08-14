@@ -6,6 +6,9 @@ confidential_local_exemption: true  # send confidential concepts to a LOCAL LLM 
 freshness_window: 7d      # age after which a stamp is flagged for re-observation
 chat_timeout: 600         # seconds an LLM chat call may take before giving up
 max_generation_tokens: 8192  # safety rail: hard ceiling on tokens a chat call may generate
+context_window: 12288     # tokens the model holds at once (prompt + reply); unpinned it
+                          # reserves its own 32K default and ~10 GB. Refused below the
+                          # derived floor; blank the value to leave it unpinned.
 # volatility_windows:     # per-tier stale-stamp windows (overrides freshness_window
 #   slow: 90d             # by knowledge-volatility tier; see docs/adr/0007)
 #   volatile: 7d

@@ -176,6 +176,52 @@ def test_every_chat_client_construction_passes_max_generation_tokens() -> None:
     )
 
 
+# --- context_window: the same wiring pinned for the context window (#691) ---
+
+
+def test_chat_client_applies_configured_context_window() -> None:
+    """`_chat_client` hands the workspace's `context_window` to the client."""
+    cfg = _cfg(context_window=16384)
+
+    client = main_module._chat_client(cfg)
+
+    assert client._context_window == 16384
+
+
+def test_chat_client_forwards_an_opted_out_context_window() -> None:
+    """`context_window: null` reaches the client as `None`, so the opt-out is
+    a real opt-out rather than a value the wiring quietly replaces."""
+    cfg = _cfg(context_window=None)
+
+    assert main_module._chat_client(cfg)._context_window is None
+
+
+def test_every_chat_client_construction_passes_a_context_window() -> None:
+    """No chat client is constructed without the configured window.
+
+    A site that omits `context_window=` compiles, type-checks, and runs -- it
+    just keeps reserving the model's own 32K default and its ~10 GB
+    footprint, which is the whole defect #691 exists to close, and it would
+    do so on only SOME verbs, which is worse than doing it on all of them.
+    """
+    offenders: list[str] = []
+    seen = 0
+    for path in sorted(_SRC.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for call in _chat_client_calls(tree):
+            seen += 1
+            if any(kw.arg == "context_window" for kw in call.keywords):
+                continue
+            offenders.append(f"{path.name}:{call.lineno}")
+
+    assert seen > 0, "no chat client constructions found -- the guard is blind"
+    assert not offenders, (
+        "chat client(s) constructed without an explicit context_window, so "
+        "the workspace's window is ignored there and the model reserves its "
+        "own default:\n  " + "\n  ".join(offenders)
+    )
+
+
 # --- #515: the same seam now resolves a PER-TASK model ---------------------
 
 
@@ -189,6 +235,7 @@ def _cfg(**overrides: object) -> config.Config:
         "embedding_model": "bge-m3",
         "chat_timeout": config.DEFAULT_CHAT_TIMEOUT,
         "max_generation_tokens": config.DEFAULT_MAX_GENERATION_TOKENS,
+        "context_window": config.DEFAULT_CONTEXT_WINDOW,
         "confidential_local_exemption": True,
         "volatility_windows": {},
         "type_tiers": {},

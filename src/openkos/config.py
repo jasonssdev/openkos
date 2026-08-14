@@ -166,6 +166,60 @@ nothing (issue #422). Reaching this ceiling raises `OllamaGenerationCapped`
 (`llm.ollama`) rather than returning a silently truncated reply -- a
 mis-set rail is loud, not silent."""
 
+PROMPT_CONTEXT_ALLOWANCE = 4096
+"""Tokens reserved for the PROMPT half of the context window (issue #691).
+
+Measured, not guessed. Both prompt shapes the engine builds were sent to
+local `qwen3:8b` at their largest, and Ollama's own `prompt_eval_count` read
+back (2026-08-14, Spanish prose -- which tokenizes worse than English, so
+this is the unfavourable case):
+
+- extraction at a FULL `extraction.concept._CHUNK_TARGET` window (4000
+  characters of source plus the system prompt, 12043 characters in all):
+  **2707 tokens**;
+- `query` with `limit`=5 retrieved bodies packed in full (13516
+  characters): **3263 tokens**.
+
+`query` is the real bound, not extraction: it has no per-body budget of its
+own, so it builds the largest prompt in the product. 4096 leaves 833 tokens
+of headroom over it and 1389 over extraction.
+
+Deliberately NOT tuned down to the extraction case alone: `num_ctx` is one
+setting shared by every chat seam, so it must be sized for the largest
+prompt any of them builds."""
+
+DEFAULT_CONTEXT_WINDOW = 12288
+"""Packaged default for `context_window`, in tokens, forwarded to Ollama as
+`options.num_ctx` (issue #691).
+
+Exactly `minimum_context_window(DEFAULT_MAX_GENERATION_TOKENS)`, so the
+shipped value and the enforced floor cannot drift apart.
+
+Left unpinned, `ollama ps` showed `qwen3:8b` reserving a 32768-token window
+and 10 GB (2026-08-14) -- weights are ~5 GB, the rest is KV cache for a
+window the engine never fills. KV cache scales linearly with the window, and
+pinning this value was measured back on the same machine and model:
+**7.2 GB at CONTEXT 12288**, a 2.8 GB saving. On a 48 GB machine that is
+invisible; on the 16 GB machine this product targets it is the difference
+between one slot that eats the whole machine and room to work."""
+
+
+def minimum_context_window(max_generation_tokens: int) -> int:
+    """The smallest `context_window` that cannot truncate (issue #691).
+
+    Ollama's `num_ctx` bounds the prompt and the completion TOGETHER, so the
+    floor is the prompt allowance plus the generation ceiling -- a window
+    sized for the prompt alone would cut off exactly the replies
+    `max_generation_tokens` is set to permit.
+
+    Kept as a function rather than a constant because the two settings are
+    not independent: a workspace that raises its generation ceiling raises
+    this floor with it, and the pair that silently truncates is precisely a
+    raised ceiling next to an unchanged window.
+    """
+    return PROMPT_CONTEXT_ALLOWANCE + max_generation_tokens
+
+
 DEFAULT_UNION_JUDGE = True
 """Packaged default for `union_judge` (design D9, #456): the union-of-runs +
 selector-judge extraction pipeline (`extraction.concept.extract_concept_union`)
@@ -652,6 +706,29 @@ class Config:
     `chat_timeout`'s scope exactly. A SAFETY RAIL, not a quality knob:
     reaching it raises `OllamaGenerationCapped` rather than returning a
     silently truncated reply."""
+    context_window: int | None
+    """Context window, in tokens, pinned on every `llm.chat` request as
+    `options.num_ctx` (issue #691), or `None` to leave the model's own
+    default in place.
+
+    Absent from the file, this resolves to
+    `max(DEFAULT_CONTEXT_WINDOW, minimum_context_window(max_generation_tokens))`
+    -- derived rather than fixed, so a workspace that raised its generation
+    ceiling and never heard of this key still gets a window big enough for
+    it.
+
+    This is the one field whose EXPLICIT null does not mean the packaged
+    default, and deliberately so: "no window pinned" is a real state that no
+    positive integer can express, whereas for every other field the absent
+    behaviour IS the default. `context_window:` written out with no value
+    therefore opts out, and sends a request byte-identical to the pre-#691
+    one.
+
+    A present value is floor-checked at read time, not merely type-checked.
+    Too LOW is worse than unset: Ollama drops the head of the prompt and
+    returns a confident answer built on a truncated document, with no error
+    anywhere. Validation is the only place that failure can be made
+    impossible rather than documented."""
     confidential_local_exemption: bool
     """Whether a `confidential` concept may be included in an `llm.chat`
     payload when the backend host is verifiably this machine (issue #240),
@@ -751,6 +828,12 @@ def read_config(root: Path) -> Config:
     embedding_model = raw.get("embedding_model")
     chat_timeout = raw.get("chat_timeout")
     max_generation_tokens = raw.get("max_generation_tokens")
+    # Membership, not `.get()`: `raw.get` returns `None` for BOTH an absent
+    # key and an explicit YAML null, and #691 gives those two opposite
+    # meanings -- absent derives a window, explicit null opts out of pinning
+    # one at all. This is the only key that needs to tell them apart.
+    context_window_present = "context_window" in raw
+    context_window = raw.get("context_window")
     confidential_local_exemption = raw.get("confidential_local_exemption")
     volatility_windows = raw.get("volatility_windows")
     type_tiers = raw.get("type_tiers")
@@ -808,6 +891,46 @@ def read_config(root: Path) -> Config:
             f"{layout.config_path.name}: 'max_generation_tokens' must be a "
             f"positive integer number of tokens, got {max_generation_tokens!r}"
         )
+    # Resolved here rather than at construction below, because the
+    # `context_window` floor is derived from it: checking a window against
+    # the PACKAGED ceiling while the workspace runs a raised one would let
+    # through exactly the pair that truncates.
+    resolved_max_generation_tokens = (
+        max_generation_tokens
+        if max_generation_tokens is not None
+        else DEFAULT_MAX_GENERATION_TOKENS
+    )
+    context_floor = minimum_context_window(resolved_max_generation_tokens)
+    if context_window is not None:
+        if (
+            isinstance(context_window, bool)
+            or not isinstance(context_window, int)
+            or context_window <= 0
+        ):
+            # `bool` first and explicitly, the same int-as-bool hazard
+            # `chat_timeout` and `max_generation_tokens` each guard above.
+            raise ValueError(
+                f"{layout.config_path.name}: 'context_window' must be a "
+                f"positive integer number of tokens, got {context_window!r}"
+            )
+        if context_window < context_floor:
+            # The one validation in this file that exists to prevent a SILENT
+            # failure rather than a loud one. Every other bad value here
+            # produces a visible error at the seam it governs; a `num_ctx`
+            # below the floor produces a normal-looking answer computed from
+            # a prompt Ollama truncated without telling anyone (#691). The
+            # remedy is named in the message, because the floor moves with
+            # `max_generation_tokens` and a bare number would look arbitrary.
+            raise ValueError(
+                f"{layout.config_path.name}: 'context_window' must be at least "
+                f"{context_floor} tokens (a {PROMPT_CONTEXT_ALLOWANCE}-token "
+                f"prompt allowance plus max_generation_tokens="
+                f"{resolved_max_generation_tokens}), got {context_window}. A "
+                f"smaller window is worse than none: Ollama truncates the "
+                f"prompt silently. Raise it, lower max_generation_tokens, or "
+                f"write `context_window:` with no value to leave the window "
+                f"unpinned."
+            )
     if confidential_local_exemption is not None and not isinstance(
         confidential_local_exemption, bool
     ):
@@ -940,10 +1063,19 @@ def read_config(root: Path) -> Config:
         chat_timeout=(
             float(chat_timeout) if chat_timeout is not None else DEFAULT_CHAT_TIMEOUT
         ),
-        max_generation_tokens=(
-            max_generation_tokens
-            if max_generation_tokens is not None
-            else DEFAULT_MAX_GENERATION_TOKENS
+        max_generation_tokens=resolved_max_generation_tokens,
+        # Three-way, unlike every other field's two-way `is not None`: a
+        # present value passes through (already floor-checked above), an
+        # explicit null opts out, and an ABSENT key derives a window that
+        # covers this workspace's own ceiling (#691).
+        context_window=(
+            context_window
+            if context_window is not None
+            else (
+                None
+                if context_window_present
+                else max(DEFAULT_CONTEXT_WINDOW, context_floor)
+            )
         ),
         confidential_local_exemption=(
             confidential_local_exemption

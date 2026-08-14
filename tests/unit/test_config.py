@@ -1684,6 +1684,165 @@ def test_written_config_carries_max_generation_tokens(tmp_path: Path) -> None:
     )
 
 
+# --- context_window: the pinned `num_ctx` and its derived floor (#691) -------
+
+
+def test_minimum_context_window_covers_the_prompt_and_the_generation() -> None:
+    """The floor is the prompt allowance PLUS the generation ceiling.
+
+    Ollama's `num_ctx` bounds prompt and completion TOGETHER, so a window
+    that only covered the prompt would truncate exactly the replies
+    `max_generation_tokens` is sized to permit.
+    """
+    assert config.minimum_context_window(8192) == config.PROMPT_CONTEXT_ALLOWANCE + 8192
+
+
+def test_minimum_context_window_tracks_a_raised_ceiling() -> None:
+    """Raising `max_generation_tokens` raises the floor with it: the two
+    settings are not independent, and a floor that ignored the ceiling would
+    let a workspace configure its own silent truncation."""
+    assert config.minimum_context_window(16384) > config.minimum_context_window(8192)
+
+
+def test_default_context_window_is_the_floor_at_the_default_ceiling() -> None:
+    """The packaged default is exactly the derived floor at the packaged
+    ceiling -- 12288 -- rather than a round number chosen by eye (#691).
+
+    Unpinned, `qwen3:8b` reserved 32768 tokens and ~10 GB, which is the whole
+    16 GB machine. 12288 brings the footprint to roughly 7 GB while still
+    covering the longest prompt the engine builds.
+    """
+    assert config.DEFAULT_CONTEXT_WINDOW == 12288
+    floor = config.minimum_context_window(config.DEFAULT_MAX_GENERATION_TOKENS)
+    assert floor == config.DEFAULT_CONTEXT_WINDOW
+
+
+def test_read_config_reads_present_context_window(tmp_path: Path) -> None:
+    """A `context_window` at or above the floor passes through (#691)."""
+    (tmp_path / "openkos.yaml").write_text("context_window: 16384\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.context_window == 16384
+    assert isinstance(result.context_window, int)
+
+
+def test_read_config_derives_context_window_when_absent(tmp_path: Path) -> None:
+    """An `openkos.yaml` omitting `context_window` gets the packaged default."""
+    (tmp_path / "openkos.yaml").write_text("model: qwen3:8b\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.context_window == config.DEFAULT_CONTEXT_WINDOW
+
+
+def test_absent_context_window_rises_with_a_raised_generation_ceiling(
+    tmp_path: Path,
+) -> None:
+    """A workspace that raised `max_generation_tokens` and never heard of
+    `context_window` still gets a window big enough for it.
+
+    Without this, upgrading to #691 would silently TRUNCATE a workspace whose
+    ceiling exceeds the packaged default -- the exact failure the issue warns
+    is worse than leaving `num_ctx` unset.
+    """
+    (tmp_path / "openkos.yaml").write_text(
+        "max_generation_tokens: 16384\n", encoding="utf-8"
+    )
+
+    result = config.read_config(tmp_path)
+
+    assert result.context_window == config.minimum_context_window(16384)
+
+
+def test_explicit_null_context_window_opts_out_of_pinning(tmp_path: Path) -> None:
+    """An explicit `context_window:` (YAML null) means "do not pin", so the
+    request is byte-identical to the pre-#691 one.
+
+    This is the ONE key whose explicit null does not mean the packaged
+    default, and deliberately so: "no window pinned" is a real state that no
+    positive integer can express, unlike every other field where the absent
+    behaviour IS the default.
+    """
+    (tmp_path / "openkos.yaml").write_text("context_window:\n", encoding="utf-8")
+
+    result = config.read_config(tmp_path)
+
+    assert result.context_window is None
+
+
+def test_read_config_rejects_a_context_window_below_the_floor(
+    tmp_path: Path,
+) -> None:
+    """A window below the derived floor is REFUSED, not accepted and quietly
+    truncating.
+
+    This is the trap #691 names: too low is worse than unset, because Ollama
+    silently drops the head of the prompt and extraction degrades without a
+    single error. Making it unconfigurable is the only fix that holds.
+    """
+    below = config.minimum_context_window(config.DEFAULT_MAX_GENERATION_TOKENS) - 1
+    (tmp_path / "openkos.yaml").write_text(
+        f"context_window: {below}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="'context_window' must be at least"):
+        config.read_config(tmp_path)
+
+
+def test_the_context_window_floor_is_checked_against_the_configured_ceiling(
+    tmp_path: Path,
+) -> None:
+    """The floor is computed from THIS workspace's `max_generation_tokens`,
+    not from the packaged one: a raised ceiling with an unchanged window is
+    exactly the pair that truncates."""
+    (tmp_path / "openkos.yaml").write_text(
+        "max_generation_tokens: 16384\ncontext_window: 12288\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="'context_window' must be at least"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_boolean_context_window(tmp_path: Path) -> None:
+    """`context_window: true` is rejected, not read as a one-token window --
+    the same int-as-bool hazard `chat_timeout` and `max_generation_tokens`
+    each guard."""
+    (tmp_path / "openkos.yaml").write_text("context_window: true\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'context_window' must be a positive integer"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_non_integer_context_window(tmp_path: Path) -> None:
+    """A fractional window is refused: Ollama's `num_ctx` is a token count."""
+    (tmp_path / "openkos.yaml").write_text(
+        "context_window: 12288.5\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="'context_window' must be a positive integer"):
+        config.read_config(tmp_path)
+
+
+def test_read_config_rejects_non_numeric_context_window(tmp_path: Path) -> None:
+    """A non-numeric window fails loudly rather than being coerced."""
+    (tmp_path / "openkos.yaml").write_text("context_window: big\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'context_window' must be a positive integer"):
+        config.read_config(tmp_path)
+
+
+def test_written_config_carries_context_window(tmp_path: Path) -> None:
+    """`write_config` ships the key, and reading it back yields the packaged
+    default -- the template and `DEFAULT_CONTEXT_WINDOW` must not drift."""
+    config.write_config(tmp_path, model="qwen3:8b", embedding_model="bge-m3")
+
+    text = (tmp_path / "openkos.yaml").read_text(encoding="utf-8")
+
+    assert "context_window:" in text
+    assert config.read_config(tmp_path).context_window == config.DEFAULT_CONTEXT_WINDOW
+
+
 # --- union_judge: opt-out flag for the union+judge extraction pipeline (#456) --
 
 
@@ -1937,6 +2096,7 @@ def test_resolve_task_model_survives_a_hand_built_non_mapping_models() -> None:
         embedding_model="mxbai-embed-large",
         chat_timeout=600.0,
         max_generation_tokens=4096,
+        context_window=config.DEFAULT_CONTEXT_WINDOW,
         confidential_local_exemption=False,
         volatility_windows={},
         type_tiers={},

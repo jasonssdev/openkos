@@ -360,6 +360,7 @@ class OllamaClient:
         max_generation_tokens: int | None = None,
         temperature: float | None = None,
         seed: int | None = None,
+        context_window: int | None = None,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
         embed_retry_attempts: int = DEFAULT_EMBED_RETRY_ATTEMPTS,
         embed_retry_backoff_base: float = DEFAULT_EMBED_RETRY_BACKOFF_BASE,
@@ -383,6 +384,20 @@ class OllamaClient:
         ships (qwen3:8b: temperature 0.6, top_p 0.95), which is measured
         run-to-run variance on identical extraction input (#454).
 
+        `context_window` (issue #691) is the CHAT-only context window
+        forwarded as `options.num_ctx`, under the same contract: `None` (the
+        default) contributes nothing. Left unpinned, the model reserves
+        whatever its Modelfile ships -- 32768 tokens and a ~10 GB footprint
+        on `qwen3:8b`, which is the whole of a 16 GB machine and makes a
+        second slot impossible. `num_ctx` bounds prompt AND completion
+        together, so it is NOT interchangeable with `num_predict` above:
+        `num_predict` caps how much may be generated, `num_ctx` caps how much
+        may be held at once. Setting it too LOW is worse than leaving it
+        unset -- Ollama silently drops the head of the prompt rather than
+        raising -- which is why the workspace-facing value is floor-checked
+        in `config.read_config` and never validated here: this seam forwards
+        what it is given, exactly like the three options above it.
+
         `embed_retry_attempts`/`embed_retry_backoff_base`/`sleep` configure
         ONLY `embed()`'s retry-with-backoff loop (D1/D3) -- `chat()` and
         `list_models()` are untouched, never retried. `sleep` defaults to
@@ -393,6 +408,7 @@ class OllamaClient:
         self._max_generation_tokens = max_generation_tokens
         self._temperature = temperature
         self._seed = seed
+        self._context_window = context_window
         self._urlopen = urlopen
         self._embed_retry_attempts = embed_retry_attempts
         self._embed_retry_backoff_base = embed_retry_backoff_base
@@ -456,6 +472,8 @@ class OllamaClient:
             options["temperature"] = self._temperature
         if self._seed is not None:
             options["seed"] = self._seed
+        if self._context_window is not None:
+            options["num_ctx"] = self._context_window
         if options:
             request_body["options"] = options
         payload = json.dumps(request_body).encode("utf-8")

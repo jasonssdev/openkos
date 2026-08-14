@@ -192,6 +192,7 @@ def _chat_client(cfg: config.Config, *, task: str | None = None) -> OllamaClient
         model=config.resolve_task_model(cfg, task),
         timeout=cfg.chat_timeout,
         max_generation_tokens=cfg.max_generation_tokens,
+        context_window=cfg.context_window,
     )
 
 

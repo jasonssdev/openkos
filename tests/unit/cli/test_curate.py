@@ -151,12 +151,14 @@ class _FakeConfig:
         review: bool = True,
         chat_timeout: float = config.DEFAULT_CHAT_TIMEOUT,
         max_generation_tokens: int = config.DEFAULT_MAX_GENERATION_TOKENS,
+        context_window: int | None = config.DEFAULT_CONTEXT_WINDOW,
         models: dict[str, str] | None = None,
     ) -> None:
         self.model = model
         self.review = review
         self.chat_timeout = chat_timeout
         self.max_generation_tokens = max_generation_tokens
+        self.context_window = context_window
         self.models = models or {}
 
 
