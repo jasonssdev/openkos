@@ -1847,9 +1847,7 @@ def _build_participant_capture_messages(
         {"role": "system", "content": _PARTICIPANT_CAPTURE_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": (
-                f"SOURCE TITLE: {source_title}\n\nSOURCE TEXT:\n{source_text}"
-            ),
+            "content": (f"SOURCE TITLE: {source_title}\n\nSOURCE TEXT:\n{source_text}"),
         },
     ]
 
@@ -1869,9 +1867,7 @@ def _capture_further_participants(
     question it was asked, so a candidate of any other type the model
     returns anyway is dropped here rather than trusted."""
     try:
-        reply = llm.chat(
-            _build_participant_capture_messages(source_text, source_title)
-        )
+        reply = llm.chat(_build_participant_capture_messages(source_text, source_title))
     except Exception:  # broad, and for the same reason the #584 re-ask is:
         # a bonus call's own failure must never destroy already-validated
         # extraction work.

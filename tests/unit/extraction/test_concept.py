@@ -2978,9 +2978,7 @@ def test_participant_capture_pass_joins_candidates_before_judge_on_meeting_sourc
     assert "Sam Okafor" in titles
     assert len(llm.calls) == 4
     capture_call = llm.calls[2]
-    assert (
-        capture_call[0]["content"] == concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT
-    )
+    assert capture_call[0]["content"] == concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT
     judge_call = llm.calls[3]
     assert "Sam Okafor" in judge_call[1]["content"]
     assert outcome.report.participant_capture_runs == 1
@@ -3016,9 +3014,7 @@ def test_participant_capture_pass_leaves_system_prompt_byte_identical() -> None:
         hashlib.sha256(concept_mod._SYSTEM_PROMPT.encode()).hexdigest()
         == "6744054466c750dd9b91e2380d9ec37d7f5076e6da0709cdd426d4b681f90c11"
     )
-    assert (
-        concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT != concept_mod._SYSTEM_PROMPT
-    )
+    assert concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT != concept_mod._SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize(
