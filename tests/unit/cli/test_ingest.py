@@ -3940,6 +3940,7 @@ class _FakeStatus:
     def __init__(self) -> None:
         self.entered = False
         self.exited = False
+        self.updates: list[str] = []
 
     def __enter__(self) -> "_FakeStatus":
         self.entered = True
@@ -3947,6 +3948,12 @@ class _FakeStatus:
 
     def __exit__(self, *exc_info: object) -> None:
         self.exited = True
+
+    def update(self, text: str) -> None:
+        """Rich's own in-place status rewrite, spied (#701): `ingest` routes
+        the extractor's phase labels here so the counter REPLACES the static
+        line instead of scrolling underneath the live spinner."""
+        self.updates.append(text)
 
 
 class _FakeConsole:
@@ -6862,3 +6869,63 @@ def test_participant_anchor_notice_is_silent_when_the_gate_discarded_none() -> N
     )
 
     assert main._participant_anchor_notice(report) is None
+
+
+# ---------------------------------------------------------------------------
+# #701 -- the extraction phases reach the spinner instead of a static line
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_updates_the_spinner_with_each_extraction_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of the seam, end to end.
+
+    Before #701 a 4m 28s ingest showed ONE line for its entire duration
+    while a dozen model calls ran underneath it. This asserts the phases the
+    extractor now reports actually arrive at the live status object, through
+    the real CLI, rather than only being emitted somewhere in the library.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    _FakeConsole.instances.clear()
+    monkeypatch.setattr(main, "Console", _FakeConsole)
+    # `CliRunner` swaps `sys.stderr` for its own wrapper, so patching the
+    # module-level object has no effect inside `invoke` -- patch the CLASS,
+    # the convention every other TTY-gated CLI test here follows.
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: True)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    status = _FakeConsole.instances[0].statuses[0]
+    assert status.updates, "the spinner was never updated -- still one static line"
+    assert all(u.startswith("openkos ingest: ") for u in status.updates)
+    assert any("extracting pass 1/2" in u for u in status.updates)
+
+
+def test_ingest_leaves_the_spinner_alone_when_stderr_is_not_a_tty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A piped run passes NO hook, so the extractor makes no per-phase call
+    at all.
+
+    This is the property the issue asked to preserve: the spinner is
+    stderr-only and no-ops when output is piped, so stdout stays clean for
+    scripting. `phase_callback` returning `None` is what enforces it at the
+    seam rather than at every emission site.
+    """
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _concept_reply())
+    _FakeConsole.instances.clear()
+    monkeypatch.setattr(main, "Console", _FakeConsole)
+    monkeypatch.setattr(_NamedTextIOWrapper, "isatty", lambda self: False)
+    source = tmp_path / "notes.txt"
+    source.write_text("Some raw notes about self-control.", encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert _FakeConsole.instances[0].statuses[0].updates == []
