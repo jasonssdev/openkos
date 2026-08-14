@@ -1,0 +1,550 @@
+{
+  "stamp": "20260813T235616Z",
+  "limit": 5,
+  "rows": [
+    {
+      "arm": "raw/floor10",
+      "floor": 10,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es MCP?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "sources/10-mcp",
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/model-context-protocol",
+        "sources/transcription1",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor10",
+      "floor": 10,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es MCP y para qu\u00e9 sirve?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "sources/transcription1",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor10",
+      "floor": 10,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es el Model Context Protocol?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/model-context-protocol",
+        "sources/10-mcp",
+        "concepts/context-window",
+        "sources/transcription1",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor10",
+      "floor": 10,
+      "family": "mcp",
+      "question": "what is MCP?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/model-context-protocol",
+        "sources/10-mcp",
+        "concepts/mcp-server",
+        "concepts/context-window",
+        "concepts/scoping-mcp-servers"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor10",
+      "floor": 10,
+      "family": "context-window",
+      "question": "what is the context window?",
+      "canonical": "concepts/context-window",
+      "cited": [
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "sources/10-mcp",
+        "concepts/agentic-loop",
+        "concepts/model-context-protocol"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor10",
+      "floor": 10,
+      "family": "context-window",
+      "question": "what is the context window and how should I manage it in detail?",
+      "canonical": "concepts/context-window",
+      "cited": [
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "concepts/agentic-loop"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor10",
+      "floor": 10,
+      "family": "mvp",
+      "question": "\u00bfqu\u00e9 es un MVP?",
+      "canonical": "concepts/producto-minimo-viable-mvp",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/transcription1",
+        "concepts/repositorio-local",
+        "concepts/model-context-protocol",
+        "sources/10-mcp"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor10",
+      "floor": 10,
+      "family": "mvp",
+      "question": "\u00bfqu\u00e9 es un MVP y para qu\u00e9 sirve?",
+      "canonical": "concepts/producto-minimo-viable-mvp",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/transcription1",
+        "concepts/repositorio-local",
+        "concepts/fuentes-inmutables",
+        "concepts/model-context-protocol"
+      ],
+      "retained": true,
+      "intrusions": 1,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor20",
+      "floor": 20,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es MCP?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "sources/10-mcp",
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/model-context-protocol",
+        "sources/transcription1",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor20",
+      "floor": 20,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es MCP y para qu\u00e9 sirve?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "sources/transcription1",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor20",
+      "floor": 20,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es el Model Context Protocol?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/model-context-protocol",
+        "sources/10-mcp",
+        "concepts/context-window",
+        "sources/transcription1",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor20",
+      "floor": 20,
+      "family": "mcp",
+      "question": "what is MCP?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/model-context-protocol",
+        "sources/10-mcp",
+        "concepts/mcp-server",
+        "concepts/context-window",
+        "concepts/scoping-mcp-servers"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor20",
+      "floor": 20,
+      "family": "context-window",
+      "question": "what is the context window?",
+      "canonical": "concepts/context-window",
+      "cited": [
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "sources/10-mcp",
+        "concepts/agentic-loop",
+        "concepts/model-context-protocol"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor20",
+      "floor": 20,
+      "family": "context-window",
+      "question": "what is the context window and how should I manage it in detail?",
+      "canonical": "concepts/context-window",
+      "cited": [
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "concepts/agentic-loop"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor20",
+      "floor": 20,
+      "family": "mvp",
+      "question": "\u00bfqu\u00e9 es un MVP?",
+      "canonical": "concepts/producto-minimo-viable-mvp",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/transcription1",
+        "concepts/repositorio-local",
+        "sources/transcription2",
+        "concepts/model-context-protocol"
+      ],
+      "retained": true,
+      "intrusions": 1,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor20",
+      "floor": 20,
+      "family": "mvp",
+      "question": "\u00bfqu\u00e9 es un MVP y para qu\u00e9 sirve?",
+      "canonical": "concepts/producto-minimo-viable-mvp",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/transcription1",
+        "concepts/repositorio-local",
+        "sources/transcription2",
+        "concepts/fuentes-inmutables"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor30",
+      "floor": 30,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es MCP?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "sources/10-mcp",
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/model-context-protocol",
+        "sources/transcription1",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor30",
+      "floor": 30,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es MCP y para qu\u00e9 sirve?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "sources/transcription1",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor30",
+      "floor": 30,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es el Model Context Protocol?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/model-context-protocol",
+        "sources/10-mcp",
+        "concepts/context-window",
+        "sources/transcription1",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor30",
+      "floor": 30,
+      "family": "mcp",
+      "question": "what is MCP?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/model-context-protocol",
+        "sources/10-mcp",
+        "concepts/mcp-server",
+        "concepts/context-window",
+        "concepts/scoping-mcp-servers"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor30",
+      "floor": 30,
+      "family": "context-window",
+      "question": "what is the context window?",
+      "canonical": "concepts/context-window",
+      "cited": [
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "sources/10-mcp",
+        "concepts/agentic-loop",
+        "concepts/model-context-protocol"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor30",
+      "floor": 30,
+      "family": "context-window",
+      "question": "what is the context window and how should I manage it in detail?",
+      "canonical": "concepts/context-window",
+      "cited": [
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "concepts/agentic-loop"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor30",
+      "floor": 30,
+      "family": "mvp",
+      "question": "\u00bfqu\u00e9 es un MVP?",
+      "canonical": "concepts/producto-minimo-viable-mvp",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/transcription1",
+        "concepts/repositorio-local",
+        "sources/transcription2",
+        "concepts/model-context-protocol"
+      ],
+      "retained": true,
+      "intrusions": 1,
+      "dense_degraded": false
+    },
+    {
+      "arm": "raw/floor30",
+      "floor": 30,
+      "family": "mvp",
+      "question": "\u00bfqu\u00e9 es un MVP y para qu\u00e9 sirve?",
+      "canonical": "concepts/producto-minimo-viable-mvp",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/transcription1",
+        "concepts/repositorio-local",
+        "sources/transcription2",
+        "concepts/fuentes-inmutables"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "content-words/floor10",
+      "floor": 10,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es MCP?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "concepts/mcp-server",
+        "concepts/scoping-mcp-servers",
+        "concepts/producto-minimo-viable-mvp"
+      ],
+      "retained": true,
+      "intrusions": 1,
+      "dense_degraded": false
+    },
+    {
+      "arm": "content-words/floor10",
+      "floor": 10,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es MCP y para qu\u00e9 sirve?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "sources/10-mcp",
+        "concepts/producto-minimo-viable-mvp",
+        "concepts/model-context-protocol",
+        "sources/transcription1",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    },
+    {
+      "arm": "content-words/floor10",
+      "floor": 10,
+      "family": "mcp",
+      "question": "\u00bfqu\u00e9 es el Model Context Protocol?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "concepts/model-context-protocol",
+        "sources/10-mcp",
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "content-words/floor10",
+      "floor": 10,
+      "family": "mcp",
+      "question": "what is MCP?",
+      "canonical": "concepts/model-context-protocol",
+      "cited": [
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "concepts/mcp-server",
+        "concepts/context-window",
+        "concepts/scoping-mcp-servers"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "content-words/floor10",
+      "floor": 10,
+      "family": "context-window",
+      "question": "what is the context window?",
+      "canonical": "concepts/context-window",
+      "cited": [
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "concepts/agentic-loop"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "content-words/floor10",
+      "floor": 10,
+      "family": "context-window",
+      "question": "what is the context window and how should I manage it in detail?",
+      "canonical": "concepts/context-window",
+      "cited": [
+        "concepts/context-window",
+        "sources/02-how-claude-code-works",
+        "sources/10-mcp",
+        "concepts/model-context-protocol",
+        "concepts/agentic-loop"
+      ],
+      "retained": true,
+      "intrusions": 0,
+      "dense_degraded": false
+    },
+    {
+      "arm": "content-words/floor10",
+      "floor": 10,
+      "family": "mvp",
+      "question": "\u00bfqu\u00e9 es un MVP?",
+      "canonical": "concepts/producto-minimo-viable-mvp",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/transcription1",
+        "concepts/model-context-protocol",
+        "sources/10-mcp",
+        "concepts/mcp-server"
+      ],
+      "retained": true,
+      "intrusions": 3,
+      "dense_degraded": false
+    },
+    {
+      "arm": "content-words/floor10",
+      "floor": 10,
+      "family": "mvp",
+      "question": "\u00bfqu\u00e9 es un MVP y para qu\u00e9 sirve?",
+      "canonical": "concepts/producto-minimo-viable-mvp",
+      "cited": [
+        "concepts/producto-minimo-viable-mvp",
+        "sources/transcription1",
+        "concepts/model-context-protocol",
+        "sources/transcription2",
+        "sources/10-mcp"
+      ],
+      "retained": true,
+      "intrusions": 2,
+      "dense_degraded": false
+    }
+  ]
+}
