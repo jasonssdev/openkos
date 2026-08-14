@@ -32,18 +32,18 @@ formula depends on); design D2.
 **Depends on**: none. **Parallel-safe with**: nothing meaningfully — this is
 the first slice everything else imports.
 
-1. [ ] RED: create `tests/unit/model/test_okf_sensitivity.py` with a
+1. [x] RED: create `tests/unit/model/test_okf_sensitivity.py` with a
    parametrized table covering: each `SENSITIVITY_ORDER` floor x offset
    `0`/`1`/`2`; clamp at `confidential` for an offset that would overflow;
    fail-closed ranking on a missing/malformed/non-string `level` (reuses
    `_rank`'s existing fail-closed behavior); `ValueError` on a negative
    offset. Run `python -m pytest tests/unit/model/test_okf_sensitivity.py -x`
    and confirm it fails (no `raise_by` yet).
-2. [ ] GREEN: add `raise_by(level: object, offset: int) -> str` to
+2. [x] GREEN: add `raise_by(level: object, offset: int) -> str` to
    `src/openkos/model/okf.py`, beside `SENSITIVITY_ORDER`/
    `combine_sensitivity`, exactly as specified in design D2 (negative offset
    raises `ValueError`; overflow clamps at the ceiling; reuses `_rank`).
-3. [ ] Run `python -m pytest tests/unit/model/test_okf_sensitivity.py -v`
+3. [x] Run `python -m pytest tests/unit/model/test_okf_sensitivity.py -v`
    green, then `python -m pytest tests/unit/model/ -q` to confirm no
    regression in the sibling model tests.
 
@@ -58,7 +58,7 @@ half of "One-Line Extension To Add A Type"; design D1, D3.
 **Depends on**: WU1 (`type_birth_sensitivity` calls `raise_by`).
 **Parallel-safe with**: nothing else — WU3 and WU4 both import this seam.
 
-1. [ ] RED: extend `tests/unit/test_config.py` with:
+1. [x] RED: extend `tests/unit/test_config.py` with:
    - `read_config` validation table: non-mapping value, unknown type key,
      `Source` key explicitly refused (not in `BUILDABLE_TYPES`), non-int
      value, `bool` value refused (checked BEFORE the numeric-tower
@@ -76,18 +76,18 @@ half of "One-Line Extension To Add A Type"; design D1, D3.
      unchanged.
    Run `python -m pytest tests/unit/test_config.py -x` and confirm every new
    case fails (attribute/name errors — nothing exists yet).
-2. [ ] GREEN: in `src/openkos/config.py` add
+2. [x] GREEN: in `src/openkos/config.py` add
    `DEFAULT_TYPE_SENSITIVITY_DEFAULTS: Final[dict[str, int]] = {"Person": 1}`,
    the `Config.type_sensitivity_defaults: dict[str, int]` field, and the
    eager per-entry validation block in `read_config` mirroring the `models:`
    precedent (`config.py:808-846`): key domain = `model.types.BUILDABLE_TYPES`,
    `bool` excluded first and explicitly, `0 <= offset <= len(SENSITIVITY_ORDER) - 1`,
    `ValueError` messages prefixed `f"{layout.config_path.name}: ..."`.
-3. [ ] GREEN: add `type_birth_sensitivity(cfg: Config, doc_type: str, base: object) -> str`
+3. [x] GREEN: add `type_birth_sensitivity(cfg: Config, doc_type: str, base: object) -> str`
    beside `resolve_task_model`, implementing
    `combine_sensitivity(base, raise_by(cfg.default_sensitivity, offset))` per
    design D3, returning `base` canonicalized when `doc_type` has no entry.
-4. [ ] Run `python -m pytest tests/unit/test_config.py -v` green, then
+4. [x] Run `python -m pytest tests/unit/test_config.py -v` green, then
    `python -m pytest tests/unit/ -q` to confirm no cross-module regression
    (in particular no `models:`/`type_tiers:` test broke).
 

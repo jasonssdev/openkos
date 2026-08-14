@@ -1202,6 +1202,7 @@ def _cfg(
         type_tiers=({} if type_tiers is None else type_tiers),  # type: ignore[arg-type]
         models={},
         union_judge=config.DEFAULT_UNION_JUDGE,
+        type_sensitivity_defaults=dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
     )
 
 

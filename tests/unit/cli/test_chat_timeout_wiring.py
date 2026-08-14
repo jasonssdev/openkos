@@ -194,6 +194,7 @@ def _cfg(**overrides: object) -> config.Config:
         "type_tiers": {},
         "models": {},
         "union_judge": config.DEFAULT_UNION_JUDGE,
+        "type_sensitivity_defaults": dict(config.DEFAULT_TYPE_SENSITIVITY_DEFAULTS),
     }
     base.update(overrides)
     return config.Config(**base)  # type: ignore[arg-type]
