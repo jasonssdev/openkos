@@ -136,6 +136,26 @@ class LintFinding:
     detail: str
     """Human-readable detail text, rendered verbatim after the subject."""
 
+    remediation: str = ""
+    """The exact runnable command that RESOLVES this finding, or `""` when
+    the kind has none to offer (issue #693).
+
+    Engine-computed, never lifted out of `detail`. That distinction is the
+    point of the field, not a stylistic preference: `detail` interpolates
+    values the bundle's own documents control -- a raw `sensitivity` string,
+    cited concept ids -- so a document can plant a backtick span spelling a
+    plausible command with the wrong argument. `cli/next_action.py` already
+    carries two hard-won guards against exactly that (#274, and the trap-1
+    filter). A field the engine computes is not forgeable from frontmatter,
+    so a consumer can trust it without re-deriving those guards.
+
+    Opt-in per kind rather than retrofitted onto all nine: today only
+    `multi-source-uncovered` populates it, because that is the kind #693 is
+    about -- `status` listed it as actionable while `next` had no runnable
+    command to offer for it. `below-source-sensitivity` keeps its existing
+    detail-parsing tier untouched. A later kind earns this field when it has
+    a consumer, not on principle."""
+
     @property
     def concept_id(self) -> str:
         """`path` minus its `.md` extension -- the OKF Concept ID (SPEC §2),
@@ -864,6 +884,20 @@ this module can name perfectly well -- and it would NOT make the hint safer,
 because `next` corroborates the extracted command against the document's own
 `resource` before printing it."""
 
+_SAFE_COMMAND_ARGUMENT = re.compile(r"\A(?!-)[\w./-]+\Z")
+"""Whether a concept id may be printed as a command argument (issue #693).
+
+Deliberately IDENTICAL to `cli/next_action.py:_SAFE_ARGUMENT`, and a separate
+copy rather than an import for the direction of the dependency: `lint` is a
+leaf that `cli` reads, never the other way round. The two answer the same
+question -- "is this runnable exactly as printed" -- and `LintFinding.
+remediation` is a runnable command, so it must clear the same bar the
+consumer would apply.
+
+A concept id that does not clear it yields an EMPTY `remediation` rather
+than an unrunnable one. The finding itself still fires: the problem is real,
+and only the one-line shortcut is unavailable."""
+
 
 def check_unextracted(docs: list[LintDoc]) -> list[LintFinding]:
     """Flag each Source whose extraction was skipped for a RETRYABLE reason
@@ -1085,15 +1119,55 @@ def check_below_source_sensitivity(docs: list[LintDoc]) -> list[LintFinding]:
         cited_detail = ", ".join(
             f"{cited_id!r} ({level!r})" for cited_id, level in cited_levels
         )
+        # The level the document should be AT: the high-water-mark across
+        # every cite, not the first one listed. `combine_sensitivity` never
+        # lowers, so this is also the level `set-sensitivity` will accept
+        # without `--allow-downgrade`.
+        resolved_level = okf.combine_sensitivity(doc.sensitivity, high_water)
+        # ONE predicate decides both the detail's command span and the
+        # `remediation` field, so the two can never disagree about whether
+        # this identity may be spelled as a command (#693).
+        #
+        # It has to cover the SPAN, not just the field. `doc.identity` comes
+        # from the on-disk path and a backtick is a legal POSIX filename
+        # character, so an unguarded interpolation closes the span early and
+        # leaves a well-formed `openkos set-sensitivity <some other id>
+        # <level>` behind -- issue #274's defect exactly, one field over,
+        # and `next` echoes this detail verbatim as its reason line.
+        # `_SAFE_COMMAND_ARGUMENT` already excludes a backtick (it admits
+        # only `[\w./-]`), so the same check serves both.
+        spellable = bool(_SAFE_COMMAND_ARGUMENT.fullmatch(doc.identity))
+        remediation = (
+            f"openkos set-sensitivity {doc.identity} {resolved_level}"
+            if spellable
+            else ""
+        )
+        # Exactly ONE runnable command is ever spelled in a backtick span,
+        # and it is the one that works. The sweep is still named -- it is why
+        # this finding exists at all -- but as prose, not as a command: a
+        # negated command sitting on `next`'s reason line in copy-paste shape
+        # is the trap `cli/next_action.py`'s trap-1 filter was built to keep
+        # off the screen.
+        remedy_clause = (
+            f"resolve it with `{remediation}`"
+            if spellable
+            else (
+                f"resolve it by raising the level to {resolved_level!r}, but "
+                f"this id cannot be spelled as a command argument -- rename "
+                f"it first"
+            )
+        )
         findings.append(
             LintFinding(
                 kind="multi-source-uncovered",
                 path=f"{doc.identity}.md",
                 detail=(
-                    f"sensitivity {doc.sensitivity!r} is not covered by "
-                    f"`openkos backfill-sensitivity` (member of no single "
-                    f"Source's closure); cites: {cited_detail}"
+                    f"sensitivity {doc.sensitivity!r} is not covered by the "
+                    f"backfill-sensitivity sweep (member of no single "
+                    f"Source's closure); {remedy_clause}; "
+                    f"cites: {cited_detail}"
                 ),
+                remediation=remediation,
             )
         )
 

@@ -635,18 +635,22 @@ def _tier_unextracted_source(signals: _BundleSignals) -> NextAction | None:
 
 
 def _tier_below_source_sensitivity(signals: _BundleSignals) -> NextAction | None:
-    """Rank 3: below-source-sensitivity descendant. Ranked above tier 4
-    because a mislabelled sensitivity is UNSAFE while a duplicate group is
-    only ambiguous, and below tier 2 because the document is at least
-    present (module docstring). Note that tiers 2 and 3 cost the same single
-    shared walk, so cost cannot separate them at all -- this pair is the
-    clearest evidence the order is not cost-derived.
+    """Rank 3: below-source-sensitivity descendant. Ranked above tier 4 --
+    its single-document sibling (#693), where this tier's sweep repairs a
+    whole closure at once -- and above tier 5 because a mislabelled
+    sensitivity is UNSAFE while a duplicate group is only ambiguous, and
+    below tier 2 because the document is at least present (module
+    docstring). Note that tiers 2, 3 and 4 all cost the same single shared
+    walk, so cost cannot separate them at all -- this group is the clearest
+    evidence the order is not cost-derived.
 
-    Trap 1 (`multi-source-uncovered`'s negating detail sentence,
-    `lint.py:766-768`): filters on `finding.kind` BEFORE ever extracting a
-    command, so a bundle carrying only a `multi-source-uncovered` finding
-    never surfaces the `openkos backfill-sensitivity` command that
-    finding's detail names only to rule out.
+    Trap 1 (`multi-source-uncovered`'s detail sentence): filters on
+    `finding.kind` BEFORE ever extracting a command, so a
+    `multi-source-uncovered` finding never reaches this tier's extraction at
+    all -- it belongs to tier 4, which reads a structured `remediation`
+    rather than prose. Since #693 that detail no longer spells `openkos
+    backfill-sensitivity` as a runnable span either, so the negated command
+    is now unreachable from both directions rather than one.
 
     This detail interpolates the document's raw `sensitivity` string before
     the command, so the command is matched by verb rather than by position --
@@ -666,8 +670,66 @@ def _tier_below_source_sensitivity(signals: _BundleSignals) -> NextAction | None
     return None
 
 
+def _tier_multi_source_uncovered(signals: _BundleSignals) -> NextAction | None:
+    """Rank 4 (#693): a `multi-source-uncovered` document, resolvable with
+    `openkos set-sensitivity`.
+
+    `status` has listed this finding under *Needs attention* since 0.2.5
+    while `next`, run seconds later against the same unchanged bundle,
+    reported nothing to do. Both verbs answer "what should I do?", so they
+    were not offering two views of one truth -- they were contradicting each
+    other. This tier is what makes them agree.
+
+    Ranked immediately BELOW tier 3 and above tier 5 (duplicate groups).
+    Both sensitivity tiers are already paid for by the same memoized
+    `signals.docs` walk, so cost cannot order them: `below-source-sensitivity`
+    wins because `backfill-sensitivity` repairs a whole closure in one sweep
+    while `set-sensitivity` repairs exactly one document. Recommending the
+    single-document fix while a sweep is pending would send the operator the
+    long way round. It stays above tier 5 for the same reason tier 3 does --
+    a mislabelled sensitivity is UNSAFE, a duplicate group is only ambiguous.
+
+    Reads `finding.remediation`, NEVER the detail prose. Tier 2 has to
+    corroborate its extracted command against the document's own `resource`
+    (#274) precisely because the detail interpolates document-controlled
+    values, and this kind's detail interpolates three of them -- a raw
+    `sensitivity` string and every cited id and level. `remediation` is
+    computed by `lint` from the document's identity and the engine's own
+    high-water-mark, so there is no prose for a document to forge, and the
+    guard tier 2 needs does not have to be reinvented here.
+
+    An id that cannot be spelled as a bare argument yields an empty
+    `remediation`, and this tier DECLINES it out loud rather than dropping it
+    (#276): the mislabelling is real whether or not a one-line command exists
+    for it.
+
+    Like tier 2, it returns on the FIRST finding it can recommend, so an
+    unspellable finding sorted after that one is never reached and never
+    declared. That is deliberate and not a gap: `next` recommends one action
+    and has never claimed to enumerate everything it did not reach -- the
+    standing `_STATUS_POINTER` contract (D4) is what covers the remainder,
+    and `status` lists every such finding. Declining silently would be the
+    defect; not walking past a hit is the design."""
+    for finding in lint_check.check_below_source_sensitivity(signals.docs):
+        if finding.kind != "multi-source-uncovered":
+            continue
+        if not finding.remediation:
+            signals.record_declination(
+                f"{finding.concept_id}: sensitivity sits below its cited "
+                "concepts, but its id is not a runnable argument -- rename "
+                "it, or run `openkos set-sensitivity` by hand"
+            )
+            continue
+        return NextAction(
+            command=finding.remediation,
+            reason=f"{finding.concept_id}: {finding.detail}",
+        )
+    return None
+
+
 def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
-    """Rank 4: pending exact-title duplicate group. Ranked last because it is
+    """Rank 5: pending exact-title duplicate group. Ranked below every
+    sensitivity tier because it is
     merely AMBIGUOUS -- everything it concerns is present and correctly
     labelled, and the ambiguity cannot be judged well over an incomplete set
     anyway (module docstring's ordering principle). That it is also the most
@@ -707,7 +769,7 @@ def _tier_duplicate_groups(signals: _BundleSignals) -> NextAction | None:
 
 
 def _tier_non_nfc_names(signals: _BundleSignals) -> NextAction | None:
-    """Rank 5: on-disk names that are not NFC (issue #491).
+    """Rank 6: on-disk names that are not NFC (issue #491).
 
     Ranked LAST, below even the duplicate-groups tier, and the position is
     the whole cost argument. A decomposed filename blocks nothing, is not
@@ -746,7 +808,7 @@ def _tier_non_nfc_names(signals: _BundleSignals) -> NextAction | None:
 
 
 def _tier_open_contradictions(signals: _BundleSignals) -> NextAction | None:
-    """Rank 6, LAST (pending-work design, Decision 6): a persisted
+    """Rank 7, LAST (pending-work design, Decision 6): a persisted
     contradiction finding that is open, non-stale, and non-declined.
 
     Ranked after everything else for the same reason `_tier_non_nfc_names`
@@ -801,14 +863,15 @@ _TIERS: tuple[Tier, ...] = (
     _tier_stale_derived_indexes,
     _tier_unextracted_source,
     _tier_below_source_sensitivity,
+    _tier_multi_source_uncovered,
     _tier_duplicate_groups,
     _tier_non_nfc_names,
     _tier_open_contradictions,
 )
 """D1 order: ingest-first (empty bundle, #386), reindex (missing vectors),
 reindex (missing FTS, #553), reindex (stale, #381), ingest,
-backfill-sensitivity, curate, normalize-names, contradictions
-(durable-pending-work, Decision 6). A higher-ranked tier's finding always
+backfill-sensitivity, set-sensitivity (#693), curate, normalize-names,
+contradictions (durable-pending-work, Decision 6). A higher-ranked tier's finding always
 wins; a lower-ranked tier is never even evaluated once a higher one fires
 (first-hit short-circuit) -- which is also what keeps the three reindex
 tiers from ever all firing: a missing index short-circuits before the
