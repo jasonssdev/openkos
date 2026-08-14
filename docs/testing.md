@@ -113,7 +113,7 @@ Both models are mandatory for full coverage — they serve different commands:
 
 | Model | Used by |
 |---|---|
-| `qwen3:8b` (chat) | `ingest` extraction, `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions`, `merge`'s reconciliation pass, `query` |
+| `qwen3:8b` (chat) | `ingest` extraction, `adjudicate`, `suggest-relations`, `suggest-volatility`, `contradictions`, the merged-body reconciliation pass (`merge`, `curate` Identity, `adjudicate --apply`/`--apply-same`), `query` |
 | `bge-m3` (embeddings) | `reindex`, every bundle-writing verb's end-of-run index refresh, and the dense-retrieval channel of `query` |
 
 > The embedding dimension is hard-coded to 1024. `bge-m3` produces 1024

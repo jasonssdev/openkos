@@ -1784,6 +1784,162 @@ def test_adjudicate_apply_accepts_merge_updates_filesystem_and_ledger(
     assert "concepts/b" not in index_text
 
 
+def test_adjudicate_apply_plans_and_applies_the_merged_body_reconciliation(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #688, second consenting caller: `adjudicate --apply` drives
+    `_prepare_one_merge`/`_commit_one_merge` directly, exactly as curate's
+    Identity stage does, so it carried the identical silent-stacking gap.
+    The disclosure rides the shared preview line and the pass runs in the
+    same post-consent, pre-drift-check slot."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    body_a = "Alpha states the shared subject at length. " * 8
+    body_b = "Beta restates the same subject in a second voice. " * 8
+    for name, title, body in (
+        ("a", "Concept A", body_a),
+        ("b", "Concept B", body_b),
+    ):
+        path = tmp_path / "bundle" / "concepts" / f"{name}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\ntype: Concept\ntitle: {title}\n---\n# {title}\n\n{body}\n",
+            encoding="utf-8",
+        )
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+        ),
+    )
+    reconciled: list[str] = []
+
+    def _fake_reconcile(root: Path, prepared: object) -> tuple[object, None]:
+        reconciled.append(getattr(prepared, "absorbed_canonical", "?"))
+        return prepared, None
+
+    monkeypatch.setattr("openkos.cli.main._reconcile_merged_survivor", _fake_reconcile)
+
+    result = runner.invoke(app, ["adjudicate", "--apply"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" in result.stdout
+    assert reconciled == ["concepts/b"]
+
+
+def _seed_reconcilable_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> list[str]:
+    """Two bodied concepts adjudicated SAME, sized to clear the #645
+    reconciliation thresholds, with `_reconcile_merged_survivor` stubbed to
+    record the absorbed ids it was called for."""
+    body_a = "Alpha states the shared subject at length. " * 8
+    body_b = "Beta restates the same subject in a second voice. " * 8
+    for name, title, body in (("a", "Concept A", body_a), ("b", "Concept B", body_b)):
+        path = tmp_path / "bundle" / "concepts" / f"{name}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\ntype: Concept\ntitle: {title}\n---\n# {title}\n\n{body}\n",
+            encoding="utf-8",
+        )
+    group = CandidateGroup(
+        okf_type="Concept",
+        member_ids=("concepts/a", "concepts/b"),
+        tier=Tier.HIGH,
+        trigger="stub",
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.find_candidates_report",
+        lambda *a, **k: CandidateGroupReport(groups=(group,), produced=1, retained=1),
+    )
+    monkeypatch.setattr(
+        "openkos.cli.main.adjudicate_candidates",
+        lambda *a, **k: AdjudicationBatch(
+            results=[_adjudicated(group, verdict=Verdict.SAME, rationale="same")]
+        ),
+    )
+    reconciled: list[str] = []
+
+    def _fake_reconcile(root: Path, prepared: object) -> tuple[object, None]:
+        reconciled.append(getattr(prepared, "absorbed_canonical", "?"))
+        return prepared, None
+
+    monkeypatch.setattr("openkos.cli.main._reconcile_merged_survivor", _fake_reconcile)
+    return reconciled
+
+
+def test_adjudicate_apply_no_reconcile_opts_out(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #688: `--no-reconcile` is the SAME lever `merge` and `curate`
+    take, not a second differently-named one -- and not an opt-out the
+    operator simply lacks here while the spec promises parity."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    reconciled = _seed_reconcilable_pair(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app, ["adjudicate", "--apply", "--no-reconcile"], input="y\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" not in result.stdout
+    assert reconciled == []
+    assert not (tmp_path / "bundle" / "concepts" / "b.md").exists(), (
+        "the merge itself still happens -- only the improvement pass is skipped"
+    )
+
+
+def test_adjudicate_apply_same_plans_and_applies_the_reconciliation(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The batch path is the fourth consenting caller. Its consent is the
+    typed count rather than a per-item `y`, so the disclosure rides Pass 1's
+    aggregate preview and the pass runs in Pass 2, still before that pair's
+    drift re-check."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    reconciled = _seed_reconcilable_pair(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["adjudicate", "--apply-same", "--confirm-count", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" in result.stdout
+    assert reconciled == ["concepts/b"]
+
+
+def test_adjudicate_apply_same_no_reconcile_opts_out(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same opt-out reaches the batch path too."""
+    _init_apply_workspace(tmp_path, tmp_path_factory, monkeypatch)
+    reconciled = _seed_reconcilable_pair(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app,
+        ["adjudicate", "--apply-same", "--confirm-count", "1", "--no-reconcile"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "reconcile merged body" not in result.stdout
+    assert reconciled == []
+
+
 def test_adjudicate_apply_merge_unions_provenance_from_both_sources(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,

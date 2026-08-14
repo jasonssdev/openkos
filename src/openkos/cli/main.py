@@ -1938,12 +1938,76 @@ def _prepare_one_merge(
     )
 
 
-def _format_merge_preview_line(prepared: "PreparedMerge") -> str:
+def _reconcile_planned(prepared: "PreparedMerge", *, no_reconcile: bool) -> bool:
+    """Whether the #645 merged-body reconciliation pass runs for `prepared`.
+
+    THE single source of truth for that decision (issue #688). It previously
+    lived inline in the `merge` command body, so the three other consenting
+    callers -- `curate`'s Identity stage, `_run_adjudicate_apply` and
+    `_run_adjudicate_apply_same`, all of which drive
+    `_prepare_one_merge`/`_commit_one_merge` directly -- silently stacked
+    bodies the standalone verb would have reconciled. Since `curate` is the
+    path the product recommends and `next` points at, the recommended path
+    was the degraded one.
+
+    Both the plan DISCLOSURE and the APPLICATION read this one predicate, so
+    a caller can no longer promise a pass it does not run, or run one it did
+    not disclose."""
+    return (
+        not no_reconcile
+        and prepared.stacked_body is not None
+        and prepared.stacked_body.share >= _RECONCILE_SHARE_THRESHOLD
+        and prepared.stacked_body.absorbed_chars >= _RECONCILE_MIN_ABSORBED_CHARS
+    )
+
+
+_RECONCILE_PLAN_NOTE: Final = (
+    "reconcile merged body: one model call rewrites it as a single coherent "
+    "document (falls back to the stacked form on failure; pass "
+    "--no-reconcile to skip)"
+)
+"""The plan-time disclosure text, shared so `merge`'s multi-line plan and
+the one-line preview every other consenting caller prints cannot drift."""
+
+
+def _apply_reconciliation(
+    root: Path, prepared: "PreparedMerge", *, no_reconcile: bool, verb: str
+) -> "PreparedMerge":
+    """Run the #645 pass when `_reconcile_planned`, else return `prepared`
+    unchanged -- the shared post-consent half of the disclosure above.
+
+    Called AFTER consent (the plan disclosed it) and BEFORE the drift
+    re-check, so the slow model call sits inside the window the drift guard
+    re-validates rather than after it. Any failure keeps the stacked body
+    and notices on stderr: the merge itself never gains a new failure mode
+    from an improvement pass."""
+    if not _reconcile_planned(prepared, no_reconcile=no_reconcile):
+        return prepared
+    prepared, failure = _reconcile_merged_survivor(root, prepared)
+    if failure is not None:
+        typer.echo(
+            f"openkos {verb}: notice -- reconciliation failed ({failure}); "
+            "kept the stacked body.",
+            err=True,
+        )
+    return prepared
+
+
+def _format_merge_preview_line(
+    prepared: "PreparedMerge", *, no_reconcile: bool = False
+) -> str:
     """The "merge X into Y (...)" preview line for one prepared merge,
     extracted verbatim from the former inline body (issue #137 closing
     slice, Phase 1 refactor). Gains an optional stacked-body clause (issue
     #409, report half) only when `prepared.stacked_body` is non-`None` --
-    a merge that stacks nothing says nothing extra here either."""
+    a merge that stacks nothing says nothing extra here either.
+
+    Also carries the #645 reconciliation disclosure (issue #688), on the
+    same reasoning the #559 guardrail warning rides here: every consenting
+    caller shows it without having to remember to. `no_reconcile` DEFAULTS
+    to `False` deliberately -- a caller that forgets to thread its opt-out
+    through over-discloses rather than under-discloses, and `merge`'s own
+    multi-line plan is the one caller that renders the note itself."""
     stacked_note = ""
     guardrail_note = ""
     if prepared.stacked_body is not None:
@@ -1964,12 +2028,15 @@ def _format_merge_preview_line(prepared: "PreparedMerge") -> str:
                 "usually means a document ABOUT the survivor, not the same "
                 "object. Verify before accepting."
             )
+    reconcile_note = ""
+    if _reconcile_planned(prepared, no_reconcile=no_reconcile):
+        reconcile_note = f"\n  ~ {_RECONCILE_PLAN_NOTE}"
     return (
         f"  merge {prepared.absorbed_canonical} into {prepared.survivor_canonical} "
         f"(sensitivity {prepared.sensitivity_before}->"
         f"{prepared.sensitivity_after}, {len(prepared.touched_files)} "
         f"rewrite(s), removes bundle/{prepared.absorbed_canonical}.md"
-        f"{stacked_note}){guardrail_note}"
+        f"{stacked_note}){guardrail_note}{reconcile_note}"
     )
 
 
@@ -2029,6 +2096,8 @@ def _run_adjudicate_apply(
     index_path: Path,
     log_path: Path,
     results: Sequence[AdjudicatedCandidate],
+    *,
+    no_reconcile: bool = False,
 ) -> None:
     """The interactive `adjudicate --apply` merge walk (issue #137 Slice
     2b-ii, design D2-D9): per SAME 2-member group (D3), re-verify both
@@ -2101,7 +2170,7 @@ def _run_adjudicate_apply(
             skipped_already_merged += 1
             continue
 
-        typer.echo(_format_merge_preview_line(prepared))
+        typer.echo(_format_merge_preview_line(prepared, no_reconcile=no_reconcile))
         # Issue #483: `curate._confirm` is the one validating per-item
         # write-consent prompt (#398 contract) -- private-helper reuse
         # across the boundary is deliberate, as with `_type_label` (#479).
@@ -2113,6 +2182,14 @@ def _run_adjudicate_apply(
                 f"{prepared.absorbed_canonical} -> {prepared.survivor_canonical}"
             )
             continue
+
+        # #688: same post-consent, pre-drift-check slot `merge` and
+        # curate's Identity stage use, via the same helper -- this walk
+        # drives `_prepare_one_merge`/`_commit_one_merge` directly too, so
+        # it had the identical silent-stacking gap.
+        prepared = _apply_reconciliation(
+            root, prepared, no_reconcile=no_reconcile, verb="adjudicate --apply"
+        )
 
         # Issue #346: every byte `_commit_one_merge` writes below was
         # computed before the prompt, so re-validate each target now --
@@ -2179,6 +2256,7 @@ def _run_adjudicate_apply_same(
     results: Sequence[AdjudicatedCandidate],
     *,
     confirm_count: str | None,
+    no_reconcile: bool = False,
 ) -> None:
     """The guarded batch `adjudicate --apply-same` merge (issue #137
     closing slice): Pass 1 builds ONE aggregate preview over every eligible
@@ -2273,7 +2351,7 @@ def _run_adjudicate_apply_same(
             refused_stacked += 1
             continue
         previewed_groups.append(group)
-        typer.echo(_format_merge_preview_line(prepared))
+        typer.echo(_format_merge_preview_line(prepared, no_reconcile=no_reconcile))
     total = len(previewed_groups)
     typer.echo(f"Total: {total}")
 
@@ -2353,6 +2431,13 @@ def _run_adjudicate_apply_same(
             )
             refused_stacked += 1
             continue
+
+        # #688: the batch's consent was the typed count above, so this is
+        # the post-consent slot here too -- still before the drift
+        # re-validation, matching every other consenting caller.
+        prepared = _apply_reconciliation(
+            root, prepared, no_reconcile=no_reconcile, verb="adjudicate --apply-same"
+        )
 
         # Issue #346: every byte `_commit_one_merge` writes below was
         # captured by this pair's re-prepare above, so re-validate each
@@ -8664,12 +8749,7 @@ def merge(
     # the consent gate -- so the model call is part of what the human
     # approves. `--no-reconcile` is the opt-out; failure falls back to the
     # stacked body after the gate.
-    reconcile_planned = (
-        not no_reconcile
-        and prepared.stacked_body is not None
-        and prepared.stacked_body.share >= _RECONCILE_SHARE_THRESHOLD
-        and prepared.stacked_body.absorbed_chars >= _RECONCILE_MIN_ABSORBED_CHARS
-    )
+    reconcile_planned = _reconcile_planned(prepared, no_reconcile=no_reconcile)
     if prepared.stacked_body is not None:
         typer.echo(
             f"  + stack absorbed body: {prepared.stacked_body.absorbed_chars} "
@@ -8677,11 +8757,7 @@ def merge(
             "merged body -- bodies were appended, not reconciled)"
         )
     if reconcile_planned:
-        typer.echo(
-            "  ~ reconcile merged body: one model call rewrites it as a "
-            "single coherent document (falls back to the stacked form on "
-            "failure; pass --no-reconcile to skip)"
-        )
+        typer.echo(f"  ~ {_RECONCILE_PLAN_NOTE}")
     for rel in prepared.rewritten_files:
         typer.echo(f"  ~ bundle/{rel} (rewrite inbound link(s) to survivor)")
     for rel in prepared.relation_rewritten_files:
@@ -8710,14 +8786,9 @@ def merge(
     # inside the window the drift guard re-validates rather than after it.
     # Any failure keeps the stacked body and notices -- the merge itself
     # never fails on an improvement pass.
-    if reconcile_planned:
-        prepared, reconcile_failure = _reconcile_merged_survivor(root, prepared)
-        if reconcile_failure is not None:
-            typer.echo(
-                f"openkos merge: notice -- reconciliation failed "
-                f"({reconcile_failure}); kept the stacked body.",
-                err=True,
-            )
+    prepared = _apply_reconciliation(
+        root, prepared, no_reconcile=no_reconcile, verb="merge"
+    )
 
     # Issue #334: every byte `merge_core` writes below was computed from a
     # pre-prompt read, so re-validate each target now -- after the gate,
@@ -11162,6 +11233,17 @@ def adjudicate(
             "bypass for this count -- it must match exactly."
         ),
     ),
+    no_reconcile: bool = typer.Option(
+        False,
+        "--no-reconcile",
+        help=(
+            "Skip the reconciliation pass (#645) on merges applied by "
+            "--apply/--apply-same: keep the merged body as the survivor's "
+            "text with the absorbed text appended under a '## Merged "
+            "content' heading, with no model call. The same opt-out `merge` "
+            "and `curate` take."
+        ),
+    ),
 ) -> None:
     """LLM-adjudicate cross-source candidate duplicates: read-only by default.
 
@@ -11349,10 +11431,18 @@ def adjudicate(
             )
         )
     elif apply:
-        _run_adjudicate_apply(root, layout, index_path, log_path, results)
+        _run_adjudicate_apply(
+            root, layout, index_path, log_path, results, no_reconcile=no_reconcile
+        )
     elif apply_same:
         _run_adjudicate_apply_same(
-            root, layout, index_path, log_path, results, confirm_count=confirm_count
+            root,
+            layout,
+            index_path,
+            log_path,
+            results,
+            confirm_count=confirm_count,
+            no_reconcile=no_reconcile,
         )
     else:
         _render_adjudicate_report(root, results, same_only=same_only)
@@ -14910,6 +15000,16 @@ def curate(
             "bulk: its merges delete a concept."
         ),
     ),
+    no_reconcile: bool = typer.Option(
+        False,
+        "--no-reconcile",
+        help=(
+            "Skip the reconciliation pass (#645) on Identity's merges: keep "
+            "the merged body as the survivor's text with the absorbed text "
+            "appended under a '## Merged content' heading, with no model "
+            "call. The same opt-out `merge` takes."
+        ),
+    ),
 ) -> None:
     """One dependency-ordered decision session over the five kinds of
     pending human judgment: Preconditions, Identity, Structure, Metadata,
@@ -15015,6 +15115,7 @@ def curate(
         include_deprecated=include_deprecated,
         local_exemption=local_exemption,
         accepted_stages=accepted_stages,
+        no_reconcile=no_reconcile,
     )
     outcomes = curate_module.run_curate(ctx)
     for line in curate_module.render_summary(outcomes):
