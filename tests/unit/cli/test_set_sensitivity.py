@@ -4,6 +4,8 @@ sensitivity-config domain, issue #185). Mirrors `relate`'s Phase A/Phase B
 scaffold and `set-volatility`'s exact-equality idempotence, plus a
 downgrade gate load-bearing for ADR-0008."""
 
+import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -14,13 +16,50 @@ from openkos.bundle import log as bundle_log
 from openkos.bundle import provenance as bundle_provenance
 from openkos.cli import main
 from openkos.cli.main import app
+from openkos.llm.base import Message
 from openkos.model import okf
 from openkos.vcs import git as vcs_git
 from tests.unit.cli.conftest import changed_paths, confirm_after, snapshot_with_mtime
 from tests.unit.cli.conftest import snapshot_bytes as _snapshot
+from tests.unit.conftest import LOCAL_BACKEND_LOCALITY
 from tests.unit.vcs.conftest import isolate_git_identity
 
 runner = CliRunner()
+
+
+class _FakeLLM:
+    """A structural `LLMBackend`, mirroring `test_ingest.py::_FakeLLM` --
+    zero network, zero real Ollama process. Used only to produce a real
+    type-defaulted-`confidential` `Person` via `ingest` for the #669
+    Requirement-9 downgrade test below."""
+
+    locality = LOCAL_BACKEND_LOCALITY
+
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+
+    def chat(self, messages: Sequence[Message]) -> str:
+        return self.reply
+
+
+def _patch_llm(monkeypatch: pytest.MonkeyPatch, reply: str) -> None:
+    monkeypatch.setattr(
+        "openkos.cli.main.OllamaClient", lambda *args, **kwargs: _FakeLLM(reply)
+    )
+
+
+def _person_reply(title: str = "Epictetus") -> str:
+    """A well-formed `extract_concept` JSON reply classifying as `Person`
+    (mirrors `test_ingest.py::_person_reply`)."""
+    return json.dumps(
+        {
+            "extract": True,
+            "type": "Person",
+            "title": title,
+            "description": "A Stoic philosopher and former slave.",
+            "body": "Taught that we control only our own judgments.",
+        }
+    )
 
 
 def _simulate_tty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -312,6 +351,36 @@ def test_lowering_under_auto_with_flag_succeeds(
 
     assert result.exit_code == 0
     assert _sensitivity_of(tmp_path, source_id) == "public"
+
+
+# -- type-sensitivity-defaults Requirement 9: downgrade unaffected (#669) ----
+
+
+def test_type_defaulted_confidential_person_can_still_be_downgraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `Person` born `confidential` via the per-type sensitivity default
+    (`private` workspace floor + the shipped `{"Person": 1}` mapping)
+    remains freely lowerable through the existing `set-sensitivity
+    --allow-downgrade` path -- the type default introduces no re-raise or
+    refusal at write time (spec `type-sensitivity-defaults` Requirement:
+    "`set-sensitivity` Downgrade Remains Unaffected")."""
+    _init_workspace(tmp_path, monkeypatch)
+    _patch_llm(monkeypatch, _person_reply())
+    source = tmp_path / "notes.txt"
+    source.write_text("Epictetus was a Stoic philosopher.", encoding="utf-8")
+    ingested = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
+    assert ingested.exit_code == 0
+    person_id = "people/epictetus"
+    assert _sensitivity_of(tmp_path, person_id) == "confidential"
+
+    result = runner.invoke(
+        app,
+        ["set-sensitivity", person_id, "private", "--auto", "--allow-downgrade"],
+    )
+
+    assert result.exit_code == 0
+    assert _sensitivity_of(tmp_path, person_id) == "private"
 
 
 # -- 2.10: lowering on a TTY, confirm accepted, no flag ----------------------

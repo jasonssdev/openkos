@@ -2959,6 +2959,22 @@ class _DerivedPlan:
     `type_alternative` frontmatter key, written by `build_concept` above,
     independent of this field."""
 
+    sensitivity: str = ""
+    """This plan's resolved birth-time `sensitivity` (issue #669, design
+    D3) -- `config.type_birth_sensitivity`'s return value, already folded
+    into `content`'s frontmatter above. Carried on the plan (rather than
+    re-parsed from `content`) so the caller can build the run-summary
+    advisory's `(type, resolved_level)` pairs the same way it already
+    builds `alternative_pairs`."""
+
+    type_floor_raised: bool = False
+    """`True` when this object's resolved `sensitivity` is strictly above
+    `stamp_sensitivity` because of the per-type offset mapping (issue #669,
+    design D3) -- `resolved != base`, the same shape #569 already uses at
+    `plan.sensitivity != cfg.default_sensitivity`. `False` on the common
+    path (no offset configured for this type, or `base` already at or
+    above the floor-plus-offset)."""
+
 
 def _stage_derived_objects(
     *,
@@ -2970,6 +2986,7 @@ def _stage_derived_objects(
     timestamp: str,
     bundle_dir: Path,
     llm: LLMBackend,
+    cfg: config.Config,
     include_confidential: bool = False,
     union_judge: bool = False,
 ) -> tuple[
@@ -3245,6 +3262,13 @@ def _stage_derived_objects(
                 err=True,
             )
 
+        # Per-type sensitivity default (issue #669, design D3): the offset
+        # applies to the CONFIG FLOOR, never to `stamp_sensitivity` itself,
+        # so a Source already resolved above the floor-plus-offset still
+        # wins via the high-water-mark inside `type_birth_sensitivity`.
+        resolved_sensitivity = config.type_birth_sensitivity(
+            cfg, extraction.type, stamp_sensitivity
+        )
         try:
             content = okf.build_concept(
                 type=extraction.type,
@@ -3252,7 +3276,7 @@ def _stage_derived_objects(
                 description=extraction.description,
                 body=extraction.body,
                 provenance=[f"sources/{source_slug}"],
-                sensitivity=stamp_sensitivity,
+                sensitivity=resolved_sensitivity,
                 timestamp=timestamp,
                 type_alternative=extraction.type_alternative,
             )
@@ -3282,6 +3306,8 @@ def _stage_derived_objects(
                 # one-line-per-run aggregate. The frontmatter record above
                 # (`build_concept`) is unchanged.
                 type_alternative=extraction.type_alternative,
+                sensitivity=resolved_sensitivity,
+                type_floor_raised=(resolved_sensitivity != stamp_sensitivity),
             )
         )
 
@@ -3562,6 +3588,14 @@ class _SingleIngestOutcome:
     (`ingest`'s single path and `_ingest_batch`) aggregate these into ONE
     summary line per run instead of the retired per-object echo (#566)."""
 
+    type_floor_pairs: tuple[tuple[str, str], ...] = ()
+    """One `(type, resolved_level)` pair per staged object whose
+    `_DerivedPlan.type_floor_raised` was `True` (issue #669, design D3) --
+    built the same way `alternative_pairs` is, so the callers aggregate
+    these into ONE run-summary advisory line via
+    `_echo_type_floor_summary`, mirroring the `alternative_pairs`/
+    `_echo_type_alternative_summary` precedent exactly."""
+
 
 def _echo_type_alternative_summary(
     derived_count: int, pairs: Sequence[tuple[str, str]]
@@ -3583,6 +3617,38 @@ def _echo_type_alternative_summary(
         f"({qualifier}: {primary}/{alternative}).",
         err=True,
     )
+
+
+def _echo_type_floor_summary(
+    derived_count: int, pairs: Sequence[tuple[str, str]]
+) -> None:
+    """Emit the ONE aggregate born-above-floor disclosure line (issue #669,
+    design D4), and, only when at least one raised object landed on
+    `confidential`, the #569 retrieval-exclusion consequence line.
+
+    Mirrors `_echo_type_alternative_summary`'s shape exactly: silent when
+    `pairs` is empty (an advisory that fires on the healthy path is
+    noise), stderr like every other ingest notice so the stdout batch
+    contract (#349) stays untouched, naming the most common `{type} ->
+    {level}` pair when more than one distinct pair is present."""
+    if not pairs:
+        return
+    counts = Counter(pairs)
+    (primary_type, primary_level), _ = counts.most_common(1)[0]
+    qualifier = "all" if len(counts) == 1 else "most common"
+    typer.echo(
+        f"openkos ingest: {len(pairs)} of {derived_count} derived object(s) "
+        f"were born above the workspace sensitivity floor by type default "
+        f"({qualifier}: {primary_type} -> {primary_level}).",
+        err=True,
+    )
+    if any(level == "confidential" for _type, level in pairs):
+        typer.echo(
+            "openkos ingest: confidential objects are excluded from query, "
+            "contradictions, and suggest-relations against a non-local "
+            "backend (#569).",
+            err=True,
+        )
 
 
 _GLOB_MAGIC_CHARS = frozenset("*?[")
@@ -3823,6 +3889,7 @@ def _ingest_batch(
     hard_skip_count = 0
     derived_total = 0
     alternative_pairs: list[tuple[str, str]] = []
+    type_floor_pairs: list[tuple[str, str]] = []
     for index, path in enumerate(matches, start=1):
         if progress is not None:
             progress(index, total, path)
@@ -3849,6 +3916,7 @@ def _ingest_batch(
             continue
         derived_total += outcome.derived_count
         alternative_pairs.extend(outcome.alternative_pairs)
+        type_floor_pairs.extend(outcome.type_floor_pairs)
         if outcome.regenerated:
             reingested_count += 1
             marker, label = "~", "re-ingested"
@@ -3872,6 +3940,7 @@ def _ingest_batch(
     # stderr before the stdout report so the stdout contract (#349) keeps
     # its promised shape: outcome lines first, batch summary last.
     _echo_type_alternative_summary(derived_total, alternative_pairs)
+    _echo_type_floor_summary(derived_total, type_floor_pairs)
 
     # Per-file outcome lines FIRST, the aggregate summary as the batch's
     # last word -- the order the docstrings and docs/cli.md promise
@@ -3974,6 +4043,7 @@ def ingest(
         # the command -- never by `_ingest_single`, which the batch path
         # calls once per file.
         _echo_type_alternative_summary(outcome.derived_count, outcome.alternative_pairs)
+        _echo_type_floor_summary(outcome.derived_count, outcome.type_floor_pairs)
         # End-of-run derived refresh (issue #553, widened by #640): AFTER
         # the single-file pipeline returned -- a refusal raises `typer.Exit`
         # above and skips this, matching the batch path (nothing new was
@@ -4373,6 +4443,7 @@ def _ingest_single(
             timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             bundle_dir=layout.bundle_dir,
             llm=_chat_client(cfg, task="extraction"),
+            cfg=cfg,
             include_confidential=include_confidential,
             union_judge=cfg.union_judge,
         )
@@ -4600,6 +4671,11 @@ def _ingest_single(
             (plan.doc_type, plan.type_alternative)
             for plan in derived_plans
             if plan.type_alternative is not None
+        ),
+        type_floor_pairs=tuple(
+            (plan.doc_type, plan.sensitivity)
+            for plan in derived_plans
+            if plan.type_floor_raised
         ),
     )
 
