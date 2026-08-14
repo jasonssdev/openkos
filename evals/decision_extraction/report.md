@@ -117,3 +117,30 @@ The `Person`/`Organization`/`Place` absences persist unchanged under the
 union path (still zero against 17/4/3 annotated mentions) — the open
 participant-extraction question above stands, and #457's adjudication pass is
 positioned to settle it.
+
+## 2026-08-13 — participant coverage baseline (change `first-class-participants`, #668)
+
+First `--participants` run of the extended probe (qwen3:8b, 3 runs per
+source, PR1's judge re-admission live in the measured tree):
+
+| Meeting | Source | Person emitted | Organization emitted | Judge-selected | Re-admitted | Anchor-less discards |
+|---|---|---:|---:|---:|---:|---:|
+| TS3005a | summary | 0 | 0 | 0 | 0 | 0 |
+| TS3005a | transcript | 0 | 0 | 0 | 0 | 0 |
+| TS3005b | summary | 0 | 0 | 0 | 0 | 0 |
+| TS3005b | transcript | 0 | 0 | 0 | 0 | 0 |
+
+Affordance floors unchanged: TS3005a has 17 Person / 4 Organization
+annotated mentions, TS3005b has 3 / 1. All four Person/Organization
+absences remain UNEXPLAINED; precision side is trivially clean (nothing
+emitted, nothing unexplained, zero stub flooding).
+
+**Reading.** Generation is confirmed as the dominant defect, exactly as the
+exploration's 0-of-12 finding predicted: with re-admission live, zero raw
+`Person`/`Organization` candidates were proposed, so the re-admission and
+anchor gates never fired (`re-admitted 0`, `anchor-less discards 0` — the
+machinery is in place and measurably inert). This satisfies the
+`participant-coverage-probe` spec's phase-2 trigger — zero generation on
+2 meetings across 3 runs — and is the recorded justification for opening
+the phase-2 scoped capture pass (design D6). Phase-1a alone moves nothing
+on this corpus, as predicted.

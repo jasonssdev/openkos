@@ -539,6 +539,14 @@ alone is unconditional, exactly as before this change.
 member here ever falls out of the closed vocabulary."""
 
 
+_PARTICIPANT_TYPES: Final = frozenset({"Person", "Organization"})
+"""The subset of `_JUDGE_READMIT_TYPES` the stub-flooding guard (#668
+design D5) reports on. Deliberately excludes `Procedure`: `Procedure`
+re-admission is unconditional (`_TWIN_EXEMPT_TYPE`) and was already
+measured before this change, so it is not part of the new anchor-gated
+re-admission this guard exists to watch."""
+
+
 _PARTICIPANT_ANCHOR_RE: Final = re.compile(
     r"\b("
     r"chair(?:s|ed|person)?|facilitat\w*|moderat\w*|organiz\w*|presenter?s?|"
@@ -1882,6 +1890,29 @@ class ExtractionReport:
     `discarded_titles` is: the reader has to be able to tell a dropped
     leak from a dropped subject. Defaulted so every existing construction
     site keeps working unchanged."""
+    participant_judge_selected_titles: tuple[str, ...] = ()
+    """`Person`/`Organization` titles (#668 design D5) the judge ITSELF
+    selected -- present in the judge's own echoed selection, not restored
+    by the anchor-gated re-admission conjunct. Always `()` outside the
+    successful non-empty `judge_status == "ok"` admission path. Read
+    alongside `participant_readmitted_titles`: the stub-flooding guard the
+    coverage probe measures is whether re-admission is DOING most of the
+    work the judge itself should be doing."""
+    participant_readmitted_titles: tuple[str, ...] = ()
+    """`Person`/`Organization` titles (#668 design D5) restored ONLY by the
+    anchor-gated judge re-admission conjunct (`_JUDGE_READMIT_TYPES` x
+    `meeting_shaped` x `_has_participant_anchor`) -- the judge itself did
+    NOT select these. Always `()` outside the successful non-empty
+    `judge_status == "ok"` admission path. A large count here relative to
+    `participant_judge_selected_titles` is the stub-flooding signal the
+    coverage probe's flooding guard exists to surface."""
+    participant_anchorless_discarded_titles: tuple[str, ...] = ()
+    """`Person`/`Organization` titles (#668 design D5) the judge dropped
+    AND the re-admission conjunct did NOT restore -- lacking a participant
+    anchor, or from a non-meeting-shaped source. A subset of
+    `judged_out_titles` restricted to `_PARTICIPANT_TYPES`. Always `()`
+    outside the successful non-empty `judge_status == "ok"` admission
+    path."""
 
 
 @dataclass(frozen=True)
@@ -2264,6 +2295,14 @@ def extract_concept_union(
             ),
         )
 
+    # Stub-flooding guard fields (#668 design D5): default to empty on every
+    # path except the successful non-empty admission branch below, where
+    # they are the only place the judge's OWN selection and the anchor-gated
+    # re-admission conjunct can still be told apart from each other.
+    participant_judge_selected_titles: tuple[str, ...] = ()
+    participant_readmitted_titles: tuple[str, ...] = ()
+    participant_anchorless_discarded_titles: tuple[str, ...] = ()
+
     if len(judge_input) == 1:
         # A single candidate makes the judge call a provable no-op (#644):
         # every possible outcome keeps that candidate -- its title echoed
@@ -2329,6 +2368,23 @@ def extract_concept_union(
             kept = admitted
             judged_out_titles = tuple(c.title for c in judge_input if c not in kept)
             judge_status = "ok"
+            participant_judge_selected_titles = tuple(
+                c.title
+                for c in kept
+                if c.type in _PARTICIPANT_TYPES
+                and _normalize_title(c.title) in selected_titles
+            )
+            participant_readmitted_titles = tuple(
+                c.title
+                for c in kept
+                if c.type in _PARTICIPANT_TYPES
+                and _normalize_title(c.title) not in selected_titles
+            )
+            participant_anchorless_discarded_titles = tuple(
+                c.title
+                for c in judge_input
+                if c.type in _PARTICIPANT_TYPES and c not in kept
+            )
 
     retained = kept[:_UNION_BACKSTOP]
     return ExtractionOutcome(
@@ -2348,5 +2404,8 @@ def extract_concept_union(
                 retained, source_title=source_title
             ),
             wrong_language_dropped_titles=wrong_language_dropped,
+            participant_judge_selected_titles=participant_judge_selected_titles,
+            participant_readmitted_titles=participant_readmitted_titles,
+            participant_anchorless_discarded_titles=participant_anchorless_discarded_titles,
         ),
     )

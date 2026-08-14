@@ -2850,6 +2850,59 @@ def test_person_not_readmitted_from_non_meeting_source() -> None:
     assert "Jordan Ellis" in outcome.report.judged_out_titles
 
 
+def test_participant_readmitted_reported_separately_from_judge_selected() -> None:
+    """Stub-flooding guard fields (#668 design D5): a `Person` restored
+    ONLY by the anchor-gated re-admission conjunct (the judge itself did
+    not select it) is reported in `participant_readmitted_titles`, and
+    NOT in `participant_judge_selected_titles` -- the two counts must stay
+    distinguishable, or the guard cannot tell re-admission from genuine
+    judge selection."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_WITH_ANCHOR_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    assert outcome.report.participant_readmitted_titles == ("Jordan Ellis",)
+    assert outcome.report.participant_judge_selected_titles == ()
+
+
+def test_participant_selected_by_judge_reported_in_selected_not_readmitted() -> None:
+    """The other side of the same guard: a `Person` the judge's OWN reply
+    keeps is reported in `participant_judge_selected_titles`, NOT in
+    `participant_readmitted_titles` -- re-admission never claims credit
+    for a candidate the judge genuinely selected."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_WITH_ANCHOR_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism", "Jordan Ellis")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    assert outcome.report.participant_judge_selected_titles == ("Jordan Ellis",)
+    assert outcome.report.participant_readmitted_titles == ()
+
+
+def test_anchorless_participant_reported_in_discarded_titles() -> None:
+    """Stub-flooding guard fields (#668 design D5): a name-only `Person`
+    the judge dropped, and re-admission does NOT restore (no anchor), is
+    reported in `participant_anchorless_discarded_titles` -- the count the
+    probe uses to distinguish a genuinely anchor-less discard from a
+    successful re-admission."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_NAME_ONLY_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes.", source_title="Team Meeting", llm=llm
+    )
+
+    assert outcome.report.participant_anchorless_discarded_titles == ("Alex Rivera",)
+
+
 @pytest.mark.parametrize(
     "judge_failure",
     [
