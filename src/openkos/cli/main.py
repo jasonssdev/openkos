@@ -12089,8 +12089,11 @@ def _partition_persisted_serves(
     for the pair's CURRENT bytes -- the same function that recorded them,
     so equality means "nothing this verdict was computed from has changed".
     Everything else re-judges, conservatively: no persisted row, any digest
-    drift, an unreadable input (fewer current rows than stored), or a
-    stored verdict value outside the enum. `consistent` rows serve exactly
+    drift, an unreadable input (fewer current rows than stored), a
+    stored verdict value outside the enum -- or a present-but-corrupt
+    store, which degrades to one stderr advisory and a full fresh judge
+    (#685 item 4) rather than crashing before any model spend. `consistent`
+    rows serve exactly
     like `contradicts` rows -- they are what proves a pair needs no
     re-judging (the display filter, not this partition, decides what is
     shown).
@@ -12101,11 +12104,25 @@ def _partition_persisted_serves(
     keeps describing the ORIGINAL plan."""
     if not layout.findings_db_path.exists():
         return {}, plan
-    conn = derived.open_derived_connection(layout.findings_db_path)
+    # Fail OPEN to judging on a present-but-corrupt store (#685 item 4,
+    # mirroring the persist path's #684 posture): this read runs BEFORE any
+    # model spend, so a crash here would cost the whole run to protect a
+    # cache -- one stderr advisory and a full fresh judge is strictly
+    # better. `sqlite3.Error` covers a non-database file; `OSError` an
+    # unreadable one.
     try:
-        persisted = findings.open_findings(conn)
-    finally:
-        conn.close()
+        conn = derived.open_derived_connection(layout.findings_db_path)
+        try:
+            persisted = findings.open_findings(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        typer.echo(
+            "openkos contradictions: warning -- failed to read persisted "
+            f"findings ({exc}); judging every candidate fresh.",
+            err=True,
+        )
+        return {}, plan
     # Insertion order is `record_findings` order: iterating forward and
     # overwriting leaves the LATEST row for each identity -- a pair curate
     # judged twice serves its newest verdict, never a superseded one.
@@ -12118,8 +12135,14 @@ def _partition_persisted_serves(
     for spec in plan.specs:
         key = _contradiction_spec_key(spec)
         row = latest.get(key)
+        # Row lookup FIRST (#685 item 4): a candidate with no persisted
+        # finding is judged without paying the per-pair digest I/O -- the
+        # hashes exist only to compare against a stored row.
+        if row is None:
+            to_judge.append(spec)
+            continue
         current = curate_module.finding_input_digests(layout.bundle_dir, spec)
-        if row is None or not current or tuple(row.input_digests) != current:
+        if not current or tuple(row.input_digests) != current:
             to_judge.append(spec)
             continue
         try:
