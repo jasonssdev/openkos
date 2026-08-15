@@ -171,6 +171,46 @@ outright, exactly because a tutorial's primary object is the one its title
 names. Excusing a miss on a `Procedure` would now hide a real extraction
 failure behind a rule that cannot fire on it.
 
+## Lever arms (`--lever`, #699)
+
+Two anti-fragmentation levers, each measured as its own row against the same
+baseline in the same sweep:
+
+```bash
+uv run python -u evals/extraction_cap/run_cap_eval.py \
+  --fixture medium-10-reunion-plataforma --runs 8 --union-judge on \
+  --lever carry-titles --lever chunk:8000
+```
+
+`carry-titles` tells each window which subjects earlier windows of the same
+source already named. `chunk:<chars>` resizes the window. **They are never
+crossed with each other** — #699 asks for them measured separately, a crossed
+cell answers a third question ("do they compose?") while making neither of the
+first two readable, and on a fixture this slow it doubles the sweep for an
+answer nobody asked for.
+
+The untreated row is always present and always first. A lever's number means
+nothing without the baseline it is read against, and the run-to-run variance
+on this material is large enough that yesterday's baseline from another sweep
+is not a safe comparison.
+
+**The arm has to bite, and that is checked.** `_chunk_lines` used to take
+`target: int = _CHUNK_TARGET` — a signature default, bound once when the
+function is defined — so setting the module constant chunked at 4 KB while the
+report said 8 KB. That is the inert-arm defect a reviewer caught in the #714
+probe, and it is the worst kind: it emits a full set of plausible numbers for a
+treatment that never ran, and nothing in the output looks wrong. Production now
+reads the constant at call time (pinned by
+`test_chunk_target_is_read_at_call_time_not_bound_at_definition`), and this
+harness's self-test fails if either lever goes inert or leaks past a run.
+
+**Adjudicate before comparing arms.** A treatment that coins new titles leaves
+them `UNJUDGED`, and unjudged positions are excluded from the precision
+denominator — so an unworked queue can flatter exactly the arm that changed the
+most. Work the queue, then `--rescore` the saved runs; that replays the same
+bytes against the edited ground truth with zero model calls, which is the only
+way to attribute a movement to the judgment rather than to resampling.
+
 ## Sampling arms
 
 `OllamaClient` exposes no temperature knob, and this harness does not add one —
