@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "Hand-written map from candidate key to 'named-only' | 'has-role',",
+    "never regex-derived (#706 precedent). A candidate key is",
+    "'<fixture>::<type>::<title>'. 'named-only' means the candidate's",
+    "description/body states no role, affiliation, or relation beyond the",
+    "bare name -- the exact class metric B (merely-named count) exists to",
+    "surface. 'has-role' means the description/body states one. Anything",
+    "not listed here is counted in neither column and is reported as",
+    "unadjudicated once real run titles exist to adjudicate.",
+    "Populated for real after the qwen3:8b sweep (task 1.4); the entries",
+    "below are placeholders only until then."
+  ],
+  "labels": {
+    "es-bare::Person::Ana": "has-role",
+    "es-bare::Person::Bruno": "has-role",
+    "es-bare::Person::Carla": "has-role",
+    "ami-ts3005a::Person::A": "has-role",
+    "ami-ts3005a::Person::B": "has-role",
+    "ami-ts3005a::Person::C": "has-role",
+    "ami-ts3005a::Person::D": "has-role"
+  },
+  "_notes": [
+    "es-bare (both arms, 5 of 6 runs): every description names a concrete",
+    "meeting action -- 'initiated the discussion', 'reviewed the records',",
+    "'identified the cause' -- an anchor by even the SHIPPED baseline",
+    "prompt's own definition, so 'has-role' for all three titles.",
+    "es-bare treatment run 3 is the ONE exception in the whole sweep:",
+    "all three candidates collapsed to 'Participante en la reunion' (no",
+    "action, no role, generic attendance only) -- genuinely borderline",
+    "'named-only' by itself, but the title-keyed adjudication scheme",
+    "(shared with evals/participant_anchor, run index deliberately",
+    "excluded from the key) cannot express 'has-role in 5 runs, bare in",
+    "1' under one label. Labeled 'has-role' (the dominant pattern across",
+    "the title's 6 occurrences) and the run-3 collapse is reported",
+    "qualitatively in report.md instead of folded into metric B's count.",
+    "ami-ts3005a (both arms, every run that produced a candidate):",
+    "descriptions state the SOURCE's own stated role verbatim (Project",
+    "Manager / User Interface Designer / Industrial Designer / Marketing",
+    "Expert) -- unambiguously 'has-role'."
+  ]
+}
