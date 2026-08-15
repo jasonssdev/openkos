@@ -1,62 +1,65 @@
-# Status: PAUSED after slice 1 — 2026-08-15
+# Status: slices 1, 2 and 4 SHIPPED — slice 3 still blocked (2026-08-15)
 
-This change is **paused, not abandoned**. Slice 1 shipped; slices 2-4 are
-blocked by their own measurement.
+## What has shipped
 
-## What slice 1 decided
-
-The Phase 0.2 gate ran and returned **REJECT** on the D2 capture-prompt
-treatment. Two of the four reject conditions fired independently:
-
-| Condition | Result |
+| Slice | State |
 | --- | --- |
-| Subject recall drops below baseline | did not fire — both arms at 0.00 (see below) |
-| Run latency ≥ 1.5× baseline | **FIRED** — 104.7s vs 54.6s (1.92×) |
-| Merely-named person count does not increase | **FIRED** — 0 vs 0 after adjudication |
-| A proposed name is absent from the source | did not fire |
+| 1 — volume eval | SHIPPED, PR #716. Its Phase 0.2 gate returned **REJECT** on D2. |
+| 2 — reverse the stub rule | SHIPPED. The anchor gate is retired. |
+| 3 — two-lane budget | **BLOCKED**, and now on stronger evidence than before. |
+| 4 — advisory name grounding | SHIPPED. |
 
-Per design D2, a rejection ships nothing prompt-level. The rewrite stays in
-`evals/named_person_volume/` as a reproducible monkeypatch. The derived
-capacity `_PARTICIPANT_BACKSTOP = 8` (from `p_max = 3`, the floor binding) is
-recorded but unused.
+## What slice 1 decided, and what survived it
 
-## Why the remaining slices are blocked rather than merely unstarted
+The Phase 0.2 gate REJECTed the D2 capture-prompt treatment: latency 1.92x
+baseline (104.7s vs 54.6s) and merely-named count 0 vs 0. Per D2 a rejection
+ships nothing prompt-level, so **task 2.4 is closed unshipped**. The rewrite
+stays in `evals/named_person_volume/` as a reproducible monkeypatch.
 
-Slice 1 measured something that removes slice 3's premise. On meeting-shaped
-sources the pipeline retains **people and nothing else** — zero
-`Decision`/`Event`/`Concept`/`Procedure` objects survive:
+Nothing else in the design was invalidated. D1/D3/D5/D6/D7 and all three
+delta specs stood, and slices 2 and 4 are exactly D6 and D5.
 
-| fixture | retained | of which participants | subjects |
-| --- | --- | --- | --- |
-| `es-bare`, 6 runs, both arms | 3 | 3 | **0** |
-| `ami-ts3005a`, baseline, 2 successful runs | 4 | 4 | **0** |
-| `es-anchored` (`evals/participant_anchor`, #706, 3 runs) | 5 / 5 / 4 | 5 / 5 / 4 | **0** |
+## The owner ruling that unblocked slice 2
 
-The last row is #706's own stored data, re-read at this angle. `es-anchored`'s
-prose contains an explicit decision ("Que quede la decisión: el corpus de actas
-… se incorpora al proyecto bajo convenio") and no `Decision` object survived any
-run.
+#712 carried an unresolved CONTRACT CONTRADICTION, stated in the issue itself:
+`_PARTICIPANT_CAPTURE_SYSTEM_PROMPT` accepts "spoke in this meeting" as an
+anchor, under which no speaker can ever be rejected, while D4/D5's stated
+purpose is anti-flooding.
 
-The two-lane budget (slice 3) exists to stop participants from crowding
-subjects out of `_UNION_BACKSTOP`. Subjects are not being crowded out: the
-backstop is 20 and only 3-5 objects were retained, so subjects are eliminated
-long before any capacity limit binds. Building the lane now would fix a
-competition that is not happening.
+**Ruled: retire the anchor gate.** Identification grounds on the NAME appearing
+in `source_text`, not on a role phrase in the model's own paraphrase.
+Anti-flooding moves to the participant budget lane, which is where a volume
+concern belongs — a lexicon was never going to carry it.
 
-That defect is tracked separately and outranks this change.
+That ruling is what D6 and D5 already described, from opposite ends: D6 deletes
+the gate, D5 adds the grounding that reads the source instead.
 
-## What is still valid here
+## Why slice 3 is still blocked, with better evidence
 
-- The owner rulings in `proposal.md` (always identify people; participants get
-  their own lane; merely-named persons carry the full lifecycle) are unchanged.
-- `exploration.md`'s mechanism map, `design.md`'s D1/D3/D5/D6/D7 and all three
-  delta specs remain accurate and reusable.
-- What is invalidated is D2's specific prompt rewrite, on its own measurement.
+The two-lane budget exists to stop participants crowding subjects out of
+`_UNION_BACKSTOP`. `evals/stage_attrition` (#715, PRs #717/#718) settled that
+they are not competing at all:
 
-## Resuming
+- Baseline reproduces zero retained subjects on **9 of 9 runs**, three fixtures.
+- `_extract_once` returns exactly ONE subject candidate per call on a
+  meeting-shaped source — the Event naming the meeting — which
+  `_drop_framing_objects` then correctly deletes.
+- The backstop is 20 and only 3-5 objects are retained, so no capacity limit
+  binds.
 
-Re-enter after the subject-retention defect is understood. At that point
-re-open `design.md` — the right mechanism for "always identify people" may look
-different once it is known why subjects do not survive, since participants
-currently reach the retained set through a deterministic re-admission path that
-subjects have no equivalent of.
+Subjects are not crowded out; **generation never produces them**. Building the
+lane now would still fix a competition that is not happening.
+
+That defect (#715) has its own authorized lever, and that lever is itself
+blocked on #714 — a 16 KB transcript blows the 8192 generation ceiling once the
+prompt asks for several objects. So the unblocking order is **#714 → #715 →
+slice 3**, and slice 3 should not be started before the first two land.
+
+## Re-entering for slice 3
+
+Re-read `design.md` D3/D4 when the time comes. `_PARTICIPANT_BACKSTOP = 8`
+(derived from `p_max = 3`, floor binding) is recorded in slice 1's report and
+still unused. Note that D4 (lane truncation ordering) was resolved
+*conditionally* and its condition should be re-checked against whatever #715's
+fix does to the subject count — a lane ordering decided when subjects were
+always zero has not been tested against the case it exists for.

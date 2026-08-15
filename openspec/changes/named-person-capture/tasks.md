@@ -41,17 +41,17 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: Slice 2 — Reverse the Stub Rule (gated by 0.2)
 
-- [ ] 2.1 RED: rewrite `test_concept.py:2887` — bare-name Person is re-admitted, no anchor check.
-- [ ] 2.2 RED: rewrite `test_concept.py:2925` — anchorless discard list is `()`.
-- [ ] 2.3 RED: NEW test — bare-name Person on NON-meeting-shaped source still not re-admitted.
-- [ ] 2.4 GREEN: rewrite `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT` per D2 table (`concept.py:1956`).
-- [ ] 2.5 GREEN: delete `and _has_participant_anchor(c)` at `concept.py:2772`; keep `_has_participant_anchor`/`_PARTICIPANT_ANCHOR_RE` exported, rewrite their docstrings (D6).
-- [ ] 2.6 Rename `participant_anchorless_discarded_titles` → `participant_unreadmitted_discarded_titles`; update `_participant_stub_notice` wording (`cli/main.py`).
-- [ ] 2.7 Update read site `run_participant_anchor_probe.py:376` (`_bucket_of`); rename bucket `anchorless-discarded` → `unreadmitted-discarded`; note old label in `README.md`.
-- [ ] 2.8 Update read site `run_type_coverage.py:257` (`anchorless_discarded_total`).
-- [ ] 2.9 Grep `docs/` for stale "Person needs an anchor" prose; correct.
-- [ ] 2.10 Update spec deltas per `extraction-union-judge/spec.md` scenarios (already authored — verify code matches).
-- [ ] 2.11 Mutation-confirm 2.1-2.3 against exact target lines; purge `__pycache__`.
+- [x] 2.1 RED: rewrite `test_concept.py:2887` — bare-name Person is re-admitted, no anchor check.
+- [x] 2.2 RED: rewrite `test_concept.py:2925` — anchorless discard list is `()`.
+- [x] 2.3 RED: NEW test — bare-name Person on NON-meeting-shaped source still not re-admitted.
+- [~] 2.4 SKIPPED: D2's rewrite was REJECTED by the Phase 0.2 gate (latency 1.92x, no merely-named increase). Per D2 a rejection ships nothing prompt-level, so this task is closed unshipped, not deferred.
+- [x] 2.5 GREEN: delete `and _has_participant_anchor(c)` at `concept.py:2772`; keep `_has_participant_anchor`/`_PARTICIPANT_ANCHOR_RE` exported, rewrite their docstrings (D6).
+- [x] 2.6 Rename `participant_anchorless_discarded_titles` → `participant_unreadmitted_discarded_titles`; update `_participant_stub_notice` wording (`cli/main.py`).
+- [x] 2.7 Update read site `run_participant_anchor_probe.py:376` (`_bucket_of`); rename bucket `anchorless-discarded` → `unreadmitted-discarded`; note old label in `README.md`.
+- [x] 2.8 Update read site `run_type_coverage.py:257` (`anchorless_discarded_total`).
+- [x] 2.9 Grep `docs/` for stale "Person needs an anchor" prose; correct.
+- [x] 2.10 Update spec deltas per `extraction-union-judge/spec.md` scenarios (already authored — verify code matches).
+- [x] 2.11 Mutation-confirm 2.1-2.3 against exact target lines; purge `__pycache__`.
 
 ## Phase 3: Slice 3 — Two-Lane Budget (after 0.1)
 
@@ -66,10 +66,10 @@ Chain strategy: feature-branch-chain
 
 ## Phase 4: Slice 4 — Advisory Name Grounding
 
-- [ ] 4.1 RED: absent name flagged; accented variant (Germán/German) not flagged (NFD strip); label-only source computes `()`.
-- [ ] 4.2 GREEN: `_names_absent_from_source(results, *, source_text)` per D5 comparison idiom + NFD/combining-mark strip.
-- [ ] 4.3 GREEN: wire label-only exemption via `_transcript_shaped_text` label regex check.
-- [ ] 4.4 Mutation-confirm 4.1 against exact target lines; purge `__pycache__`.
+- [x] 4.1 RED: absent name flagged; accented variant (Germán/German) not flagged (NFD strip); label-only source computes `()`.
+- [x] 4.2 GREEN: `_names_absent_from_source(results, *, source_text)` per D5 comparison idiom + NFD/combining-mark strip.
+- [x] 4.3 GREEN: wire label-only exemption via `_transcript_shaped_text` label regex check.
+- [x] 4.4 Mutation-confirm 4.1 against exact target lines; purge `__pycache__`.
 
 ## Phase 5: Verification
 

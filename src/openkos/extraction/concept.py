@@ -18,6 +18,7 @@ UX, looping `openkos.model.okf.build_concept` once per validated object.
 import contextlib
 import itertools
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, Final
@@ -647,8 +648,9 @@ additive re-admission are different consumers with different costs of
 error and MUST NOT share one predicate (the module's standing rule, see
 `_restates_source_title`). Used ONLY at the judge re-admission site;
 `Person`/`Organization` re-admission there is further gated on
-`meeting_shaped` and `_has_participant_anchor` (design D3/D4) -- `Procedure`
-alone is unconditional, exactly as before this change.
+`meeting_shaped` (design D3) -- `Procedure` alone is unconditional, exactly
+as before this change. The second gate, `_has_participant_anchor` (design
+D4), was RETIRED by #712.
 `test_judge_readmit_types_subset_of_classifiable_types` is the alarm if a
 member here ever falls out of the closed vocabulary."""
 
@@ -680,13 +682,28 @@ _PARTICIPANT_ANCHOR_RE: Final = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-"""A minimal context anchor beyond a bare name -- a meeting role,
-affiliation, or relation cue (the Stub Rejection requirement, design D4).
-Membership is deliberately TIGHT, the same asymmetry #459/#522 documented
-for `_MEETING_SHAPED_TITLE_RE`: a false negative merely keeps a genuine
-participant dropped (the status quo before #668), while a false positive
-re-admits a name-only stub -- exactly the defect this gate exists to
-prevent.
+"""RETIRED AS A GATE (#712). No production code reads this. It survives ONLY
+so `evals/participant_anchor`'s `--rescore` can re-derive #706's verdict from
+its own stored runs -- the property that report asserts in its opening lines.
+An import that merely breaks can be fixed at the read site; a measurement that
+can no longer be reproduced cannot.
+
+It was a minimal context anchor beyond a bare name -- a meeting role,
+affiliation, or relation cue (the Stub Rejection requirement, design D4) --
+and #706 measured what it actually did. It searched the CANDIDATE'S OWN
+description, which the model wrote out of `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT`'s
+vocabulary, so it was checking the prompt against itself: all 9 candidates on a
+source stating nothing about anyone were re-admitted on the token
+`Participante`, while 12 of 27 candidates stating a role in plain words scored
+ANCHORLESS -- `Representative from` missing because the lexicon carries
+`representative of`. A preposition was the whole difference.
+
+Widening the lexicon was measured and rejected in #706: it admits more
+paraphrase while still grounding nothing. The grounding that replaced it is
+`_names_absent_from_source`, which compares against the SOURCE.
+
+Membership was deliberately TIGHT, the same asymmetry #459/#522 documented
+for `_MEETING_SHAPED_TITLE_RE`.
 
 The lexicon ships English+Spanish ONLY, mirroring
 `_MEETING_SHAPED_TITLE_RE`'s own #522 two-language limit -- a THIRD
@@ -697,17 +714,17 @@ shape of change #459 warns against. Extend only after measuring through
 
 
 def _has_participant_anchor(result: ExtractionResult) -> bool:
-    """Does `result` carry a role, affiliation, or relation cue beyond its
-    bare name (design D4)? Reads `description` and `body` -- either field
-    can carry the anchor, since a role is sometimes named in the
-    description and sometimes only in the body. `title` is NOT consulted:
-    a name-only title with an anchored description is exactly the shape
-    this check exists to admit, and a title alone was never a valid signal
-    (the STUB RULE this check enforces: a bare name, wherever it appears,
-    is not a participant).
+    """RETIRED AS A GATE (#712) -- zero production callers.
 
-    Used ONLY at the judge re-admission step (`_JUDGE_READMIT_TYPES`); the
-    twin-drop and framing-drop DELETION sites never call this."""
+    Kept, with `_PARTICIPANT_ANCHOR_RE`, so #706's stored runs stay
+    re-derivable through `evals/participant_anchor --rescore`; see that
+    constant's docstring for what the measurement found and why widening it
+    was not the fix.
+
+    It answered: does `result` carry a role, affiliation, or relation cue
+    beyond its bare name (design D4)? It read `description` and `body`, never
+    `title` -- and that is precisely the defect, because those two fields are
+    the model's own paraphrase rather than the source."""
     return bool(_PARTICIPANT_ANCHOR_RE.search(f"{result.description} {result.body}"))
 
 
@@ -1157,6 +1174,83 @@ def _strip_ungrounded_expansions(
             result = replace(result, title=title.strip())
         stripped.append(result)
     return stripped
+
+
+_LABEL_ONLY_MAX_LEN: Final = 2
+"""Longest speaker label that still counts as label-only. AMI transcripts name
+their speakers `A:`, `B:`, `C:`; two characters covers those and `AB:` style
+initials without reaching a real short name."""
+
+
+def _fold_for_name_match(value: str) -> str:
+    """Strip, casefold, collapse whitespace, then drop combining marks.
+
+    The first three are the module's deliberately dumb comparison idiom, used
+    by every title rule here (`_strip_ungrounded_expansions`,
+    `_restates_source_title`). The fourth is specific to names: `Germán` in the
+    source against `German` in the candidate is one person losing a diacritic
+    in transcription, not a fabricated name, and flagging it would train the
+    operator to ignore this notice."""
+    folded = " ".join(value.casefold().split())
+    decomposed = unicodedata.normalize("NFD", folded)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _names_absent_from_source(
+    results: list[ExtractionResult], *, source_text: str
+) -> tuple[str, ...]:
+    """`Person`/`Organization` titles the SOURCE never writes (#712 design D5).
+
+    ADVISORY -- it returns titles for a caller to report and drops nothing.
+    That is the whole difference from `_has_participant_anchor`, the gate this
+    replaced. That gate searched the candidate's own `description`, which the
+    model wrote out of `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT`'s vocabulary, so it
+    was checking the prompt against itself: #706 measured all 9 candidates on a
+    source stating nothing about anyone re-admitted on the token
+    `Participante`, while 12 of 27 stating a role in plain words scored
+    anchorless. This check reads the SOURCE instead, which is the only text
+    that can ground anything.
+
+    Promotion to a rejecting filter is NOT in this change and needs its own
+    eval. The owner ruling is that every named person is identified, so a
+    rejecting version would delete a real person whenever the source writes
+    `G. Vega` and the model proposes `Germán Vega` -- the retired gate's
+    failure, committed in the other direction. Its declared bias is therefore
+    the inverse of that gate's: it prefers to MISS an invented name over to
+    accuse a real one, because the consequence changed from "drop a person" to
+    "print a line".
+
+    | Case | Behavior | Trade |
+    |---|---|---|
+    | `Germán` vs `German` | matches | bought by the combining-mark strip |
+    | source `G. Vega`, proposed `Germán Vega` | flagged | accepted false positive |
+    | source full name, proposed surname only | not flagged | accepted false negative |
+
+    Skipped entirely on a LABEL-ONLY source -- one whose every speaker label is
+    at most `_LABEL_ONLY_MAX_LEN` characters, as in AMI's `A:`/`B:`/`C:`. Every
+    proposed participant there is 'absent' by construction, so the check would
+    emit a flood of false alarms that buries the one real case rather than
+    surfacing it.
+
+    Non-participant types are never checked: a `Concept` title is SYNTHESIZED
+    rather than copied (the module's standing rule), so grounding it would flag
+    every correct object."""
+    labels = [
+        match.group("label").strip()
+        for line in source_text.splitlines()
+        if (match := _TRANSCRIPT_TURN_RE.match(line)) is not None
+    ]
+    if labels and all(len(label) <= _LABEL_ONLY_MAX_LEN for label in labels):
+        return ()
+
+    grounded_source = _fold_for_name_match(source_text)
+    return tuple(
+        result.title
+        for result in results
+        if result.type in _PARTICIPANT_TYPES
+        and (name := _fold_for_name_match(result.title))
+        and name not in grounded_source
+    )
 
 
 def _drop_framing_objects(
@@ -2223,26 +2317,39 @@ class ExtractionReport:
     participant_judge_selected_titles: tuple[str, ...] = ()
     """`Person`/`Organization` titles (#668 design D5) the judge ITSELF
     selected -- present in the judge's own echoed selection, not restored
-    by the anchor-gated re-admission conjunct. Always `()` outside the
+    by the re-admission conjunct. Always `()` outside the
     successful non-empty `judge_status == "ok"` admission path. Read
     alongside `participant_readmitted_titles`: the stub-flooding guard the
     coverage probe measures is whether re-admission is DOING most of the
     work the judge itself should be doing."""
     participant_readmitted_titles: tuple[str, ...] = ()
     """`Person`/`Organization` titles (#668 design D5) restored ONLY by the
-    anchor-gated judge re-admission conjunct (`_JUDGE_READMIT_TYPES` x
-    `meeting_shaped` x `_has_participant_anchor`) -- the judge itself did
+    judge re-admission conjunct (`_JUDGE_READMIT_TYPES` x `meeting_shaped`,
+    since #712 retired the anchor half) -- the judge itself did
     NOT select these. Always `()` outside the successful non-empty
     `judge_status == "ok"` admission path. A large count here relative to
     `participant_judge_selected_titles` is the stub-flooding signal the
     coverage probe's flooding guard exists to surface."""
-    participant_anchorless_discarded_titles: tuple[str, ...] = ()
+    participant_unreadmitted_discarded_titles: tuple[str, ...] = ()
     """`Person`/`Organization` titles (#668 design D5) the judge dropped
-    AND the re-admission conjunct did NOT restore -- lacking a participant
-    anchor, or from a non-meeting-shaped source. A subset of
+    AND the re-admission conjunct did NOT restore -- since #712 that means
+    exactly one thing: the source was not meeting-shaped. Named
+    `unreadmitted` rather than `anchorless` because the anchor gate it used
+    to name is retired, and a field whose name outlives its mechanism is a
+    silent lie to its next reader. A subset of
     `judged_out_titles` restricted to `_PARTICIPANT_TYPES`. Always `()`
     outside the successful non-empty `judge_status == "ok"` admission
     path."""
+    participant_names_absent_from_source: tuple[str, ...] = ()
+    """`Person`/`Organization` titles among the RETAINED objects whose name
+    the source never writes (#712 design D5), computed by
+    `_names_absent_from_source`.
+
+    ADVISORY. Nothing is dropped for appearing here -- see that function for
+    the declared bias and why promoting it to a filter needs its own eval.
+    Always `()` on a label-only source, where every name is 'absent' by
+    construction. Scored on the RETAINED set rather than every candidate: a
+    name that never survives is not a claim the bundle will store."""
     participant_capture_runs: int = 0
     """EXTRA chat calls spent on the scoped participant-capture pass (#668
     design D6): `1` when the source is meeting-shaped and the pass fired,
@@ -2726,11 +2833,11 @@ def extract_concept_union(
 
     # Stub-flooding guard fields (#668 design D5): default to empty on every
     # path except the successful non-empty admission branch below, where
-    # they are the only place the judge's OWN selection and the anchor-gated
+    # they are the only place the judge's OWN selection and the
     # re-admission conjunct can still be told apart from each other.
     participant_judge_selected_titles: tuple[str, ...] = ()
     participant_readmitted_titles: tuple[str, ...] = ()
-    participant_anchorless_discarded_titles: tuple[str, ...] = ()
+    participant_unreadmitted_discarded_titles: tuple[str, ...] = ()
 
     if len(judge_input) == 1:
         # A single candidate makes the judge call a provable no-op (#644):
@@ -2767,10 +2874,14 @@ def extract_concept_union(
             if _normalize_title(c.title) in selected_titles
             or (
                 c.type in _JUDGE_READMIT_TYPES
-                and (
-                    c.type == _TWIN_EXEMPT_TYPE
-                    or (meeting_shaped and _has_participant_anchor(c))
-                )
+                # The anchor half of this conjunct was RETIRED (#712): it
+                # read `_PARTICIPANT_ANCHOR_RE` over the candidate's own
+                # description, which the model wrote out of the capture
+                # prompt's own vocabulary, so it was checking the prompt
+                # against itself. The SCOPE half (`meeting_shaped`, #668 D3)
+                # stays -- a bare name on a technical article is still not a
+                # participant.
+                and (c.type == _TWIN_EXEMPT_TYPE or meeting_shaped)
             )
         ]
         if not admitted and judge_input:
@@ -2800,7 +2911,7 @@ def extract_concept_union(
                 if c.type in _PARTICIPANT_TYPES
                 and _normalize_title(c.title) not in selected_titles
             )
-            participant_anchorless_discarded_titles = tuple(
+            participant_unreadmitted_discarded_titles = tuple(
                 c.title
                 for c in judge_input
                 if c.type in _PARTICIPANT_TYPES and c not in kept
@@ -2826,7 +2937,10 @@ def extract_concept_union(
             wrong_language_dropped_titles=wrong_language_dropped,
             participant_judge_selected_titles=participant_judge_selected_titles,
             participant_readmitted_titles=participant_readmitted_titles,
-            participant_anchorless_discarded_titles=participant_anchorless_discarded_titles,
+            participant_unreadmitted_discarded_titles=participant_unreadmitted_discarded_titles,
+            participant_names_absent_from_source=_names_absent_from_source(
+                retained, source_text=source_text
+            ),
             participant_capture_runs=participant_capture_runs,
             participant_capture_added_titles=participant_capture_added_titles,
         ),
