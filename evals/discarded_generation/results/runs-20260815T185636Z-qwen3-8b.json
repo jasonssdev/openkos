@@ -1,0 +1,309 @@
+{
+  "model": "qwen3:8b",
+  "stamp": "20260815T185636Z",
+  "runs": [
+    {
+      "fixture": "es-anchored",
+      "run": 1,
+      "model": "qwen3:8b",
+      "latency_s": 94.07533054200758,
+      "produced": 5,
+      "retained": 5,
+      "generated_head": 233,
+      "generated_tail": 12020,
+      "kept_head": 101,
+      "kept_tail": 806,
+      "error": null,
+      "discarded_titles": [
+        "Reunión de coordinación del proyecto de memoria institucional"
+      ]
+    },
+    {
+      "fixture": "es-anchored",
+      "run": 2,
+      "model": "qwen3:8b",
+      "latency_s": 168.84169116699195,
+      "produced": 9,
+      "retained": 9,
+      "generated_head": 481,
+      "generated_tail": 20866,
+      "kept_head": 349,
+      "kept_tail": 9570,
+      "error": null,
+      "discarded_titles": [
+        "Reunión de coordinación del proyecto de memoria institucional"
+      ]
+    },
+    {
+      "fixture": "es-anchored",
+      "run": 3,
+      "model": "qwen3:8b",
+      "latency_s": 93.18351870900369,
+      "produced": 5,
+      "retained": 5,
+      "generated_head": 233,
+      "generated_tail": 11956,
+      "kept_head": 101,
+      "kept_tail": 749,
+      "error": null,
+      "discarded_titles": [
+        "Reunión de coordinación del proyecto de memoria institucional"
+      ]
+    },
+    {
+      "fixture": "es-anchored",
+      "run": 4,
+      "model": "qwen3:8b",
+      "latency_s": 93.24894966700231,
+      "produced": 5,
+      "retained": 5,
+      "generated_head": 233,
+      "generated_tail": 12032,
+      "kept_head": 101,
+      "kept_tail": 751,
+      "error": null,
+      "discarded_titles": [
+        "Reunión de coordinación del proyecto de memoria institucional"
+      ]
+    },
+    {
+      "fixture": "es-anchored",
+      "run": 5,
+      "model": "qwen3:8b",
+      "latency_s": 91.64601262500219,
+      "produced": 5,
+      "retained": 5,
+      "generated_head": 233,
+      "generated_tail": 12104,
+      "kept_head": 101,
+      "kept_tail": 849,
+      "error": null,
+      "discarded_titles": [
+        "Reunión de coordinación del proyecto de memoria institucional"
+      ]
+    },
+    {
+      "fixture": "es-anchored",
+      "run": 6,
+      "model": "qwen3:8b",
+      "latency_s": 94.60988712499966,
+      "produced": 5,
+      "retained": 5,
+      "generated_head": 233,
+      "generated_tail": 12137,
+      "kept_head": 101,
+      "kept_tail": 875,
+      "error": null,
+      "discarded_titles": [
+        "Reunión de coordinación del proyecto de memoria institucional"
+      ]
+    },
+    {
+      "fixture": "es-bare",
+      "run": 1,
+      "model": "qwen3:8b",
+      "latency_s": 69.85721733300306,
+      "produced": 5,
+      "retained": 5,
+      "generated_head": 187,
+      "generated_tail": 8050,
+      "kept_head": 121,
+      "kept_tail": 1450,
+      "error": null,
+      "discarded_titles": [
+        "Reunión semanal de operación"
+      ]
+    },
+    {
+      "fixture": "es-bare",
+      "run": 2,
+      "model": "qwen3:8b",
+      "latency_s": 82.39724316699721,
+      "produced": 7,
+      "retained": 7,
+      "generated_head": 358,
+      "generated_tail": 10425,
+      "kept_head": 244,
+      "kept_tail": 3200,
+      "error": null,
+      "discarded_titles": [
+        "Decisión sobre la medición y el contexto",
+        "Reunión semanal de operación"
+      ]
+    },
+    {
+      "fixture": "es-bare",
+      "run": 3,
+      "model": "qwen3:8b",
+      "latency_s": 75.90595270800986,
+      "produced": 6,
+      "retained": 6,
+      "generated_head": 339,
+      "generated_tail": 9667,
+      "kept_head": 175,
+      "kept_tail": 2107,
+      "error": null,
+      "discarded_titles": [
+        "Fijar la ventana de contexto y repetir la medición",
+        "Programar el respaldo del bundle",
+        "Reunión semanal de operación"
+      ]
+    },
+    {
+      "fixture": "es-bare",
+      "run": 4,
+      "model": "qwen3:8b",
+      "latency_s": 66.67679804199724,
+      "produced": 5,
+      "retained": 5,
+      "generated_head": 277,
+      "generated_tail": 8453,
+      "kept_head": 121,
+      "kept_tail": 1209,
+      "error": null,
+      "discarded_titles": [
+        "Reunión semanal de operación"
+      ]
+    },
+    {
+      "fixture": "es-bare",
+      "run": 5,
+      "model": "qwen3:8b",
+      "latency_s": 68.17008695800905,
+      "produced": 5,
+      "retained": 5,
+      "generated_head": 291,
+      "generated_tail": 8625,
+      "kept_head": 135,
+      "kept_tail": 1134,
+      "error": null,
+      "discarded_titles": [
+        "Decisión sobre la ventana de contexto",
+        "Reunión semanal de operación"
+      ]
+    },
+    {
+      "fixture": "es-bare",
+      "run": 6,
+      "model": "qwen3:8b",
+      "latency_s": 71.16321858399897,
+      "produced": 6,
+      "retained": 6,
+      "generated_head": 282,
+      "generated_tail": 9032,
+      "kept_head": 171,
+      "kept_tail": 1786,
+      "error": null,
+      "discarded_titles": [
+        "Decisión sobre la medición del índice",
+        "Reunión semanal de operación"
+      ]
+    },
+    {
+      "fixture": "ami-ts3005a",
+      "run": 1,
+      "model": "qwen3:8b",
+      "latency_s": 142.124111541998,
+      "produced": 2,
+      "retained": 2,
+      "generated_head": 104,
+      "generated_tail": 13179,
+      "kept_head": 69,
+      "kept_tail": 7974,
+      "error": null,
+      "discarded_titles": [
+        "Meeting",
+        "Meeting Discussion"
+      ]
+    },
+    {
+      "fixture": "ami-ts3005a",
+      "run": 2,
+      "model": "qwen3:8b",
+      "latency_s": 126.02874233300099,
+      "produced": 2,
+      "retained": 2,
+      "generated_head": 120,
+      "generated_tail": 17073,
+      "kept_head": 61,
+      "kept_tail": 8014,
+      "error": null,
+      "discarded_titles": [
+        "AMI meeting TS3005a",
+        "Meeting",
+        "Meeting Discussion"
+      ]
+    },
+    {
+      "fixture": "ami-ts3005a",
+      "run": 3,
+      "model": "qwen3:8b",
+      "latency_s": 123.21569854200061,
+      "produced": 2,
+      "retained": 2,
+      "generated_head": 120,
+      "generated_tail": 16975,
+      "kept_head": 61,
+      "kept_tail": 8039,
+      "error": null,
+      "discarded_titles": [
+        "AMI meeting TS3005a",
+        "Meeting",
+        "Meeting Discussion"
+      ]
+    },
+    {
+      "fixture": "ami-ts3005a",
+      "run": 4,
+      "model": "qwen3:8b",
+      "latency_s": 110.02742479099834,
+      "produced": 2,
+      "retained": 2,
+      "generated_head": 117,
+      "generated_tail": 14481,
+      "kept_head": 58,
+      "kept_tail": 5451,
+      "error": null,
+      "discarded_titles": [
+        "AMI meeting TS3005a",
+        "Meeting",
+        "Meeting Discussion"
+      ]
+    },
+    {
+      "fixture": "ami-ts3005a",
+      "run": 5,
+      "model": "qwen3:8b",
+      "latency_s": 111.46855108300224,
+      "produced": 2,
+      "retained": 2,
+      "generated_head": 104,
+      "generated_tail": 13175,
+      "kept_head": 69,
+      "kept_tail": 8042,
+      "error": null,
+      "discarded_titles": [
+        "Meeting",
+        "Meeting Discussion"
+      ]
+    },
+    {
+      "fixture": "ami-ts3005a",
+      "run": 6,
+      "model": "qwen3:8b",
+      "latency_s": 125.27291995800624,
+      "produced": 2,
+      "retained": 2,
+      "generated_head": 133,
+      "generated_tail": 16891,
+      "kept_head": 69,
+      "kept_tail": 7962,
+      "error": null,
+      "discarded_titles": [
+        "AMI meeting TS3005a",
+        "Meeting Discussion",
+        "Team Meeting"
+      ]
+    }
+  ]
+}
