@@ -13,4 +13,21 @@
 # The cost, stated plainly: nobody else can reproduce the exact numbers, only
 # the procedure. For a manual harness that never runs in CI, that is the right
 # trade.
-sources/
+# `sources/*`, not `sources/`: git does not descend into an excluded
+# DIRECTORY, so a negation for a file inside one can never re-include it.
+# Excluding the contents instead leaves the exception below reachable.
+sources/*
+
+# EXCEPTION: `medium-10-reunion-plataforma.md` is committed.
+#
+# The rule above exists because the other sources are third-party material this
+# project cannot relicense. That reason does not apply to this one: it was
+# WRITTEN for this repository as #694's oracle fixture, so it is original work
+# under the repository's own licence.
+#
+# Committing it is the whole point. #694's complaint is that "extraction
+# improved" and "extraction regressed" are both unfalsifiable claims; an oracle
+# whose source cannot be checked out reproduces that problem one level up.
+# With this file tracked, anyone cloning can run the measurement and get the
+# same numbers, even with no third-party corpus present at all.
+!sources/medium-10-reunion-plataforma.md

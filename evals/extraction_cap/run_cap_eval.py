@@ -711,6 +711,82 @@ class Cell:
             ]
         )
 
+    def _precision_of(self, titles: Sequence[str]) -> float | None:
+        """Share of this run's JUDGED positions that earned a NEW subject.
+
+        `None`, never `0.0`, when the run judged nothing: a run whose every
+        title is `UNJUDGED` has no measured precision, and scoring it zero
+        would report an unannotated ground truth as a model failure (#694).
+        Excluded from the mean rather than dragging it down.
+
+        Two rules that the recall side does not need, and that a naive
+        subject-count would get wrong:
+
+        - The denominator is the JUDGED positions, not all of them. Precision
+          over a mostly-unjudged reply is not a measurement, which is why
+          `mean_unjudged` is reported directly beside it -- a reader has to be
+          able to see how much of the output the figure actually covers.
+        - A subject already credited earlier in the same reply does NOT earn
+          the credit twice. `classify` answers per title, so two positions
+          naming one ground-truth subject both return `SUBJECT` unless the
+          curated near-duplicate list happens to name the second one. Counting
+          both would let a run inflate its precision by repeating itself --
+          the exact behaviour `NEAR_DUPLICATE` exists to penalise. First
+          occurrence in reply order wins; later ones count against.
+        """
+        judged = 0
+        credited = 0
+        seen: set[str] = set()
+        for title in titles:
+            verdict = classify(title, self.truth)
+            if verdict == UNJUDGED:
+                continue
+            judged += 1
+            subject = self.truth.subject_for(title)
+            if subject is not None and subject.title not in seen:
+                seen.add(subject.title)
+                credited += 1
+        if judged == 0:
+            return None
+        return credited / judged
+
+    @property
+    def precision_values_precap(self) -> list[float]:
+        """Per-run pre-cap precision, runs with nothing judged omitted."""
+        values = [self._precision_of(o.titles) for o in self.responded]
+        return [v for v in values if v is not None]
+
+    @property
+    def precision_values_postcap(self) -> list[float]:
+        """Per-run post-cap precision -- what a bundle actually received."""
+        values = [self._precision_of(o.titles[: o.retained]) for o in self.responded]
+        return [v for v in values if v is not None]
+
+    @property
+    def recall_values_precap(self) -> list[float]:
+        """Per-run pre-cap recall, kept so variance can be reported."""
+        total = self.truth.subject_count
+        return [
+            len(subjects_found(o.titles, self.truth)) / total for o in self.responded
+        ]
+
+    @property
+    def recall_values_postcap(self) -> list[float]:
+        """Per-run post-cap recall, kept so variance can be reported."""
+        total = self.truth.subject_count
+        return [
+            len(subjects_found(o.titles[: o.retained], self.truth)) / total
+            for o in self.responded
+        ]
+
+    @property
+    def mean_precision_precap(self) -> float:
+        return self._mean(self.precision_values_precap)
+
+    @property
+    def mean_precision_postcap(self) -> float:
+        return self._mean(self.precision_values_postcap)
+
     @property
     def mean_cap_cost(self) -> float:
         """Mean number of genuine subjects lost to the cap per run."""
@@ -1190,6 +1266,30 @@ def _fmt(value: float) -> str:
     return f"{value:.2f}"
 
 
+def _spread(values: Sequence[float]) -> str:
+    """`mean ±sd [min-max] n=N` -- the shape #694 asks a metric to have.
+
+    The issue's own argument is that a single number cannot say whether a
+    changed figure is a real movement or the same distribution sampled again:
+    yield on a byte-identical source varied ~40% across three runs. A mean with
+    no spread beside it invites exactly that mistake, so every headline metric
+    is rendered through this.
+
+    `n` is printed because the spread of two runs and the spread of ten are not
+    the same claim, and a reader must not have to look elsewhere to tell them
+    apart. A single run reports its value with `n=1` and no spread rather than
+    a fabricated `±0.00`."""
+    if not values:
+        return "-"
+    if len(values) == 1:
+        return f"{values[0]:.2f} n=1"
+    return (
+        f"{statistics.fmean(values):.2f} "
+        f"±{statistics.stdev(values):.2f} "
+        f"[{min(values):.2f}-{max(values):.2f}] n={len(values)}"
+    )
+
+
 def build_report(
     cells: Sequence[Cell], *, model: str, runs: int, generated_at: datetime
 ) -> str:
@@ -1262,8 +1362,18 @@ def _fixture_section(cell: Cell) -> list[str]:
     lines.append("| --- | --- |")
     lines.append(f"| mean produced (pre-cap) | {_fmt(cell.mean_produced)} |")
     lines.append(f"| mean retained (post-cap) | {_fmt(cell.mean_retained)} |")
-    lines.append(f"| subject recall pre-cap | {_fmt(cell.mean_recall_precap)} |")
-    lines.append(f"| subject recall post-cap | {_fmt(cell.mean_recall_postcap)} |")
+    lines.append(f"| subject recall pre-cap | {_spread(cell.recall_values_precap)} |")
+    lines.append(f"| subject recall post-cap | {_spread(cell.recall_values_postcap)} |")
+    # Precision sits directly beside `mean unjudged titles` below on purpose:
+    # it is computed over the JUDGED positions only, so a high unjudged count
+    # means the figure covers little of the output and must not be read as a
+    # verdict on the extractor (#694).
+    lines.append(
+        f"| subject precision pre-cap | {_spread(cell.precision_values_precap)} |"
+    )
+    lines.append(
+        f"| subject precision post-cap | {_spread(cell.precision_values_postcap)} |"
+    )
     lines.append(
         f"| **mean cap_cost (subjects lost to the cap)** | "
         f"**{_fmt(cell.mean_cap_cost)}** |"
@@ -1635,6 +1745,49 @@ def self_test() -> int:
         "near-dup recall counts once",
         round(dupey.mean_recall_precap, 6),
         round(1 / 3, 6),
+    )
+    # Precision over the JUDGED positions: one subject, one near-duplicate.
+    check("near-dup precision", dupey.precision_values_precap, [0.5])
+
+    # #694's subtle case: the SAME subject emitted twice, uncurated. Both
+    # positions classify SUBJECT, so a naive count would report precision 1.00
+    # for a reply that added one subject and one repetition. Credit is given to
+    # the first occurrence only.
+    repeated = Cell(fixture="sample", arm="synthetic", truth=truth)
+    repeated.outcomes = [_run(["Pre-built Skills", "Pre-built Skills"], 2, truth, 2)]
+    check(
+        "repeated subject verdicts are both SUBJECT",
+        repeated.outcomes[0].verdicts,
+        (SUBJECT, SUBJECT),
+    )
+    check(
+        "a repeated subject is not credited twice",
+        repeated.precision_values_precap,
+        [0.5],
+    )
+    check(
+        "a repeated subject still recalls once",
+        round(repeated.mean_recall_precap, 6),
+        round(1 / 3, 6),
+    )
+
+    # A reply nobody has judged has NO precision -- excluded from the mean
+    # rather than scored zero, which would report an unannotated ground truth
+    # as a model failure.
+    unjudged_only = Cell(fixture="sample", arm="synthetic", truth=truth)
+    unjudged_only.outcomes = [_run(["Something Nobody Ruled On"], 1, truth, 1)]
+    check("unjudged reply has no precision", unjudged_only.precision_values_precap, [])
+    check("unjudged spread renders as absent", _spread([]), "-")
+
+    # Variance is the whole point of #694: a mean with no spread beside it
+    # cannot say whether a moved figure is a real movement.
+    check(
+        "single run reports n=1 without a fabricated spread", _spread([0.5]), "0.50 n=1"
+    )
+    check(
+        "several runs report mean, sd, range and n",
+        _spread([0.0, 1.0]),
+        "0.50 ±0.71 [0.00-1.00] n=2",
     )
 
     raises(
@@ -2030,6 +2183,7 @@ def self_test() -> int:
         return 1
     print(
         "SELF-TEST PASSED: parsing, strictness, exact-only matching, cap_cost, "
+        "precision (incl. the repeated-subject rule), variance rendering, "
         "position curve, twin flag, temperature seam, and report OK."
     )
     return 0
