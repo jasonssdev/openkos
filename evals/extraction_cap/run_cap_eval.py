@@ -1099,9 +1099,6 @@ class Lever:
     2x2 on a fixture this slow also doubles the sweep for an answer nobody
     asked for. Each lever is its own row against the same baseline."""
 
-    carry_titles: bool = False
-    """Send earlier windows' titles to later windows of the same source."""
-
     chunk_target: int | None = None
     """Override `_CHUNK_TARGET` (chars per window). `None` keeps 4 000."""
 
@@ -1111,8 +1108,6 @@ class Lever:
         design as `_UNION_JUDGE_SUFFIX`/`_STEM_TITLE_SUFFIX`: a suffix on the
         opaque `arm` string, so every scoring, reporting, JSON and rescore
         path keeps working and the compared rows sort adjacent."""
-        if self.carry_titles:
-            return "+carry-titles"
         if self.chunk_target is not None:
             return f"+chunk{self.chunk_target}"
         return ""
@@ -1123,9 +1118,7 @@ NO_LEVER = Lever()
 
 
 def parse_lever(spec: str) -> Lever:
-    """Parse one `--lever` value: `carry-titles` or `chunk:<chars>`."""
-    if spec == "carry-titles":
-        return Lever(carry_titles=True)
+    """Parse one `--lever` value: `chunk:<chars>`."""
     if spec.startswith("chunk:"):
         raw = spec.removeprefix("chunk:")
         try:
@@ -1135,7 +1128,7 @@ def parse_lever(spec: str) -> Lever:
         if target < 1:
             raise ValueError(f"lever {spec!r}: window size must be positive")
         return Lever(chunk_target=target)
-    raise ValueError(f"unknown lever {spec!r} (want 'carry-titles' or 'chunk:<chars>')")
+    raise ValueError(f"unknown lever {spec!r} (want 'chunk:<chars>')")
 
 
 def expand_lever_arms(
@@ -1169,15 +1162,12 @@ def applied_lever(lever: Lever) -> Iterator[None]:
     definition` in the production suite is what keeps that closed; this
     harness's own self-test checks the arm still bites end to end.
     """
-    previous_carry = concept_mod._CARRY_TITLES_FORWARD
     previous_target = concept_mod._CHUNK_TARGET
-    concept_mod._CARRY_TITLES_FORWARD = lever.carry_titles
     if lever.chunk_target is not None:
         concept_mod._CHUNK_TARGET = lever.chunk_target
     try:
         yield
     finally:
-        concept_mod._CARRY_TITLES_FORWARD = previous_carry
         concept_mod._CHUNK_TARGET = previous_target
 
 
@@ -2149,9 +2139,8 @@ def self_test() -> int:
     #      #714 probe's shipped defect -- it produces a full set of plausible
     #      numbers for a treatment that never ran, and nothing in the report
     #      looks wrong.
-    check("lever: carry-titles", parse_lever("carry-titles"), Lever(carry_titles=True))
     check("lever: chunk size", parse_lever("chunk:8000"), Lever(chunk_target=8000))
-    for bad in ("chunk:abc", "chunk:0", "carry_titles", ""):
+    for bad in ("chunk:abc", "chunk:0", "carry-titles", ""):
         try:
             parse_lever(bad)
         except ValueError:
@@ -2162,12 +2151,12 @@ def self_test() -> int:
         "levers sit beside the untreated arm, never replacing it",
         expand_lever_arms(
             [(BASELINE_ARM, None, False, False)],
-            levers=[Lever(carry_titles=True), Lever(chunk_target=8000)],
+            levers=[Lever(chunk_target=6000), Lever(chunk_target=8000)],
         ),
         [
             (BASELINE_ARM, None, False, False, NO_LEVER),
-            (f"{BASELINE_ARM}+carry-titles", None, False, False, Lever(True, None)),
-            (f"{BASELINE_ARM}+chunk8000", None, False, False, Lever(False, 8000)),
+            (f"{BASELINE_ARM}+chunk6000", None, False, False, Lever(6000)),
+            (f"{BASELINE_ARM}+chunk8000", None, False, False, Lever(8000)),
         ],
     )
 
@@ -2175,19 +2164,12 @@ def self_test() -> int:
     untreated_windows = len(concept_mod._chunk_lines(lever_text))
     with applied_lever(Lever(chunk_target=8000)):
         treated_windows = len(concept_mod._chunk_lines(lever_text))
-        if concept_mod._CARRY_TITLES_FORWARD is not False:
-            failures.append("chunk lever must not switch carry-titles on")
     if treated_windows >= untreated_windows:
         failures.append(
             f"chunk lever is INERT: {untreated_windows} windows untreated, "
             f"{treated_windows} at chunk:8000 -- the arm would report a "
             f"treatment that never ran"
         )
-    with applied_lever(Lever(carry_titles=True)):
-        if concept_mod._CARRY_TITLES_FORWARD is not True:
-            failures.append("carry-titles lever is INERT: the constant stayed off")
-    if concept_mod._CARRY_TITLES_FORWARD is not False:
-        failures.append("applied_lever leaked: carry-titles stayed on after the run")
     if len(concept_mod._chunk_lines(lever_text)) != untreated_windows:
         failures.append("applied_lever leaked: the chunk target stayed overridden")
 
@@ -2434,9 +2416,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--lever",
         action="append",
         default=None,
-        help="#699 anti-fragmentation lever to measure BESIDE the untreated "
-        "arm; repeatable. 'carry-titles' tells each window which subjects "
-        "earlier windows named; 'chunk:<chars>' resizes the window (e.g. "
+        help="Window-size lever to measure BESIDE the untreated arm; "
+        "repeatable. 'chunk:<chars>' resizes the extraction window (e.g. "
         "chunk:8000). Levers are never crossed with each other -- #699 asks "
         "for them measured separately, and each gets its own row against the "
         "same baseline.",

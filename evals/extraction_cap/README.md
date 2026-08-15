@@ -173,21 +173,25 @@ failure behind a rule that cannot fire on it.
 
 ## Lever arms (`--lever`, #699)
 
-Two anti-fragmentation levers, each measured as its own row against the same
-baseline in the same sweep:
+Window-size levers, each measured as its own row against the same baseline in
+the same sweep:
 
 ```bash
 uv run python -u evals/extraction_cap/run_cap_eval.py \
   --fixture medium-10-reunion-plataforma --runs 8 --union-judge on \
-  --lever carry-titles --lever chunk:8000
+  --lever chunk:6000 --lever chunk:8000
 ```
 
-`carry-titles` tells each window which subjects earlier windows of the same
-source already named. `chunk:<chars>` resizes the window. **They are never
-crossed with each other** — #699 asks for them measured separately, a crossed
-cell answers a third question ("do they compose?") while making neither of the
-first two readable, and on a fixture this slow it doubles the sweep for an
-answer nobody asked for.
+**Levers are never crossed with each other** — #699 asks for them measured
+separately, a crossed cell answers a third question ("do they compose?") while
+making neither of the first two readable, and on a fixture this slow it doubles
+the sweep for an answer nobody asked for.
+
+A second lever, `carry-titles`, was measured here on 2026-08-15 and
+**rejected**: it amplified the fragmentation it was built to remove, from 0.12
+to 0.62 redundant subject emissions per run. Its axis was removed with the
+production mechanism it drove; both are preserved on the annotated tag
+`experiment/699-carry-titles`. See [`report-699-levers.md`](report-699-levers.md).
 
 The untreated row is always present and always first. A lever's number means
 nothing without the baseline it is read against, and the run-to-run variance
