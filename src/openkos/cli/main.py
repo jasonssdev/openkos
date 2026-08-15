@@ -3054,7 +3054,17 @@ def _participant_unreadmitted_notice(report: ExtractionReport) -> str | None:
     one reason: the SOURCE was not meeting-shaped, so participant re-admission
     never applied to it. The wording says that, because the old text -- "no
     role, affiliation, or relation cue" -- would now send the operator to look
-    for a cue that is no longer read anywhere."""
+    for a cue that is no longer read anywhere.
+
+    The field itself is a COMPLEMENT (`judge_input` minus `kept`), not a cause,
+    so this notice states a cause the field cannot prove on its own. It holds
+    because the re-admission conjunct admits EVERY `_PARTICIPANT_TYPES`
+    candidate once `meeting_shaped` is true, which leaves a non-meeting source
+    as the only way in. Narrow that conjunct again -- a budget lane that drops
+    participants past a cap is the obvious candidate, and slice 3 is exactly
+    that -- and this wording becomes a lie before any test notices. Re-derive
+    it there; `test_participant_unreadmitted_notice_names_the_real_second_decision`
+    records the reasoning but cannot detect a second cause appearing."""
     if not report.participant_unreadmitted_discarded_titles:
         return None
     titles = report.participant_unreadmitted_discarded_titles

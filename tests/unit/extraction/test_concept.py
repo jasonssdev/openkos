@@ -5470,3 +5470,97 @@ def test_union_reports_no_absent_names_when_the_source_writes_them() -> None:
     )
 
     assert outcome.report.participant_names_absent_from_source == ()
+
+
+def test_names_absent_from_source_requires_a_word_boundary() -> None:
+    """R4/R3 review finding on PR #719: the grounding was a raw substring
+    test, so a short name was 'found' inside any unrelated word that
+    happened to contain it -- `Ana` in `mañana`, `Vega` in `Vegas`.
+
+    That silently un-fires the advisory exactly where it is most needed: a
+    short fabricated name is the easiest to hallucinate and the easiest to
+    find by accident. The bias table declares which false NEGATIVES are
+    accepted; this one was not among them, it was a bug."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person", title="Ana", description="Attended.", body=""
+        )
+    ]
+
+    absent = concept_mod._names_absent_from_source(
+        results, source_text="Seguimos mañana con el análisis pendiente."
+    )
+
+    assert absent == ("Ana",)
+
+
+def test_names_absent_from_source_still_matches_a_name_next_to_punctuation() -> None:
+    """The boundary must not be so strict it breaks the ordinary case: a
+    transcript writes `Ana:` with a colon, and a source writing `(Ana)` or
+    `Ana,` is the same person. A rule that only matched a space-delimited
+    name would flag every real speaker."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person", title="Ana", description="Ran the agenda.", body=""
+        )
+    ]
+
+    assert (
+        concept_mod._names_absent_from_source(
+            results, source_text="Ana: partamos por el índice."
+        )
+        == ()
+    )
+
+
+def test_names_absent_from_source_exempts_a_mostly_label_only_transcript() -> None:
+    """R4 review finding on PR #719: the exemption asked `all()` over every
+    matched label, so ONE longer label anywhere in an otherwise `A:`/`B:`
+    transcript disabled it for the whole source and re-flagged every
+    role-titled participant.
+
+    An AMI transcript with a single `Presenter:` line is still a source that
+    does not state real names, and the flood of false alarms is what buries
+    the one real case."""
+    lines = [
+        line
+        for _ in range(6)
+        for line in ("A: Let us start.", "B: Agreed.", "C: One moment.")
+    ]
+    lines.append("Presenter: Thanks everyone.")
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person",
+            title="Industrial Designer",
+            description="Presented.",
+            body="",
+        )
+    ]
+
+    absent = concept_mod._names_absent_from_source(
+        results, source_text="\n".join(lines)
+    )
+
+    assert absent == ()
+
+
+def test_single_run_extraction_also_reports_absent_participant_names() -> None:
+    """R1 review finding on PR #719: the advisory was computed at ONE
+    construction site. `cli/main.py` picks
+    `extract_concept_union if union_judge else extract_concept`, so with
+    `union_judge` off the legacy single path stored participants and
+    reported nothing -- the same "computed but never surfaced" defect #690
+    spent a PR diagnosing."""
+    invented = (
+        '{"type": "Person", "title": "Nadie Real", '
+        '"description": "Attended the meeting.", "body": ""}'
+    )
+    llm = _FakeLLM(reply=_array(_CONCEPT_ITEM, invented))
+
+    outcome = concept_mod.extract_concept(
+        "Team meeting notes. Ana ran the agenda.",
+        source_title="Team Meeting",
+        llm=llm,
+    )
+
+    assert outcome.report.participant_names_absent_from_source == ("Nadie Real",)
