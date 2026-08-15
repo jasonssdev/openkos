@@ -1966,6 +1966,46 @@ def self_test() -> int:
         ],
         [True, True, True, True],
     )
+    # The OTHER direction. `path_invariant_violation` is symmetric in the
+    # declared path, and asserting only the `chunked` side leaves half the
+    # comparison unproved -- a fixture pinned to the whole-document path
+    # (because chunking is what would change its numbers) is exactly as
+    # entitled to the guard.
+    drifted_other = path_invariant_violation(
+        _with_path("whole-document", "wholedoc"),
+        source_text="x" * 12_001,
+        title="Reunión de coordinación",
+    )
+    check(
+        "a whole-document fixture that starts chunking is a violation too",
+        [
+            token in (drifted_other or "")
+            for token in ("declares the whole-document", "takes the chunked", "12001")
+        ],
+        [True, True, True],
+    )
+    check(
+        "and it is satisfied when the source stays short",
+        path_invariant_violation(
+            _with_path("whole-document", "wholedoc"),
+            source_text="x" * 12_000,
+            title="Reunión de coordinación",
+        ),
+        None,
+    )
+    # `_gt` hands back a source path that does not exist, which is the state
+    # of MOST of this corpus in MOST checkouts (git-ignored third-party
+    # material). The preflight must skip it rather than report a violation it
+    # cannot have observed -- `evaluate_cell` owns that skip, and a preflight
+    # that aborted here would make the harness unrunnable on a fresh clone.
+    check(
+        "a declared invariant with no source on disk blocks nothing",
+        preflight_path_invariants(
+            [_with_path("chunked", "absent")],
+            [(BASELINE_ARM, None, False, False, NO_LEVER)],
+        ),
+        [],
+    )
 
     # The concrete hole #726 was filed for. This fixture is COMMITTED (unlike
     # the rest of the corpus), so a checkout that has it can prove the
