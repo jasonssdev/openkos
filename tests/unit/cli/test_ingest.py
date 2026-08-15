@@ -6871,6 +6871,93 @@ def test_participant_anchor_notice_is_silent_when_the_gate_discarded_none() -> N
     assert main._participant_anchor_notice(report) is None
 
 
+def test_participant_anchor_notice_truncates_past_the_title_limit() -> None:
+    """A meeting naming a dozen people can discard a dozen stubs, and the
+    notice caps the list at `_CAP_NOTICE_TITLE_LIMIT` like every other
+    notice here -- the COUNT stays exact and the remainder is disclosed as
+    `(+N more)` rather than silently dropped.
+
+    Coverage gap named by PR #705's four-lens review: the truncation branch
+    had no test, so a change that dropped the remainder entirely would have
+    read as a passing suite."""
+    titles = tuple(f"Person {index}" for index in range(1, 6))
+    report = concept_mod.ExtractionReport(
+        produced=9,
+        retained=9,
+        judge_status="ok",
+        judged_out_titles=titles,
+        participant_anchorless_discarded_titles=titles,
+    )
+
+    notice = main._participant_anchor_notice(report)
+
+    assert notice is not None
+    assert "5 participant candidate(s)" in notice
+    assert "Person 1, Person 2, Person 3 (+2 more)" in notice
+    assert "Person 4" not in notice
+
+
+def test_ingest_reports_the_anchor_gate_when_the_judge_drops_a_stub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notice reaches stderr on a REAL `ingest` run, not only from its
+    helper (PR #705's review: the helper was unit-tested, the render path
+    was not -- a notice computed and never printed is the same defect the
+    engine already had, one layer up).
+
+    Drives the whole union path over a meeting-shaped source: two
+    extraction passes, the #668 participant-capture pass (this source is
+    transcript-shaped, so it fires), then a judge that selects only the
+    Concept. The captured `Person` carries a bare name with no role,
+    affiliation, or relation cue, so the anchor gate declines to re-admit
+    it -- and BOTH notices must appear, because the two decisions are the
+    finding."""
+    _init_workspace(tmp_path, monkeypatch)
+    text = "\n".join(
+        [
+            "# Weekly project meeting",
+            "",
+            *[
+                line
+                for _ in range(6)
+                for line in (
+                    "Ana: We reviewed the ingestion backlog this week.",
+                    "Bruno: The index rebuild finished and search got faster.",
+                )
+            ],
+        ]
+    )
+    participant_reply = json.dumps(
+        [
+            {
+                "type": "Person",
+                "title": "Ana",
+                "description": "Ana.",
+                "body": "",
+            }
+        ]
+    )
+    judge_reply = json.dumps({"keep": ["Ingestion Backlog"]})
+    _patch_sequenced_llm(
+        monkeypatch,
+        [
+            "[" + _concept_reply(title="Ingestion Backlog") + "]",
+            "[" + _concept_reply(title="Index Rebuild") + "]",
+            participant_reply,
+            judge_reply,
+        ],
+    )
+    source = tmp_path / "meeting.txt"
+    source.write_text(text, encoding="utf-8")
+
+    result = runner.invoke(app, ["ingest", "meeting.txt", "--auto"])
+
+    assert result.exit_code == 0
+    assert "1 participant candidate(s) discarded as name-only stubs" in result.stderr
+    assert "Ana" in result.stderr
+    assert "judge dropped" in result.stderr
+
+
 # ---------------------------------------------------------------------------
 # #701 -- the extraction phases reach the spinner instead of a static line
 # ---------------------------------------------------------------------------
