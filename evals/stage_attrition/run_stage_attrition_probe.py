@@ -45,11 +45,23 @@ Both counts are always printed side by side, and the totals with them. A view
 that shows only one class hides its own complement — the exact reason #715 sat
 inside `evals/participant_anchor`'s stored data for a day without being seen.
 
+## The treatment arm (#715 fix)
+
+The ledger answered WHERE, and the answer was "nowhere -- generation never
+produces them". `--arm both` measures the one lever the owner authorized
+against that: an ADDITIVE clause next to the verbatim-pinned anti-enumeration
+paragraph, asking for the second half of what that paragraph already promises.
+The pinned paragraph is not edited and `_drop_framing_objects` is not relaxed.
+
+The arm splices the clause into `_SYSTEM_PROMPT` at the exact position it would
+ship, so the measurement is of the shippable text and not of a paraphrase.
+
 Usage:
 
     uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --self-test
     uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --runs 3
     uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --fixture es-anchored
+    uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --arm both --runs 3
 """
 
 from __future__ import annotations
@@ -172,6 +184,74 @@ def build_fixtures() -> list[Fixture]:
             )
         )
     return fixtures
+
+
+# --------------------------------------------------------------------------- #
+# Arms
+# --------------------------------------------------------------------------- #
+
+_SPLICE_ANCHOR: Final = (
+    "A source developing only one subject still yields exactly ONE object.\n\n"
+)
+"""End of the stated multiplicity test (design D3), which is itself ADDITIVE
+next to the verbatim-pinned anti-enumeration paragraph. The treatment clause
+goes immediately after it, so it lands in the same adjacency D3 established and
+the pinned paragraph (#380) keeps every one of its pinned bytes."""
+
+_TREATMENT_CLAUSE: Final = (
+    "When the source is a meeting, call, or interview transcript, BOTH halves "
+    "of that instruction are required: the gathering itself AND each distinct "
+    "subject the participants worked through -- every decision reached, every "
+    "problem raised, every topic resolved, every procedure agreed. A working "
+    "transcript normally develops SEVERAL such subjects, and a reply naming "
+    "only the gathering has not read the transcript for its content.\n\n"
+)
+"""The one lever authorized for #715, stated ADDITIVELY.
+
+`evals/stage_attrition`'s own report established the mechanism: the pinned
+anti-enumeration paragraph tells the model a transcript is "about the meeting
+itself (an Event) and any Decisions reached", the model emits the Event and
+stops, and `_drop_framing_objects` then correctly deletes it -- so a meeting
+yields nothing.
+
+This clause therefore does NOT contradict that paragraph; it COMPLETES it. The
+failure is that only the first half of "extract the Event and the Decisions"
+ever arrives, so the clause reinforces the second half rather than negating the
+first. Negating it was the alternative and was deliberately not taken: a direct
+contradiction inside one prompt degrades the 8B tier, and the anti-twin
+experience (D4/5b) is that a narrower clause carrying a CONCRETE forbidden
+example made its defect measurably WORSE via priming. There is no concrete
+example here for the same reason."""
+
+
+@dataclass(frozen=True)
+class Arm:
+    """One prompt configuration to measure."""
+
+    name: str
+    system_prompt: str
+    """The exact `_SYSTEM_PROMPT` text this arm runs under."""
+
+
+def build_arms() -> dict[str, Arm]:
+    """`baseline` (shipped text) and `treatment` (shipped text + the clause).
+
+    The splice is asserted, never assumed: if the anchor paragraph is reworded,
+    a silent `str.replace` no-op would run the treatment arm on the baseline
+    prompt and report "no effect" for a treatment that was never applied."""
+    shipped = concept_mod._SYSTEM_PROMPT
+    if shipped.count(_SPLICE_ANCHOR) != 1:
+        raise SystemExit(
+            "the treatment splice anchor is no longer present exactly once in "
+            "_SYSTEM_PROMPT. Re-point it before trusting a number from the "
+            "treatment arm -- an unspliced arm measures the baseline twice and "
+            "reads as 'the treatment does nothing'."
+        )
+    treated = shipped.replace(_SPLICE_ANCHOR, _SPLICE_ANCHOR + _TREATMENT_CLAUSE, 1)
+    return {
+        "baseline": Arm(name="baseline", system_prompt=shipped),
+        "treatment": Arm(name="treatment", system_prompt=treated),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -368,7 +448,7 @@ class _StageRecorder:
 
 @dataclass
 class RunRecord:
-    """One (fixture, run) with its full stage ledger."""
+    """One (fixture, arm, run) with its full stage ledger."""
 
     fixture: str
     run: int
@@ -377,15 +457,38 @@ class RunRecord:
     judge_status: str
     produced: int
     retained: int
+    arm: str = "baseline"
     final_objects: list[dict[str, str]] = field(default_factory=list)
     stages: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
 
+    @property
+    def subjects(self) -> list[dict[str, str]]:
+        return [c for c in self.final_objects if c["lane"] == _SUBJECT_LABEL]
 
-def run_fixture(fixture: Fixture, llm: Any, runs: int, model: str) -> list[RunRecord]:
-    """Measure one fixture `runs` times, recording every stage."""
+    @property
+    def participants(self) -> list[dict[str, str]]:
+        return [c for c in self.final_objects if c["lane"] == _PARTICIPANT_LABEL]
+
+
+def run_fixture(
+    fixture: Fixture,
+    llm: Any,
+    runs: int,
+    model: str,
+    arm: Arm | None = None,
+) -> list[RunRecord]:
+    """Measure one fixture `runs` times under one arm, recording every stage.
+
+    The arm's prompt is installed on the module for the duration and restored
+    in the same `finally` that restores the recorder: a probe that leaves a
+    treatment prompt installed would silently contaminate every later arm."""
     recorder = _StageRecorder()
     recorder.install()
+    arm_name = arm.name if arm is not None else "baseline"
+    original_prompt = concept_mod._SYSTEM_PROMPT
+    if arm is not None:
+        concept_mod._SYSTEM_PROMPT = arm.system_prompt
     records: list[RunRecord] = []
     try:
         for index in range(1, runs + 1):
@@ -401,6 +504,7 @@ def run_fixture(fixture: Fixture, llm: Any, runs: int, model: str) -> list[RunRe
                         fixture=fixture.name,
                         run=index,
                         model=model,
+                        arm=arm_name,
                         latency_s=round(time.monotonic() - started, 1),
                         judge_status="error",
                         produced=0,
@@ -418,6 +522,7 @@ def run_fixture(fixture: Fixture, llm: Any, runs: int, model: str) -> list[RunRe
                     fixture=fixture.name,
                     run=index,
                     model=model,
+                    arm=arm_name,
                     latency_s=latency,
                     judge_status=outcome.report.judge_status,
                     produced=outcome.report.produced,
@@ -428,12 +533,13 @@ def run_fixture(fixture: Fixture, llm: Any, runs: int, model: str) -> list[RunRe
             )
             subjects = sum(1 for c in final if c["lane"] == _SUBJECT_LABEL)
             print(
-                f"    run {index}: retained {len(final)} "
+                f"    [{arm_name}] run {index}: retained {len(final)} "
                 f"({subjects} subject / {len(final) - subjects} participant), "
                 f"judge {outcome.report.judge_status}, {latency}s"
             )
     finally:
         recorder.restore()
+        concept_mod._SYSTEM_PROMPT = original_prompt
     return records
 
 
@@ -451,7 +557,8 @@ def _event_counts(event: dict[str, Any], lane: str) -> tuple[int, int]:
 def render_run(record: RunRecord) -> str:
     """The attrition ledger for one run, in call order."""
     lines = [
-        f"  run {record.run} (judge {record.judge_status}, {record.latency_s}s)",
+        f"  [{record.arm}] run {record.run} "
+        f"(judge {record.judge_status}, {record.latency_s}s)",
         "    stage                         subj in→out   part in→out   dropped",
     ]
     for event in record.stages:
@@ -534,6 +641,148 @@ def render(records: list[RunRecord], fixtures: list[Fixture]) -> str:
     return "\n".join(lines)
 
 
+# --------------------------------------------------------------------------- #
+# The gate
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class ArmSummary:
+    """One arm's scored totals."""
+
+    arm: str
+    runs: int
+    runs_with_subject: int
+    mean_subjects: float
+    mean_participants: float
+    mean_latency: float
+
+
+def summarize_arm(records: list[RunRecord]) -> ArmSummary:
+    """Score one arm over every successful run it produced."""
+    ok = [r for r in records if r.error is None]
+    count = max(len(ok), 1)
+    return ArmSummary(
+        arm=ok[0].arm if ok else (records[0].arm if records else "?"),
+        runs=len(ok),
+        runs_with_subject=sum(1 for r in ok if r.subjects),
+        mean_subjects=round(sum(len(r.subjects) for r in ok) / count, 2),
+        mean_participants=round(sum(len(r.participants) for r in ok) / count, 2),
+        mean_latency=round(sum(r.latency_s for r in ok) / count, 1),
+    )
+
+
+_LATENCY_REJECT_FACTOR: Final = 1.5
+"""Slice 1's own reject threshold (`named-person-capture` Phase 0.2), reused
+verbatim so two treatments aimed at the same defect are not scored against two
+different bars."""
+
+_PARTICIPANT_TOLERANCE: Final = 0.5
+"""Participants reach retention deterministically, so their count should not
+move at all. Half an object of slack absorbs a single stochastic capture
+without excusing a real regression."""
+
+
+def render_gate(records: list[RunRecord]) -> tuple[str, bool]:
+    """Score the treatment against the baseline. Returns `(report, shippable)`.
+
+    Four conditions, mirroring the slice-1 gate that rejected the D2 capture
+    prompt. Any one firing means REJECT, and per the owner's standing ruling a
+    REJECT ships the measurement only -- production is not touched and no
+    fallback lever is taken.
+
+    Condition 4 is deliberately NOT automated. Whether a retained subject is
+    real cannot be decided by a substring test the way #712's absent-name check
+    could, and a probe that scores it automatically would be inventing an
+    oracle it does not have (#694 is that oracle, and it is unbuilt). The gate
+    prints every retained subject and stops short of PASS until a human has
+    adjudicated them."""
+    by_arm: dict[str, list[RunRecord]] = {}
+    for record in records:
+        by_arm.setdefault(record.arm, []).append(record)
+
+    lines = ["", "=" * 78, "GATE — treatment vs baseline (#715)", "=" * 78, ""]
+    if "treatment" not in by_arm or "baseline" not in by_arm:
+        lines.append("  Single-arm run: no gate. Use --arm both to score.")
+        return "\n".join(lines), False
+
+    base = summarize_arm(by_arm["baseline"])
+    treat = summarize_arm(by_arm["treatment"])
+
+    lines.append(
+        f"  {'arm':<12}{'runs':>6}{'w/subject':>11}"
+        f"{'subj/run':>10}{'part/run':>10}{'latency':>10}"
+    )
+    for summary in (base, treat):
+        lines.append(
+            f"  {summary.arm:<12}{summary.runs:>6}{summary.runs_with_subject:>11}"
+            f"{summary.mean_subjects:>10}{summary.mean_participants:>10}"
+            f"{summary.mean_latency:>9}s"
+        )
+    lines.append("")
+
+    latency_ratio = (
+        treat.mean_latency / base.mean_latency if base.mean_latency else float("inf")
+    )
+    conditions = [
+        (
+            "subject retention does not increase",
+            treat.runs_with_subject <= base.runs_with_subject,
+            f"{base.runs_with_subject}/{base.runs} → "
+            f"{treat.runs_with_subject}/{treat.runs} runs retained a subject",
+        ),
+        (
+            f"latency >= {_LATENCY_REJECT_FACTOR}x baseline",
+            latency_ratio >= _LATENCY_REJECT_FACTOR,
+            f"{base.mean_latency}s -> {treat.mean_latency}s ({latency_ratio:.2f}x)",
+        ),
+        (
+            "participant retention degrades",
+            treat.mean_participants < base.mean_participants - _PARTICIPANT_TOLERANCE,
+            f"{base.mean_participants} → {treat.mean_participants} per run",
+        ),
+        (
+            "a retained subject is not supported by the source",
+            False,
+            "NOT automated — adjudicate the titles below before reading a PASS",
+        ),
+    ]
+    fired = [name for name, did_fire, _ in conditions if did_fire]
+    for name, did_fire, evidence in conditions:
+        mark = "FIRED  " if did_fire else "clear  "
+        lines.append(f"  [{mark}] {name}\n             {evidence}")
+
+    lines += ["", "  Subjects retained by the treatment arm (adjudicate each):"]
+    treatment_subjects = [
+        (r.fixture, c["type"], c["title"])
+        for r in by_arm["treatment"]
+        for c in r.subjects
+    ]
+    if not treatment_subjects:
+        lines.append("    (none)")
+    for fixture, type_name, title in sorted(set(treatment_subjects)):
+        occurrences = sum(
+            1 for row in treatment_subjects if row == (fixture, type_name, title)
+        )
+        lines.append(f"    {fixture:<14} x{occurrences}  {type_name}: {title}")
+
+    lines.append("")
+    if fired:
+        lines.append(
+            f"  VERDICT: REJECT — {len(fired)} condition(s) fired: {'; '.join(fired)}"
+        )
+        lines.append(
+            "  Per the standing ruling, a REJECT ships the measurement only: "
+            "production stays untouched."
+        )
+    else:
+        lines.append(
+            "  VERDICT: no automated condition fired. SHIPPABLE once the "
+            "retained subjects above are adjudicated as real."
+        )
+    return "\n".join(lines), not fired
+
+
 def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     slug = model.replace(":", "-").replace("/", "-")
@@ -589,6 +838,100 @@ class _FakeLLM:
         )
 
 
+def _record(arm: str, subjects: int, participants: int, latency: float) -> RunRecord:
+    """One synthetic outcome, for scoring the gate without a model."""
+    final = [
+        {"type": "Decision", "title": f"d{i}", "lane": _SUBJECT_LABEL}
+        for i in range(subjects)
+    ] + [
+        {"type": "Person", "title": f"p{i}", "lane": _PARTICIPANT_LABEL}
+        for i in range(participants)
+    ]
+    return RunRecord(
+        fixture="es-bare",
+        run=1,
+        model="fake",
+        arm=arm,
+        latency_s=latency,
+        judge_status="ok",
+        produced=len(final),
+        retained=len(final),
+        final_objects=final,
+    )
+
+
+def _arm_and_gate_self_test() -> list[str]:
+    """Prove the splice really splices and the gate really rejects.
+
+    Both failures this guards are silent-success failures: an unspliced
+    treatment arm runs the baseline prompt twice and reports "no effect", and a
+    gate that never fires reports SHIPPABLE for a treatment that did nothing.
+    Neither shows up as an error."""
+    failures: list[str] = []
+    arms = build_arms()
+    baseline, treatment = arms["baseline"], arms["treatment"]
+
+    if _TREATMENT_CLAUSE not in treatment.system_prompt:
+        failures.append("the treatment arm's prompt does not carry the clause")
+    if len(treatment.system_prompt) <= len(baseline.system_prompt):
+        failures.append("the treatment prompt is not longer than the baseline")
+    if _SPLICE_ANCHOR + _TREATMENT_CLAUSE not in treatment.system_prompt:
+        failures.append("the clause did not land adjacent to the multiplicity test")
+    if _TREATMENT_CLAUSE in baseline.system_prompt:
+        failures.append("the baseline arm is contaminated with the clause")
+
+    original = concept_mod._SYSTEM_PROMPT
+    run_fixture(build_fixtures()[0], _FakeLLM(), runs=1, model="fake", arm=treatment)
+    if concept_mod._SYSTEM_PROMPT is not original:
+        failures.append(
+            "run_fixture left an arm's prompt installed -- every later arm "
+            "would be measured under it"
+        )
+
+    flat = [
+        _record("baseline", subjects=0, participants=3, latency=50.0),
+        _record("baseline", subjects=0, participants=3, latency=50.0),
+        _record("treatment", subjects=0, participants=3, latency=55.0),
+        _record("treatment", subjects=0, participants=3, latency=55.0),
+    ]
+    report, shippable = render_gate(flat)
+    if shippable or "VERDICT: REJECT" not in report:
+        failures.append("the gate must REJECT a treatment that retained no subject")
+
+    better = [
+        *flat[:2],
+        _record("treatment", subjects=2, participants=3, latency=55.0),
+        _record("treatment", subjects=1, participants=3, latency=55.0),
+    ]
+    report, shippable = render_gate(better)
+    if not shippable:
+        failures.append(
+            "the gate must clear a treatment that lifted subject retention "
+            "within budget -- an always-REJECT gate proves nothing"
+        )
+
+    slow = [
+        *flat[:2],
+        _record("treatment", subjects=2, participants=3, latency=95.0),
+        _record("treatment", subjects=2, participants=3, latency=95.0),
+    ]
+    _, shippable = render_gate(slow)
+    if shippable:
+        failures.append("the gate must REJECT on latency at 1.9x baseline")
+
+    thinner = [
+        *flat[:2],
+        _record("treatment", subjects=2, participants=1, latency=55.0),
+        _record("treatment", subjects=2, participants=1, latency=55.0),
+    ]
+    _, shippable = render_gate(thinner)
+    if shippable:
+        failures.append(
+            "the gate must REJECT when participants are traded for subjects"
+        )
+    return failures
+
+
 def _self_test() -> int:
     """Prove the ledger localizes a known kill, with no model running.
 
@@ -640,6 +983,7 @@ def _self_test() -> int:
         ),
     ]
     failures = [why for ok, why in expectations if not ok]
+    failures.extend(_arm_and_gate_self_test())
     print(report)
     if failures:
         for why in failures:
@@ -656,6 +1000,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--fixture", action="append", help="measure only this fixture (repeatable)"
     )
+    parser.add_argument(
+        "--arm",
+        default="baseline",
+        choices=("baseline", "treatment", "both"),
+        help="which prompt arm(s) to measure (default: baseline)",
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
@@ -670,15 +1020,29 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"unknown fixture(s): {', '.join(sorted(unknown))}")
         fixtures = [f for f in fixtures if f.name in wanted]
 
+    arms = build_arms()
+    wanted_arms = ["baseline", "treatment"] if args.arm == "both" else [str(args.arm)]
+
     llm = OllamaClient(model=args.model, max_generation_tokens=_MAX_GENERATION_TOKENS)
-    print(f"model {args.model}, {args.runs} run(s) per fixture\n")
+    print(
+        f"model {args.model}, {args.runs} run(s) per fixture, "
+        f"arm(s): {', '.join(wanted_arms)}\n"
+    )
 
     records: list[RunRecord] = []
-    for fixture in fixtures:
-        print(f"  {fixture.name} ({len(fixture.text)} chars)")
-        records.extend(run_fixture(fixture, llm, args.runs, args.model))
+    # Arm OUTERMOST so both arms see the same fixture order and the same warm
+    # model, and so an interrupted `both` run still holds one complete arm.
+    for arm_name in wanted_arms:
+        for fixture in fixtures:
+            print(f"  [{arm_name}] {fixture.name} ({len(fixture.text)} chars)")
+            records.extend(
+                run_fixture(fixture, llm, args.runs, args.model, arms[arm_name])
+            )
 
     print(render(records, fixtures))
+    if len(wanted_arms) > 1:
+        gate_report, _ = render_gate(records)
+        print(gate_report)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     print(f"stored {write_results(records, stamp, args.model)}")
     return 0
