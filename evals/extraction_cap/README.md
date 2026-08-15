@@ -292,3 +292,33 @@ Measured on the stored runs (2026-08-09), the result is one-sided:
 with zero correct ones. The correct expansion never appears in Spanish at
 all. This is why #423 is treated as language-specific rather than as a
 general hallucination bug: the English base rate is not low, it is zero.
+
+## `measure_title_containment.py` — scoring a twin-rule widening before writing it (#722)
+
+Zero model calls. Replays the stored `results/runs-*.json` plus the transcript
+probes that share `evals/participant_anchor`'s fixtures, and asks what a
+CONTAINMENT twin rule would delete that production keeps today.
+
+Written to answer #722 (a title FRAGMENT escapes `_drop_source_title_twins`,
+which tests normalized equality) on the #613 / #622 / #630 / #699 precedent:
+a deterministic treatment is scored against stored data first, and one that
+fails ships as a measurement.
+
+```bash
+uv run python evals/extraction_cap/measure_title_containment.py --floor 3
+```
+
+The answer was **REJECTED** — 110 adjudicated ground-truth subjects deleted
+against 1 true positive, because a descriptive source title contains its
+subjects by construction. See `report-722-containment.md`.
+
+Two properties worth reusing in any successor:
+
+- It models the WHOLE rule at the RUN level — the `Procedure` exemption and
+  both floors — not just the string comparison. Scoring the comparison alone
+  counts deletions the shipped rule never performs, which is the reading error
+  `extraction_collapse`'s `title_twin_runs` made before it consulted the type.
+- Every verdict prints its own denominator. The meeting-shaped narrowing scores
+  zero false positives, and that zero is worthless: it was offered 217 objects
+  across both pools and matched one. `eligible` is printed so that reads as
+  UNFALSIFIABLE rather than as a cleared bar.
