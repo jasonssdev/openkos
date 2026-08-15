@@ -2316,6 +2316,124 @@ def test_large_source_makes_one_chat_call_per_chunk() -> None:
         assert "Field Notes" in user
 
 
+def _meeting_shaped_text(chars: int = 16_000) -> str:
+    """Speaker-turn text `_transcript_shaped_text` recognizes, sized into the
+    band between the meeting threshold and the prose one (#714).
+
+    Three recurring labels with many turns each, which is what the #673
+    detector requires -- `_long_text` above deliberately uses ONE label and so
+    is NOT transcript-shaped, which is why it cannot serve here."""
+    speakers = ("Ana", "Beto", "Caro")
+    lines: list[str] = []
+    size = 0
+    index = 0
+    while size < chars:
+        line = f"{speakers[index % 3]}: turno {index:04d} " + "palabra " * 5
+        lines.append(line)
+        size += len(line) + 1
+        index += 1
+    return "\n".join(lines)
+
+
+def _same_size_prose(chars: int = 16_000) -> str:
+    """Prose of the SAME size carrying no speaker turns at all -- the 13-17 KB
+    band `_CHUNK_THRESHOLD`'s docstring records as measured-working on the
+    whole-document path (#379 gate: 5-10 objects per document)."""
+    lines: list[str] = []
+    size = 0
+    index = 0
+    while size < chars:
+        line = f"Paragraph {index:04d} develops the argument further " + "word " * 8
+        lines.append(line)
+        size += len(line) + 1
+        index += 1
+    return "\n".join(lines)
+
+
+def test_union_chunks_a_meeting_shaped_source_below_the_prose_threshold() -> None:
+    """#714: a 16 KB meeting transcript takes the CHUNKED path.
+
+    Measured cause (`evals/generation_ceiling/`): on the whole-document path
+    this source's extraction call reached the shipped 8192 generation ceiling
+    and raised, failing 2 of 3 runs under #715's clause; chunked, the worst
+    call generated 1731. `_extract_once` is the only call whose cut-off
+    propagates, so this is the fan-out the ceiling failure is about.
+
+    The fixture's own gate verdict is asserted first: a fixture that stopped
+    being transcript-shaped would take the prose branch, chunk at 18 000, and
+    this test would then be measuring nothing while still passing."""
+    text = _meeting_shaped_text()
+    assert concept_mod._is_meeting_shaped("TS3005a transcript", text)
+    assert 12_000 < len(text) < 18_000
+    llm = _SequencedLLM(["[]"] * 40)
+
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="TS3005a transcript", llm=llm
+    )
+
+    assert outcome.report.chunks > 1
+    assert outcome.report.runs == 1
+
+
+def test_union_keeps_same_size_prose_on_the_two_pass_path() -> None:
+    """The twin of the test above, and not a formality (#714).
+
+    Prose in this band is the path every existing extraction measurement was
+    taken against, and chunking it is measured COLLATERAL: on the 16 948-char
+    `large-03` control the same lowered threshold took the retained set from 8
+    objects to 17, fragmenting one subject across windows (the #699 class).
+
+    Lowering `_CHUNK_THRESHOLD` itself -- rather than branching on shape --
+    passes the transcript test above while silently regressing this band, so
+    the pair is the guard: remove either one and a flat lower threshold looks
+    correct."""
+    text = _same_size_prose()
+    assert not concept_mod._is_meeting_shaped("Field Notes", text)
+    assert 12_000 < len(text) < 18_000
+    llm = _SequencedLLM(["[]"] * 40)
+
+    outcome = concept_mod.extract_concept_union(
+        text, source_title="Field Notes", llm=llm
+    )
+
+    assert outcome.report.chunks == 1
+    assert outcome.report.runs == 2
+
+
+def test_single_run_path_chunks_a_meeting_shaped_source_too() -> None:
+    """The legacy `extract_concept` path takes the same boundary (#714).
+
+    Both are production: `cli/main.py` picks between them on the `union_judge`
+    config flag, so a fix applied to one only would leave whether #714 is fixed
+    depending on a setting."""
+    text = _meeting_shaped_text()
+    assert concept_mod._is_meeting_shaped("TS3005a transcript", text)
+    assert 12_000 < len(text) < 18_000
+    llm = _SequencedLLM(["[]"] * 40)
+
+    outcome = concept_mod.extract_concept(
+        text, source_title="TS3005a transcript", llm=llm
+    )
+
+    assert outcome.report.chunks > 1
+
+
+def test_single_run_path_keeps_same_size_prose_whole() -> None:
+    """The legacy path's half of the twin (#714) -- same reason as the union's.
+
+    Carries the union twin's fixture guards for the same reason it does: a
+    `_same_size_prose` retuned below the meeting threshold would still assert
+    `chunks == 1` and still pass, while no longer testing the boundary at all."""
+    text = _same_size_prose()
+    assert not concept_mod._is_meeting_shaped("Field Notes", text)
+    assert 12_000 < len(text) < 18_000
+    llm = _SequencedLLM(["[]"] * 40)
+
+    outcome = concept_mod.extract_concept(text, source_title="Field Notes", llm=llm)
+
+    assert outcome.report.chunks == 1
+
+
 def test_chunked_results_merge_in_chunk_order() -> None:
     """Validated objects concatenate in chunk order, first chunk first."""
     text = _long_text()

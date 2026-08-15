@@ -1755,11 +1755,64 @@ Both sides of the boundary are measured, on `qwen3:8b`:
   measured-working path with an unmeasured one, so the threshold sits just
   above it.
 
-The known cost: a 16.4 KB meeting transcript (`TS3005a`) collapses too,
-and stays under this threshold. Size does not predict the collapse --
-corpus shape does (#454's own counter-evidence) -- and no cheap detector
-for "transcript-shaped" exists yet. Lowering the boundary is an eval run
-away (`evals/decision_extraction/`), not a code change."""
+This value now governs NON-meeting-shaped sources only. Meeting-shaped ones
+take the lower `_MEETING_CHUNK_THRESHOLD` -- see there for why, and for the
+measurement that separated them.
+
+The split is what #454's own counter-evidence always pointed at: size does
+not predict the collapse, corpus shape does. This docstring used to add
+"and no cheap detector for transcript-shaped exists yet", which is why the
+boundary stayed a single number. #673 shipped that detector
+(`_transcript_shaped_text`, measured 0 false positives over a 785-file
+sweep), so the reason no longer holds."""
+
+
+_MEETING_CHUNK_THRESHOLD = 12_000
+"""`_CHUNK_THRESHOLD`'s counterpart for meeting-shaped sources (#714).
+
+The whole-document extraction call on a 16.4 KB real meeting transcript
+reaches the shipped 8192 generation ceiling and RAISES, which fails the
+whole ingest -- `_extract_once` is the only call in the pipeline whose
+cut-off propagates (the judge, the re-ask and the participant pass all
+swallow theirs by contract), so this fan-out is exactly what that failure
+is about.
+
+Measured, `qwen3:8b`, `evals/generation_ceiling/`, 3 runs per arm on
+`TS3005a` (16 440 chars):
+
+| arm | threshold | runs failed | worst generated |
+| --- | --- | --- | --- |
+| shipped prompt | 18 000 | 0/3 | 235 |
+| shipped prompt | 12 000 | 0/3 | 1 248 |
+| +#715's clause | 18 000 | **2/3** | **8 192 (cut off)** |
+| +#715's clause | 12 000 | **0/3** | 1 731 |
+
+Both cut-offs landed in `extracting pass 1/2` and `pass 2/2`. Chunked, the
+worst window generated 1 731 of 8 192 -- the headroom is not marginal.
+
+Why a SECOND constant rather than lowering the first: the same 12 000 applied
+to prose is measured collateral, not a neutral change. On the 16 948-char
+`large-03` control -- LARGER than the transcript that fails, and never once
+cut off in any arm -- chunking took the retained set from 8 objects to 17
+(16/17/20 across three runs), fragmenting subjects across windows, which is
+the open #699 defect. Prose in the 13-17 KB band is the path every existing
+extraction measurement was taken against; moving it onto the chunked path
+buys nothing here and costs that.
+
+Only 12 000 was measured. A different value is another eval run
+(`evals/generation_ceiling/`), not a judgement call."""
+
+
+def _chunk_threshold_for(*, meeting_shaped: bool) -> int:
+    """The chunking boundary this source is governed by (#714).
+
+    One function so the two constants cannot drift apart at their call sites:
+    `extract_concept` and `extract_concept_union` are both production entry
+    points -- `cli/main.py` picks between them on the `union_judge` config flag
+    -- and a boundary applied to one only would leave whether #714 is fixed
+    depending on a setting."""
+    return _MEETING_CHUNK_THRESHOLD if meeting_shaped else _CHUNK_THRESHOLD
+
 
 ProgressHook = Callable[[str], None]
 """A phase reporter: called with one human-readable label per phase the
@@ -2466,7 +2519,13 @@ def extract_concept(
     unswallowed to the caller (see module docstring). The caller loops
     `openkos.model.okf.build_concept` once per returned object.
     """
-    if len(source_text) <= _CHUNK_THRESHOLD:
+    # #714, same boundary as `extract_concept_union`: computed here rather than
+    # threaded in, because this entry point has no other need for the verdict
+    # and `_is_meeting_shaped` is pure. `_build_messages` recomputes it per
+    # call already, so this adds no new class of work.
+    if len(source_text) <= _chunk_threshold_for(
+        meeting_shaped=_is_meeting_shaped(source_title, source_text)
+    ):
         _report(on_progress, "extracting the source")
         results = _extract_once(source_text, source_title, llm)
         if not results:
@@ -2745,7 +2804,7 @@ def extract_concept_union(
     # below -- design D3's one-definition rule, now title OR content shape.
     meeting_shaped = _is_meeting_shaped(source_title, source_text)
 
-    if len(source_text) <= _CHUNK_THRESHOLD:
+    if len(source_text) <= _chunk_threshold_for(meeting_shaped=meeting_shaped):
         # `pass i/2`, not `chunk 1/1`: below the threshold this branch runs
         # the IDENTICAL prompt twice and merges, which is a different shape
         # from a one-window fan-out and should not be described as one.
