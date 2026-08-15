@@ -656,13 +656,17 @@ class ArmSummary:
     mean_subjects: float
     mean_participants: float
     mean_latency: float
-    failed_fixtures: frozenset[str] = frozenset()
-    """Fixtures on which EVERY run of this arm errored.
+    errors_by_fixture: tuple[tuple[str, int], ...] = ()
+    """`(fixture, errored run count)` for every fixture this arm attempted,
+    sorted, including the zeros.
 
-    Scored per fixture rather than per run because the failure this catches is
-    categorical: a source either fits under the generation ceiling or it does
-    not. One flaky run is noise; a fixture that never completes is a source the
-    arm cannot process at all."""
+    Counted rather than set-membership. The first version of this field named
+    only fixtures where EVERY run errored, and that is the wrong shape for the
+    failure it exists to catch: #714 is INTERMITTENT -- originally measured at
+    1 run in 3 -- so an all-or-nothing test reads clear on exactly the regime
+    the issue reports, while the fixture's surviving runs keep flattering the
+    completed-run averages. A treatment that breaks a source two times in three
+    has broken it."""
 
 
 def summarize_arm(records: list[RunRecord]) -> ArmSummary:
@@ -674,8 +678,10 @@ def summarize_arm(records: list[RunRecord]) -> ArmSummary:
     that fixture had never been attempted."""
     ok = [r for r in records if r.error is None]
     count = max(len(ok), 1)
-    attempted = {r.fixture for r in records}
-    completed = {r.fixture for r in ok}
+    errors: dict[str, int] = {r.fixture: 0 for r in records}
+    for record in records:
+        if record.error is not None:
+            errors[record.fixture] += 1
     return ArmSummary(
         arm=ok[0].arm if ok else (records[0].arm if records else "?"),
         runs=len(ok),
@@ -683,7 +689,7 @@ def summarize_arm(records: list[RunRecord]) -> ArmSummary:
         mean_subjects=round(sum(len(r.subjects) for r in ok) / count, 2),
         mean_participants=round(sum(len(r.participants) for r in ok) / count, 2),
         mean_latency=round(sum(r.latency_s for r in ok) / count, 1),
-        failed_fixtures=frozenset(attempted - completed),
+        errors_by_fixture=tuple(sorted(errors.items())),
     )
 
 
@@ -717,10 +723,17 @@ def render_gate(records: list[RunRecord]) -> tuple[str, bool]:
     scored that sweep as shippable while the treatment failed every run on the
     largest fixture: asking for more objects lengthens the reply, and a 16 KB
     transcript then blows the 8192 generation ceiling (#714). The other four
-    conditions average completed runs only, so a fixture the arm can no longer
-    process at all leaves the averages LOOKING BETTER -- its slow, crowded runs
-    simply stop being counted. A gate blind to that is a gate that cannot see a
-    treatment break a source."""
+    conditions average completed runs only, so a run the arm can no longer
+    complete leaves the averages LOOKING BETTER -- a slow, crowded run simply
+    stops being counted. A gate blind to that is a gate that cannot see a
+    treatment break a source.
+
+    It counts errored RUNS per fixture rather than asking whether a fixture
+    failed outright. The first version asked the outright question and was
+    wrong for this exact failure: #714 is intermittent -- originally 1 run in
+    3 -- so an all-or-nothing test reads clear on the regime the issue actually
+    reports, while the fixture's surviving runs keep flattering conditions
+    1-3."""
     by_arm: dict[str, list[RunRecord]] = {}
     for record in records:
         by_arm.setdefault(record.arm, []).append(record)
@@ -748,6 +761,12 @@ def render_gate(records: list[RunRecord]) -> tuple[str, bool]:
     latency_ratio = (
         treat.mean_latency / base.mean_latency if base.mean_latency else float("inf")
     )
+    base_errors = dict(base.errors_by_fixture)
+    regressed = [
+        (fixture, treated, base_errors.get(fixture, 0))
+        for fixture, treated in treat.errors_by_fixture
+        if treated > base_errors.get(fixture, 0)
+    ]
     conditions = [
         (
             "subject retention does not increase",
@@ -771,14 +790,13 @@ def render_gate(records: list[RunRecord]) -> tuple[str, bool]:
             "NOT automated — adjudicate the titles below before reading a PASS",
         ),
         (
-            "the treatment cannot complete a fixture the baseline completed",
-            bool(treat.failed_fixtures - base.failed_fixtures),
-            (
-                "newly failing: "
-                + ", ".join(sorted(treat.failed_fixtures - base.failed_fixtures))
+            "the treatment errors on runs the baseline completed",
+            bool(regressed),
+            ", ".join(
+                f"{fixture}: {treated} errored run(s) vs baseline {baseline}"
+                for fixture, treated, baseline in regressed
             )
-            if treat.failed_fixtures - base.failed_fixtures
-            else "every fixture the baseline completed, the treatment completed",
+            or "no fixture errored more often under the treatment",
         ),
     ]
     fired = [name for name, did_fire, _ in conditions if did_fire]
@@ -1013,6 +1031,33 @@ def _arm_and_gate_self_test() -> list[str]:
         )
     if "ami" not in report:
         failures.append("the gate must NAME the fixture the treatment broke")
+
+    # The INTERMITTENT regime, which is the one #714 actually reports: the
+    # treatment completes the big fixture once and errors on it twice. An
+    # all-or-nothing condition 5 reads clear here while conditions 1-3 are
+    # scored on the one surviving run.
+    flaky_big = [
+        *flat[:2],
+        _record("baseline", subjects=0, participants=4, latency=70.0, fixture="ami"),
+        _record("baseline", subjects=0, participants=4, latency=70.0, fixture="ami"),
+        _record("treatment", subjects=2, participants=3, latency=55.0),
+        _record("treatment", subjects=2, participants=4, latency=55.0, fixture="ami"),
+        _record(
+            "treatment",
+            subjects=0,
+            participants=0,
+            latency=0.0,
+            fixture="ami",
+            error="OllamaGenerationCapped",
+        ),
+    ]
+    _, shippable = render_gate(flaky_big)
+    if shippable:
+        failures.append(
+            "the gate must REJECT a treatment that errors on SOME runs of a "
+            "fixture the baseline completed -- #714 is intermittent, so an "
+            "all-or-nothing condition 5 is clear on the regime it must catch"
+        )
     return failures
 
 

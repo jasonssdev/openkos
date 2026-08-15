@@ -67,10 +67,14 @@ asserted: an unspliced arm would measure the baseline twice and read as "the
 treatment does nothing".
 
 The gate's five conditions decide whether the treatment may ship. Four score
-COMPLETED runs; the fifth scores whether the treatment can complete a fixture
-at all, and exists because the other four scored the first real sweep as
-shippable while the treatment failed every run on the largest fixture. Averages
-over completed runs get *better* when a hard fixture crashes out of them.
+COMPLETED runs; the fifth counts the runs each arm could not complete, per
+fixture, and exists because the other four scored the first real sweep as
+shippable while the treatment failed every run on the largest fixture.
+Averages over completed runs get *better* when a hard run crashes out of them.
+
+Condition 5 counts runs rather than asking whether a fixture failed outright:
+the failure it guards (#714) is intermittent, so an all-or-nothing test is
+clear on exactly the regime that issue reports.
 
 `--rescore` re-reads a stored sweep through the current gate with no model
 calls. Add a gate condition and re-score the existing evidence with it —
@@ -90,3 +94,6 @@ Fix attempt: REJECT, on condition 5. The clause lifted subject retention from
 0/9 to 1/6 with zero fabrications, and made a 16 KB transcript blow the 8192
 generation ceiling on 3 of 3 runs (#714). Blocked, not refuted — re-measure
 after #714 lands.
+
+`report-treatment.md` also records what the review of that measurement caught:
+condition 5's first version could not see an intermittent break.

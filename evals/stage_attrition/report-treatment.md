@@ -42,7 +42,7 @@ arrives.
 | Latency >= 1.5x baseline | did not fire — 73.6s → 76.4s (1.04x) |
 | Participant retention degrades | did not fire — 3.33 → 3.67 per run |
 | A retained subject is not supported by the source | did not fire — **zero fabrications**, adjudicated below |
-| The treatment cannot complete a fixture the baseline completed | **FIRED** — `ami-ts3005a`, 3 of 3 runs |
+| The treatment errors on runs the baseline completed | **FIRED** — `ami-ts3005a`, 3 errored runs vs baseline 0 |
 
 Per the standing ruling a REJECT ships the measurement only. Production is
 untouched. This is the fifth measured prompt treatment this repo has rejected
@@ -74,11 +74,20 @@ longer process at all leaves the averages looking *better*, its slow crowded
 runs simply stop being counted. AMI's baseline mean was dragged up by a 142.6s
 run; the treatment's mean excludes AMI entirely.
 
-Condition 5 scores per FIXTURE, not per run: one flaky run is noise, a fixture
-that never completes is a source the arm cannot process. It is
-mutation-confirmed in `--self-test` against its exact target line, and the
-stored sweep was re-scored through `--rescore` rather than re-run, so the new
-condition was scored against the same evidence and not a fresh sample.
+Condition 5 counts errored RUNS per fixture. Its first version asked whether a
+fixture failed OUTRIGHT, and the review caught that as wrong for this exact
+failure: **#714 is intermittent** — originally 1 run in 3 — so an
+all-or-nothing test reads clear on the regime the issue actually reports,
+while the fixture's surviving runs keep flattering conditions 1-3. A treatment
+that breaks a source two times in three has broken it.
+
+Both regimes are mutation-confirmed in `--self-test`: reverting the counter to
+all-or-nothing leaves the outright case rejecting and the intermittent case
+passing, which is the failure the guard exists to prevent.
+
+The stored sweep was re-scored through `--rescore` rather than re-run, both
+when condition 5 was added and when it was corrected — so the condition changed
+against the same evidence and not against a fresh sample.
 
 ## Adjudication — the one run that fired
 
