@@ -1,0 +1,38 @@
+{
+  "_why": [
+    "Hand-written ground truth for the false-positive bar. Deriving it from",
+    "any regex would beg the question the probe exists to answer, so it is",
+    "authored here and read by --rescore. Keys are arm::type::title so a",
+    "reworded description on the next run does not go stale.",
+    "",
+    "The question each label answers is NOT 'is this a real human' but 'does",
+    "the SOURCE state a role, affiliation, or relation for them beyond their",
+    "name' -- the #668 stub rule. Judged against the source text, never",
+    "against the description the model wrote about them, which is the whole",
+    "distinction the es-bare arm exists to expose."
+  ],
+  "_es_bare_is_a_judgment_call": [
+    "Ana, Bruno and Carla are labelled `stub` because the source gives them",
+    "nothing but a name and their turns. Recorded as a judgment call, not a",
+    "fact: `_PARTICIPANT_CAPTURE_SYSTEM_PROMPT` lists 'spoke in this meeting'",
+    "among the relations it will accept, and under that reading every speaker",
+    "in every transcript is anchored and the gate can never reject anyone.",
+    "The stub rule's stated purpose (#668 design D4/D5) is anti-flooding, so",
+    "the narrower reading is the one scored here. The tension between the two",
+    "is a product question and is filed rather than settled by this file."
+  ],
+  "labels": {
+    "es-anchored::Person::Ana Ríos": "anchored",
+    "es-anchored::Person::Germán Vega": "anchored",
+    "es-anchored::Person::Gustavo Martínez": "anchored",
+    "es-anchored::Person::Jason Sepúlveda": "anchored",
+    "es-anchored::Organization::Vega Ingeniería": "anchored",
+    "es-bare::Person::Ana": "stub",
+    "es-bare::Person::Bruno": "stub",
+    "es-bare::Person::Carla": "stub",
+    "en-ami::Person::A": "anchored",
+    "en-ami::Person::B": "anchored",
+    "en-ami::Person::C": "anchored",
+    "en-ami::Person::D": "anchored"
+  }
+}
