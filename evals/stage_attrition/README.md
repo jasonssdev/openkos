@@ -90,10 +90,23 @@ meeting-shaped sources `_extract_once` returns exactly one subject candidate
 per call, the Event named after the meeting, which `_drop_framing_objects`
 then correctly deletes.
 
-Fix attempt: REJECT, on condition 5. The clause lifted subject retention from
-0/9 to 1/6 with zero fabrications, and made a 16 KB transcript blow the 8192
-generation ceiling on 3 of 3 runs (#714). Blocked, not refuted — re-measure
-after #714 lands.
+Fix attempt, first pass: REJECT on condition 5 — the clause lifted subject
+retention from 0/9 to 1/6 completed runs, but made a 16 KB transcript blow the
+8192 generation ceiling on 3 of 3 runs (#714). Blocked, not refuted.
+
+Fix attempt, re-measured after #714 shipped: **ACCEPT, and the clause is now in
+`_SYSTEM_PROMPT`.** Note the baseline itself MOVED between the two passes and
+the denominators are not comparable: #714 put `ami-ts3005a` on the chunked path,
+which recovers subjects on the shipped prompt alone, so the second pass measures
+a different baseline rather than re-running the first. Runs retaining a subject
+3/9 → 7/9, subjects per run
+0.78 → 1.89, latency 1.02x, no errored runs, and all 16 retained subjects
+adjudicated against their sources with zero fabrications.
+
+Because the clause SHIPPED, `build_arms` now builds the pair by **ablation**:
+`treatment` is the shipped prompt and `baseline` is that prompt with the clause
+removed. Splicing onto a prompt that already carries it would have compared
+duplication against itself while reporting clause-against-no-clause.
 
 `report-treatment.md` also records what the review of that measurement caught:
 condition 5's first version could not see an intermittent break.

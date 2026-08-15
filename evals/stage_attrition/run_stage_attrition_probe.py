@@ -198,15 +198,14 @@ next to the verbatim-pinned anti-enumeration paragraph. The treatment clause
 goes immediately after it, so it lands in the same adjacency D3 established and
 the pinned paragraph (#380) keeps every one of its pinned bytes."""
 
-_TREATMENT_CLAUSE: Final = (
-    "When the source is a meeting, call, or interview transcript, BOTH halves "
-    "of that instruction are required: the gathering itself AND each distinct "
-    "subject the participants worked through -- every decision reached, every "
-    "problem raised, every topic resolved, every procedure agreed. A working "
-    "transcript normally develops SEVERAL such subjects, and a reply naming "
-    "only the gathering has not read the transcript for its content.\n\n"
-)
+_TREATMENT_CLAUSE: Final = concept_mod.TRANSCRIPT_SUBJECTS_CLAUSE
 """The one lever authorized for #715, stated ADDITIVELY.
+
+READ FROM PRODUCTION, never re-declared here. The clause shipped after this
+gate cleared, so the baseline arm is now built by REMOVING it from
+`_SYSTEM_PROMPT`; a local copy that drifted from the shipped bytes would remove
+nothing, leaving both arms identical while the table still said
+clause-against-no-clause.
 
 `evals/stage_attrition`'s own report established the mechanism: the pinned
 anti-enumeration paragraph tells the model a transcript is "about the meeting
@@ -234,23 +233,49 @@ class Arm:
 
 
 def build_arms() -> dict[str, Arm]:
-    """`baseline` (shipped text) and `treatment` (shipped text + the clause).
+    """`baseline` (without the clause) and `treatment` (with it).
 
-    The splice is asserted, never assumed: if the anchor paragraph is reworded,
-    a silent `str.replace` no-op would run the treatment arm on the baseline
-    prompt and report "no effect" for a treatment that was never applied."""
+    The clause SHIPPED after the 2026-08-15 sweep cleared this gate, so the
+    probe now builds the pair by ABLATION rather than by splice: `treatment` is
+    the shipped prompt and `baseline` is that prompt with the clause removed.
+
+    Inverting it was not cosmetic. Splicing onto a prompt that already contains
+    the clause would have produced a treatment arm carrying it TWICE and a
+    baseline arm carrying it once -- a comparison of duplication against
+    itself, reported as if it were clause against no-clause.
+
+    There is deliberately NO fallback branch. An earlier version kept the old
+    splice path for the case where the clause could not be found, and that is
+    precisely the silent-measurement hazard: a reworded clause would fall
+    through and splice STALE text after the anchor, producing a `treatment` arm
+    carrying prompt bytes the shipped code does not contain. Every way of not
+    finding exactly one clause now exits loudly instead.
+
+    Both invariants are asserted, never assumed -- the clause appears exactly
+    once, and it appears where it was MEASURED, immediately after the anchor. A
+    clause that moved elsewhere in the prompt would still ablate cleanly while
+    the numbers described a configuration the code no longer ships."""
     shipped = concept_mod._SYSTEM_PROMPT
-    if shipped.count(_SPLICE_ANCHOR) != 1:
+    occurrences = shipped.count(_TREATMENT_CLAUSE)
+    if occurrences != 1:
         raise SystemExit(
-            "the treatment splice anchor is no longer present exactly once in "
-            "_SYSTEM_PROMPT. Re-point it before trusting a number from the "
-            "treatment arm -- an unspliced arm measures the baseline twice and "
-            "reads as 'the treatment does nothing'."
+            f"_SYSTEM_PROMPT carries the #715 clause {occurrences} times, not "
+            "once. The baseline arm is built by REMOVING it, so neither arm "
+            "means what its name says. Re-sync "
+            "`concept.TRANSCRIPT_SUBJECTS_CLAUSE` before trusting any number."
         )
-    treated = shipped.replace(_SPLICE_ANCHOR, _SPLICE_ANCHOR + _TREATMENT_CLAUSE, 1)
+    if _SPLICE_ANCHOR + _TREATMENT_CLAUSE not in shipped:
+        raise SystemExit(
+            "the #715 clause is no longer immediately after the multiplicity "
+            "anchor it was measured at. Re-point the anchor, or re-measure -- "
+            "the stored numbers describe the adjacency, not the words alone."
+        )
+    baseline = shipped.replace(_TREATMENT_CLAUSE, "", 1)
+    if baseline == shipped:  # unreachable while the count check holds
+        raise SystemExit("ablation removed nothing; both arms are one prompt.")
     return {
-        "baseline": Arm(name="baseline", system_prompt=shipped),
-        "treatment": Arm(name="treatment", system_prompt=treated),
+        "baseline": Arm(name="baseline", system_prompt=baseline),
+        "treatment": Arm(name="treatment", system_prompt=shipped),
     }
 
 
@@ -953,6 +978,17 @@ def _arm_and_gate_self_test() -> list[str]:
         failures.append("the clause did not land adjacent to the multiplicity test")
     if _TREATMENT_CLAUSE in baseline.system_prompt:
         failures.append("the baseline arm is contaminated with the clause")
+    # Ablation-specific: the clause SHIPPED, so `treatment` must be the shipped
+    # prompt itself, not a reconstruction of it. A spliced treatment arm would
+    # carry the clause TWICE and this is the only assertion that can tell those
+    # apart -- every check above passes either way.
+    if treatment.system_prompt != concept_mod._SYSTEM_PROMPT:
+        failures.append(
+            "the treatment arm is not the shipped prompt -- it is measuring a "
+            "reconstruction, so the numbers do not describe what ships"
+        )
+    if treatment.system_prompt.count(_TREATMENT_CLAUSE) != 1:
+        failures.append("the treatment arm carries the clause more than once")
 
     original = concept_mod._SYSTEM_PROMPT
     run_fixture(build_fixtures()[0], _FakeLLM(), runs=1, model="fake", arm=treatment)

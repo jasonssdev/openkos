@@ -32,6 +32,52 @@ from openkos.model.types import CLASSIFIABLE_TYPES as _VALID_TYPES
 # that module for the single source of truth. Closed classification
 # vocabulary; anything else fails validation.
 
+TRANSCRIPT_SUBJECTS_CLAUSE = (
+    "When the source is a meeting, call, or interview transcript, BOTH halves "
+    "of that instruction are required: the gathering itself AND each distinct "
+    "subject the participants worked through -- every decision reached, every "
+    "problem raised, every topic resolved, every procedure agreed. A working "
+    "transcript normally develops SEVERAL such subjects, and a reply naming "
+    "only the gathering has not read the transcript for its content.\n\n"
+)
+"""The #715 clause, spliced into `_SYSTEM_PROMPT` below.
+
+#715: meeting-shaped sources retained people and NO subjects at all -- zero
+`Decision`/`Event`/`Concept`/`Procedure` across 21 runs on two harnesses.
+`evals/stage_attrition` named the stage: nothing KILLS the subjects,
+generation never produces them. The anti-enumeration paragraph says a
+transcript is about "the meeting itself (an Event) and any Decisions reached";
+the model emits the Event, stops, and `_drop_framing_objects` then correctly
+deletes it, so the source yields nothing.
+
+This clause COMPLETES that instruction instead of contradicting it: the
+failure is that only the first half of "the Event AND the Decisions" ever
+arrives. Negating the paragraph was the alternative and was deliberately not
+taken -- a direct contradiction inside one prompt degrades the 8B tier, and
+the anti-twin experience (D4/5b) is that a narrower clause carrying a CONCRETE
+forbidden example made its defect measurably WORSE via priming. There is no
+concrete example here for the same reason. The #380 paragraph keeps every
+pinned byte and `_drop_framing_objects` is not relaxed.
+
+Measured, `evals/stage_attrition --arm both`, `qwen3:8b`, 9 runs per arm over
+three fixtures: runs retaining a subject 3/9 -> 7/9, subjects per run
+0.78 -> 1.89, latency 1.02x, zero errored runs. All 16 retained subjects were
+adjudicated against their sources -- 15 quote the prose, and the one exception
+is grounded in the source TITLE rather than invented (filed separately). The
+participant aggregate rose 2.89 -> 3.22 but hides a one-participant dip on one
+`es-anchored` run; see that harness's `report-treatment.md`.
+
+PUBLIC, and a named constant rather than one more paragraph inline, because
+three separate places need the EXACT bytes and drift between them is silent:
+the prompt itself, the adjacency test in
+`tests/unit/extraction/test_concept.py`, and `evals/stage_attrition`, whose
+baseline arm is built by REMOVING this text from the shipped prompt. A probe
+carrying its own copy that no longer matched would ablate nothing and measure
+one prompt twice while reporting it as clause-against-no-clause.
+
+Its placement is load-bearing and pinned by that test: immediately after the
+stated multiplicity test, which is where it was measured."""
+
 _SYSTEM_PROMPT = (
     "You are a classification step in a local-first knowledge engine. Read "
     "the SOURCE text below and decide which distinct derived knowledge "
@@ -146,6 +192,10 @@ _SYSTEM_PROMPT = (
     "idea corrected, a decision made -- yields one object per subject, "
     "each classified independently. A source developing only one subject "
     "still yields exactly ONE object.\n\n"
+    # #715, spliced HERE and nowhere else -- the position is measured, and a
+    # test pins the adjacency. Rationale, measurement and bounds live on
+    # `TRANSCRIPT_SUBJECTS_CLAUSE` itself, beside the bytes they describe.
+    + TRANSCRIPT_SUBJECTS_CLAUSE
     # Anti-twin clause (design D4/5b, narrowed): prompt wording alone could
     # not carry the unconditional rule at the 8B tier -- a narrower clause
     # carrying a CONCRETE forbidden-title example made the defect WORSE
@@ -156,7 +206,7 @@ _SYSTEM_PROMPT = (
     # ALONGSIDE genuine subjects, and explicitly preserves the floor: a
     # source whose one genuine subject IS what its own title names still
     # yields that subject.
-    "A candidate whose title and scope merely restate the SOURCE's own "
+    + "A candidate whose title and scope merely restate the SOURCE's own "
     'title and scope as a whole -- a "twin" that mirrors the source itself '
     "rather than one specific subject within it -- MUST NOT be produced "
     "ALONGSIDE another genuine candidate: when the source develops more "
