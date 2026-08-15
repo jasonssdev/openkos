@@ -3144,16 +3144,57 @@ def test_participant_capture_pass_does_not_fire_on_non_meeting_source() -> None:
     assert outcome.report.participant_capture_added_titles == ()
 
 
+def test_system_prompt_asks_a_transcript_for_its_subjects_too() -> None:
+    """#715: meeting-shaped sources retained people and NO subjects at all.
+
+    `evals/stage_attrition` established the mechanism: the pinned
+    anti-enumeration paragraph says a transcript is about "the meeting itself
+    (an Event) and any Decisions reached", the model emits the Event and stops,
+    and `_drop_framing_objects` then correctly deletes it -- so the source
+    yields nothing. The clause pinned here COMPLETES that instruction rather
+    than contradicting it; the #380 paragraph keeps every pinned byte and
+    `_drop_framing_objects` is not relaxed.
+
+    ADJACENCY is asserted, not just presence. The clause was measured spliced
+    immediately after the multiplicity test, and a later edit that keeps the
+    words but moves them elsewhere in the prompt would leave
+    `evals/stage_attrition`'s numbers describing a configuration the code no
+    longer ships -- the same silent drift its own splice assertion exists to
+    prevent on the other side.
+
+    The clause text is read from `TRANSCRIPT_SUBJECTS_CLAUSE`, never re-declared
+    here. A hand-copied literal would make this test the SECOND place the exact
+    bytes live and `evals/stage_attrition`'s ablation arm the third, so a
+    rewording could leave the probe removing text the prompt no longer contains
+    -- measuring one prompt twice while reporting clause against no-clause."""
+    anchor = "A source developing only one subject still yields exactly ONE object.\n\n"
+    clause = concept_mod.TRANSCRIPT_SUBJECTS_CLAUSE
+
+    assert concept_mod._SYSTEM_PROMPT.count(anchor) == 1
+    assert concept_mod._SYSTEM_PROMPT.count(clause) == 1
+    assert anchor + clause in concept_mod._SYSTEM_PROMPT
+    # The clause must actually say the thing it was measured saying. Reading it
+    # from the module makes every assertion above tautological on its own: a
+    # clause reworded to empty would still be "present once" and "adjacent".
+    assert "meeting, call, or interview transcript" in clause
+    assert "BOTH halves" in clause
+
+
 def test_participant_capture_pass_leaves_system_prompt_byte_identical() -> None:
     """D6 constraint: the capture pass is a NEW, separate prompt constant --
     `_SYSTEM_PROMPT`, the general extraction prompt, is never touched by
     this change. Pinned by hash (mirrors `CONTROL_PROMPT_SHA`'s own
     precedent in `evals/extraction_collapse/`) rather than a full-string
     comparison, so any future accidental edit to `_SYSTEM_PROMPT` fails
-    loudly here."""
+    loudly here.
+
+    The pin has been rolled ONCE, deliberately, for #715's measured transcript
+    clause -- it did its job and caught that edit. Roll it only alongside a
+    measurement; a hash updated to make a red test green is the one failure
+    mode this guard cannot survive."""
     assert (
         hashlib.sha256(concept_mod._SYSTEM_PROMPT.encode()).hexdigest()
-        == "6744054466c750dd9b91e2380d9ec37d7f5076e6da0709cdd426d4b681f90c11"
+        == "6514c14bc12ec1d8645cc0bee8343b2a102082b81341c334297f194e49e961cb"
     )
     assert concept_mod._PARTICIPANT_CAPTURE_SYSTEM_PROMPT != concept_mod._SYSTEM_PROMPT
 
