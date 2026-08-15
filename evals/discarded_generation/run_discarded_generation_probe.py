@@ -510,8 +510,8 @@ def render(records: Sequence[RunRecord]) -> str:
         for record in ok:
             for stage, chars in record.killed_by.items():
                 charged[stage] = charged.get(stage, 0) + chars
-        if charged:
-            total = sum(charged.values())
+        total = sum(charged.values())
+        if charged and total > 0:
             title_only = sum(c for s, c in charged.items() if s in _TITLE_ONLY_GATES)
             lines.append("Discarded tail chars by the stage that killed them:")
             lines.append("")
