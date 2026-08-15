@@ -10,6 +10,8 @@ is read off a ledger instead of argued from an outcome.
 uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --self-test
 uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --runs 3
 uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --fixture es-anchored
+uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --arm both --runs 3
+uv run python -u evals/stage_attrition/run_stage_attrition_probe.py --rescore results/<file>.jsonl
 ```
 
 **Use `-u`.** Piping through `tee` makes Python buffer and a long run looks
@@ -56,9 +58,42 @@ demonstrably discusses. It is **not** a recall target; it exists so a reader
 can judge whether the candidates a stage killed were worth keeping, which a
 bare count cannot say.
 
+## Arms and the gate
+
+`--arm both` measures the shipped prompt against the shipped prompt plus one
+ADDITIVE clause, spliced at the exact position the clause would ship so the
+measurement is of shippable text and not a paraphrase. The splice anchor is
+asserted: an unspliced arm would measure the baseline twice and read as "the
+treatment does nothing".
+
+The gate's five conditions decide whether the treatment may ship. Four score
+COMPLETED runs; the fifth counts the runs each arm could not complete, per
+fixture, and exists because the other four scored the first real sweep as
+shippable while the treatment failed every run on the largest fixture.
+Averages over completed runs get *better* when a hard run crashes out of them.
+
+Condition 5 counts runs rather than asking whether a fixture failed outright:
+the failure it guards (#714) is intermittent, so an all-or-nothing test is
+clear on exactly the regime that issue reports.
+
+`--rescore` re-reads a stored sweep through the current gate with no model
+calls. Add a gate condition and re-score the existing evidence with it —
+re-running the models would change the sample and the gate at the same time.
+
 ## What it measured
 
-See `report.md`. Short version: nothing kills the subjects — generation never
-produces them. On meeting-shaped sources `_extract_once` returns exactly one
-subject candidate per call, the Event named after the meeting, which
-`_drop_framing_objects` then correctly deletes.
+See `report.md` for the diagnosis and `report-treatment.md` for the fix
+attempt.
+
+Diagnosis: nothing kills the subjects — generation never produces them. On
+meeting-shaped sources `_extract_once` returns exactly one subject candidate
+per call, the Event named after the meeting, which `_drop_framing_objects`
+then correctly deletes.
+
+Fix attempt: REJECT, on condition 5. The clause lifted subject retention from
+0/9 to 1/6 with zero fabrications, and made a 16 KB transcript blow the 8192
+generation ceiling on 3 of 3 runs (#714). Blocked, not refuted — re-measure
+after #714 lands.
+
+`report-treatment.md` also records what the review of that measurement caught:
+condition 5's first version could not see an intermittent break.
