@@ -19,7 +19,7 @@ import contextlib
 import itertools
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
@@ -467,7 +467,61 @@ both ways -- an unmeasured addition to the common path is exactly the shape
 of change that regressed `large-03` from 0.75 to 0.57."""
 
 
-def _build_messages(source_text: str, source_title: str) -> list[Message]:
+_CARRY_TITLES_FORWARD = False
+"""Whether a chunked extraction tells each window which subjects the EARLIER
+windows of the same source already named (#699).
+
+Off until a measured gate against the #694 oracle says otherwise. The lever
+exists because chunk-blind windows are structurally unable to agree on a
+name: a subject whose prose straddles a window boundary is coined twice, and
+`_dedup_merged` compares exact normalized titles, so both survive as separate
+objects (`Problema de respaldos` alongside `Cifrado de respaldos`, runs 2 and
+5 of the oracle baseline).
+
+A module constant read at CALL time, deliberately not a signature default.
+`_chunk_lines(text, target=_CHUNK_TARGET)` binds its default when the
+function is defined, so a probe that reassigns the module constant measures
+the untreated path while reporting a treatment arm -- the inert-arm defect
+the #714 probe shipped and a reviewer caught. Anything a measurement arm
+must be able to move is read at call time here."""
+
+
+_CARRY_TITLES_MARKER = "SUBJECTS ALREADY NAMED IN EARLIER PARTS OF THIS SOURCE"
+"""The clause's literal header. Public-ish within the module so the tests and
+the eval harness assert on the SAME string the prompt sends, rather than on a
+paraphrase that could drift away from it silently."""
+
+
+def _carry_titles_clause(prior_titles: Sequence[str]) -> str:
+    """The user-turn clause naming subjects earlier windows already coined,
+    or `""` when there are none (the first window, always).
+
+    First-seen order, each title once: the list is re-sent on every later
+    window, so a title repeated by three windows would otherwise be listed
+    three times, crowding the window's own text and priming the model to
+    re-emit exactly the title it is being shown."""
+    seen: set[str] = set()
+    unique: list[str] = []
+    for title in prior_titles:
+        key = _normalize_title(title)
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(title)
+    if not unique:
+        return ""
+    listed = "\n".join(f"- {title}" for title in unique)
+    return (
+        f"{_CARRY_TITLES_MARKER} (this is a LATER part of a source whose "
+        f"earlier parts are not shown):\n{listed}\n\nIf this part discusses "
+        f"one of those subjects, reuse its title EXACTLY as written above "
+        f"instead of coining a new name for it. Only give a new title to a "
+        f"subject that is genuinely absent from that list.\n\n"
+    )
+
+
+def _build_messages(
+    source_text: str, source_title: str, *, prior_titles: Sequence[str] = ()
+) -> list[Message]:
     """Assemble the 2-message prompt: system classification rules + the raw
     source text as the user turn, prefixed with its title labeled as
     non-authoritative metadata (design DD1) -- the title is still handed
@@ -496,13 +550,21 @@ def _build_messages(source_text: str, source_title: str) -> list[Message]:
     predicate everywhere is the design D3 rule. On the chunked paths this
     runs per WINDOW; a transcript's windows are themselves turn-dense, so
     the per-window verdict tracks the whole-source one."""
+    # #699: the carry-forward clause rides BOTH branches. The meeting-shaped
+    # branch sends strictly less (no title line), which makes "leave that one
+    # alone" the tempting reading -- and it is the same docstring assumption
+    # #713 falsified, where the participant pass turned out to be the single
+    # call omitting `_LANGUAGE_ANCHOR`. Meeting-shaped sources are also where
+    # #699 collected its own evidence, so skipping this branch would leave
+    # the lever inert exactly where it is needed.
+    carried = _carry_titles_clause(prior_titles)
     if _is_meeting_shaped(source_title, source_text):
-        user_content = f"{_LANGUAGE_ANCHOR}\n\nSOURCE TEXT:\n{source_text}"
+        user_content = f"{_LANGUAGE_ANCHOR}\n\n{carried}SOURCE TEXT:\n{source_text}"
     else:
         user_content = (
             f"SOURCE TITLE (metadata only, not authoritative -- treat as "
             f"context, not the pre-computed topic): {source_title}\n\n"
-            f"SOURCE TEXT:\n{source_text}"
+            f"{carried}SOURCE TEXT:\n{source_text}"
         )
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -1924,9 +1986,18 @@ summaries in the 1.1-2.5 KB band extract well. Deliberately NOT tuned finer
 than "the band where extraction demonstrably works"."""
 
 
-def _chunk_lines(text: str, target: int = _CHUNK_TARGET) -> list[str]:
+def _chunk_lines(text: str, target: int | None = None) -> list[str]:
     """Pack LINES into windows of at most `target` chars, never splitting
     inside a line (a truncated utterance is not extractable content).
+
+    `target=None` means `_CHUNK_TARGET`, read HERE rather than bound as a
+    signature default (#699). A default expression is evaluated once, when
+    the function is defined, so `target: int = _CHUNK_TARGET` made the
+    constant unpatchable: an eval arm that reassigned it packed 4 KB windows
+    while labelling itself an 8 KB arm, and reported plausible numbers for a
+    treatment that never ran. That is the inert-arm defect a reviewer caught
+    in the #714 probe, closed here at its origin rather than worked around
+    in each harness.
 
     Lines, not paragraphs: the material this exists for -- speaker-labelled
     transcripts -- has no blank lines at all, which is exactly how the first
@@ -1934,6 +2005,8 @@ def _chunk_lines(text: str, target: int = _CHUNK_TARGET) -> list[str]:
     than `target` becomes its own oversized window, whole.
 
     Lossless by construction: `"\\n".join(_chunk_lines(text)) == text`."""
+    if target is None:
+        target = _CHUNK_TARGET
     chunks: list[str] = []
     current: list[str] = []
     size = 0
@@ -1949,12 +2022,24 @@ def _chunk_lines(text: str, target: int = _CHUNK_TARGET) -> list[str]:
 
 
 def _extract_once(
-    source_text: str, source_title: str, llm: LLMBackend
+    source_text: str,
+    source_title: str,
+    llm: LLMBackend,
+    *,
+    prior_titles: Sequence[str] = (),
 ) -> list[ExtractionResult]:
     """One chat call's validated results, in reply order -- the pre-#454
     whole-document pipeline up to (not including) twin-drop and the cap,
-    shared verbatim by the single-call and per-chunk paths."""
-    reply = llm.chat(_build_messages(source_text, source_title))
+    shared verbatim by the single-call and per-chunk paths.
+
+    `prior_titles` (#699) are the subjects earlier windows of the SAME source
+    already named; empty on every whole-document call and on the first
+    window. Only the chunked callers pass it, and only when
+    `_CARRY_TITLES_FORWARD` is on -- the gate lives at the call sites so this
+    function stays a pure "send this text, get candidates"."""
+    reply = llm.chat(
+        _build_messages(source_text, source_title, prior_titles=prior_titles)
+    )
     items = parsing.extract_json_items(reply)
     results: list[ExtractionResult] = []
     for item in items:
@@ -1962,6 +2047,20 @@ def _extract_once(
         if result is not None:
             results.append(result)
     return results
+
+
+def _carried_titles(so_far: Sequence[ExtractionResult]) -> tuple[str, ...]:
+    """The titles a chunked path hands to its NEXT window, or `()` when the
+    #699 lever is off.
+
+    One helper for both chunked call sites (`extract_concept` and
+    `extract_concept_union`) for the same reason `_chunk_threshold_for`
+    exists: the two are both production entry points -- `cli/main.py` picks
+    between them on the `union_judge` config flag -- so a lever wired into
+    one only would make "is #699 fixed" depend on a setting."""
+    if not _CARRY_TITLES_FORWARD:
+        return ()
+    return tuple(result.title for result in so_far)
 
 
 def _dedup_merged(results: list[ExtractionResult]) -> list[ExtractionResult]:
@@ -2629,7 +2728,14 @@ def extract_concept(
         merged: list[ExtractionResult] = []
         for index, window in enumerate(windows, start=1):
             _report(on_progress, f"extracting chunk {index}/{chunk_count}")
-            merged.extend(_extract_once(window, source_title, llm))
+            merged.extend(
+                _extract_once(
+                    window,
+                    source_title,
+                    llm,
+                    prior_titles=_carried_titles(merged),
+                )
+            )
         # Grounding checks against the FULL source, not the window that
         # produced the object -- an expansion stated once in chunk 1 grounds
         # the acronym a later chunk re-derives.
@@ -2910,7 +3016,14 @@ def extract_concept_union(
         chunked: list[ExtractionResult] = []
         for index, window in enumerate(windows, start=1):
             _report(on_progress, f"extracting chunk {index}/{chunk_count}")
-            chunked.extend(_extract_once(window, source_title, llm))
+            chunked.extend(
+                _extract_once(
+                    window,
+                    source_title,
+                    llm,
+                    prior_titles=_carried_titles(chunked),
+                )
+            )
         deduped = _dedup_merged(
             _strip_ungrounded_expansions(chunked, source_text=source_text)
         )

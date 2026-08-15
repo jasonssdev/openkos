@@ -73,6 +73,7 @@ Prove the parsing/scoring/report logic with no model at all:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import statistics
@@ -81,12 +82,13 @@ import tempfile
 import time
 import urllib.request
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from openkos.extraction import concept as concept_mod
 from openkos.extraction.concept import (
     _TWIN_EXEMPT_TYPE,
     ExtractionOutcome,
@@ -1087,6 +1089,98 @@ def expand_title_mode_arms(
     return [(label, temp, uj, False) for label, temp, uj in arms]
 
 
+@dataclass(frozen=True)
+class Lever:
+    """One #699 anti-fragmentation lever, or the untreated baseline.
+
+    The two levers are NEVER crossed with each other. #699 asks for them
+    measured SEPARATELY, and a crossed cell answers a third question ("do
+    they compose?") while making neither of the first two readable -- a
+    2x2 on a fixture this slow also doubles the sweep for an answer nobody
+    asked for. Each lever is its own row against the same baseline."""
+
+    carry_titles: bool = False
+    """Send earlier windows' titles to later windows of the same source."""
+
+    chunk_target: int | None = None
+    """Override `_CHUNK_TARGET` (chars per window). `None` keeps 4 000."""
+
+    @property
+    def suffix(self) -> str:
+        """The arm-label suffix, empty for the untreated baseline. Same
+        design as `_UNION_JUDGE_SUFFIX`/`_STEM_TITLE_SUFFIX`: a suffix on the
+        opaque `arm` string, so every scoring, reporting, JSON and rescore
+        path keeps working and the compared rows sort adjacent."""
+        if self.carry_titles:
+            return "+carry-titles"
+        if self.chunk_target is not None:
+            return f"+chunk{self.chunk_target}"
+        return ""
+
+
+NO_LEVER = Lever()
+"""The untreated arm: production constants, untouched."""
+
+
+def parse_lever(spec: str) -> Lever:
+    """Parse one `--lever` value: `carry-titles` or `chunk:<chars>`."""
+    if spec == "carry-titles":
+        return Lever(carry_titles=True)
+    if spec.startswith("chunk:"):
+        raw = spec.removeprefix("chunk:")
+        try:
+            target = int(raw)
+        except ValueError:
+            raise ValueError(f"lever {spec!r}: {raw!r} is not an integer") from None
+        if target < 1:
+            raise ValueError(f"lever {spec!r}: window size must be positive")
+        return Lever(chunk_target=target)
+    raise ValueError(f"unknown lever {spec!r} (want 'carry-titles' or 'chunk:<chars>')")
+
+
+def expand_lever_arms(
+    arms: list[tuple[str, float | None, bool, bool]], *, levers: Sequence[Lever]
+) -> list[tuple[str, float | None, bool, bool, Lever]]:
+    """Add one row per lever BESIDE the untreated row, never replacing it.
+
+    The untreated arm always comes first and is always present: a lever's
+    number means nothing without the baseline it is read against, and this
+    material's run-to-run variance is large enough that yesterday's baseline
+    from another sweep is not a safe comparison.
+    """
+    expanded: list[tuple[str, float | None, bool, bool, Lever]] = []
+    for label, temp, uj, stem in arms:
+        expanded.append((label, temp, uj, stem, NO_LEVER))
+        for lever in levers:
+            expanded.append((f"{label}{lever.suffix}", temp, uj, stem, lever))
+    return expanded
+
+
+@contextlib.contextmanager
+def applied_lever(lever: Lever) -> Iterator[None]:
+    """Apply one lever to the production module for the duration of a run.
+
+    Both knobs are module constants the production code reads at CALL time,
+    which is the property that makes this arm real rather than decorative.
+    `_chunk_lines` once took `target: int = _CHUNK_TARGET`, a default bound
+    at definition, so setting the constant here would have chunked at 4 KB
+    while the report said 8 KB -- the inert-arm defect a reviewer caught in
+    the #714 probe. `test_chunk_target_is_read_at_call_time_not_bound_at_
+    definition` in the production suite is what keeps that closed; this
+    harness's own self-test checks the arm still bites end to end.
+    """
+    previous_carry = concept_mod._CARRY_TITLES_FORWARD
+    previous_target = concept_mod._CHUNK_TARGET
+    concept_mod._CARRY_TITLES_FORWARD = lever.carry_titles
+    if lever.chunk_target is not None:
+        concept_mod._CHUNK_TARGET = lever.chunk_target
+    try:
+        yield
+    finally:
+        concept_mod._CARRY_TITLES_FORWARD = previous_carry
+        concept_mod._CHUNK_TARGET = previous_target
+
+
 def build_client(
     model: str, host: str | None, timeout: float, temperature: float | None
 ) -> OllamaClient:
@@ -1140,6 +1234,7 @@ def run_one(
     *,
     union_judge: bool = False,
     stem_title: bool = False,
+    lever: Lever = NO_LEVER,
 ) -> RunOutcome:
     """Drive the REAL pipeline once; never raise.
 
@@ -1156,7 +1251,8 @@ def run_one(
     started = time.perf_counter()
     extractor = extract_concept_union if union_judge else extract_concept
     try:
-        outcome = extractor(source_text, source_title=title, llm=client)
+        with applied_lever(lever):
+            outcome = extractor(source_text, source_title=title, llm=client)
     except OllamaError as exc:
         return RunOutcome(
             fixture=truth.name,
@@ -1208,6 +1304,7 @@ def evaluate_cell(
     *,
     union_judge: bool = False,
     stem_title: bool = False,
+    lever: Lever = NO_LEVER,
 ) -> Cell:
     """Run one fixture `runs` times under one arm; skip a missing source."""
     cell = Cell(fixture=truth.name, arm=arm, truth=truth)
@@ -1233,6 +1330,7 @@ def evaluate_cell(
             twin_risk,
             union_judge=union_judge,
             stem_title=stem_title,
+            lever=lever,
         )
         cell.outcomes.append(outcome)
         _print_run_line(outcome)
@@ -2045,6 +2143,54 @@ def self_test() -> int:
         [(BASELINE_ARM, None), ("t0.0", 0.0), ("t0.1", 0.1)],
     )
 
+    # 12b. The #699 lever axis. Two things are checked, and the second is the
+    #      one that matters: that the arm actually BITES. An arm that parses,
+    #      labels itself correctly and then runs the untreated pipeline is the
+    #      #714 probe's shipped defect -- it produces a full set of plausible
+    #      numbers for a treatment that never ran, and nothing in the report
+    #      looks wrong.
+    check("lever: carry-titles", parse_lever("carry-titles"), Lever(carry_titles=True))
+    check("lever: chunk size", parse_lever("chunk:8000"), Lever(chunk_target=8000))
+    for bad in ("chunk:abc", "chunk:0", "carry_titles", ""):
+        try:
+            parse_lever(bad)
+        except ValueError:
+            pass
+        else:
+            failures.append(f"lever {bad!r} parsed but should have been rejected")
+    check(
+        "levers sit beside the untreated arm, never replacing it",
+        expand_lever_arms(
+            [(BASELINE_ARM, None, False, False)],
+            levers=[Lever(carry_titles=True), Lever(chunk_target=8000)],
+        ),
+        [
+            (BASELINE_ARM, None, False, False, NO_LEVER),
+            (f"{BASELINE_ARM}+carry-titles", None, False, False, Lever(True, None)),
+            (f"{BASELINE_ARM}+chunk8000", None, False, False, Lever(False, 8000)),
+        ],
+    )
+
+    lever_text = "\n".join(f"A: line {i:04d} " + "x" * 30 for i in range(700))
+    untreated_windows = len(concept_mod._chunk_lines(lever_text))
+    with applied_lever(Lever(chunk_target=8000)):
+        treated_windows = len(concept_mod._chunk_lines(lever_text))
+        if concept_mod._CARRY_TITLES_FORWARD is not False:
+            failures.append("chunk lever must not switch carry-titles on")
+    if treated_windows >= untreated_windows:
+        failures.append(
+            f"chunk lever is INERT: {untreated_windows} windows untreated, "
+            f"{treated_windows} at chunk:8000 -- the arm would report a "
+            f"treatment that never ran"
+        )
+    with applied_lever(Lever(carry_titles=True)):
+        if concept_mod._CARRY_TITLES_FORWARD is not True:
+            failures.append("carry-titles lever is INERT: the constant stayed off")
+    if concept_mod._CARRY_TITLES_FORWARD is not False:
+        failures.append("applied_lever leaked: carry-titles stayed on after the run")
+    if len(concept_mod._chunk_lines(lever_text)) != untreated_windows:
+        failures.append("applied_lever leaked: the chunk target stayed overridden")
+
     # 13. The real corpus ground truth parses. This is a REGRESSION GUARD on the
     #     committed fixtures, not on this harness: the files are hand-edited, and
     #     a broken one must fail here rather than skew a measurement later. The
@@ -2184,7 +2330,8 @@ def self_test() -> int:
     print(
         "SELF-TEST PASSED: parsing, strictness, exact-only matching, cap_cost, "
         "precision (incl. the repeated-subject rule), variance rendering, "
-        "position curve, twin flag, temperature seam, and report OK."
+        "position curve, twin flag, temperature seam, #699 lever arms "
+        "(parsed, non-inert and leak-free), and report OK."
     )
     return 0
 
@@ -2283,6 +2430,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "for the before/after recall-delta comparison the Pre-Archive "
         "Measurement Gate requires.",
     )
+    parser.add_argument(
+        "--lever",
+        action="append",
+        default=None,
+        help="#699 anti-fragmentation lever to measure BESIDE the untreated "
+        "arm; repeatable. 'carry-titles' tells each window which subjects "
+        "earlier windows named; 'chunk:<chars>' resizes the window (e.g. "
+        "chunk:8000). Levers are never crossed with each other -- #699 asks "
+        "for them measured separately, and each gets its own row against the "
+        "same baseline.",
+    )
     return parser.parse_args(argv)
 
 
@@ -2330,15 +2488,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_queue_note(replayed)
         return 0
 
+    try:
+        levers = [parse_lever(spec) for spec in args.lever or ()]
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
     base_arms = resolve_arms(baseline=args.baseline, temperatures=args.temperature)
-    arms = expand_title_mode_arms(
-        expand_union_judge_arms(base_arms, union_judge_mode=args.union_judge),
-        title_mode=args.title_mode,
+    arms = expand_lever_arms(
+        expand_title_mode_arms(
+            expand_union_judge_arms(base_arms, union_judge_mode=args.union_judge),
+            title_mode=args.title_mode,
+        ),
+        levers=levers,
     )
 
     cells: list[Cell] = []
     for truth in truths:
-        for arm, temperature, union_judge, stem_title in arms:
+        for arm, temperature, union_judge, stem_title, lever in arms:
             print(f"\n=== {truth.name} [{arm}] ===")
             cell = evaluate_cell(
                 truth,
@@ -2350,6 +2517,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.timeout,
                 union_judge=union_judge,
                 stem_title=stem_title,
+                lever=lever,
             )
             if cell.skip_reason:
                 print(f"  skipped: {cell.skip_reason}")
