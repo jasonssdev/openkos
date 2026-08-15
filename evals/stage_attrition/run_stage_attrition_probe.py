@@ -305,34 +305,18 @@ def _classify(item: Any) -> str:
 
 
 def _snapshot(items: Any) -> list[dict[str, str]]:
-    """`(type, title, lane)` for each candidate, order preserved.
-
-    Also carries the GENERATED SIZE of each candidate (#692): `head_chars`
-    is the type and title -- what a title-first extraction would still have
-    to produce -- and `tail_chars` is the description and body, the part a
-    discarded candidate generated for nothing. They are recorded here rather
-    than in a probe of their own because every stage boundary is already
-    wrapped here, and a second recorder would have to re-derive which
-    candidates a stage dropped. Stored as strings so the ledger stays one
-    flat `dict[str, str]` that JSON round-trips unchanged.
-    """
+    """`(type, title, lane)` for each candidate, order preserved."""
     if items is None:
         return []
     out: list[dict[str, str]] = []
     for item in items:
         if not hasattr(item, "title"):
             continue
-        title = str(item.title)
         out.append(
             {
                 "type": str(getattr(item, "type", "?")),
-                "title": title,
+                "title": str(item.title),
                 "lane": _classify(item),
-                "head_chars": str(len(str(getattr(item, "type", ""))) + len(title)),
-                "tail_chars": str(
-                    len(str(getattr(item, "description", "")))
-                    + len(str(getattr(item, "body", "")))
-                ),
             }
         )
     return out
