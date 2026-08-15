@@ -1,6 +1,6 @@
 # What extraction generates and throws away — #692
 
-_Generated: 2026-08-15T19:31:51+00:00_
+_Generated: 2026-08-15T19:42:43+00:00_
 
 Ratios are computed in CHARACTERS; a chars-to-token factor cancels out of a ratio. Absolute sizes are rendered as tokens at ~3.7 chars/token where that helps a reader, and the conversion is applied nowhere else.
 

@@ -117,6 +117,21 @@ or the ratio measures the difference between two populations rather than
 waste."""
 
 
+_FILTERING_STAGES = (
+    "_strip_ungrounded_expansions",
+    "_drop_framing_objects",
+    "_merge_union",
+    "_dedup_merged",
+    "_drop_source_title_twins",
+    "_drop_wrong_language_titles",
+    "judge.select",
+)
+"""Stages that only ever remove or collapse candidates. Listed EXPLICITLY
+rather than inferred as "everything else", so that a stage the recorder
+starts emitting has to be classified by a human before this probe will
+report a number over it."""
+
+
 def _int(value: str | int) -> int:
     """A ledger field, tolerant of the JSON round trip that makes it a str."""
     return int(value)
@@ -255,13 +270,32 @@ def _minted_by(event: dict[str, Any]) -> list[dict[str, str]]:
     Everything for a producing stage; for an additive one, only the
     candidates it did not receive — it passes its input through, and
     crediting the whole output would count every earlier candidate again at
-    every additive stage. Filtering stages mint nothing."""
-    if event["stage"] in _PRODUCING_STAGES:
+    every additive stage. Filtering stages mint nothing.
+
+    An UNKNOWN stage raises rather than returning nothing. Treating it as a
+    filter is the exact shape of the defect this probe already shipped once:
+    `_add_participant_capture` was missing from `_ADDITIVE_STAGES`, so its
+    output vanished from the generation total and `es-anchored` reported
+    100% waste. Silence is the wrong default for a classifier whose misses
+    only ever undercount — the sibling recorder refuses to run when a stage
+    it patches has been renamed, for the same reason, and this is the same
+    guard one layer up."""
+    stage = event["stage"]
+    if stage in _PRODUCING_STAGES:
         return list(event["left"])
-    if event["stage"] in _ADDITIVE_STAGES:
+    if stage in _ADDITIVE_STAGES:
         arrived = {_key(c) for c in event["entered"]}
         return [c for c in event["left"] if _key(c) not in arrived]
-    return []
+    if stage in _FILTERING_STAGES:
+        return []
+    raise SystemExit(
+        f"unclassified pipeline stage {stage!r}: this probe must know whether "
+        f"it MINTS candidates, ADDS to them, or only filters. Add it to "
+        f"_PRODUCING_STAGES, _ADDITIVE_STAGES or _FILTERING_STAGES before "
+        f"trusting a number from this run -- an unclassified minting stage "
+        f"undercounts the generation total silently, which is how this probe "
+        f"once reported 100% waste."
+    )
 
 
 @dataclass
@@ -725,6 +759,47 @@ def _self_test() -> int:
         "only the eliminating stage is charged",
         attribute_kills(travelled, []),
         {"_drop_framing_objects": 300},
+    )
+
+    # An unclassified stage must STOP the run, not be silently treated as a
+    # filter. Every miss of this classifier undercounts generation, and this
+    # probe has already shipped one such miss.
+    try:
+        _minted_by({"stage": "_a_stage_nobody_classified", "entered": [], "left": []})
+    except SystemExit:
+        pass
+    else:
+        failures.append("an unclassified stage was silently treated as a filter")
+
+    # The char counting itself, through the REAL `_snapshot`, on real
+    # ExtractionResult objects. Every ratio in the report is built on this
+    # arithmetic, and building the ledger dicts by hand everywhere else
+    # meant a mistake in it would ship unnoticed.
+    attrition_for_chars = _load_attrition_probe()
+    from openkos.extraction.concept import ExtractionResult
+
+    real = ExtractionResult(
+        type="Concept", title="Título", description="Descripción.", body="Cuerpo largo."
+    )
+    snapped = attrition_for_chars._snapshot([real])
+    check("snapshot counts one candidate", len(snapped), 1)
+    check(
+        "head is type + title",
+        snapped[0]["head_chars"],
+        str(len("Concept") + len("Título")),
+    )
+    check(
+        "tail is description + body",
+        snapped[0]["tail_chars"],
+        str(len("Descripción.") + len("Cuerpo largo.")),
+    )
+    real_ledger = account_run(
+        [{"stage": "_extract_once", "entered": [], "left": snapped}], []
+    )
+    check(
+        "a real candidate's chars reach the ledger",
+        real_ledger.generated,
+        len("Concept") + len("Título") + len("Descripción.") + len("Cuerpo largo."),
     )
 
     # The recorder this probe rides must still expose what it reads.
