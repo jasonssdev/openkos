@@ -1,6 +1,7 @@
 # Ground truth — `medium-10-reunion-plataforma.md`
 
-Source size: 12718 B
+Source size: 12 718 characters (12 948 bytes). The harness compares
+CHARACTERS, because `len(source_text)` is what production compares.
 
 ## READ THIS FIRST — this fixture is SYNTHETIC, and that is the point
 
@@ -27,18 +28,29 @@ lived.
 **It is NOT a size control against any other fixture**, and it is not a paired
 variant of anything. It is an independent sample.
 
-## Why 12 718 B specifically
+## Path invariant
+
+- chunked
+
+## Why 12 718 characters specifically
 
 The size is load-bearing, not incidental. `_is_meeting_shaped` returns true on
 this content, so `_chunk_threshold_for` governs it at `_MEETING_CHUNK_THRESHOLD`
-(12 000, #714) rather than at 18 000. At 12 718 B it therefore takes the
-**chunked** path — four windows of roughly 3 900 / 3 900 / 4 000 / 940 — which
-is the regime #699's within-source fragmentation lives in.
+(12 000, #714) rather than at 18 000. At 12 718 characters it therefore takes
+the **chunked** path — four windows of roughly 3 900 / 3 900 / 4 000 / 940 —
+which is the regime #699's within-source fragmentation lives in.
 
-A fixture a few hundred bytes shorter would silently take the two-pass
-whole-document path instead and measure a different pipeline. Anyone editing
-this source must re-check that it still exceeds 12 000, or the numbers stop
-describing the path they claim to.
+A fixture a few hundred characters shorter would silently take the two-pass
+whole-document path instead and measure a different pipeline. That is what the
+`## Path invariant` section above is for: `run_cap_eval.py` reads it, asks
+`concept._chunk_threshold_for` which path this source ACTUALLY takes, and
+refuses to sweep when the two disagree (#726). Until that section existed the
+guard was this paragraph, and prose cannot fail.
+
+The margin is 718 characters, so the check is not theoretical. Note the unit:
+the file is 12 948 **bytes** and 12 718 **characters** — production compares
+`len(source_text)`, so a byte-counting guard would be wrong by 230 in the
+permissive direction.
 
 **One subject is deliberately split across the window boundary.** `Deriva del
 modelo de embeddings` is discussed in window 1 and returned to in the final

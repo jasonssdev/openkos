@@ -56,6 +56,16 @@ forbid it. Rather than special-case the pair, this harness never aggregates
 across fixtures at all. Three real documents of different sizes and languages
 were never a population to take a mean over.
 
+## What it refuses to measure
+
+A ground truth may DECLARE the extraction path its numbers describe
+(`## Path invariant`, #726). Before the first call, `preflight_path_invariants`
+asks the production module which path each selected source actually takes and
+aborts the sweep when the two disagree. A source that drifts across
+`_chunk_threshold_for`'s boundary measures a different pipeline under the same
+fixture name, and nothing else in this file would notice: the report renders,
+the numbers look plausible, and only the path they describe has changed.
+
 ## Running it
 
 The corpus sources are git-ignored (third-party material, see the corpus
@@ -74,6 +84,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import io
 import json
 import re
 import statistics
@@ -192,6 +203,14 @@ class GroundTruth:
     the two would inflate the decay figure -- which is exactly the number that
     argues AGAINST raising the cap. A scorer must not be generous in either
     direction, so the two are counted apart."""
+    path_invariant: str | None = None
+    """The extraction path this fixture's numbers describe (`PATH_INVARIANTS`),
+    or None when the file declares none.
+
+    Optional by design: most fixtures do not care which path they take, and
+    demanding a declaration from every one would turn a real invariant into
+    boilerplate nobody reads. A fixture that DOES care says so, and the sweep
+    then refuses to measure it on the wrong path (#726)."""
 
     @property
     def subject_count(self) -> int:
@@ -244,6 +263,27 @@ _FACETS_HEADING = "facets, not subjects"
 _NEAR_DUP_HEADING = "near-duplicates"
 _ALIASES_HEADING = "aliases"
 _OUT_OF_SCOPE_HEADING = "out of scope"
+_PATH_INVARIANT_HEADING = "path invariant"
+
+CHUNKED = "chunked"
+"""One chat call per `_chunk_lines` window (#454)."""
+
+WHOLE_DOCUMENT = "whole-document"
+"""One chat call over the entire source."""
+
+PATH_INVARIANTS = (CHUNKED, WHOLE_DOCUMENT)
+"""The extraction paths a ground truth may DECLARE its numbers describe.
+
+Exactly the branch `extract_concept`/`extract_concept_union` take on
+`len(source_text) <= _chunk_threshold_for(...)`, named in the ground truth so
+the harness can refuse to measure a fixture that has drifted across it (#726).
+
+A source that crosses the boundary silently measures a different pipeline
+under the same fixture name, with nothing failing — the class of silent
+success this corpus has already paid for twice (an arm axis that went inert
+once production selected by shape, and splice arms that measured a shipped
+treatment against itself).
+"""
 
 
 def _sections(text: str) -> dict[str, str]:
@@ -321,13 +361,41 @@ def _parse_near_duplicates(body: str) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
+def _parse_path_invariant(body: str) -> str:
+    """Parse a `## Path invariant` section: EXACTLY one bullet, from
+    `PATH_INVARIANTS`.
+
+    Strict on both counts, for the same reason `**Count:**` is strict. A
+    section listing two paths declares nothing checkable, and a section
+    holding only prose is the state #726 was filed about -- a documented
+    invariant that no code reads. Either would parse into a guard that never
+    fires, which is worse than no guard, because the file would then claim
+    protection it does not have.
+    """
+    bullets = _bullets(body)
+    if len(bullets) != 1:
+        raise GroundTruthError(
+            f"`## Path invariant` must hold exactly one bullet naming the path "
+            f"({' or '.join(PATH_INVARIANTS)}), got {len(bullets)}"
+        )
+    declared = bullets[0].strip().strip(_WRAPPERS).strip().casefold()
+    if declared not in PATH_INVARIANTS:
+        raise GroundTruthError(
+            f"`## Path invariant` must be `{CHUNKED}` or `{WHOLE_DOCUMENT}`, "
+            f"got {bullets[0]!r}"
+        )
+    return declared
+
+
 class Parsed(NamedTuple):
-    """The four judgment lists a ground-truth file carries."""
+    """The four judgment lists a ground-truth file carries, plus the optional
+    extraction path it declares its numbers describe."""
 
     subjects: tuple[Subject, ...]
     facets: tuple[str, ...]
     near_duplicates: tuple[tuple[str, str], ...]
     out_of_scope: tuple[str, ...]
+    path_invariant: str | None = None
 
 
 def parse_ground_truth(text: str, *, name: str = "<memory>") -> Parsed:
@@ -408,11 +476,16 @@ def parse_ground_truth(text: str, *, name: str = "<memory>") -> Parsed:
             f"{sorted(unknown_dups)}"
         )
 
+    path_body = _find_section(sections, _PATH_INVARIANT_HEADING)
+
     return Parsed(
         subjects=tuple(subjects),
         facets=_listed(_FACETS_HEADING),
         near_duplicates=near_duplicates,
         out_of_scope=_listed(_OUT_OF_SCOPE_HEADING),
+        path_invariant=_parse_path_invariant(path_body)
+        if path_body is not None
+        else None,
     )
 
 
@@ -440,6 +513,7 @@ def load_ground_truth(gt_path: Path, *, sources_dir: Path = _SOURCES) -> GroundT
         facets=parsed.facets,
         near_duplicates=parsed.near_duplicates,
         out_of_scope=parsed.out_of_scope,
+        path_invariant=parsed.path_invariant,
     )
 
 
@@ -451,6 +525,57 @@ def discover_ground_truth(
         load_ground_truth(p, sources_dir=sources_dir)
         for p in sorted(directory.glob("*.md"))
     ]
+
+
+def extraction_path_for(source_text: str, source_title: str) -> str:
+    """The path production WILL take on this source, under this title.
+
+    Asks the production module rather than restating its numbers: the branch
+    is `len(source_text) <= _chunk_threshold_for(meeting_shaped=...)` at both
+    entry points (`extract_concept` and `extract_concept_union`), and the
+    threshold itself BRANCHES ON SHAPE since #714 -- 12 000 for a
+    meeting-shaped source, 18 000 otherwise. A guard carrying its own copy of
+    either constant would drift from the boundary it exists to watch, which is
+    the same defect one level up.
+
+    The title matters: `_is_meeting_shaped` is a title gate OR a content-shape
+    gate (#673), so the answer can differ between the production title and the
+    `+stem-title` arm. Callers pass the title THEIR arm sends.
+
+    Counted in CHARACTERS, because `len(source_text)` is what production
+    compares. The corpus prose calls this fixture's size "12 718 B"; it is
+    12 718 characters and 12 948 bytes, and a byte-counting guard would be
+    wrong by 230 in the permissive direction.
+    """
+    meeting_shaped = concept_mod._is_meeting_shaped(source_title, source_text)
+    threshold = concept_mod._chunk_threshold_for(meeting_shaped=meeting_shaped)
+    return WHOLE_DOCUMENT if len(source_text) <= threshold else CHUNKED
+
+
+def path_invariant_violation(
+    truth: GroundTruth, *, source_text: str, title: str
+) -> str | None:
+    """The reason this fixture may not be measured, or None when it may.
+
+    Returns None when the ground truth declares no path -- the invariant is
+    opt-in, and a fixture that never claimed one cannot break it.
+    """
+    if truth.path_invariant is None:
+        return None
+    actual = extraction_path_for(source_text, title)
+    if actual == truth.path_invariant:
+        return None
+    meeting_shaped = concept_mod._is_meeting_shaped(title, source_text)
+    threshold = concept_mod._chunk_threshold_for(meeting_shaped=meeting_shaped)
+    return (
+        f"{truth.name}: ground truth declares the {truth.path_invariant} path, "
+        f"but this source takes the {actual} path -- {len(source_text)} chars "
+        f"against a threshold of {threshold} "
+        f"(meeting_shaped={meeting_shaped}, title={title!r}). "
+        f"Every number measured on it would describe a different pipeline "
+        f"under the same fixture name. Restore the source, or update the "
+        f"`## Path invariant` section and re-baseline."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1283,6 +1408,46 @@ def run_one(
     )
 
 
+def preflight_path_invariants(
+    truths: Sequence[GroundTruth],
+    arms: Sequence[tuple[str, float | None, bool, bool, Lever]],
+) -> list[str]:
+    """Every declared-path violation across the selected fixtures and arms.
+
+    Runs BEFORE the sweep and aborts it, rather than skipping a cell or
+    warning inside one: a sweep costs minutes of GPU per cell, and a warning
+    printed among the run lines is exactly the kind of notice a reader scrolls
+    past while the report renders and the numbers look plausible.
+
+    Checked PER ARM because `resolve_title` differs between the production
+    title and the `+stem-title` arm, and `_is_meeting_shaped` reads the title.
+    A missing source is not a violation -- most of this corpus is git-ignored,
+    and `evaluate_cell` already owns that skip.
+
+    The `#699` levers are deliberately not consulted: `applied_lever` patches
+    `_CHUNK_TARGET` (window size), never a threshold, so no lever can move a
+    source across this boundary. If one ever gains that reach, this function
+    is where the arm's threshold has to be applied.
+    """
+    violations: list[str] = []
+    for truth in truths:
+        if not truth.source_exists or truth.path_invariant is None:
+            continue
+        source_text = truth.read_source()
+        seen: set[str] = set()
+        for _arm, _temperature, _union_judge, stem_title, _lever in arms:
+            title = resolve_title(source_text, truth.source_path, stem_title=stem_title)
+            if title in seen:
+                continue
+            seen.add(title)
+            violation = path_invariant_violation(
+                truth, source_text=source_text, title=title
+            )
+            if violation is not None:
+                violations.append(violation)
+    return violations
+
+
 def evaluate_cell(
     truth: GroundTruth,
     arm: str,
@@ -1618,6 +1783,7 @@ def _gt(text: str = _SAMPLE_GT, name: str = "sample") -> GroundTruth:
         facets=parsed.facets,
         near_duplicates=parsed.near_duplicates,
         out_of_scope=parsed.out_of_scope,
+        path_invariant=parsed.path_invariant,
     )
 
 
@@ -1725,6 +1891,193 @@ def self_test() -> int:
         len(_gt(_SAMPLE_GT.replace("**Count: 3.**", ""), "nocount").subjects),
         3,
     )
+
+    # 2b. The declared path invariant (#726). A fixture whose numbers only mean
+    # something on ONE extraction path says so, and the sweep refuses to
+    # measure it on the other -- the prose that used to carry this could not
+    # fail.
+    def _with_path(value: str, name: str = "path") -> GroundTruth:
+        return _gt(f"{_SAMPLE_GT}\n## Path invariant\n\n- {value}\n", name)
+
+    check("path invariant is optional", truth.path_invariant, None)
+    check("path invariant parsed", _with_path("chunked").path_invariant, CHUNKED)
+    check(
+        "path invariant is case/wrapper insensitive",
+        _with_path("`Whole-Document`").path_invariant,
+        WHOLE_DOCUMENT,
+    )
+    raises(
+        "path invariant with an unknown value",
+        f"{_SAMPLE_GT}\n## Path invariant\n\n- streamed\n",
+        "must be `chunked` or `whole-document`",
+    )
+    raises(
+        "path invariant naming two paths",
+        f"{_SAMPLE_GT}\n## Path invariant\n\n- chunked\n- whole-document\n",
+        "exactly one bullet",
+    )
+    raises(
+        "path invariant that is prose only",
+        f"{_SAMPLE_GT}\n## Path invariant\n\nMust exceed 12 000.\n",
+        "exactly one bullet",
+    )
+
+    # The boundary is asked of production, never restated. The third check is
+    # the one that matters: at the SAME size, shape decides the path (#714).
+    check(
+        "meeting-shaped above 12 000 chunks",
+        extraction_path_for("x" * 12_001, "Reunión de coordinación"),
+        CHUNKED,
+    )
+    check(
+        "meeting-shaped at exactly 12 000 does not",
+        extraction_path_for("x" * 12_000, "Reunión de coordinación"),
+        WHOLE_DOCUMENT,
+    )
+    check(
+        "prose at the same size does not chunk",
+        extraction_path_for("x" * 12_001, "A Prose Document"),
+        WHOLE_DOCUMENT,
+    )
+    check(
+        "a satisfied invariant blocks nothing",
+        path_invariant_violation(
+            _with_path("chunked"),
+            source_text="x" * 12_001,
+            title="Reunión de coordinación",
+        ),
+        None,
+    )
+    check(
+        "an undeclared invariant blocks nothing",
+        path_invariant_violation(truth, source_text="x" * 12_001, title="Reunión"),
+        None,
+    )
+    drifted = path_invariant_violation(
+        _with_path("chunked"),
+        source_text="x" * 12_000,
+        title="Reunión de coordinación",
+    )
+    check(
+        "a violation names both paths, the size and the threshold",
+        [
+            token in (drifted or "")
+            for token in ("chunked", "whole-document", "12000", "path")
+        ],
+        [True, True, True, True],
+    )
+    # The OTHER direction. `path_invariant_violation` is symmetric in the
+    # declared path, and asserting only the `chunked` side leaves half the
+    # comparison unproved -- a fixture pinned to the whole-document path
+    # (because chunking is what would change its numbers) is exactly as
+    # entitled to the guard.
+    drifted_other = path_invariant_violation(
+        _with_path("whole-document", "wholedoc"),
+        source_text="x" * 12_001,
+        title="Reunión de coordinación",
+    )
+    check(
+        "a whole-document fixture that starts chunking is a violation too",
+        [
+            token in (drifted_other or "")
+            for token in ("declares the whole-document", "takes the chunked", "12001")
+        ],
+        [True, True, True],
+    )
+    check(
+        "and it is satisfied when the source stays short",
+        path_invariant_violation(
+            _with_path("whole-document", "wholedoc"),
+            source_text="x" * 12_000,
+            title="Reunión de coordinación",
+        ),
+        None,
+    )
+    # `_gt` hands back a source path that does not exist, which is the state
+    # of MOST of this corpus in MOST checkouts (git-ignored third-party
+    # material). The preflight must skip it rather than report a violation it
+    # cannot have observed -- `evaluate_cell` owns that skip, and a preflight
+    # that aborted here would make the harness unrunnable on a fresh clone.
+    check(
+        "a declared invariant with no source on disk blocks nothing",
+        preflight_path_invariants(
+            [_with_path("chunked", "absent")],
+            [(BASELINE_ARM, None, False, False, NO_LEVER)],
+        ),
+        [],
+    )
+
+    # The concrete hole #726 was filed for. This fixture is COMMITTED (unlike
+    # the rest of the corpus), so a checkout that has it can prove the
+    # invariant end to end with no model.
+    oracle_gt = _GROUND_TRUTH / "medium-10-reunion-plataforma.md"
+    if oracle_gt.is_file():
+        oracle = load_ground_truth(oracle_gt)
+        check("oracle fixture declares its path", oracle.path_invariant, CHUNKED)
+        if oracle.source_exists:
+            oracle_text = oracle.read_source()
+            check(
+                "oracle fixture still takes the chunked path",
+                preflight_path_invariants(
+                    [oracle], [(BASELINE_ARM, None, False, False, NO_LEVER)]
+                ),
+                [],
+            )
+            check(
+                "oracle fixture is measured in chars, not bytes",
+                len(oracle_text) < len(oracle_text.encode("utf-8")),
+                True,
+            )
+
+    # The guard is only worth having if `main` actually consults it before
+    # spending a call. Driven end to end on a throwaway corpus whose source is
+    # far too short for the path it declares, against an unroutable host with a
+    # quarter-second timeout: wired, this exits 2 having contacted nothing;
+    # unwired, the sweep runs to completion on failed calls and returns 0.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        gt_dir, src_dir = root / "ground-truth", root / "sources"
+        gt_dir.mkdir()
+        src_dir.mkdir()
+        (gt_dir / "drifted.md").write_text(
+            "## Genuinely distinct subjects\n\n- Concept | A\n\n"
+            "## Path invariant\n\n- chunked\n",
+            encoding="utf-8",
+        )
+        (src_dir / "drifted.md").write_text(
+            "# Reunión de coordinación\n\nToo short to chunk.\n", encoding="utf-8"
+        )
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            code = main(
+                [
+                    "--ground-truth-dir",
+                    str(gt_dir),
+                    "--sources-dir",
+                    str(src_dir),
+                    "--output",
+                    str(root / "report.md"),
+                    "--runs",
+                    "1",
+                    "--host",
+                    "http://127.0.0.1:1",
+                    "--timeout",
+                    "0.25",
+                ]
+            )
+        check("preflight aborts the sweep", code, 2)
+        check(
+            "preflight explains itself on stderr",
+            [
+                token in stderr.getvalue()
+                for token in ("refusing to measure", "drifted", "whole-document")
+            ],
+            [True, True, True],
+        )
+        check("preflight writes no report", (root / "report.md").exists(), False)
 
     # 3. Matching: exact + curated alias only, and NOTHING else.
     check("exact", classify("Pre-built Skills", truth), SUBJECT)
@@ -2483,6 +2836,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         levers=levers,
     )
+
+    violations = preflight_path_invariants(truths, arms)
+    if violations:
+        print(
+            "error: a fixture no longer takes the extraction path its ground "
+            "truth declares; refusing to measure (#726)",
+            file=sys.stderr,
+        )
+        for violation in violations:
+            print(f"  - {violation}", file=sys.stderr)
+        return 2
 
     cells: list[Cell] = []
     for truth in truths:
