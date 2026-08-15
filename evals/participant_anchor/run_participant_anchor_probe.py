@@ -13,7 +13,7 @@ over `openkos.llm.ollama.OllamaClient` -- and answers ONE question:
 ## Why the report fields alone cannot answer it
 
 #705 made the discard OBSERVABLE -- `ExtractionReport.participant_
-anchorless_discarded_titles` names the dropped candidates. But a title is a
+unreadmitted_discarded_titles` names the dropped candidates. But a title is a
 name, and the anchor is read off `description` + `body`, which never leave
 the pipeline. "Gustavo Martinez was discarded" is compatible with both
 answers above, so the field that made the defect legible cannot settle it.
@@ -291,18 +291,26 @@ class CandidateRecord:
     description: str
     body: str
     bucket: str
-    """`judge-selected`, `re-admitted`, `anchorless-discarded`, or
+    """`judge-selected`, `re-admitted`, `unreadmitted-discarded`, or
     `judge-not-run` -- which of `ExtractionReport`'s three title tuples
     claimed this candidate, with the fourth value for the runs where the
     judge was skipped, failed, or rejected everything and no tuple was
     written at all. Never guessed: an unclaimed candidate on an `ok` run is
-    recorded as `anchorless-discarded` only because that tuple IS the
-    complement the pipeline computes."""
+    recorded as `unreadmitted-discarded` only because that tuple IS the
+    complement the pipeline computes.
+
+    Named `anchorless-discarded` before #712 retired the anchor gate. No
+    stored run carries the old label -- #706 measured ZERO discards across
+    all nine runs, which is the finding that filed #712 -- so the rename
+    cannot silently reinterpret existing evidence."""
     anchored: bool
     """`_has_participant_anchor` on this exact candidate, recomputed rather
-    than observed. Identical to the gate's own verdict by construction (same
-    function, same fields) and available for candidates the judge selected,
-    where production short-circuits before ever asking."""
+    than observed.
+
+    Since #712 this is the RETIRED gate's verdict, not production's: nothing
+    in the pipeline reads it any more. It stays so this probe's `--rescore`
+    can re-derive #706's numbers from its own stored runs, which is the
+    property that report asserts in its opening lines."""
     meeting_shaped: bool
 
 
@@ -373,8 +381,8 @@ def _bucket_of(result: ExtractionResult, report: Any) -> str:
         return "judge-selected"
     if result.title in report.participant_readmitted_titles:
         return "re-admitted"
-    if result.title in report.participant_anchorless_discarded_titles:
-        return "anchorless-discarded"
+    if result.title in report.participant_unreadmitted_discarded_titles:
+        return "unreadmitted-discarded"
     return "judge-not-run"
 
 
@@ -441,7 +449,9 @@ def run_arm(arm: Arm, llm: Any, runs: int, model: str) -> list[RunRecord]:
                     candidates=candidates,
                 )
             )
-            discarded = sum(1 for c in candidates if c.bucket == "anchorless-discarded")
+            discarded = sum(
+                1 for c in candidates if c.bucket == "unreadmitted-discarded"
+            )
             print(
                 f"    run {index}: {len(candidates)} participant candidate(s), "
                 f"{discarded} discarded, judge {outcome.report.judge_status}, "
@@ -753,9 +763,12 @@ def _self_test() -> int:
             "if one does, the fixture no longer tests the gap",
         ),
         (
-            by_title["Gustavo Martínez"].bucket == "anchorless-discarded",
-            "an anchorless candidate the judge did not select must land in "
-            "the anchorless-discarded bucket "
+            by_title["Gustavo Martínez"].bucket == "re-admitted",
+            "#712 retired the anchor gate, so a candidate the judge did not "
+            "select is now RE-ADMITTED on a meeting-shaped source rather than "
+            "discarded. This assertion used to expect the opposite; the "
+            "unreadmitted-discarded bucket is now reachable only on a "
+            "non-meeting-shaped source "
             f"(got {by_title['Gustavo Martínez'].bucket})",
         ),
         (

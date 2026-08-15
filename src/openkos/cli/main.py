@@ -3035,37 +3035,65 @@ def _judge_selection_notice(report: ExtractionReport) -> str | None:
     return f"judge dropped {len(report.judged_out_titles)} candidate(s): {listed}"
 
 
-def _participant_anchor_notice(report: ExtractionReport) -> str | None:
-    """Name the ANCHOR gate when it is what discarded a `Person`/
-    `Organization` candidate, or `None` when it discarded none (issue #690).
+def _participant_unreadmitted_notice(report: ExtractionReport) -> str | None:
+    """Name what actually discarded a `Person`/`Organization` candidate, or
+    `None` when nothing did (issue #690).
 
     Without this the operator sees only `judge dropped 2 candidate(s): Jason
     Sepulveda, Gustavo Martínez` and reasonably concludes the judge rejected
-    them on merit. What actually happened is two decisions: the judge did not
-    select them, AND the #668 re-admission declined to save them because
-    neither carried a role, affiliation, or relation cue beyond a bare name
-    -- the STUB RULE, working exactly as specified.
+    them on merit. What actually happened is TWO decisions: the judge did not
+    select them, AND re-admission declined to save them.
 
-    Those are different findings with different remedies. "The judge has poor
-    taste in people" invites tuning the judge; "the candidates were name-only
-    stubs" points at the generator or at the anchor lexicon, and is the
-    question worth measuring. Reporting the first when the second is true is
-    what made the earlier runs unfalsifiable.
+    Those are different findings with different remedies -- "the judge has
+    poor taste in people" invites tuning the judge, while the real second
+    decision points somewhere else entirely. Reporting the first when the
+    second is true is what made the earlier runs unfalsifiable.
 
-    The engine already computed this -- `participant_anchorless_discarded_titles`
-    has been on the report since #668 and no caller had ever read it."""
-    if not report.participant_anchorless_discarded_titles:
+    #712 retired the anchor gate, and with it the only reason this list could
+    have two causes. Since then a participant reaches this list for exactly
+    one reason: the SOURCE was not meeting-shaped, so participant re-admission
+    never applied to it. The wording says that, because the old text -- "no
+    role, affiliation, or relation cue" -- would now send the operator to look
+    for a cue that is no longer read anywhere."""
+    if not report.participant_unreadmitted_discarded_titles:
         return None
-    titles = report.participant_anchorless_discarded_titles
+    titles = report.participant_unreadmitted_discarded_titles
     shown = titles[:_CAP_NOTICE_TITLE_LIMIT]
     remainder = len(titles) - len(shown)
     listed = ", ".join(shown)
     if remainder > 0:
         listed = f"{listed} (+{remainder} more)"
     return (
-        f"{len(titles)} participant candidate(s) discarded as name-only "
-        f"stubs -- no role, affiliation, or relation cue beyond the name: "
-        f"{listed}. They were not re-admitted after the judge dropped them."
+        f"{len(titles)} participant candidate(s) not re-admitted after the "
+        f"judge dropped them -- this source is not meeting-shaped, so "
+        f"participant re-admission does not apply to it: {listed}."
+    )
+
+
+def _participant_ungrounded_notice(report: ExtractionReport) -> str | None:
+    """Name participants the SOURCE never writes, or `None` when every name
+    is grounded (#712 design D5).
+
+    Advisory, and worded to say so: these objects were stored. The check is
+    deliberately not a filter -- the owner ruling is that every named person
+    is identified, and a rejecting version would delete a real person the
+    moment a source writes `G. Vega` and the model proposes `Germán Vega`.
+
+    It points at the SOURCE on purpose. The retired anchor gate reported a
+    candidate as lacking a 'role, affiliation, or relation cue', which sent
+    the operator to a lexicon they could not act on. A name the source never
+    writes is checkable by opening the source."""
+    if not report.participant_names_absent_from_source:
+        return None
+    titles = report.participant_names_absent_from_source
+    shown = titles[:_CAP_NOTICE_TITLE_LIMIT]
+    remainder = len(titles) - len(shown)
+    listed = ", ".join(shown)
+    if remainder > 0:
+        listed = f"{listed} (+{remainder} more)"
+    return (
+        f"{len(titles)} participant name(s) not found in the source text -- "
+        f"stored anyway, but worth checking against the source: {listed}."
     )
 
 
@@ -3397,9 +3425,18 @@ def _stage_derived_objects(
     # judge line names WHAT was dropped; this one names WHY the re-admission
     # declined to save it, which is a different decision with a different
     # remedy.
-    anchor_notice = _participant_anchor_notice(outcome.report)
-    if anchor_notice is not None:
-        typer.echo(f"openkos ingest: {anchor_notice}", err=True)
+    unreadmitted_notice = _participant_unreadmitted_notice(outcome.report)
+    if unreadmitted_notice is not None:
+        typer.echo(f"openkos ingest: {unreadmitted_notice}", err=True)
+
+    # #712 D5: the other half of the participant story. The line above names
+    # people the pipeline did NOT store; this one names people it DID store
+    # whose name the source never writes. Both are advisory and both are
+    # about the same question -- did the model read the source or write from
+    # its own vocabulary.
+    ungrounded_notice = _participant_ungrounded_notice(outcome.report)
+    if ungrounded_notice is not None:
+        typer.echo(f"openkos ingest: {ungrounded_notice}", err=True)
 
     # #404: the cap was the ONE drop in this function that said nothing --
     # empty slug, in-batch collision, existing file and failed build all

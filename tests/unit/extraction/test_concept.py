@@ -2830,22 +2830,14 @@ def test_judge_dropped_person_with_anchor_on_meeting_source_is_readmitted() -> N
     assert "Jordan Ellis" not in outcome.report.judged_out_titles
 
 
-def test_person_without_anchor_not_readmitted() -> None:
-    """Stub rejection (#668): a name-only `Person` -- no role, affiliation,
-    or relation cue -- the judge dropped stays dropped, even on a
-    meeting-shaped source. Re-admission is not a blanket type amnesty."""
-    run1 = _array(_CONCEPT_ITEM, _PERSON_NAME_ONLY_ITEM)
-    run2 = _array(_CONCEPT_ITEM)
-    # "[]" is the #668 D6 participant capture call: nothing further.
-    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism")])
-
-    outcome = concept_mod.extract_concept_union(
-        "Team meeting notes.", source_title="Team Meeting", llm=llm
-    )
-
-    titles = {r.title for r in outcome.objects}
-    assert "Alex Rivera" not in titles
-    assert "Alex Rivera" in outcome.report.judged_out_titles
+# `test_person_without_anchor_not_readmitted` (#668) lived here and asserted
+# the exact rule #712 retired: a name-only `Person` stays dropped on a
+# meeting-shaped source. Its replacement is
+# `test_name_only_participant_on_meeting_source_is_readmitted`, which asserts
+# the inverse, and the property it also carried -- "re-admission is not a
+# blanket type amnesty" -- is preserved by
+# `test_name_only_participant_on_non_meeting_source_is_not_readmitted`, since
+# the SCOPE half of the conjunct is what still refuses.
 
 
 def test_person_with_meeting_role_anchor_is_readmitted() -> None:
@@ -2886,12 +2878,16 @@ def test_person_not_readmitted_from_non_meeting_source() -> None:
 
 def test_participant_readmitted_reported_separately_from_judge_selected() -> None:
     """Stub-flooding guard fields (#668 design D5): a `Person` restored
-    ONLY by the anchor-gated re-admission conjunct (the judge itself did
-    not select it) is reported in `participant_readmitted_titles`, and
-    NOT in `participant_judge_selected_titles` -- the two counts must stay
+    ONLY by the re-admission conjunct (the judge itself did not select it)
+    is reported in `participant_readmitted_titles`, and NOT in
+    `participant_judge_selected_titles` -- the two counts must stay
     distinguishable, or the guard cannot tell re-admission from genuine
-    judge selection."""
-    run1 = _array(_CONCEPT_ITEM, _PERSON_WITH_ANCHOR_ITEM)
+    judge selection.
+
+    Uses the NAME-ONLY fixture on purpose (#712): re-admission no longer
+    asks for a role, affiliation or relation cue, so a bare name is the
+    case that must now come back."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_NAME_ONLY_ITEM)
     run2 = _array(_CONCEPT_ITEM)
     # "[]" is the #668 D6 participant capture call: nothing further.
     llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism")])
@@ -2900,7 +2896,7 @@ def test_participant_readmitted_reported_separately_from_judge_selected() -> Non
         "Team meeting notes.", source_title="Team Meeting", llm=llm
     )
 
-    assert outcome.report.participant_readmitted_titles == ("Jordan Ellis",)
+    assert outcome.report.participant_readmitted_titles == ("Alex Rivera",)
     assert outcome.report.participant_judge_selected_titles == ()
 
 
@@ -2922,12 +2918,17 @@ def test_participant_selected_by_judge_reported_in_selected_not_readmitted() -> 
     assert outcome.report.participant_readmitted_titles == ()
 
 
-def test_anchorless_participant_reported_in_discarded_titles() -> None:
-    """Stub-flooding guard fields (#668 design D5): a name-only `Person`
-    the judge dropped, and re-admission does NOT restore (no anchor), is
-    reported in `participant_anchorless_discarded_titles` -- the count the
-    probe uses to distinguish a genuinely anchor-less discard from a
-    successful re-admission."""
+def test_name_only_participant_on_meeting_source_is_readmitted() -> None:
+    """#712: the anchor gate is RETIRED. A name-only `Person` the judge
+    dropped on a meeting-shaped source is re-admitted like any other
+    participant, and the discard list is empty.
+
+    This is the test that used to assert the opposite. The gate it enforced
+    read `_PARTICIPANT_ANCHOR_RE` over the candidate's OWN description --
+    text the model wrote from the prompt's own vocabulary -- so it was
+    checking the prompt against itself. The owner ruling is that every
+    named person is identified; anti-flooding belongs to the participant
+    budget lane, not to a lexicon."""
     run1 = _array(_CONCEPT_ITEM, _PERSON_NAME_ONLY_ITEM)
     run2 = _array(_CONCEPT_ITEM)
     # "[]" is the #668 D6 participant capture call: nothing further.
@@ -2937,7 +2938,29 @@ def test_anchorless_participant_reported_in_discarded_titles() -> None:
         "Team meeting notes.", source_title="Team Meeting", llm=llm
     )
 
-    assert outcome.report.participant_anchorless_discarded_titles == ("Alex Rivera",)
+    assert "Alex Rivera" in {r.title for r in outcome.objects}
+    assert outcome.report.participant_unreadmitted_discarded_titles == ()
+
+
+def test_name_only_participant_on_non_meeting_source_is_not_readmitted() -> None:
+    """#712 removed ONE HALF of the re-admission conjunct, not both. The
+    SCOPE rule (#668 D3) survives: `Person`/`Organization` re-admission is
+    still gated on the source being meeting-shaped, so a bare name the
+    judge dropped on a technical article stays dropped and is reported in
+    `participant_unreadmitted_discarded_titles`.
+
+    Without this test, deleting the whole conjunct would look identical to
+    deleting the anchor half."""
+    run1 = _array(_CONCEPT_ITEM, _PERSON_NAME_ONLY_ITEM)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, _keep_reply("Stoicism")])
+
+    outcome = concept_mod.extract_concept_union(
+        "A technical article.", source_title="API Reference Guide", llm=llm
+    )
+
+    assert "Alex Rivera" not in {r.title for r in outcome.objects}
+    assert outcome.report.participant_unreadmitted_discarded_titles == ("Alex Rivera",)
 
 
 # --- Scoped participant capture pass (#668 design D6) -----------------------
@@ -5307,3 +5330,143 @@ def test_a_progress_hook_never_swallows_a_keyboard_interrupt() -> None:
             llm=_FakeLLM(reply=_array(_CONCEPT_ITEM)),
             on_progress=_interrupt,
         )
+
+
+# --- Advisory name grounding (#712 design D5) ------------------------------
+
+
+def test_names_absent_from_source_flags_a_name_the_source_never_writes() -> None:
+    """#712 D5: with the anchor gate retired, the ONE remaining check on a
+    proposed participant is whether the source writes their name at all.
+
+    It is ADVISORY, never rejecting. The owner ruling is that every named
+    person is identified, so a check that DROPS on a near-miss would delete a
+    real person -- the exact failure the retired gate committed, in the other
+    direction. The consequence here is a printed line."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person",
+            title="Ana Ríos",
+            description="Chaired the meeting.",
+            body="",
+        ),
+        concept_mod.ExtractionResult(
+            type="Person",
+            title="Someone Invented",
+            description="Attended.",
+            body="",
+        ),
+    ]
+
+    absent = concept_mod._names_absent_from_source(
+        results, source_text="Ana Ríos: empecemos por el índice."
+    )
+
+    assert absent == ("Someone Invented",)
+
+
+def test_names_absent_from_source_tolerates_an_accent_the_model_dropped() -> None:
+    """`Germán` in the source and `German` in the candidate is the SAME
+    person losing a diacritic in the model's transcription, not a fabricated
+    name. NFD decomposition plus a combining-mark strip on BOTH sides buys
+    that, and the alternative -- flagging it -- would train the operator to
+    ignore this notice."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person",
+            title="German Vega",
+            description="Representative.",
+            body="",
+        )
+    ]
+
+    absent = concept_mod._names_absent_from_source(
+        results, source_text="Desde Vega Ingeniería habla Germán Vega."
+    )
+
+    assert absent == ()
+
+
+def test_names_absent_from_source_skips_a_label_only_transcript() -> None:
+    """AMI transcripts name their speakers `A:`, `B:`, `C:` and nothing
+    else. Every proposed participant on such a source is 'absent' by
+    construction, so the check computes NOTHING there rather than emitting a
+    flood of false alarms that would bury the one real case."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Person",
+            title="User Interface Designer",
+            description="Presented the concept.",
+            body="",
+        )
+    ]
+    source = "\n".join(
+        line
+        for _ in range(6)
+        for line in ("A: Let us start.", "B: Agreed, next item.", "C: One moment.")
+    )
+
+    assert concept_mod._names_absent_from_source(results, source_text=source) == ()
+
+
+def test_names_absent_from_source_ignores_non_participant_types() -> None:
+    """Only `Person`/`Organization` carry a name the source is expected to
+    write. A `Concept` title is SYNTHESIZED -- the module's own standing
+    rule -- so grounding it would flag every correct object."""
+    results = [
+        concept_mod.ExtractionResult(
+            type="Concept",
+            title="Retrieval Quality Review",
+            description="A synthesized topic title.",
+            body="",
+        )
+    ]
+
+    absent = concept_mod._names_absent_from_source(
+        results, source_text="Hablamos de la calidad de la recuperación."
+    )
+
+    assert absent == ()
+
+
+def test_union_reports_participant_names_absent_from_source() -> None:
+    """The advisory has to REACH a caller. `_names_absent_from_source`
+    computed and never reported is the same defect #690 spent a PR
+    diagnosing -- `participant_unreadmitted_discarded_titles` sat on the
+    report since #668 with no reader -- one function further along."""
+    invented = (
+        '{"type": "Person", "title": "Nadie Real", '
+        '"description": "Attended the meeting.", "body": ""}'
+    )
+    run1 = _array(_CONCEPT_ITEM, invented)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism", "Nadie Real")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes. Ana ran the agenda.",
+        source_title="Team Meeting",
+        llm=llm,
+    )
+
+    assert outcome.report.participant_names_absent_from_source == ("Nadie Real",)
+
+
+def test_union_reports_no_absent_names_when_the_source_writes_them() -> None:
+    """The healthy path stays silent, like every other notice in this
+    module -- an advisory that fires on correct runs is one the operator
+    learns to skip."""
+    real = (
+        '{"type": "Person", "title": "Ana", '
+        '"description": "Ran the agenda.", "body": ""}'
+    )
+    run1 = _array(_CONCEPT_ITEM, real)
+    run2 = _array(_CONCEPT_ITEM)
+    llm = _SequencedLLM([run1, run2, "[]", _keep_reply("Stoicism", "Ana")])
+
+    outcome = concept_mod.extract_concept_union(
+        "Team meeting notes. Ana ran the agenda.",
+        source_title="Team Meeting",
+        llm=llm,
+    )
+
+    assert outcome.report.participant_names_absent_from_source == ()

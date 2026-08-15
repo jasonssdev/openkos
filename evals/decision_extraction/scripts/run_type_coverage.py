@@ -129,8 +129,8 @@ class ParticipantRunReport:
     not stored on the report itself) and the three new `ExtractionReport`
     fields directly for judge-selected vs re-admitted counts.
 
-    `anchorless_discarded_total` is COMBINED across `Person`+`Organization`
-    rather than split, because `ExtractionReport.participant_anchorless_
+    `unreadmitted_discarded_total` is COMBINED across `Person`+`Organization`
+    rather than split, because `ExtractionReport.participant_unreadmitted_
     discarded_titles` carries titles only -- the dropped candidate's type is
     not recoverable from a title alone once it never reached `outcome.
     objects`, and guessing would misattribute a discard to the wrong type."""
@@ -138,7 +138,7 @@ class ParticipantRunReport:
     admitted_titles: dict[str, tuple[str, ...]]
     judge_selected: dict[str, int]
     readmitted: dict[str, int]
-    anchorless_discarded_total: int
+    unreadmitted_discarded_total: int
 
 
 @dataclass
@@ -253,8 +253,8 @@ def _participant_run_report(outcome: ExtractionOutcome) -> ParticipantRunReport:
         admitted_titles=admitted_titles,
         judge_selected=dict(judge_selected),
         readmitted=dict(readmitted),
-        anchorless_discarded_total=len(
-            outcome.report.participant_anchorless_discarded_titles
+        unreadmitted_discarded_total=len(
+            outcome.report.participant_unreadmitted_discarded_titles
         ),
     )
 
@@ -435,11 +435,11 @@ def render_participant_section(
         lines.append(f"## {result.name}")
         judge_selected: collections.Counter[str] = collections.Counter()
         readmitted: collections.Counter[str] = collections.Counter()
-        anchorless_total = 0
+        unreadmitted_total = 0
         for run in result.participant_runs:
             judge_selected.update(run.judge_selected)
             readmitted.update(run.readmitted)
-            anchorless_total += run.anchorless_discarded_total
+            unreadmitted_total += run.unreadmitted_discarded_total
         floor = floors.get(result.meeting, collections.Counter())
         for okf_type in sorted(_PARTICIPANT_TYPES):
             emitted = sum(
@@ -466,7 +466,7 @@ def render_participant_section(
                     "most of this type's coverage"
                 )
         lines.append(
-            f"  anchor-less discards (Person+Organization): {anchorless_total}"
+            f"  anchor-less discards (Person+Organization): {unreadmitted_total}"
         )
         lines.append("")
     return "\n".join(lines)
@@ -598,7 +598,7 @@ def _self_test() -> int:
             },
             judge_selected={"Person": 1},
             readmitted={"Person": 3},
-            anchorless_discarded_total=0,
+            unreadmitted_discarded_total=0,
         )
     ]
     participant_b = SourceResult(
@@ -609,7 +609,7 @@ def _self_test() -> int:
             admitted_titles={"Person": ("Eve", "Fay"), "Organization": ("Acme",)},
             judge_selected={"Person": 2},
             readmitted={"Person": 0},
-            anchorless_discarded_total=2,
+            unreadmitted_discarded_total=2,
         )
     ]
     participant_floors = {

@@ -6828,37 +6828,48 @@ def test_ingest_wrong_language_drop_notice_names_the_dropped_titles(
     ).exists()
 
 
-def test_participant_anchor_notice_names_the_stub_rule_not_the_judge() -> None:
+def test_participant_unreadmitted_notice_names_the_real_second_decision() -> None:
     """Issue #690: the engine has known since #668 which participant
-    candidates the ANCHOR gate discarded -- `participant_anchorless_discarded_titles`
-    -- and no caller had ever read it. The operator saw only
-    `judge dropped 2 candidate(s): ...` and reasonably concluded the judge
-    rejected them on merit.
+    candidates re-admission declined to restore --
+    `participant_unreadmitted_discarded_titles` -- and no caller had ever
+    read it. The operator saw only `judge dropped 2 candidate(s): ...` and
+    reasonably concluded the judge rejected them on merit.
 
-    Two different findings with two different remedies: "the judge has poor
-    taste in people" invites tuning the judge, while "the candidates were
-    name-only stubs" points at the generator or the anchor lexicon. Reporting
-    the first when the second is true is what made the earlier runs
-    unfalsifiable."""
+    Two different findings with two different remedies, and reporting the
+    first when the second is true is what made the earlier runs
+    unfalsifiable.
+
+    #712 changed WHICH second decision this can be. With the anchor gate
+    retired, a participant lands here for exactly one reason -- the source is
+    not meeting-shaped -- so the notice must say that. Asserting the old
+    wording ("no role, affiliation, or relation cue") would pin an
+    explanation that now sends the operator hunting for a cue no production
+    code reads."""
     report = concept_mod.ExtractionReport(
         produced=9,
         retained=9,
         judge_status="ok",
         judged_out_titles=("Jason Sepulveda", "Gustavo Martinez"),
-        participant_anchorless_discarded_titles=("Jason Sepulveda", "Gustavo Martinez"),
+        participant_unreadmitted_discarded_titles=(
+            "Jason Sepulveda",
+            "Gustavo Martinez",
+        ),
     )
 
-    notice = main._participant_anchor_notice(report)
+    notice = main._participant_unreadmitted_notice(report)
 
     assert notice is not None
-    assert "name-only stubs" in notice
-    assert "role, affiliation, or relation cue" in notice
+    assert "not meeting-shaped" in notice
+    assert "not re-admitted after the judge dropped them" in notice
+    assert "role, affiliation, or relation cue" not in notice
     assert "Jason Sepulveda" in notice
     assert "Gustavo Martinez" in notice
     assert "2 participant candidate(s)" in notice
 
 
-def test_participant_anchor_notice_is_silent_when_the_gate_discarded_none() -> None:
+def test_participant_unreadmitted_notice_is_silent_when_the_gate_discarded_none() -> (
+    None
+):
     """A run whose participants were selected or re-admitted says nothing
     extra -- the healthy path stays quiet, like every other notice here."""
     report = concept_mod.ExtractionReport(
@@ -6868,10 +6879,10 @@ def test_participant_anchor_notice_is_silent_when_the_gate_discarded_none() -> N
         judged_out_titles=("Some Concept",),
     )
 
-    assert main._participant_anchor_notice(report) is None
+    assert main._participant_unreadmitted_notice(report) is None
 
 
-def test_participant_anchor_notice_truncates_past_the_title_limit() -> None:
+def test_participant_unreadmitted_notice_truncates_past_the_title_limit() -> None:
     """A meeting naming a dozen people can discard a dozen stubs, and the
     notice caps the list at `_CAP_NOTICE_TITLE_LIMIT` like every other
     notice here -- the COUNT stays exact and the remainder is disclosed as
@@ -6886,10 +6897,10 @@ def test_participant_anchor_notice_truncates_past_the_title_limit() -> None:
         retained=9,
         judge_status="ok",
         judged_out_titles=titles,
-        participant_anchorless_discarded_titles=titles,
+        participant_unreadmitted_discarded_titles=titles,
     )
 
-    notice = main._participant_anchor_notice(report)
+    notice = main._participant_unreadmitted_notice(report)
 
     assert notice is not None
     assert "5 participant candidate(s)" in notice
@@ -6897,7 +6908,7 @@ def test_participant_anchor_notice_truncates_past_the_title_limit() -> None:
     assert "Person 4" not in notice
 
 
-def test_ingest_reports_the_anchor_gate_when_the_judge_drops_a_stub(
+def test_ingest_reports_the_unreadmitted_participant_when_the_judge_drops_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The notice reaches stderr on a REAL `ingest` run, not only from its
@@ -6905,29 +6916,15 @@ def test_ingest_reports_the_anchor_gate_when_the_judge_drops_a_stub(
     was not -- a notice computed and never printed is the same defect the
     engine already had, one layer up).
 
-    Drives the whole union path over a meeting-shaped source: two
-    extraction passes, the #668 participant-capture pass (this source is
-    transcript-shaped, so it fires), then a judge that selects only the
-    Concept. The captured `Person` carries a bare name with no role,
-    affiliation, or relation cue, so the anchor gate declines to re-admit
-    it -- and BOTH notices must appear, because the two decisions are the
-    finding."""
+    The source is deliberately NOT meeting-shaped. #712 retired the anchor
+    gate, so on a transcript every participant is now re-admitted and this
+    notice correctly never fires there. The remaining path to it is the SCOPE
+    half of the conjunct: an ordinary document whose extraction proposed a
+    `Person`, which the judge then dropped. BOTH notices must appear, because
+    the two decisions are the finding."""
     _init_workspace(tmp_path, monkeypatch)
-    text = "\n".join(
-        [
-            "# Weekly project meeting",
-            "",
-            *[
-                line
-                for _ in range(6)
-                for line in (
-                    "Ana: We reviewed the ingestion backlog this week.",
-                    "Bruno: The index rebuild finished and search got faster.",
-                )
-            ],
-        ]
-    )
-    participant_reply = json.dumps(
+    judge_reply = json.dumps({"keep": ["Ingestion Backlog"]})
+    person_reply = json.dumps(
         [
             {
                 "type": "Person",
@@ -6937,23 +6934,26 @@ def test_ingest_reports_the_anchor_gate_when_the_judge_drops_a_stub(
             }
         ]
     )
-    judge_reply = json.dumps({"keep": ["Ingestion Backlog"]})
     _patch_sequenced_llm(
         monkeypatch,
         [
             "[" + _concept_reply(title="Ingestion Backlog") + "]",
-            "[" + _concept_reply(title="Index Rebuild") + "]",
-            participant_reply,
+            person_reply,
             judge_reply,
         ],
     )
-    source = tmp_path / "meeting.txt"
-    source.write_text(text, encoding="utf-8")
+    source = tmp_path / "notes.txt"
+    source.write_text(
+        "A short article about the ingestion backlog and how it is worked "
+        "through, written up by Ana for the team handbook.",
+        encoding="utf-8",
+    )
 
-    result = runner.invoke(app, ["ingest", "meeting.txt", "--auto"])
+    result = runner.invoke(app, ["ingest", "notes.txt", "--auto"])
 
     assert result.exit_code == 0
-    assert "1 participant candidate(s) discarded as name-only stubs" in result.stderr
+    assert "1 participant candidate(s) not re-admitted" in result.stderr
+    assert "not meeting-shaped" in result.stderr
     assert "Ana" in result.stderr
     assert "judge dropped" in result.stderr
 
@@ -7016,3 +7016,33 @@ def test_ingest_leaves_the_spinner_alone_when_stderr_is_not_a_tty(
 
     assert result.exit_code == 0
     assert _FakeConsole.instances[0].statuses[0].updates == []
+
+
+def test_participant_ungrounded_notice_names_the_source_not_the_model() -> None:
+    """#712 D5: the advisory reaches the operator, or it is not an advisory.
+
+    Wording matters here. The retired anchor gate reported a candidate as
+    lacking a 'role, affiliation, or relation cue', which pointed the
+    operator at a lexicon. This one points at the SOURCE, because that is
+    the only text the check consulted and the only place the operator can
+    go to confirm or refute it."""
+    report = concept_mod.ExtractionReport(
+        produced=4,
+        retained=4,
+        judge_status="ok",
+        participant_names_absent_from_source=("Nadie Real",),
+    )
+
+    notice = main._participant_ungrounded_notice(report)
+
+    assert notice is not None
+    assert "Nadie Real" in notice
+    assert "source" in notice
+    assert "1 participant" in notice
+
+
+def test_participant_ungrounded_notice_is_silent_when_every_name_is_grounded() -> None:
+    """The healthy path says nothing, like every other notice here."""
+    report = concept_mod.ExtractionReport(produced=4, retained=4, judge_status="ok")
+
+    assert main._participant_ungrounded_notice(report) is None

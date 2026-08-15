@@ -4,9 +4,24 @@ Issue #690 ended with a diagnosis rather than a fix: the judge dropped the
 `Person` candidates the #668 participant pass produced, and the anchor gate
 then declined to re-admit them because `_has_participant_anchor` returned
 false. PR #705 made that discard observable
-(`ExtractionReport.participant_anchorless_discarded_titles`) and stopped
+(`ExtractionReport.participant_unreadmitted_discarded_titles`) and stopped
 there, because the field carries TITLES and the gate reads `description` +
 `body`. This probe records the text the gate actually judged.
+
+> **The gate this probe measured is RETIRED (#712).** What it found is why:
+> the gate read the candidate's own description — text the model wrote out of
+> the capture prompt's vocabulary — so it was checking the prompt against
+> itself. `_has_participant_anchor` and `_PARTICIPANT_ANCHOR_RE` survive with
+> zero production callers so `--rescore` can still re-derive every number in
+> `report.md` from `results/*.jsonl`, which is what that report promises in
+> its opening lines. `--rescore` is unaffected: it scores the two lexicons
+> against stored text and never consults production.
+>
+> A LIVE run now measures the pipeline WITHOUT the gate. The
+> `unreadmitted-discarded` bucket — named `anchorless-discarded` before the
+> retirement — is reachable only on a non-meeting-shaped source. No stored
+> run carries the old label, because #706 measured zero discards across all
+> nine runs, and that zero is the finding that filed #712.
 
 ```bash
 uv run python -u evals/participant_anchor/run_participant_anchor_probe.py --self-test
@@ -22,7 +37,7 @@ hung.
 A wrapper around `concept._select_with_progress` — the one seam that sees
 the complete `list[ExtractionResult]` on its way to the judge — captures
 every `Person`/`Organization` candidate with its description, its body, its
-reported bucket (`judge-selected` / `re-admitted` / `anchorless-discarded`)
+reported bucket (`judge-selected` / `re-admitted` / `unreadmitted-discarded`)
 and the shipped lexicon's verdict on it. Production is untouched; the
 wrapper delegates.
 
