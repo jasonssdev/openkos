@@ -656,12 +656,26 @@ class ArmSummary:
     mean_subjects: float
     mean_participants: float
     mean_latency: float
+    failed_fixtures: frozenset[str] = frozenset()
+    """Fixtures on which EVERY run of this arm errored.
+
+    Scored per fixture rather than per run because the failure this catches is
+    categorical: a source either fits under the generation ceiling or it does
+    not. One flaky run is noise; a fixture that never completes is a source the
+    arm cannot process at all."""
 
 
 def summarize_arm(records: list[RunRecord]) -> ArmSummary:
-    """Score one arm over every successful run it produced."""
+    """Score one arm over every successful run it produced.
+
+    The averages read only completed runs -- an errored run has no latency or
+    object count to average. `failed_fixtures` is what keeps that exclusion
+    honest: without it, an arm that crashes on its hardest fixture scores as if
+    that fixture had never been attempted."""
     ok = [r for r in records if r.error is None]
     count = max(len(ok), 1)
+    attempted = {r.fixture for r in records}
+    completed = {r.fixture for r in ok}
     return ArmSummary(
         arm=ok[0].arm if ok else (records[0].arm if records else "?"),
         runs=len(ok),
@@ -669,6 +683,7 @@ def summarize_arm(records: list[RunRecord]) -> ArmSummary:
         mean_subjects=round(sum(len(r.subjects) for r in ok) / count, 2),
         mean_participants=round(sum(len(r.participants) for r in ok) / count, 2),
         mean_latency=round(sum(r.latency_s for r in ok) / count, 1),
+        failed_fixtures=frozenset(attempted - completed),
     )
 
 
@@ -686,17 +701,26 @@ without excusing a real regression."""
 def render_gate(records: list[RunRecord]) -> tuple[str, bool]:
     """Score the treatment against the baseline. Returns `(report, shippable)`.
 
-    Four conditions, mirroring the slice-1 gate that rejected the D2 capture
-    prompt. Any one firing means REJECT, and per the owner's standing ruling a
-    REJECT ships the measurement only -- production is not touched and no
-    fallback lever is taken.
+    Five conditions. The first four mirror the slice-1 gate that rejected the
+    D2 capture prompt. Any one firing means REJECT, and per the owner's
+    standing ruling a REJECT ships the measurement only -- production is not
+    touched and no fallback lever is taken.
 
     Condition 4 is deliberately NOT automated. Whether a retained subject is
     real cannot be decided by a substring test the way #712's absent-name check
     could, and a probe that scores it automatically would be inventing an
     oracle it does not have (#694 is that oracle, and it is unbuilt). The gate
     prints every retained subject and stops short of PASS until a human has
-    adjudicated them."""
+    adjudicated them.
+
+    Condition 5 was ADDED after the first real sweep, because the first four
+    scored that sweep as shippable while the treatment failed every run on the
+    largest fixture: asking for more objects lengthens the reply, and a 16 KB
+    transcript then blows the 8192 generation ceiling (#714). The other four
+    conditions average completed runs only, so a fixture the arm can no longer
+    process at all leaves the averages LOOKING BETTER -- its slow, crowded runs
+    simply stop being counted. A gate blind to that is a gate that cannot see a
+    treatment break a source."""
     by_arm: dict[str, list[RunRecord]] = {}
     for record in records:
         by_arm.setdefault(record.arm, []).append(record)
@@ -746,6 +770,16 @@ def render_gate(records: list[RunRecord]) -> tuple[str, bool]:
             False,
             "NOT automated — adjudicate the titles below before reading a PASS",
         ),
+        (
+            "the treatment cannot complete a fixture the baseline completed",
+            bool(treat.failed_fixtures - base.failed_fixtures),
+            (
+                "newly failing: "
+                + ", ".join(sorted(treat.failed_fixtures - base.failed_fixtures))
+            )
+            if treat.failed_fixtures - base.failed_fixtures
+            else "every fixture the baseline completed, the treatment completed",
+        ),
     ]
     fired = [name for name, did_fire, _ in conditions if did_fire]
     for name, did_fire, evidence in conditions:
@@ -781,6 +815,20 @@ def render_gate(records: list[RunRecord]) -> tuple[str, bool]:
             "retained subjects above are adjudicated as real."
         )
     return "\n".join(lines), not fired
+
+
+def load_results(path: Path) -> list[RunRecord]:
+    """Re-read a stored sweep so a GATE change can be re-scored against the
+    same evidence without spending another model run.
+
+    A gate condition added after a sweep is exactly the case that needs this:
+    re-running the models would score the new condition against a different
+    sample and quietly change two things at once."""
+    records: list[RunRecord] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            records.append(RunRecord(**json.loads(line)))
+    return records
 
 
 def write_results(records: list[RunRecord], stamp: str, model: str) -> Path:
@@ -838,7 +886,14 @@ class _FakeLLM:
         )
 
 
-def _record(arm: str, subjects: int, participants: int, latency: float) -> RunRecord:
+def _record(
+    arm: str,
+    subjects: int,
+    participants: int,
+    latency: float,
+    fixture: str = "es-bare",
+    error: str | None = None,
+) -> RunRecord:
     """One synthetic outcome, for scoring the gate without a model."""
     final = [
         {"type": "Decision", "title": f"d{i}", "lane": _SUBJECT_LABEL}
@@ -848,15 +903,16 @@ def _record(arm: str, subjects: int, participants: int, latency: float) -> RunRe
         for i in range(participants)
     ]
     return RunRecord(
-        fixture="es-bare",
+        fixture=fixture,
         run=1,
         model="fake",
         arm=arm,
         latency_s=latency,
-        judge_status="ok",
+        judge_status="error" if error else "ok",
         produced=len(final),
         retained=len(final),
         final_objects=final,
+        error=error,
     )
 
 
@@ -929,6 +985,34 @@ def _arm_and_gate_self_test() -> list[str]:
         failures.append(
             "the gate must REJECT when participants are traded for subjects"
         )
+
+    # Condition 5, scored on the shape the first real sweep produced: the
+    # treatment lifts subject retention on the small fixture AND cannot
+    # complete the large one, while the baseline completes both. Every other
+    # condition reads clear here, which is the point -- this is the case that
+    # scored SHIPPABLE before condition 5 existed.
+    broke_big = [
+        *flat[:2],
+        _record("baseline", subjects=0, participants=4, latency=70.0, fixture="ami"),
+        _record("treatment", subjects=2, participants=3, latency=55.0),
+        _record(
+            "treatment",
+            subjects=0,
+            participants=0,
+            latency=0.0,
+            fixture="ami",
+            error="OllamaGenerationCapped",
+        ),
+    ]
+    report, shippable = render_gate(broke_big)
+    if shippable:
+        failures.append(
+            "the gate must REJECT a treatment that cannot complete a fixture "
+            "the baseline completed -- the averages read completed runs only, "
+            "so a crashed fixture flatters them"
+        )
+    if "ami" not in report:
+        failures.append("the gate must NAME the fixture the treatment broke")
     return failures
 
 
@@ -1006,11 +1090,22 @@ def main(argv: list[str] | None = None) -> int:
         choices=("baseline", "treatment", "both"),
         help="which prompt arm(s) to measure (default: baseline)",
     )
+    parser.add_argument(
+        "--rescore",
+        help="re-score a stored results JSONL through the gate, no model calls",
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
 
     if args.self_test:
         return _self_test()
+
+    if args.rescore:
+        stored = load_results(Path(args.rescore))
+        print(render(stored, build_fixtures()))
+        gate_report, _ = render_gate(stored)
+        print(gate_report)
+        return 0
 
     fixtures = build_fixtures()
     if args.fixture:
