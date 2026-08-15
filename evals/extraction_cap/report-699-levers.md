@@ -4,14 +4,28 @@
 `medium-10-reunion-plataforma` — the fixture #694 built with one subject
 deliberately split across a window boundary.
 
-**Reproduce it:**
+**Reproduce the chunk arm** — this is what the shipped CLI accepts today:
 
 ```bash
 uv run python -u evals/extraction_cap/run_cap_eval.py \
   --fixture medium-10-reunion-plataforma --runs 8 --union-judge on \
-  --lever carry-titles --lever chunk:8000 \
+  --lever chunk:8000 \
   --output evals/extraction_cap/results/<your-file>.md
 ```
+
+**The carry-titles arm cannot be reproduced from `main`**, and that is
+deliberate rather than an oversight: the lever was rejected, so both its
+production mechanism and its `--lever carry-titles` axis were removed in the
+same change that published this report. Reproducing that column means checking
+out the annotated tag `experiment/699-carry-titles`, which is the commit these
+numbers were measured on, and running the command above with
+`--lever carry-titles` added.
+
+> Caught by the reliability lens of this change's own review: the first draft
+> of this report printed the two-lever command as if `main` still accepted it,
+> so following it verbatim would have exited with status 2 and no runs. A
+> reproduction command that does not run is worse than none — it reads as
+> evidence the numbers can be re-derived.
 
 Owner ruling this was measured against: ship a lever when recall rises above
 the noise band and precision does not fall outside its interval, each lever
