@@ -151,6 +151,37 @@ exist, a near-duplicate line missing its pipe, and any file whose
 `**Count: N**` disagrees with its bullet count — a half-edited ground truth
 would otherwise skew every recall figure by a silent constant.
 
+### `## Path invariant` (#726)
+
+A fixture whose numbers only mean something on ONE extraction path declares
+it, and the sweep refuses to run when the source no longer takes that path:
+
+```markdown
+## Path invariant
+
+- chunked
+```
+
+Optional, and exactly one bullet — `chunked` or `whole-document`. Before the
+first call, `preflight_path_invariants` asks
+`concept._chunk_threshold_for` which path each selected fixture actually takes
+under each arm's title, and aborts with exit 2 naming the fixture, both paths,
+the size and the threshold. It never restates a constant: the boundary
+branches on shape since #714 (12 000 for a meeting-shaped source, 18 000
+otherwise), so a guard carrying its own copy would drift from the thing it
+watches.
+
+`medium-10-reunion-plataforma` is why this exists. It sits **718 characters**
+above `_MEETING_CHUNK_THRESHOLD` so it takes the chunked path where #699's
+fragmentation lives, and until #726 the only thing protecting that was a
+paragraph in its ground truth asking the reader to re-check. Drop it below the
+line and every number still renders, under the same fixture name, describing a
+different pipeline.
+
+Note the unit: **characters**, not bytes. Production compares
+`len(source_text)`, and that fixture is 12 718 characters against 12 948
+bytes.
+
 ## Two things it refuses to do
 
 **No corpus-wide average.** `small-04-pre-build-skills` is the same lesson as
