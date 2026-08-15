@@ -1226,21 +1226,35 @@ def _names_absent_from_source(
     | source `G. Vega`, proposed `Germán Vega` | flagged | accepted false positive |
     | source full name, proposed surname only | not flagged | accepted false negative |
 
-    Skipped entirely on a LABEL-ONLY source -- one whose every speaker label is
-    at most `_LABEL_ONLY_MAX_LEN` characters, as in AMI's `A:`/`B:`/`C:`. Every
-    proposed participant there is 'absent' by construction, so the check would
-    emit a flood of false alarms that buries the one real case rather than
-    surfacing it.
+    Skipped entirely on a LABEL-ONLY source -- one where at least HALF the
+    DISTINCT speaker labels are at most `_LABEL_ONLY_MAX_LEN` characters, as in
+    AMI's `A:`/`B:`/`C:`. Every proposed participant there is 'absent' by
+    construction, so the check would emit a flood of false alarms that buries
+    the one real case rather than surfacing it.
+
+    Half rather than all, and distinct rather than every line: PR #719's review
+    caught `all()` over every matched label letting a SINGLE `Presenter:` line
+    disable the exemption for an entire AMI transcript. A transcript with one
+    longer label still does not state its participants' real names.
+
+    The name must match on WORD BOUNDARIES. A raw substring test -- which is
+    what shipped first, and what the same review caught -- grounds `Ana` in
+    `mañana` and `Vega` in `Vegas`, silently un-firing the advisory exactly
+    where it matters most, since a short fabricated name is both the easiest to
+    hallucinate and the easiest to find by accident. The boundary is
+    `(?<!\\w)`/`(?!\\w)` rather than `\\b` so a name beside a colon, comma or
+    parenthesis -- how every transcript actually writes one -- still matches.
 
     Non-participant types are never checked: a `Concept` title is SYNTHESIZED
     rather than copied (the module's standing rule), so grounding it would flag
     every correct object."""
-    labels = [
+    labels = {
         match.group("label").strip()
         for line in source_text.splitlines()
         if (match := _TRANSCRIPT_TURN_RE.match(line)) is not None
-    ]
-    if labels and all(len(label) <= _LABEL_ONLY_MAX_LEN for label in labels):
+    }
+    short = sum(1 for label in labels if len(label) <= _LABEL_ONLY_MAX_LEN)
+    if labels and short * 2 >= len(labels):
         return ()
 
     grounded_source = _fold_for_name_match(source_text)
@@ -1249,7 +1263,7 @@ def _names_absent_from_source(
         for result in results
         if result.type in _PARTICIPANT_TYPES
         and (name := _fold_for_name_match(result.title))
-        and name not in grounded_source
+        and not re.search(rf"(?<!\w){re.escape(name)}(?!\w)", grounded_source)
     )
 
 
@@ -2526,6 +2540,14 @@ def extract_concept(
                 retained, source_title=source_title
             ),
             wrong_language_dropped_titles=wrong_language_dropped,
+            # The LEGACY single-run path reports the advisory too (#712 D5).
+            # `cli/main.py` picks `extract_concept_union if union_judge else
+            # extract_concept`, so leaving it out here would store
+            # participants and surface nothing whenever `union_judge` is off
+            # -- the "computed but never read" defect #690 already cost a PR.
+            participant_names_absent_from_source=_names_absent_from_source(
+                retained, source_text=source_text
+            ),
         ),
     )
 

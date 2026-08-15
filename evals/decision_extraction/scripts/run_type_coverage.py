@@ -466,7 +466,7 @@ def render_participant_section(
                     "most of this type's coverage"
                 )
         lines.append(
-            f"  anchor-less discards (Person+Organization): {unreadmitted_total}"
+            f"  unreadmitted discards (Person+Organization): {unreadmitted_total}"
         )
         lines.append("")
     return "\n".join(lines)
