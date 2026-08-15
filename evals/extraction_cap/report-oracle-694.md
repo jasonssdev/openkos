@@ -89,6 +89,21 @@ raised off the agenda, late in the source, in the last third. A count of 10
 produced objects reads as healthy; the oracle says one designed subject never
 survives.
 
+> **CORRECTION, 2026-08-15 (#699 lever sweep).** This finding was wrong. The
+> subject was being recovered under the document's own phrasing — line 87 is
+> Tomás saying *"Es sobre los documentos duplicados en el corpus"* — and the
+> ground truth did not yet admit `Duplicación de documentos en el corpus` or
+> `Duplicados en el corpus` as aliases. Runs in all three arms of the later
+> sweep emitted one of them. **It was adjudication debt, not a recovery
+> failure**, and the aliases are now in the ground truth. The claim above
+> described the annotation, not the extractor — the exact trap this harness's
+> own README warns about, paid for here by its author.
+>
+> The baseline figures in the table above are likewise a small sample read too
+> confidently: an 8-run sweep of the same bytes measured recall
+> **0.80 ±0.12 [0.64–0.91]** against the **0.89 ±0.04** below. See
+> `report-699-levers.md`.
+
 **Fragmentation, distinguished from renaming.** Runs 2 and 5 emitted `Problema
 de respaldos` *alongside* `Cifrado de respaldos` — two objects for one subject,
 in one reply. That is #699's within-source fragmentation, on a fixture built to

@@ -117,6 +117,25 @@ An extractor emitting these is decaying, not enumerating.
 - Registros agregados sin identificadores
 - Conjunto de consultas de control
 - Índice aproximado
+- Problema de acumulación de archivos temporales
+- Problema de almacenamiento y temporales
+- Fallo en el monitoreo de discos
+- Problema de alertas de disco
+- Procedimiento de regeneración de vectores
+- Procedimiento para la regeneración de vectores antiguos
+
+The last six came out of the **2026-08-15 lever sweep** (#699), and they split
+two ways that were already decided above:
+
+- The four `temporales` / `disco` phrasings are re-namings of
+  `Archivos temporales de la reconstrucción` and `Umbral de alerta de disco`,
+  both already listed as facets of `Incidente de indisponibilidad del
+  servicio`. The incident's cause and its missing alarm are how the incident is
+  described, not two further things the meeting is about.
+- The two `regeneración de vectores` phrasings are `Regeneración incremental de
+  vectores` under another name — already ruled a facet of `Deriva del modelo de
+  embeddings`, on the transcript's own statement that the drift *"tiene dos
+  mitades: la limpieza … y la prevención"*.
 
 Two of these are judgment calls, made here on purpose rather than left to a
 scorer:
@@ -148,9 +167,37 @@ in no case did it invent a subject the document does not discuss.
 - Incidente de indisponibilidad del servicio | Incidente de caída del servicio | Incidente de la semana pasada
 - Latencia de la búsqueda vectorial | Latencia de búsqueda | Latencia de búsqueda vectorial | Problema de latencia en búsqueda vectorial
 - Deriva del modelo de embeddings | Modelo de embeddings | Cambio de modelo de embeddings | Cambio de versión en el modelo de embeddings
-- Cifrado de los respaldos en reposo | Cifrado de respaldos
-- Retención de los registros de acceso a noventa días | Retención de registros de acceso
-- Procedimiento de rotación de credenciales | Rotación de credenciales
+- Cifrado de los respaldos en reposo | Cifrado de respaldos | Cifrar los respaldos y custodiar la llave en el gestor de secretos | Decisión sobre cifrado de respaldos | Respaldos
+- Retención de los registros de acceso a noventa días | Retención de registros de acceso | Retención de los registros de acceso | Decisión sobre la retención de los registros de acceso | Decisión sobre retención de registros de acceso
+- Procedimiento de rotación de credenciales | Rotación de credenciales | Problema de rotación de credenciales
+- Duplicación de objetos por procesamiento en trozos | Duplicación de documentos en el corpus | Duplicados en el corpus
+
+### The 2026-08-15 additions, and the rule that decided each one
+
+The lines above the `Duplicación` one gained phrasings from the #699 lever
+sweep (24 runs, three arms). One mechanical rule separated alias from
+near-duplicate, applied without looking at which arm produced the title:
+**does it appear in the same reply as another name for the same subject?** If
+yes it is a near-duplicate, because that reply spent two slots on one subject.
+If no, the run named the subject once and this is simply how it named it.
+
+`Duplicación de documentos en el corpus` is the adjudication that matters
+most, and it is not a judgment call: line 87 of the source is Tomás saying
+*"Es sobre los documentos duplicados en el corpus"* — the document's own
+phrase for the subject the annotation calls `Duplicación de objetos por
+procesamiento en trozos`. The #694 baseline report named this subject as
+missing from 5 of 5 runs. **That finding was an artefact of an unworked
+adjudication queue, not a recovery failure**, and it stands corrected here:
+runs across all three arms of the lever sweep recover it under the
+transcript's own wording.
+
+`Respaldos` is admitted as an alias with reservations recorded. It is the
+shortest phrasing in this file and generic enough that a different source
+could mean something else by it — but the corpus rule is that aliases are
+observed, not guessed, and it was emitted on a source where the only backup
+arc is the encryption decision. Where it was emitted twice in one reply
+(carry-titles run 3), the second emission is scored against the run, since
+precision credits a subject once.
 
 `Incidente de la semana pasada` is the document's own phrase for the outage
 (Elena's agenda line), so it names the subject rather than describing it
@@ -167,6 +214,13 @@ from the same sweep.
 
 - Cifrado de los respaldos en reposo | Problema de respaldos
 - Cifrado de los respaldos en reposo | Problemas de respaldos
+- Latencia de la búsqueda vectorial | Problema de escalabilidad de la latencia
+
+`Problema de escalabilidad de la latencia` was adjudicated by the same
+co-occurrence rule as the two backup lines, and it fails it in both arms that
+produced it: baseline run 6 emitted it alongside `Latencia de búsqueda
+vectorial`, and carry-titles run 6 alongside `Latencia de búsqueda`. Two
+slots, one subject, one reply.
 
 **These are near-duplicates, not aliases, and the distinction is observable
 rather than stylistic.** In runs 2 and 5 the model emitted `Problema de
@@ -189,6 +243,27 @@ Tomás quotes *"latencia del índice"* and *"latencia en las consultas del
 índice"* as an example of the defect he is describing. Those remain unlisted.
 They are two strings inside a turn, never observed as emissions, and listing
 them would credit this ground truth for a prediction it has not earned.
+
+## Out of scope
+
+Named in the transcript and not what it is about. Kept apart from facets so a
+scope error never reads as decay.
+
+- Equipo de infraestructura
+- Área de cumplimiento
+- Manual de operación
+- Política de cumplimiento
+
+All four are self-introductions or pointers: Elena *"coordino el equipo de
+infraestructura"*, Paula *"vengo del área de cumplimiento"* and, for the last
+two, where a written procedure will live (*"en el manual de operación"*) and
+the rule a decision cites (*"la política dice que los datos personales en
+reposo van cifrados"*). An extractor emitting them has turned a mention into
+an object.
+
+Note that three of the four came from ONE run — carry-titles run 5, the run
+that also produced the sweep's only `F` and its only `D`. Its extra output is
+mentions promoted to objects, not subjects nobody listed.
 
 ## Notes
 
