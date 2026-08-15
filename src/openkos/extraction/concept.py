@@ -1924,9 +1924,18 @@ summaries in the 1.1-2.5 KB band extract well. Deliberately NOT tuned finer
 than "the band where extraction demonstrably works"."""
 
 
-def _chunk_lines(text: str, target: int = _CHUNK_TARGET) -> list[str]:
+def _chunk_lines(text: str, target: int | None = None) -> list[str]:
     """Pack LINES into windows of at most `target` chars, never splitting
     inside a line (a truncated utterance is not extractable content).
+
+    `target=None` means `_CHUNK_TARGET`, read HERE rather than bound as a
+    signature default (#699). A default expression is evaluated once, when
+    the function is defined, so `target: int = _CHUNK_TARGET` made the
+    constant unpatchable: an eval arm that reassigned it packed 4 KB windows
+    while labelling itself an 8 KB arm, and reported plausible numbers for a
+    treatment that never ran. That is the inert-arm defect a reviewer caught
+    in the #714 probe, closed here at its origin rather than worked around
+    in each harness.
 
     Lines, not paragraphs: the material this exists for -- speaker-labelled
     transcripts -- has no blank lines at all, which is exactly how the first
@@ -1934,6 +1943,8 @@ def _chunk_lines(text: str, target: int = _CHUNK_TARGET) -> list[str]:
     than `target` becomes its own oversized window, whole.
 
     Lossless by construction: `"\\n".join(_chunk_lines(text)) == text`."""
+    if target is None:
+        target = _CHUNK_TARGET
     chunks: list[str] = []
     current: list[str] = []
     size = 0

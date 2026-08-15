@@ -2316,6 +2316,27 @@ def test_large_source_makes_one_chat_call_per_chunk() -> None:
         assert "Field Notes" in user
 
 
+def test_chunk_target_is_read_at_call_time_not_bound_at_definition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Patching `_CHUNK_TARGET` MUST change the windows production packs.
+
+    This is the #714 arm-inert defect written down as a test. `_chunk_lines`
+    used to take `target: int = _CHUNK_TARGET`, and a signature default binds
+    once, when the function is defined -- so a measurement arm that
+    reassigned the module constant chunked at 4 KB while reporting itself as
+    an 8 KB arm. The bug is invisible in the arm's own output: it produces
+    plausible numbers for a treatment that never ran."""
+    text = _long_text()
+    before = concept_mod._chunk_lines(text)
+
+    monkeypatch.setattr(concept_mod, "_CHUNK_TARGET", 8_000)
+    after = concept_mod._chunk_lines(text)
+
+    assert len(after) < len(before)
+    assert "\n".join(after) == text
+
+
 def _meeting_shaped_text(chars: int = 16_000) -> str:
     """Speaker-turn text `_transcript_shaped_text` recognizes, sized into the
     band between the meeting threshold and the prose one (#714).
